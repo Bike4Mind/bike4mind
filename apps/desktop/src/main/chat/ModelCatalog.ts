@@ -39,6 +39,7 @@ interface WireModel {
   name?: unknown;
   type?: unknown;
   backend?: unknown;
+  releaseDate?: unknown;
   contextWindow?: unknown;
   max_tokens?: unknown;
   supportsTools?: unknown;
@@ -78,7 +79,7 @@ export class ModelCatalog {
 
   constructor(
     private readonly deps: ModelCatalogDeps,
-    private readonly local = new OllamaLocal()
+    private readonly local: Pick<OllamaLocal, 'models'> = new OllamaLocal()
   ) {}
 
   /** Cached models for the current environment, without a round trip. Null when nothing is cached. */
@@ -154,7 +155,12 @@ export class ModelCatalog {
     return withCurrentContexts(this.localCache.models);
   }
 
-  /** After the local context setting changes, so the next list sizes every local model again. */
+  /** The last local list however old, without a round trip; null before the first list or after forgetLocal. */
+  lastLocal(): ChatModelOption[] | null {
+    return this.localCache ? withCurrentContexts(this.localCache.models) : null;
+  }
+
+  /** After the local context setting changes or a model turns out removed, so the next list reads Ollama again. */
   forgetLocal(): void {
     this.localCache = null;
   }
@@ -263,6 +269,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       id: model.id as string,
       name: typeof model.name === 'string' && model.name ? model.name : (model.id as string),
       ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
+      ...(typeof model.releaseDate === 'string' && model.releaseDate ? { releaseDate: model.releaseDate } : {}),
       ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
       ...(typeof model.max_tokens === 'number' && model.max_tokens > 0 ? { maxOutputTokens: model.max_tokens } : {}),
       // Carried through only when the server stated it. Absent is "not said", which the

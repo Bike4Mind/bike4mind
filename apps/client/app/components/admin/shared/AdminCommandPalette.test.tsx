@@ -59,6 +59,29 @@ describe('AdminCommandPalette', () => {
     expect(run).toHaveBeenCalledTimes(3);
   });
 
+  it('keeps a paletteOnly command out of the button strip but in the palette and shortcuts', async () => {
+    const run = vi.fn();
+    render(
+      <CssVarsProvider theme={theme}>
+        <AdminCommandPalette
+          commands={[
+            { id: 'credits', label: 'Adjust credits', shortcut: 'c', paletteOnly: true, run },
+            { id: 'revoke', label: 'Revoke API keys', run: vi.fn() },
+          ]}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('admin-command-credits-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('admin-command-revoke-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-shortcuts-open-btn')).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'c' });
+    expect(run).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId('admin-command-open-btn'));
+    fireEvent.change(screen.getByTestId('admin-search-input'), { target: { value: 'Adjust' } });
+    fireEvent.click(screen.getByRole('option', { name: 'Adjust credits' }));
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+  });
+
   it('opens the mounted Help Center through its host callback', async () => {
     const onOpenHelp = vi.fn();
     render(
@@ -145,6 +168,21 @@ describe('AdminCommandPalette', () => {
     expect(screen.getByRole('dialog')).toHaveAccessibleName('Admin keyboard shortcuts');
     fireEvent.keyDown(screen.getByTestId('admin-shortcuts-close-btn'), { key: 'c' });
     expect(run).toHaveBeenCalledOnce();
+  });
+
+  it('still runs shortcuts past a closed dialog left mounted under an aria-hidden root', () => {
+    const run = vi.fn();
+    setup([{ id: 'credits', label: 'Adjust credits', shortcut: 'c', run }]);
+    const hidden = document.createElement('div');
+    hidden.setAttribute('aria-hidden', 'true');
+    hidden.innerHTML = '<div role="dialog"></div>';
+    document.body.appendChild(hidden);
+    try {
+      fireEvent.keyDown(document.body, { key: 'c' });
+      expect(run).toHaveBeenCalledOnce();
+    } finally {
+      hidden.remove();
+    }
   });
 
   it('focuses the local search, and opens the palette from an input with Cmd/Ctrl+K', () => {

@@ -113,7 +113,8 @@ export const createVideoGenerationContract = defineEndpoint({
       description:
         'The request cannot run: a body or capability violation (`errorCode` names it, e.g. ' +
         '`unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an ' +
-        'unknown or unavailable model (`model_unavailable`), a model your ' +
+        'unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names ' +
+        'the model to use instead), a model your ' +
         'administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an ' +
         'Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`).',
       schema: VideoGenerationErrorResponseSchema,

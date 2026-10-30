@@ -22,6 +22,7 @@ import {
   triageReleaseNotes,
   writeReleaseNotes,
 } from './generate';
+import { trimToBoundary } from './limits';
 
 const pr = (number: number, extra: Partial<ReleaseNotesJobPr> = {}): ReleaseNotesJobPr => ({
   number,
@@ -145,10 +146,85 @@ describe('generateReleaseNotes', () => {
     expect(result.draft.items).toEqual([]);
   });
 
-  it('rejects a triage reply that skips a PR', async () => {
-    const complete = vi.fn().mockResolvedValue(triageReply([{ number: 1, customerFacing: false, note: '' }]));
+  it('re-triages a PR the triage reply skips, on its own', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(triageReply([{ number: 1, customerFacing: true, note: 'One.' }]))
+      .mockResolvedValueOnce(triageReply([{ number: 1, customerFacing: true, note: 'One.' }]))
+      .mockResolvedValueOnce(triageReply([{ number: 2, customerFacing: true, note: 'Two.' }]));
+    const logger = { warn: vi.fn() };
 
-    await expect(generateReleaseNotes([pr(1), pr(2)], complete)).rejects.toThrow(/missing entry for pull request 2/);
+    const { notes, usage } = await triageReleaseNotes([pr(1), pr(2)], complete, { logger });
+
+    expect(complete).toHaveBeenCalledTimes(3);
+    const prompts: string[] = complete.mock.calls.map(call => call[0]);
+    expect(usage.inputTokens).toBe(prompts.reduce((sum, prompt) => sum + Math.ceil(prompt.length / 4), 0));
+    expect(complete.mock.calls[1][0]).toContain('missing entry for pull request 2');
+    const retryPrompt: string = complete.mock.calls[2][0];
+    expect(retryPrompt).toContain('"number":2');
+    expect(retryPrompt).not.toContain('"number":1');
+    expect(notes).toEqual(
+      new Map([
+        [1, 'One.'],
+        [2, 'Two.'],
+      ])
+    );
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('treating them as internal'));
+  });
+
+  it('keeps the entries of a partial repair reply that covers more than the first reply', async () => {
+    const entry = (number: number) => ({ number, customerFacing: true, note: `Note ${number}.` });
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(triageReply([entry(1)]))
+      .mockResolvedValueOnce(triageReply([entry(1), entry(2), entry(3)]))
+      .mockResolvedValueOnce(triageReply([entry(4)]));
+    const logger = { warn: vi.fn() };
+
+    const { notes } = await triageReleaseNotes([pr(1), pr(2), pr(3), pr(4)], complete, { logger });
+
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(complete.mock.calls[2][0]).not.toContain('"number":3');
+    expect([...notes.keys()]).toEqual([1, 2, 3, 4]);
+  });
+
+  it('drops a PR the model keeps omitting with a warning and ships the rest', async () => {
+    const complete = vi.fn(async (prompt: string) =>
+      prompt.includes('"number":1')
+        ? triageReply([{ number: 1, customerFacing: true, note: 'One.' }])
+        : triageReply([{ number: 99, customerFacing: true, note: 'Invented.' }])
+    );
+    const logger = { warn: vi.fn() };
+
+    const { notes, omitted } = await triageReleaseNotes([pr(1), pr(2)], complete, { logger });
+
+    expect(complete).toHaveBeenCalledTimes(4);
+    expect(notes).toEqual(new Map([[1, 'One.']]));
+    expect(omitted).toEqual([2]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[releaseNotes] triage omitted pull requests 2; treating them as internal'
+    );
+  });
+
+  it('treats omitted PRs as internal when the retry call itself fails', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(triageReply([{ number: 1, customerFacing: true, note: 'One.' }]))
+      .mockResolvedValueOnce(triageReply([{ number: 1, customerFacing: true, note: 'One.' }]))
+      .mockRejectedValueOnce(new Error('timed out'));
+    const logger = { warn: vi.fn() };
+
+    const { notes } = await triageReleaseNotes([pr(1), pr(2)], complete, { logger });
+
+    expect(notes).toEqual(new Map([[1, 'One.']]));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('retry for omitted pull requests failed'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('omitted pull requests 2'));
+  });
+
+  it('still fails when no triage reply is usable', async () => {
+    const complete = vi.fn().mockResolvedValue('not json');
+
+    await expect(triageReleaseNotes([pr(1)], complete)).rejects.toThrow(/triage output invalid after one repair/);
   });
 
   it('makes no LLM call for an empty PR list', async () => {
@@ -313,6 +389,72 @@ describe('copy accuracy', () => {
     expect(warn.mock.calls.filter(([message]) => String(message).includes('9999'))).toHaveLength(1);
   });
 
+  const fieldReply = (fields: { headline?: string; summary?: string }) =>
+    JSON.stringify({
+      headline: 'Storage usage by uploader',
+      summary: 'Organizations can see storage usage.',
+      items: [{ category: 'new', text: 'Search is quicker.', importance: 1, sourcePrs: [4938] }],
+      ...fields,
+    });
+
+  it.each([
+    ['summary', { summary: `${'Sentence one is short. '}${'w'.repeat(600)}` }, 'summary: must be at most 600'],
+    ['headline', { headline: `${'Fast. '}${'w'.repeat(120)}` }, 'headline: must be at most 120'],
+  ])('asks for a repair when the %s runs over the cap', async (_, fields, expectedError) => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(fieldReply(fields))
+      .mockResolvedValueOnce(editorialReply([4938]));
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete);
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[1][0]).toContain(expectedError);
+    expect(draft.headline).toBe('Faster search');
+  });
+
+  it('trims a summary that is still over the cap after the repair instead of failing the release', async () => {
+    const warn = vi.fn();
+    const long = fieldReply({ summary: `${'Sentence one is short. '}${'w'.repeat(600)}` });
+    const complete = vi.fn().mockResolvedValueOnce(long).mockResolvedValueOnce(long);
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
+      logger: { warn },
+    });
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(draft.summary.length).toBeLessThanOrEqual(600);
+    expect(draft.summary.startsWith('Sentence one is short.')).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('trimmed summary'));
+  });
+
+  it('trims a headline that is still over the cap after the repair instead of failing the release', async () => {
+    const warn = vi.fn();
+    const long = fieldReply({ headline: `${'word '.repeat(30)}end` });
+    const complete = vi.fn().mockResolvedValueOnce(long).mockResolvedValueOnce(long);
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
+      logger: { warn },
+    });
+
+    expect(draft.headline.length).toBeLessThanOrEqual(120);
+    expect(draft.headline.endsWith('word...')).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('trimmed headline'));
+  });
+
+  it('trims an over-long summary when the repair call fails, so the release still gets a note', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(fieldReply({ summary: 'w'.repeat(700) }))
+      .mockRejectedValueOnce(new Error('timed out'));
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
+      logger: { warn: vi.fn() },
+    });
+
+    expect(draft.summary).toBe(`${'w'.repeat(597)}...`);
+  });
+
   it.each([
     [
       'fails schema validation',
@@ -356,8 +498,7 @@ describe('copy accuracy', () => {
       .fn()
       .mockResolvedValueOnce(
         JSON.stringify({
-          headline: 'x'.repeat(121),
-          summary: 'Organizations can see storage usage.',
+          headline: 'Storage usage by uploader',
           items: [{ category: 'new', text: 'x'.repeat(161), importance: 1, sourcePrs: [4938] }],
         })
       )
@@ -445,5 +586,32 @@ describe('createReleaseNotesCompleter', () => {
     h.getAvailableModels.mockResolvedValue([]);
 
     await expect(createReleaseNotesCompleter({ modelId: 'nope' }, logger as never)).rejects.toThrow(/neither nope/);
+  });
+});
+
+describe('trimToBoundary', () => {
+  it('returns text within the cap untouched', () => {
+    expect(trimToBoundary('Short one.', 50)).toBe('Short one.');
+  });
+
+  it('cuts at the last sentence end past the halfway mark', () => {
+    expect(trimToBoundary('First sentence here. Second sentence runs on and on', 38)).toBe('First sentence here.');
+  });
+
+  it('keeps a sentence that ends exactly at the cap', () => {
+    expect(trimToBoundary('Ends right here. Next', 16)).toBe('Ends right here.');
+  });
+
+  it('falls back to a word boundary with an ellipsis when the only sentence end is too early', () => {
+    expect(trimToBoundary('Hi. then a very long run of words without stops', 30)).toBe('Hi. then a very long run...');
+  });
+
+  it('hard-cuts a single unbroken token with an ellipsis', () => {
+    expect(trimToBoundary('w'.repeat(50), 20)).toBe(`${'w'.repeat(17)}...`);
+  });
+
+  it('never leaves half of a surrogate pair', () => {
+    const text = `${'a'.repeat(6)}\u{1F600}${'b'.repeat(20)}`;
+    expect(trimToBoundary(text, 10)).toBe(`${'a'.repeat(6)}...`);
   });
 });

@@ -7,6 +7,7 @@ import {
   assignClaudePluginName,
   type SkillListingDenorm,
 } from './SkillListingModel';
+import { SkillBundle } from './SkillBundleModel';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -25,6 +26,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await SkillListing.collection.deleteMany({});
+  await SkillBundle.collection.deleteMany({});
 });
 
 let seq = 0;
@@ -160,6 +162,19 @@ describe('claudePluginName', () => {
       await approvePendingListingVersion(id, 'stale', 1, { name: 'Foo', description: 'd' } as SkillListingDenorm)
     ).toBe(false);
     expect(await pluginName(id)).toBeUndefined();
+  });
+
+  it('skips a name a bundle in the same org holds', async () => {
+    const bundle = { name: 'b', description: 'd', pluginName: 'pr-reviewer', createdByUserId: 'admin' };
+    await SkillBundle.create({ ...bundle, organizationId: 'org1' });
+    await SkillBundle.create({ ...bundle, organizationId: 'org2', pluginName: 'linter' });
+    const id = await listing('PR Reviewer');
+    await approve(id, 'PR Reviewer', 1);
+    expect(await pluginName(id)).toBe(`pr-reviewer-${id.slice(-6)}`);
+
+    const other = await listing('Linter');
+    await approve(other, 'Linter', 1);
+    expect(await pluginName(other)).toBe('linter');
   });
 
   it('scopes collisions to the org', async () => {

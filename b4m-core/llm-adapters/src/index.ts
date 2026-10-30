@@ -613,6 +613,7 @@ export * from './wifTokenSource';
 // Implementations:
 export * from './anthropicBackend';
 export * from './llmTimeoutErrors';
+export * from './llmEmptyTurnErrors';
 export * from './anthropicBatchService';
 export * from './awsBackend';
 export * from './bedrockBackend/base';
@@ -661,3 +662,4 @@ export * from './staleReferences';
 export * from './modelSunsetMetrics';
 export * from './thinkingParams';
 export * from './toolPairingUtils';
+export { convertOpenAIToolHistoryToCanonical } from './messageFormatConverter';

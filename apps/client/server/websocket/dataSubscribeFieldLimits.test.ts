@@ -62,6 +62,7 @@ describe('resolveFieldLimits', () => {
       stripeCustomerId: false,
       resetPasswordToken: false,
       signupGrantAssessment: false,
+      riskScore: false,
     });
   });
 

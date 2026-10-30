@@ -65,6 +65,15 @@ export function requireBaseUrl(hostOrUrl: string, runtimeKind: string): string {
   return baseUrl;
 }
 
+const RUNTIME_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/** The caller's `id` option, or the address-derived default; throws `LocalRuntimeError` for an unusable id. */
+export function chooseRuntimeId(id: string | undefined, fallback: string, runtimeKind: string): string {
+  if (id === undefined) return fallback;
+  if (!RUNTIME_ID.test(id)) throw new LocalRuntimeError(`Invalid ${runtimeKind} runtime id`, runtimeKind);
+  return id;
+}
+
 export function hostPort(baseUrl: string): string {
   const url = new URL(baseUrl);
   const port = url.port || (url.protocol === 'https:' ? '443' : '80');
@@ -189,6 +198,39 @@ export function parseJson<T extends z.ZodType>(client: HttpClient, path: string,
     });
   }
   return parsed.data;
+}
+
+export class BodyTooLargeError extends Error {}
+
+/**
+ * The body's decoded bytes, or `BodyTooLargeError` once they pass `maxBytes`; `content-length` is only an early
+ * reject, since fetch decodes gzip and br and the decoded size is what counts.
+ */
+export async function readCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
+  if (Number(response.headers.get('content-length')) > maxBytes) throw new BodyTooLargeError();
+  if (!response.body) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) throw new BodyTooLargeError();
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  const out = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
 /** Yields each non-empty line of a streamed body, decoding UTF-8 across chunk boundaries. */

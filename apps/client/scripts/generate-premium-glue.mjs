@@ -1776,6 +1776,194 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
   }
 }
 
+// Infra resources an overlay declares as plain data (b4mContributions.infraResources).
+// The same literal goes to infra/ (deploy side) and to server-utils (runtime side), so
+// the two can never register different lists. Name rules (collisions with core,
+// duplicates, bad characters) are applied by both consumers via @bike4mind/infra's
+// partitionContributed; this only checks shape, since the values become TS literals.
+// The core name list is read from infra/, so it is only as complete as that tree.
+const INFRA_RESOURCE_TARGETS = [
+  join(INFRA_GENERATED_DIR, 'infraResources.generated.ts'),
+  join(REPO_ROOT, 'packages/server-utils/src/premium-generated/infraResources.generated.ts'),
+];
+
+function readInfraResources(pkg) {
+  const raw = pkg.contributions.infraResources;
+  const fail = msg => {
+    throw new Error(`[codegen] invalid b4mContributions.infraResources from package "${pkg.name}": ${msg}`);
+  };
+  if (!isPlainObject(raw)) fail('must be an object');
+  const list = field => {
+    const value = raw[field] === undefined ? [] : raw[field];
+    if (!Array.isArray(value) || !value.every(isPlainObject)) fail(`${field} must be an array of objects`);
+    return value;
+  };
+  const secrets = list('secrets').map(s => {
+    if (typeof s.name !== 'string') fail('secret name must be a string');
+    if (s.placeholder !== undefined && typeof s.placeholder !== 'string')
+      fail(`${s.name}.placeholder must be a string`);
+    if (s.env !== undefined && typeof s.env !== 'boolean') fail(`${s.name}.env must be a boolean`);
+    if (s.env && s.name.length < 2) fail(`${s.name}.env requires a name of at least two characters for Lambda`);
+    return { name: s.name, placeholder: s.placeholder, env: s.env };
+  });
+  const rotations = list('rotations').map(r => {
+    if (typeof r.secret !== 'string') fail('rotation secret must be a string');
+    if (typeof r.description !== 'string' || typeof r.rotationProcess !== 'string') {
+      fail(`${r.secret} rotation needs string description and rotationProcess`);
+    }
+    if (!Number.isInteger(r.rotationIntervalDays) || r.rotationIntervalDays <= 0) {
+      fail(`${r.secret}.rotationIntervalDays must be a positive integer`);
+    }
+    // Same ceiling as the admin rotation PATCH (apps/client/pages/api/secret-rotations/[id]).
+    if (r.rotationIntervalDays > 365) fail(`${r.secret}.rotationIntervalDays must be at most 365`);
+    if (typeof r.isAutomatic !== 'boolean') fail(`${r.secret}.isAutomatic must be a boolean`);
+    const { secret, description, rotationIntervalDays, isAutomatic, rotationProcess } = r;
+    return { secret, description, rotationIntervalDays, isAutomatic, rotationProcess };
+  });
+  const optional = (q, field, check, what) => {
+    if (q[field] !== undefined && !check(q[field])) fail(`${q.name}.${field} must be ${what}`);
+    return q[field];
+  };
+  const isString = v => typeof v === 'string';
+  const isIntBetween = (min, max) => v => Number.isInteger(v) && v >= min && v <= max;
+  const queues = list('queues').map(q => {
+    for (const field of ['name', 'visibilityTimeout', 'label', 'displayName', 'application']) {
+      if (typeof q[field] !== 'string') fail(`queue ${field} must be a string`);
+    }
+    const tags = optional(q, 'tags', v => isPlainObject(v) && Object.values(v).every(isString), 'an object of strings');
+    return {
+      name: q.name,
+      dlqName: optional(q, 'dlqName', isString, 'a string'),
+      visibilityTimeout: q.visibilityTimeout,
+      retry: optional(q, 'retry', isIntBetween(1, 1000), 'an integer from 1 to 1000'),
+      encryption: optional(q, 'encryption', v => ['kms', 'sse-sqs', 'none'].includes(v), "'kms', 'sse-sqs' or 'none'"),
+      dlqEncryption: optional(q, 'dlqEncryption', v => ['kms', 'none'].includes(v), "'kms' or 'none'"),
+      dlqMessageRetentionSeconds: optional(
+        q,
+        'dlqMessageRetentionSeconds',
+        isIntBetween(60, 1209600),
+        'an integer from 60 to 1209600'
+      ),
+      tags: tags === undefined ? undefined : Object.fromEntries(Object.entries(tags)),
+      label: q.label,
+      displayName: q.displayName,
+      application: q.application,
+    };
+  });
+  return { secrets, rotations, queues };
+}
+
+// Every name core links into Resource: its secrets plus the other SST components declared
+// in infra/*.ts, and the built-in App. Null when infra/ is absent (an image install step
+// that runs before the source copy): the runtime then registers no contributed secret
+// rather than one that might shadow a core name, until a later run sees infra/.
+function readCoreResourceNames() {
+  const infraDir = join(REPO_ROOT, 'infra');
+  if (!existsSync(join(infraDir, 'secrets.ts'))) return null;
+  const names = new Set(['App']);
+  for (const file of readdirSync(infraDir)
+    .filter(f => f.endsWith('.ts'))
+    .sort()) {
+    const source = readFileSync(join(infraDir, file), 'utf8');
+    const code = source
+      .split('\n')
+      .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
+      .join('\n');
+    const captured = [...code.matchAll(/new sst\.[A-Za-z.]+\(\s*'([A-Za-z0-9_]+)'/g)];
+    // The contributed secret and queue loops are the only constructors named from data;
+    // those names are not core's. Each pattern exempts one constructor, so a second one named
+    // the same way is counted as unreadable instead of silently left out.
+    const fromData = { 'secrets.ts': [/^\s*spec\.name,/], 'queues.ts': [/^\s*pair\.name,/, /^\s*pair\.dlqName,/] };
+    const exempted = new Set();
+    const constructors = [...code.matchAll(/new sst\.[A-Za-z.]+\(/g)].filter(m => {
+      const rest = code.slice(m.index + m[0].length);
+      const pattern = (fromData[file] ?? []).find(p => !exempted.has(p) && p.test(rest));
+      if (pattern) exempted.add(pattern);
+      return !pattern;
+    });
+    if (constructors.length !== captured.length) {
+      throw new Error(
+        `infra/${file}: ${constructors.length - captured.length} sst constructor(s) not named by a ` +
+          `single-quoted literal; core resource names cannot be read reliably`
+      );
+    }
+    for (const m of captured) names.add(m[1]);
+  }
+  return [...names];
+}
+
+// Mirrors toEnvKey in b4m-core/resource/src/index.ts; keep in sync.
+function toEnvKey(name) {
+  if (/^[A-Z0-9_]+$/.test(name)) return name;
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+}
+
+// Env var names core is known to own: the env form of every core resource, plus every upper-snake
+// key in infra/*.ts. This catches accidental collisions only; it is not a sandbox, since a package's
+// own code can read process.env. The env example files are not scanned: they list core secrets a
+// package may later take over. Null when coreNames is null.
+function readCoreEnvNames(coreNames) {
+  if (coreNames === null) return null;
+  const names = new Set(coreNames.map(toEnvKey));
+  const keyPattern = /(?:^|[{,])\s*(?:-\s*)?#?\s*([A-Z][A-Z0-9_]*)\s*[:=]/gm;
+  const infraDir = join(REPO_ROOT, 'infra');
+  const files = readdirSync(infraDir)
+    .filter(f => f.endsWith('.ts'))
+    .map(f => join(infraDir, f));
+  for (const file of files) {
+    for (const m of readFileSync(file, 'utf8').matchAll(keyPattern)) names.add(m[1]);
+  }
+  return [...names].sort();
+}
+
+// Every DLQ label infra/dlqAlarms.ts alarms on, registry-listed or alarm-only. Null when
+// infra/ is absent, like the core resource names. A label that is not a string literal
+// would be missed, so one fails codegen; the contributed pairs' spec.label is the exception.
+function readCoreDlqLabels() {
+  const file = join(REPO_ROOT, 'infra/dlqAlarms.ts');
+  if (!existsSync(file)) return null;
+  const code = readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
+    .join('\n');
+  // Only the contributed loop's spec.label is exempt; a second one is reported like any other.
+  let contributedLabelSeen = false;
+  const computed = [...code.matchAll(/\blabel:\s*(?![\s'"])([^,}\n]+)/g)]
+    .map(m => m[1].trim())
+    .filter(value => {
+      if (value !== 'spec.label' || contributedLabelSeen) return true;
+      contributedLabelSeen = true;
+      return false;
+    });
+  if (computed.length > 0) {
+    throw new Error(
+      `infra/dlqAlarms.ts: DLQ label(s) not written as a string literal: ${computed.join(', ')}. ` +
+        'Codegen reads core labels from literals; write the label inline.'
+    );
+  }
+  const labels = [...code.matchAll(/\blabel:\s*(['"])([a-z0-9]+(?:-[a-z0-9]+)*)\1/g)].map(m => m[2]);
+  return [...new Set(labels)].sort();
+}
+
+function generateInfraResources(packages) {
+  const merged = { secrets: [], rotations: [], queues: [] };
+  for (const pkg of packages) {
+    if (pkg.contributions.infraResources === undefined) continue;
+    const { secrets, rotations, queues } = readInfraResources(pkg);
+    merged.secrets.push(...secrets);
+    merged.rotations.push(...rotations);
+    merged.queues.push(...queues);
+  }
+  const coreNames = readCoreResourceNames();
+  const content =
+    `${GENERATED_BANNER}import type { InfraResourceContributions } from '@bike4mind/infra';\n\n` +
+    `export const contributedInfraResources: InfraResourceContributions = ${JSON.stringify(merged, null, 2)};\n\n` +
+    `export const coreResourceNames: readonly string[] | null = ${JSON.stringify(coreNames)};\n\n` +
+    `export const coreEnvNames: readonly string[] | null = ${JSON.stringify(readCoreEnvNames(coreNames))};\n\n` +
+    `export const coreDlqLabels: readonly string[] | null = ${JSON.stringify(readCoreDlqLabels())};\n`;
+  for (const target of INFRA_RESOURCE_TARGETS) writeFile(target, content);
+}
+
 // --- Main ---
 
 const packages = discoverPremiumPackages();
@@ -1837,5 +2025,6 @@ generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
 generateEntitlementGrants(packages);
 generateApiKeyScopes(packages);
+generateInfraResources(packages);
 
 console.log('[codegen] done.');

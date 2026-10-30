@@ -1,42 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { AxiosError, AxiosHeaders } from 'axios';
 import type { ReactNode } from 'react';
 import { UserProfilePage } from './UserProfilePage';
 
-type BlockerArgs = { current: { pathname: string }; next: { pathname: string } };
-type BlockerOptions = { shouldBlockFn: (args: BlockerArgs) => boolean; enableBeforeUnload: () => boolean };
-
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   useGetUser: vi.fn(),
-  blockerOptions: undefined as BlockerOptions | undefined,
-  blocker: { status: 'idle' } as { status: string; proceed?: () => void; reset?: () => void },
 }));
 
-vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => mocks.navigate,
-  useBlocker: (options: BlockerOptions) => {
-    mocks.blockerOptions = options;
-    return mocks.blocker;
-  },
-}));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@client/app/hooks/data/user', () => ({ useGetUser: mocks.useGetUser }));
-vi.mock('../../AdminProfileModal', () => ({ default: () => null }));
-vi.mock('../ComplianceModal', () => ({ default: () => null }));
-// The card is covered by FullUsersView.test.tsx; this stub exposes the props the page wires.
-vi.mock('../Views/FullUsersView', () => ({
-  FullUsersView: (props: {
-    variant: string;
+vi.mock('../ComplianceModal', () => ({ default: () => <div data-testid="stub-compliance-modal" /> }));
+// The view is covered by UserProfileView.test.tsx; this stub exposes the props the page wires.
+vi.mock('./UserProfileView', () => ({
+  UserProfileView: (props: {
+    user: { id: string };
     tab: string;
-    onUnsavedFieldsChange: (keys: string[]) => void;
-    onUserDeleted: () => void;
+    onTabChange: (tab: string) => void;
+    onBack: () => void;
   }) => (
-    <div data-testid="stub-full-users-view" data-variant={props.variant} data-tab={props.tab}>
-      <button data-testid="stub-stage-edit" onClick={() => props.onUnsavedFieldsChange(['tags'])} />
-      <button data-testid="stub-delete" onClick={props.onUserDeleted} />
+    <div data-testid="stub-user-profile-view" data-tab={props.tab} data-user-id={props.user.id}>
+      <button data-testid="stub-tab-btn" onClick={() => props.onTabChange('credits')} />
+      <button data-testid="stub-back-btn" onClick={props.onBack} />
     </div>
   ),
 }));
@@ -65,29 +53,55 @@ const notFoundError = () =>
     config: { headers: new AxiosHeaders() },
   });
 
-const renderPage = (userId = USER_ID) =>
-  render(<UserProfilePage userId={userId} tab="activity" onTabChange={vi.fn()} />, { wrapper: TestWrapper });
-
-const leaving = { current: { pathname: `/admin/users/${USER_ID}` }, next: { pathname: '/admin' } };
-const switchingTab = {
-  current: { pathname: `/admin/users/${USER_ID}` },
-  next: { pathname: `/admin/users/${USER_ID}` },
+const renderPage = (userId = USER_ID, onTabChange = vi.fn()) => {
+  render(<UserProfilePage userId={userId} tab="activity" onTabChange={onTabChange} />, { wrapper: TestWrapper });
+  return { onTabChange };
 };
 
 describe('UserProfilePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.blocker = { status: 'idle' };
     mocks.useGetUser.mockReturnValue(loadedUser());
   });
 
-  it('renders the user as the page variant on the tab from the URL', () => {
+  it('renders the profile view for the loaded user on the tab from the URL', () => {
     renderPage();
 
     expect(mocks.useGetUser).toHaveBeenCalledWith(USER_ID);
-    const view = screen.getByTestId('stub-full-users-view');
-    expect(view).toHaveAttribute('data-variant', 'page');
+    const view = screen.getByTestId('stub-user-profile-view');
     expect(view).toHaveAttribute('data-tab', 'activity');
+    expect(view).toHaveAttribute('data-user-id', USER_ID);
+    expect(screen.getByTestId('user-profile-page')).toBeInTheDocument();
+  });
+
+  it('mounts the compliance modal the header opens, which the view does not render itself', () => {
+    renderPage();
+
+    expect(screen.getByTestId('stub-compliance-modal')).toBeInTheDocument();
+  });
+
+  it('hands tab changes to the route', () => {
+    const { onTabChange } = renderPage();
+
+    fireEvent.click(screen.getByTestId('stub-tab-btn'));
+
+    expect(onTabChange).toHaveBeenCalledWith('credits');
+  });
+
+  it('goes back to the Users list from the view', () => {
+    renderPage();
+
+    fireEvent.click(screen.getByTestId('stub-back-btn'));
+
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'users' } });
+  });
+
+  it('shows a progress bar while the user loads', () => {
+    mocks.useGetUser.mockReturnValue({ isLoading: true, isFetching: true, error: null, data: undefined });
+    renderPage();
+
+    expect(screen.getByTestId('user-profile-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('stub-user-profile-view')).not.toBeInTheDocument();
   });
 
   it('shows not-found for a malformed id without asking the API', () => {
@@ -98,63 +112,34 @@ describe('UserProfilePage', () => {
     expect(screen.getByTestId('user-profile-not-found')).toBeInTheDocument();
   });
 
-  it('shows not-found when the API says the user does not exist', () => {
+  it('shows not-found when the API says the user does not exist, with a way back', () => {
     mocks.useGetUser.mockReturnValue({ isLoading: false, isFetching: false, error: notFoundError(), data: undefined });
     renderPage();
 
     expect(screen.getByTestId('user-profile-not-found')).toBeInTheDocument();
-    expect(screen.queryByTestId('stub-full-users-view')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('stub-user-profile-view')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('user-profile-back-btn'));
+
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'users' } });
   });
 
   it('offers a retry, not not-found, for any other load failure', () => {
+    const refetch = vi.fn();
     mocks.useGetUser.mockReturnValue({
       isLoading: false,
       isFetching: false,
       error: new Error('boom'),
       data: undefined,
-      refetch: vi.fn(),
+      refetch,
     });
     renderPage();
 
     expect(screen.getByTestId('user-profile-error')).toBeInTheDocument();
     expect(screen.queryByTestId('user-profile-not-found')).not.toBeInTheDocument();
-  });
 
-  it('guards leaving the page only while edits are unsaved, and never a tab switch', () => {
-    renderPage();
-    expect(mocks.blockerOptions?.shouldBlockFn(leaving)).toBe(false);
-    expect(mocks.blockerOptions?.enableBeforeUnload()).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
 
-    act(() => fireEvent.click(screen.getByTestId('stub-stage-edit')));
-
-    expect(mocks.blockerOptions?.shouldBlockFn(leaving)).toBe(true);
-    expect(mocks.blockerOptions?.shouldBlockFn(switchingTab)).toBe(false);
-    expect(mocks.blockerOptions?.enableBeforeUnload()).toBe(true);
-  });
-
-  it('names the unsaved fields when a navigation is blocked, and leaves only on discard', () => {
-    const proceed = vi.fn();
-    const reset = vi.fn();
-    mocks.blocker = { status: 'blocked', proceed, reset };
-    renderPage();
-    act(() => fireEvent.click(screen.getByTestId('stub-stage-edit')));
-
-    expect(screen.getByTestId('user-profile-leave-modal')).toHaveTextContent('Tags and product access');
-    fireEvent.click(screen.getByTestId('user-profile-leave-cancel-btn'));
-    expect(reset).toHaveBeenCalled();
-    expect(proceed).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId('user-profile-leave-confirm-btn'));
-    expect(proceed).toHaveBeenCalled();
-  });
-
-  it('goes back to the Users list once the user is deleted, without asking about staged edits', () => {
-    renderPage();
-    act(() => fireEvent.click(screen.getByTestId('stub-stage-edit')));
-
-    fireEvent.click(screen.getByTestId('stub-delete'));
-
-    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'users' } });
-    expect(mocks.blockerOptions?.shouldBlockFn(leaving)).toBe(false);
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 });

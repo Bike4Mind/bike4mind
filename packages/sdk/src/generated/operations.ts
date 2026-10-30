@@ -101,9 +101,25 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/voice/sessions/{id}/end',
   },
+  enhanceAgentField: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/enhance-field',
+  },
   executeTool: {
     method: 'POST',
     path: '/api/ai/v1/tools',
+  },
+  generateAgentAvatar: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/generate-avatar',
+  },
+  generateAgentDescription: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/generate-description',
+  },
+  generateAgentSystemPrompt: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/generate-system-prompt',
   },
   generateImage: {
     method: 'POST',
@@ -132,6 +148,10 @@ export const operations = {
   getArtifactVersion: {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions/{version}',
+  },
+  getClaudeBundleZip: {
+    method: 'GET',
+    path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
   },
   getClaudeMarketplace: {
     method: 'GET',
@@ -177,6 +197,10 @@ export const operations = {
     method: 'GET',
     path: '/api/sessions/{id}',
   },
+  getSkillMarketListing: {
+    method: 'GET',
+    path: '/api/v1/skills/market/listings/{id}',
+  },
   getVideoGeneration: {
     method: 'GET',
     path: '/api/v1/video-generations/{id}',
@@ -184,6 +208,10 @@ export const operations = {
   getWhatsNewMedia: {
     method: 'GET',
     path: '/api/v1/whats-new/media/{id}/{asset}',
+  },
+  importSkillMarketListing: {
+    method: 'POST',
+    path: '/api/v1/skills/market/listings/{id}/import',
   },
   listAgents: {
     method: 'GET',
@@ -221,6 +249,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/music-models',
   },
+  listMySkillMarketListings: {
+    method: 'GET',
+    path: '/api/v1/skills/market/listings/mine',
+  },
   listProjects: {
     method: 'GET',
     path: '/api/v1/projects',
@@ -232,6 +264,14 @@ export const operations = {
   listSessions: {
     method: 'GET',
     path: '/api/v1/sessions',
+  },
+  listSkillMarketListings: {
+    method: 'GET',
+    path: '/api/v1/skills/market/listings',
+  },
+  listSkillMarketReviewQueue: {
+    method: 'GET',
+    path: '/api/v1/skills/market/review-queue',
   },
   listVideoGenerations: {
     method: 'GET',
@@ -249,9 +289,21 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/whats-new',
   },
+  publishSkillMarketListing: {
+    method: 'POST',
+    path: '/api/v1/skills/market/listings',
+  },
   removeDataLakeFile: {
     method: 'DELETE',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
+  },
+  rescanSkillMarketVersion: {
+    method: 'POST',
+    path: '/api/v1/skills/market/versions/{vid}/rescan',
+  },
+  reviewSkillMarketVersion: {
+    method: 'POST',
+    path: '/api/v1/skills/market/versions/{vid}/review',
   },
   searchDataLake: {
     method: 'POST',
@@ -264,6 +316,10 @@ export const operations = {
   startAgentExecution: {
     method: 'POST',
     path: '/api/v1/agent-executions',
+  },
+  submitSkillMarketListingVersion: {
+    method: 'POST',
+    path: '/api/v1/skills/market/listings/{id}/versions',
   },
   synthesizeSpeech: {
     method: 'POST',
@@ -288,5 +344,9 @@ export const operations = {
   updateSession: {
     method: 'PUT',
     path: '/api/sessions/{id}',
+  },
+  withdrawSkillMarketListing: {
+    method: 'DELETE',
+    path: '/api/v1/skills/market/listings/{id}',
   },
 } as const;

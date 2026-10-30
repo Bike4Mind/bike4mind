@@ -6,6 +6,7 @@ import {
   ISessionDocument,
   OpenAIImageGenerationInput,
   IUserDocument,
+  LLMEventPayload,
   LLMEvents,
   ImageModels,
   BFLSafetyToleranceSchema,
@@ -149,6 +150,7 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
    * keeps the first run's files while quest.images shows the new render. Absent on messages queued before it existed.
    */
   generationId: z.string().optional(),
+  adminRoleWithheld: z.boolean().optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
@@ -180,9 +182,13 @@ interface IImageGenerationServiceOptions {
   startImageGenerationProcess: (body: ImageGenerationBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
   creditHolds: ImageCreditHolds;
+  assertModelAdmission: (user: string | IUserDocument, modelId: string, adminRoleWithheld?: boolean) => Promise<void>;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
-  logEvent: (event: any, options?: { session?: mongoose.ClientSession; ability?: MongoAbility }) => Promise<any>;
+  logEvent: (
+    event: LLMEventPayload,
+    options?: { session?: mongoose.ClientSession; ability?: MongoAbility }
+  ) => Promise<void>;
   /** Storage where the generated images will be stored. */
   storage: BaseStorage;
   fabFileStorage: BaseStorage;
@@ -247,6 +253,7 @@ export class ImageGenerationService {
   private db: IImageGenerationServiceOptions['db'];
   private startImageGenerationProcess: IImageGenerationServiceOptions['startImageGenerationProcess'];
   private creditHolds: ImageCreditHolds;
+  private assertModelAdmission: IImageGenerationServiceOptions['assertModelAdmission'];
   private wsHttpsUrl: string;
   private logEvent: IImageGenerationServiceOptions['logEvent'];
   private abilityGetter: IImageGenerationServiceOptions['abilityGetter'];
@@ -264,6 +271,7 @@ export class ImageGenerationService {
     this.db = options.db;
     this.startImageGenerationProcess = options.startImageGenerationProcess;
     this.creditHolds = options.creditHolds;
+    this.assertModelAdmission = options.assertModelAdmission;
     this.wsHttpsUrl = options.wsHttpsUrl;
     this.logEvent = options.logEvent;
     this.storage = options.storage;
@@ -299,7 +307,15 @@ export class ImageGenerationService {
     }
   }
 
-  public async invoke({ body, userId }: { body: z.infer<typeof GenerateImageIvokeParamsSchema>; userId: string }) {
+  public async invoke({
+    body,
+    userId,
+    adminRoleWithheld,
+  }: {
+    adminRoleWithheld?: boolean;
+    body: z.infer<typeof GenerateImageIvokeParamsSchema>;
+    userId: string;
+  }) {
     const now = new Date();
 
     const parsedBody = GenerateImageIvokeParamsSchema.parse(body);
@@ -323,6 +339,7 @@ export class ImageGenerationService {
       rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
+    await this.assertModelAdmission(userId, model, adminRoleWithheld);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
 
@@ -468,6 +485,7 @@ export class ImageGenerationService {
           organizationId,
           intent,
           generationId: uuidv4(),
+          adminRoleWithheld,
         })
       );
 
@@ -828,6 +846,7 @@ export class ImageGenerationService {
       sessionId,
       questId,
       userId,
+      adminRoleWithheld,
       prompt,
       model,
       n = 1,
@@ -895,6 +914,7 @@ export class ImageGenerationService {
         organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
       ]);
       if (!user) throw new NotFoundError('User not found');
+      await this.assertModelAdmission(user, model, adminRoleWithheld);
 
       // Owner-wide lake access for scoping the input-image lookup: a lake-only image the workbench
       // admitted must still resolve here. Absent resolver (or a resolution outage) degrades to
@@ -1455,7 +1475,12 @@ export class ImageGenerationService {
       const userAbility = this.abilityGetter(user);
 
       await this.logEvent(
-        { userId, type: LLMEvents.QUEUE_HANDLER_IMAGE_GENERATE, metadata: { questId: quest.id, modelId: model } },
+        // as unknown: payload lacks the event type's required metadata and sends modelId, not model; typing it would change analytics
+        {
+          userId,
+          type: LLMEvents.QUEUE_HANDLER_IMAGE_GENERATE,
+          metadata: { questId: quest.id, modelId: model },
+        } as unknown as LLMEventPayload,
         { ability: userAbility }
       );
 

@@ -872,7 +872,21 @@
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
-          "Name": "AWSManagedRulesAmazonIpReputationList"
+          "Name": "AWSManagedRulesAmazonIpReputationList",
+          "RuleActionOverrides": [
+            {
+              "Name": "AWSManagedIPReputationList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            },
+            {
+              "Name": "AWSManagedReconnaissanceList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            }
+          ]
         }
       },
       "OverrideAction": {
@@ -2059,6 +2073,117 @@
       }
     },
     {
+      "Name": "AWS-AWSManagedRulesACFPRuleSet",
+      "Priority": 27,
+      "Statement": {
+        "ManagedRuleGroupStatement": {
+          "VendorName": "AWS",
+          "Name": "AWSManagedRulesACFPRuleSet",
+          "ManagedRuleGroupConfigs": [
+            {
+              "AWSManagedRulesACFPRuleSet": {
+                "CreationPath": "/api/otc/verify",
+                "RegistrationPagePath": "/api/otc/verify",
+                "EnableRegexInPath": false,
+                "RequestInspection": {
+                  "PayloadType": "JSON",
+                  "UsernameField": {
+                    "Identifier": "/email"
+                  },
+                  "PasswordField": {
+                    "Identifier": "/code"
+                  }
+                }
+              }
+            }
+          ],
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/otc/",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "OverrideAction": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "AWS-AWSManagedRulesACFPRuleSet"
+      }
+    },
+    {
+      "Name": "block-forged-waf-forwarding-headers",
+      "Priority": 28,
+      "Statement": {
+        "OrStatement": {
+          "Statements": [
+            {
+              "ByteMatchStatement": {
+                "SearchString": "1",
+                "FieldToMatch": {
+                  "SingleHeader": {
+                    "Name": "x-amzn-waf-x-waf-anon-ip"
+                  }
+                },
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "NONE"
+                  }
+                ],
+                "PositionalConstraint": "EXACTLY"
+              }
+            },
+            {
+              "ByteMatchStatement": {
+                "SearchString": "1",
+                "FieldToMatch": {
+                  "SingleHeader": {
+                    "Name": "x-amzn-waf-x-waf-bot-signal"
+                  }
+                },
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "NONE"
+                  }
+                ],
+                "PositionalConstraint": "EXACTLY"
+              }
+            }
+          ]
+        }
+      },
+      "Action": {
+        "Block": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "block-forged-waf-forwarding-headers"
+      }
+    },
+    {
       "Name": "AWS-AWSManagedRulesBotControlRuleSet",
       "Priority": 30,
       "Statement": {
@@ -2137,6 +2262,60 @@
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
         "MetricName": "AWS-AWSManagedRulesBotControlRuleSet"
+      }
+    },
+    {
+      "Name": "forward-anon-ip-label",
+      "Priority": 31,
+      "Statement": {
+        "LabelMatchStatement": {
+          "Scope": "LABEL",
+          "Key": "awswaf:managed:aws:anonymous-ip-list:AnonymousIPList"
+        }
+      },
+      "Action": {
+        "Count": {
+          "CustomRequestHandling": {
+            "InsertHeaders": [
+              {
+                "Name": "x-waf-anon-ip",
+                "Value": "1"
+              }
+            ]
+          }
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "forward-anon-ip-label"
+      }
+    },
+    {
+      "Name": "forward-bot-signal-label",
+      "Priority": 32,
+      "Statement": {
+        "LabelMatchStatement": {
+          "Scope": "NAMESPACE",
+          "Key": "awswaf:managed:aws:bot-control:bot:"
+        }
+      },
+      "Action": {
+        "Count": {
+          "CustomRequestHandling": {
+            "InsertHeaders": [
+              {
+                "Name": "x-waf-bot-signal",
+                "Value": "1"
+              }
+            ]
+          }
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "forward-bot-signal-label"
       }
     }
   ],

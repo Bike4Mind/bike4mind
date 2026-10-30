@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { toast } from 'sonner';
 import { getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import useSessionLayout, {
   markModerationScanTimedOut,
@@ -89,9 +88,6 @@ export function useModerationScanFallback(pendingMessageFiles: PendingMessageFil
           for (const id of timedOut) next[id] = now + MODERATION_SLOW_POLL_WINDOW_MS;
           return next;
         });
-        toast.info(
-          "An image's safety check is taking longer than usual. We're still checking - it will attach once it clears, or you can remove it."
-        );
       }
     };
 

@@ -60,6 +60,7 @@ export function secretUserFields() {
     pendingNotionOAuthNonce: SECRET_VALUE,
     userNotes: SECRET_VALUE,
     stripeCustomerId: SECRET_VALUE,
+    riskScore: { score: 90, signals: [{ signal: 'quickApiKey', points: 15, reason: SECRET_VALUE }] },
     notInSchema: SECRET_VALUE,
   } satisfies Record<(typeof USER_SECRET_FIELDS)[number] | 'passwordHash' | 'notInSchema', unknown>;
 }

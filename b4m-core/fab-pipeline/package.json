@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/fab-pipeline",
-  "version": "2.1.10",
+  "version": "2.2.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -81,6 +81,6 @@
     "mongoose": "^8.24.1",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

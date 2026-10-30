@@ -29,6 +29,27 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return this.model.find({ userId }).sort({ createdAt: -1 }).exec();
   }
 
+  async findFirstCreatedAtByUserId(userId: string): Promise<Date | null> {
+    const [first] = await this.model
+      .find({ userId }, { createdAt: 1 })
+      .setOptions({ includeDeleted: true })
+      .sort({ createdAt: 1 })
+      .limit(1)
+      .lean<{ createdAt?: Date }[]>()
+      .exec();
+    return first?.createdAt ?? null;
+  }
+
+  async countCreatedByUserIds(userIds: string[]): Promise<Record<string, number>> {
+    if (userIds.length === 0) return {};
+    // aggregate skips the soft-delete filter, so deleted keys count as created.
+    const rows = await this.model.aggregate<{ _id: string; count: number }>([
+      { $match: { userId: { $in: userIds } } },
+      { $group: { _id: '$userId', count: { $sum: 1 } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
+  }
+
   findByUserIdAndId(userId: string, id: string) {
     return this.model.findOne({ _id: id, userId }).exec();
   }
@@ -132,9 +153,10 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
   }
 
   // Status-filtered in the same write, not checked on a prior read, so a re-revoke or a revoke
-  // racing deactivateAllByUserId keeps the first audit stamp instead of overwriting it.
-  async revokeIfNotDisabled(id: string, revokedBy: string, revokedReason?: string) {
-    await this.model.updateOne(
+  // racing deactivateAllByUserId keeps the first audit stamp instead of overwriting it. True when
+  // this call revoked it.
+  async revokeIfNotDisabled(id: string, revokedBy: string, revokedReason?: string): Promise<boolean> {
+    const result = await this.model.updateOne(
       { _id: id, status: { $ne: ApiKeyStatus.DISABLED } },
       {
         $set: {
@@ -145,6 +167,75 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
         },
       }
     );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Undoes a revoke: ACTIVE again and the revoke stamps cleared, only while the key is still
+   * DISABLED by `revokedBy` at or after `revokedSince` and has not expired. The conditions ride the
+   * same write, so two concurrent restores cannot both succeed. True when this call restored it.
+   */
+  async restoreRevoked(id: string, revokedBy: string, revokedSince: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: id,
+        status: ApiKeyStatus.DISABLED,
+        revokedBy,
+        revokedAt: { $gte: revokedSince },
+        $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+      },
+      { $set: { status: ApiKeyStatus.ACTIVE }, $unset: { revokedAt: 1, revokedBy: 1, revokedReason: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Disables every key of the user that is not already DISABLED, stamping the actor and the bulk batch,
+   * and returns the keys it flipped with their prior status so `reactivateByIds` can put them back.
+   */
+  async revokeLiveByUserId(
+    userId: string,
+    { revokedBy, revokedReason, batchId }: { revokedBy: string; revokedReason: string; batchId: string }
+  ): Promise<{ id: string; status: ApiKeyStatus }[]> {
+    const live = await this.model
+      .find({ userId, status: { $ne: ApiKeyStatus.DISABLED } })
+      .select('_id status')
+      .lean<{ _id: unknown; status: ApiKeyStatus }[]>();
+    if (live.length === 0) return [];
+    await this.model.updateMany(
+      { _id: { $in: live.map(key => key._id) }, status: { $ne: ApiKeyStatus.DISABLED } },
+      {
+        $set: {
+          status: ApiKeyStatus.DISABLED,
+          revokedAt: new Date(),
+          revokedBy,
+          revokedReason,
+          revokedBatchId: batchId,
+        },
+      }
+    );
+    return live.map(key => ({ id: String(key._id), status: key.status }));
+  }
+
+  /**
+   * Undo of `revokeLiveByUserId`: restores each key's prior status, but only for keys of this user still
+   * DISABLED by that same batch, so a key revoked again since (by anyone) stays revoked.
+   */
+  async reactivateByIds(
+    userId: string,
+    keys: { id: string; status: ApiKeyStatus }[],
+    batchId: string
+  ): Promise<number> {
+    let restored = 0;
+    for (const status of new Set(keys.map(key => key.status))) {
+      const ids = keys.filter(key => key.status === status).map(key => key.id);
+      const result = await this.model.updateMany(
+        { _id: { $in: ids }, userId, status: ApiKeyStatus.DISABLED, revokedBatchId: batchId },
+        { $set: { status }, $unset: { revokedAt: 1, revokedBy: 1, revokedReason: 1, revokedBatchId: 1 } }
+      );
+      restored += result.modifiedCount;
+    }
+    return restored;
   }
 
   findExpiredKeys() {
@@ -298,6 +389,8 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     revokedAt: { type: Date },
     revokedBy: { type: String },
     revokedReason: { type: String },
+    // Set only by an admin users-list bulk revoke, so that batch's undo restores its own keys and no others.
+    revokedBatchId: { type: String },
     // Encrypted at rest; select: false keeps it out of every read (and out of the whole-doc
     // update() writes rotate/revoke do) except findCallbackSigningSecret. See IUserApiKey.
     callbackSigningSecret: { type: String, select: false },

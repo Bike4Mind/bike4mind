@@ -2,7 +2,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { publicVideoModel } from './media/__fixtures__/videoModels';
 import { ModelCatalog, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
-import { cpuMachine, GIB, stubArch } from './fitStub.testHelper';
+import { GIB, stubArch, unifiedMachine } from './fitStub.testHelper';
 import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
 
 vi.mock('@bike4mind/common', async importOriginal => ({
@@ -26,6 +26,15 @@ describe('selectUsableModels', () => {
   it("carries the model's output ceiling from the catalog's max_tokens", () => {
     expect(selectUsableModels([wireModel({ max_tokens: 16_384 })])[0]).toMatchObject({ maxOutputTokens: 16_384 });
     expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('maxOutputTokens');
+  });
+
+  it('carries the release date only when the server sent a non-empty string', () => {
+    expect(selectUsableModels([wireModel({ releaseDate: '2025-04-14' })])[0]).toMatchObject({
+      releaseDate: '2025-04-14',
+    });
+    expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('releaseDate');
+    expect(selectUsableModels([wireModel({ releaseDate: '' })])[0]).not.toHaveProperty('releaseDate');
+    expect(selectUsableModels([wireModel({ releaseDate: 20250414 })])[0]).not.toHaveProperty('releaseDate');
   });
 
   it('keeps only text models that can call tools', () => {
@@ -132,6 +141,25 @@ describe('ModelCatalog', () => {
     expect((await catalog.list()).models.some(model => model.id.startsWith('local:'))).toBe(false);
   });
 
+  it('keeps the last local list past its expiry, without asking the device, until forgotten', async () => {
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    expect(catalog.lastLocal()).toBeNull();
+    await catalog.listLocal();
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+    expect(catalog.lastLocal()?.map(model => model.id)).toEqual(['local:ollama:qwen']);
+    expect(local.models).toHaveBeenCalledTimes(1);
+    catalog.forgetLocal();
+    expect(catalog.lastLocal()).toBeNull();
+  });
+
   it('discovers a newly started local runtime without expiring or refetching the hosted list', async () => {
     const local = { models: vi.fn().mockResolvedValue([]) };
     catalog = new ModelCatalog(
@@ -178,7 +206,7 @@ describe('ModelCatalog', () => {
 
   it("shows a local model's context as it is now: grown by a conversation, or sized again after Settings", async () => {
     // The stub estimator: 64K is the most that fits 13 GiB, 32K the most that fits 10 GiB.
-    let hardware = cpuMachine(13);
+    let hardware = unifiedMachine(13);
     const footprint = () => ({ arch: stubArch(131072), weightsBytes: 4 * GIB, hardware });
     const replies = [
       () =>
@@ -218,7 +246,7 @@ describe('ModelCatalog', () => {
       expect(catalog.cached()?.find(model => model.id === 'local:ollama:qwen')?.contextWindow).toBe(grown);
       expect((await contextOf())?.contextWindow).toBe(grown);
 
-      hardware = cpuMachine(10);
+      hardware = unifiedMachine(10);
       forgetLocalContexts();
       catalog.forgetLocal();
       expect((await contextOf())?.contextWindow).toBe(32768);

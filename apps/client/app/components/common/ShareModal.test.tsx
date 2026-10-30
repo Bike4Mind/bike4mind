@@ -378,6 +378,20 @@ describe('ShareModal - Email tab', () => {
     expect(mocks.apiPost.mock.calls[0][1].recipients).toHaveLength(MAX_EMAIL_RECIPIENTS);
   });
 
+  it('shows the server message when the send is refused', async () => {
+    mocks.apiPost.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 429, data: { message: 'Email limit reached. Try again in 1800 seconds.' } },
+    });
+    const user = await openEmailTab();
+    await addRecipients(user, 1);
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith('Email limit reached. Try again in 1800 seconds.')
+    );
+  });
+
   it('caps the personal message at the server limit', async () => {
     await openEmailTab();
     expect(screen.getByTestId('share-modal-email-message-input')).toHaveAttribute(

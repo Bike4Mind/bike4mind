@@ -9,6 +9,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess, type AgentAccess, type AgentAccessShape } from '@server/agents/assertAgentAccess';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel - its subtree pulls the
 // Lambda-runtime import graph, which deadlocks module init under Next dev).
 import { discardEnrolledMission, enrollMissionForAgent, listMissionsForAgent } from '@server/deepAgent/missions';
@@ -60,7 +61,9 @@ function agentAccessDenial(
 
 // baseApi's scope gate is per route, so it admits either agents scope and each method asserts its own.
 const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
-  .use(rateLimit({ limit: process.env.NODE_ENV === 'development' ? 30 : 5, windowMs: 60 * 1000 }))
+  .use(
+    rateLimit({ limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 30 : 5), windowMs: 60 * 1000 })
+  )
   .get(async (req: Request, res: Response) => {
     assertAgentsReadScope(req);
     const userId = req.user?.id;

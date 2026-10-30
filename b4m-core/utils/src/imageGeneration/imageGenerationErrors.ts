@@ -1,3 +1,5 @@
+import { getQuestErrorCode } from '@bike4mind/common';
+
 export type ExpectedImageFailureKind = 'moderation_blocked' | 'provider_unavailable' | 'input_rejected';
 
 /**
@@ -58,8 +60,9 @@ type FailureLogger = {
 };
 
 /**
- * The one place an image-generation caller reports a failure: expected failures at warn, anything
- * else at error (which pages). `context` is extra caller metadata (ids), never the prompt.
+ * The one place an image-generation caller reports a failure: expected failures and running out of
+ * credits at warn, anything else at error (which pages). `context` is extra caller metadata (ids),
+ * never the prompt.
  */
 export function logImageGenerationFailure(
   logger: FailureLogger,
@@ -69,6 +72,11 @@ export function logImageGenerationFailure(
 ): void {
   if (error instanceof ExpectedImageGenerationError) {
     logger.warn(message, { ...context, kind: error.kind, ...error.logContext });
+    return;
+  }
+  // Out of credits is not an incident either: the user sees the message and the Add Credits CTA.
+  if (getQuestErrorCode(error) === 'insufficient_credits') {
+    logger.warn(message, { ...context, errorCode: 'insufficient_credits', detail: (error as Error).message });
     return;
   }
   if (context) {

@@ -29,7 +29,6 @@ describe('projectService - listInvites authorization', () => {
           projects: { shareable: createShareableFake([project as never]) },
           invites: { searchInvites },
         },
-        ability: {},
       },
     };
   };

@@ -49,6 +49,7 @@ export * from './SessionAgentConfigModel';
 export * from './SessionToolApprovalModel';
 export * from './SkillModel';
 export * from './SkillListingModel';
+export * from './SkillBundleModel';
 export * from './SkillListingVersionModel';
 export * from './SkillListingImportModel';
 export * from './SkillListingReportModel';

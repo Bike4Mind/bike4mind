@@ -1,15 +1,21 @@
-import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
-import { User, authSessionRepository, realtimeConnectionRepository, type IUserObject } from '@bike4mind/database';
+import { AuthStrategy, IAuthProviders, type INetworkMeta } from '@bike4mind/common';
+import {
+  User,
+  adminSettingsRepository,
+  authSessionRepository,
+  realtimeConnectionRepository,
+  type IUserObject,
+} from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { authSessionService } from '@bike4mind/services';
+import { authSessionService, userService } from '@bike4mind/services';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import omit from 'lodash/omit';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
-import {
-  applyEmailVerifiedGrants,
-  isEligibleForFreeCredits,
-  releaseVerifiedPendingFreeCredits,
-} from '@server/auth/emailVerifiedGrants';
+import { type NetworkRequest, readNetworkMeta } from '@server/auth/networkMeta';
+import { isSignupNetworkOverLimit } from '@server/auth/signupNetworkLimits';
+import { signupProtection } from '@server/auth/signupProtection';
+import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
+import { wasTurnstileVerified } from '@server/auth/signupChallenge';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -43,7 +49,9 @@ const authenticateUser = async (
   refreshToken: string,
   profile: any,
   done: any,
-  authProvider?: Partial<IAuthProviders>
+  authProvider?: Partial<IAuthProviders>,
+  signupNetwork?: INetworkMeta,
+  challengeVerified?: true | null
 ) => {
   const selectedEmail = selectProviderEmail(profile)?.value;
   const email = typeof selectedEmail === 'string' ? selectedEmail : null;
@@ -221,6 +229,34 @@ const authenticateUser = async (
         done(null, undefined, { code: 'registration_closed' });
         return;
       }
+      // The same email rules registerUser applies to an email sign-up. A failed list read throws to
+      // the catch below, so the gate fails closed as it does there.
+      if (SELF_SERVE_STRATEGIES.has(strategy)) {
+        if (!email || !isProviderEmailVerified(profile)) {
+          done(null, undefined, { code: 'signup_email_unverified' });
+          return;
+        }
+        const normalizedEmail = email.toLowerCase().trim();
+        if (
+          await userService.shouldBlockDisposableEmail(normalizedEmail, {
+            adminSettings: adminSettingsRepository,
+            signupProtection,
+          })
+        ) {
+          done(null, undefined, { code: 'signup_email_blocked', email: normalizedEmail });
+          return;
+        }
+      }
+      // Only Google/GitHub pass a network (selfServeVerifyCallback), matching the invite gate's scope;
+      // a partner-domain rule is an admin's authorization and skips the caps, as on the OTC path.
+      if (
+        signupNetwork &&
+        !(await isPartnerDomainSignupAllowed(email, isProviderEmailVerified(profile))) &&
+        (await isSignupNetworkOverLimit(signupNetwork, Logger.globalInstance))
+      ) {
+        done(null, undefined, { code: 'signup_limited' });
+        return;
+      }
 
       const name = profile?.displayName ?? profile?.name ?? username ?? '';
       // Gate the provider-asserted email out of a brand-new account's login
@@ -235,16 +271,14 @@ const authenticateUser = async (
       // The provider-verified email is the proof of ownership registerViaOTC gets from the code,
       // so a self-serve account is created tagged and the flat grant released right away; a
       // failed release leaves the tag for the backfill script. Okta/SAML get no flat grant.
-      const pendingFreeCredits =
-        SELF_SERVE_STRATEGIES.has(strategy) &&
-        !!emailForNewAccount &&
-        (await isEligibleForFreeCredits(emailForNewAccount, Logger.globalInstance));
+      const pendingFreeCredits = SELF_SERVE_STRATEGIES.has(strategy);
       user = await createUniqueOAuthUser({
         name,
         baseUsername,
         email: emailForNewAccount,
         oauthCredentials,
         pendingFreeCredits,
+        ...(signupNetwork ? { signupMeta: { ...signupNetwork, capturedAt: new Date(), challengeVerified } } : {}),
       });
       const newUserId = String(user._id);
       let creditsGranted = 0;
@@ -252,7 +286,8 @@ const authenticateUser = async (
         const release = await releaseVerifiedPendingFreeCredits(
           { id: newUserId, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
           'OAuth signup (provider-verified email)',
-          Logger.globalInstance
+          Logger.globalInstance,
+          signupNetwork
         );
         creditsGranted += release.creditsGranted;
       }
@@ -313,3 +348,23 @@ export const verifyCallback = (strategy: AuthStrategy) => {
     }
   };
 };
+
+/**
+ * Google/GitHub verify, registered with `passReqToCallback: true` so a first login can be checked
+ * against its network. The declared arity (5) is what makes passport-oauth2 call it as
+ * (req, accessToken, refreshToken, profile, done); do not add or drop parameters.
+ */
+export const selfServeVerifyCallback =
+  (strategy: AuthStrategy) =>
+  // any: passport's untyped verify callback, as in verifyCallback above
+  (req: NetworkRequest, accessToken: string, refreshToken: string, profile: unknown, done: any) =>
+    authenticateUser(
+      strategy,
+      accessToken,
+      refreshToken,
+      profile,
+      done,
+      undefined,
+      readNetworkMeta(req),
+      wasTurnstileVerified(req)
+    );

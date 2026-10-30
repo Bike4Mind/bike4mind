@@ -1,5 +1,23 @@
 # Signup burst protection
 
+## Account risk review and AI access
+
+Accounts whose signup risk score reaches the review threshold enter **Admin > Risk review**.
+While a review is pending, AI requests are refused with an account-review message, including
+free models and requests made with API keys. Sign-in and access to existing data remain available;
+users can contact support to request a review. Existing pending reviews also receive this hold.
+
+**Approve** lifts the signup review hold. A separate manual AI restriction or account suspension
+still applies. **Undo** restores the pending review and AI hold. Rescoring updates the score and
+signals but never clears a pending hold or overturns an approval. To deny access to the account
+as a whole, use **Suspend** in the review queue.
+
+This hold is independent of the domain and signup-credit controls below. It does not deduct
+credits or turn a credit-only domain hold into an account suspension. If an approved user still
+cannot use AI, check for a manual AI restriction, suspension, and normal plan and credit limits.
+
+## Domain holds
+
 Admins can enable **Auto-hold Signup Bursts** in Admin > Settings > Users.
 The default is off. **Signup Burst Threshold** defaults to 5 verified signups
 and **Signup Burst Window (hours)** defaults to 6 (maximum 168).
@@ -48,3 +66,18 @@ runtime and credit recovery scripts wire the database repository into the shared
 flat-grant and staged-release boundaries. Recovery scripts use `mode: 'enforce'` to check existing holds
 without replaying signup observations or creating holds without notifications. External service consumers without that adapter retain their
 existing behavior.
+
+## Disposable lists and domain intelligence
+
+A daily job (`apps/workers/src/cron/disposableDomainRefresh.ts`) refreshes three upstream disposable-domain lists into MongoDB: the curated `disposable-email-domains/disposable-email-domains` list, `7c/fakefilter`, and the `disposable/disposable-email-domains` aggregate. A source that fails, returns nothing, or shrinks below half of its last good size keeps its previous entries. Per-source counts, last success and last error appear in **Admin > Signup Domain Holds**; the `disposableDomainRefreshFailures` alarm fires after two failing days. If an upstream genuinely shrinks by half, the floor refuses it every day; delete that source's `disposabledomainsources` document to accept the next snapshot.
+
+- **Rejected** at registration (and withheld on OAuth signup and email change) under **Block Disposable Emails**: the admin `blockedEmailDomains` list, the bundled package list, the curated list and fakefilter. Organization and internal staff domains are never rejected on a refreshed-list hit, since those lists change without review.
+- **Held** for review (account created, free credits pending) when **Hold Risky Signup Domains** is on (default on):
+  - `disposable-aggregate`: the domain is only on the aggregate list, which also scrapes and so carries more false positives.
+  - `young-domain`: RDAP reports a registration younger than **Hold Signups From Domains Younger Than (days)** (default 30; 0 turns it off).
+  - `burner-mx`: the domain's MX host belongs to a rejected provider.
+  - `disposable-list`: a rejected-tier domain reached the hold step because **Block Disposable Emails** is off.
+
+Shared commodity mail hosting (Cloudflare Email Routing, Google Workspace) is recorded as a flag and never held on its own; `domainRiskFacts` exposes the flags for a signup risk score. Forwarding/relay services are not ingested.
+
+RDAP and MX lookups run once per registrable domain, in parallel within **Domain Lookup Timeout (ms)** (default 2000). Results are cached for seven days, failures for an hour (a cold start can spend most of the budget fetching the RDAP bootstrap). A timeout, a registry without RDAP, a rate limit or a DNS error logs a warning and lets the signup through. Domain-intelligence holds share the review queue, Slack alert and Release flow above, apply only to fresh signups, and do not depend on **Auto-hold Signup Bursts**. Mailbox providers, synthetic, organization and internal staff (`NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS`) domains are exempt.

@@ -15,7 +15,8 @@ import {
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { fabFileListResponseSchema, ProjectEvents, projectResponseSchema } from '@bike4mind/common';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 const addFileIdsBodySchema = z.object({
@@ -47,7 +48,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         }
       );
 
-      return res.json(files);
+      return respond(res, fabFileListResponseSchema, files);
     })
   )
   .post(
@@ -90,7 +91,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         )
       );
 
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   )
   .delete(
@@ -135,7 +136,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         )
       );
 
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   );
 

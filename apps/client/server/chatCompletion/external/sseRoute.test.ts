@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import { request as httpRequest, type Server } from 'http';
 import express from 'express';
+import { OutputBudgetExhaustedError } from '@bike4mind/llm-adapters';
 import type { z } from 'zod';
 import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
@@ -87,9 +88,19 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockResolveContractAuth = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
 vi.mock('@server/cli/resolveContractAuth', () => ({ resolveContractAuth: mockResolveContractAuth }));
+
+const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: mockAdmitApiKeyCompletion,
+  NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
+}));
 
 vi.mock('@server/cli/auth', () => ({
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
@@ -159,6 +170,7 @@ beforeAll(async () => {
 afterAll(() => server?.close());
 
 beforeEach(() => {
+  mockAdmitApiKeyCompletion.mockResolvedValue({ release: quotaRelease });
   mockResolveContractAuth.mockResolvedValue({
     method: 'apiKey',
     userId: 'user-1',
@@ -1010,6 +1022,32 @@ describe('POST /api/ai/v1/completions - failures after the stream opened', () =>
     expect(text).not.toContain('secret-model-name');
   });
 
+  it('classifies an exhausted caller max_tokens in-band and logs it at warn', async () => {
+    mockExecuteCompletion.mockImplementationOnce(
+      failAfterReady(new OutputBudgetExhaustedError('DeepSeek', 'secret-model-name'))
+    );
+
+    const text = await (await post({ ...COMPLETION, max_tokens: 256 })).text();
+    expect(errorFrame(text)).toMatchObject({ code: 'output_budget_exhausted' });
+    expect(text).not.toContain('secret-model-name');
+    expect(mockLoggerWarn).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['non-positive', 0],
+  ])('keeps a %s max_tokens budget that ran out as provider_error, still at warn', async (_label, maxTokens) => {
+    mockLoggerError.mockClear();
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(new OutputBudgetExhaustedError('DeepSeek', 'm')));
+
+    const text = await (
+      await post(maxTokens === undefined ? COMPLETION : { ...COMPLETION, max_tokens: maxTokens })
+    ).text();
+    expect(errorFrame(text)).toMatchObject({ code: 'provider_error' });
+    expect(mockLoggerWarn).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+    expect(mockLoggerError).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+  });
+
   it('classifies a Bedrock AccessDeniedException as provider_rejected and logs its status', async () => {
     const legacy = 'Access denied. This Model is marked by provider as Legacy';
     const upstream = Object.assign(new Error(legacy), { name: 'AccessDeniedException', $fault: 'client' });
@@ -1132,6 +1170,78 @@ describe('POST /api/ai/v1/completions - admin role on the reloaded owner', () =>
     mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' });
     expect((await postAs({})).status).toBe(200);
     expect(scopeActorOfCall()).toBeUndefined();
+  });
+});
+
+describe('POST /api/ai/v1/completions - untrusted owner quotas', () => {
+  it("admits an API-key completion against the owner's quotas and holds a slot for it", async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'User', ownerUntrusted: true },
+    });
+    expect((await post()).status).toBe(200);
+    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith({
+      owner: 'user-1',
+      ownerUntrusted: true,
+      billingOwnerType: 'User',
+      holdSlot: true,
+    });
+  });
+
+  it('does not apply them to a JWT session', async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' });
+    expect((await postAs({})).status).toBe(200);
+    expect(mockAdmitApiKeyCompletion).not.toHaveBeenCalled();
+  });
+
+  it('frees the slot after a completed stream', async () => {
+    const res = await post();
+    await res.text();
+    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalled());
+  });
+
+  it('frees the slot when the completion fails', async () => {
+    mockExecuteCompletion.mockRejectedValue(new Error('boom'));
+    const res = await post();
+    await res.text();
+    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalled());
+  });
+
+  it('holds the slot after the client disconnects until the completion settles, then frees it', async () => {
+    let finishCompletion: () => void = () => {};
+    mockExecuteCompletion.mockImplementation(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      await new Promise<void>(resolve => {
+        finishCompletion = resolve;
+      });
+    });
+    const controller = new AbortController();
+    const res = await fetch(COMPLETIONS_URL(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_live_test' },
+      body: JSON.stringify(COMPLETION),
+      signal: controller.signal,
+    });
+    expect(res.status).toBe(200);
+    controller.abort();
+    // Long enough for the server to see the socket close.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(quotaRelease).not.toHaveBeenCalled();
+
+    finishCompletion();
+    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalledTimes(1));
+  });
+
+  it('answers a refused quota with a 429, its errorCode and Retry-After, without starting the completion', async () => {
+    mockAdmitApiKeyCompletion.mockRejectedValue(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 12 })
+    );
+    const res = await post();
+    const body = await expectJsonError(res, 429);
+    expect(body.errorCode).toBe('token_rate_limit_exceeded');
+    expect(res.headers.get('retry-after')).toBe('12');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 });
 

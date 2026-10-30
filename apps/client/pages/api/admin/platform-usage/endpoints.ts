@@ -1,7 +1,6 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { apiKeyUsageLogRepository } from '@bike4mind/database';
 import { API_KEY_COMPLETION_SOURCES, ApiKeyScope, type IPlatformEndpointUsageResponse } from '@bike4mind/common';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 /** ApiKeyUsageLog's 90-day TTL: no endpoint data exists beyond this. */
@@ -19,14 +18,10 @@ const QuerySchema = z.object({
  * /api/admin/platform-usage so the two admin dashboard sections filter separately.
  * Admin-only; requiredScopes gates the API-key path as on the sibling route.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user) {
-    throw new ForbiddenError('Authentication required');
-  }
-  if (!req.user.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const { source } = QuerySchema.parse(req.query);
 
   const endpoints = await apiKeyUsageLogRepository.platformEndpointUsage({ days: ENDPOINT_TTL_DAYS, source });

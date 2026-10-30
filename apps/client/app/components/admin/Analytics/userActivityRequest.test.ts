@@ -9,25 +9,45 @@ import { ALL_VALUE } from './store';
 const state = {
   dateFilters: { startDate: '2026-07-21', endDate: '2026-07-28' },
   selectedOrganizations: [ALL_VALUE],
-  excludedOrgs: { millionOnMars: true, unknown: false, personal: true },
+  exclusions: { noOrg: true, staff: true },
   userActivityFilters: { counterNameSearch: '', userEmailSearch: '' },
   metadataFilters: [],
 };
 
 describe('buildUserActivityRequest', () => {
-  it('maps the exclusion checkboxes to the organization names the server stores', () => {
-    expect(buildUserActivityRequest(state).excludeOrgs).toEqual(['Million on Mars', 'Personal']);
+  it('sends both exclusions as flags rather than a list of organization names', () => {
+    const request = buildUserActivityRequest(state);
+
+    expect(request).toMatchObject({ excludeNoOrg: true, excludeStaff: true });
+    expect(request).not.toHaveProperty('excludeOrgs');
   });
 
-  it('drops the exclusions once a specific organization is selected', () => {
+  it('sends each exclusion only while its checkbox is ticked', () => {
+    expect(buildUserActivityRequest({ ...state, exclusions: { noOrg: false, staff: true } })).toMatchObject({
+      excludeNoOrg: false,
+      excludeStaff: true,
+    });
+    expect(buildUserActivityRequest({ ...state, exclusions: { noOrg: true, staff: false } })).toMatchObject({
+      excludeNoOrg: true,
+      excludeStaff: false,
+    });
+  });
+
+  it('drops the no-org exclusion but keeps the staff one once a specific organization is selected', () => {
     const request = buildUserActivityRequest({ ...state, selectedOrganizations: ['Acme'] });
 
-    expect(request.excludeOrgs).toEqual([]);
-    expect(request.orgs).toEqual(['Acme']);
+    expect(request).toMatchObject({ excludeNoOrg: false, excludeStaff: true, orgs: ['Acme'] });
   });
 
   it('sends no organization list while "all" is selected', () => {
     expect(buildUserActivityRequest(state).orgs).toBeNull();
+  });
+
+  it('treats an empty organization selection as "all", keeping the exclusions', () => {
+    const request = buildUserActivityRequest({ ...state, selectedOrganizations: [] });
+
+    expect(request.orgs).toBeNull();
+    expect(request).toMatchObject({ excludeNoOrg: true, excludeStaff: true });
   });
 
   it('omits blank searches so the server does not filter on an empty string', () => {

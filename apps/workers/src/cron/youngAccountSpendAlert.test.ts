@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getSettingsMap: vi.fn(),
   resolveSlackWebhookUrl: vi.fn(),
   post: vi.fn(),
+  log: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: mocks.resource }));
@@ -22,7 +23,7 @@ vi.mock('axios', () => ({ default: { post: mocks.post } }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     withMetadata() {
-      return { log: vi.fn(), error: vi.fn() };
+      return { log: mocks.log, error: vi.fn() };
     }
   },
 }));
@@ -112,15 +113,20 @@ describe('young-account spend handler', () => {
     expect(start).toEqual(new Date('2026-10-26T10:00:00Z'));
     expect(end).toEqual(new Date(event.time));
     expect(limit).toBe(10);
+    expect(mocks.log).toHaveBeenCalledWith(
+      'young-account-spend',
+      expect.objectContaining({ windowStart: '2026-10-26T10:00:00.000Z', windowEnd: '2026-10-26T11:00:00.000Z' })
+    );
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
   it('keeps the scheduled window on delayed delivery and retry', async () => {
-    mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+    mocks.post.mockRejectedValueOnce(new Error('webhook unavailable'));
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-10-26T11:05:00Z'));
-      await handler(event);
+      await expect(handler(event)).rejects.toThrow('webhook unavailable');
       vi.setSystemTime(new Date('2026-10-26T12:15:00Z'));
       await handler(event);
       expect(mocks.findYoungAccountSpend.mock.calls[0]).toEqual(mocks.findYoungAccountSpend.mock.calls[1]);
@@ -134,10 +140,18 @@ describe('young-account spend handler', () => {
     }
   });
 
-  it.each([{}, { time: 'invalid' }])('rejects a malformed scheduled event %j before connecting', async invalidEvent => {
-    await expect(handler(invalidEvent)).rejects.toThrow();
+  it('rejects a malformed scheduled event time before connecting', async () => {
+    await expect(handler({ time: 'invalid' })).rejects.toThrow();
     expect(mocks.connect).not.toHaveBeenCalled();
   });
+
+  it.each([{}, null, undefined, { time: null }, { time: '' }])(
+    'rejects an event without a valid scheduled timestamp: %j',
+    async invalidEvent => {
+      await expect(handler(invalidEvent)).rejects.toThrow();
+      expect(mocks.connect).not.toHaveBeenCalled();
+    }
+  );
 
   it('posts to Slack when a ceiling is exceeded', async () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));

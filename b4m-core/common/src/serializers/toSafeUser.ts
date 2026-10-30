@@ -49,6 +49,7 @@ export const USER_SECRET_FIELDS = [
   'securityQuestions',
   'loginRecords',
   'signupMeta',
+  'riskScore',
   'freeCreditClaimEmail',
   'signupGrantAssessment',
   'userNotes',

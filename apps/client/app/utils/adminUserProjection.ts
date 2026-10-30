@@ -20,6 +20,7 @@ export const ADMIN_USER_LIST_FIELDS = [
   'username',
   'email',
   'isAdmin',
+  'adminPermissions',
   'level',
   'tags',
   'isBanned',

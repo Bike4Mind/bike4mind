@@ -8,6 +8,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ChatModels, ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
 
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => undefined }),
+}));
+
 const m = vi.hoisted(() => ({
   denied: new Set<string>(),
   admissionFlags: [] as unknown[],

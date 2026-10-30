@@ -10,6 +10,7 @@ import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authS
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
+import { oauthIpRateLimit } from '@server/middlewares/oauthIpRateLimit';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
@@ -21,6 +22,7 @@ import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureLoginErrorCode } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -49,6 +51,7 @@ const handler = baseApi({ auth: false })
   })
   .use(checkBlockedIP())
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }))
+  .use(oauthIpRateLimit('oauth-callback'))
   .get(async (req: Request<{}, unknown, unknown, { strategy: AuthStrategy; state: string }>, res, next) => {
     const { strategy } = req.query;
 
@@ -104,6 +107,10 @@ const handler = baseApi({ auth: false })
               : resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
           const logFailure = reason === 'internal' ? console.error : console.warn;
           logFailure('Passport Authenticate User Not Found Info:', info);
+          // Counted by the OAuthSignupsRefused metric filter in infra/authAbuseAlarms.ts; keep the
+          // message in sync with its pattern. Only registration_closed is logged on purpose: the alarm
+          // tracks closed-registration waves, while the auto-block runner also counts the other reasons.
+          if (reason === 'registration_closed') req.logger?.info('oauth-signup-refused');
           try {
             await authFailLogRepository.create({
               strategy,
@@ -177,6 +184,8 @@ const handler = baseApi({ auth: false })
           }
           await stampOAuthSourceTag(user.id, stateResult?.valid ? stateResult.payload.clientId : undefined);
           await recordSignupNetwork({ req, userId: user.id, method: strategy });
+          // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+          await refreshSignupRiskScore(user.id, req.logger);
           // Credit the signup to the product the visitor came through, if any, and only with
           // consent - see readConsentedAcquisitionTouches. Before the session is minted, as in
           // OTC: a mint failure after the account exists would otherwise lose the signup for

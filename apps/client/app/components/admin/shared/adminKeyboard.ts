@@ -17,6 +17,13 @@ export function isAdminChordEvent(event: KeyboardEvent): boolean {
   );
 }
 
+// A closed keepMounted Joy Drawer keeps its role="dialog" content in the DOM under an aria-hidden root.
+export function isAdminOverlayOpen(): boolean {
+  return Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"]')).some(
+    overlay => !overlay.closest('[aria-hidden="true"]')
+  );
+}
+
 export function useAdminSaveShortcut(ref: RefObject<HTMLElement | null>) {
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -24,7 +31,7 @@ export function useAdminSaveShortcut(ref: RefObject<HTMLElement | null>) {
       const root = ref.current;
       if (!root || !(event.target instanceof Node) || !root.contains(event.target)) return;
       if (event.target instanceof Element && event.target.closest('[data-admin-settings-editor]') !== root) return;
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      if (isAdminOverlayOpen()) return;
       // Claim the key even with no Save button rendered (a clean sub-setting) so the browser's Save Page stays out.
       event.preventDefault();
       const save = root.querySelector<HTMLButtonElement>('button[data-admin-save]');

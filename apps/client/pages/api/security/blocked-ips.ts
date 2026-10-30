@@ -28,10 +28,11 @@ const handler = baseApi()
     const parsed = BlockSchema.safeParse(req.body ?? {});
     if (!parsed.success) return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     const { ip, reason } = parsed.data;
-    const doc = await withTransaction(async () => {
-      // block() returns an existing active block untouched, so only a new block is audited.
-      const { doc: blocked, created } = await blockedIPRepository.block(ip, reason);
-      if (!created) return blocked;
+    const { doc, created } = await withTransaction(async () => {
+      // block() only extends an existing active block; only a new block is audited.
+      const result = await blockedIPRepository.block(ip, reason);
+      if (!result.created) return result;
+      const blocked = result.doc;
       await recordAdminActionFromRequest(req, {
         action: 'security.blocked_ip.added',
         target: { kind: 'settings', id: `blocked-ip:${ip}`, displayName: ip },
@@ -39,9 +40,10 @@ const handler = baseApi()
         details: { ip, expiresAt: blocked.expiresAt },
         reason,
       });
-      return blocked;
+      return result;
     });
-    res.status(201).json({ item: doc });
+    // An IP already blocked keeps its existing row, reason and (never shorter) expiry.
+    res.status(created ? 201 : 200).json({ item: doc, alreadyBlocked: !created });
   })
   .delete(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);

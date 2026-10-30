@@ -86,7 +86,7 @@ export function LocalContextSettings({
     <Stack spacing={1.25}>
       <Typography level="body-xs" textColor="text.tertiary">
         A larger context lets a local model read longer conversations and uses more memory. Auto starts each model at
-        16K tokens, or at the largest size that fits this computer&apos;s GPU (or its memory when there is no GPU), and
+        16K tokens, or at the largest size that fits this computer&apos;s GPU (up to 32K when there is no GPU), and
         gives a conversation that outgrows it more room before summarising it. When Desktop cannot measure the GPU,
         every model starts at 16K and grows one size at a time. No model goes past the context it was trained on. A
         model reloads on its next message after this changes.

@@ -220,3 +220,75 @@ describe('signup protection and credit boundary', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 });
+
+describe('domain intelligence holds', () => {
+  const withLists = (sources: Record<string, ('aggregate' | 'curated' | 'fakefilter')[]>) => {
+    const fixture = buildFixture();
+    fixture.findBySettingNames.mockResolvedValue([]);
+    Object.assign(fixture.repository, {
+      disposableSources: vi.fn(async (domains: string[]) => domains.flatMap(domain => sources[domain] ?? [])),
+    });
+    return fixture;
+  };
+
+  it('holds an aggregate-only domain with burst auto-hold off and notifies once', async () => {
+    const fixture = withLists({ 'example-burner.test': ['aggregate'] });
+    const user = fixture.user(1, 'person@x1.example-burner.test');
+    expect(await protectSignupCredits(user.id, fixture.db)).toBe(true);
+    expect(fixture.repository.createHold).toHaveBeenCalledWith(
+      expect.objectContaining({
+        domain: 'example-burner.test',
+        reason: 'disposable-aggregate',
+        cohortUserIds: [user.id],
+        signupCount: 1,
+      })
+    );
+    expect(fixture.notifyHold).toHaveBeenCalledTimes(1);
+    expect(fixture.repository.observe).not.toHaveBeenCalled();
+  });
+
+  it('creates no domain-intelligence hold in enforce mode or with the toggle off', async () => {
+    const enforce = withLists({ 'example-burner.test': ['aggregate'] });
+    (enforce.db as unknown as { signupProtection: { mode: string } }).signupProtection.mode = 'enforce';
+    expect(await protectSignupCredits(enforce.user(1, 'a@example-burner.test').id, enforce.db)).toBe(false);
+    expect(enforce.repository.createHold).not.toHaveBeenCalled();
+
+    const off = withLists({ 'example-burner.test': ['aggregate'] });
+    off.findBySettingNames.mockResolvedValue([{ settingName: 'enableDomainIntelligence', settingValue: false }]);
+    expect(await protectSignupCredits(off.user(1, 'a@example-burner.test').id, off.db)).toBe(false);
+    expect(off.repository.createHold).not.toHaveBeenCalled();
+  });
+
+  it('never flags mainstream or internal staff domains even if a list carries them', async () => {
+    vi.stubEnv('NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS', 'staff.example.org');
+    try {
+      for (const email of ['a@gmail.com', 'a@list.ru', 'a@staff.example.org']) {
+        const fixture = withLists({ [email.split('@')[1]]: ['aggregate'] });
+        expect(await protectSignupCredits(fixture.user(1, email).id, fixture.db)).toBe(false);
+        expect(fixture.repository.disposableSources).not.toHaveBeenCalled();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('skips the domain checks for an existing review or a signup outside the window', async () => {
+    const reviewed = withLists({ 'example-burner.test': ['aggregate'] });
+    reviewed.setReview({ domain: 'example-burner.test', status: 'released' } as SignupDomainReview);
+    expect(await protectSignupCredits(reviewed.user(1, 'a@example-burner.test').id, reviewed.db)).toBe(false);
+    expect(reviewed.repository.disposableSources).not.toHaveBeenCalled();
+
+    const stale = withLists({ 'example-burner.test': ['aggregate'] });
+    const user = stale.user(1, 'a@example-burner.test');
+    stale.findById.mockResolvedValue({ ...user, emailVerifiedAt: new Date('2020-01-01') });
+    expect(await protectSignupCredits(user.id, stale.db)).toBe(false);
+    expect(stale.repository.disposableSources).not.toHaveBeenCalled();
+  });
+
+  it('fails open when the list read throws', async () => {
+    const fixture = withLists({});
+    vi.mocked(fixture.repository.disposableSources!).mockRejectedValue(new Error('db down'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await protectSignupCredits(fixture.user(1, 'a@any.test').id, fixture.db)).toBe(false);
+  });
+});

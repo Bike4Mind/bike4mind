@@ -125,7 +125,7 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
   // behavior identical (only `find`/`findOne` get the plugin's pre-hook).
 
   async listForUser(userId: string): Promise<ISkill[]> {
-    const results = await this.skillModel.find({ userId, deletedAt: null }).sort({ name: 1 });
+    const results = await this.skillModel.find({ userId, deletedAt: null }).select('-files').sort({ name: 1 });
     return results.map(doc => doc.toJSON());
   }
 
@@ -158,6 +158,7 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
   async listInvocableForUser(userId: string, limit: number): Promise<ISkill[]> {
     const results = await this.skillModel
       .find({ userId, deletedAt: null, disableModelInvocation: { $ne: true } })
+      .select('-files')
       .sort({ updatedAt: -1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());
@@ -170,11 +171,13 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
    */
   async findByNamesForUser(userId: string, names: string[]): Promise<ISkill[]> {
     if (names.length === 0) return [];
-    const results = await this.skillModel.find({
-      userId,
-      name: { $in: names },
-      deletedAt: null,
-    });
+    const results = await this.skillModel
+      .find({
+        userId,
+        name: { $in: names },
+        deletedAt: null,
+      })
+      .select('-files');
     return results.map(doc => doc.toJSON());
   }
 
@@ -205,6 +208,7 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
         deletedAt: null,
         disableModelInvocation: { $ne: true },
       })
+      .select('-files')
       .sort({ updatedAt: -1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());
@@ -248,11 +252,13 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
    */
   async findAccessibleByNamesForUser(userId: string, names: string[]): Promise<ISkill[]> {
     if (names.length === 0) return [];
-    const matches = await this.skillModel.find({
-      name: { $in: names },
-      deletedAt: null,
-      $or: this.accessibleOr(userId),
-    });
+    const matches = await this.skillModel
+      .find({
+        name: { $in: names },
+        deletedAt: null,
+        $or: this.accessibleOr(userId),
+      })
+      .select('-files');
 
     // Collapse cross-scope collisions to the most-specific grant per name.
     // Value type is inferred from `matches` (hydrated docs) so `.toJSON()` stays
@@ -275,7 +281,15 @@ export const SkillSchema = new Schema<ISkill, ISkillModel, ISkillMethods>(
     body: { type: String, required: true, maxlength: 50_000 },
     argumentHint: { type: String, maxlength: 200 },
     allowedTools: { type: [String] },
+    claudeCodeAllowedTools: { type: [String], default: undefined },
     disableModelInvocation: { type: Boolean, default: false },
+    // Bounds live in checkSkillFiles (@bike4mind/common utils/skillFiles.ts), applied by every writer.
+    files: {
+      type: [
+        new Schema({ path: { type: String, required: true }, content: { type: String, default: '' } }, { _id: false }),
+      ],
+      default: undefined,
+    },
 
     // Scope discriminator. Exactly one of userId / organizationId / isSystem
     // must be set - enforced by the pre-save validator below. Mirrors AgentModel.

@@ -1,4 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
+
+type RouteHandler = (request: unknown, response: unknown) => unknown;
+const route = vi.hoisted(() => ({
+  handler: null as RouteHandler | null,
+  admit: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: route.admit }));
 import {
   GROWTH_RATIO_CEILING,
   SMALL_INPUT_MS_CEILING,
@@ -8,7 +15,14 @@ import {
   FENCE_PIECES,
 } from '@client/__tests__/utils/regexLinearity';
 
-vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: () => () => undefined }) }));
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => ({
+    post: (handler: RouteHandler) => {
+      route.handler = handler;
+      return handler;
+    },
+  }),
+}));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getPublishedArtifactsStorage: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ PublishedArtifact: {}, Annotation: {} }));
 vi.mock('@server/services/publish', () => ({
@@ -20,6 +34,14 @@ vi.mock('@server/services/publish', () => ({
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: vi.fn() }));
 
 import { stripFences } from '../revise';
+
+it('rejects a quota refusal before accessing the published artifact or generating a revision', async () => {
+  const error = new Error('completion quota exhausted');
+  route.admit.mockRejectedValueOnce(error);
+  const request = { user: { id: 'owner-1' } };
+  await expect(route.handler!(request, {})).rejects.toBe(error);
+  expect(route.admit).toHaveBeenCalledWith(request, { holdSlot: true });
+});
 
 describe('stripFences', () => {
   const OLD_FENCE = /^```[a-z]*\s*\n([\s\S]*?)\n```$/i;

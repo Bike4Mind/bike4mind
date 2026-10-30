@@ -1,101 +1,138 @@
 import React from 'react';
-import { Avatar, Box, Chip, Stack, Tooltip, Typography } from '@mui/joy';
-import type { IUserDocument } from '@bike4mind/common';
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
-import { formatAccountAge } from '../formatAccountAge';
+import { Avatar, Button, Dropdown, ListDivider, Menu, MenuButton, MenuItem } from '@mui/joy';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import { EntityHeader, StatusChip } from '../../shared';
+import type { ProfileAction } from './actions/profileActions';
+import {
+  LEVEL_LABELS,
+  accountStatus,
+  displayName,
+  initials,
+  organizationName,
+  type AdminUserProfile,
+} from './userProfileModel';
 
-/**
- * A user as the profile page has it: GET /api/users/[id] returns the whole document, so fields the
- * list projection leaves out (how the account signed up) are there too. List rows lack them.
- */
-export type AdminUserProfile = AdminUserListItem & Partial<Pick<IUserDocument, 'acquisition'>>;
+type MenuEntry = { action: ProfileAction | 'compliance'; label: string; danger?: boolean } | 'divider';
 
-const DateLine: React.FC<{ label: string; value: string | Date | undefined; testId: string }> = ({
-  label,
-  value,
-  testId,
-}) => {
-  const relative = formatAccountAge(value);
-  if (!relative || !value) return null;
-  return (
-    <Tooltip title={new Date(value).toLocaleString()}>
-      <Typography level="body-xs" color="neutral" data-testid={testId}>
-        {label} {relative}
-      </Typography>
-    </Tooltip>
-  );
+const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
+  { action: 'editProfile', label: 'Edit profile' },
+  { action: 'loginAs', label: 'Log in as user' },
+  { action: 'message', label: 'Send message' },
+  { action: 'subscription', label: 'Grant subscription' },
+  { action: 'role', label: 'Change role' },
+  { action: 'productAccess', label: 'Manage product access' },
+  'divider',
+  { action: 'compliance', label: 'Compliance record' },
+  { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict AI features' },
+  { action: 'delete', label: 'Delete user', danger: true },
+];
+
+const SIGNUP_METHOD_LABELS: Readonly<Record<string, string>> = {
+  google: 'Google',
+  github: 'GitHub',
+  okta: 'Okta',
+  email: 'email',
+  password: 'email',
 };
 
-/** Identity, state badges and dates of the profile page, with the page's quick actions on the right. */
-export const UserProfileHeader: React.FC<{ user: AdminUserProfile; actions: React.ReactNode }> = ({
-  user,
-  actions,
-}) => {
-  const signupMethod = user.acquisition?.signupMethod;
+const joinedPrefix = (user: AdminUserProfile): string => {
+  const method = user.acquisition?.signupMethod;
+  return method ? `Joined with ${SIGNUP_METHOD_LABELS[method.toLowerCase()] ?? method} \u00b7` : 'Joined';
+};
+
+type UserProfileHeaderProps = {
+  user: AdminUserProfile;
+  onAction: (action: ProfileAction) => void;
+  onCompliance: () => void;
+};
+
+/** Identity, status and the page's actions: Adjust credits and Suspend up front, the rest under More. */
+export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAction, onCompliance }) => {
+  const name = displayName(user);
+  const status = accountStatus(user);
+  const org = organizationName(user);
+  const level = user.level ? (LEVEL_LABELS[user.level] ?? user.level) : null;
+
   return (
-    <Stack
-      data-testid="user-profile-header"
-      direction={{ xs: 'column', md: 'row' }}
-      spacing={2}
-      justifyContent="space-between"
-      alignItems={{ xs: 'stretch', md: 'flex-start' }}
-      sx={{ py: 2 }}
-    >
-      <Stack direction="row" spacing={2} sx={{ minWidth: 0 }}>
-        <Avatar src={user.photoUrl || undefined} alt={user.name} size="lg" />
-        <Stack spacing={0.75} sx={{ minWidth: 0 }}>
-          <Typography level="h1" sx={{ overflowWrap: 'anywhere' }}>
-            {user.name}
-          </Typography>
-          <Typography level="body-sm" color="neutral" sx={{ overflowWrap: 'anywhere' }}>
-            @{user.username} - {user.email}
-          </Typography>
-          <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap">
-            <Chip
-              size="sm"
-              variant="soft"
-              color={user.emailVerified ? 'success' : 'warning'}
-              data-testid="user-profile-badge-email"
+    <EntityHeader
+      title={name}
+      id={user.id}
+      email={user.email ?? undefined}
+      avatar={
+        <Avatar
+          src={user.photoUrl || undefined}
+          alt=""
+          sx={{
+            width: 56,
+            height: 56,
+            fontSize: 18,
+            fontWeight: 600,
+            bgcolor: 'admin.status.info.background',
+            color: 'admin.status.info.foreground',
+          }}
+        >
+          {initials(name)}
+        </Avatar>
+      }
+      status={
+        <>
+          <StatusChip tone={status.tone} label={status.label} dot data-testid="user-profile-status-chip" />
+          {level && <StatusChip tone="info" label={level} data-testid="user-profile-level-chip" />}
+          {org && <StatusChip tone="neutral" label={org} data-testid="user-profile-org-chip" />}
+        </>
+      }
+      times={[
+        { prefix: joinedPrefix(user), at: user.createdAt, 'data-testid': 'user-profile-joined' },
+        { prefix: 'Active', at: user.lastActiveAt, 'data-testid': 'user-profile-last-active' },
+      ]}
+      actions={
+        <>
+          <Button
+            variant="outlined"
+            color="neutral"
+            onClick={() => onAction('credits')}
+            data-testid="user-profile-adjust-credits-btn"
+          >
+            Adjust credits
+          </Button>
+          {!user.isBanned && (
+            <Button
+              variant="outlined"
+              color="danger"
+              onClick={() => onAction('suspend')}
+              data-testid="user-profile-suspend-btn"
             >
-              {user.emailVerified ? 'Email verified' : 'Email unverified'}
-            </Chip>
-            {user.isBanned && (
-              <Chip size="sm" variant="solid" color="danger" data-testid="user-profile-badge-banned">
-                Banned
-              </Chip>
-            )}
-            {user.isModerated && (
-              <Chip size="sm" variant="soft" color="warning" data-testid="user-profile-badge-moderated">
-                Moderated
-              </Chip>
-            )}
-            {user.isAdmin && (
-              <Chip size="sm" variant="soft" color="primary" data-testid="user-profile-badge-admin">
-                Super Admin
-              </Chip>
-            )}
-            <Chip size="sm" variant="outlined" data-testid="user-profile-badge-level">
-              {user.level}
-            </Chip>
-            {/* An update response carries the org unpopulated (a bare id) until the refetch lands. */}
-            {typeof user.organizationId === 'object' && user.organizationId?.name && (
-              <Chip size="sm" variant="outlined" data-testid="user-profile-badge-org">
-                {user.organizationId.name}
-              </Chip>
-            )}
-            {signupMethod && (
-              <Chip size="sm" variant="outlined" data-testid="user-profile-badge-signup">
-                Signed up via {signupMethod}
-              </Chip>
-            )}
-          </Stack>
-          <Stack direction="row" spacing={2} useFlexGap flexWrap="wrap">
-            <DateLine label="Created" value={user.createdAt} testId="user-profile-created" />
-            <DateLine label="Last active" value={user.lastActiveAt} testId="user-profile-last-active" />
-          </Stack>
-        </Stack>
-      </Stack>
-      <Box sx={{ flexShrink: 0 }}>{actions}</Box>
-    </Stack>
+              Suspend
+            </Button>
+          )}
+          <Dropdown>
+            <MenuButton
+              slots={{ root: Button }}
+              slotProps={{ root: { variant: 'outlined', color: 'neutral', 'aria-label': 'More actions' } }}
+              sx={{ px: 1 }}
+              data-testid="user-profile-more-btn"
+            >
+              <MoreHorizIcon />
+            </MenuButton>
+            <Menu placement="bottom-end" sx={{ minWidth: 240 }} data-testid="user-profile-more-menu">
+              {menuEntries(user).map((entry, index) =>
+                entry === 'divider' ? (
+                  <ListDivider key={`divider-${index}`} />
+                ) : (
+                  <MenuItem
+                    key={entry.action}
+                    color={entry.danger ? 'danger' : 'neutral'}
+                    onClick={() => (entry.action === 'compliance' ? onCompliance() : onAction(entry.action))}
+                    data-testid={`user-profile-menu-${entry.action}-item`}
+                  >
+                    {entry.label}
+                  </MenuItem>
+                )
+              )}
+            </Menu>
+          </Dropdown>
+        </>
+      }
+    />
   );
 };

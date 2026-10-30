@@ -1,18 +1,34 @@
 # Signup abuse alarms
 
+Committed staged signup assessments also publish `SignupGrant_full`,
+`SignupGrant_reduced` and `SignupGrant_review` counts in `<app-name>/<stage>/Signup`
+via the server's structured log messages. Rolled-back transactions and ordinary
+grant retries do not emit a new assessment event. Emission is best effort after
+commit, so a process crash between commit and logging can undercount; these metrics
+are operational signals, not the credit ledger.
+
+Set `SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN` privately to a positive integer to alert
+when zero-credit review decisions reach that count in five minutes. Unset disables
+this alarm. Monitored stages route both ALARM and OK transitions through the same
+Slack and out-of-band email topics as the other signup alarms. No policy weights,
+network data, account identifiers or email addresses are included in band messages.
+
 All thresholds are read from the deployer's environment, are listed in
 `infra/deploy-contract.json`, and must be integers of at least 1. Invalid values
 fail deployment (or, for the scheduled worker, fail the run).
 
-| Variable                             | Default                | Alarm                                                         |
-| ------------------------------------ | ---------------------- | ------------------------------------------------------------- |
-| `SIGNUP_CODE_SEND_ALARM_PER_HOUR`    | unset: no hourly alarm | Sign-in code sends, hourly `Sum`                              |
-| `SIGNUP_CODE_SEND_ALARM_PER_5MIN`    | 15                     | Sign-in code sends, 5-minute `Sum`                            |
-| `API_KEY_CREATE_ALARM_PER_5MIN`      | 10                     | User API key creations, 5-minute `Sum`                        |
-| `SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN`  | 5                      | WAF-labelled `/api/otc/` requests, 5-minute `Sum`             |
-| `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS`  | 5000                   | Hourly credits spent by accounts under 7 days old             |
-| `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS` | 25                     | Hourly count of distinct accounts under 7 days old that spent |
-| `LLM_SPEND_ALARM_USD_PER_5MIN`       | 25                     | Estimated LLM USD per provider, 5-minute `Sum`                |
+| Variable                                 | Default                | Alarm                                                               |
+| ---------------------------------------- | ---------------------- | ------------------------------------------------------------------- |
+| `SIGNUP_CODE_SEND_ALARM_PER_HOUR`        | unset: no hourly alarm | Sign-in code sends, hourly `Sum`                                    |
+| `SIGNUP_CODE_SEND_ALARM_PER_5MIN`        | 15                     | Sign-in code sends, 5-minute `Sum`                                  |
+| `API_KEY_CREATE_ALARM_PER_5MIN`          | 10                     | User API key creations, 5-minute `Sum`                              |
+| `SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN`      | 5                      | WAF-labelled `/api/otc/` requests, 5-minute `Sum`                   |
+| `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS`      | 5000                   | Hourly credits spent by accounts under 7 days old                   |
+| `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`     | 25                     | Hourly count of distinct accounts under 7 days old that spent       |
+| `LLM_SPEND_ALARM_USD_PER_5MIN`           | 25                     | Estimated LLM USD per provider, 5-minute `Sum`                      |
+| `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` | 2                      | Estimated LLM USD per hour by accounts under 7 days old             |
+| `SIGNUP_ALARM_PER_HOUR`                  | 8                      | Accounts created per hour (hourly census)                           |
+| `NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR`     | 5                      | User API keys created within 24h of signup per hour (hourly census) |
 
 Monitoring runs on `dev` and `production`; another stage also needs
 `ENABLE_MONITORING=true`. The WAF edge alarm and the young-account spend worker
@@ -57,12 +73,53 @@ must share the alarm's region, so this alarm routes to the us-east-1 WAF topics:
 
 Hourly, production only. Uses the scheduled event time as the end of a fixed
 `[end - 1 hour, end)` window, so delayed delivery and retries query the same spend.
+The target clears SST's default literal input so EventBridge passes the original
+scheduled event, including `time`. Missing or invalid timestamps fail the run
+instead of silently shifting the window on a retry.
 Sums AI credit spend by accounts created in the 7 days before that end time and posts to the LiveOps Slack webhook when the total
 exceeds `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS` or the number of distinct spending
 accounts exceeds `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`. The message lists the top
 10 user ids by spend, the counts, and the window. It does not include emails.
-Both EventBridge delivery failures and exhausted Lambda retries reach a monitored
-14-day DLQ; recovery re-emits the original scheduled event.
+Each run logs `young-account-spend` with `windowStart`, `windowEnd` and the totals.
+
+Both EventBridge delivery failures and exhausted Lambda retries (2, the default)
+reach a monitored 14-day DLQ. Each message is one failed hour, and its body is the
+original scheduled event. Messages queued before the target cleared SST's `{}`
+input have a `{}` body and cannot be replayed. Their SQS `SentTimestamp`, minus a
+few minutes of Lambda retries, identifies the failed hour: backfill it as below,
+then purge them.
+
+### Replaying a failed hour
+
+There is no source queue to redrive into. To replay, save the DLQ message body to
+`event.json` and check it has a `time`. Find the function name with
+`aws lambda list-functions --query "Functions[?contains(FunctionName,'youngAccountSpendAlert')].FunctionName"`,
+then invoke it synchronously:
+
+```sh
+aws lambda invoke --function-name <function-name> --invocation-type RequestResponse \
+  --cli-binary-format raw-in-base64-out --cli-read-timeout 150 \
+  --payload fileb://event.json out.json
+```
+
+Delete the message only once `out.json` shows `ok` or `alerted`. If the handler
+throws, the CLI still exits 0 but prints `"FunctionError": "Unhandled"`, and
+`out.json` holds `errorMessage`. Lambda does not retry a synchronous invoke and it
+does not dead-letter, so a failed replay leaves the original message in place. The
+read timeout must exceed the function's 2-minute timeout; at the CLI's 60-second
+default, a slow run is sent again and can post twice.
+
+The worker keeps no delivery receipt. A dead-lettered hour has usually not posted
+(the Slack post is its last step); it has if Slack accepted a post whose response
+was then lost. Replaying an hour that already succeeded also posts again.
+
+To backfill a gap, invoke with `{"time":"<window end>"}` for each missing hour.
+Each run covers `[time - 1 hour, time)` and measures account age from `time`, so a
+later run reproduces the hour apart from deleted users. The schedule is
+`rate(1 hour)`, so take the minute and second from the `windowEnd` of a scheduled
+run next to the gap (the offset changes if the rule is re-created) to make
+backfilled windows tile against the scheduled ones. Every breaching hour posts to
+LiveOps with its window, so tell the channel before a large backfill.
 
 ## LLM spend (`infra/llmSpend.ts`)
 
@@ -95,10 +152,22 @@ the Slack DLQ topic and the out-of-band email topic. The
 output tokens, spend by model, the young-account share of spend, and the signup
 and WAF edge-signal counts from the alarms above.
 
+An hourly alarm on `EstimatedUsdYoungAccounts` fires when accounts under 7 days
+old sum to at least `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` (whole USD) and
+routes to the same two topics. It is not listed in the dashboard alarm-status widget.
+
 The figures are estimates from our price table, not provider invoices. Paths
 outside the ChatCompletion service are not counted: the legacy WebSocket CLI
 and Slack quest Lambdas log the same line, but Lambda's text log format hides it
 from JSON filters; the agent executor, image, video and voice paths do not log it.
+
+## Mail send failures (`infra/mailAlarms.ts`)
+
+A metric filter on the `email-send` subscriber's log group counts the
+`Email delivery failed - check MailService logs for details` line, which that
+Lambda logs when the mail transport rejects a send (sign-in codes included). The
+metric is `MailSendFailures` in `<app-name>/<stage>/Mail`. The alarm fires when it
+sums to at least 1 in an hour and routes to the DLQ alarm topic (Slack).
 
 ## If alerts do not arrive
 

@@ -1,9 +1,9 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest, telemetryAuditLogRepository } from '@bike4mind/database';
 import { z } from 'zod';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
@@ -13,14 +13,13 @@ const paramsSchema = z.object({
   id: z.string().min(1),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   // GET /api/admin/context-telemetry/[id] - Get single telemetry entry
   .get(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = paramsSchema.parse(req.query);
 
       const quest = isValidObjectId(id) ? await Quest.findById(id).select(TELEMETRY_SAFE_PROJECTION).lean() : null;
@@ -47,10 +46,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       // Cast req for getClientIp compatibility (Next.js API routes have similar structure to Express)
       const sourceIp = truncateIp(getClientIp(req as Parameters<typeof getClientIp>[0]));
       const userAgent = (req.headers['user-agent'] as string) || 'unknown';
-
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
 
       const { id } = paramsSchema.parse(req.query);
 

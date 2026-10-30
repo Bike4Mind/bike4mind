@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 export interface RephraseRequest {
@@ -19,7 +20,7 @@ export interface RephraseResponse {
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 50 : 20,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 50 : 20),
       windowMs: 60 * 1000,
     })
   )

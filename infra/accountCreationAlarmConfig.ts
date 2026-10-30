@@ -1,5 +1,8 @@
-export function accountCreationAlarmThreshold(raw: string | undefined, name: string): number | undefined {
-  if (!raw?.trim()) return undefined;
+export const SIGNUP_ALARM_PER_HOUR_DEFAULT = 8;
+export const NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR_DEFAULT = 5;
+
+export function accountCreationAlarmThreshold(raw: string | undefined, name: string, fallback: number): number {
+  if (!raw?.trim()) return fallback;
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive safe integer`);
   return value;

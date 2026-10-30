@@ -29,7 +29,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 }));
 
 vi.mock('@bike4mind/server-utils/lib/secretRotation/constants', () => ({
-  SECRET_ROTATION_CONFIG: {},
+  getSecretRotationConfig: () => ({}),
 }));
 
 vi.mock('sst', () => ({

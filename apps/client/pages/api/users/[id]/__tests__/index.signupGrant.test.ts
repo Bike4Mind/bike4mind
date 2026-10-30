@@ -41,6 +41,7 @@ describe('GET /api/users/:id signup assessment visibility', () => {
           role: '',
           team: '',
           signupGrantAssessment: assessment,
+          userNotes: [{ timestamp: '2026-10-20', note: 'Synthetic internal context', userName: 'Test admin' }],
         }),
       }),
     });
@@ -58,5 +59,11 @@ describe('GET /api/users/:id signup assessment visibility', () => {
     expect(result.id).toBe('target');
     if (allowed) expect(result.signupGrantAssessment).toEqual(assessment);
     else expect(result).not.toHaveProperty('signupGrantAssessment');
+    if (!allowed) {
+      expect(result).not.toHaveProperty('userNotes');
+      expect(result).not.toHaveProperty('history');
+      expect(result).not.toHaveProperty('revisions');
+      expect(JSON.stringify(result)).not.toContain('Synthetic internal context');
+    }
   });
 });

@@ -3,6 +3,10 @@ import { AuthStrategy, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { ACCOUNT_LINK_VERIFICATION_REQUIRED, ACCOUNT_LINK_EMAIL_MISMATCH } from './oauthAccountLink';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
+// Linking an account that promotes emailVerified runs applyEmailVerifiedGrants, which rescores.
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+
 const mockFindOne = vi.fn();
 const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
@@ -86,8 +90,19 @@ vi.mock('./openRegistration', () => ({
   isOpenRegistrationAllowed: () => mockIsOpenRegistrationAllowed(),
 }));
 
+const mockIsSignupNetworkOverLimit = vi.fn();
+const mockCreateSignupRiskCollector = vi.fn();
+vi.mock('@server/auth/signupNetworkLimits', () => ({
+  isSignupNetworkOverLimit: (...args: unknown[]) => mockIsSignupNetworkOverLimit(...args),
+  createSignupRiskCollector: (...args: unknown[]) => mockCreateSignupRiskCollector(...args),
+}));
+vi.mock('@bike4mind/server-utils/auth/signupGrantRisk', () => ({
+  createSignupGrantRiskCollector: (...args: unknown[]) => mockCreateSignupRiskCollector(...args),
+}));
+
 import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
-import { verifyCallback } from './verifyCallback';
+import { selfServeVerifyCallback, verifyCallback } from './verifyCallback';
+import { recordTurnstileVerification } from '@server/auth/signupChallenge';
 
 const runStandard = (
   strategy: AuthStrategy,
@@ -139,6 +154,10 @@ beforeEach(() => {
   // Open by default so the pre-existing create-path tests keep exercising creation.
   mockIsOpenRegistrationAllowed.mockReset();
   mockIsOpenRegistrationAllowed.mockResolvedValue(true);
+  mockIsSignupNetworkOverLimit.mockReset();
+  mockIsSignupNetworkOverLimit.mockResolvedValue(false);
+  mockCreateSignupRiskCollector.mockReset();
+  mockCreateSignupRiskCollector.mockImplementation(network => ({ collectorFor: network ?? null }));
 });
 
 // Failure-safe restore of any vi.spyOn() (e.g. console.error) so a throwing
@@ -674,6 +693,7 @@ describe('verifyCallback - new user creation username field', () => {
       id: 'github-id-123',
       username: 'aanderson',
       displayName: 'Alice Anderson',
+      emails: [{ value: 'alice@example.com', verified: true }],
     });
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
@@ -732,6 +752,7 @@ describe('verifyCallback - catch block surfaces the error', () => {
     const { err, info } = await runStandard(AuthStrategy.Github, {
       id: 'github-id-sys',
       username: 'system-handle',
+      emails: [{ value: 'sys@example.com', verified: true }],
     });
 
     expect(err).toBeNull();
@@ -746,6 +767,7 @@ describe('verifyCallback - catch block surfaces the error', () => {
     const { err, info } = await runStandard(AuthStrategy.Github, {
       id: 'github-id-other',
       username: 'other-handle',
+      emails: [{ value: 'other@example.com', verified: true }],
     });
 
     expect(err).toBeNull();
@@ -897,40 +919,49 @@ describe('verifyCallback - OAuth create: username dedupe on collision', () => {
   });
 });
 
-describe('verifyCallback - OAuth create: unverified provider email is not persisted as login identity', () => {
-  it('does NOT persist the email on create when the provider marks it unverified', async () => {
+describe('verifyCallback - OAuth create: a provider-verified email is required', () => {
+  it.each([
+    ['marks it unverified', [{ value: 'victim@example.com', verified: false }]],
+    ['gives no verification signal', [{ value: 'victim@example.com' }]],
+  ])('refuses a Google sign-up when the provider %s', async (_label, emails) => {
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
-    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'attacker' });
 
-    const { err, user } = await runStandard(AuthStrategy.Google, {
+    const { err, user, info } = await runStandard(AuthStrategy.Google, {
       id: 'google-sub-attacker',
       username: 'attacker',
-      emails: [{ value: 'victim@example.com', verified: false }],
+      emails,
     });
 
-    // Sign-in still succeeds and the account is created, but WITHOUT the unverified
-    // email as its login identity - so it can't pre-seed a Stage-2 match key that a
-    // later verified sign-in for the same address would be auto-linked into.
     expect(err).toBeNull();
-    expect(user).toBeDefined();
-    expect(mockCreate).toHaveBeenCalledTimes(1);
-    expect(mockCreate.mock.calls[0][0].email).toBeUndefined();
+    expect(user).toBeUndefined();
+    expect(info).toEqual({ code: 'signup_email_unverified' });
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  it('does NOT persist the email on create when the provider gives no verification signal', async () => {
+  it('refuses a GitHub sign-up whose profile carries no email', async () => {
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
-    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'nosignal' });
 
-    await runStandard(AuthStrategy.Google, {
-      id: 'google-sub-nosignal',
-      username: 'nosignal',
-      emails: [{ value: 'victim@example.com' }], // no `verified` field
+    const { user, info } = await runStandard(AuthStrategy.Github, { id: 'gh-1', username: 'noemail' });
+
+    expect(user).toBeUndefined();
+    expect(info).toEqual({ code: 'signup_email_unverified' });
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a GitHub sign-up when none of its emails is verified', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+
+    const { info } = await runStandard(AuthStrategy.Github, {
+      id: 'gh-2',
+      username: 'unverified',
+      emails: [{ value: 'unverified@example.com', primary: true, verified: false }],
     });
 
-    expect(mockCreate.mock.calls[0][0].email).toBeUndefined();
+    expect(info).toEqual({ code: 'signup_email_unverified' });
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  it('DOES persist the email on create when the provider marks it verified (unchanged behavior)', async () => {
+  it('persists the email on create when the provider marks it verified', async () => {
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     mockCreate.mockResolvedValueOnce({ _id: 'new-id', email: 'real@example.com' });
 
@@ -955,19 +986,81 @@ describe('verifyCallback - OAuth create: unverified provider email is not persis
     expect(mockCreate.mock.calls[0][0].email).toBe('saml-user@example.com');
   });
 
-  it('creates an emailless account with a random username when the email is unverified and no username is given', async () => {
-    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
-    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'user-abc12345' });
-
-    await runStandard(AuthStrategy.Google, {
-      id: 'google-sub-emailless',
-      emails: [{ value: 'victim@example.com', verified: false }],
+  it('leaves an existing account without a verified provider email signing in as before', async () => {
+    mockFindOne.mockResolvedValueOnce({
+      _id: 'u-existing',
+      username: 'noemail',
+      authProviders: [{ strategy: AuthStrategy.Github, id: 'gh-1' }],
     });
 
-    const createArg = mockCreate.mock.calls[0][0];
-    expect(createArg.email).toBeUndefined();
-    // No username and no usable (verified) email local-part -> random fallback, no crash.
-    expect(createArg.username).toMatch(/^user-[a-f0-9]{8}$/);
+    const { user, info } = await runStandard(AuthStrategy.Github, { id: 'gh-1', username: 'noemail' });
+
+    expect(user).toMatchObject({ _id: 'u-existing' });
+    expect(info).toBeUndefined();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('verifyCallback - OAuth create: blocked email domains', () => {
+  const profile = {
+    id: 'google-sub-burner',
+    displayName: 'Burner',
+    emails: [{ value: 'Someone@Burner.example ', verified: true }],
+  };
+
+  it.each([AuthStrategy.Google, AuthStrategy.Github])(
+    'refuses a %s sign-up on a domain the shared gate blocks',
+    async strategy => {
+      mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      mockShouldBlockDisposableEmail.mockResolvedValue(true);
+
+      const { err, user, info } = await runStandard(strategy, profile);
+
+      expect(err).toBeNull();
+      expect(user).toBeUndefined();
+      expect(info).toEqual({ code: 'signup_email_blocked', email: 'someone@burner.example' });
+      expect(mockShouldBlockDisposableEmail).toHaveBeenCalledWith('someone@burner.example', expect.anything());
+      expect(mockCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('fails closed when the domain lists cannot be read', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockShouldBlockDisposableEmail.mockRejectedValue(new Error('settings down'));
+
+    const { user, info } = await runStandard(AuthStrategy.Google, profile);
+
+    expect(user).toBeUndefined();
+    expect((info as { code: string }).code).toBe('internal');
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not apply to enterprise SSO sign-ups', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockShouldBlockDisposableEmail.mockResolvedValue(true);
+    mockCreate.mockResolvedValueOnce({ _id: 'u-saml' });
+
+    const { user } = await runStandard(AuthStrategy.SAML, profile);
+
+    expect(user).toBeDefined();
+    expect(mockShouldBlockDisposableEmail).not.toHaveBeenCalled();
+  });
+
+  it('lets an existing account on a blocked domain keep signing in', async () => {
+    mockShouldBlockDisposableEmail.mockResolvedValue(true);
+    mockFindOne.mockResolvedValueOnce({
+      _id: 'u-existing',
+      email: 'someone@burner.example',
+      emailVerified: true,
+      authProviders: [{ strategy: AuthStrategy.Google, id: 'google-sub-burner' }],
+    });
+
+    const { user } = await runStandard(AuthStrategy.Google, profile);
+
+    expect(user).toMatchObject({ _id: 'u-existing' });
+    expect(mockShouldBlockDisposableEmail).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -1046,6 +1139,21 @@ describe('verifyCallback - invite gate on federated first login', () => {
 
     expect(user).toBeTruthy();
     expect(mockCreate).toHaveBeenCalled();
+  });
+
+  it('reports registration_closed ahead of the email checks on an invite-only instance', async () => {
+    noExistingUser();
+    mockIsOpenRegistrationAllowed.mockResolvedValue(false);
+    mockShouldBlockDisposableEmail.mockResolvedValue(true);
+
+    const { info } = await runStandard(AuthStrategy.Google, {
+      ...freshProfile,
+      emails: [{ value: 'new@example.com', verified: false }],
+    });
+
+    expect(info).toMatchObject({ code: 'registration_closed' });
+    expect(mockShouldBlockDisposableEmail).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -1183,37 +1291,6 @@ describe('verifyCallback - starter credits on OAuth signup', () => {
     expect((user as { signupCreditsGranted?: number }).signupCreditsGranted).toBe(0);
   });
 
-  it('does not tag or grant when the account has no email', async () => {
-    const { err } = await runStandard(AuthStrategy.Github, { id: 'gh-1', username: 'noemail' });
-
-    expect(err).toBeNull();
-    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
-    expect(mockReleasePending).not.toHaveBeenCalled();
-    expect(mockPartnerGrant).not.toHaveBeenCalled();
-  });
-
-  it('does not tag or grant a disposable email the shared gate blocks', async () => {
-    mockShouldBlockDisposableEmail.mockResolvedValue(true);
-
-    const { err } = await runStandard(AuthStrategy.Google, verifiedProfile);
-
-    expect(err).toBeNull();
-    expect(mockShouldBlockDisposableEmail).toHaveBeenCalledWith('pat@example.com', expect.anything());
-    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
-    expect(mockReleasePending).not.toHaveBeenCalled();
-  });
-
-  it('withholds the grant but completes the login when the eligibility check throws', async () => {
-    mockShouldBlockDisposableEmail.mockRejectedValue(new Error('settings down'));
-
-    const { err, user } = await runStandard(AuthStrategy.Google, verifiedProfile);
-
-    expect(err).toBeNull();
-    expect(user).toBeDefined();
-    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
-    expect(mockReleasePending).not.toHaveBeenCalled();
-  });
-
   it('keeps the tag (no tag-strip write) and completes the login when the grant fails', async () => {
     mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
 
@@ -1232,36 +1309,6 @@ describe('verifyCallback - starter credits on OAuth signup', () => {
 
     expect(err).toBeNull();
     expect(user).toBeDefined();
-  });
-});
-
-describe('verifyCallback - unverified provider email on OAuth signup', () => {
-  beforeEach(() => {
-    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
-    mockCreate.mockImplementationOnce(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
-    mockPartnerGrant.mockResolvedValue({
-      matched: true,
-      entitlements: new Set(['optihashi:pro']),
-      signupCredits: 1000,
-      organizationId: 'org-1',
-    });
-  });
-
-  it.each([
-    ['verified:false', [{ value: 'victim@example.com', verified: false }]],
-    ['no verified field', [{ value: 'victim@example.com' }]],
-  ])('grants and releases nothing when the Google email is %s', async (_label, emails) => {
-    const { err } = await runStandard(AuthStrategy.Google, { id: 'google-sub-1', displayName: 'Vic', emails });
-
-    expect(err).toBeNull();
-    const createdDoc = mockCreate.mock.calls[0][0];
-    expect(createdDoc).not.toHaveProperty('email');
-    expect(createdDoc).not.toHaveProperty('tags');
-    expect(mockShouldBlockDisposableEmail).not.toHaveBeenCalled();
-    expect(mockReleasePending).not.toHaveBeenCalled();
-    expect(mockPartnerGrant).not.toHaveBeenCalled();
-    expect(mockAddCredits).not.toHaveBeenCalled();
-    expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
   });
 });
 
@@ -1437,5 +1484,114 @@ describe('verifyCallback - pending free credits on account link', () => {
     expect(err).toBeNull();
     expect(user).toBeDefined();
     expect(mockClearPending).not.toHaveBeenCalled();
+  });
+});
+
+describe('selfServeVerifyCallback - signup network limits', () => {
+  const freshProfile = {
+    id: 'sub-net',
+    displayName: 'Net Person',
+    emails: [{ value: 'net@example.com', verified: true }],
+  };
+  const req = { headers: { 'cloudfront-viewer-address': '203.0.113.9:4444', 'cloudfront-viewer-asn': '64500' } };
+  const runSelfServe = (
+    strategy: AuthStrategy,
+    profile: Record<string, unknown> = freshProfile,
+    verified = false
+  ): Promise<{ err: unknown; user: unknown; info: unknown }> =>
+    new Promise(resolve => {
+      const done = (err: unknown, user?: unknown, info?: unknown) => resolve({ err, user, info });
+      recordTurnstileVerification(req, verified);
+      void selfServeVerifyCallback(strategy)(req, 'access-tok', 'refresh-tok', profile, done);
+    });
+
+  it('declares the arity passport-oauth2 needs to pass the request first', () => {
+    expect(selfServeVerifyCallback(AuthStrategy.Google)).toHaveLength(5);
+  });
+
+  it('refuses a first login whose network is over the signup limit', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+
+    const { user, info } = await runSelfServe(AuthStrategy.Github);
+
+    expect(user).toBeFalsy();
+    expect(info).toMatchObject({ code: 'signup_limited' });
+    expect(mockIsSignupNetworkOverLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ ip: '203.0.113.9', asn: 64500 }),
+      expect.anything()
+    );
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['signup_email_unverified', { ...freshProfile, emails: [{ value: 'net@example.com', verified: false }] }, false],
+    ['signup_email_blocked', freshProfile, true],
+  ])('reports %s ahead of the network cap', async (code, profile, blocked) => {
+    mockFindOne.mockResolvedValue(null);
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+    mockShouldBlockDisposableEmail.mockResolvedValue(blocked);
+
+    const { info } = await runSelfServe(AuthStrategy.Github, profile);
+
+    expect(info).toMatchObject({ code });
+    expect(mockIsSignupNetworkOverLimit).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('admits a partner-domain first login without running the network cap check', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'p-id', id: 'p-id' }));
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      ruleId: 'rule-1',
+      domain: 'example.com',
+      entitlements: new Set(),
+      signupCredits: 0,
+      organizationId: null,
+      tags: [],
+      subscription: null,
+    });
+
+    const { user, info } = await runSelfServe(AuthStrategy.Google);
+
+    expect(user).toBeTruthy();
+    expect(info).toBeUndefined();
+    expect(mockIsSignupNetworkOverLimit).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('assesses a new account with the request network and challenge proof (%s)', async verified => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'new-id', id: 'new-id' }));
+
+    const { user } = await runSelfServe(AuthStrategy.Google, freshProfile, verified);
+
+    expect(user).toBeTruthy();
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signupMeta: expect.objectContaining({
+          ip: '203.0.113.9',
+          capturedAt: expect.any(Date),
+          challengeVerified: verified ? true : null,
+        }),
+      })
+    );
+    expect(mockCreateSignupRiskCollector).toHaveBeenCalledWith(expect.objectContaining({ ip: '203.0.113.9' }));
+    expect(mockReleasePending).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ collectRiskSignals: { collectorFor: expect.objectContaining({ asn: 64500 }) } })
+    );
+  });
+
+  it('does not gate the request-less verifyCallback (SAML wrapper)', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'saml-id', id: 'saml-id' }));
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+
+    const { user } = await runStandard(AuthStrategy.Google, freshProfile);
+
+    expect(user).toBeTruthy();
+    expect(mockIsSignupNetworkOverLimit).not.toHaveBeenCalled();
   });
 });

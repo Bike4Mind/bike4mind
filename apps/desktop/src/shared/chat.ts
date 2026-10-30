@@ -863,9 +863,13 @@ export function localBackend(runtimeId: string): string {
 export const NO_LOCAL_MODEL = 'local:';
 
 /** The device-local model a conversation moves to: the remembered pick if listed, else the first. */
-export function pickLocalModel(models: readonly { id: string }[], remembered?: string | null): string | null {
-  if (remembered && models.some(model => model.id === remembered)) return remembered;
-  return models[0]?.id ?? null;
+export function pickLocalModel(
+  models: readonly { id: string; unavailable?: string }[],
+  remembered?: string | null
+): string | null {
+  const usable = models.filter(model => !model.unavailable);
+  if (remembered && usable.some(model => model.id === remembered)) return remembered;
+  return usable[0]?.id ?? null;
 }
 
 /**
@@ -880,6 +884,8 @@ export interface ChatModelOption {
   name: string;
   /** Provider serving it ("anthropic", "ollama", ...). Shown as a secondary label. */
   backend?: string;
+  /** Release day as YYYY-MM-DD, from the server's catalog. Absent for local and saved-server models. */
+  releaseDate?: string;
   contextWindow?: number;
   /**
    * The most output tokens this model can produce in one reply, sent as `max_tokens` on every
@@ -905,8 +911,14 @@ export interface ChatModelOption {
    * THINKING_OFF_SETTING (off).
    */
   thinkingToggle?: boolean;
+  /** A `thinkingToggle` model whose template always thinks, so the switch shows Off as unavailable. */
+  thinkingAlwaysOn?: boolean;
   /** Local models can remain useful without tool-call support. */
   supportsTools?: boolean;
+  /** A saved model server's model, grouped under it in the picker. Absent for hosted models and this computer's. */
+  server?: { id: string; name: string };
+  /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
+  unavailable?: string;
 }
 
 /** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
@@ -941,6 +953,15 @@ export const REASONING_EFFORT_SETTINGS: readonly ReasoningEffortSetting[] = [
 export interface ChatModelCatalog {
   models: ChatModelOption[];
   error?: string;
+}
+
+/**
+ * A generation tool the next Chat turn would declare, as `listCreationTools` answers. Derived from
+ * the same inputs as the request's tool list (see toolsForRequest), so the blank chat never offers
+ * to make something the model will not be given a tool for.
+ */
+export interface CreationTool {
+  name: string;
 }
 
 /**
@@ -1741,6 +1762,9 @@ export function isTurnBudgetStop(reason?: string): boolean {
  * paused turn instead, under the one re-auth notice, rather than as a red line per message.
  */
 export const SESSION_EXPIRED_STOP = 'session_expired';
+
+/** The stop reason of a turn a model server refused with 401 or 403; the thread offers to enter new credentials. */
+export const SERVER_CREDENTIALS_STOP = 'server_credentials';
 
 /**
  * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at

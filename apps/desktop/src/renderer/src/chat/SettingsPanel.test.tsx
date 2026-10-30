@@ -31,6 +31,8 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-entry="local-context"');
     expect(html).toContain('settings-local-context-select');
     expect(html).toContain('settings-clear-history-btn');
+    expect(html).toContain('data-entry="curated-list"');
+    expect(html).toContain('settings-curated-source-switch');
     expect(html).not.toContain('data-entry="permissions"');
     expect(html).not.toContain('data-entry="claude-import"');
   });
@@ -51,7 +53,16 @@ describe('the Settings screen', () => {
     expect(imports).not.toContain('data-entry="appearance"');
   });
 
+  it('gives model servers their own page, which works signed out too', () => {
+    const servers = markup(<SettingsScreen auth={null} section="servers" onClose={() => {}} />);
+    expect(servers).toContain('data-entry="model-servers"');
+    expect(servers).toContain('data-testid="model-servers"');
+    expect(servers).not.toContain('data-entry="appearance"');
+    expect(isSettingsSection('servers')).toBe(true);
+  });
+
   it('only takes known page names from the route', () => {
+    expect(isSettingsSection('worktrees')).toBe(true);
     expect(isSettingsSection('import')).toBe(true);
     expect(isSettingsSection('billing')).toBe(false);
     expect(isSettingsSection(undefined)).toBe(false);

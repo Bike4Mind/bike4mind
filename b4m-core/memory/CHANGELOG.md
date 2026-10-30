@@ -1,5 +1,11 @@
 # @bike4mind/memory
 
+## 0.2.4
+
+### Patch Changes
+
+- [#5955](https://github.com/Bike4Mind/bike4mind/pull/5955) [`a295054`](https://github.com/Bike4Mind/bike4mind/commit/a2950546d13fbf978e70ee33156e6094db9aabcd) Thanks [@ken-b4m](https://github.com/ken-b4m)! - clear open Dependabot alerts with in-major overrides and bumps
+
 ## 0.2.3
 
 ### Patch Changes

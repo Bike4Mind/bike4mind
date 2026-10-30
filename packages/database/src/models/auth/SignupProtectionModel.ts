@@ -2,6 +2,7 @@ import mongoose, { Schema } from 'mongoose';
 import type { SignupDomainReview, SignupObservation, SignupProtectionRepository } from '@bike4mind/common';
 import { emailDomainCandidates } from '@bike4mind/common';
 import { PartnerSignupRule } from './PartnerSignupRuleModel';
+import { disposableDomainRepository } from './DisposableDomainModel';
 
 const observationSchema = new Schema<SignupObservation>({
   userId: { type: String, required: true, unique: true },
@@ -25,10 +26,10 @@ const reviewSchema = new Schema<SignupDomainReview & { reviewedBy?: string; revi
 });
 reviewSchema.index({ triggeredAt: -1 });
 
-export const SignupObservationModel =
+export const SignupObservationModel: mongoose.Model<SignupObservation> =
   (mongoose.models.SignupObservation as mongoose.Model<SignupObservation>) ??
   mongoose.model('SignupObservation', observationSchema);
-export const SignupDomainReviewModel =
+export const SignupDomainReviewModel: mongoose.Model<SignupDomainReview> =
   (mongoose.models.SignupDomainReview as mongoose.Model<SignupDomainReview>) ??
   mongoose.model('SignupDomainReview', reviewSchema);
 
@@ -72,4 +73,7 @@ export const signupProtectionRepository: SignupProtectionRepository = {
       organizationId: { $type: 'string', $ne: '' },
     }));
   },
+  disposableSources: disposableDomainRepository.disposableSources,
+  findDomainIntel: disposableDomainRepository.findDomainIntel,
+  saveDomainIntel: disposableDomainRepository.saveDomainIntel,
 };

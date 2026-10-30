@@ -162,7 +162,7 @@ async function generateAuthUrl(
       const params = new URLSearchParams({
         client_id: clientId,
         redirect_uri: `${baseUrl}/api/auth/github/mcp-callback`,
-        scope: 'repo,read:org,read:user,project',
+        scope: 'repo,read:org,read:user,user:email,project',
         state,
         allow_signup: 'false',
       });

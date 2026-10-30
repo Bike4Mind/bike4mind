@@ -1,7 +1,13 @@
 import { ModelInfo } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { isAxiosError } from 'axios';
-import { getLlmByModel, isLlmTimeoutError, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import {
+  getLlmByModel,
+  isLlmTimeoutError,
+  isStreamEndedWithoutFinishError,
+  type ApiKeyTable,
+  type ICompletionBackend,
+} from '@bike4mind/llm-adapters';
 
 /**
  * Fallback attempt result
@@ -91,6 +97,11 @@ export function shouldTriggerFallback(error: Error): boolean {
   // (e.g. Bedrock's 503 ServiceUnavailableException) error shapes.
   const status = getHttpStatus(error);
   if (status === 429 || status === 502 || status === 503 || status === 504) {
+    return true;
+  }
+
+  // A stream that closed with no finish reason and no output is a provider blip, not a bad request.
+  if (isStreamEndedWithoutFinishError(error)) {
     return true;
   }
 

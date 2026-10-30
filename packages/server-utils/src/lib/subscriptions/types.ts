@@ -35,6 +35,20 @@ export const isCancellableSubscriptionStatus = (status: Stripe.Subscription.Stat
   !TERMINAL_SUBSCRIPTION_STATUSES.has(status);
 
 /**
+ * A row Stripe may still be charging for. Deleting it in Mongo alone stops our credit grants but
+ * not the invoices, so the admin remove route refuses it and the admin UI disables the action.
+ */
+export const isLiveStripeBilledSubscription = (sub: {
+  source?: SubscriptionSource;
+  subscriptionId?: string;
+  status: Stripe.Subscription.Status;
+}): boolean =>
+  resolveSubscriptionSource(sub) === SubscriptionSource.Stripe && isCancellableSubscriptionStatus(sub.status);
+
+export const LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE =
+  'This subscription is still billed through Stripe. Cancel it first; removing the record alone keeps charging the customer.';
+
+/**
  * The minimum a client-side row must expose for the display pickers below.
  * `source` is optional because it only reaches the client as a leaked field of the
  * repository row, and rows written before that field existed read back without it.
@@ -163,6 +177,31 @@ export interface ISubscription {
   paymentFailureNotifiedInvoiceIds?: string[];
   /** When the owner was emailed that dunning cancelled the subscription; the once-only claim. */
   nonPaymentCancelNotifiedAt?: Date;
+  /**
+   * Mirror of the Stripe subscription, written through `stripeMirrorFields` (./stripeMirror.ts)
+   * by every path that syncs from a Stripe subscription object. Absent on admin grants and on
+   * rows not yet synced or backfilled. `currency` is the billed currency and `unitAmount` is per
+   * unit in its minor units, before discounts; null when the price has no flat unit amount (tiered
+   * or decimal pricing) or none known in that currency.
+   */
+  unitAmount?: number | null;
+  currency?: string;
+  interval?: Stripe.Price.Recurring.Interval | null;
+  /** Billed every `intervalCount` intervals (3 with `month` is quarterly). */
+  intervalCount?: number | null;
+  cancelAtPeriodEnd?: boolean;
+  /**
+   * When a scheduled cancel takes effect. Set for a period-end cancel and for one on a custom
+   * date (which leaves `cancelAtPeriodEnd` false), so this is the "will end" signal.
+   */
+  cancelAt?: Date | null;
+  trialEndsAt?: Date | null;
+  stripeCustomerId?: string;
+  /**
+   * When the mirror was last written from a Stripe read, not when Stripe's state was current:
+   * a redelivered deleted event carries an older payload.
+   */
+  lastSyncedAt?: Date;
 }
 
 /**

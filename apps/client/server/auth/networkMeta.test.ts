@@ -36,6 +36,8 @@ describe('readNetworkMeta', () => {
       country: 'US',
       isDatacenter: true,
       ja4: null,
+      wafAnonIp: null,
+      wafBotSignal: null,
     });
   });
 
@@ -54,7 +56,47 @@ describe('readNetworkMeta', () => {
       country: null,
       isDatacenter: null,
       ja4: null,
+      wafAnonIp: null,
+      wafBotSignal: null,
     });
+  });
+
+  it('returns null for wafAnonIp and wafBotSignal when not on a deployed stage', () => {
+    // Without ORIGIN_VERIFY_SECRET the deployed flag is false; WAF headers are untrusted.
+    const meta = readNetworkMeta(reqWith({ 'x-amzn-waf-x-waf-anon-ip': '1', 'x-amzn-waf-x-waf-bot-signal': '1' }));
+    expect(meta.wafAnonIp).toBeNull();
+    expect(meta.wafBotSignal).toBeNull();
+  });
+
+  it('returns null for wafAnonIp and wafBotSignal on self-host even with headers present', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', 'synthetic-secret');
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const meta = readNetworkMeta(reqWith({ 'x-amzn-waf-x-waf-anon-ip': '1', 'x-amzn-waf-x-waf-bot-signal': '1' }));
+    expect(meta.wafAnonIp).toBeNull();
+    expect(meta.wafBotSignal).toBeNull();
+  });
+
+  it('returns null for wafAnonIp and wafBotSignal when the attached ACL does not forward labels', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', 'synthetic-secret');
+    const meta = readNetworkMeta(reqWith({}));
+    expect(meta.wafAnonIp).toBeNull();
+    expect(meta.wafBotSignal).toBeNull();
+  });
+
+  it('reads wafAnonIp and wafBotSignal as false when label forwarding is on and the headers are absent', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', 'synthetic-secret');
+    vi.stubEnv('WAF_LABEL_FORWARDING', 'true');
+    const meta = readNetworkMeta(reqWith({ 'x-waf-anon-ip': '1', 'x-waf-bot-signal': '1' }));
+    expect(meta.wafAnonIp).toBe(false);
+    expect(meta.wafBotSignal).toBe(false);
+  });
+
+  it('reads wafAnonIp and wafBotSignal as true on a deployed stage when headers are present', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', 'synthetic-secret');
+    vi.stubEnv('WAF_LABEL_FORWARDING', 'true');
+    const meta = readNetworkMeta(reqWith({ 'x-amzn-waf-x-waf-anon-ip': '1', 'x-amzn-waf-x-waf-bot-signal': '1' }));
+    expect(meta.wafAnonIp).toBe(true);
+    expect(meta.wafBotSignal).toBe(true);
   });
 
   it('captures only a bounded observation when origin verification is enabled', () => {

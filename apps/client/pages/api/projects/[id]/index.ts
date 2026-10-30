@@ -1,9 +1,10 @@
 import { z } from 'zod';
-import { ProjectEvents } from '@bike4mind/common';
+import { ProjectEvents, projectResponseSchema } from '@bike4mind/common';
 import { fabFileRepository, projectRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { BadRequestError, UnprocessableEntityError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
+import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
 import {
   assertProjectsReadScope,
   assertProjectsWriteScope,
@@ -11,6 +12,7 @@ import {
 } from '@server/projects/projectScopes';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { logEvent } from '@server/utils/analyticsLog';
+import { respond } from '@server/utils/respond';
 
 const updateProjectBodySchema = z.object({
   name: z.string().optional(),
@@ -27,7 +29,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         users: userRepository,
       },
     });
-    return res.json(project);
+    return respond(res, projectResponseSchema, project);
   })
   .put(async (req, res) => {
     assertProjectsWriteScope(req);
@@ -83,6 +85,9 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       },
     });
 
+    // Read before the delete: its cascade prunes the project's file list.
+    const cleanUpTargets = await projectRevokeCleanupTargets(project.id, undefined, req.logger);
+
     await projectService.deleteProject(
       req.user.id,
       { ...(req.query as any) },
@@ -95,6 +100,8 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         },
       }
     );
+
+    await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
 
     await logEvent(
       {

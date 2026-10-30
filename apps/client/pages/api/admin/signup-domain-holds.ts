@@ -1,7 +1,12 @@
 import { respond } from '@server/utils/respond';
 import { z } from 'zod';
 import { ApiKeyScope, PENDING_FREE_CREDITS_TAG, signupDomainReviewSchema } from '@bike4mind/common';
-import { SignupDomainReviewModel, User } from '@bike4mind/database';
+import {
+  disposableDomainRepository,
+  DomainIntelligenceModel,
+  SignupDomainReviewModel,
+  User,
+} from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -17,6 +22,14 @@ const decisionSchema = z.object({
     .optional(),
 });
 
+const sourceStatusSchema = z.object({
+  source: z.string(),
+  count: z.number(),
+  lastSuccessAt: z.date().optional(),
+  lastError: z.string().optional(),
+  lastErrorAt: z.date().optional(),
+});
+
 const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
   .get(
     asyncHandler(async (req, res) => {
@@ -24,15 +37,26 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       const parsed = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1) }).safeParse(req.query);
       if (!parsed.success) throw new BadRequestError('Invalid page');
       const limit = 25;
-      const [data, total] = await Promise.all([
+      const [data, total, sources, intelCacheSize] = await Promise.all([
         SignupDomainReviewModel.find()
           .sort({ triggeredAt: -1, _id: -1 })
           .skip((parsed.data.page - 1) * limit)
           .limit(limit)
           .lean(),
         SignupDomainReviewModel.countDocuments(),
+        disposableDomainRepository.getDisposableSourceStatus(),
+        DomainIntelligenceModel.estimatedDocumentCount(),
       ]);
-      respond(res, z.object({ data: z.array(signupDomainReviewSchema), total: z.number() }), { data, total });
+      respond(
+        res,
+        z.object({
+          data: z.array(signupDomainReviewSchema),
+          total: z.number(),
+          sources: z.array(sourceStatusSchema),
+          intelCacheSize: z.number(),
+        }),
+        { data, total, sources, intelCacheSize }
+      );
     })
   )
   .post(
@@ -81,7 +105,9 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           const result = await releaseVerifiedPendingFreeCredits(
             { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
             'Signup domain hold released by admin',
-            req.logger
+            req.logger,
+            undefined,
+            { bypassBudget: true }
           );
           creditsReleased += result.creditsGranted;
           if (!result.tags) stillPending++;

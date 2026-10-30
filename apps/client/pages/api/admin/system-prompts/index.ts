@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { systemPromptRepository } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
 import { z } from 'zod';
 
@@ -23,7 +23,10 @@ const CreateSystemPromptSchema = z.object({
   enabled: z.boolean().default(true),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(
     /**
      * GET /api/admin/system-prompts
@@ -31,10 +34,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
      * Returns both code-defined defaults and database overrides.
      */
     async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { category, enabled, search, source } = GetSystemPromptsQuerySchema.parse(req.query);
 
       // Load default prompts from code
@@ -149,10 +148,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
      * Create a new system prompt
      */
     async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const promptData = CreateSystemPromptSchema.parse(req.body);
 
       const existing = await systemPromptRepository.findOne({ promptId: promptData.promptId });
@@ -174,6 +169,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         createdBy: req.user?.email || 'system',
         lastUpdatedBy: req.user?.email || 'system',
         lastUpdatedByName: req.user?.name || 'System',
+      });
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.system_prompt.created',
+        target: { kind: 'settings', id: promptData.promptId, displayName: promptData.name },
+        summary: `created system prompt ${promptData.promptId}`,
+        details: { category: newPrompt.category, enabled: newPrompt.enabled, version: newPrompt.version },
       });
 
       return res.status(201).json({

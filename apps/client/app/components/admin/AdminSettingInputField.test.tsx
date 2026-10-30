@@ -5,6 +5,14 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { SENSITIVE_SETTING_MASK, settingsMap } from '@bike4mind/common';
 
 const mutate = vi.fn();
+const mutateAsync = vi.fn();
+vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => ({
+    state: { location: { pathname: '/admin', search: { tab: 'admin-settings' } } },
+    navigate: vi.fn(),
+  }),
+}));
 // Read at render time, so a test can put the mutation into its rejected state.
 let updateError: unknown;
 // Read at render time, so a test can simulate the save round-trip still being in flight.
@@ -16,13 +24,14 @@ let updatePending = false;
 let floorWarning: string | undefined;
 vi.mock('@client/app/hooks/data/settings', () => ({
   useFloorAboveMeasuredWarning: (key: string) => (key === 'forcedRetrievalMinSimilarityPct' ? floorWarning : undefined),
-  useUpdateSettings: () => ({ mutate, isPending: updatePending, error: updateError }),
+  useUpdateSettings: () => ({ mutate, mutateAsync, isPending: updatePending, error: updateError }),
   useScopedSettingOverrides: () => ({ data: [] }),
   useSetScopedSettingOverride: () => ({ mutate: vi.fn(), isPending: false, error: undefined }),
   useClearScopedSettingOverride: () => ({ mutate: vi.fn(), isPending: false, error: undefined }),
 }));
 
 import AdminSettingInputField from './AdminSettingInputField';
+import { SettingsDraftProvider } from './SettingsDraftProvider';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -43,6 +52,46 @@ const input = () => screen.getByTestId('admin-setting-anthropicDemoKey-input') a
 // Qualified by testid: an unqualified getByRole('button') breaks with a confusing
 // "multiple elements" error the moment another button lands in this card.
 const saveButton = () => screen.getByTestId('admin-setting-anthropicDemoKey-save-btn');
+
+describe('staged settings fields', () => {
+  it('does not stage a focused mask and discards plaintext without a write', () => {
+    render(
+      <TestWrapper>
+        <SettingsDraftProvider>
+          <AdminSettingInputField setting={settingsMap.anthropicDemoKey} index={0} defaultValue={maskedValue} />
+        </SettingsDraftProvider>
+      </TestWrapper>
+    );
+    fireEvent.focus(input());
+    expect(input()).toHaveValue('');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    fireEvent.change(input(), { target: { value: 'synthetic-secret' } });
+    expect(input()).toHaveAttribute('type', 'password');
+    expect(screen.queryByTestId('admin-setting-anthropicDemoKey-save-btn')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+    fireEvent.blur(input());
+    expect(input()).toHaveValue(maskedValue);
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('saves through SaveBar on Ctrl+S from a staged input', async () => {
+    mutateAsync.mockReset();
+    mutateAsync.mockResolvedValue({ settingValue: 200 });
+    render(
+      <TestWrapper>
+        <SettingsDraftProvider>
+          <AdminSettingInputField setting={settingsMap.modelDiscoveryPriceBandPct} index={0} defaultValue={50} />
+        </SettingsDraftProvider>
+      </TestWrapper>
+    );
+    const field = screen.getByTestId('admin-setting-modelDiscoveryPriceBandPct-input');
+    fireEvent.change(field, { target: { value: '200' } });
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 's', ctrlKey: true });
+    });
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'modelDiscoveryPriceBandPct', value: 200 });
+  });
+});
 
 describe('AdminSettingInputField save shortcut boundaries', () => {
   beforeEach(() => {

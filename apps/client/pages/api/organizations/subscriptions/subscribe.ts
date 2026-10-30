@@ -1,6 +1,6 @@
 import { adminSettingsRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
+import { isTeamPlanPriceId } from '@client/lib/userSubscriptions/constants';
 import {
   OrgSubscriptionSubscribeSchema,
   StripeSubscriptionMetadataSchema,
@@ -26,7 +26,7 @@ const handler = baseApi()
     const { priceId, organizationId, quantity, organizationData, callbackUrl, attributionConsent, surface } =
       OrgSubscriptionSubscribeSchema.parse(req.body);
 
-    if (priceId !== ORGANIZATION_SUBSCRIPTION_PRICE_ID) {
+    if (!isTeamPlanPriceId(priceId)) {
       throw new BadRequestError('Invalid Organization Subscription Price ID');
     }
 
@@ -87,7 +87,7 @@ const handler = baseApi()
         gatedOrganizationId
       );
 
-      // The price is pinned to ORGANIZATION_SUBSCRIPTION_PRICE_ID above, so for an org this is
+      // The price is pinned to the Team price (isTeamPlanPriceId) above, so for an org this is
       // "any non-terminal subscription"; keep the match so the guard reads the same for any price.
       const blockingSubscription = liveSubscriptions.find(subscription => subscription.priceId === priceId);
 

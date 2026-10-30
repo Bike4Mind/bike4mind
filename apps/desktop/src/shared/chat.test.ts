@@ -8,8 +8,23 @@ import {
   localModelId,
   messagesSinceBoundary,
   parseLocalModelId,
+  pickLocalModel,
   type ChatMessage,
 } from './chat';
+
+describe('pickLocalModel', () => {
+  it('never picks a model whose server is down', () => {
+    const down = { id: 'local:srv-abc123:qwen', unavailable: 'gpu box is unreachable' };
+    const up = { id: 'local:ollama:qwen' };
+    expect(pickLocalModel([down, up])).toBe(up.id);
+    expect(pickLocalModel([down, up], down.id)).toBe(up.id);
+    expect(pickLocalModel([down])).toBeNull();
+  });
+
+  it('keeps the remembered model while it is usable', () => {
+    expect(pickLocalModel([{ id: 'a' }, { id: 'b' }], 'b')).toBe('b');
+  });
+});
 
 describe('local model ids', () => {
   it('round-trips a runtime and a model containing colons', () => {

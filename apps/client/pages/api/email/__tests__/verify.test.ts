@@ -3,6 +3,9 @@ import { createMocks } from 'node-mocks-http';
 import { CreditHolderType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+
 // Middleware is stripped so the handler body runs directly (same pattern as
 // pages/api/auth/__tests__/unlink.test.ts). baseApi().use(...).use(...).post(fn)
 // must chain and hand back the raw handler.

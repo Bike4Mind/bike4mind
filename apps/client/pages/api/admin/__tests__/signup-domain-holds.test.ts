@@ -28,10 +28,25 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@bike4mind/database', () => ({
-  SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate },
-  User: { find, countDocuments: count },
-}));
+vi.mock('@bike4mind/database', () => {
+  const reviewQuery = {
+    sort: () => reviewQuery,
+    skip: () => reviewQuery,
+    limit: () => reviewQuery,
+    lean: async () => [],
+  };
+  return {
+    SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate, find: () => reviewQuery, countDocuments: async () => 0 },
+    DomainIntelligenceModel: { estimatedDocumentCount: async () => 12 },
+    disposableDomainRepository: {
+      getDisposableSourceStatus: async () => [
+        { source: 'curated', count: 3, lastSuccessAt: new Date('2026-01-02') },
+        { source: 'aggregate', count: 0, lastError: 'HTTP 503', lastErrorAt: new Date('2026-01-02') },
+      ],
+    },
+    User: { find, countDocuments: count },
+  };
+});
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   isEligibleForFreeCredits: eligible,
   releaseVerifiedPendingFreeCredits: release,
@@ -58,6 +73,21 @@ beforeEach(() => {
   release.mockReset().mockResolvedValue({ creditsGranted: 25, tags: [] });
   eligible.mockReset().mockResolvedValue(true);
 });
+describe('signup domain hold listing', () => {
+  it('reports per-source list freshness and the lookup cache size', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: {} });
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
+    await handlers.get(req, res);
+    expect(res._getJSONData()).toMatchObject({
+      total: 0,
+      intelCacheSize: 12,
+      sources: [
+        { source: 'curated', count: 3 },
+        { source: 'aggregate', count: 0, lastError: 'HTTP 503' },
+      ],
+    });
+  });
+});
 describe('signup domain hold decisions', () => {
   it('is session-only and rejects non-admin decisions before reading or writing', async () => {
     expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
@@ -82,7 +112,9 @@ describe('signup domain hold decisions', () => {
     expect(release).toHaveBeenCalledWith(
       { id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG], pendingCreditGrant: 25 },
       'Signup domain hold released by admin',
-      expect.anything()
+      expect.anything(),
+      undefined,
+      { bypassBudget: true }
     );
     expect(res._getJSONData()).toEqual({ status: 'released', creditsReleased: 25, remaining: 0, nextCursor: null });
     // A single page saw every candidate, so the unindexed regex is not scanned a second time.

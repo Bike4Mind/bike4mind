@@ -8,12 +8,15 @@ import {
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
+  TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+  CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
   DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
 } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
 import {
   ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
+  COMPLETION_SSE_ERROR_CODES,
   COMPLETION_TOOL_ERROR_CODES,
   CompletionSseErrorEventSchema,
 } from './schemas/cliCompletions';
@@ -21,6 +24,7 @@ import { VIDEO_GENERATION_API_ERROR_CODES, VIDEO_JOB_PUBLIC_ERROR_CODES } from '
 import { MUSIC_GENERATION_API_ERROR_CODES, MUSIC_JOB_PUBLIC_ERROR_CODES } from './schemas/musicGenerations';
 import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
+import { SKILL_MARKET_IMPORT_ERROR_CODES } from './schemas/skillMarketPublic';
 
 /**
  * The `satisfies readonly ApiErrorCode[]` on each narrowing tuple is what actually
@@ -56,6 +60,8 @@ describe('API_ERROR_CODES', () => {
       DECISIONS_ERROR_CODES,
       STORAGE_ERROR_CODES,
       COMPLETION_TOOL_ERROR_CODES,
+      SKILL_MARKET_IMPORT_ERROR_CODES,
+      COMPLETION_SSE_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
     // AGENT_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/agents/createAgent.test.ts.
@@ -63,6 +69,8 @@ describe('API_ERROR_CODES', () => {
     // BILLING_ORGANIZATION_MISMATCH_ERROR_CODE likewise; proven by apps/client/server/billing/resolveMediaBillingOrgId.test.ts.
     // REQUEST_TIMEOUT_ERROR_CODE likewise; proven by apps/client/pages/api/__tests__/chat.integration.test.ts (over the wait=true deadline).
     // API_KEY_TRUST_REQUIRED_ERROR_CODE likewise; proven by userApiKeyService/__tests__/trust.test.ts.
+    // TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE and CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE likewise; proven by
+    // apps/client/server/utils/untrustedCompletionQuota.test.ts.
     // MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
     // DAILY_FREE_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/billing/freeTierDailyCapGate.test.ts.
     const emitted = new Set<string>([
@@ -75,6 +83,8 @@ describe('API_ERROR_CODES', () => {
       REQUEST_TIMEOUT_ERROR_CODE,
       ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
       API_KEY_TRUST_REQUIRED_ERROR_CODE,
+      TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+      CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
       DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);

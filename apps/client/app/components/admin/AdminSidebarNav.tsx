@@ -37,6 +37,8 @@ export type SidebarNavProps = {
   enableUserMigration?: boolean;
   showLiveOpsTriageTab: boolean;
   waitingSubscribersCount?: number;
+  /** A Stripe-billed subscription started since this browser last opened the Subscriptions tab. */
+  newSubscriptions?: boolean;
   hiddenNotifications: string[];
   onTabSelect: (tab: AdminTab) => void;
   account?: SidebarAccount;
@@ -270,6 +272,7 @@ export const SidebarNav = ({
   enableUserMigration,
   showLiveOpsTriageTab,
   waitingSubscribersCount,
+  newSubscriptions = false,
   hiddenNotifications,
   onTabSelect,
   account,
@@ -314,7 +317,18 @@ export const SidebarNav = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [collapsed]);
 
-  const waitingBadge = (item: SidebarItem): ReactNode => {
+  const itemBadge = (item: SidebarItem): ReactNode => {
+    if (item.badge === 'newSubscriptions') {
+      return newSubscriptions ? (
+        <Box
+          component="span"
+          role="img"
+          aria-label="New subscriptions since your last visit"
+          data-testid="admin-sidebar-new-subscriptions-dot"
+          sx={{ width: 8, height: 8, flexShrink: 0, borderRadius: '50%', bgcolor: 'admin.status.bad.foreground' }}
+        />
+      ) : null;
+    }
     if (
       item.badge !== 'waitingSubscribers' ||
       !waitingSubscribersCount ||
@@ -326,7 +340,8 @@ export const SidebarNav = ({
     return (
       <Box
         component="span"
-        aria-label={`${waitingSubscribersCount} waiting`}
+        aria-label={`${waitingSubscribersCount} waiting for an invite`}
+        title={`${waitingSubscribersCount} waiting for an invite`}
         sx={{
           minWidth: 20,
           height: 20,
@@ -518,7 +533,7 @@ export const SidebarNav = ({
                         <Box component="span" sx={{ flex: 1 }}>
                           {item.label}
                         </Box>
-                        {waitingBadge(item)}
+                        {itemBadge(item)}
                       </MenuItem>
                     );
                   })}
@@ -617,8 +632,6 @@ export const SidebarNav = ({
             '& input::placeholder': { color: 'admin.inkMuted', opacity: 1 },
             '& .MuiInput-startDecorator': { color: 'admin.inkMuted' },
             '&:hover': { borderColor: tokens.borderStrong },
-            '&:focus-within': { outline: '2px solid var(--joy-palette-admin-accent)', outlineOffset: 2 },
-            '&::before': { display: 'none' },
           }}
         />
       </Box>
@@ -643,7 +656,7 @@ export const SidebarNav = ({
                     <NavLink
                       item={item}
                       active={item.tab === activeTab}
-                      endDecorator={waitingBadge(item)}
+                      endDecorator={itemBadge(item)}
                       onSelect={onTabSelect}
                     />
                   </li>

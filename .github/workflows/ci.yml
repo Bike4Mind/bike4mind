@@ -166,6 +166,9 @@ jobs:
       - name: Check user $lookup field projections
         run: node scripts/check-user-lookup-projection.mjs
 
+      - name: Check tracked files against the overlay-literal allowlist
+        run: bash scripts/check-no-overlay-literals.sh
+
       # Resolve what "added" means for the two ASCII checks below.
       #
       # `pull_request.base.sha` is the base-branch head recorded when the PR was opened -

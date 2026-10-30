@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Stream } from 'openai/streaming';
 import { DeepSeekBackend } from './deepseekBackend';
 import type { CompletionInfo } from './backend';
+import { isOutputBudgetExhaustedError, isStreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
 
 /**
  * The non-streaming reasoning path. Every case here is silent when it breaks:
@@ -117,6 +118,47 @@ describe('DeepSeekBackend reasoning capture', () => {
     const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
     const assistantTurn = secondRequest.messages.find(m => m.role === 'assistant' && m.tool_calls);
     expect(assistantTurn?.reasoning_content).toBe('step one');
+  });
+
+  it('replays a parallel round as ONE assistant message carrying every call and the reasoning', async () => {
+    // One assistant message per call left every message after the first without
+    // reasoning_content, and DeepSeek thinking mode rejects that history with a 400.
+    const toolFn = vi.fn().mockResolvedValue('tool output');
+    const { backend, create } = backendReturning([]);
+    create.mockResolvedValueOnce({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: '',
+            reasoning_content: 'search twice',
+            tool_calls: [
+              { id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+              { id: 't2', type: 'function', function: { name: 'search', arguments: '{"q":"b"}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+    create.mockResolvedValue({
+      choices: [{ index: 0, message: { content: 'done' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 12, completion_tokens: 6 },
+    });
+
+    await runTurn(backend, ChatModels.DEEPSEEK_FLASH, { tools: searchTool(toolFn) });
+
+    expect(toolFn).toHaveBeenCalledTimes(2);
+    const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
+    const toolCallMessages = secondRequest.messages.filter(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolCallMessages).toHaveLength(1);
+    expect(toolCallMessages[0].reasoning_content).toBe('search twice');
+    expect((toolCallMessages[0].tool_calls as Array<{ id: string }>).map(c => c.id)).toEqual(['t1', 't2']);
+    expect(secondRequest.messages.slice(-2).map(m => [m.role, m.tool_call_id])).toEqual([
+      ['tool', 't1'],
+      ['tool', 't2'],
+    ]);
   });
 
   it('throws a diagnosable error when reasoning consumed the whole output budget', async () => {
@@ -470,6 +512,45 @@ describe('DeepSeekBackend streaming reasoning', () => {
     expect(joined.match(/<think>/g)?.length).toBe(joined.match(/<\/think>/g)?.length);
   });
 
+  it('replays a streamed parallel round as ONE assistant message carrying the reasoning', async () => {
+    const toolFn = vi.fn().mockResolvedValue('42');
+    const { backend, create } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'search twice' } }] },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  { index: 0, id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+                  { index: 1, id: 't2', type: 'function', function: { name: 'search', arguments: '{"q":"b"}' } },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'the answer' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 12, completion_tokens: 6 },
+        },
+      ],
+    ]);
+
+    await runStream(backend, ChatModels.DEEPSEEK_FLASH, { tools: searchTool(toolFn) });
+
+    expect(toolFn).toHaveBeenCalledTimes(2);
+    const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
+    const toolCallMessages = secondRequest.messages.filter(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolCallMessages).toHaveLength(1);
+    expect(toolCallMessages[0].reasoning_content).toBe('search twice');
+    expect((toolCallMessages[0].tool_calls as Array<{ id: string }>).map(c => c.id)).toEqual(['t1', 't2']);
+  });
+
   it('throws a diagnosable error when a stream produces no content and no tool', async () => {
     // Without this guard an empty stream returns silently with zero callbacks and
     // the chat hangs.
@@ -483,6 +564,47 @@ describe('DeepSeekBackend streaming reasoning', () => {
     ]);
 
     await expect(runStream(backend, ChatModels.DEEPSEEK_FLASH)).rejects.toThrow(/output budget was exhausted/);
+  });
+
+  it('types a budget-exhausted turn so callers can classify it', async () => {
+    const { backend } = backendReturning([{ index: 0, message: { content: '' }, finish_reason: 'length' }]);
+
+    const err = await runTurn(backend, ChatModels.DEEPSEEK_FLASH).catch((e: unknown) => e);
+    expect(isOutputBudgetExhaustedError(err)).toBe(true);
+  });
+
+  it('types a budget-exhausted stream so callers can classify it', async () => {
+    const { backend } = streamingBackend([
+      [
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'length' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH).catch((e: unknown) => e);
+    expect(isOutputBudgetExhaustedError(err)).toBe(true);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+  });
+
+  it('types a stream that ends with no finish reason as retryable', async () => {
+    const { backend } = streamingBackend([[{ choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] }]]);
+
+    const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH).catch((e: unknown) => e);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(true);
+    expect(isOutputBudgetExhaustedError(err)).toBe(false);
+    expect((err as Error).message).not.toMatch(/abort|overload|timeout/i);
+  });
+
+  it('does not type an aborted stream as retryable', async () => {
+    const { backend } = streamingBackend([[{ choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] }]]);
+    const abortSignal = AbortSignal.abort();
+
+    const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH, { abortSignal }).catch((e: unknown) => e);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/returned no content/);
   });
 
   it('throws when a stream spent the whole output budget reasoning and never produced prose', async () => {

@@ -1,4 +1,15 @@
-import { evaluateTier1Secrets, formatTier1DeployFailure, type Tier1SecretStatus } from '@bike4mind/infra';
+import {
+  describeDroppedContributions,
+  evaluateTier1Secrets,
+  formatTier1DeployFailure,
+  partitionContributed,
+  type Tier1SecretStatus,
+} from '@bike4mind/infra';
+import {
+  contributedInfraResources,
+  coreEnvNames,
+  coreResourceNames,
+} from './premium-generated/infraResources.generated';
 import { PRODUCTION_STAGES } from './constants';
 
 export const secrets = {
@@ -202,7 +213,42 @@ export const secrets = {
   QA_ALARM_SLACK_WEBHOOKS: new sst.Secret('QA_ALARM_SLACK_WEBHOOKS', 'not-configured'),
 };
 
-export const allSecrets = Object.values(secrets);
+// Without core names, nothing stops a contribution from shadowing a core resource or env var.
+if ((coreResourceNames === null || coreEnvNames === null) && contributedInfraResources.secrets.length > 0) {
+  throw new Error(
+    '[infra] core resource names unknown (codegen ran without infra/); refusing to register contributed secrets. ' +
+      'Re-run pnpm codegen with infra/ present.'
+  );
+}
+
+const contributedSecretPartition = partitionContributed(
+  contributedInfraResources.secrets,
+  spec => spec.name,
+  new Set([...(coreResourceNames ?? []), ...(coreEnvNames ?? []), ...Object.keys(secrets)])
+);
+for (const line of describeDroppedContributions('contributed secret', contributedSecretPartition)) {
+  console.warn(`[infra] ${line}`);
+}
+
+// Overlay-declared secrets, keyed by their verbatim name so a secret that moves here from
+// the core list above keeps its resource name and stored value.
+export const contributedSecrets: Record<string, sst.Secret> = Object.fromEntries(
+  contributedSecretPartition.registered.map(spec => [
+    spec.name,
+    new sst.Secret(spec.name, spec.placeholder ?? 'not-configured'),
+  ])
+);
+
+/** Plain env vars for the contributed secrets that asked for one (linking alone only sets SST_RESOURCE_*). */
+export function contributedSecretEnvironment() {
+  return Object.fromEntries(
+    contributedSecretPartition.registered
+      .filter(spec => spec.env)
+      .map(spec => [spec.name, contributedSecrets[spec.name].value])
+  );
+}
+
+export const allSecrets = [...Object.values(secrets), ...Object.values(contributedSecrets)];
 
 /**
  * Value the stage will actually run with, read the same way sst.Secret reads it

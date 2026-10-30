@@ -106,7 +106,7 @@ const MOVED_MODULES = [
   {
     from: 'apps/client/server/security',
     to: 'apps/workers/src/security',
-    stems: ['alertProcessor'],
+    stems: ['alertProcessor', 'cloudScan'],
   },
   {
     from: 'apps/client/server/security/attackSimulation',
@@ -125,6 +125,7 @@ const MOVED_MODULES = [
     stems: ['manageDatabase', 'seedDatabase', 'dropPreviewDatabase'],
   },
   { from: 'apps/client/server/utils', to: 'apps/workers/src/media', stems: ['imageProcessor'] },
+  { from: 'apps/client/server/utils', to: 'apps/workers/src/mcp', stems: ['mcpCall'] },
   // `tools.` also covers tools.handler and tools.wiring, but not toolsHandler.shared, which stays.
   { from: 'apps/client/server/cli', to: 'apps/workers/src/cli', stems: ['tools'] },
   { from: 'apps/client/server/queueHandlers', to: 'apps/workers/src/queueHandlers', stems: ['slackQuestProcessor'] },
@@ -162,7 +163,11 @@ const MOVED_MODULES = [
       'getFirstIterationMementosPreamble',
     ],
   },
-  { from: 'apps/client/server/deepAgent', to: 'apps/workers/src/deepAgent', stems: ['missionChatTools'] },
+  {
+    from: 'apps/client/server/deepAgent',
+    to: 'apps/workers/src/deepAgent',
+    stems: ['missionChatTools', 'wakeHandler'],
+  },
   { from: 'apps/client/server/services', to: 'apps/workers/src/services', stems: ['secopsTriageService'] },
   { from: 'apps/client/server/modelDiscovery', to: 'apps/workers/src/modelDiscovery', stems: ['metrics'] },
   { from: 'apps/client/server/cli', to: 'apps/workers/src/cli', stems: ['defineLambdaRoute'] },
@@ -226,6 +231,7 @@ describe('directories and modules moved out of apps/client/server stay moved', (
         // infra/queues.ts; the Lambda Bundle Guard is path-filtered and skips infra/-only PRs.
         'apps/workers/src/queueHandlers/imageGeneration.dispatch',
         'apps/workers/src/queueHandlers/imageEdit.dispatch',
+        'apps/workers/src/deepAgent/wakeHandler.dispatch',
         // infra/emailMarketing.ts, which no other moved handler lives in.
         'apps/workers/src/queueHandlers/emailBatch.dispatch',
         'apps/workers/src/queueHandlers/dataLakeCleanup.dispatch',
@@ -234,6 +240,9 @@ describe('directories and modules moved out of apps/client/server stay moved', (
         'apps/workers/src/security/alertProcessor.handler',
         // infra/cron.ts
         'apps/workers/src/security/attackSimulation/runner.handler',
+        'apps/workers/src/security/cloudScan.handler',
+        // infra/mcp.ts, which no other moved handler lives in.
+        'apps/workers/src/mcp/mcpCall.handler',
         // infra/agentExecutor.ts; the Lambda and the continuation subscriber share this export.
         'apps/workers/src/queueHandlers/agentExecutor.handler',
         // infra/buckets.ts

@@ -12,7 +12,16 @@ import {
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
 import { imageProcessor } from './imageProcessor';
+import {
+  buildQueuePair,
+  contributedQueuePairOptions,
+  describeDroppedContributions,
+  partitionContributedQueues,
+  reservedQueueNames,
+  type ContributedQueueSpec,
+} from '@bike4mind/infra';
 import { allSecrets } from './secrets';
+import * as generatedInfraResources from './premium-generated/infraResources.generated';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
@@ -1238,7 +1247,7 @@ const tavernHeartbeatQueue = new sst.aws.Queue('tavernHeartbeatQueue', {
 
 // Deep Agent Wake Queue
 // One message → one wake cycle for one long-horizon agent (orient → act →
-// reflect → groom). See apps/client/server/deepAgent and
+// reflect → groom). See apps/workers/src/deepAgent/wakeHandler.ts and
 // docs/concepts/deep-agent-framework.md.
 const deepAgentWakeQueueDLQ = new sst.aws.Queue('deepAgentWakeQueueDLQ', {});
 const deepAgentWakeQueue = new sst.aws.Queue('deepAgentWakeQueue', {
@@ -1250,7 +1259,7 @@ const deepAgentWakeQueue = new sst.aws.Queue('deepAgentWakeQueue', {
 });
 const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
   {
-    handler: 'apps/client/server/deepAgent/wakeHandler.dispatch',
+    handler: 'apps/workers/src/deepAgent/wakeHandler.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -1629,6 +1638,14 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
       { actions: ['execute-api:ManageConnections'], resources: ['*'] },
       { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     ],
+    nodejs: {
+      // playwright-core cannot be bundled, so external + install ships it. Pinned in apps/client to
+      // the remote Chromium's Playwright: a connect needs the same version on both ends.
+      install: ['playwright-core'],
+      esbuild: {
+        external: ['playwright-core'],
+      },
+    },
   },
   SINGLE_RECORD_BATCH
 );
@@ -1663,6 +1680,40 @@ const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.
     // fan-out would rate-limit the live product. 2 is the lowest value AWS accepts.
     transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
   }
+);
+
+// Package-declared queue pairs. Core alarms the DLQ (dlqAlarms.ts) and links both URLs
+// (web.ts) but subscribes no consumer, and contributeInfra in sst.config.ts is not handed
+// these queues, so a pair has no consumer until that wiring exists. Without core names
+// nothing stops a pair from reusing a core logical name, so codegen without infra/ fails the
+// deploy here.
+const reservedContributedQueueNames = reservedQueueNames(generatedInfraResources);
+const { contributedInfraResources } = generatedInfraResources;
+if (reservedContributedQueueNames === null && contributedInfraResources.queues.length > 0) {
+  throw new Error(
+    '[infra] core resource names unknown (codegen ran without infra/); refusing to create contributed queues. ' +
+      'Re-run pnpm codegen with infra/ present.'
+  );
+}
+const contributedQueuePartition = partitionContributedQueues(
+  contributedInfraResources.queues,
+  reservedContributedQueueNames ?? { resourceNames: [], envNames: [], dlqLabels: [] }
+);
+for (const line of describeDroppedContributions('contributed queue', contributedQueuePartition)) {
+  console.warn(`[infra] ${line}`);
+}
+
+export const contributedQueues: Record<
+  string,
+  { spec: ContributedQueueSpec; queue: sst.aws.Queue; dlq: sst.aws.Queue }
+> = Object.fromEntries(
+  contributedQueuePartition.registered.map(spec => {
+    const pair = buildQueuePair<$util.Output<string>>(contributedQueuePairOptions(spec));
+    const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs);
+    // partitionContributedQueues only registers durations QueueArgs accepts, within the SQS 12-hour ceiling.
+    const queue = new sst.aws.Queue(pair.name, pair.queueArgs(dlq.arn) as sst.aws.QueueArgs);
+    return [spec.name, { spec, queue, dlq }];
+  })
 );
 
 export {

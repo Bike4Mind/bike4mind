@@ -39,8 +39,18 @@ vi.mock('@bike4mind/database', () => ({
 
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
   ProjectEvents: { REMOVE_MEMBER: 'remove_member', PROJECT_LEAVED: 'project_leaved' },
+}));
+
+const refCleanup = vi.hoisted(() => ({
+  targets: vi.fn().mockResolvedValue([{ userId: 'planned', fileIds: ['f1'] }]),
+  cleanUp: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@server/sharing/revokedFileReferences', () => ({
+  projectRevokeCleanupTargets: (...a: unknown[]) => refCleanup.targets(...a),
+  cleanUpRevokedFileReferences: (...a: unknown[]) => refCleanup.cleanUp(...a),
 }));
 
 import '@pages/api/projects/[id]/members';
@@ -49,6 +59,7 @@ function request(body: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method: 'DELETE', query: { id: 'p1' }, body });
   (req as unknown as { user: { id: string } }).user = { id: 'u1' };
   (req as unknown as { ability: Record<string, unknown> }).ability = {};
+  (req as unknown as { logger: Record<string, unknown> }).logger = { warn: vi.fn() };
   return { req, res };
 }
 
@@ -75,5 +86,30 @@ describe('DELETE /api/projects/[id]/members', () => {
 
     expect(logEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'remove_member' }), expect.anything());
     expect(createActivity).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a member leaving', {}, 'u1'],
+    ['an owner removing a member', { userId: 'member-1' }, 'member-1'],
+    // leaveProject treats an empty userId as a self-leave; planning must too, not as a project delete.
+    ['a member leaving with an empty userId', { userId: '' }, 'u1'],
+  ])('plans the reference cleanup before %s and runs it after the commit', async (_label, body, revoked) => {
+    leaveProject.mockResolvedValue({ id: 'p1', name: 'Project' });
+    const { req, res } = request(body);
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(refCleanup.targets).toHaveBeenCalledWith('p1', revoked, expect.anything());
+    expect(refCleanup.cleanUp).toHaveBeenCalledWith([{ userId: 'planned', fileIds: ['f1'] }], expect.anything());
+    expect(refCleanup.targets.mock.invocationCallOrder[0]).toBeLessThan(leaveProject.mock.invocationCallOrder[0]);
+    expect(leaveProject.mock.invocationCallOrder[0]).toBeLessThan(refCleanup.cleanUp.mock.invocationCallOrder[0]);
+  });
+
+  it('does not clean up when the leave fails', async () => {
+    leaveProject.mockRejectedValue(new Error('denied'));
+    const { req, res } = request();
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('denied');
+    expect(refCleanup.cleanUp).not.toHaveBeenCalled();
   });
 });

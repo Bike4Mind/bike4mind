@@ -1,5 +1,5 @@
 /** Context sizing and history fitting for local Ollama chat requests. */
-import { estimateFit, type FitInput, type HardwareProfile, type ModelArch } from '@bike4mind/common';
+import { estimateFit, isCpuOnly, type FitInput, type HardwareProfile, type ModelArch } from '@bike4mind/common';
 import { estimateTextTokens } from '@shared/contextLimit';
 import { LOCAL_CONTEXT_SIZES, type LocalContextSetting } from '@shared/localContextSetting';
 
@@ -28,6 +28,9 @@ export class ContextOverflowError extends Error {
 // Desktop's system prompt and tool schemas alone run 5k-12k tokens, past Ollama's 4k default;
 // 16k fits them plus a conversation while a small model's KV cache stays well under 1 GB.
 export const LOCAL_CONTEXT_TARGET_TOKENS = 16_384;
+// CPU prefill runs at tens of tokens a second, so a larger window only costs RAM and load time;
+// a conversation that needs more still grows past it.
+export const CPU_ONLY_CONTEXT_CAP_TOKENS = 32_768;
 const OUTPUT_RESERVE_TOKENS = 2_048;
 const CHARS_PER_TOKEN = 4;
 /** Ollama's own per-image figure when it fits chat history (ollama server/prompt.go). */
@@ -87,8 +90,9 @@ function resident(input: SizedInput, context: number): boolean {
 }
 
 /**
- * Auto: the trained length or the largest Settings size that stays resident, else (or unmeasured) 16K;
- * a larger resident Modelfile num_ctx wins. Fixed: the Settings size. Never past the trained length.
+ * Auto: the trained length or the largest Settings size that stays resident, at most 32K without a GPU,
+ * else (or unmeasured) 16K; a larger resident Modelfile num_ctx within those bounds wins.
+ * Fixed: the Settings size. Never past the trained length.
  */
 export function chatContextTokens({ setting, footprint, modelLimit, configured }: ChatContextInput): number {
   const limit = trainedLimit(footprint, modelLimit);
@@ -97,7 +101,8 @@ export function chatContextTokens({ setting, footprint, modelLimit, configured }
   const floor = cap(LOCAL_CONTEXT_TARGET_TOKENS);
   const input = fitInput(footprint);
   if (!input || footprint.hardware?.confidence === 'low') return floor;
-  const allowed = (tokens: number) => tokens === cap(tokens) && resident(input, tokens);
+  const ceiling = isCpuOnly(input.hardware) ? CPU_ONLY_CONTEXT_CAP_TOKENS : Infinity;
+  const allowed = (tokens: number) => tokens === cap(tokens) && tokens <= ceiling && resident(input, tokens);
   const picked = [cap(MAX_LOCAL_CONTEXT), ...LARGEST_FIRST].find(allowed) ?? floor;
   return configured !== undefined && configured > picked && allowed(configured) ? configured : picked;
 }
@@ -118,8 +123,9 @@ export type ContextGrowth =
   { tokens: number; slower: boolean } | { tokens?: undefined; reason: 'model-limit' | 'memory' | 'unmeasured' };
 
 /**
- * Where Auto takes a model whose prompt needs `measured` tokens: once, to the largest resident context.
- * Without one, or with an unmeasured GPU, the smallest Settings size that holds it; slower if offloaded.
+ * Where Auto takes a model whose prompt needs `measured` tokens: once, to the largest resident context,
+ * which without a GPU stops at 32K or the smallest Settings size that holds the prompt. Without a resident
+ * size, or with an unmeasured GPU, that smallest Settings size; slower if offloaded.
  */
 export function grownContext(
   footprint: LocalModelFootprint,
@@ -141,9 +147,10 @@ export function grownContext(
   const preset = LOCAL_CONTEXT_SIZES.find(size => size >= needed && size <= ceiling);
   const steps = [preset, needed].filter((size): size is number => size !== undefined);
   if (footprint.hardware?.confidence !== 'low') {
+    const reach = isCpuOnly(input.hardware) ? Math.max(CPU_ONLY_CONTEXT_CAP_TOKENS, preset ?? ceiling) : ceiling;
     // Memory only rises with context, so the resident sizes are a prefix of the list.
     let low = 0;
-    let high = sizes.length;
+    let high = sizes.filter(size => size <= reach).length;
     while (low < high) {
       const middle = (low + high) >> 1;
       if (resident(input, sizes[middle])) low = middle + 1;

@@ -44,6 +44,13 @@ import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { getUserEntitlements } from '@server/entitlements';
+import { httpErrorToResponse } from '@server/middlewares/errorHandler';
+import {
+  admitApiKeyCompletion,
+  NO_COMPLETION_QUOTA,
+  type CompletionQuotaGrant,
+} from '@server/utils/untrustedCompletionQuota';
+import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 /**
@@ -122,6 +129,16 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         apiKeyInfo = await verifyApiKey(headers);
         userId = apiKeyInfo.userId;
         logger.info('[CLI_WS_HTTP] Authenticated via API key', { keyId: apiKeyInfo.keyId });
+        logApiKeyUsageOnResponse({
+          req,
+          res,
+          apiKey: apiKeyInfo,
+          endpoint: WS_COMPLETIONS_ENDPOINT,
+          source,
+          startTime,
+          logger,
+          track,
+        });
 
         await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
           userId: apiKeyInfo.userId,
@@ -197,6 +214,28 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         effectiveConnections.map(conn => sendToConnection(conn.connectionId, wsEndpoint, data as never))
       );
     };
+
+    // Last check before the 202, so every refusal is still an HTTP status the CLI can read.
+    let quota: CompletionQuotaGrant = NO_COMPLETION_QUOTA;
+    if (apiKeyInfo) {
+      try {
+        quota = await admitApiKeyCompletion({
+          owner: userId,
+          ownerUntrusted: apiKeyInfo.ownerUntrusted,
+          billingOwnerType: apiKeyInfo.billingOwnerType,
+          holdSlot: true,
+        });
+      } catch (error) {
+        if (!(error instanceof HTTPError)) {
+          logger.error('[CLI_WS_HTTP] Quota check failed', { error: sanitizeErrorMessage(error) });
+          res.status(500).json({ error: sanitizeErrorMessage(error) });
+          return;
+        }
+        const { status, headers, body: errorBody } = httpErrorToResponse(error, undefined);
+        res.status(status).set(headers).json(errorBody);
+        return;
+      }
+    }
 
     logger.info(`[CLI_WS_HTTP] Starting completion for user ${userId}, model: ${model}`);
     res.status(202).json({ success: true });
@@ -330,6 +369,8 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
             logger,
           }).catch(() => {}); // analytics failure must not mask the original error
+        } finally {
+          await quota.release();
         }
       })()
     );

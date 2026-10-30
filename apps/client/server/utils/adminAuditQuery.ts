@@ -1,9 +1,13 @@
+import { z } from 'zod';
 import {
   AuditLogFiltersSchema,
+  USER_TIMELINE_TYPES,
   UserActivityDirectionSchema,
+  UserTimelineTypeSchema,
   type AuditLogCursor,
   type AuditLogFilters,
   type UserActivityDirection,
+  type UserTimelineType,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
@@ -85,6 +89,43 @@ export const parseUserActivityQuery = (
   return {
     direction: direction.data,
     includeSecurity: parseBooleanFlag(values.includeSecurity, 'includeSecurity'),
+    limit: parseLimit(values.limit),
+    cursor: parseCursor(values.cursor),
+  };
+};
+
+/** A cursor-paged list with no filters (e.g. a user's sign-ins). */
+export const parseCursorPageQuery = (query: unknown): { limit: number; cursor?: AuditLogCursor } => {
+  const values = readSingleValues(query);
+  return { limit: parseLimit(values.limit), cursor: parseCursor(values.cursor) };
+};
+
+const parseInstant = (raw: string | undefined, name: string): Date | undefined => {
+  if (raw === undefined) return undefined;
+  const result = z.iso.datetime({ offset: true }).safeParse(raw);
+  if (!result.success) throw new BadRequestError(`${name} must be an ISO 8601 date-time`);
+  return new Date(result.data);
+};
+
+const parseTimelineTypes = (raw: string | undefined): UserTimelineType[] => {
+  if (raw === undefined) return [...USER_TIMELINE_TYPES];
+  const result = z.array(UserTimelineTypeSchema).min(1).safeParse(raw.split(','));
+  if (!result.success)
+    throw new BadRequestError(`types must be a comma-separated list of ${USER_TIMELINE_TYPES.join(', ')}`);
+  return [...new Set(result.data)];
+};
+
+/** The per-user timeline query: every source by default, an optional inclusive date range, keyset paging. */
+export const parseUserTimelineQuery = (
+  query: unknown
+): { types: UserTimelineType[]; range: { from?: Date; to?: Date }; limit: number; cursor?: AuditLogCursor } => {
+  const values = readSingleValues(query);
+  const from = parseInstant(values.from, 'from');
+  const to = parseInstant(values.to, 'to');
+  if (from && to && from.getTime() > to.getTime()) throw new BadRequestError('from must not be after to');
+  return {
+    types: parseTimelineTypes(values.types),
+    range: { from, to },
     limit: parseLimit(values.limit),
     cursor: parseCursor(values.cursor),
   };

@@ -34,21 +34,19 @@ vi.mock('@bike4mind/services', () => ({
     rotateSession: (...args: any[]) => mockRotateSession(...args),
     issueSession: (...args: any[]) => mockIssueSession(...args),
     revokeSession: vi.fn(),
-    parseRefreshToken: (t: string) => ({ sid: t.split('.')[0], secret: t.split('.')[1] }),
   },
   // Stand-in for accountState.accountBlockReasons, which assertAccountStateUsable reads.
   userService: { accountBlockReasons: () => [] },
 }));
 
 const mockFindById = vi.fn();
-const mockFindBySid = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: {
     findById: (...args: any[]) => mockFindById(...args),
   },
   userRepository: {},
-  authSessionRepository: { findBySid: (...args: unknown[]) => mockFindBySid(...args) },
+  authSessionRepository: {},
 }));
 
 vi.mock('@bike4mind/database/infra', () => ({
@@ -139,23 +137,18 @@ describe('POST /api/auth/refreshToken — tokenVersion kill switch', () => {
     );
   });
 
-  it('re-stamps impersonatedBy from the refresh token onto the migrated session', async () => {
-    // Regression: a refreshed access token during impersonation must keep carrying
-    // impersonatedBy, otherwise logout.ts's "don't revoke the real customer" guard
-    // silently stops applying after one refresh.
+  it('rejects legacy impersonation tokens rather than migrating without a fixed deadline', async () => {
     mockVerifyRefreshToken.mockReturnValue({ userId: 'customer-1', tokenVersion: 0, impersonatedBy: 'admin-9' });
     mockFindById.mockResolvedValue({ id: 'customer-1', tokenVersion: 0 });
 
     const { req, res } = createMocks({ method: 'POST', body: { refresh_token: 'impersonated-token' } });
 
-    await handler(req as any, res as any);
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(mockIssueSession).toHaveBeenCalledWith(
-      'customer-1',
-      expect.objectContaining({ impersonatedBy: 'admin-9' }),
-      expect.anything()
+    await expect(handler(req as never, res as never)).rejects.toThrow(
+      'Legacy support session expired. Return to admin.'
     );
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockIssueSession).not.toHaveBeenCalled();
+    expect(res.getHeader('Set-Cookie')).toBeUndefined();
   });
 });
 
@@ -266,19 +259,17 @@ describe('POST /api/auth/refreshToken - opaque token rotation', () => {
     expect(res._getJSONData().accessToken).toBe('access-1');
   });
 
-  describe('bare-name cookie over https', () => {
+  describe('prefixed cookie over https', () => {
     beforeEach(() => {
       vi.stubEnv('NODE_ENV', 'production');
-      vi.useFakeTimers({ now: new Date('2026-10-25T00:00:00Z') });
       mockRotateSession.mockResolvedValue(rotated);
     });
     afterEach(() => {
-      vi.useRealTimers();
       vi.unstubAllEnvs();
     });
 
-    const refresh = async () => {
-      const { req, res } = createMocks({ method: 'POST', body: {}, headers: { cookie: 'b4m_rt=sid.old-secret' } });
+    const refresh = async (cookie: string) => {
+      const { req, res } = createMocks({ method: 'POST', body: {}, headers: { cookie } });
       const outcome = await handler(req as never, res as never).then(
         () => null,
         (err: unknown) => err
@@ -286,47 +277,21 @@ describe('POST /api/auth/refreshToken - opaque token rotation', () => {
       return { res, outcome, cookies: [res.getHeader('Set-Cookie') ?? []].flat().map(String) };
     };
 
-    it('moves a session created before the cutoff onto the prefixed cookie and expires the bare one', async () => {
-      mockFindBySid.mockResolvedValue({ sid: 'sid', createdAt: new Date('2026-10-01T00:00:00Z') });
-
-      const { res, outcome, cookies } = await refresh();
+    it('rotates the prefixed cookie and expires the bare-name copy', async () => {
+      const { res, outcome, cookies } = await refresh('__Host-b4m_rt=sid.old-secret');
 
       expect(outcome).toBeNull();
       expect(res._getStatusCode()).toBe(200);
-      expect(mockFindBySid).toHaveBeenCalledWith('sid');
       expect(cookies.some(c => c.startsWith('__Host-b4m_rt=sid.rotated-secret; Path=/;') && c.includes('Secure'))).toBe(
         true
       );
       expect(cookies.some(c => c.startsWith('b4m_rt=; Path=/api;') && c.includes('Max-Age=0'))).toBe(true);
     });
 
-    it('rejects a bare-name cookie whose session was created after the cutoff', async () => {
-      mockFindBySid.mockResolvedValue({ sid: 'sid', createdAt: new Date('2026-10-31T00:00:00Z') });
+    it('rejects a lone bare-name cookie in production', async () => {
+      const { outcome, cookies } = await refresh('b4m_rt=sid.old-secret');
 
-      const { outcome, cookies } = await refresh();
-
-      expect(outcome).toMatchObject({ name: 'UnauthorizedError' });
-      expect(mockRotateSession).not.toHaveBeenCalled();
-      expect(cookies.some(c => c.startsWith('__Host-b4m_rt='))).toBe(false);
-    });
-
-    it('rejects a bare-name cookie whose session no longer exists', async () => {
-      mockFindBySid.mockResolvedValue(null);
-
-      const { outcome, cookies } = await refresh();
-
-      expect(outcome).toMatchObject({ name: 'UnauthorizedError' });
-      expect(mockRotateSession).not.toHaveBeenCalled();
-      expect(cookies.some(c => c.startsWith('__Host-b4m_rt='))).toBe(false);
-    });
-
-    it('rejects a bare-name cookie once the acceptance window has closed', async () => {
-      vi.setSystemTime(new Date('2026-11-30T00:00:00Z'));
-      mockFindBySid.mockResolvedValue({ sid: 'sid', createdAt: new Date('2026-10-01T00:00:00Z') });
-
-      const { outcome, cookies } = await refresh();
-
-      expect(outcome).toMatchObject({ name: 'UnauthorizedError' });
+      expect(outcome).toMatchObject({ name: 'UnauthorizedError', message: 'Refresh token is required' });
       expect(mockRotateSession).not.toHaveBeenCalled();
       expect(cookies).toHaveLength(0);
     });

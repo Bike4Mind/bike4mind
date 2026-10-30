@@ -37,8 +37,8 @@ vi.mock('@server/models/Subscription', () => ({
 }));
 
 // Two plans: one gated behind an availability flag, one always-purchasable.
-vi.mock('@client/lib/userSubscriptions/constants', () => ({
-  SUBSCRIPTION_PLANS: [
+vi.mock('@client/lib/userSubscriptions/constants', () => {
+  const plans = [
     {
       priceId: 'price_gated',
       availabilityFlag: 'EnableGatedProduct',
@@ -49,8 +49,9 @@ vi.mock('@client/lib/userSubscriptions/constants', () => ({
       description: '',
     },
     { priceId: 'price_open', interval: 'monthly', name: 'Open', credits: 1, features: [], description: '' },
-  ],
-}));
+  ];
+  return { findSubscriptionPlan: (priceId: string) => plans.find(plan => plan.priceId === priceId) };
+});
 
 // Use the REAL appendSuccessParams so the success_url this route builds is
 // actually asserted below - mocking it away is what let the individual path ship

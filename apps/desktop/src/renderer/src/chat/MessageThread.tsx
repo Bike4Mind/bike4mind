@@ -6,9 +6,11 @@ import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import { useNavigate } from '@tanstack/react-router';
 import {
   isTurnBudgetStop,
   lastBoundaryIndex,
+  SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
   type ChatMessage,
   type ChatUsage,
@@ -90,6 +92,7 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
       </Stack>
     );
   }
+  if (reason === SERVER_CREDENTIALS_STOP) return <ServerCredentialsRow />;
   if (reason === 'aborted') {
     return (
       <Chip size="sm" color="neutral" variant="soft" sx={{ mt: 1 }} data-testid="chat-stopped-chip">
@@ -98,6 +101,26 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
     );
   }
   return null;
+}
+
+function ServerCredentialsRow() {
+  const navigate = useNavigate();
+  return (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }} flexWrap="wrap" useFlexGap>
+      <Chip size="sm" color="warning" variant="soft" data-testid="chat-server-credentials-chip">
+        The model server wants new credentials
+      </Chip>
+      <Button
+        size="sm"
+        variant="soft"
+        color="primary"
+        onClick={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
+        data-testid="chat-server-credentials-btn"
+      >
+        Open Model servers
+      </Button>
+    </Stack>
+  );
 }
 
 /**

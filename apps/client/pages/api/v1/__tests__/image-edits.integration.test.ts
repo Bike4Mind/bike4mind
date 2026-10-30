@@ -52,7 +52,10 @@ const RATE_LIMIT_HEADERS = {
 };
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
@@ -221,6 +224,7 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     expect(res._getJSONData()).toMatchObject({ id: 'quest-1' });
     expect(ImageQuestSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls[0][0].adminRoleWithheld).toBe(true);
   });
 
   describe('referenceImageFabFileIds', () => {

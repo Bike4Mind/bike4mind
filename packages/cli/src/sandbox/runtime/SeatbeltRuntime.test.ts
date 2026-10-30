@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { SeatbeltRuntime } from './SeatbeltRuntime.js';
+import { isBinaryAvailable } from './SandboxRuntimeAdapter.js';
 import os from 'os';
 import path from 'path';
 import { realpathSync, writeFileSync } from 'fs';
@@ -27,6 +28,10 @@ describe('SeatbeltRuntime', () => {
     it('has correct platform and name', () => {
       expect(runtime.platform).toBe('darwin');
       expect(runtime.name).toBe('seatbelt');
+    });
+
+    it('is available when sandbox-exec is on PATH', () => {
+      expect(runtime.isAvailable()).toBe(isBinaryAvailable('sandbox-exec'));
     });
   });
 
@@ -264,18 +269,20 @@ describe('SeatbeltRuntime', () => {
           proxyPort,
         });
 
-      it('denies network and re-allows only loopback IP', () => {
+      it('denies network and re-allows outbound loopback only to the proxy port', () => {
         const profile = proxiedProfile(43123);
         const denyIdx = profile.indexOf('(deny network*)');
         const loopbackRules = [
           '(allow network-bind (local ip "localhost:*"))',
           '(allow network-inbound (local ip "localhost:*"))',
-          '(allow network-outbound (remote ip "localhost:*"))',
+          '(allow network-outbound (remote ip "localhost:43123"))',
         ];
 
         expect(denyIdx).toBeGreaterThan(profile.indexOf('(allow default)'));
         for (const rule of loopbackRules) expect(profile.indexOf(rule)).toBeGreaterThan(denyIdx);
         expect(profile.match(/ ip "/g)).toHaveLength(loopbackRules.length);
+        expect(profile).not.toContain('(remote ip "localhost:*")');
+        expect(profile.match(/network-outbound \(remote ip/g)).toHaveLength(1);
       });
 
       it('keeps local unix sockets but blocks the DNS resolver socket', () => {
@@ -306,7 +313,9 @@ describe('SeatbeltRuntime', () => {
 
         expect(profile).toContain('(deny network*)');
         expect(profile).not.toContain('remote ip');
-        expect(profile).not.toContain('mDNSResponder');
+        expect(profile).toContain(
+          '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))'
+        );
       });
     });
 
@@ -451,6 +460,23 @@ describe('SeatbeltRuntime', () => {
   });
 
   describe('wrapCommand', () => {
+    it.each([
+      [new Error('disk full'), 'Failed to create sandbox profile: disk full'],
+      ['disk full', 'Failed to create sandbox profile: disk full'],
+    ])('wraps profile write failures (%s)', (thrown, message) => {
+      vi.mocked(writeFileSync).mockImplementationOnce(() => {
+        throw thrown;
+      });
+      expect(() =>
+        runtime.wrapCommand({
+          command: 'ls',
+          cwd: '/Users/test/project',
+          filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+          networkEnabled: false,
+        })
+      ).toThrow(message);
+    });
+
     it('returns a WrappedCommand with sandbox-exec', () => {
       const result = runtime.wrapCommand({
         command: 'echo hello',

@@ -112,7 +112,10 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({}),
 }));
 vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
@@ -178,6 +181,7 @@ beforeEach(() => {
   // A fresh document per read, as a real lookup returns, so the owner re-read is not the already-withheld one.
   findUserMock.mockImplementation(async () => ({ id: 'admin-1', isBanned: false, isAdmin: true }));
   createFabFileMock.mockResolvedValue({ id: 'file-1' });
+  toggleTagsMock.mockResolvedValue([]);
   listBlockedMock.mockResolvedValue([]);
   revokeSessionsMock.mockResolvedValue(2);
 });

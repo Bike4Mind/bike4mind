@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/infra",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -43,6 +43,6 @@
     "@tsconfig/node24": "*",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

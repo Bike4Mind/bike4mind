@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
+  OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
@@ -222,6 +223,20 @@ export type ChatAck = z.infer<typeof ChatAckSchema>;
 // Must stay in sync with `ToolPayload` in utils/toolPayloads.ts.
 const ToolPayloadSchema = z.object({ type: z.string(), payload: z.unknown() });
 
+// Mirrors SystemPromptTextDisclosure (services/src/llm/systemPromptDisclosure.ts); keep in sync.
+const SystemPromptTextDisclosureSchema = z.object({
+  blocks: z.array(
+    z.object({
+      source: SystemPromptDetailSchema.shape.source,
+      name: z.string(),
+      text: z.string().optional(),
+      redacted: z.boolean(),
+      placement: z.enum(['system', 'user_turn', 'mixed']),
+    })
+  ),
+  sizeCapped: z.boolean(),
+});
+
 /**
  * The completed-turn body POST /api/chat returns with `wait: true`. Like the ACK it is
  * assembled inline in apps/client/pages/api/chat.ts and MUST stay in sync with that
@@ -233,11 +248,11 @@ export const ChatWaitResponseSchema = ChatAckSchema.extend({
   response: z.string().nullable(),
   responses: z.array(z.string()),
   toolPayloads: z.array(ToolPayloadSchema),
-  // ISO string on the wire; Date too because defineNextRoute's non-prod response check runs
+  // ISO string on the wire; Date too because defineNextRoute's response check runs
   // before JSON serialization. Not z.coerce.date(): that documents the field as nullable.
   createdAt: z.union([z.string().datetime(), z.date()]),
   promptDetails: z.array(SystemPromptDetailSchema).optional(),
-  promptText: z.string().optional(),
+  promptText: SystemPromptTextDisclosureSchema.optional(),
   performance: z.object({
     total_ms: z.number(),
     phases: z.record(z.string(), z.number()),
@@ -348,6 +363,23 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
  */
 export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal(REQUEST_TIMEOUT_ERROR_CODE),
+  quest_id: z.string(),
+  sessionId: z.string().optional(),
+});
+
+/**
+ * 422 on `wait: true`. `errorCode` is `output_budget_exhausted` when a reasoning model spent the caller's
+ * whole `max_tokens` thinking; it is optional because schema-validation 422s carry none. `quest_id` and
+ * `sessionId` are present only on that settled-turn case.
+ */
+export const ChatWaitUnprocessableErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE).optional(),
+  quest_id: z.string().optional(),
+  sessionId: z.string().optional(),
+});
+
+/** 502 on `wait: true`: the turn settled as an error upstream; `quest_id` is the settled quest. */
+export const ChatWaitUpstreamErrorSchema = ApiErrorSchema.extend({
   quest_id: z.string(),
   sessionId: z.string().optional(),
 });

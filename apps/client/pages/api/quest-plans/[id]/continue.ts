@@ -11,6 +11,7 @@ import { sessionService } from '@bike4mind/services';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { respond } from '@server/utils/respond';
@@ -30,7 +31,11 @@ const continueResponseSchema = questMasterPlanMutationResponseSchema.extend({
   contextMessage: z.object({ id: z.string(), prompt: z.string() }),
 });
 
-const continueRateLimit = rateLimit({ limit: 20, windowMs: 60000, bucket: 'quest-plans/continue' });
+const continueRateLimit = rateLimit({
+  limit: blockedAtZeroTierLimit(20),
+  windowMs: 60000,
+  bucket: 'quest-plans/continue',
+});
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableQuestMaster'))

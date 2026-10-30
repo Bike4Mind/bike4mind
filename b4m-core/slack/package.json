@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/slack",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "publishConfig": {
     "access": "restricted"
   },
@@ -65,6 +65,6 @@
     "@types/mdast": "^4.0.4",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

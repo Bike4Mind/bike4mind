@@ -104,22 +104,25 @@ import {
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueue,
   libreoncologyAudioRenderQueueDLQ,
+  contributedQueues,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
 import { searxngUrl } from './searxng';
 import { router, routerDistributionId, cdnUrlForLambdaEnv, appUrlForLambdaEnv, originVerifySecret } from './router';
-import { secrets } from './secrets';
+import { allSecrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
-import { wafReadPermissions, wafWebAclArn } from './waf';
+import { wafReadPermissions, wafStageWebAcl, wafWebAclArn } from './waf';
 
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
 // time — no IAM statements generated, no env var size concerns. The wildcard SQS
 // permission already grants runtime access to all queues.
 const dlqUrls = new sst.Linkable('dlqUrls', {
   properties: {
+    // Contributed entries go first so a core key always wins.
+    ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
     'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
     'fab-file-chunk': fabFileChunkQueueDLQ.url,
     'generation-callback': generationCallbackQueueDLQ.url,
@@ -183,6 +186,7 @@ const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
 
 const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
   properties: {
+    ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, queue }) => [spec.name, queue.url])),
     emailJobQueue: emailJobQueue.url,
     fabFileChunkQueue: fabFileChunkQueue.url,
     fabFileVectorizeQueue: fabFileVectorizeQueue.url,
@@ -237,6 +241,8 @@ export const web = new sst.aws.Nextjs(
 
     vpc: lambdaVpc,
     router: router ? { instance: router } : undefined,
+    // The function URL keeps SST's default CORS, so it adds `Access-Control-Allow-Origin: *` to any
+    // request with an Origin; handlers must not add a second (apps/client/server/utils/allowOrigin.ts).
     server: {
       timeout: '60 seconds',
       runtime: 'nodejs24.x',
@@ -248,7 +254,7 @@ export const web = new sst.aws.Nextjs(
       memory: '2048 MB',
     },
     link: [
-      ...Object.values(secrets),
+      ...allSecrets,
       websocketApi,
       historyImportBucket,
       // Linked so the frontend can resolve Resource.ChatCompletion.url to POST quests.
@@ -412,6 +418,7 @@ export const web = new sst.aws.Nextjs(
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
+      IMPERSONATION_TTL_MINUTES: process.env.IMPERSONATION_TTL_MINUTES || '60',
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
       ...TEST_DECISION_PROVIDER_ENVIRONMENT,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
@@ -428,6 +435,8 @@ export const web = new sst.aws.Nextjs(
       ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
         ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
         : {}),
+      // Only the stage-owned ACL carries the label-forward rules; an externally managed ACL does not.
+      ...(wafStageWebAcl ? { WAF_LABEL_FORWARDING: 'true' } : {}),
       // Kill-switch for in-handler response gzip (apps/client/server/utils/sendMaybeGzip.ts).
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.

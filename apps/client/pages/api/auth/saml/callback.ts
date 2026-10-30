@@ -16,6 +16,8 @@ import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
+import { Logger } from '@bike4mind/observability';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {
@@ -144,6 +146,8 @@ const handleSamlCallback = async (req: any, res: any) => {
       if (user.isNewUser) {
         await stampOAuthSourceTag(user.id, clientIdFromAuthorizeRedirect(redirectTo));
         await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.SAML });
+        // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+        await refreshSignupRiskScore(user.id, Logger.globalInstance);
         const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.SAML });
         await emitSignupFunnelEvents({
           user: { id: user.id, ...signupFunnel },

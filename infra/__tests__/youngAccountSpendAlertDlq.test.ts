@@ -9,7 +9,7 @@ const cronSource = readInfra('cron.ts');
 // Execute the actual declaration, bounded before the next cron, without loading the full SST app.
 const declaration = cronSource.slice(
   cronSource.indexOf('const youngAccountSpendAlert ='),
-  cronSource.indexOf('const secretRotationNotifierCron =')
+  cronSource.indexOf('// Signup Grant Held Release')
 );
 
 function output<T>(value: T) {
@@ -44,22 +44,26 @@ function loadCron(source = declaration, runsScheduledJobs = true) {
     process: { env: {} },
     $util: { output },
   });
-  return { cron, policy };
+  const configuration = cron.mock.calls[0]?.[1];
+  const transform = configuration?.transform as { target: Record<string, unknown> } | undefined;
+  const target: Record<string, unknown> = { input: '{}', ...transform?.target };
+  return { cron, policy, target };
 }
 
 function verifyDeadLetters(source = declaration) {
-  const { cron, policy } = loadCron(source);
+  const { cron, policy, target } = loadCron(source);
   expect(cron).toHaveBeenCalledExactlyOnceWith(
     'youngAccountSpendAlert',
     expect.objectContaining({
       schedule: 'rate(1 hour)',
-      transform: { target: { deadLetterConfig: { arn: 'spend-alert-dlq' } } },
+      transform: { target: { deadLetterConfig: { arn: 'spend-alert-dlq' }, input: undefined } },
       function: expect.objectContaining({
         permissions: [{ actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] }],
         transform: { function: { deadLetterConfig: { targetArn: 'spend-alert-dlq' } } },
       }),
     })
   );
+  expect(target.deadLetterConfig).toEqual({ arn: 'spend-alert-dlq' });
   const args = policy.mock.calls[0]?.[1];
   expect(args?.queueUrl).toBe('spend-alert-dlq-url');
   expect(JSON.parse(String(args?.policy))).toMatchObject({
@@ -83,9 +87,13 @@ describe('young-account spend alert failure recovery', () => {
     verifyDeadLetters();
   });
 
-  it('does not replace the ScheduledEvent carrying event.time', () => {
-    const { cron } = loadCron();
-    expect(cron.mock.calls[0]?.[1]).not.toHaveProperty('event');
+  it('clears SST default input to preserve the ScheduledEvent carrying event.time', () => {
+    const verify = (source: string) => {
+      const { target } = loadCron(source);
+      expect(target.input).toBeUndefined();
+    };
+    verify(declaration);
+    expect(() => verify(declaration.replace('input: undefined,', ''))).toThrow();
   });
 
   it('creates no cron or policy on stages without scheduled jobs', () => {
@@ -97,7 +105,7 @@ describe('young-account spend alert failure recovery', () => {
   it.each([
     'permissions: [youngAccountSpendAlertDeadLetter.sendPermission],',
     'transform: youngAccountSpendAlertDeadLetter.functionTarget,',
-    'transform: youngAccountSpendAlertDeadLetter.ruleTarget,',
+    '...youngAccountSpendAlertDeadLetter.ruleTarget.target,',
     'youngAccountSpendAlertDeadLetter.allowRules([$util.output(youngAccountSpendAlert)]);',
   ])('rejects a missing recovery link: %s', wiring => {
     expect(declaration).toContain(wiring);

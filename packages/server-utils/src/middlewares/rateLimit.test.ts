@@ -80,12 +80,15 @@ describe('rateLimit middleware', () => {
     expect(next).toHaveBeenCalledWith();
   });
 
-  it('bypasses enforcement when the resolved limit is non-positive', async () => {
+  it.each([0, -1, NaN])('blocks without touching the counter when the resolved limit is %s', async limit => {
     const next = vi.fn();
-    await rateLimit({ limit: () => 0, windowMs: 60_000 })(makeReq(), makeRes(), next);
+    const res = makeRes();
+    await rateLimit({ limit: () => limit, windowMs: 60_000 })(makeReq(), res, next);
 
     expect(tryIncrementMock).not.toHaveBeenCalled();
-    expect(next).toHaveBeenCalledWith();
+    expect(next.mock.calls[0][0]).toBeInstanceOf(TooManyRequestsError);
+    expect(next.mock.calls[0][0].message).toBe('Requests to this endpoint are currently blocked for your account.');
+    expect(res.setHeader).toHaveBeenCalledWith('Retry-After', 60);
   });
 
   it('rejects with TooManyRequestsError and sets Retry-After when the limit is exceeded', async () => {

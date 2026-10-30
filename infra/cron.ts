@@ -23,6 +23,8 @@ import { appUrlForLambdaEnv } from './router';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { websocketApi } from './websocket';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
+import './businessMetricAlerts';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -109,6 +111,33 @@ const signupBaselineReport = runsScheduledJobs
     })
   : undefined;
 
+// Refreshes the disposable email domain lists the signup gate reads. Its SourceFailures metric feeds
+// disposableDomainRefreshFailures in alarms.ts.
+const disposableDomainRefreshCron = runsScheduledJobs
+  ? new sst.aws.Cron('disposableDomainRefresh', {
+      schedule: 'cron(30 4 * * ? *)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/disposableDomainRefresh.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        memory: '1024 MB',
+        // The next daily run is the retry; a failing source keeps its previous entries meanwhile.
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
+      },
+    })
+  : undefined;
+
 const youngAccountSpendAlert =
   runsScheduledJobs && youngAccountSpendAlertDeadLetter
     ? new sst.aws.Cron('youngAccountSpendAlert', {
@@ -131,12 +160,55 @@ const youngAccountSpendAlert =
             retention: '1 week',
           },
         },
-        transform: youngAccountSpendAlertDeadLetter.ruleTarget,
+        transform: {
+          target: {
+            ...youngAccountSpendAlertDeadLetter.ruleTarget.target,
+            // SST defaults to a literal {} input; omit it to retain EventBridge's scheduled time.
+            // The handler's window, its DLQ message body and replay all depend on it.
+            input: undefined,
+          },
+        },
       })
     : undefined;
 
 if (youngAccountSpendAlert && youngAccountSpendAlertDeadLetter) {
   youngAccountSpendAlertDeadLetter.allowRules([$util.output(youngAccountSpendAlert)]);
+}
+
+// Signup Grant Held Release - pays grants held by the daily budget, oldest first, once a new UTC day's
+// budget is available. Idempotent per account, so the next hourly run is the retry.
+// Self-host twin: apps/workers/src/selfhost/signupGrantHeldRelease.ts.
+const signupGrantHeldRelease =
+  runsScheduledJobs && signupGrantHeldReleaseDeadLetter
+    ? new sst.aws.Cron('signupGrantHeldRelease', {
+        schedule: 'rate(1 hour)',
+        function: {
+          vpc: lambdaVpc,
+          handler: 'apps/workers/src/cron/signupGrantHeldRelease.handler',
+          runtime: 'nodejs24.x',
+          timeout: '5 minutes',
+          retries: 0,
+          link: [...allSecrets],
+          environment: {
+            ...DEFAULT_LAMBDA_ENVIRONMENT,
+          },
+          permissions: [signupGrantHeldReleaseDeadLetter.sendPermission],
+          transform: signupGrantHeldReleaseDeadLetter.functionTarget,
+          logging: {
+            retention: '1 month',
+          },
+        },
+        transform: {
+          target: {
+            ...signupGrantHeldReleaseDeadLetter.ruleTarget.target,
+            input: undefined,
+          },
+        },
+      })
+    : undefined;
+
+if (signupGrantHeldRelease && signupGrantHeldReleaseDeadLetter) {
+  signupGrantHeldReleaseDeadLetter.allowRules([$util.output(signupGrantHeldRelease)]);
 }
 
 const secretRotationNotifierCron = runsScheduledJobs
@@ -172,6 +244,26 @@ const apiKeyBaselineCalculation = runsScheduledJobs
         link: [...allSecrets],
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+      },
+    })
+  : undefined;
+
+// Read-only usage pattern signals for free-tier review; a no-op until usagePatternSignalsEnabled is on.
+const usagePatternSignals = runsScheduledJobs
+  ? new sst.aws.Cron('usagePatternSignals', {
+      schedule: 'rate(1 hour)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/usagePatternSignals.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        logging: {
+          retention: '1 week',
         },
       },
     })
@@ -339,6 +431,28 @@ const adminAuditAlertsCron = runsScheduledJobs
     })
   : undefined;
 
+// OAuth Abuse Auto-Block - blocks IPs whose failed OAuth sign-ins reach the admin-set threshold, with
+// escalating durations. The admin evaluate endpoint runs the same code on demand.
+// Self-host twin: apps/workers/src/selfhost/oauthAbuseAutoBlock.ts; keep the schedules in step.
+const oauthAbuseAutoBlockCron = runsScheduledJobs
+  ? new sst.aws.Cron('oauthAbuseAutoBlockCron', {
+      schedule: 'rate(1 minute)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/oauthAbuseAutoBlock.handler',
+        runtime: 'nodejs24.x',
+        timeout: '50 seconds',
+        // The next minute's run is the retry; Lambda's async retries would overlap it.
+        retries: 0,
+        link: [...allSecrets],
+        environment: DEFAULT_LAMBDA_ENVIRONMENT,
+        logging: {
+          retention: '1 month',
+        },
+      },
+    })
+  : undefined;
+
 // Data Lake Vector Index Keep-Warm - one wide $vectorSearch per queryable per-model Atlas index, so
 // forced retrieval's 3s ANN candidate pick does not hit a cold index after an idle stretch
 // and fall back to picking files by name. Skips itself while EnableDataLakeVectorSearch is off.
@@ -423,7 +537,7 @@ const cloudSecurityScanCron = runsScheduledJobs
       schedule: 'rate(1 day)',
       function: {
         vpc: lambdaVpc,
-        handler: 'apps/client/server/security/cloudScan.handler',
+        handler: 'apps/workers/src/security/cloudScan.handler',
         runtime: 'nodejs24.x',
         timeout: '5 minutes',
         link: [...allSecrets],
@@ -1180,6 +1294,9 @@ const lakeInconsistencySweepCron = runsScheduledJobs
 
 export {
   adminAuditAlertsCron,
+  oauthAbuseAutoBlockCron,
+  signupGrantHeldRelease,
+  disposableDomainRefreshCron,
   dataLakeVectorIndexKeepWarmCron,
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,
@@ -1189,6 +1306,7 @@ export {
   secretRotationNotifierCron,
   scheduleTaskCron,
   apiKeyBaselineCalculation,
+  usagePatternSignals,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
   liveopsTriageDispatcherCron,

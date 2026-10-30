@@ -35,6 +35,7 @@ export const generateTools = (
   // inputs should keep going here.
   {
     db,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -57,6 +58,7 @@ export const generateTools = (
     getAbortSignal,
   }: {
     db: ToolContext['db'];
+    getEntitlements?: ToolContext['getEntitlements'];
     retrievalFilter?: ToolContext['retrievalFilter'];
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
@@ -82,10 +84,10 @@ export const generateTools = (
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>,
-  onStart: (toolName: string, data: any) => Promise<void>,
-  onFinish: (toolName: string, data: any) => Promise<void>,
+  onStart: (toolName: string, data: unknown) => Promise<void>,
+  onFinish: (toolName: string, data: unknown) => Promise<void>,
   llm: ICompletionBackend,
-  config: { [key in LlmTools]?: any },
+  config: { [key in LlmTools]?: unknown },
   model: string | undefined,
   imageProcessorLambdaName: string | undefined,
   // `tools` is required (no default): the previous `= b4mTools` default silently
@@ -121,6 +123,7 @@ export const generateTools = (
     imageProcessorLambdaName,
     allowedDirectories,
     entitlementKeys,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,

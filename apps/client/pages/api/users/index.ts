@@ -27,6 +27,11 @@ import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly'
 import * as z from 'zod';
 import qs from 'qs';
 import { Request } from 'express';
+import { respond } from '@server/utils/respond';
+import {
+  adminUserDownloadResponseSchema,
+  adminUserListResponseSchema,
+} from '@server/users/adminUserListResponseSchema';
 
 const querySchema = z.object({
   // Positive only: 0 reaches $limit/$skip as an invalid stage and surfaces as a 500.
@@ -51,6 +56,9 @@ const querySchema = z.object({
   orgSearch: z.array(z.string()).default(['all']),
   tags: z.array(z.string()).optional(),
   recentSignups: z.enum(['hour']).optional(),
+  // A created-at window from the signup chart; the end is exclusive.
+  createdFrom: z.string().datetime().optional(),
+  createdTo: z.string().datetime().optional(),
   groupBy: z.enum(['emailDomain']).optional(),
   projectId: z
     .string()
@@ -86,6 +94,8 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       projectId,
       pendingInviteProjectId,
       recentSignups,
+      createdFrom,
+      createdTo,
       groupBy,
     } = querySchema.parse(qs.parse(req.query));
 
@@ -96,7 +106,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // users, downloadAll is admin-only, and the page size is hard-capped.
     const isAdmin = !!req.user?.isAdmin;
     const viewer = { userId: String(req.user?.id), isAdmin };
-    if ((recentSignups || groupBy) && !isAdmin) {
+    if ((recentSignups || groupBy || createdFrom || createdTo) && !isAdmin) {
       return res.status(403).json({ message: 'Signup review is admin-only.' });
     }
     const isPicker = publicView && !isAdmin;
@@ -149,6 +159,16 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       ? { createdAt: { $gte: new Date(now.getTime() - 60 * 60 * 1000), $lt: now } }
       : undefined;
     if (recentSignupWindow) conditions.push(recentSignupWindow);
+    const createdWindow =
+      createdFrom || createdTo
+        ? {
+            createdAt: {
+              ...(createdFrom && { $gte: new Date(createdFrom) }),
+              ...(createdTo && { $lt: new Date(createdTo) }),
+            },
+          }
+        : undefined;
+    if (createdWindow) conditions.push(createdWindow);
     if (search) {
       const escapedSearch = escapeRegex(search);
       const idConditions: mongoose.FilterQuery<typeof User>[] = /^[0-9a-fA-F]{24}$/.test(search)
@@ -272,7 +292,8 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
     if (groupBy) {
       // Cap the indexed candidate scan before joins or grouping; filters can make this sample incomplete.
-      const candidates = await User.find(recentSignupWindow ?? {})
+      const signupWindows = [recentSignupWindow, createdWindow].filter(window => window !== undefined);
+      const candidates = await User.find(signupWindows.length > 1 ? { $and: signupWindows } : (signupWindows[0] ?? {}))
         .sort({ createdAt: -1 })
         .hint({ createdAt: 1 })
         .select('_id')
@@ -437,7 +458,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
       await User.populate(users, { path: 'organizationId' });
 
-      return res.json({
+      return respond(res, adminUserListResponseSchema, {
         users: users.map((user: IUserObject) => {
           const serialized = withSafeOrganization(User.hydrate(user).toJSON(), viewer);
           // pendingInvite is not a User path, so it is added after hydrate rather than through it.
@@ -453,7 +474,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
       await User.populate(results, { path: 'organizationId' });
 
-      return res.json({
+      return respond(res, adminUserDownloadResponseSchema, {
         users: results.map((user: IUserObject) => withSafeOrganization(User.hydrate(user).toJSON(), viewer)),
         totalUsers: results.length,
       });

@@ -26,9 +26,7 @@ import {
   TabList,
   Tab,
   TabPanel,
-  Card,
-  CardContent,
-  CardOverflow,
+  Box,
   Divider,
   SvgIcon,
   type SvgIconProps,
@@ -38,6 +36,7 @@ import React, { useCallback, useMemo, useState, type ComponentProps } from 'reac
 import AdminSettingInputField from './AdminSettingInputField';
 import AdminStringListSettingField from './AdminStringListSettingField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
+import { AdminTurnstileStatusNotice } from './AdminTurnstileStatusNotice';
 import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
 import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
@@ -46,6 +45,8 @@ import { useAdminModal } from './useAdminModal';
 
 import AdminLogoUpload from './AdminLogoUpload';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { SettingsDraftProvider } from './SettingsDraftProvider';
+import { AdminPageHeader, SettingsSection } from './shared';
 
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import PsychologyIcon from '@mui/icons-material/Psychology';
@@ -415,9 +416,9 @@ const AdminSettingsTab: React.FC = () => {
     }
 
     return (
-      <Card key={groupId || 'ungrouped'} variant="outlined" sx={{ mb: 2 }}>
+      <SettingsSection key={groupId || 'ungrouped'}>
         {groupName && (
-          <CardOverflow>
+          <Box>
             <Stack
               direction={{ xs: 'column', sm: 'row' }}
               alignItems={{ xs: 'flex-start', sm: 'center' }}
@@ -438,9 +439,9 @@ const AdminSettingsTab: React.FC = () => {
               )}
             </Stack>
             <Divider inset="none" />
-          </CardOverflow>
+          </Box>
         )}
-        <CardContent>
+        <Box>
           <Stack spacing={1}>
             {topLevelSettings.map((setting, index) => {
               const children = inlineChildrenByParent.get(setting.key);
@@ -498,8 +499,8 @@ const AdminSettingsTab: React.FC = () => {
               .
             </Typography>
           )}
-        </CardContent>
-      </Card>
+        </Box>
+      </SettingsSection>
     );
   };
 
@@ -524,6 +525,10 @@ const AdminSettingsTab: React.FC = () => {
         {category === 'AI' && <AdminRecommendedModelsSetting />}
 
         {category === 'AI' && <AdminGenerationModelsSetting />}
+
+        {category === 'Users' && (
+          <AdminTurnstileStatusNotice enabled={String(settingValueByName.get('turnstileEnabled')) === 'true'} />
+        )}
 
         {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
             seven of the nine scope-capable settings are AI, and the panel lists all nine wherever
@@ -570,7 +575,7 @@ const AdminSettingsTab: React.FC = () => {
             }}
           >
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: { xs: 1, md: 0 } }}>
-              <Typography level="h4">Admin Settings</Typography>
+              <AdminPageHeader title="Settings" description="Edit configuration, then save or discard your changes." />
               <ContextHelpButton helpId="admin/admin-settings" tooltipText="Admin Settings Help" />
             </Stack>
             <FormControl sx={{ width: { xs: '100%', md: '40vw' } }}>
@@ -703,4 +708,10 @@ const AdminSettingsTab: React.FC = () => {
 
 AdminSettingsTab.displayName = 'AdminSettingsTab';
 
-export default AdminSettingsTab;
+export default function AdminSettingsPage() {
+  return (
+    <SettingsDraftProvider>
+      <AdminSettingsTab />
+    </SettingsDraftProvider>
+  );
+}

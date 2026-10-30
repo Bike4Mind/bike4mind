@@ -1,4 +1,4 @@
-import { type Locator, expect } from '@playwright/test';
+import { type Locator, type Response, expect } from '@playwright/test';
 import { BasePage } from './BasePage';
 import { TIMEOUTS } from '../constants';
 
@@ -65,9 +65,17 @@ export class AdminPage extends BasePage {
   async navigateToUsersTab() {
     await this.expandUserOps();
     await this.page.getByTestId('admin-users-tab-btn').filter({ visible: true }).first().click();
-    await expect(this.page.getByTestId('admin-search-users-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
-    await this.waitForLoaderToDisappear('admin-users-loading-indicator');
-    await expect(this.page.getByTestId('admin-sort-order-btn')).toBeEnabled({ timeout: TIMEOUTS.ACTION });
+    await expect(this.page.getByTestId('admin-users-search-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await this.waitForUsersLoaded();
+  }
+
+  /** The users table renders skeleton rows while a page is fetching. */
+  private async waitForUsersLoaded() {
+    await expect(this.page.getByTestId('admin-table-skeleton-row')).toHaveCount(0, { timeout: TIMEOUTS.ACTION });
+  }
+
+  private isUsersListResponse(resp: Response) {
+    return resp.url().includes('/api/admin/users?') && resp.request().method() === 'GET' && resp.ok();
   }
 
   async navigateToOrganizationsTab() {
@@ -89,67 +97,44 @@ export class AdminPage extends BasePage {
   // --- User Search ---
 
   async searchUser(query: string) {
-    const searchInput = this.page.getByTestId('admin-search-users-input').getByRole('textbox');
+    const searchInput = this.page.getByTestId('admin-users-search-input');
     await searchInput.clear();
     await searchInput.fill(query);
     await this.waitForResponseOrUI(
-      resp => resp.url().includes('/api/users') && resp.request().method() === 'GET' && resp.ok(),
-      () => expect(this.page.getByTestId('admin-sort-order-btn')).toBeEnabled({ timeout: TIMEOUTS.ACTION })
+      resp => this.isUsersListResponse(resp) && resp.url().includes('search='),
+      () => this.waitForUsersLoaded()
     );
-
-    await this.waitForLoaderToDisappear('admin-users-loading-indicator');
+    await this.waitForUsersLoaded();
   }
 
   async isUserVisible(name: string): Promise<boolean> {
-    return await this.page
-      .getByTestId(`user-name-${name}`)
+    return await this.getUserRow(name)
       .isVisible()
       .catch(() => false);
   }
 
   async waitForUserVisible(name: string) {
-    await expect(this.page.getByTestId(`user-name-${name}`)).toBeVisible({ timeout: TIMEOUTS.ACTION });
+    await expect(this.getUserRow(name)).toBeVisible({ timeout: TIMEOUTS.ACTION });
   }
 
   // --- Sort ---
 
-  async setSortBy(option: 'name' | 'createdAt') {
-    const testId = option === 'name' ? 'sort-option-name' : 'sort-option-created-at';
-    // Dropdown options can be detached by React re-renders. Retry: re-open the dropdown.
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        // The floating AI chat can re-open and overlay the sort controls, intercepting pointer
-        // events (same guard as toggleSortOrder). Re-close each attempt in case it reopened.
-        await this.closeFloatingChat();
-        // Bound the click so a stuck dropdown-open (unbounded stability check) fails fast into
-        // the retry rather than hanging; keeping it inside the try lets a throw retry too.
-        await this.page.getByTestId('admin-sort-by-select').click({ timeout: TIMEOUTS.ELEMENT_STATE });
-        await this.page.getByTestId(testId).click({ timeout: TIMEOUTS.ELEMENT_STATE });
-        break;
-      } catch {
-        if (attempt === 3) throw new Error(`Failed to select sort option "${option}" after retries`);
-        await this.page.keyboard.press('Escape');
-      }
-    }
-    await this.waitForLoaderToDisappear('admin-users-loading-indicator');
-    await expect(this.page.getByTestId('admin-sort-by-listbox')).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
-  }
-
-  async toggleSortOrder() {
-    // The floating AI chat can re-open and overlay the sort controls,
-    // intercepting pointer events - close it before clicking.
+  /** Click a sortable column header; each click flips the direction. */
+  async sortByColumn(columnId: 'user' | 'signedUp' | 'lastActive' | 'credits') {
+    // The floating AI chat can re-open and overlay the table header, intercepting pointer events.
     await this.closeFloatingChat();
-    await this.page.getByTestId('admin-sort-order-btn').click();
+    await this.page.getByTestId(`admin-table-sort-${columnId}-btn`).click();
     await this.waitForResponseOrUI(
-      resp => resp.url().includes('/api/users') && resp.request().method() === 'GET' && resp.ok(),
-      () => expect(this.page.getByTestId('admin-sort-order-btn')).toBeEnabled({ timeout: TIMEOUTS.ACTION })
+      resp => this.isUsersListResponse(resp),
+      () => this.waitForUsersLoaded()
     );
+    await this.waitForUsersLoaded();
   }
 
   // --- Create User ---
 
   async openCreateUserModal() {
-    await this.page.getByTestId('admin-create-user-btn').click();
+    await this.page.getByTestId('admin-users-create-btn').click();
     await expect(this.page.getByTestId('create-user-username-input')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
@@ -175,98 +160,103 @@ export class AdminPage extends BasePage {
 
   // --- User Row Actions ---
 
-  /** Get the user row card containing the given user name */
-  private getUserRow(name: string): Locator {
-    return this.page.getByTestId('admin-user-card').filter({ has: this.page.getByTestId(`user-name-${name}`) });
+  /** The users table row whose text contains the given name or email. */
+  getUserRow(text: string): Locator {
+    return this.page.locator('tr[data-testid^="admin-users-row-"]').filter({ hasText: text });
   }
 
-  async clickUserAdminButton(name: string) {
+  /**
+   * Opens the /admin/users/$userId profile page by activating the row from the keyboard: at 1280x720
+   * the Users page header (signups chart, filters) leaves the scrolling list almost no height, so the
+   * bottom pager covers the row and a pointer click never lands.
+   */
+  async openUserProfile(name: string) {
     const row = this.getUserRow(name);
-    await row.getByTestId('admin-user-admin-btn').click();
-    // Navigates to the /admin/users/$userId profile page
-    await expect(this.page.getByTestId('user-profile-header')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await row.focus();
+    await row.press('Enter');
+    await expect(this.page.getByTestId('user-profile-view')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
-  async clickUserProfileButton(name: string) {
-    const row = this.getUserRow(name);
-    await row.getByTestId('admin-user-profile-btn').click();
-    // Wait for AdminProfileModal to open
-    await expect(this.page.getByTestId('admin-profile-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+  /** Pick an action from the profile header's More menu. */
+  private async clickProfileMenuItem(action: 'editProfile' | 'loginAs' | 'delete') {
+    await this.page.getByTestId('user-profile-more-btn').click();
+    await this.page.getByTestId(`user-profile-menu-${action}-item`).click();
   }
 
-  // --- Login as User (FullUsersView) ---
+  // --- Login as User (profile page) ---
 
-  /** Open the target user's full view, then click "Login as User". */
+  /** Open the target user's profile, then pick "Log in as user" from the More menu. */
   async clickLoginAs(name: string) {
-    await this.clickUserAdminButton(name);
-    await this.page.getByTestId('login-as-user-btn').click();
+    await this.openUserProfile(name);
+    await this.clickProfileMenuItem('loginAs');
   }
 
-  /** Assert the TOTP-token modal opened (proves the acting admin's mfa.totpEnabled was projected into currentUser). */
+  /**
+   * Assert the dialog asks for the admin's TOTP code. LoginAsDialog renders the code input only
+   * when the acting admin's mfa.totpEnabled was projected into currentUser.
+   */
   async expectLoginAsMfaModal() {
-    await expect(this.page.getByTestId('login-as-mfa-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(this.page.getByTestId('login-as-dialog-mfa-input')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
   async fillLoginAsMfa(code: string) {
-    await this.fillMuiInput(this.page.getByTestId('login-as-mfa-input').locator('input'), code);
+    await this.fillMuiInput(this.page.getByTestId('login-as-dialog-mfa-input'), code);
   }
 
   /** Confirm stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */
   async fillLoginAsReason(reason = 'E2E login-as regression guard') {
-    await this.page.getByTestId('login-as-reason-input').fill(reason);
+    await this.page.getByTestId('login-as-dialog-reason-input').fill(reason);
   }
 
   async confirmLoginAs() {
-    const confirmBtn = this.page.getByTestId('login-as-mfa-confirm-btn');
+    const confirmBtn = this.page.getByTestId('login-as-dialog-confirm-btn');
     await expect(confirmBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
     await confirmBtn.click();
   }
 
-  // --- Edit User Profile (AdminProfileModal) ---
+  // --- Edit profile (profile More menu) ---
 
-  async fillProfileField(label: string, value: string) {
-    const input = this.getProfileFieldByLabel(label);
-    await input.clear();
-    if (value) {
-      await input.fill(value);
-    }
+  /** Open the target user's profile, then pick "Edit profile" from the More menu. */
+  async openEditProfileDialog(name: string) {
+    await this.openUserProfile(name);
+    await this.clickProfileMenuItem('editProfile');
+    await expect(this.page.getByTestId('edit-profile-dialog')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
-  async saveProfileChanges() {
-    const saveBtn = this.page.getByTestId('profile-save-btn');
+  async fillEditProfileName(value: string) {
+    await this.fillMuiInput(this.page.getByTestId('edit-profile-dialog-name-input'), value);
+  }
+
+  /** Save stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH; the dialog closes on success. */
+  async saveEditProfile(reason = 'E2E profile edit regression guard') {
+    await this.page.getByTestId('edit-profile-dialog-reason-input').fill(reason);
+    const saveBtn = this.page.getByTestId('edit-profile-dialog-confirm-btn');
+    await expect(saveBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
     await saveBtn.click();
-    // Wait for save to complete (button re-enables after API response)
-    await expect(saveBtn).toBeEnabled({ timeout: TIMEOUTS.ACTION });
+    await expect(this.page.getByTestId('edit-profile-dialog')).toBeHidden({ timeout: TIMEOUTS.ACTION });
   }
 
-  async closeModal() {
-    await this.page.getByTestId('modal-close-btn').click();
-    await expect(this.page.getByTestId('modal-close-btn')).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
-  }
-
-  // --- Delete User (SpicyUserActions) ---
+  // --- Delete User (profile More menu) ---
 
   async clickDeleteUserButton() {
-    // Delete lives on the profile page's Admin (danger zone) tab.
-    await this.page.getByTestId('user-profile-tab-admin').click();
-    await this.page.getByTestId('delete-user-btn').click();
+    await this.clickProfileMenuItem('delete');
   }
 
   /** The delete dialog asks for the account's email; read it from the dialog rather than the fixture. */
   async typeDeleteConfirmation() {
     const expected = await this.page.getByTestId('delete-user-dialog-typed-expected').innerText();
-    await this.page.getByTestId('delete-user-confirm-input').fill(expected);
+    await this.page.getByTestId('delete-user-dialog-typed-input').fill(expected);
   }
 
   /** The confirm-delete button stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */
   async fillDeleteReason(reason = 'E2E user CRUD cleanup') {
-    await this.page.getByTestId('user-delete-reason-input').fill(reason);
+    await this.page.getByTestId('delete-user-dialog-reason-input').fill(reason);
   }
 
   async confirmDeleteUser() {
-    await this.page.getByTestId('confirm-delete-btn').click();
+    await this.page.getByTestId('delete-user-dialog-confirm-btn').click();
     // Wait for the confirm button itself to disappear (the delete modal closed)
-    await expect(this.page.getByTestId('confirm-delete-btn')).toBeHidden({ timeout: TIMEOUTS.ACTION });
+    await expect(this.page.getByTestId('delete-user-dialog-confirm-btn')).toBeHidden({ timeout: TIMEOUTS.ACTION });
     // Dismiss any follow-up modal (e.g. "User not found" error) if it appears
     const closeBtn = this.page.getByTestId('modal-close-btn');
     if (await closeBtn.isVisible().catch(() => false)) {

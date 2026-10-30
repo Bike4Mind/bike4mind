@@ -74,13 +74,18 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
     return this.model.find({ userId }).sort({ createdAt: -1 }).limit(limit);
   }
 
-  /** Counts other accounts, not login events. A truncated scan is unknown, never a low count. */
+  /**
+   * Counts other accounts, not login events. A truncated scan is unknown, never a low count.
+   * Without a userId every signup counts (a gate run before the account exists).
+   */
   async recentDistinctSignups(input: {
-    userId: string;
+    userId?: string;
     since: Date;
     until: Date;
     ip: string | null;
     asn: number | null;
+    /** Skip the IPv4 /24 count (null) when the caller never reads it; defaults to counted. */
+    prefix?: boolean;
     maxRows: number;
   }): Promise<{ ipSignups: number | null; asnSignups: number | null; prefixSignups: number | null }> {
     const { since, until, maxRows } = input;
@@ -99,7 +104,12 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
 
     const count = async (network: Record<string, unknown>): Promise<number | null> => {
       const rows = await this.model
-        .find({ ...network, type: 'signup', userId: { $ne: input.userId }, createdAt: { $gte: since, $lt: until } })
+        .find({
+          ...network,
+          type: 'signup',
+          ...(input.userId === undefined ? {} : { userId: { $ne: input.userId } }),
+          createdAt: { $gte: since, $lt: until },
+        })
         .select({ userId: 1, _id: 0 })
         .limit(maxRows + 1)
         .maxTimeMS(2000)
@@ -108,13 +118,24 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
       return new Set(rows.map(row => row.userId)).size;
     };
     const ipVersion = input.ip === null ? 0 : isIP(input.ip);
-    const prefix = input.ip !== null && ipVersion === 4 ? input.ip.slice(0, input.ip.lastIndexOf('.') + 1) : null;
+    const prefix =
+      input.prefix !== false && input.ip !== null && ipVersion === 4
+        ? input.ip.slice(0, input.ip.lastIndexOf('.') + 1)
+        : null;
     const [ipSignups, asnSignups, prefixSignups] = await Promise.all([
       ipVersion ? count({ ip: input.ip }) : null,
       Number.isSafeInteger(input.asn) && input.asn !== null && input.asn > 0 ? count({ asn: input.asn }) : null,
       prefix ? count({ ip: { $gte: prefix, $lt: `${prefix}~` } }) : null,
     ]);
     return { ipSignups, asnSignups, prefixSignups };
+  }
+
+  /** The account's signup rows since `since`, for the deletion-time SignupTrace. */
+  async findSignupsSince(userId: string, since: Date): Promise<Pick<IAuthEventDocument, 'ip' | 'asn' | 'createdAt'>[]> {
+    return this.model
+      .find({ userId, type: 'signup', createdAt: { $gte: since } })
+      .select({ ip: 1, asn: 1, createdAt: 1, _id: 0 })
+      .lean();
   }
 
   async deleteAllForUser(userId: string): Promise<number> {

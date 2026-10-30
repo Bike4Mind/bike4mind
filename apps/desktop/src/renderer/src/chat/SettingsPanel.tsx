@@ -21,6 +21,11 @@ import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './Cl
 import type { LocalContextFit, LocalContextSetting } from '@shared/localContextSetting';
 import { LocalContextSettings, localContextSummary, useLocalContextSetting } from './LocalContextSettings';
 import { LocalHistorySettings } from './LocalHistorySettings';
+import type { ModelServerView } from '@shared/modelServers';
+import { ModelServersSettings, modelServersSummary, useModelServers } from './ModelServersSettings';
+import { WorktreesSettings } from './WorktreesSettings';
+import type { CuratedListSettings as CuratedListSettingsState } from '@shared/models';
+import { CuratedListSettings, curatedListSummary, useCuratedListSettings } from './CuratedListSettings';
 import { EntrySection, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
 import {
   ArrowLeftIcon,
@@ -158,6 +163,24 @@ function localContextEntry(
   };
 }
 
+function curatedListEntry(
+  settings: CuratedListSettingsState | null,
+  onEnabled: (enabled: boolean) => void,
+  error: string | null,
+  onRetry: () => void,
+  saving: boolean
+): ConfigEntry {
+  return {
+    id: 'curated-list',
+    icon: <DownloadIcon />,
+    label: 'Curated models list',
+    summary: !settings && error ? error : curatedListSummary(settings),
+    control: (
+      <CuratedListSettings settings={settings} onEnabled={onEnabled} error={error} onRetry={onRetry} saving={saving} />
+    ),
+  };
+}
+
 function localHistoryEntry(): ConfigEntry {
   return {
     id: 'local-history',
@@ -165,6 +188,16 @@ function localHistoryEntry(): ConfigEntry {
     label: 'Local history',
     summary: 'Opted-in conversations and pages stay on this device and remain searchable offline.',
     control: <LocalHistorySettings />,
+  };
+}
+
+function worktreesEntry(): ConfigEntry {
+  return {
+    id: 'worktrees',
+    icon: <BranchIcon />,
+    label: 'Worktrees',
+    summary: 'Worktrees the app made for your projects, and the ones no conversation uses any more.',
+    control: <WorktreesSettings />,
   };
 }
 
@@ -239,8 +272,25 @@ function updatesEntry(controller: AppUpdateController): ConfigEntry {
   };
 }
 
+function modelServersEntry(
+  servers: ModelServerView[] | null,
+  setServers: (servers: ModelServerView[]) => void,
+  loadError: string | null
+): ConfigEntry {
+  // One word: the side nav shows it beside the section label.
+  const attention = servers?.some(server => server.health.state === 'credentials') ? 'Credentials' : undefined;
+  return {
+    id: 'model-servers',
+    icon: <ServerIcon />,
+    label: 'Model servers',
+    summary: modelServersSummary(servers),
+    ...(attention ? { attention } : {}),
+    control: <ModelServersSettings servers={servers} onServers={setServers} loadError={loadError} />,
+  };
+}
+
 /** The pages of Settings, in the order the side nav lists them. */
-export const SETTINGS_SECTIONS = ['general', 'permissions', 'import'] as const;
+export const SETTINGS_SECTIONS = ['general', 'servers', 'permissions', 'import', 'worktrees'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
@@ -252,14 +302,18 @@ const SETTINGS_NAV_WIDTH = 200;
 
 const SECTION_LABEL: Record<SettingsSection, string> = {
   general: 'General',
+  servers: 'Model servers',
   permissions: 'Permissions',
   import: 'Import',
+  worktrees: 'Worktrees',
 };
 
 const SECTION_ICON: Record<SettingsSection, ReactNode> = {
   general: <SlidersIcon />,
+  servers: <ServerIcon />,
   permissions: <ShieldIcon />,
   import: <FolderIcon />,
+  worktrees: <BranchIcon />,
 };
 
 /**
@@ -283,6 +337,8 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
   const [claudeImport, setClaudeImport, importError, retryImport] = useClaudeImport();
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
+  const [modelServers, setModelServers, modelServersError] = useModelServers();
+  const curatedList = useCuratedListSettings();
 
   return {
     general: [
@@ -290,13 +346,22 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
       localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
+      curatedListEntry(
+        curatedList.settings,
+        enabled => void curatedList.setEnabled(enabled),
+        curatedList.error,
+        () => void curatedList.reload(),
+        curatedList.saving
+      ),
       localHistoryEntry(),
       ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),
       updatesEntry(update),
     ],
+    servers: [modelServersEntry(modelServers, setModelServers, modelServersError)],
     permissions: [permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions)],
     import: [claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport)],
+    worktrees: [worktreesEntry()],
   };
 }
 

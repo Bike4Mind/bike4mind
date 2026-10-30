@@ -65,6 +65,8 @@ export interface IAuthSession {
   createdVia: AuthSessionCreatedVia;
   /** Set when this session belongs to an admin impersonating the user (loginAs). */
   impersonatedBy?: string | null;
+  impersonationExpiresAt?: Date | null;
+  impersonationWriteEnabled?: boolean;
   /** OAuth client that minted this session (authorization-code or device flow); absent on older rows. */
   clientId?: string | null;
   lastUsedAt: Date;
@@ -109,9 +111,16 @@ export interface IAuthSessionDocument extends IAuthSession, IMongoDocument {}
  * cannot drift apart.
  */
 export const isAuthSessionActive = (
-  session: { revokedAt?: Date | null; expiresAt: Date } | null | undefined,
+  session:
+    | { revokedAt?: Date | null; expiresAt: Date; impersonatedBy?: string | null; impersonationExpiresAt?: Date | null }
+    | null
+    | undefined,
   now: Date = new Date()
-): boolean => !!session && !session.revokedAt && session.expiresAt > now;
+): boolean =>
+  !!session &&
+  !session.revokedAt &&
+  session.expiresAt > now &&
+  (!session.impersonatedBy || (!!session.impersonationExpiresAt && session.impersonationExpiresAt > now));
 
 /**
  * Client-safe projection of an AuthSession for the active-sessions UI (GET /api/users/me/sessions).

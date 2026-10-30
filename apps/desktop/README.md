@@ -43,6 +43,36 @@ Electron against it with HMR.
 | `pnpm test`           | vitest                                             |
 | `pnpm package`        | Installers for the host platform, into `release/`  |
 
+## Private and gated Hugging Face models
+
+In Models > Explore, choose Add token and enter a Hugging Face read token from
+[huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Desktop checks it
+before saving. Replace changes the token; Remove deletes it. The token is sent only to
+Hugging Face, and stays in the main process after you submit it.
+
+Desktop encrypts the saved token with the OS secret store. Without secure storage, including
+Linux's `basic_text` backend, it keeps the token only until you quit. The token row says
+whether it is saved for this run or across restarts.
+
+Ollama downloads the files itself using its own SSH key. For private or gated repos, grant
+your Hugging Face account access and register Ollama's public key (usually
+`~/.ollama/id_ed25519.pub`) at
+[huggingface.co/settings/keys](https://huggingface.co/settings/keys). The token checks Hub
+access; it does not give Ollama access. Desktop, CLI and MCP use `huggingface.co/...` for
+these pulls and recognize installed models under either Hugging Face hostname.
+
+Show abliterated models is off by default and is remembered on this computer across restarts.
+
+### Troubleshooting Hugging Face access
+
+- Token rejected: check that the token is complete, has not been revoked, and can read the repo.
+- Token cannot read the file: request gated access on the repo page, or grant the token access
+  to the private repo, then check again.
+- Ollama download refused: register Ollama's public key on the account with repo access.
+- Saved token could not be read: check access to Desktop's user-data folder, then select Retry.
+- Save or Remove failed: the previous token remains active. Resolve the storage error and retry.
+- Token missing after restart: check whether the token row said it was kept only until quit.
+
 ## Images in conversations
 
 Right-click an image in a sent message or tool result to open its menu. From the keyboard,
@@ -265,11 +295,25 @@ Desktop updates use only the dedicated repository's Latest release. Production r
 automation is unchanged. Keep source desktop release tags intact;
 changing the package version does not override existing release history.
 
-Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
-Without it, users must select their own backend. `DESKTOP_RELEASE_REPOSITORY` supplies the
+The hosted backend defaults to `https://app.bike4mind.com`; the repository variable
+`B4M_DEFAULT_API_URL` overrides it. `DESKTOP_RELEASE_REPOSITORY` supplies the
 dedicated public `owner/repo`; CI derives and bakes `B4M_UPDATE_FEED_URL` as its
 `https://github.com/<owner>/<repo>/releases/latest/download/` URL. Unset or source-repo
 destinations fail closed. PR builds have no signing credentials and are not published.
+
+For signed online Curated lists, set both source Actions variables
+`B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` to the same HTTPS `latest.json`
+URL. The first is baked into Desktop; the second is the release gate's expected URL.
+Leave both unset to keep the bundled list. A baked URL without the matching expected
+URL fails the release. Setting only `CURATED_PUBLIC_URL` leaves online updates off;
+the gate permits an empty baked URL. Production trusted keys must also be shipped
+before Desktop will fetch online lists.
+
+Local testing can build with `B4M_CURATED_DEV_KEYS=1` in the shell and use the runtime
+`B4M_CURATED_DEV_URL` override for a signed test list, including HTTP on loopback.
+The override is ignored in packaged apps and builds without test keys. Test-key
+builds use a separate cache directory and are rejected by `curated:check-build`;
+never enable the dev flag for a release.
 
 The validation job generates `latest-mac.yml` and `latest-linux.yml` from the actual
 installer bytes, with SHA-512 and size. ZIP blockmaps are mandatory; AppImage blockmaps
@@ -296,12 +340,14 @@ partial manifest. Published assets are not overwritten on retry.
    and omits `latest-mac.yml`. Linux metadata and updates remain enabled. Ad-hoc
    signing provides bundle integrity, not publisher identity or notarization.
    Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
-5. Merge through review, then inspect the first trusted run's signatures, notarization,
+5. When enabling online Curated lists, set `B4M_CURATED_MANIFEST_URL` and
+   `CURATED_PUBLIC_URL` together as described above; otherwise leave both unset.
+6. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
    `latest-linux.yml` downloads redirect successfully (also `latest-mac.yml` for
    the Developer ID path only). CI logs record
    publication and tag operations; organization audit-log retention is managed separately.
-6. Test two signed versions using a temporary installation and profile. Check, download,
+7. Test two signed versions using a temporary installation and profile. Check, download,
    and explicitly restart into the newer version. Never use a user's existing profile.
    Contract tests and local feed checks do not prove Squirrel.Mac signature acceptance.
 
@@ -361,18 +407,14 @@ GitHub Releases, then rerun the workflow on corrected `main` to publish a new ve
 
 ### Baking the backend URL
 
-`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is what makes
-**Production** selectable in the environment picker - `hostedAvailable()` in
-`src/main/auth/environment.ts` is false whenever it is empty, and the picker then reads
-"Production (not set in this build)". A packaged app inherits no shell environment, so
-there is nothing to read at runtime.
+`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is the
+**Production** entry in the environment picker. A packaged app inherits no shell
+environment, so there is nothing to read at runtime.
 
-**There is deliberately no fallback URL in source.** This repo is public and open-core;
-committing a hostname here would put it in every fork's bundle. The CLI has the same rule
-and the same shape (`packages/cli/tsdown.config.ts`, injected in `release.yaml` from a repo
-variable), so the two clients are branded the same way.
-
-Supply it per build, highest precedence first:
+When nothing supplies it, the build uses `https://app.bike4mind.com` (`PRODUCTION_API_URL` in
+`electron.vite.config.ts`), so every build signs in to production with nothing to type. The
+exception is `pnpm dev`, which bakes nothing and so starts on Local Dev (`http://localhost:3000`). A
+fork that runs its own backend overrides it, highest precedence first:
 
 ```bash
 B4M_DEFAULT_API_URL=https://your-backend.example pnpm package:mac
@@ -385,8 +427,7 @@ covers, at the root, for `.env` and `.env*.local` alike:
 B4M_DEFAULT_API_URL=https://your-backend.example
 ```
 
-Build with neither and the app ships with no hosted option at all, which is the correct
-state for an unbranded fork: Local Dev and a self-hosted URL still work.
+Local Dev and a self-hosted URL stay available from "Change server" on the sign-in card.
 
 ### Signing
 
@@ -677,8 +718,8 @@ token.
   HTTP client debug-logs request bodies.
 
 `B4M_DEFAULT_API_URL` is baked into the main bundle at build time (see the `define` block in
-`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown. Empty for an unbranded
-fork, which then has no Production option and must pick Local Dev or a custom URL.
+`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown, and falls back to
+`https://app.bike4mind.com` when no build supplies it (except in `pnpm dev`, which starts on Local Dev).
 
 Routing uses hash history. A packaged build loads the renderer over `file://`, which has no
 origin for the History API to push against, so hash history is the one mode that behaves
@@ -841,6 +882,23 @@ ideally `./schemas`), and make the two `process.env` reads lazy. That would let 
 renderer drop both workarounds above and cut roughly a megabyte.
 
 ## Standing permission rules
+
+Settings -> Permissions also shows the local capability ledger: active grants for files,
+tools, browser origins, imported identity, project trust and credit-spending actions,
+followed by their 200 most recent audit events. Tool execution does not
+append audit events. The ledger uses an append-only local log; existing ledger files are
+migrated automatically. Conversation grants are visible only in the account that created
+them. Revoke removes the corresponding stored permission or
+conversation allowance immediately. A separate overlapping allow can still authorize a
+call; inspect the remaining grants and permission rules if a prompt does not reappear.
+Standing tool approvals end when the desktop restarts. Durable grants are migrated into
+the ledger, including folders shared with saved conversations when Settings loads.
+Imported browser identity remains separate from anonymous access.
+
+If the ledger cannot be loaded or a revoke fails, Settings displays the error. Check that
+the desktop's user-data directory is writable, then retry. A failed revoke must not be
+treated as confirmation that access ended. Invalid logs are quarantined for inspection;
+audit synchronization failures are logged and do not undo completed permission changes.
 
 Open Settings -> Permissions to add allow, ask, or deny rules for every project or one
 project. Rules use Claude Code syntax, for example `Bash(git status:*)`,

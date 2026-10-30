@@ -218,6 +218,33 @@ describe('readGgufMetadata values', () => {
     expect(header.metadata['__proto__']).toBe('x');
   });
 
+  it('records each value type, with the item type of every array however long or empty', async () => {
+    const header = await read(
+      gguf({
+        kv: [
+          ['narrow', u8(3)],
+          ['wide', u32(3)],
+          ['signed', i32(3)],
+          ['text', str('x')],
+          ['empty.nested', arr(T.ARRAY, [])],
+          ['short.nested', arr(T.ARRAY, [arr(T.UINT8, [])])],
+          ['long.strings', arr(T.STRING, [str('a'), str('b'), str('c')])],
+        ],
+      }),
+      { maxArrayLength: 2 }
+    );
+    expect(Object.getPrototypeOf(header.types)).toBeNull();
+    expect({ ...header.types }).toEqual({
+      narrow: { type: 'uint8' },
+      wide: { type: 'uint32' },
+      signed: { type: 'int32' },
+      text: { type: 'string' },
+      'empty.nested': { type: 'array', itemType: 'array' },
+      'short.nested': { type: 'array', itemType: 'array' },
+      'long.strings': { type: 'array', itemType: 'string' },
+    });
+  });
+
   it('records long arrays by length only and keeps reading after them', async () => {
     const header = await read(
       gguf({

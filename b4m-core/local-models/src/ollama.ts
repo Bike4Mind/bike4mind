@@ -1,9 +1,16 @@
 import { z } from 'zod';
 import { archFromModelInfo, positiveInt, tensorStatsFromTensors } from './arch';
-import { LocalRuntimeError, ModelNotFoundError, RuntimeHttpError, RuntimeProtocolError } from './errors';
+import {
+  LocalRuntimeError,
+  ModelNotFoundError,
+  PullIdleTimeoutError,
+  RuntimeHttpError,
+  RuntimeProtocolError,
+} from './errors';
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   HEALTH_TIMEOUT_MS,
+  chooseRuntimeId,
   connectionError,
   describeError,
   runtimeEndpointId,
@@ -17,11 +24,13 @@ import {
 } from './http';
 import type {
   FetchLike,
+  InspectOptions,
   InstalledModel,
   LoadedModel,
   LocalRuntime,
   ModelCapabilities,
   ModelInspection,
+  ModelContents,
   PullOptions,
   RuntimeHealth,
 } from './types';
@@ -36,6 +45,11 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 
 export interface OllamaRuntimeOptions {
   baseUrl?: string;
+  /**
+   * Replaces the address-derived id, so a saved server keeps its identity when its address changes and two
+   * servers reached at the same address (one over SSH) stay apart.
+   */
+  id?: string;
   fetch?: FetchLike;
   /** Sent as `Authorization: Bearer <apiKey>`, for a daemon behind an authenticating proxy. */
   apiKey?: string;
@@ -73,6 +87,10 @@ const showSchema = z.object({
   modified_at: z.string().optional(),
   model_info: z.record(z.string(), z.unknown()).nullable().optional(),
   tensors: z.array(z.unknown()).nullable().optional(),
+  parameters: z.string().nullable().optional().catch(null),
+  template: z.string().nullable().optional().catch(null),
+  license: z.string().nullable().optional().catch(null),
+  modelfile: z.string().nullable().optional().catch(null),
   ...remoteFields,
 });
 
@@ -141,6 +159,34 @@ const PER_LAYER_KEYS = [
   'attention.sliding_window_pattern',
 ];
 
+/** The first positive `*.context_length`, as Desktop's chat caps num_ctx (apps/desktop OllamaLocal). */
+function contextLengthOf(modelInfo: Record<string, unknown> | null | undefined): number | null {
+  for (const [key, value] of Object.entries(modelInfo ?? {}))
+    if (key.endsWith('.context_length') && positiveInt(value)) return value as number;
+  return null;
+}
+
+/** Blob paths in Ollama's generated Modelfile header, before any multiline template or license text. */
+function modelBlobsOf(
+  modelfile: string | null | undefined
+): Pick<ModelContents, 'modelBlob' | 'projectorBlobs' | 'draftBlobs' | 'adapterBlobs'> {
+  const models: (string | null)[] = [];
+  const drafts: (string | null)[] = [];
+  const adapters: (string | null)[] = [];
+  for (const line of (modelfile ?? '').split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text || text.startsWith('#')) continue;
+    const command = /^(FROM|DRAFT|ADAPTER)[ \t]+(.+)$/.exec(text);
+    if (!command) break;
+    // Ollama prints paths unquoted; profile names and volume names can contain spaces.
+    const digest = /^(?:.*[\\/])?sha256-([0-9a-f]{64})$/.exec(command[2])?.[1] ?? null;
+    if (command[1] === 'FROM') models.push(digest);
+    if (command[1] === 'DRAFT') drafts.push(digest);
+    if (command[1] === 'ADAPTER') adapters.push(digest);
+  }
+  return { modelBlob: models[0] ?? null, projectorBlobs: models.slice(1), draftBlobs: drafts, adapterBlobs: adapters };
+}
+
 /**
  * Ollama 0.34.0 and older blank arrays longer than 5 entries in a non-verbose /api/show, to [] or null.
  * MoE models also need the verbose tensor list for `tensorStats`.
@@ -179,7 +225,11 @@ export class OllamaRuntime implements LocalRuntime {
 
   constructor(options: OllamaRuntimeOptions = {}) {
     this.baseUrl = requireBaseUrl(options.baseUrl ?? DEFAULT_OLLAMA_URL, 'ollama');
-    this.id = this.baseUrl === DEFAULT_OLLAMA_URL ? 'ollama' : `ollama:${runtimeEndpointId(this.baseUrl)}`;
+    this.id = chooseRuntimeId(
+      options.id,
+      this.baseUrl === DEFAULT_OLLAMA_URL ? 'ollama' : `ollama:${runtimeEndpointId(this.baseUrl)}`,
+      'ollama'
+    );
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.healthTimeoutMs = options.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;
     this.client = {
@@ -221,10 +271,13 @@ export class OllamaRuntime implements LocalRuntime {
     });
   }
 
-  async inspect(model: string): Promise<ModelInspection> {
-    const [shown, tags] = await Promise.all([this.show(model), this.tags().catch(() => [])]);
+  async inspect(model: string, options: InspectOptions = {}): Promise<ModelInspection> {
+    const [shown, tags] = await Promise.all([
+      this.show(model, false, options),
+      options.tags === false ? Promise.resolve([]) : this.tags().catch(() => []),
+    ]);
     if (isRemote(shown)) throw new LocalRuntimeError(`${model} is cloud-backed, not a local model`, this.id);
-    const show = needsVerboseShow(shown.model_info) ? await this.show(model, true).catch(() => shown) : shown;
+    const show = needsVerboseShow(shown.model_info) ? await this.show(model, true, options).catch(() => shown) : shown;
     const tagged = withDefaultTag(model);
     const tag = tags.find(entry => entry.name === model || entry.name === tagged);
     return {
@@ -236,6 +289,13 @@ export class OllamaRuntime implements LocalRuntime {
       }),
       arch: archFromModelInfo(show.model_info, show.tensors),
       tensorStats: tensorStatsFromTensors(show.tensors),
+      parameters: show.parameters ?? null,
+      contextLength: contextLengthOf(show.model_info),
+      contents: {
+        template: show.template ?? null,
+        license: show.license ?? null,
+        ...modelBlobsOf(show.modelfile),
+      },
     };
   }
 
@@ -249,10 +309,7 @@ export class OllamaRuntime implements LocalRuntime {
       throw new LocalRuntimeError(`idleTimeoutMs must be a positive number or Infinity, got ${idleTimeoutMs}`, this.id);
     }
     const idle = new AbortController();
-    const idleError = new LocalRuntimeError(
-      `${this.id} sent nothing for ${idleTimeoutMs}ms while pulling ${ref}`,
-      this.id
-    );
+    const idleError = new PullIdleTimeoutError(this.id, ref, idleTimeoutMs);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const arm = () => {
       clearTimeout(timer);
@@ -266,7 +323,7 @@ export class OllamaRuntime implements LocalRuntime {
       arm();
       const response = await send(this.client, '/api/pull', {
         method: 'POST',
-        body: { model: ref, stream: true },
+        body: { model: ref, stream: true, ...(opts.runner ? { runner: opts.runner } : {}) },
         signal,
       });
       if (!response.body) throw new RuntimeProtocolError(`${this.id} /api/pull returned no body`, this.id);
@@ -348,12 +405,17 @@ export class OllamaRuntime implements LocalRuntime {
     });
   }
 
-  private async show(model: string, verbose = false): Promise<ShowResponse> {
+  private async show(
+    model: string,
+    verbose = false,
+    options: Pick<InspectOptions, 'signal' | 'timeoutMs'> = {}
+  ): Promise<ShowResponse> {
     try {
       return await requestJson(this.client, '/api/show', showSchema, {
         method: 'POST',
         body: verbose ? { model, verbose } : { model },
-        timeoutMs: this.requestTimeoutMs,
+        signal: options.signal,
+        timeoutMs: options.timeoutMs ?? this.requestTimeoutMs,
       });
     } catch (error) {
       if (error instanceof RuntimeHttpError && error.status === 404) throw new ModelNotFoundError(this.id, model);

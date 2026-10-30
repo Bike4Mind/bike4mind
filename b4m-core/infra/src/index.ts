@@ -88,3 +88,22 @@ export type { QuestMetricName } from './questMetricSpecs.js';
 export { QUESTS_NAMESPACE, QUEST_METRICS } from './questMetricSpecs.js';
 export type { VoiceMetricName } from './voiceMetricSpecs.js';
 export { VOICE_NAMESPACE, VOICE_METRICS } from './voiceMetricSpecs.js';
+export type {
+  ContributedSecretSpec,
+  ContributedSecretRotationSpec,
+  ContributedQueueSpec,
+  CoreQueueNames,
+  GeneratedInfraResources,
+  InfraResourceContributions,
+  PartitionedContributions,
+} from './contributions.js';
+export {
+  EMPTY_INFRA_RESOURCE_CONTRIBUTIONS,
+  isValidContributedResourceName,
+  partitionContributed,
+  partitionContributedQueues,
+  contributedQueueNames,
+  contributedQueuePairOptions,
+  reservedQueueNames,
+  describeDroppedContributions,
+} from './contributions.js';

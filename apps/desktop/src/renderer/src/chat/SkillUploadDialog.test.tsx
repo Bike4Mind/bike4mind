@@ -108,15 +108,36 @@ describe('SkillUploadDialog', () => {
   it('shows the ignored keys and the files that are not uploaded', () => {
     render(
       <SkillUploadDialog
-        preview={preview({ dropped: ['allowed-tools', 'model'], extraFiles: ['a.py', 'b.md'], extraFileCount: 7 })}
+        preview={preview({ dropped: ['hooks', 'model'], extraFiles: ['a.py', 'b.md'], extraFileCount: 7 })}
         onClose={() => {}}
       />
     );
     expect($('skill-upload-dropped')?.textContent).toContain(
-      'Ignored (not supported in Bike4Mind skills): allowed-tools, model'
+      'Ignored (not supported in Bike4Mind skills): hooks, model'
     );
-    expect($('skill-upload-extra-files')?.textContent).toContain('Only SKILL.md is uploaded; 7 other files');
+    expect($('skill-upload-extra-files')?.textContent).toContain(
+      'Only SKILL.md, scripts/ and references/ are uploaded; 7 other files'
+    );
     expect($('skill-upload-extra-files')?.textContent).toContain('a.py, b.md');
+  });
+
+  it('lists the supporting files that are uploaded and says scripts get a human review', () => {
+    render(
+      <SkillUploadDialog
+        preview={preview({
+          fields: {
+            ...preview().fields,
+            files: [
+              { path: 'references/a.md', content: 'a' },
+              { path: 'scripts/run.py', content: 'b' },
+            ],
+          },
+        })}
+        onClose={() => {}}
+      />
+    );
+    expect($('skill-upload-files')?.textContent).toContain('2 supporting files: references/a.md, scripts/run.py');
+    expect($('skill-upload-files')?.textContent).toContain('a person reviews them');
   });
 
   it('links a Bike4Mind export to its original', async () => {

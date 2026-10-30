@@ -67,13 +67,17 @@ const CATEGORY_LABEL: Record<ReleaseNote['items'][number]['category'], string> =
 // Slack mrkdwn control characters; escaping them keeps model output from forming <!channel> or links.
 const escapeSlack = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function buildSlackText(note: ReleaseNote, releaseUrl: string): string {
+function buildSlackText(note: ReleaseNote, releaseUrl: string, omittedPrs: number[]): string {
   const hours = Math.max(0, Math.round((note.publishAt.getTime() - Date.now()) / MS_PER_HOUR));
   const status =
     note.status === 'hidden'
       ? 'No customer-facing changes; stored hidden and will not publish.'
       : `Goes live in ${hours}h (${note.publishAt.toISOString()}). Edit it before then to change or hide it.`;
   const lines = [`*Release notes for <${releaseUrl}|${escapeSlack(note.releaseTag)}>*`, status];
+  if (omittedPrs.length > 0) {
+    const numbers = omittedPrs.map(n => `#${n}`).join(', ');
+    lines.push(`Triage could not classify PRs ${numbers}, so they are left out. Add them if customers would notice.`);
+  }
   // A hidden note's headline and summary describe the items that were dropped.
   if (note.status !== 'hidden') {
     if (note.headline) lines.push('', `*${escapeSlack(note.headline)}*`);
@@ -87,6 +91,7 @@ function buildSlackText(note: ReleaseNote, releaseUrl: string): string {
 async function postToSlack(
   note: ReleaseNote,
   releaseUrl: string,
+  omittedPrs: number[],
   config: ReleaseNotesConfig,
   logger: Logger
 ): Promise<void> {
@@ -105,7 +110,7 @@ async function postToSlack(
       headers: { Authorization: `Bearer ${workspace.slackBotToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         channel: config.slackChannelId,
-        text: buildSlackText(note, releaseUrl),
+        text: buildSlackText(note, releaseUrl, omittedPrs),
         unfurl_links: false,
         unfurl_media: false,
       }),
@@ -130,10 +135,10 @@ async function generateAndStore(
   payload: ReleaseNotesJobPayload,
   config: ReleaseNotesConfig,
   logger: Logger
-): Promise<{ note: ReleaseNote; preserved: boolean; usage: TokenUsage; modelId: string }> {
+): Promise<{ note: ReleaseNote; preserved: boolean; omittedPrs: number[]; usage: TokenUsage; modelId: string }> {
   const deadline = Date.now() + GENERATION_BUDGET_MS;
   const { complete, modelId } = await createReleaseNotesCompleter(config, logger, deadline);
-  const triage = await triageReleaseNotes(payload.prs, complete);
+  const triage = await triageReleaseNotes(payload.prs, complete, { logger });
   const usage: TokenUsage = { ...triage.usage };
 
   let feedback: string[] = [];
@@ -159,7 +164,7 @@ async function generateAndStore(
     }
     if (result.kind === 'ok') {
       const { note, preserved } = await releaseNoteRepository.upsertGenerated(result.note);
-      return { note: preserved ? note : result.note, preserved, usage, modelId };
+      return { note: preserved ? note : result.note, preserved, omittedPrs: triage.omitted, usage, modelId };
     }
     previousDraft = generated.draft;
   }
@@ -197,11 +202,11 @@ async function processPayload(payload: ReleaseNotesJobPayload, logger: Logger): 
     throw err;
   }
 
-  const { note, preserved, usage, modelId } = outcome;
+  const { note, preserved, omittedPrs, usage, modelId } = outcome;
   if (preserved) {
     logger.info('[releaseNotes] stored note was edited by a human; kept it and skipped the announcement');
   } else {
-    await postToSlack(note, payload.releaseUrl, config, logger);
+    await postToSlack(note, payload.releaseUrl, omittedPrs, config, logger);
   }
 
   await emitModalGenerationMetrics([

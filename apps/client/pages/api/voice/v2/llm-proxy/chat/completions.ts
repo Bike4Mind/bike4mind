@@ -32,7 +32,7 @@ import {
 } from '@bike4mind/voice';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
@@ -166,6 +166,14 @@ async function runFullPipeline(
     // whole completion happens synchronously here.
     invokeLambda: async () => {},
   };
+  // A tool that re-reads the owner by id must see the same withheld role as `user`. Kept out of the
+  // literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.test.ts).
+  if (sessionCtx.adminRoleWithheld) {
+    chatCompletionOptions.db = {
+      ...chatCompletionOptions.db,
+      users: ownerWithheldUsers(sessionCtx.userId, chatCompletionOptions.db.users),
+    };
+  }
 
   const invokeBody = {
     sessionId: sessionCtx.sessionId,
@@ -176,7 +184,8 @@ async function runFullPipeline(
     organizationId,
     // stream:true so the model emits tokens incrementally - ChatCompletionProcess
     // fires onReplyStream on each chunk, and the proxy relays SSE deltas.
-    params: { model: sessionCtx.reasoningModelId, max_tokens: 4096, stream: true },
+    // No max_tokens: ChatCompletionProcess sizes it per model, so a reasoning model keeps room to answer.
+    params: { model: sessionCtx.reasoningModelId, stream: true },
     promptMeta: { session: { id: sessionCtx.sessionId, userId: sessionCtx.userId, organizationId } },
     enableArtifacts: false,
     // Enable the inline built-in tools (web search, RAG, etc.) plus any ElevenLabs
@@ -242,7 +251,11 @@ async function runFullPipeline(
 
   // process() mutates the quest in place. Use the last reply item (the visible
   // answer after any thinking reply) to match what onReplyStream forwarded.
-  return stripToolOutputMarker(quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '');
+  const reply = stripToolOutputMarker(quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '');
+  // A settled budget error resolves without throwing and its reply never went through onReplyStream,
+  // so speak it here rather than leave the caller in silence.
+  if (processService.terminalError) onReplyStream(reply);
+  return reply;
 }
 
 export const config = {

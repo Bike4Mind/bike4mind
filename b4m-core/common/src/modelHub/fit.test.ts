@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { ModelArchSchema, type ModelArch } from '../schemas/modelHub';
 import { MOE_35B_ARCH, machine } from './__fixtures__/hubManifest';
 import {
@@ -11,9 +11,13 @@ import {
   contextOptions,
   contextTarget,
   estimateFit,
+  estimateFitFromSize,
   fitMarginBytes,
   flashAttnOffBytes,
+  isCpuOnly,
   kvCacheBytes,
+  memoryBudgets,
+  ollamaNumCtx,
   type FitInput,
   type HardwareProfile,
 } from './fit';
@@ -83,6 +87,14 @@ const OLLAMA = { kind: 'ollama' } as const;
 const mac = (budgetGiB: number): HardwareProfile => ({
   ...machine('unified', 128),
   gpuWorkingSetBytes: budgetGiB * GIB,
+});
+/** Strix Halo: RAM the OS sees and the device memory ROCm reports. */
+const strix = (ramGiB: number, deviceGiB: number): HardwareProfile => ({
+  ...machine('unified', ramGiB),
+  platform: 'linux',
+  arch: 'x64',
+  gpuMemoryBytes: deviceGiB * GIB,
+  gpuVendor: 'amd',
 });
 
 function fit(over: Partial<FitInput> & { weightsGiB?: number; arch?: ModelArch } = {}) {
@@ -192,6 +204,18 @@ describe('contextTarget and contextFloor', () => {
   });
 });
 
+describe('isCpuOnly', () => {
+  it.each([
+    ['no GPU', machine('cpu', 64), true],
+    ['a discrete GPU of unknown memory', machine('discrete', 64), true],
+    ['a discrete GPU', machine('discrete', 64, 24), false],
+    ['unified memory', machine('unified', 64), false],
+  ] as const)('%s: %s', (_label, hw, expected) => {
+    expect(isCpuOnly(hw)).toBe(expected);
+    expect(fit({ hardware: hw, runtime: OLLAMA, context: 16384 }).requested?.placement === 'cpu').toBe(expected);
+  });
+});
+
 describe('estimateFit', () => {
   it('totals what the runtime allocates and keeps the margin beside it', () => {
     const { memory } = fit();
@@ -281,6 +305,14 @@ describe('estimateFit', () => {
     expect(compute(mac(64))).toBeGreaterThan(compute(machine('discrete', 64, 24)));
   });
 
+  it('keeps the host mask copy on all unified memory, ROCm included', () => {
+    const compute = (hardware: HardwareProfile) =>
+      fit({ hardware, weightsGiB: 1, context: 32768 }).requested!.memory.computeBytes;
+    expect(compute(strix(31, 96))).toBe(compute(mac(64)));
+    const mask = attentionMaskBytes(ARCH_64K, 32768, 512);
+    expect(compute(strix(31, 96))).toBe(compute(machine('discrete', 64, 24)) + mask);
+  });
+
   it('reserves at least one layer of F16 KV per extra slot on a GPU', () => {
     const compute = (slots: number) =>
       fit({ hardware: mac(64), weightsGiB: 1, context: 32768, runtime: { ...LS, slots } }).requested!.memory
@@ -346,6 +378,24 @@ describe('estimateFit', () => {
     expect(ubatch(machine('discrete', 64, 48))).toBe(2048);
     expect(ubatch(machine('discrete', 64, 48), { kind: 'ollama', flashAttn: 'off' })).toBe(512);
     expect(ubatch(machine('discrete', 64, 8), { kind: 'ollama', flashAttn: 'off' })).toBe(256);
+  });
+
+  it("keys Ollama's flash-attention-off batch on CUDA, so ROCm and Vulkan step down instead", () => {
+    const faOff = (hardware: HardwareProfile) =>
+      fit({ hardware, runtime: { kind: 'ollama', flashAttn: 'off' }, context: 65536 }).requested!.ubatch;
+    expect(faOff({ ...machine('discrete', 64, 48), gpuVendor: 'nvidia' })).toBe(512);
+    expect(faOff({ ...machine('unified', 128), platform: 'linux', arch: 'arm64', gpuVendor: 'nvidia' })).toBe(512);
+    expect(faOff({ ...machine('discrete', 64, 48), gpuVendor: 'amd' })).toBe(2048);
+    expect(faOff({ ...machine('discrete', 64, 48), gpuVendor: 'intel' })).toBe(2048);
+    expect(faOff(strix(31, 96))).toBe(2048);
+  });
+
+  it("steps Ollama's batch down by the RAM the OS sees on unified memory, as Ollama holds an iGPU to free RAM", () => {
+    const ubatch = (hardware: HardwareProfile) =>
+      fit({ hardware, runtime: OLLAMA, weightsGiB: 20, context: 65536 }).requested!.ubatch;
+    // 20 GiB of weights plus a 4 GiB KV prediction is past 60% and 75% of 31 GiB, though not of the 96 GiB carve-out.
+    expect(ubatch(strix(31, 96))).toBe(512);
+    expect(ubatch(strix(125, 96))).toBe(2048);
   });
 
   it('loads Ollama embedding models with one slot and a 2048 batch capped at the context', () => {
@@ -479,6 +529,22 @@ describe('estimateFit', () => {
     );
   });
 
+  it('budgets AMD unified memory from what ROCm reports, not a share of the RAM the OS sees', () => {
+    // A 96 GiB carve-out leaves the OS 31 GiB; a small one leaves GTT at about half of RAM.
+    expect(fit({ hardware: strix(31, 96) }).memory.budgetBytes).toBe(96 * GIB);
+    expect(fit({ hardware: strix(125, 62) }).memory.budgetBytes).toBe(62 * GIB);
+    expect(fit({ hardware: strix(31, 96), weightsGiB: 60, runtime: OLLAMA })).toMatchObject({ verdict: 'fast' });
+    expect(fit({ hardware: strix(125, 62), weightsGiB: 70, runtime: OLLAMA })).toMatchObject({ verdict: 'too-large' });
+  });
+
+  it('plans a Windows Strix Halo carve-out machine from RAM, since its reported bytes are not the usable pool', () => {
+    const carveOut = { ...strix(64, 0.5), platform: 'win32' } as const;
+    expect(fit({ hardware: carveOut, weightsGiB: 4, runtime: OLLAMA })).toMatchObject({ verdict: 'too-large' });
+    const unknown = { ...carveOut, gpuMemoryBytes: null };
+    expect(fit({ hardware: unknown, weightsGiB: 4, runtime: OLLAMA })).toMatchObject({ verdict: 'fast' });
+    expect(fit({ hardware: unknown, weightsGiB: 4, runtime: OLLAMA }).memory.budgetBytes).toBe(48 * GIB);
+  });
+
   it('grows compute with ubatch', () => {
     const at = (ubatch: number) =>
       fit({ hardware: machine('cpu', 64), runtime: { ...LS, ubatch }, context: 8192 }).requested!.memory.computeBytes;
@@ -603,5 +669,67 @@ describe('contextOptions', () => {
       [32768, false],
       [65536, false],
     ]);
+  });
+});
+
+describe('memoryBudgets', () => {
+  it('gives a CPU-only machine a share of its RAM and a discrete GPU its VRAM plus a RAM pool', () => {
+    expect(memoryBudgets(machine('cpu', 128))).toEqual({ gpu: 96 * GIB, ramPool: 0, cpuOnly: true });
+    expect(memoryBudgets(machine('discrete', 64, 24))).toEqual({
+      gpu: 24 * GIB,
+      ramPool: 64 * GIB * FIT_CONSTANTS.discreteOffloadRamFraction,
+      cpuOnly: false,
+    });
+  });
+});
+
+describe('ollamaNumCtx', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('caps the reported window at 32K unless OLLAMA_MAX_NUM_CTX sets another cap', () => {
+    expect(ollamaNumCtx(262144)).toBe(32768);
+    expect(ollamaNumCtx(Infinity)).toBe(32768);
+    expect(ollamaNumCtx(8192)).toBe(8192);
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', '65536');
+    expect(ollamaNumCtx(262144)).toBe(65536);
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', 'nonsense');
+    expect(ollamaNumCtx(262144)).toBe(32768);
+  });
+});
+
+describe('estimateFitFromSize', () => {
+  const cpu128 = machine('cpu', 128);
+
+  it('fits a small file and counts compute on top of it', () => {
+    const fit = estimateFitFromSize(GIB, cpu128, 32768);
+    expect(fit).toMatchObject({ level: 'fits', budgetBytes: 96 * GIB, offloadBytes: 0, cpuOnly: true, context: 32768 });
+    expect(fit.needBytes).toBeGreaterThan(GIB);
+    expect(fit.needBytes).toBeLessThan(2 * GIB);
+  });
+
+  it('is tight past the headroom left for context memory', () => {
+    expect(estimateFitFromSize(80 * GIB, cpu128, 32768).level).toBe('tight');
+  });
+
+  it('is too large past the budget without a GPU to split onto', () => {
+    const fit = estimateFitFromSize(120 * GIB, cpu128, 32768);
+    expect(fit.level).toBe('too-large');
+    expect(fit.offloadBytes).toBeGreaterThan(24 * GIB);
+  });
+
+  it('splits a discrete GPU overflow into system RAM until the pool runs out', () => {
+    const rig = machine('discrete', 64, 24);
+    const split = estimateFitFromSize(30 * GIB, rig, 16384);
+    expect(split.level).toBe('tight');
+    expect(split.offloadBytes).toBeGreaterThan(6 * GIB);
+    expect(estimateFitFromSize(100 * GIB, rig, 16384).level).toBe('too-large');
+  });
+
+  it('needs more at a longer context', () => {
+    const short = estimateFitFromSize(4 * GIB, cpu128, 8192);
+    const long = estimateFitFromSize(4 * GIB, cpu128, 131072);
+    expect(long.needBytes).toBeGreaterThan(short.needBytes);
   });
 });

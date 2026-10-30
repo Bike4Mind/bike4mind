@@ -55,6 +55,7 @@ import {
   recordSignupAcquisition,
 } from '@server/analytics/funnel';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -501,6 +502,8 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
     if (isNewUser) {
       await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.Okta });
+      // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+      await refreshSignupRiskScore(user.id, Logger.globalInstance);
       const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
       await emitSignupFunnelEvents({
         user: { id: user.id, ...signupFunnel },

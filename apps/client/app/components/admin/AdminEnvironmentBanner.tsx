@@ -2,7 +2,7 @@ import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import CloseIcon from '@mui/icons-material/Close';
 import HelpCenterIcon from '@mui/icons-material/HelpCenter';
 import { Box, IconButton, Tooltip, Typography } from '@mui/joy';
-import { useRouter } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import { environmentBannerPalette } from '@client/app/utils/themes/admin';
 import { resolveCurrentEnvironment } from './environmentBanner';
 import { adminFocus } from './shared/adminStyles';
@@ -22,7 +22,7 @@ const bannerIconSx = { fontSize: 14, color: 'inherit' };
 
 /** The strip naming the environment. It sits outside `data-admin-surface`, so the admin skin never reaches it. */
 const EnvironmentBanner = () => {
-  const router = useRouter();
+  const navigate = useNavigate();
   const { environment, environmentName } = resolveCurrentEnvironment();
 
   return (
@@ -68,7 +68,7 @@ const EnvironmentBanner = () => {
             <HelpCenterIcon sx={bannerIconSx} />
           </IconButton>
         </Tooltip>
-        <IconButton onClick={() => router.history.back()} sx={bannerButtonSx} size="sm" aria-label="Leave admin">
+        <IconButton onClick={() => navigate({ to: '/' })} sx={bannerButtonSx} size="sm" aria-label="Leave admin">
           <CloseIcon sx={bannerIconSx} data-testid="close-admin-page-banner-btn" />
         </IconButton>
       </Box>

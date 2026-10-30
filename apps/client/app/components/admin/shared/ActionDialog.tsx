@@ -1,18 +1,6 @@
 import React, { useId, useState } from 'react';
-import {
-  Button,
-  DialogContent,
-  DialogTitle,
-  FormControl,
-  FormLabel,
-  Input,
-  Modal,
-  ModalClose,
-  ModalDialog,
-  Stack,
-  Typography,
-} from '@mui/joy';
-import { adminFocusScope } from './adminStyles';
+import { Button, DialogContent, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
+import { AdminDialog } from './AdminDialog';
 import {
   ADMIN_REASON_HINT,
   type AdminReasonDraft,
@@ -21,6 +9,7 @@ import {
   isAdminReasonComplete,
 } from './adminReason';
 import { ReasonPicker } from './ReasonPicker';
+import { Kbd } from './Kbd';
 
 type TypedConfirm = {
   /** The exact text the admin must type, e.g. the account email. */
@@ -39,6 +28,8 @@ export type ActionDialogProps = {
   /** Before/after preview, a bulk dry-run summary, or extra inputs the command needs. */
   children?: React.ReactNode;
   reasonPresets: readonly string[];
+  /** False while the endpoint has no reason field; see ReasonPicker's `audited`. */
+  reasonAudited?: boolean;
   /** Repeats the consequence where it helps: "Set balance to 0". */
   confirmLabel: string;
   /**
@@ -60,27 +51,20 @@ export type ActionDialogProps = {
 };
 
 /**
- * The one dialog for audited admin writes (DESIGN_GUIDE.md section 4). Joy's Modal supplies the
- * focus trap, Esc to close and focus return to the opener.
+ * The one dialog for audited admin writes (DESIGN_GUIDE.md section 4), built on the AdminDialog
+ * shell, which supplies the focus trap, Esc to close and focus return to the opener.
  */
-export const ActionDialog: React.FC<ActionDialogProps> = props => {
-  const titleId = useId();
-  return (
-    <Modal open={props.open} onClose={props.onClose}>
-      <ModalDialog
-        aria-labelledby={titleId}
-        data-testid={props['data-testid']}
-        sx={{ ...adminFocusScope, width: 'min(560px, calc(100vw - 32px))', overflowY: 'auto' }}
-      >
-        <ModalClose data-testid={`${props['data-testid']}-close-btn`} />
-        <DialogTitle id={titleId} component="h2">
-          {props.title}
-        </DialogTitle>
-        <ActionDialogForm {...props} />
-      </ModalDialog>
-    </Modal>
-  );
-};
+export const ActionDialog: React.FC<ActionDialogProps> = props => (
+  <AdminDialog
+    open={props.open}
+    onClose={props.onClose}
+    title={props.title}
+    width={560}
+    data-testid={props['data-testid']}
+  >
+    <ActionDialogForm {...props} />
+  </AdminDialog>
+);
 
 // Separate from ActionDialog so its state lives inside the Modal and resets on every open.
 const ActionDialogForm: React.FC<ActionDialogProps> = ({
@@ -88,6 +72,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   description,
   children,
   reasonPresets,
+  reasonAudited = true,
   confirmLabel,
   onConfirm,
   tone = 'neutral',
@@ -115,6 +100,8 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
     setSubmitting(true);
     try {
       await onConfirm(composeAdminReason(reason));
+    } catch {
+      // The caller reports its own failure (toast); a rejection only means the dialog stays open.
     } finally {
       setSubmitting(false);
     }
@@ -138,6 +125,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           presets={reasonPresets}
           value={reason}
           onChange={setReason}
+          audited={reasonAudited}
           data-testid={testIds.reason ?? `${testId}-reason-input`}
         />
         {typedConfirm && (
@@ -158,10 +146,21 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           </FormControl>
         )}
       </DialogContent>
-      <Stack direction="row" alignItems="center" justifyContent="flex-end" gap={1} flexWrap="wrap" sx={{ pt: 1 }}>
-        {hint && (
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="flex-end"
+        gap={1}
+        flexWrap="wrap"
+        sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+      >
+        {hint ? (
           <Typography id={hintId} level="body-sm" data-testid={`${testId}-hint`} sx={{ mr: 'auto' }}>
             {hint}
+          </Typography>
+        ) : (
+          <Typography level="body-xs" sx={{ mr: 'auto', fontWeight: 400 }}>
+            <Kbd>Enter</Kbd> to apply
           </Typography>
         )}
         <Button variant="plain" color="neutral" onClick={onClose} data-testid={`${testId}-cancel-btn`}>

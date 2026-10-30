@@ -11,9 +11,17 @@ vi.mock('@server/utils/auth/turnstile', () => ({
   getTurnstilePolicy: getPolicy,
   turnstileAllowedHostnames: () => ['app.example.com'],
 }));
-vi.mock('@bike4mind/server-utils/utils/turnstile', () => ({ verifyTurnstile: verify }));
+vi.mock('@bike4mind/server-utils/utils/turnstile', () => ({
+  verifyTurnstile: verify,
+  isTurnstileTestSecret: () => false,
+}));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.9' }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: () => false }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  isE2EEnabled: () => false,
+  isProduction: () => false,
+  isDevelopment: () => true,
+  isDeployedStage: () => false,
+}));
 vi.mock('sst', () => ({ Resource: {} }));
 
 import { requireOAuthStartTurnstile } from './oauthStartTurnstile';

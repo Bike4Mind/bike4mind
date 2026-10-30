@@ -7,9 +7,13 @@ import {
   PENDING_FREE_CREDITS_TAG,
   RESERVED_USERNAME_MESSAGE,
   UnprocessableEntityError,
+  TooManyRequestsError,
 } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
+
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
 
 // Middleware is stripped so the handler body runs directly (same pattern as the
 // email/verify suite). baseApi().use(...).use(...).post(fn) must chain and hand back
@@ -50,6 +54,23 @@ const mockRecordLoginEvent = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/auth/networkMeta', () => ({
   recordSignupNetwork: (...a: any[]) => mockRecordSignupNetwork(...a),
   recordLoginEvent: (...a: any[]) => mockRecordLoginEvent(...a),
+  readNetworkMeta: () => ({
+    ip: '203.0.113.5',
+    userAgent: null,
+    asn: 64500,
+    asnOrg: null,
+    country: null,
+    isDatacenter: false,
+  }),
+}));
+const mockAssertSignupNetworkWithinLimits = vi.fn().mockResolvedValue(undefined);
+const mockSignupRiskCollector = vi.fn();
+vi.mock('@server/auth/signupNetworkLimits', () => ({
+  assertSignupNetworkWithinLimits: (...a: any[]) => mockAssertSignupNetworkWithinLimits(...a),
+  createSignupRiskCollector: () => mockSignupRiskCollector,
+}));
+vi.mock('@bike4mind/server-utils/auth/signupGrantRisk', () => ({
+  createSignupGrantRiskCollector: () => mockSignupRiskCollector,
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
@@ -72,8 +93,9 @@ vi.mock('@bike4mind/db-core', async importOriginal => ({
 // The one-time code is already proven by the time we reach registration; stub the
 // verify layer so the happy path lands on the new-user branch.
 const mockJwtVerify = vi.fn();
+const mockJwtSign = vi.fn((..._a: unknown[]) => 'signed-token');
 vi.mock('jsonwebtoken', () => ({
-  default: { verify: (...a: any[]) => mockJwtVerify(...a), sign: () => 'signed-token' },
+  default: { verify: (...a: any[]) => mockJwtVerify(...a), sign: (...a: unknown[]) => mockJwtSign(...a) },
 }));
 
 // DB-backed partner rules (issue #293). Default to "no rule" so the base cases fall
@@ -154,6 +176,7 @@ vi.mock('@bike4mind/services', () => ({
     verifyPendingOTC: (...a: any[]) => mockVerifyPendingOTC(...a),
     registerViaOTC: (...a: any[]) => mockRegisterViaOTC(...a),
     releasePendingFreeCredits: (...a: unknown[]) => mockReleasePending(...a),
+    refundBudgetOnFailure: <T>(fn: () => Promise<T>) => fn(),
   },
   creditService: { addCredits: (...a: any[]) => mockAddCredits(...a) },
   organizationService: { applyPartnerRuleMembership: (...a: unknown[]) => mockApplyPartnerRuleMembership(...a) },
@@ -429,6 +452,18 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
 
   const firstTouch = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
 
+  it('scores the new account once it is registered', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(refreshSignupRiskScore).toHaveBeenCalledWith('user-1', req.logger);
+    expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
+      refreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
+  });
+
   it("credits the new account's signup to the product in its touch cookies, as an otc signup", async () => {
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
@@ -498,6 +533,75 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       expect.anything()
     );
     expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
+  });
+
+  it('refuses an over-limit network before creating the account, with a fresh token', async () => {
+    mockAssertSignupNetworkWithinLimits.mockRejectedValueOnce(new TooManyRequestsError('limited'));
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    const err = await handler(req, res).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(TooManyRequestsError);
+    expect(err).toMatchObject({ additionalInfo: { pendingToken: expect.any(String) } });
+    expect(mockAssertSignupNetworkWithinLimits).toHaveBeenCalledWith(
+      expect.objectContaining({ ip: '203.0.113.5', asn: 64500 }),
+      expect.anything()
+    );
+    expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+    // The refusal is not attacker-varying input, so retrying later does not burn the code.
+    expect(mockJwtSign).toHaveBeenLastCalledWith(
+      expect.objectContaining({ attempts: 0 }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('exempts a partner-domain signup from the network caps', async () => {
+    mockPartnerGrant.mockResolvedValue({ matched: true, entitlements: new Set(), signupCredits: 0, tags: [] });
+    mockAssertSignupNetworkWithinLimits.mockRejectedValue(new TooManyRequestsError('limited'));
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockAssertSignupNetworkWithinLimits).not.toHaveBeenCalled();
+    expect(mockRegisterViaOTC).toHaveBeenCalled();
+    mockAssertSignupNetworkWithinLimits.mockReset();
+    mockAssertSignupNetworkWithinLimits.mockResolvedValue(undefined);
+  });
+
+  it("hands the request network's risk collector to the staged grant", async () => {
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ collectRiskSignals: mockSignupRiskCollector })
+    );
+  });
+
+  it.each([true, null, 'true'])('persists only a literal signed challenge pass (%s) before granting', async proof => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    mockJwtVerify.mockReturnValue({
+      email: NON_DOMAIN_EMAIL,
+      attempts: 0,
+      exp: Math.floor(Date.now() / 1000) + 600,
+      jti: 'jti-1',
+      challengeVerified: proof,
+    });
+    Object.assign(req.body, { challengeVerified: true });
+    await handler(req, res);
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        signupMeta: expect.objectContaining({
+          challengeVerified: proof === true ? true : null,
+          capturedAt: expect.any(Date),
+        }),
+      })
+    );
   });
 
   it('keeps a synthetic account out of the signup conversion', async () => {

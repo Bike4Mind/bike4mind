@@ -176,7 +176,7 @@ const EXPECTED_SCOPE_DOWNS: Record<string, UriPathMatch[]> = {
  * Groups that narrow themselves by inclusion (the group applies to these paths only) rather than
  * by exemption, so they cannot be expressed in EXPECTED_SCOPE_DOWNS.
  */
-const INCLUSION_SCOPED_GROUPS = ['AWS-AWSManagedRulesAnonymousIpList'];
+const INCLUSION_SCOPED_GROUPS = ['AWS-AWSManagedRulesAnonymousIpList', 'AWS-AWSManagedRulesACFPRuleSet'];
 
 const RATE_BLOCK = {
   Block: { CustomResponse: { ResponseCode: 429, ResponseHeaders: [{ Name: 'retry-after', Value: '300' }] } },
@@ -563,9 +563,10 @@ describe('wafPolicy', () => {
       expect(emergency).toBeDefined();
       expect(emergency!.Action).toEqual({ Block: {} });
 
-      // Bot Control is the one group that counts wholesale; the 'bot control in count' suite pins it.
+      // Bot Control and ACFP are the groups that count wholesale; their own suites pin them.
+      const countWholesale = [BOT_CONTROL_RULE, 'AWS-AWSManagedRulesACFPRuleSet'];
       const enforcing = rules.filter(
-        r => (r.Statement as any).ManagedRuleGroupStatement && r.Name !== BOT_CONTROL_RULE
+        r => (r.Statement as any).ManagedRuleGroupStatement && !countWholesale.includes(r.Name)
       );
       for (const rule of enforcing) {
         expect(rule.OverrideAction, `${rule.Name} must not be overridden to Count wholesale`).toEqual({
@@ -877,11 +878,142 @@ describe('wafPolicy', () => {
         }
       });
 
-      it(`is the last ${stage} rule, by priority and by position`, () => {
+      it(`is the last ${stage} managed rule group, by priority`, () => {
         const rules = forStage(stage);
-        const maxPriority = Math.max(...rules.map(r => r.Priority));
-        expect(rules.find(r => r.Priority === maxPriority)!.Name).toBe(BOT_CONTROL_RULE);
-        expect(rules[rules.length - 1].Name).toBe(BOT_CONTROL_RULE);
+        // any: ManagedRuleGroupStatement shape is deeply nested
+        const managed = rules.filter(r => (r.Statement as any).ManagedRuleGroupStatement);
+        const maxManagedPriority = Math.max(...managed.map(r => r.Priority));
+        expect(managed.find(r => r.Priority === maxManagedPriority)!.Name).toBe(BOT_CONTROL_RULE);
+
+        // Only label-forwarding Count rules with LabelMatchStatement are allowed after Bot Control.
+        const afterBotControl = rules.filter(r => r.Priority > maxManagedPriority);
+        for (const rule of afterBotControl) {
+          // any: LabelMatchStatement shape is deeply nested
+          expect((rule.Statement as any).LabelMatchStatement).toBeDefined();
+          expect(rule.Action).toMatchObject({ Count: expect.anything() });
+        }
+      });
+    }
+  });
+
+  describe('ip reputation in count mode', () => {
+    const IP_REP_RULE = 'AWS-AWSManagedRulesAmazonIpReputationList';
+    const IP_REP_RULE_NAMES = ['AWSManagedIPReputationList', 'AWSManagedReconnaissanceList'];
+
+    for (const stage of ['dev']) {
+      it(`puts both ${stage} ip reputation rules in Count via RuleActionOverrides`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const rule = rules.find(r => r.Name === IP_REP_RULE);
+        expect(rule).toBeDefined();
+        // any: ManagedRuleGroupStatement shape is deeply nested
+        const mgs = (rule!.Statement as any).ManagedRuleGroupStatement;
+        const overrides: { Name: string; ActionToUse: unknown }[] = mgs.RuleActionOverrides;
+        expect(overrides).toBeDefined();
+        const overrideNames = overrides.map(o => o.Name).sort();
+        expect(overrideNames).toEqual([...IP_REP_RULE_NAMES].sort());
+        for (const override of overrides) {
+          expect(override.ActionToUse).toEqual({ Count: {} });
+        }
+        // OverrideAction stays None so the enforcing test excludes it from its check.
+        expect(rule!.OverrideAction).toEqual({ None: {} });
+      });
+    }
+  });
+
+  describe('acfp account creation fraud prevention', () => {
+    const ACFP_RULE = 'AWS-AWSManagedRulesACFPRuleSet';
+
+    for (const stage of ['dev']) {
+      it(`is present on ${stage} at a priority between Bot Control and the rate limits`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const rule = rules.find(r => r.Name === ACFP_RULE);
+        expect(rule).toBeDefined();
+        expect(rule!.Priority).toBeGreaterThan(26);
+        expect(rule!.Priority).toBeLessThan(30);
+      });
+
+      it(`counts the ${stage} ACFP group wholesale, with no per-rule overrides to drift from AWS`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const rule = rules.find(r => r.Name === ACFP_RULE)!;
+        // any: ManagedRuleGroupStatement shape is deeply nested
+        expect((rule.Statement as any).ManagedRuleGroupStatement.RuleActionOverrides).toBeUndefined();
+        expect(rule.OverrideAction).toEqual({ Count: {} });
+      });
+
+      it(`scopes the ${stage} ACFP group to /api/otc/ with decode+normalize+lowercase`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const rule = rules.find(r => r.Name === ACFP_RULE)!;
+        // any: ManagedRuleGroupStatement shape is deeply nested
+        const mgs = (rule.Statement as any).ManagedRuleGroupStatement;
+        const scopeDown = mgs.ScopeDownStatement?.ByteMatchStatement;
+        expect(scopeDown).toBeDefined();
+        expect(scopeDown.SearchString).toBe('/api/otc/');
+        expect(scopeDown.PositionalConstraint).toBe('STARTS_WITH');
+        const types = [...scopeDown.TextTransformations]
+          .sort((a: { Priority: number }, b: { Priority: number }) => a.Priority - b.Priority)
+          .map((t: { Type: string }) => t.Type);
+        expect(types).toEqual(['URL_DECODE', 'NORMALIZE_PATH', 'LOWERCASE']);
+      });
+
+      it(`configures ${stage} ACFP ManagedRuleGroupConfigs with the OTC verify path`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const rule = rules.find(r => r.Name === ACFP_RULE)!;
+        // any: ManagedRuleGroupStatement shape is deeply nested
+        const mgs = (rule.Statement as any).ManagedRuleGroupStatement;
+        const configs: { AWSManagedRulesACFPRuleSet?: { CreationPath: string; RegistrationPagePath: string } }[] =
+          mgs.ManagedRuleGroupConfigs;
+        expect(configs).toBeDefined();
+        const acfpConfig = configs.find(c => c.AWSManagedRulesACFPRuleSet)?.AWSManagedRulesACFPRuleSet;
+        expect(acfpConfig).toBeDefined();
+        expect(acfpConfig!.CreationPath).toBe('/api/otc/verify');
+        expect(acfpConfig!.RegistrationPagePath).toBe('/api/otc/verify');
+      });
+    }
+  });
+
+  describe('forgery-guard rule', () => {
+    for (const stage of ['dev']) {
+      it(`blocks requests that carry a forged x-amzn-waf-x-waf-* header on ${stage}`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const rule = rules.find(r => r.Name === 'block-forged-waf-forwarding-headers');
+        expect(rule).toBeDefined();
+        expect(rule!.Priority).toBe(28);
+        // AWS WAF inserts these headers only after inspection, so a match here is always viewer-sent.
+        expect(rule!.Action).toEqual({ Block: {} });
+        const stmts = (rule!.Statement as any).OrStatement.Statements;
+        const headers = stmts.map((s: any) => s.ByteMatchStatement.FieldToMatch.SingleHeader.Name);
+        expect(headers).toContain('x-amzn-waf-x-waf-anon-ip');
+        expect(headers).toContain('x-amzn-waf-x-waf-bot-signal');
+      });
+    }
+  });
+
+  describe('label-forwarding rules', () => {
+    for (const stage of ['dev']) {
+      it(`injects x-waf-anon-ip on ${stage} when the anonymous-ip label matches`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const rule = rules.find(r => r.Name === 'forward-anon-ip-label');
+        expect(rule).toBeDefined();
+        expect(rule!.Priority).toBe(31);
+        // any: LabelMatchStatement shape is deeply nested
+        const label = (rule!.Statement as any).LabelMatchStatement;
+        expect(label.Scope).toBe('LABEL');
+        expect(label.Key).toBe('awswaf:managed:aws:anonymous-ip-list:AnonymousIPList');
+        const headers = (rule!.Action as any)?.Count?.CustomRequestHandling?.InsertHeaders ?? [];
+        expect(headers).toContainEqual({ Name: 'x-waf-anon-ip', Value: '1' });
+      });
+
+      it(`injects x-waf-bot-signal on ${stage} when any bot-control bot label matches`, () => {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+        const rule = rules.find(r => r.Name === 'forward-bot-signal-label');
+        expect(rule).toBeDefined();
+        expect(rule!.Priority).toBe(32);
+        // any: LabelMatchStatement shape is deeply nested
+        const label = (rule!.Statement as any).LabelMatchStatement;
+        expect(label.Scope).toBe('NAMESPACE');
+        expect(label.Key).toBe('awswaf:managed:aws:bot-control:bot:');
+        const headers = (rule!.Action as any)?.Count?.CustomRequestHandling?.InsertHeaders ?? [];
+        expect(headers).toContainEqual({ Name: 'x-waf-bot-signal', Value: '1' });
       });
     }
   });

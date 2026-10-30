@@ -115,6 +115,16 @@ describe('ChatPanelControls layout menu', () => {
   });
 });
 
+describe('ChatPanelControls without docking', () => {
+  // A host that clips a docked panel (e.g. /admin) must not offer a layout it cannot show.
+  it('drops the layout menu but keeps the copy button', () => {
+    renderControls({ dockable: false });
+
+    expect(screen.queryByTestId(`${PREFIX}-layout-select-btn`)).not.toBeInTheDocument();
+    expect(screen.getByTestId(`${PREFIX}-copy-markdown`)).toBeInTheDocument();
+  });
+});
+
 describe('ChatPanelControls copy button', () => {
   it('copies the chat as Markdown on click', () => {
     renderControls({ activeLayout: 'dockRight' });

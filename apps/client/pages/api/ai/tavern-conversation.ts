@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { agentRepository } from '@bike4mind/database';
@@ -119,7 +120,7 @@ Return ONLY valid JSON (no markdown fences):
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 60 : 30,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 60 : 30),
       windowMs: 60 * 1000,
     })
   )

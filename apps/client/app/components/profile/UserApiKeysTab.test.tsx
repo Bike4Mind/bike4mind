@@ -376,6 +376,14 @@ describe('UserApiKeysTab - premium scopes', () => {
     h.createMutate.mockClear();
   });
 
+  it('names the routes open to every key once, apart from any scope', () => {
+    openScopeDocs();
+    expect(screen.getByTestId('api-keys-scopes-open-endpoints')).toHaveTextContent('GET /api/sessions');
+    expect(screen.getByTestId(`api-keys-scope-endpoints-${ApiKeyScope.READ_NOTEBOOKS}`)).not.toHaveTextContent(
+      /GET \/api\/sessions(,|$)/
+    );
+  });
+
   it('keeps the premium scopes out of the New-Key modal and its Full access preset without Opti access', () => {
     renderTab();
     fireEvent.click(screen.getByText('Create API Key'));
@@ -516,6 +524,50 @@ describe('UserApiKeysTab - Bob scopes', () => {
     const scopes = mintScopes('full');
     expect(scopes).toContain(ApiKeyScope.BOB_READ);
     expect(scopes).toContain(ApiKeyScope.BOB_RUN);
+  });
+});
+
+describe('UserApiKeysTab - skills:write', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.createMutate.mockClear();
+  });
+
+  const mintScopes = (preset?: 'readwrite' | 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Skills key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    return (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+  };
+
+  it('keeps skills:write out of the default Read-only selection', () => {
+    expect(mintScopes()).not.toContain(ApiKeyScope.SKILLS_WRITE);
+  });
+
+  it('keeps skills:write out of Read & write, despite its suffix', () => {
+    const readwrite = mintScopes('readwrite');
+    // A write scope proves the preset click took effect.
+    expect(readwrite).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(readwrite).not.toContain(ApiKeyScope.SKILLS_WRITE);
+  });
+
+  it('offers skills:write with Full access', () => {
+    expect(mintScopes('full')).toContain(ApiKeyScope.SKILLS_WRITE);
+  });
+
+  it('keeps skills:review out of the default Read-only selection', () => {
+    expect(mintScopes()).not.toContain(ApiKeyScope.SKILLS_REVIEW);
+  });
+
+  it('keeps skills:review out of Read & write', () => {
+    const readwrite = mintScopes('readwrite');
+    expect(readwrite).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(readwrite).not.toContain(ApiKeyScope.SKILLS_REVIEW);
   });
 });
 

@@ -75,8 +75,27 @@ import {
   createAgentContract,
   updateAgentContract,
   deleteAgentContract,
+  generateAgentAvatarContract,
+  generateAgentDescriptionContract,
+  generateAgentSystemPromptContract,
+  enhanceAgentFieldContract,
 } from './agents.contract';
-import { getClaudeMarketplaceContract, getClaudePluginZipContract } from './skillMarket.contract';
+import {
+  getClaudeBundleZipContract,
+  getClaudeMarketplaceContract,
+  getClaudePluginZipContract,
+} from './skillMarket.contract';
+import {
+  listSkillMarketListingsContract,
+  getSkillMarketListingContract,
+  publishSkillMarketListingContract,
+  listMySkillMarketListingsContract,
+  withdrawSkillMarketListingContract,
+  submitSkillMarketListingVersionContract,
+  importSkillMarketListingContract,
+  rescanSkillMarketVersionContract,
+} from './skillMarketWrite.contract';
+import { listSkillMarketReviewQueueContract, reviewSkillMarketVersionContract } from './skillMarketReview.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -155,6 +174,21 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createAgentContract,
   updateAgentContract,
   deleteAgentContract,
+  generateAgentAvatarContract,
+  generateAgentDescriptionContract,
+  generateAgentSystemPromptContract,
+  enhanceAgentFieldContract,
   getClaudeMarketplaceContract,
   getClaudePluginZipContract,
+  getClaudeBundleZipContract,
+  listSkillMarketListingsContract,
+  getSkillMarketListingContract,
+  publishSkillMarketListingContract,
+  listMySkillMarketListingsContract,
+  withdrawSkillMarketListingContract,
+  submitSkillMarketListingVersionContract,
+  importSkillMarketListingContract,
+  rescanSkillMarketVersionContract,
+  listSkillMarketReviewQueueContract,
+  reviewSkillMarketVersionContract,
 ];

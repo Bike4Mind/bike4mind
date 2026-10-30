@@ -1,4 +1,8 @@
 // @vitest-environment node
+vi.mock('@server/billing/assertMediaModelAdmission', () => ({
+  filterAdmittedMediaModels: vi.fn(async (_user: unknown, models: unknown[]) => models),
+}));
+
 /**
  * Integration test for GET /api/v1/music-models through the real next-connect chain
  * (nextRouteForContract -> apiKeyAuth -> scope check -> validation -> handler). The model listing and the repository are mocked: their behaviour is covered elsewhere.
@@ -8,7 +12,10 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { fire, h, resetHarness, validateWithScopes } from '@server/generations/__test__/routeHarness';
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
   (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)

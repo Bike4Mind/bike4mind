@@ -163,10 +163,10 @@ describe('ChatService session_send', () => {
     const delivered = calls.filter(call => call?.status === 'done');
     const refused = calls.filter(call => call?.status === 'error');
 
-    // Three messages get through - one per hop - and the fourth attempt is refused. The chain is
+    // Five messages get through - one per hop - and the sixth attempt is refused. The chain is
     // bounded by the hop count each message carries, so it terminates whichever way the two
     // sessions arrange it.
-    expect(delivered).toHaveLength(3);
+    expect(delivered).toHaveLength(5);
     expect(refused).toHaveLength(1);
     expect(refused[0]?.error).toMatch(/hops from the user/);
 

@@ -1,5 +1,6 @@
 import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
 import {
+  ADMIN_PERMISSIONS,
   AuthStrategy,
   PENDING_FREE_CREDITS_TAG,
   CollectionType,
@@ -9,11 +10,17 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  ISignupRiskScore,
+  SIGNUP_RISK_REVIEW_STATES,
+  SIGNUP_RISK_SIGNALS,
+  type SignupRiskReviewState,
   UserModerationStatus,
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
   MFA_ATTEMPT_RESET_WINDOW_MS,
   SIGNUP_GRANT_UNLOCK_REASONS,
+  Collection,
+  PaginatedResponse,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
@@ -234,7 +241,7 @@ const ModerationHitSchema = new Schema(
   {
     at: { type: Date, required: true },
     categories: { type: [String], default: [] },
-    source: { type: String, enum: ['openai', 'bedrock'], required: true },
+    source: { type: String, enum: ['openai', 'bedrock', 'provider'], required: true },
     questId: { type: String, required: false },
   },
   { _id: false }
@@ -653,7 +660,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     userId: string,
     options: { page: number; limit: number; search: string; type?: CollectionType },
     deps: { findSessionIdsByUserId: (userId: string) => Promise<string[]> }
-  ) {
+  ): Promise<PaginatedResponse<Collection>> {
     const { page, limit, search, type } = options;
 
     const { pipeline, facetStages } = await buildCollectionSearchPipeline(
@@ -713,6 +720,15 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
     if (!before) return 0;
     return Math.min(credits, Math.max(before.currentCredits ?? 0, 0));
+  }
+
+  /** Debits `credits` in one atomic update only when the balance covers all of it; false leaves it untouched. */
+  async decrementCreditsIfCovered(userId: string, credits: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, currentCredits: { $gte: credits } },
+      { $inc: { currentCredits: -credits } }
+    );
+    return result.modifiedCount === 1;
   }
 
   async incrementCurrentStorage(userId: string, count: number): Promise<void> {
@@ -857,6 +873,64 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
+    const preservedStates = ['pending', 'approved', 'banned'];
+    await this.model.updateOne({ _id: userId }, [
+      {
+        $set: {
+          riskScore: {
+            score: riskScore.score,
+            // $literal: a reason that happened to start with '$' would otherwise read as a field path.
+            signals: { $literal: riskScore.signals },
+            computedAt: riskScore.computedAt,
+            reviewState: {
+              $cond: [
+                { $in: [{ $ifNull: ['$riskScore.reviewState', 'none'] }, preservedStates] },
+                '$riskScore.reviewState',
+                riskScore.reviewState,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+  }
+
+  async findRiskScoringCandidateIds(since: Date, options: { afterId?: string; limit: number }): Promise<string[]> {
+    const rows = await this.model
+      .find(
+        {
+          createdAt: { $gte: since },
+          'riskScore.reviewState': { $nin: ['approved', 'banned'] },
+          ...(options.afterId ? { _id: { $gt: new mongoose.Types.ObjectId(options.afterId) } } : {}),
+        },
+        { _id: 1 }
+      )
+      .sort({ _id: 1 })
+      .limit(options.limit)
+      .lean<{ _id: mongoose.Types.ObjectId }[]>()
+      .exec();
+    return rows.map(row => row._id.toString());
+  }
+
+  async findPendingRiskReviews(limit: number): Promise<IUserDocument[]> {
+    return this.model
+      .find(
+        { 'riskScore.reviewState': 'pending', isBanned: { $ne: true } },
+        { email: 1, username: 1, createdAt: 1, riskScore: 1 }
+      )
+      .sort({ 'riskScore.score': -1, _id: 1 })
+      .limit(limit)
+      .exec();
+  }
+
+  async setRiskReviewState(userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState): Promise<boolean> {
+    const result = await this.model
+      .updateOne({ _id: userId, 'riskScore.reviewState': from }, { $set: { 'riskScore.reviewState': to } })
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores the
    * appeal text so admins can review it alongside the user's escalation state. Returns the
@@ -908,6 +982,26 @@ const SignupMetaSchema = new Schema(
   {
     ...NETWORK_META_FIELDS,
     capturedAt: { type: Date, required: true },
+    challengeVerified: { type: Boolean, default: undefined },
+  },
+  { _id: false }
+);
+
+const RiskScoreSchema = new Schema(
+  {
+    score: { type: Number, required: true },
+    signals: [
+      new Schema(
+        {
+          signal: { type: String, required: true, enum: [...SIGNUP_RISK_SIGNALS] },
+          points: { type: Number, required: true },
+          reason: { type: String, required: true },
+        },
+        { _id: false }
+      ),
+    ],
+    computedAt: { type: Date, required: true },
+    reviewState: { type: String, required: true, enum: [...SIGNUP_RISK_REVIEW_STATES] },
   },
   { _id: false }
 );
@@ -928,6 +1022,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     hasUsablePassword: { type: Boolean, default: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
+    adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
     storageLimit: { type: Number, default: 1000 }, // Decimal MB
     storageLimitOverride: { type: Number },
     planStorageLimit: { type: Number },
@@ -940,6 +1035,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },
     signupGrantAssessment: { type: Schema.Types.Mixed, default: undefined },
+    signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
+    // When the tranche was last held for an exhausted budget; the activity drip ignores older holds.
+    signupGrantHeldAt: { type: Date },
     signupGrant: {
       type: new Schema(
         {
@@ -950,6 +1048,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
           nextCondition: { type: String, enum: ['email_verification', 'verification', null], default: null },
           unlockedBy: { type: String, enum: SIGNUP_GRANT_UNLOCK_REASONS },
           unlockedOrgId: { type: String },
+          dripCredits: { type: Number, min: 0 },
+          lastDripDay: { type: String },
+          lastDripPeriod: { type: String },
+          activity: {
+            type: new Schema({ day: String, ms: Number, lastAt: Date, period: String }, { _id: false }),
+            default: undefined,
+          },
         },
         { _id: false }
       ),
@@ -1199,6 +1304,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
     // Written once at signup - see IUser.signupMeta.
     signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
+    // Recomputed by userService.refreshSignupRiskScore - see IUser.riskScore.
+    riskScore: { type: RiskScoreSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },
@@ -1245,6 +1352,9 @@ UserSchema.pre('save', function (next) {
   }
   next();
 });
+
+// Stripe-customer resolution for business metrics.
+UserSchema.index({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
 
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({
@@ -1321,6 +1431,24 @@ UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
+// Admin users list: the Signed up, Last active and Credits sorts and the built-in view counts
+// (apps/client/server/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
+// adminUsersSort adds an _id tiebreak, and a sort only uses an index whose key it prefixes; each
+// serves both directions. The flag and band indexes are partial/sparse so they stay small. Built
+// by the ensure-user-admin-list-indexes migration.
+UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
+UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
+UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
+UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
+// Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
+// 20260921235956 byte-for-byte.
+UserSchema.index({ 'riskScore.reviewState': 1, 'riskScore.score': -1 }, { name: 'user_riskScore_review' });
+// Serves the held-grants admin list and release sweep, and the activity drip held-tranche existence check.
+UserSchema.index(
+  { signupGrantHeldReason: 1, _id: 1 },
+  { partialFilterExpression: { signupGrantHeldReason: { $type: 'string' } }, name: 'user_signupGrantHeldReason' }
+);
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel

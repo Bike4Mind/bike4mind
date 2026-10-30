@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -26,11 +26,51 @@ describe('readSkillSource', () => {
 
     expect(await readSkillSource(skill)).toEqual({
       ok: true,
-      fields: { name: 'code-review', description: 'Reviews code', body: 'Review it.' },
-      dropped: ['allowed-tools', 'model'],
+      fields: {
+        name: 'code-review',
+        description: 'Reviews code',
+        body: 'Review it.',
+        claudeCodeAllowedTools: ['Bash', 'Read'],
+      },
+      dropped: ['model'],
       extraFiles: ['a.py', 'b.md', 'c', 'd', 'e'],
       extraFileCount: 6,
     });
+  });
+
+  it('uploads text files under scripts/ and references/, skipping symlinks and dotfiles', async () => {
+    const skill = join(dir, 'review');
+    await mkdir(join(skill, 'scripts'), { recursive: true });
+    await mkdir(join(skill, 'references', 'api'), { recursive: true });
+    await writeFile(join(skill, 'SKILL.md'), '---\ndescription: d\n---\nRun scripts/run.py.');
+    await writeFile(join(skill, 'scripts', 'run.py'), 'print("ok")\n');
+    await writeFile(join(skill, 'scripts', '.cache'), 'x');
+    await writeFile(join(skill, 'references', 'api', 'v2.md'), '# v2');
+    await writeFile(join(skill, 'README.md'), 'readme');
+    await symlink('/etc/hosts', join(skill, 'scripts', 'hosts'));
+
+    expect(await readSkillSource(skill)).toMatchObject({
+      ok: true,
+      fields: {
+        files: [
+          { path: 'references/api/v2.md', content: '# v2' },
+          { path: 'scripts/run.py', content: 'print("ok")\n' },
+        ],
+      },
+      extraFiles: ['README.md', 'scripts/hosts'],
+      extraFileCount: 2,
+    });
+  });
+
+  it('refuses a binary supporting file and an invalid path', async () => {
+    await mkdir(join(dir, 'scripts'));
+    await writeFile(join(dir, 'SKILL.md'), '---\nname: x\n---\nb');
+    await writeFile(join(dir, 'scripts', 'tool'), Buffer.from([0xff, 0xfe, 0x00]));
+    expect(await readSkillSource(dir)).toEqual({ ok: false, error: 'scripts/tool: only text files are supported' });
+
+    await rm(join(dir, 'scripts', 'tool'));
+    await writeFile(join(dir, 'scripts', 'a b.sh'), 'echo');
+    expect(await readSkillSource(dir)).toMatchObject({ ok: false, error: expect.stringContaining('scripts/a b.sh') });
   });
 
   it('prefers the frontmatter name, and names a lone .md file after itself without listing siblings', async () => {

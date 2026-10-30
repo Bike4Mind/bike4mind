@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import { Box, Card, Stack, Typography, Button, LinearProgress, Grid, Alert } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InfoIcon from '@mui/icons-material/Info';
@@ -6,20 +6,12 @@ import { useWeeklyReports, WeeklyReport } from '@client/app/hooks/useWeeklyRepor
 import { WeekPicker, WeekRange } from '../filters/WeekPicker';
 import { AnalyticsErrorCard } from '../AnalyticsErrorCard';
 
-interface WeeklyReportTabProps {
-  error?: unknown;
-  onRefresh: () => void;
-}
-
-export const WeeklyReportTab: React.FC<WeeklyReportTabProps> = ({ error, onRefresh }) => {
+export const WeeklyReportTab: React.FC = () => {
   const [selectedWeeks, setSelectedWeeks] = useState<WeekRange[]>([]);
 
-  const { data: reports, isLoading, refetch } = useWeeklyReports(selectedWeeks);
+  const { data: reports, isLoading, isFetching, error, refetch } = useWeeklyReports(selectedWeeks);
 
-  const handleRefresh = useCallback(() => {
-    refetch();
-    onRefresh();
-  }, [refetch, onRefresh]);
+  const handleRefresh = () => refetch();
 
   return (
     <Box>
@@ -46,7 +38,8 @@ export const WeeklyReportTab: React.FC<WeeklyReportTabProps> = ({ error, onRefre
               size="sm"
               startDecorator={<RefreshIcon />}
               onClick={handleRefresh}
-              disabled={isLoading}
+              disabled={isFetching || selectedWeeks.length === 0}
+              data-testid="weekly-report-refresh-btn"
               sx={{ ml: 2 }}
             >
               Refresh

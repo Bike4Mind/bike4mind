@@ -11,6 +11,8 @@ import {
   validateSkillBody,
   validateSkillArgumentHint,
   validateSkillAllowedTools,
+  validateSkillFiles,
+  validateSkillClaudeCodeAllowedTools,
 } from '@server/utils/skillValidation';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
@@ -95,7 +97,9 @@ const handler = baseApi()
       )
     );
 
-    res.json({ ...result, data: await attachMarketStatus(data) });
+    // Files are hashed for locallyModified, then dropped: up to 512 KB per row, and GET /api/skills/:id has them.
+    const withStatus = await attachMarketStatus(data);
+    res.json({ ...result, data: withStatus.map(({ files: _files, ...skill }) => skill) });
   })
   .post(async (req, res) => {
     const body = req.body as Partial<ISkill> & { scope?: { organizationId?: string; isSystem?: boolean } };
@@ -105,6 +109,8 @@ const handler = baseApi()
     const skillBody = validateSkillBody(body.body);
     const argumentHint = validateSkillArgumentHint(body.argumentHint);
     const allowedTools = validateSkillAllowedTools(body.allowedTools);
+    const files = validateSkillFiles(body.files);
+    const claudeCodeAllowedTools = validateSkillClaudeCodeAllowedTools(body.claudeCodeAllowedTools);
 
     const scope = await resolveCreateScope(body, { id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) });
 
@@ -115,6 +121,8 @@ const handler = baseApi()
         body: skillBody,
         ...(argumentHint !== undefined && { argumentHint }),
         ...(allowedTools !== undefined && { allowedTools }),
+        ...(files?.length ? { files } : {}),
+        ...(claudeCodeAllowedTools?.length && { claudeCodeAllowedTools }),
         disableModelInvocation: Boolean(body.disableModelInvocation),
         ...scope,
         isGlobalRead: false,

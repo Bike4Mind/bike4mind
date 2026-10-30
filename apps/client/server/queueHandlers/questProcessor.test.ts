@@ -201,6 +201,63 @@ describe('processQuest', () => {
     120_000
   );
 
+  it.each([
+    ['withholds the admin role from a tool that re-reads the owner', true, false],
+    ['hands tools the stored role for a payload without the field', undefined, true],
+  ])(
+    '%s',
+    async (_, adminRoleWithheld, expected) => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { getStaticOptions, processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      processOptions.mockClear();
+
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
+        logger as never
+      );
+
+      const { users } = processOptions.mock.calls[0][0].db;
+      if (!adminRoleWithheld) expect(users).toBe(getStaticOptions().db.users);
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ isAdmin: true } as never);
+      try {
+        expect((await users.findById('user-1')).isAdmin).toBe(expected);
+      } finally {
+        findUser.mockRestore();
+      }
+    },
+    120_000
+  );
+
+  it.each([
+    ['withholds every admin_ tool when the admin role is withheld', true, false],
+    ['injects the admin tools for an admin without the withheld flag', undefined, true],
+  ])(
+    '%s',
+    async (_, adminRoleWithheld, expectsAdminTools) => {
+      const { User } = await import('@bike4mind/database');
+      vi.mocked(User.findById).mockResolvedValueOnce({ _id: 'user-1', isAdmin: true } as never);
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      mockProcess.mockClear();
+
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
+        logger as never
+      );
+
+      expect(mockProcess).toHaveBeenCalledTimes(1);
+      const externalToolNames = Object.keys(mockProcess.mock.lastCall?.[0].externalTools ?? {});
+      const adminToolNames = externalToolNames.filter(name => name.startsWith('admin_'));
+      if (expectsAdminTools) {
+        expect(adminToolNames).toContain('admin_get_usage_signals');
+      } else {
+        expect(adminToolNames).toEqual([]);
+      }
+    },
+    120_000
+  );
+
   it.each([undefined, 'team-org'])(
     'forwards the quest billing organization %s to the daily cap',
     async organizationId => {

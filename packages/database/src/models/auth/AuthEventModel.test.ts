@@ -51,6 +51,20 @@ describe('recentDistinctSignups', () => {
     });
   });
 
+  it('counts every account when no userId is given', async () => {
+    await AuthEventModel.collection.insertMany([row('one'), row('current')]);
+    const { userId: _omitted, ...withoutUser } = input;
+    expect(await authEventRepository.recentDistinctSignups(withoutUser)).toMatchObject({ ipSignups: 2 });
+  });
+
+  it('skips the /24 count when the caller opts out', async () => {
+    await AuthEventModel.collection.insertMany([row('one'), row('prefix', { ip: '192.0.2.99' })]);
+    expect(await authEventRepository.recentDistinctSignups({ ...input, prefix: false })).toMatchObject({
+      ipSignups: 1,
+      prefixSignups: null,
+    });
+  });
+
   it('returns unknown on missing metadata or scan saturation', async () => {
     expect(await authEventRepository.recentDistinctSignups({ ...input, ip: null, asn: null })).toEqual({
       ipSignups: null,

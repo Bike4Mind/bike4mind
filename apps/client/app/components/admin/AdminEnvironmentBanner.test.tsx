@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { Sheet } from '@mui/joy';
 import AppTheme from '@client/app/utils/themes/AppTheme';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 
-vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ history: { back: vi.fn() } }) }));
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 vi.mock('@client/app/hooks/useHelpPanel', () => ({ openHelpPanel: vi.fn() }));
 
 const PROPS = ['color', 'background-color', 'font-size', 'font-family', 'border-color'] as const;
@@ -47,5 +48,16 @@ describe('AdminEnvironmentBanner', () => {
     const title = getComputedStyle(screen.getByTestId('environment-banner-title'));
     expect([strip.height, strip.backgroundColor]).toEqual(['24px', 'rgb(47, 94, 72)']);
     expect([title.fontSize, title.fontWeight]).toEqual(['12px', '500']);
+  });
+
+  // Admin pages push history entries, so a history step would usually land on another admin page.
+  it('leaves admin for the home page instead of stepping back through history', () => {
+    render(
+      <AppTheme>
+        <EnvironmentBanner />
+      </AppTheme>
+    );
+    fireEvent.click(screen.getByTestId('close-admin-page-banner-btn'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/' });
   });
 });

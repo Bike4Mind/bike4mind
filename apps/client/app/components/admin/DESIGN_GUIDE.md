@@ -177,12 +177,18 @@ Build new admin pages from these, in `apps/client/app/components/admin/shared/`.
 |---|---|---|
 | `AdminPageHeader` | Title, count or meta, page actions | Actions sit top-right and wrap below the title on small screens. |
 | `EntityHeader` | Identity of a user, org or key | IDs and emails have a copy button. Times are relative, with the exact UTC time on hover. |
-| `StatStrip` / `StatTile` | 3 to 5 key numbers | Label, value, comparison line. Optional sparkline. No decorative icons. |
+| `StatStrip` / `StatTile` | 3 to 5 key numbers | Label, value, comparison line. Optional sparkline, and an optional `help` control beside the label that defines the term (16 px icon). No decorative icons. |
 | `SectionCard` | A group of facts | Title, optional ghost action, definition list. No form inputs inside. |
 | `DataTable` | Every admin list | Sticky header, sortable columns, row selection, horizontal scroll on mobile, skeleton, empty and error states. Page sizes 25, 50, 100. |
 | `FilterBar` / `SavedViews` | Narrowing a list | Every filter is kept in the URL. Dashed chip = unset, solid chip = set and removable. |
+| `FilterChip` | One filter in a `FilterBar` | Dashed with just the label while unset; "Label: Value" in the `selection` tint with a remove button once set. Picking a value opens a menu. |
+| `ViewTabs` | Built-in and saved views above a list | The active tab is ink-filled. Each tab may carry a count. A view is its filters, so matching filters light its tab. |
+| `SegmentedControl` | 2 to 4 mutually exclusive modes | Toggle buttons on a `hover` track, e.g. Group by None / Email domain. Not for filters with many values. |
+| `InitialsAvatar` | The person in a table row | The photo when there is one, else initials on a tone that stays stable per user. |
+| `InlineBar` | A number's share of the largest in view | Decorative only: the number itself stays in the cell. |
 | `BulkActionBar` | Acting on a selection | Floats at the bottom. Offers "Select all N matching". Most destructive action last. |
 | `ActionDialog` | Any audited write | Verb-phrase title, before/after preview or dry run, then a reason. Commit button bottom-right. |
+| `AdminDialog` | An unaudited dialog, such as naming a saved view | The modal shell `ActionDialog` is built on: title, close button, focus trap. No reason field. |
 | `ReasonPicker` | Audit reasons | Preset chips per action type plus free text (5 to 500 characters, the shared `adminActionReason` rule). Replaces `AdminReasonField`. |
 | `UndoToast` | Recovery | Bottom-center, 30 seconds, Undo plus a link to the audit entry. One at a time. |
 | `SaveBar` | Settings forms only | Sticky bottom bar: "3 unsaved changes", Discard, Save (Cmd+S). |
@@ -195,13 +201,24 @@ Build new admin pages from these, in `apps/client/app/components/admin/shared/`.
 - Numbers people can scan: thousands separator, tabular figures, signed deltas (+2,000, -412), unit named once in the column header.
 - Errors say what to do: "Reason must be at least 5 characters", not "Invalid input".
 
+### Money
+
+Every money value goes through `formatMoney` in `shared/formatMoney.ts`, so these rules live in one function.
+
+- Amounts are stored and sent in minor units with Stripe's lowercase currency code. `formatMoney(minorUnits, currency)` displays them with `Intl.NumberFormat('en-US', { style: 'currency', currency })`, using Stripe's minor-unit exponent for the currency (2 by default; 0 for JPY and the other zero-decimal currencies; 3 for KWD, BHD, JOD, OMR, TND), not the digits Intl would show: "$1,234.56", and "CA$19.00" for another currency.
+- Only a `StatTile` value goes compact (`{ compact: true }`): "$12.3K" from 10,000 major units up, with no trailing zero on round values ("$10K").
+- Table cells are right-aligned and tabular (a `numeric` column), with the currency named once in the column header: "MRR (USD)".
+- Negative money is "-$12.00" (refunds), never in parentheses.
+- Credits are integers with a thousands separator and never carry a currency symbol. A credits value next to a money value is labeled "credits".
+- A value that is not revenue (a comp) or not known yet is an `inkMuted` dash, never "$0.00" and never a list price read from the plan catalog. A row that should have an amount but Stripe sends none shows a neutral "No amount" chip instead, so it differs from a row that is not counted.
+
 ## 7. Accessibility, keyboard and states
 
 Definition of done for any admin UI:
 
 - Text contrast at least 4.5:1, muted meta text included, in light and dark themes.
 - Every control is a real button, link or input reachable with Tab.
-- Focus is always visible: a 2 px accent ring.
+- Focus is always visible: one 2 px accent ring per control. A field (input, textarea, select, autocomplete) draws it on its rounded root; the native control inside never adds an outline of its own.
 - Dialogs trap focus, close on Esc and return focus to the button that opened them.
 - Icon-only buttons have an `aria-label`. Status is never shown by color alone.
 - Loading uses a skeleton shaped like the content. Empty, filtered-empty and error states each offer a next step.
@@ -222,13 +239,13 @@ Shortcuts:
 ## 8. Rollout
 
 1. **Tokens and toolkit.** Admin tokens in the Joy theme; the components above in `components/admin/shared` with tests.
-2. **Users first.** Rebuild the users list and user profile on the toolkit; split `FullUsersView` into the profile shell and section cards.
+2. **Users first.** Rebuild the users list and user profile on the toolkit; the old `FullUsersView` is gone, replaced by the profile shell and section cards.
 3. **Every other admin tab.** Organizations, credits, API keys, security, settings and audit log move onto the same page anatomy, one PR per tab.
 4. **Lock it in.** A lint rule against raw Joy `Card`, `Modal` and `Table` in admin code outside `shared/`, and a design-review checkbox in the PR template.
 
 ### Lint guard
 
-`b4m/no-raw-admin-joy` rejects raw Joy `Card`, `Modal` and `Table` imports (including aliases and component subpaths) outside the root `admin/shared/` toolkit. Namespace imports and re-exports cannot bypass it. Use `SectionCard`, `ActionDialog` and `DataTable` instead.
+`b4m/no-raw-admin-joy` rejects raw Joy `Card`, `Modal` and `Table` imports (including aliases and component subpaths) outside the root `admin/shared/` toolkit. Namespace imports and re-exports cannot bypass it. Use `SectionCard`, `ActionDialog` (or `AdminDialog` for an unaudited dialog) and `DataTable` instead.
 
 An exceptional import needs an immediately preceding comment: `// admin-toolkit-allow YYYY-MM-DD -- concrete reason the toolkit cannot serve this use case`. Keep exceptions local to one import; do not disable the rule for a file or directory.
 

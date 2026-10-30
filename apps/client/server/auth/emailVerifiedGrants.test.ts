@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+
 const mockClearPending = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -57,6 +60,12 @@ describe('emailVerifiedGrants', () => {
       expect(await isEligibleForFreeCredits('x@gmail.com', logger)).toBe(true);
     });
 
+    it('passes signupProtection so the gate sees the refreshed reject-tier lists', async () => {
+      mockShouldBlock.mockResolvedValue(false);
+      await isEligibleForFreeCredits('x@gmail.com', logger);
+      expect(mockShouldBlock.mock.calls[0][1].signupProtection).toBe(signupProtection);
+    });
+
     it('withholds the grant when the gate throws', async () => {
       mockShouldBlock.mockRejectedValue(new Error('settings down'));
       expect(await isEligibleForFreeCredits('x@gmail.com', logger)).toBe(false);
@@ -85,6 +94,17 @@ describe('emailVerifiedGrants', () => {
       );
       expect(mockClearPending).toHaveBeenCalledWith('user-1');
       expect(result).toEqual({ creditsGranted: 100, currentCredits: 100, tags: ['Customer'] });
+    });
+
+    it('forwards bypassBudget to the release adapters', async () => {
+      mockReleasePending.mockResolvedValue(releasedResult);
+
+      await releaseVerifiedPendingFreeCredits(taggedUser, 'test reason', logger, undefined, { bypassBudget: true });
+
+      expect(mockReleasePending).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ bypassBudget: true })
+      );
     });
 
     it('reports current persisted tags instead of the stale grant snapshot', async () => {
@@ -133,6 +153,8 @@ describe('emailVerifiedGrants', () => {
       mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
 
       await applyEmailVerifiedGrants(params);
+
+      expect(refreshSignupRiskScore).toHaveBeenCalledWith('user-1', logger);
 
       expect(mockApplySignupDomainGrant).toHaveBeenCalledWith({
         userId: 'user-1',

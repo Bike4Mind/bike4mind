@@ -275,6 +275,12 @@ describe('useUser store — isHydrated flag', () => {
   // `beforeLoad` consent guard reads a rehydrated user missing the field, treats an
   // already-consented user as un-consented, and flashes the /accept-policies interstitial on every
   // hard reload until /api/identify refetches. Guards the persisted-field whitelist regression.
+  it('persists delegated admin permissions for consistent console access on reload', () => {
+    useUser.getState().setCurrentUser(fakeUser({ adminPermissions: ['support:read'] }));
+    const persisted = JSON.parse(localStorage.getItem('user-context') as string);
+    expect(persisted.state.currentUser.adminPermissions).toEqual(['support:read']);
+  });
+
   it('persists aupAcceptedVersion so the consent guard does not re-flash on reload', () => {
     useUser.getState().setCurrentUser(fakeUser({ aupAcceptedVersion: 'v1' }));
     const persisted = JSON.parse(localStorage.getItem('user-context') as string);

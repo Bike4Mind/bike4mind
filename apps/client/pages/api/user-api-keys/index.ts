@@ -27,6 +27,7 @@ import {
 } from '@client/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {
@@ -247,6 +248,8 @@ const handler = baseApi()
         trust,
       }
     );
+    // A key minted soon after signup is one of the risk signals, so rescore now rather than wait.
+    await refreshSignupRiskScore(userId, req.logger);
 
     await logEventSafe(
       {

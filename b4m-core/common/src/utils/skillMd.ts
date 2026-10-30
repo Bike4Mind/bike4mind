@@ -28,6 +28,7 @@ export interface SkillMdFields {
   argumentHint?: string;
   body?: string;
   disableModelInvocation?: boolean;
+  claudeCodeAllowedTools?: string[];
 }
 
 export interface SkillMdSkill {
@@ -36,6 +37,7 @@ export interface SkillMdSkill {
   body: string;
   argumentHint?: string;
   disableModelInvocation?: boolean;
+  claudeCodeAllowedTools?: string[];
 }
 
 export interface ToSkillMdOptions {
@@ -58,7 +60,10 @@ export type ParseSkillMdResult =
     }
   | { ok: false; error: string };
 
-/** Serializes a skill to SKILL.md. allowedTools is never written: B4M tool names are not Claude Code tools. */
+/**
+ * Serializes a skill to SKILL.md. allowedTools is never written (B4M tool names are not Claude Code
+ * tools); claudeCodeAllowedTools, the imported `allowed-tools`, is.
+ */
 export function toSkillMd(skill: SkillMdSkill, opts: ToSkillMdOptions = {}): string {
   const comments: string[] = [];
   if (opts.sourceUrl) comments.push(`# ${SKILL_MD_SOURCE_MARKER} ${opts.sourceUrl.replace(/\s/g, '')}`);
@@ -69,6 +74,7 @@ export function toSkillMd(skill: SkillMdSkill, opts: ToSkillMdOptions = {}): str
   const data: Record<string, unknown> = { name: skill.name, description: skill.description };
   if (skill.argumentHint) data['argument-hint'] = skill.argumentHint;
   if (skill.disableModelInvocation) data['disable-model-invocation'] = true;
+  if (skill.claudeCodeAllowedTools?.length) data['allowed-tools'] = skill.claudeCodeAllowedTools.join(', ');
 
   // lineWidth 0 disables folding so a long description stays on one line. The body always gets one
   // trailing newline, which parseSkillMd strips, so the round trip is lossless.
@@ -97,6 +103,30 @@ function quoteRawArgumentHint(frontmatter: string): string {
 
 const toText = (value: unknown): string | undefined =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : undefined;
+
+/**
+ * Claude Code's `allowed-tools`: a YAML list, or one string separated by commas or spaces. Every list
+ * entry is split too, because the export joins them and Claude Code re-splits on commas and spaces. A space
+ * inside parentheses (`Bash(git add:*)`) belongs to the entry; an unclosed `(` keeps the rest whole.
+ */
+export function splitAllowedTools(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(v => splitAllowedTools(toText(v)));
+  const text = toText(value);
+  if (!text) return [];
+  const tools: string[] = [];
+  let current = '';
+  let depth = 0;
+  for (const ch of text) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    if (depth === 0 && (ch === ',' || /\s/.test(ch))) {
+      if (current.trim()) tools.push(current.trim());
+      current = '';
+    } else current += ch;
+  }
+  if (current.trim()) tools.push(current.trim());
+  return tools;
+}
 
 /** Parses a SKILL.md into skill form fields. Never throws; a malformed file yields `ok: false`. */
 export function parseSkillMd(input: string): ParseSkillMdResult {
@@ -145,8 +175,14 @@ export function parseSkillMd(input: string): ParseSkillMdResult {
       case 'autoinvoke':
         fields.disableModelInvocation = fields.disableModelInvocation || value === false || value === 'false';
         break;
-      // Everything else is reported as dropped, allowed-tools included: Claude Code tool names
-      // (Bash/Read/Edit) are not B4M tools.
+      // Kept in its own field, never in allowedTools: Claude Code tool names (Bash/Read/Edit) are not
+      // B4M tools, and allowedTools narrows the skill's B4M tools at run time.
+      case 'allowed-tools': {
+        const tools = splitAllowedTools(value);
+        if (tools.length) fields.claudeCodeAllowedTools = tools;
+        else if (value != null && value !== '' && !(Array.isArray(value) && value.length === 0)) dropped.push(key);
+        break;
+      }
       default:
         dropped.push(key);
     }
@@ -164,6 +200,31 @@ export function parseSkillMd(input: string): ParseSkillMdResult {
 /** Drops the blank line after the closing fence and the single trailing newline toSkillMd adds. */
 function stripBodyNewlines(rest: string): string {
   return rest.replace(/^\r?\n/, '').replace(/\r?\n$/, '');
+}
+
+// Markdown link/image targets, and bare file paths with a script/doc extension.
+const MARKDOWN_LINK_TARGET = /!?\[[^\]\n]*\]\(\s*<?([^)\s>]+)/g;
+const BARE_FILE_PATH =
+  /(?<![\w/.:-])(?:\.{1,2}\/)?[\w-]+(?:[./][\w-]+)*\.(?:sh|py|js|ts|mjs|md|json|ya?ml|txt)\b(?![\w/-])/g;
+
+/**
+ * Relative paths a skill body references, e.g. `scripts/run.sh` or `[guide](reference.md)`: files a
+ * Claude Code skill folder ships beside its SKILL.md, which an import of the SKILL.md alone loses.
+ * ponytail: regex heuristic (misses extensionless paths, may hit a filename named in prose); a real
+ * markdown parse if the warning proves noisy.
+ */
+export function referencedRelativePaths(body: string): string[] {
+  const paths = new Set<string>();
+  for (const match of body.matchAll(MARKDOWN_LINK_TARGET)) {
+    const target = match[1].split('#')[0];
+    if (target && !/^[a-z][a-z0-9+.-]*:/i.test(target) && !target.startsWith('/')) paths.add(target);
+  }
+  // URLs are removed first so `https://x.test/a/install.sh` is not read as a relative path.
+  for (const match of body.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ').matchAll(BARE_FILE_PATH)) {
+    // Without a directory, only script/doc names: `package.json` or `Node.js` in prose is not a sibling file.
+    if (match[0].includes('/') || /\.(?:sh|py|md)$/.test(match[0])) paths.add(match[0]);
+  }
+  return [...paths];
 }
 
 /** What in a skill only works inside Bike4Mind: its B4M tools and any `@agent` mentions in the body. */

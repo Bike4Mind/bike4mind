@@ -15,8 +15,8 @@ const h = vi.hoisted(() => ({
   sendToQueue: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const routes: Record<string, RouteFn> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),

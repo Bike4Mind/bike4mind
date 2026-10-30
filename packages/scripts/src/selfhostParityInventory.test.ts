@@ -620,6 +620,22 @@ describe('handler sources', () => {
     expect(validateParityPolicy(inventory, [], {}).filter(error => error.startsWith('Hosted handler'))).toEqual([]);
   });
 
+  it('skips only the reviewed data-named queue constructors and keeps the literal rule elsewhere', () => {
+    const pairs =
+      'const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs); const queue = new sst.aws.Queue(pair.name, pair.queueArgs);';
+    expect(discoverParityInventory({ 'infra/queues.ts': pairs })).toEqual([]);
+    expect(() => discoverParityInventory({ 'infra/queues.ts': `${pairs} new sst.aws.Queue(other.name, {});` })).toThrow(
+      /literal name required/
+    );
+    expect(() => discoverParityInventory({ 'infra/test.ts': pairs })).toThrow(/literal name required/);
+    expect(() => discoverParityInventory({ 'infra/queues.ts': 'new sst.aws.Queue(pair.dlqName, {});' })).toThrow(
+      /stale DATA_NAMED_QUEUES entry pair\.name/
+    );
+    expect(() => discoverParityInventory({ 'infra/queues.ts': `${pairs} new sst.aws.Queue(pair.name, {});` })).toThrow(
+      /entry pair\.name names 2 queues/
+    );
+  });
+
   it('treats only ENOENT as absence when reading repository sources', () => {
     expect(readIfPresent('infra/does-not-exist.ts')).toBeUndefined();
     expect(() => readIfPresent('infra')).toThrow(/EISDIR/);

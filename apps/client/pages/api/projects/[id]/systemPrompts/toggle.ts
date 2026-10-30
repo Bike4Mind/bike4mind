@@ -3,6 +3,8 @@ import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
+import { respond } from '@server/utils/respond';
+import { projectResponseSchema } from '@bike4mind/common';
 
 const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).post(
   asyncHandler<{ id: string }>(async (req, res) => {
@@ -25,7 +27,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).post(
       )
     );
 
-    return res.json(project);
+    return respond(res, projectResponseSchema, project);
   })
 );
 

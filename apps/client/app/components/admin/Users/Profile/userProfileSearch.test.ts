@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { legacyUserLinkRedirect, parseUserProfileSearch } from './userProfileSearch';
 
 describe('parseUserProfileSearch', () => {
-  it.each(['activity', 'admin'] as const)('keeps a deep link to the %s tab', tab => {
+  it.each(['activity', 'credits', 'keys', 'signins', 'admin'] as const)('keeps a deep link to the %s tab', tab => {
     expect(parseUserProfileSearch({ tab })).toEqual({ tab });
   });
 

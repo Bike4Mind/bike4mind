@@ -23,7 +23,7 @@ vi.mock('@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generate
   },
 }));
 
-import { WORKSPACE_SURFACES } from '@bike4mind/common';
+import { ADMIN_ASSISTANT_SURFACE, WORKSPACE_SURFACES } from '@bike4mind/common';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 
 // Found by shape rather than by name, so these cases follow whichever gated workspace the registry carries.
@@ -72,5 +72,15 @@ describe('useWorkspaceTargets with overlay copy grants', () => {
     const { result } = renderHook(() => useWorkspaceTargets({ userId: 'user-1', surface: GATED }));
 
     expect(ids(result.current.copyTargets)).toEqual([null]);
+  });
+});
+
+describe('useWorkspaceTargets with an admin-assistant session', () => {
+  it('returns no current workspace and no targets (unknown-surface parity)', () => {
+    h.user = { currentUser: { id: 'user-1', tags: [] }, isAdmin: true };
+
+    const { result } = renderHook(() => useWorkspaceTargets({ userId: 'user-1', surface: ADMIN_ASSISTANT_SURFACE }));
+
+    expect(result.current).toEqual({ current: undefined, copyTargets: [], moveTargets: [] });
   });
 });

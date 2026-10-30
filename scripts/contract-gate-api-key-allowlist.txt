@@ -548,7 +548,6 @@ apps/client/pages/api/oauth/openid-configuration.ts
 apps/client/pages/api/oauth/refresh.ts
 apps/client/pages/api/oauth/token.ts
 apps/client/pages/api/oauth/userinfo.ts
-apps/client/pages/api/ollama/models.ts
 apps/client/pages/api/organizations/[id]/addUser.ts
 apps/client/pages/api/organizations/[id]/admins.ts
 apps/client/pages/api/organizations/[id]/feedback-report.ts
@@ -760,6 +759,7 @@ apps/client/pages/api/tools/web-fetch.ts
 apps/client/pages/api/tools/web-search.ts
 apps/client/pages/api/transforms/batch.ts
 apps/client/pages/api/transforms/batch/[id].ts
+apps/client/pages/api/turnstile/client-failure.ts  # deliberately unauthenticated (auth: false): reports a Turnstile failure from the signed-out sign-in page; rate limited, log-only
 apps/client/pages/api/usage/fleet-export.ts
 apps/client/pages/api/usage/index.ts
 apps/client/pages/api/user-api-keys/[id]/callback-secret.ts

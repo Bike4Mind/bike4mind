@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/server-utils",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "private": true,
   "type": "module",
   "exports": {
@@ -63,6 +63,6 @@
     "aws-sdk-client-mock": "^4.1.0",
     "mongodb-memory-server": "^11.3.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

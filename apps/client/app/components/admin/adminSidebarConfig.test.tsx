@@ -75,11 +75,12 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(gatedByTab.size).toBe(2);
   });
 
-  it('only badges the Subscribers tab', () => {
-    const badged = allItems.filter(i => i.badge);
-    expect(badged).toHaveLength(1);
-    expect(badged[0].tab).toBe(AdminTab.Subscribers);
-    expect(badged[0].badge).toBe('waitingSubscribers');
+  it('only badges the Waitlist and Subscriptions tabs', () => {
+    const badged = allItems.filter(i => i.badge).map(i => [i.tab, i.badge]);
+    expect(badged).toEqual([
+      [AdminTab.Waitlist, 'waitingSubscribers'],
+      [AdminTab.Subscriptions, 'newSubscriptions'],
+    ]);
   });
 });
 
@@ -87,6 +88,8 @@ describe('findSectionKeyForTab', () => {
   it('returns the owning section key for a tab', () => {
     expect(findSectionKeyForTab(AdminTab.Dashboard)).toBe('overview');
     expect(findSectionKeyForTab(AdminTab.Users)).toBe('people');
+    expect(findSectionKeyForTab(AdminTab.Waitlist)).toBe('people');
+    expect(findSectionKeyForTab(AdminTab.EmailMarketing)).toBe('people');
     expect(findSectionKeyForTab(AdminTab.CreditAnalytics)).toBe('money');
     expect(findSectionKeyForTab(AdminTab.SecretsRotation)).toBe('trust');
     expect(findSectionKeyForTab(AdminTab.LLMDashboard)).toBe('ai');

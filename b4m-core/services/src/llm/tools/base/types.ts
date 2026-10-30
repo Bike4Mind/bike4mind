@@ -1,4 +1,5 @@
 import { BaseStorage } from '@bike4mind/utils';
+import type { ILatticeModelRepository } from '../../../latticeService/latticeModelService';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { DecisionToolRequest } from '../implementation/decide/request';
@@ -12,7 +13,6 @@ import {
   IChatHistoryItemDocument,
   IChatHistoryItemRepository,
   ISessionRepository,
-  ILatticeModel,
   IUserDocument,
   IFabFileRepository,
   IFabFileChunkRepository,
@@ -123,11 +123,7 @@ export interface ToolContext {
   slackDestination?: { workspaceId: string; channelId: string; threadTs: string };
   logger: Logger;
   db: GetEffectiveApiKeyAdapters['db'] & {
-    latticeModels?: {
-      create: (data: any) => Promise<ILatticeModel>;
-      findById: (id: string) => Promise<ILatticeModel | null>;
-      update: (data: any) => Promise<ILatticeModel | null>;
-    };
+    latticeModels?: Pick<ILatticeModelRepository, 'create' | 'findById' | 'update'>;
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
     /** Concurrency slots for the shared ElevenLabs key (runElevenLabsWithCapacity); absent runs unslotted. */
@@ -267,6 +263,8 @@ export interface ToolContext {
    * absent means tag-only matching (the neutral default). See getDynamicDataLakeAccess.
    */
   entitlementKeys?: string[];
+  /** Resolve current plan access lazily; failures must reach model admission. */
+  getEntitlements?: () => Promise<string[]>;
   /**
    * The turn's active organization, already authorization-validated upstream on the web and
    * public API paths (resolveActiveOrg) but NOT on every host (Slack), so a tool that scopes a
@@ -412,8 +410,8 @@ export interface ToolContext {
    * citationNumbering.ts.
    */
   numberCitables?: (citables: CitableSource[]) => CitableSource[] | undefined;
-  onStart?: (toolName: string, data: any) => Promise<void>;
-  onFinish?: (toolName: string, data: any) => Promise<void>;
+  onStart?: (toolName: string, data: unknown) => Promise<void>;
+  onFinish?: (toolName: string, data: unknown) => Promise<void>;
   llm: Pick<ICompletionBackend, 'complete'>;
   model?: string; // User's selected model for the current quest
   /**
@@ -495,5 +493,5 @@ export interface ToolDefinition {
    * TOOL_ARTIFACT_EMITTERS instead, which wins on a name clash (see resolveToolArtifactType).
    */
   artifactType?: string;
-  implementation: (context: Omit<ToolContext, 'config'>, config: any) => ICompletionOptionTools;
+  implementation: (context: Omit<ToolContext, 'config'>, config: unknown) => ICompletionOptionTools;
 }

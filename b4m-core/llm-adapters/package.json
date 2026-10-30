@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/llm-adapters",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -79,6 +79,6 @@
     "dotenv": "^17.4.2",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

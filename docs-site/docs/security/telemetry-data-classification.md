@@ -208,6 +208,15 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
 
+## Usage pattern signals
+
+A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin setting, derives a usage profile for recently active free-tier accounts and stores the latest result per user in the `UserUsagePatternSignals` collection. It collects no new raw data: every input already exists in `UsageEvent`, `ApiKeyUsageLog` or `UserApiKey`. The result is for admin review only and triggers no automatic action on the account, its keys or its balance. Paid accounts get a marker with no signals.
+
+| Data              | Storage                                                                                                                   | Lifetime                                         | Purpose      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------ |
+| Signals           | Per signal (API-key share, request cadence, balance polling, key-mint timing): value, triggered flag, weight, explanation | 30 days after last checked (TTL on `computedAt`) | Admin review |
+| Score and outcome | `score`, `needsReview`, `skipped` reason, `computedAt`, keyed by `userId`                                                 | 30 days after last checked (TTL on `computedAt`) | Admin review |
+
 ## Signup and login network metadata
 
 Every self-service signup stores the network it came from on the new account (`signupMeta`), written once. Every successful signup and sign-in also writes one `AuthEvent` row. Admin-created accounts and impersonation sessions write neither. The network number (ASN) and country come from headers the CDN sets; when they are absent the fields are empty, never guessed. A failed write never blocks sign-in. Both are visible only to admins, and both are deleted with the account. The full IP on `signupMeta` is kept for the same 90 days as the `AuthEvent` rows; after that the daily `signupIpRetention` job replaces it with its /24 (IPv4) or /48 (IPv6) prefix. The other `signupMeta` fields stay for the account's lifetime. Two other stores keep sign-in IPs outside this retention: `User.loginRecords[].ip` holds the full IP of the most recent sign-ins for the account's lifetime, and `UserAuthAuditLog.actorIp` keeps it for 12 months (TTL index).
@@ -219,6 +228,10 @@ Every self-service signup stores the network it came from on the new account (`s
 | Network (ASN) | `asn`, plus operator for hosting ASNs | Account lifetime / 90 days (TTL index)                                                 | Spot signups from one network or a hosting provider |
 | Country       | ISO country code                      | Account lifetime / 90 days (TTL index)                                                 | Abuse and security investigation                    |
 | Hosting flag  | `isDatacenter`                        | Account lifetime / 90 days (TTL index)                                                 | Flag signups from cloud and hosting networks        |
+
+`signupMeta.challengeVerified` records `true` only after a real server-verified challenge pass; skipped or unavailable checks remain null or absent. It shares the other non-IP signup metadata's admin-only access, account lifetime, and account-deletion behavior. Signed signup tokens carry this observation only to preserve it through verification; public test secrets and fail-open checks do not establish proof. On email sign-up the proof is single-use, because the signed token is consumed. On OAuth sign-up it is per-flow: the signed state is not consumed, so every callback that reuses the same state within its 5-minute lifetime records the same pass.
+
+Signup grant assessments also emit one of the `signup-grant-assessed-full`, `signup-grant-assessed-reduced`, or `signup-grant-assessed-review` log markers after commit. These markers contain only the outcome band, without account identifiers, policy weights, network observations, or challenge tokens. CloudWatch metric filters count them for monitoring and an optional review-volume alarm. The markers follow the server log group's retention; metric counts follow CloudWatch retention. Emission is best effort, so counts are operational monitoring rather than an exact grant ledger.
 
 ## Chat turn timing
 
@@ -254,14 +267,14 @@ Integration requests themselves ("request this integration") are product data, n
 
 Bike4Mind Desktop can send aggregate activity to a team's Fleet. It sends nothing until two things are true: Fleet's installer has written `~/.claude/fleet/bike4mind-desktop.json` on the machine (mode 0600; Desktop ignores a copy other users can read), and the user has turned on "Share activity with Fleet" in Desktop's Profile. Turning the switch off deletes everything not yet sent. Desktop posts OTLP/HTTP JSON logs to the Fleet origin in that file, at `/v1/logs`, from the main process, with the team telemetry key the file holds. The key never reaches the renderer and is never logged.
 
-| Data       | Sent as                                                                               | Purpose                                      |
-| ---------- | ------------------------------------------------------------------------------------- | -------------------------------------------- |
-| Who        | `user.email` and `fleet.install.id`, from the installer file                          | Attribute activity to a person in Fleet      |
-| App        | `service.name` `bike4mind-desktop`, `service.version`                                 | Tell Desktop apart from other tools          |
-| Reply      | `bike4mind_desktop.session`: event id, conversation id, duration in ms                | Replies and active time per person and day   |
+| Data       | Sent as                                                                                                                                    | Purpose                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
+| Who        | `user.email` and `fleet.install.id`, from the installer file                                                                               | Attribute activity to a person in Fleet      |
+| App        | `service.name` `bike4mind-desktop`, `service.version`                                                                                      | Tell Desktop apart from other tools          |
+| Reply      | `bike4mind_desktop.session`: event id, conversation id, duration in ms                                                                     | Replies and active time per person and day   |
 | Usage      | On the reply record: `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `credits_milli` (credits x 1000) | Which models a person uses and what they use |
-| Tool call  | `bike4mind_desktop.tool`: the above plus a category only                              | Tool use by category                         |
-| Repository | `bike4mind_desktop.repository`: owner/name from the `origin` remote, `view` or `edit` | Which repositories a person works in         |
+| Tool call  | `bike4mind_desktop.tool`: the above plus a category only                                                                                   | Tool use by category                         |
+| Repository | `bike4mind_desktop.repository`: owner/name from the `origin` remote, `view` or `edit`                                                      | Which repositories a person works in         |
 
 The model id is the one the conversation is set to, for example `claude-opus-5`. Token counts and credits are the server's own figures for that reply, as the reply shows them. A reply that was resumed reports only what was added since the earlier part. A reply record names one model, so what the `explore` sub-agent spends is counted under the conversation's own model rather than the one that sub-agent ran on. None of it is message content.
 

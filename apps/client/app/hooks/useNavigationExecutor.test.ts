@@ -91,13 +91,13 @@ describe('useNavigationExecutor', () => {
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/new' });
   });
 
-  it('selects the admin tab and names its slug in the URL', () => {
+  it('navigates to the admin tab before changing the store', () => {
     const { result } = renderHook(() => useNavigationExecutor());
     result.current({ navigationType: 'tab', target: String(AdminTab.LLMDashboard) } as Parameters<
       ReturnType<typeof useNavigationExecutor>
     >[0]);
 
-    expect(mockSetActiveTab).toHaveBeenCalledWith(AdminTab.LLMDashboard);
+    expect(mockSetActiveTab).not.toHaveBeenCalled();
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'llm-dashboard' } });
   });
 

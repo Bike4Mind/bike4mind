@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Stack, Typography } from '@mui/joy';
+import { Alert, Stack } from '@mui/joy';
+import { AdminPageHeader } from '../shared/AdminPageHeader';
 import type { AuditEntry, AuditLogFilters, AuditSummaryWindow } from '@bike4mind/common';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
 import { useAuditAlertStatus, useAuditEntry, useAuditLog } from '@client/app/hooks/data/adminAuditLog';
@@ -29,7 +30,7 @@ const AuditLogPage: React.FC = () => {
   const { showSnackbar } = useSnackbar();
   const [windowDays, setWindowDays] = useState<AuditSummaryWindow>(DEFAULT_SUMMARY_WINDOW);
   const { data: alertStatus } = useAuditAlertStatus();
-  const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } = useAuditLog(filters);
+  const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } = useAuditLog(filters);
 
   const entries = useMemo(() => data?.pages.flatMap(page => page.entries) ?? [], [data]);
   const loadedEntry = useMemo(
@@ -61,7 +62,7 @@ const AuditLogPage: React.FC = () => {
 
   return (
     <Stack spacing={2} sx={{ p: { xs: 1, sm: 2 } }} data-testid="audit-log-page">
-      <Typography level="title-lg">Audit Log</Typography>
+      <AdminPageHeader title="Audit log" description="Review recorded changes, their actors and reasons." />
       {alertStatus && !alertStatus.alertsEnabled && (
         <Alert color="warning" variant="soft" data-testid="audit-alerts-off-banner">
           Security alerts are off: critical entries are not posted to Slack. Set the Security Alerts Channel Webhook URL
@@ -78,11 +79,13 @@ const AuditLogPage: React.FC = () => {
       <AuditFilterBar filters={filters} onChange={patchFilters} onClear={() => setFilters({})} />
       <AuditEventTable
         entries={entries}
+        pageResetKey={JSON.stringify(filters)}
         isLoading={isLoading}
         errorMessage={isError ? LIST_ERROR_MESSAGE : undefined}
         hasMore={Boolean(hasNextPage)}
         isFetchingMore={isFetchingNextPage}
         onLoadMore={() => void fetchNextPage()}
+        onRetry={() => void refetch()}
         onSelectEntry={entry => openEntry(entry.id)}
         onFilterActor={actorUserId => patchFilters({ actorUserId })}
         onFilterTarget={({ kind, id }) => patchFilters({ targetKind: kind, targetId: id })}

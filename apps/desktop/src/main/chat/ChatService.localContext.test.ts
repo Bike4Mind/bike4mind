@@ -9,7 +9,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { describeCompaction, formatTokens } from '../../renderer/src/chat/statusLine';
 import { ChatService } from './ChatService';
 import { COMPACT_MAX_TOKENS } from './compaction';
-import { cpuMachine, discreteMachine, GIB, lowConfidenceMachine, stubArch } from './fitStub.testHelper';
+import { cpuMachine, discreteMachine, GIB, lowConfidenceMachine, stubArch, unifiedMachine } from './fitStub.testHelper';
 import { localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { ModelCatalog } from './ModelCatalog';
 import { forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
@@ -227,7 +227,7 @@ const sizedOn = (setting: LocalContextSetting, hardware: HardwareProfile): Local
 
 it.each([
   // The stub estimator: 72K is the largest context that stays in 13 GiB.
-  { label: 'the largest resident size', hardware: cpuMachine(13), first: 65_536, measured: 60_000, grown: 73_728 },
+  { label: 'the largest resident size', hardware: unifiedMachine(13), first: 65_536, measured: 60_000, grown: 73_728 },
   {
     label: 'one Settings size on an unmeasured GPU',
     hardware: lowConfidenceMachine(64),

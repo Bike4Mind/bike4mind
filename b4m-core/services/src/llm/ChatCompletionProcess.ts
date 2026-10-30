@@ -5,6 +5,7 @@ import {
   IMessage,
   IUserDocument,
   LLMEvents,
+  ISessionDocument,
   IOrganizationDocument,
   Permission,
   SettingKey,
@@ -15,7 +16,6 @@ import {
   getTextModelCost,
   getTurnsCost,
   buildUsagePriceStamp,
-  CACHE_READ_MULTIPLIER,
   ModelInfo,
   ModelBackend,
   b4mLLMTools,
@@ -43,11 +43,13 @@ import {
   resolveHistoryFetchLimit,
   QuestErrorCode,
   getQuestErrorCode,
+  isProviderRefusalStopReason,
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   MAX_TOOL_CALLS_CEILING,
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
+  type ModerationHitSource,
   visibleReplyText,
   tokenEstimateMultiplier,
   pairDataLakeTools,
@@ -137,6 +139,12 @@ import {
   isTurnEndingTool,
   ResponsesStreamTruncatedError,
   LlmTimeoutError,
+  isLlmTimeoutError,
+  isKeepaliveStreamTimeout,
+  isOutputBudgetExhaustedError,
+  isStreamEndedWithoutFinishError,
+  type OutputBudgetExhaustedError,
+  convertOpenAIToolHistoryToCanonical,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -288,6 +296,8 @@ import {
   shouldOfferSkillTool,
 } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
+import { resolveAdminAssistantTools } from './adminAssistantGate';
+import { withAdminAssistantPrompt } from './adminAssistantPrompt';
 import {
   ContextTelemetryAlertsSchema,
   sanitizeTelemetryError,
@@ -310,6 +320,17 @@ const STREAMING_HEARTBEAT_ERROR_ESCALATION_THRESHOLD = 3;
 
 /** Final reply when the model stayed too slow through its retry and any fallback. Not "busy": the provider never said so. */
 export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
+
+/**
+ * Final reply when a reasoning model spent its whole output budget and the caller set `max_tokens`
+ * (API callers, and the web UI, which always sends one). Worded so it is actionable on both.
+ */
+export const OUTPUT_BUDGET_EXHAUSTED_REPLY =
+  'The model used its whole output budget reasoning before it could answer. Raise the max tokens setting (max_tokens in the API), or use the model default.';
+
+/** Same failure when the server chose the budget (voice, or an API call that sent no `max_tokens`): nothing for the user to raise. */
+export const OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY =
+  'The model ran out of room while reasoning and could not answer. Please try again or simplify the request.';
 
 // Context management constants: message-history limits per query type
 
@@ -618,6 +639,7 @@ export function isAbortError(error: unknown): boolean {
  */
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
+  if (isOutputBudgetExhaustedError(error)) return false;
   if (error instanceof HTTPError && error.statusCode >= 400 && error.statusCode < 500) return false;
   if (!(error instanceof Error)) return true;
   return !(
@@ -766,12 +788,14 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
 export function resolveDeniedTools(
   sessionDisabledTools: unknown,
   requestDeniedTools?: string[],
-  surfaceDeniedTools?: readonly string[]
+  surfaceDeniedTools?: readonly string[],
+  adminAssistantDeniedTools?: readonly string[]
 ): string[] | undefined {
   const merged = new Set([
     ...(Array.isArray(sessionDisabledTools) ? sessionDisabledTools : []),
     ...(requestDeniedTools ?? []),
     ...(surfaceDeniedTools ?? []),
+    ...(adminAssistantDeniedTools ?? []),
   ]);
   return merged.size > 0 ? [...merged] : undefined;
 }
@@ -1880,6 +1904,8 @@ export class ChatCompletionProcess {
     };
   }
 
+  /** Set when the turn failed because a reasoning model spent its whole output budget; the quest is already settled. */
+  public terminalError: OutputBudgetExhaustedError | undefined;
   /** Pipeline phase durations from the most recent process() call. Available after process() resolves. */
   public pipelinePhases: Record<string, number> | null = null;
 
@@ -1936,8 +1962,7 @@ export class ChatCompletionProcess {
     /** Pre-fetched quest from invoke; avoids redundant DB read for wait=true path */
     prefetchedQuest?: IChatHistoryItemDocument;
     /** Pre-fetched session from invoke; avoids redundant DB read for wait=true path */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    prefetchedSession?: any;
+    prefetchedSession?: ISessionDocument | null;
     /** Pre-fetched organization from invoke; avoids redundant DB read for wait=true path */
     prefetchedOrganization?: IOrganizationDocument | null;
     /** External tool definitions (e.g., Slack tools) that can't be serialized through EventBridge */
@@ -2271,12 +2296,22 @@ export class ChatCompletionProcess {
       // fetchAndProcessPreviousMessages `includeReplyChoices`); voice reads the raw stream aloud.
       // Research Mode is excluded because its early return never reaches applyReplyChoices.
       const replyChoicesOffered = !(skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices);
+      // Evaluated fresh every turn from the session surface and the server-loaded user (never from
+      // the request or sticky session state). Closed, it denies every admin tool name through the
+      // same denylist the post-buildTools pass enforces; see adminAssistantGate.ts.
+      const adminAssistantPlan = resolveAdminAssistantTools({
+        surface: session.surface,
+        isAdmin: this.user.isAdmin,
+        availableToolNames: new Set(Object.keys(externalTools ?? {})),
+      });
+      const adminAssistantGateOpen = adminAssistantPlan.open;
       // Read at every denylist site below instead of `session.disabledTools`: the final pass after
       // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
       const deniedTools = resolveDeniedTools(
         session.disabledTools,
         parsedBody.deniedTools,
-        resolveWorkspaceDeniedTools(session.surface, this.workspaceDeniedTools)
+        resolveWorkspaceDeniedTools(session.surface, this.workspaceDeniedTools),
+        adminAssistantPlan.deny
       );
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
@@ -2380,6 +2415,10 @@ export class ChatCompletionProcess {
         skipAutoOffers,
       });
       enabledTools.splice(0, enabledTools.length, ...resolvedTools);
+      // Added per turn, never persisted to session.autoAddedTools; still subject to the denylist.
+      for (const tool of adminAssistantPlan.enable) {
+        if (!enabledTools.includes(tool) && !deniedTools?.includes(tool)) enabledTools.push(tool);
+      }
 
       // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
       // moved to after buildTools, where the authoritative post-build tool list is known.
@@ -2464,11 +2503,14 @@ export class ChatCompletionProcess {
       // the id to its CURRENT content HERE - not in an entry-point route - so it injects on EVERY
       // path (chat, llm, queue, slack) via SessionPromptFeature, and admin edits take effect with no
       // deploy. Raw text wins if both are somehow set. The injector enforces the activatable allowlist.
-      const sessionSystemPrompt = session.systemPromptText?.trim()
-        ? session.systemPromptText
-        : session.systemPromptId && this.loadSystemPromptById
-          ? ((await this.loadSystemPromptById(session.systemPromptId)) ?? undefined)
-          : undefined;
+      const sessionSystemPrompt = withAdminAssistantPrompt(
+        session.systemPromptText?.trim()
+          ? session.systemPromptText
+          : session.systemPromptId && this.loadSystemPromptById
+            ? ((await this.loadSystemPromptById(session.systemPromptId)) ?? undefined)
+            : undefined,
+        adminAssistantGateOpen
+      );
       // Hoisted out of the buildOptimizedFeatures argument it used to be inlined into: the
       // offeredTools site further down stamps this onto promptMeta.retrieval.mode, and the two
       // must be the same value - a telemetry field that recomputes its own answer is a field that
@@ -2746,7 +2788,7 @@ export class ChatCompletionProcess {
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
             // must never mask the block, so its own failure is swallowed with a warning.
             if (moderationError instanceof FlaggedContentError) {
-              await this.recordModerationHit('openai', moderationError, questId, logger);
+              await this.recordModerationHit('openai', moderationError.categories, questId, logger);
             }
             throw moderationError;
           }
@@ -2763,7 +2805,7 @@ export class ChatCompletionProcess {
               await this.getBedrockGuardrailsService(guardrailId, guardrailVersion, logger).checkPrompt(message);
             } catch (moderationError) {
               if (moderationError instanceof FlaggedContentError) {
-                await this.recordModerationHit('bedrock', moderationError, questId, logger);
+                await this.recordModerationHit('bedrock', moderationError.categories, questId, logger);
               }
               throw moderationError;
             }
@@ -3324,6 +3366,11 @@ export class ChatCompletionProcess {
         user: this.user,
         db: this.db,
         entitlementKeys,
+        getEntitlements: async () => {
+          const { keys, resolved } = await this.resolveEntitlementKeys();
+          if (!resolved) throw new Error('entitlement resolution failed');
+          return keys;
+        },
         authOrigin: parsedBody.authOrigin,
         apiKeyId: parsedBody.apiKeyId,
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
@@ -5017,6 +5064,51 @@ export class ChatCompletionProcess {
       let toolPairingRetried = false;
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
+      let streamEndedWithoutFinishRetried = false;
+      // A timed-out stream rejects before reporting usage and the next attempt resets
+      // actualTokenUsage, so the prompt the provider billed for it is recorded here as COGS only.
+      // Called only when the loop moves on to another attempt: a timeout that ends the turn is
+      // settled by settleAbortedReservation, and recording it here too would count it twice.
+      const recordTimedOutAttempt = (error: Error, attemptModel: typeof currentModel) => {
+        if (!adminSettingsEnforceCredits || !isLlmTimeoutError(error) || !error.usage) return;
+        const { inputTokens: providerInputTokens, cacheReadInputTokens, cacheCreationInputTokens } = error.usage;
+        const promptTokens = providerInputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+        this.db.usageEvents
+          ?.record({
+            requestId: quest.id,
+            userId: this.user.id,
+            ownerId: this.reservedCreditsOwnerId || this.user.id,
+            ownerType: this.reservedCreditsOwnerType,
+            sessionId: quest.sessionId,
+            feature: 'chat',
+            provider: attemptModel.backend,
+            model: attemptModel.id,
+            source: 'web',
+            // inputTokens is the local estimate and counts toward the user's token quota; this
+            // attempt is ours to absorb, so the provider count goes in providerInputTokens only.
+            inputTokens: 0,
+            // The provider reports output only in message_delta, which a cut stream never reached.
+            outputTokens: 0,
+            providerInputTokens,
+            cachedInputTokens: cacheReadInputTokens,
+            cacheWriteTokens: cacheCreationInputTokens,
+            costUsd: getTextModelCost(
+              attemptModel,
+              providerInputTokens,
+              0,
+              cacheReadInputTokens,
+              cacheCreationInputTokens,
+              promptTokens
+            ),
+            creditsCharged: 0,
+            ...buildUsagePriceStamp(attemptModel, { tierBasisTokens: promptTokens }),
+            status: 'timeout',
+            latencyMs: Date.now() - processStartTime,
+          })
+          .catch((usageEventError: unknown) => {
+            logger.warn('Failed to record timed-out attempt usage event', usageEventError);
+          });
+      };
       // Where the last tool call landed in the visible reply, so the end of the turn can tell
       // an answer written after the tools ran from a preamble written before them. The slots
       // themselves can't say this: every iteration appends into the same indices.
@@ -5428,7 +5520,8 @@ export class ChatCompletionProcess {
           } catch (attemptError) {
             lastError = attemptError as Error;
             // Aborts (user cancel, client disconnect, or request/idle timeout) are
-            // benign - log the raw error at warn so its stack stays out of the
+            // benign, and output-budget exhaustion is deterministic and settled as terminal
+            // below (an error log would trip the alert) - log the raw error at warn so its stack stays out of the
             // CloudWatch ERROR to LiveOps/Slack alerts. This bare dump was
             // the last error-severity log on the abort path; the backends and the
             // formatted summary below were already downgraded. Real failures still dump
@@ -5436,7 +5529,8 @@ export class ChatCompletionProcess {
             if (
               isAbortError(lastError) ||
               isStreamIdleTimeoutError(lastError) ||
-              lastError instanceof ResponsesStreamTruncatedError
+              lastError instanceof ResponsesStreamTruncatedError ||
+              isOutputBudgetExhaustedError(lastError)
             ) {
               logger.warn(lastError);
             } else {
@@ -5568,8 +5662,15 @@ export class ChatCompletionProcess {
             // Stream idle timeout retry: for mid-stream stalls, retry once with short backoff.
             // Unlike request timeouts (model never started), stream idle timeouts mean the model
             // started responding but stalled. One retry, then fall back: repeating the same stall
-            // on the same model wastes minutes.
-            if (isStreamIdleTimeoutError(lastError) && !streamIdleTimeoutRetried) {
+            // on the same model wastes minutes. A keepalive timeout is no stall: the same model
+            // would think just as long again, so it goes straight to the fallback.
+            const isKeepaliveTimeout = isKeepaliveStreamTimeout(lastError);
+            if (isKeepaliveTimeout) {
+              logger.info(
+                `[Stream Idle Retry] ${currentModel.id} was still generating when the keepalive ceiling cut the stream; skipping the same-model retry, which would re-bill the thinking phase`
+              );
+            }
+            if (isStreamIdleTimeoutError(lastError) && !streamIdleTimeoutRetried && !isKeepaliveTimeout) {
               streamIdleTimeoutRetried = true;
               const STREAM_IDLE_RETRY_DELAY_MS = 3000;
               const jitter = Math.floor(Math.random() * 1000);
@@ -5581,7 +5682,29 @@ export class ChatCompletionProcess {
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
               turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, currentModel.id);
+              recordTimedOutAttempt(lastError, currentModel);
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
+
+              resetStreamStateForRetry();
+
+              continue;
+            }
+
+            // A stream that closed with no finish reason and no output: one same-model retry,
+            // then the fallback chain.
+            if (isStreamEndedWithoutFinishError(lastError) && !streamEndedWithoutFinishRetried) {
+              streamEndedWithoutFinishRetried = true;
+              const EMPTY_STREAM_RETRY_DELAY_MS = 2000;
+              const jitter = Math.floor(Math.random() * 500);
+
+              logger.info(
+                `[Empty Stream Retry] ${currentModel.id} stream ended without a finish reason, retrying once in ${EMPTY_STREAM_RETRY_DELAY_MS + jitter}ms`
+              );
+
+              this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
+
+              turnTiming.recordRetry(lastError, EMPTY_STREAM_RETRY_DELAY_MS + jitter, currentModel.id);
+              await new Promise(resolve => setTimeout(resolve, EMPTY_STREAM_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
 
@@ -5611,8 +5734,9 @@ export class ChatCompletionProcess {
                 chatApiKeyTable,
                 logger,
                 {
-                  // A timeout that reaches here has spent its one same-model retry. triedModelIds
-                  // already excludes the failed model; forceSwitch states that intent outright.
+                  // A timeout that reaches here has spent its one same-model retry, or skipped it
+                  // because the model was still generating (isSlowModelTimeout covers both).
+                  // triedModelIds already excludes the failed model; forceSwitch states that intent outright.
                   forceSwitch: overloadRetriesExhausted || isSlowModelTimeout,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
@@ -5629,9 +5753,16 @@ export class ChatCompletionProcess {
                 throw lastError;
               }
 
+              recordTimedOutAttempt(lastError, failedModel);
+
               // Update to the fallback model
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
+              // The failed attempt left its tool rounds in outboundMessages in its own provider's
+              // shape, which another backend may not read (OpenAI-shape tool_calls reach Anthropic as null).
+              if (currentModel.backend !== failedModel.backend) {
+                outboundMessages = convertOpenAIToolHistoryToCanonical(outboundMessages);
+              }
               servingModel.current = currentModel;
               if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
@@ -6079,6 +6210,11 @@ export class ChatCompletionProcess {
         };
       } catch (error) {
         logger.debug(`Error during fallback-enabled model invocation (final model: ${currentModel.id}):`, error);
+        // Only a turn that ends refused counts: a refusal a fallback model answered may be a
+        // classifier false positive, and the hit drives throttling/suspension.
+        if (error instanceof Error && isSafetyRefusalError(error)) {
+          await this.recordModerationHit('provider', [], quest.id, logger);
+        }
         throw error; // Re-throw the error to be handled by the outer try-catch
       }
 
@@ -6120,8 +6256,9 @@ export class ChatCompletionProcess {
         // zeroed axis as free.
         // Anything less than full positive usage falls back to the local
         // estimate, which also remains the pre-reservation basis. The fallback
-        // keeps the capped cache-read discount and never bills cache creation,
-        // exactly the pre-provider-basis behavior. The bases never blend.
+        // bills capped cache reads at the model's own cache-read rate (the same
+        // one the provider basis uses) and never bills cache creation. The bases
+        // never blend.
         //
         // Disjoint-fields assumption: whatever an adapter forwards as
         // cacheReadInputTokens must NOT also be counted in inputTokens. Anthropic-family
@@ -6175,9 +6312,9 @@ export class ChatCompletionProcess {
               )
           : getTextModelCost(
               currentModel,
-              localInputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
+              localInputTokens - cacheReadInputTokens,
               outputTokens,
-              0,
+              cacheReadInputTokens,
               0,
               // The local estimate is one whole prompt; the cache discount above must not lower its tier.
               localInputTokens
@@ -6323,6 +6460,12 @@ export class ChatCompletionProcess {
         const providerStopReason = actualTokenUsage?.stopReason;
         const wasTruncated = providerStopReason === TRUNCATED_FINISH_REASON;
         const wasDegenerate = providerStopReason === DEGENERATE_FINISH_REASON;
+
+        // Provider refusals that settle (HTTP 200) rather than throw; the catch above only sees throws.
+        // Not awaited so recording does not delay credit settlement.
+        if (isProviderRefusalStopReason(providerStopReason)) {
+          void this.recordModerationHit('provider', [], quest.id, logger);
+        }
         const earlyStopStamp = buildEarlyStopStamp(providerStopReason);
 
         // P6: Credits reconciliation - settle the pre-reserved credits against actual usage.
@@ -7041,6 +7184,19 @@ export class ChatCompletionProcess {
         // was meant to avoid.
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
         setErrorReply(SLOW_MODEL_ERROR_REPLY);
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (isOutputBudgetExhaustedError(err)) {
+        // WARN, not error: retrying with the same budget fails the same way, and error severity
+        // would trip the CloudWatch ERROR alert. Settled rather than rethrown so the queue path
+        // does not DLQ-retry a deterministic failure; the /api/chat wait route reads terminalError.
+        logger.warn(`[Output Budget] Quest ${questId}: ${err.message}`);
+        this.terminalError = err;
+        setErrorReply(
+          (params.max_tokens ?? 0) > 0 ? OUTPUT_BUDGET_EXHAUSTED_REPLY : OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY
+        );
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
@@ -7989,8 +8145,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   }
 
   private async recordModerationHit(
-    source: 'openai' | 'bedrock',
-    error: FlaggedContentError,
+    source: ModerationHitSource,
+    categories: string[],
     questId: string,
     logger: Logger
   ): Promise<void> {
@@ -7998,14 +8154,15 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       const decision = await applyModerationHit({
         users: this.db.users,
         userId: this.user.id,
-        hit: { at: new Date(), categories: error.categories, source, questId },
+        hit: { at: new Date(), categories, source, questId },
       });
       logger.warn(
-        `🚦 [Moderation] User ${this.user.id} flagged by ${source} (${error.categories.join(', ')}); ` +
-          `${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
+        `[Moderation] User ${this.user.id} flagged by ${source}` +
+          (categories.length ? ` (${categories.join(', ')})` : '') +
+          `; ${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
       );
     } catch (recordError) {
-      logger.error(`🚦 [Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
+      logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
   }
 

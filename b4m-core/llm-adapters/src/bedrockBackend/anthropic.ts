@@ -39,6 +39,7 @@ import {
   resolveAnthropicEffort,
 } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
+import { ensureToolPairingIntegrity } from '../toolPairingUtils';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
 
 enum ClaudeChunkTypes {
@@ -669,7 +670,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         // Global endpoint; cache hits are 0.05x input on Sonnet 5.5, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 2 / 1_000_000, output: 10 / 1_000_000, cache_read: 0.1 / 1_000_000 },
+          1_000_000: {
+            input: 2 / 1_000_000,
+            output: 10 / 1_000_000,
+            cache_read: 0.1 / 1_000_000,
+            cache_write: 2.5 / 1_000_000,
+          },
         },
         supportsVision: true,
         supportsTools: true,
@@ -786,7 +792,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         // Global endpoint; cache hits are 0.025x input on Fable 5.1, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 10 / 1_000_000, output: 50 / 1_000_000, cache_read: 0.25 / 1_000_000 },
+          1_000_000: {
+            input: 10 / 1_000_000,
+            output: 50 / 1_000_000,
+            cache_read: 0.25 / 1_000_000,
+            cache_write: 12.5 / 1_000_000,
+          },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -831,7 +842,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         // Global endpoint, first-party parity; cache hits are 0.05x input on Opus 5.5, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 4 / 1_000_000, output: 20 / 1_000_000, cache_read: 0.2 / 1_000_000 },
+          1_000_000: {
+            input: 4 / 1_000_000,
+            output: 20 / 1_000_000,
+            cache_read: 0.2 / 1_000_000,
+            cache_write: 5 / 1_000_000,
+          },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -886,7 +902,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
     // Filter and validate messages to ensure content is valid
     // Bedrock/Anthropic rejects "text content blocks must contain non-whitespace text"
-    const filteredMessages = messages
+    const sanitizedMessages = messages
       .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content !== null && m.content !== undefined)
       // Unlike the other backends this one forwards IMessage objects into the request body largely
       // as-is, so control-only fields have to be dropped here rather than left to the invariant that
@@ -935,6 +951,13 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         return { ...m, content: '' };
       })
       .filter(m => m.content !== '' && (Array.isArray(m.content) ? m.content.length > 0 : true));
+
+    // Dropping role/empty messages above can leave a tool_result with no tool_use right before it,
+    // which Bedrock rejects. Same pass anthropicBackend runs - keep the two in sync.
+    const filteredMessages = ensureToolPairingIntegrity(
+      sanitizedMessages as unknown as IMessage[],
+      Logger.globalInstance
+    ) as unknown as typeof sanitizedMessages;
 
     if (filteredMessages.length === 0) {
       throw new BadRequestError('request must contain at least one non-empty user or assistant message');

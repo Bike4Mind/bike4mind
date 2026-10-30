@@ -80,7 +80,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -1810,6 +1810,7 @@ async function processExecution(
     const toolDeps: ToolBuilderDeps = {
       userId: execution.userId,
       user: user as IUserDocument,
+      getEntitlements: () => getUserEntitlements(user),
       logger,
       thinkingVisibility,
       // The run's active account, already membership-checked at start; lake-creating tools scope to it.
@@ -1859,7 +1860,8 @@ async function processExecution(
         adminSettings: adminSettingsRepository,
         fabfiles: fabFileRepository,
         fabfilechunks: fabFileChunkRepository,
-        users: userRepository,
+        // A tool that re-reads the owner by id must see the role withheld above, not the stored one.
+        users: execution.adminRoleWithheld ? ownerWithheldUsers(execution.userId, userRepository) : userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -3956,6 +3958,7 @@ async function processSubagentDispatch(
     const toolDeps: ToolBuilderDeps = {
       userId: child.userId,
       user: user as IUserDocument,
+      getEntitlements: () => getUserEntitlements(user),
       logger,
       thinkingVisibility,
       organizationId: child.organizationId,
@@ -3995,7 +3998,8 @@ async function processSubagentDispatch(
         adminSettings: adminSettingsRepository,
         fabfiles: fabFileRepository,
         fabfilechunks: fabFileChunkRepository,
-        users: userRepository,
+        // A tool that re-reads the owner by id must see the role withheld above, not the stored one.
+        users: child.adminRoleWithheld ? ownerWithheldUsers(child.userId, userRepository) : userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,

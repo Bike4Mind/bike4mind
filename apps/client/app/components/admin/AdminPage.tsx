@@ -9,13 +9,14 @@ import AdminSystemHealthTab from '@client/app/components/admin/AdminSystemHealth
 import { useUser } from '@client/app/contexts/UserContext';
 import { Box, TabPanel, Tabs } from '@mui/joy';
 import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
-import { lazy, useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '@client/app/contexts/ApiContext';
+import { lazy, useCallback } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import SessionContainer from '@client/app/components/Session/SessionContainer';
 import { NotebookFilepondProvider } from '@client/app/components/Session/NotebookFilepondProvider';
 import { useGetSession } from '@client/app/hooks/data/sessions';
-import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { useAdminChatLayout } from './useAdminChatLayout';
+import { useAdminAssistantSession } from './useAdminAssistantSession';
+import { useAdminAssistantChatContext } from './useAdminAssistantChatContext';
 import ModalsAdminTab from './AdminModalTab';
 import EmbedKeysTab from './EmbedKeysTab';
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
@@ -61,8 +62,10 @@ const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
 const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: false });
-const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
+const WaitlistTab = dynamic(() => import('./WaitlistTab'), { ssr: false });
 const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
+const SignupRiskReviewTab = dynamic(() => import('./SignupRiskReviewTab'), { ssr: false });
+const HeldSignupGrantsTab = dynamic(() => import('./HeldSignupGrantsTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
 const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
@@ -121,46 +124,12 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   useAdminTabUrlSync(activeTab, setActiveTab, isAdminTabRenderable);
 
   // Admin Floating Chat (docked-session floating chat pattern)
-  const ADMIN_SESSION_KEY = 'admin-assistant-session-id';
-  const [adminSessionId, setAdminSessionId] = useState<string | null>(null);
-  const adminInitialized = useRef(false);
-
-  useEffect(() => {
-    if (adminInitialized.current || !currentUser?.isAdmin) return;
-    adminInitialized.current = true;
-
-    (async () => {
-      const savedId = localStorage.getItem(ADMIN_SESSION_KEY);
-      if (savedId) {
-        try {
-          await api.get(`/api/sessions/${savedId}`);
-          setAdminSessionId(savedId);
-          return;
-        } catch {
-          localStorage.removeItem(ADMIN_SESSION_KEY);
-        }
-      }
-      try {
-        const { data } = await api.post('/api/sessions/create', { name: 'Admin Assistant' });
-        localStorage.setItem(ADMIN_SESSION_KEY, data.id);
-        setAdminSessionId(data.id);
-      } catch (err) {
-        console.error('Failed to create Admin Assistant session:', err);
-      }
-    })();
-  }, [currentUser?.isAdmin]);
-
+  const adminSessionId = useAdminAssistantSession(!!currentUser?.isAdmin);
+  useAdminAssistantChatContext(activeTab);
   const adminSession = useGetSession(adminSessionId);
 
   // Mount the assistant as the minimized pill so it is on hand without covering the page; restore on unmount
-  useEffect(() => {
-    if (!currentUser?.isAdmin) return;
-    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: true });
-    return () => {
-      // Reset the minimized default too, or the next floating chat opened elsewhere starts as the pill
-      setSessionLayout({ layout: 'hide', floatingChatMinimized: false });
-    };
-  }, [currentUser?.isAdmin]);
+  useAdminChatLayout(!!currentUser?.isAdmin);
 
   return (
     <UndoToastProvider>
@@ -216,9 +185,15 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.Dependencies && <DependenciesTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ApiCookbook}>{activeTab === AdminTab.ApiCookbook && <ApiCookbookTab />}</TabPanel>
-          <TabPanel value={AdminTab.Subscribers}>{activeTab === AdminTab.Subscribers && <SubscribersTab />}</TabPanel>
+          <TabPanel value={AdminTab.Waitlist}>{activeTab === AdminTab.Waitlist && <WaitlistTab />}</TabPanel>
           <TabPanel value={AdminTab.SignupDomainHolds} sx={{ padding: 0 }}>
             {activeTab === AdminTab.SignupDomainHolds && <SignupDomainHoldsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SignupRiskReview} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.SignupRiskReview && <SignupRiskReviewTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.HeldSignupGrants} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.HeldSignupGrants && <HeldSignupGrantsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
             {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
@@ -340,6 +315,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               isLoading={!adminSessionId || adminSession.isPending}
               autoHideOnEmpty={false}
               floatingChatCloseToPill
+              floatingChatDockable={false}
             />
           </Box>
         </NotebookFilepondProvider>

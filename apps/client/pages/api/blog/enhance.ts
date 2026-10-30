@@ -1,3 +1,4 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { IUserDocument, UnprocessableEntityError, type IMessage } from '@bike4mind/common';
 import {
@@ -120,38 +121,40 @@ Summary:`;
   }
 }
 
-const handler = baseApi().post(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  try {
-    const params = req.body as BlogEnhanceParams;
+const handler = baseApi().post(
+  withRequestCompletionQuota(async (req, res) => {
+    assertAiAccessAllowed(req.user);
+    try {
+      const params = req.body as BlogEnhanceParams;
 
-    if (!params.content || !params.content.trim()) {
-      return res.status(400).json({
+      if (!params.content || !params.content.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Content is required',
+        });
+      }
+
+      if (!params.enhancementType || !['title', 'summary'].includes(params.enhancementType)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Enhancement type must be either "title" or "summary"',
+        });
+      }
+
+      const result = await enhanceContent(req, req.user, params, req.logger);
+
+      return res.json(result);
+    } catch (error) {
+      // The credit reservation keeps its own 422 rather than collapsing into the generic 500.
+      if (error instanceof UnprocessableEntityError) throw error;
+      console.error('Blog enhance error:', error);
+      return res.status(500).json({
         success: false,
-        message: 'Content is required',
+        message: error instanceof Error ? error.message : 'Failed to enhance blog content',
       });
     }
-
-    if (!params.enhancementType || !['title', 'summary'].includes(params.enhancementType)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Enhancement type must be either "title" or "summary"',
-      });
-    }
-
-    const result = await enhanceContent(req, req.user, params, req.logger);
-
-    return res.json(result);
-  } catch (error) {
-    // The credit reservation keeps its own 422 rather than collapsing into the generic 500.
-    if (error instanceof UnprocessableEntityError) throw error;
-    console.error('Blog enhance error:', error);
-    return res.status(500).json({
-      success: false,
-      message: error instanceof Error ? error.message : 'Failed to enhance blog content',
-    });
-  }
-});
+  })
+);
 
 export const config = {
   api: {

@@ -40,6 +40,39 @@ describe('AuditEventTable', () => {
     expect(screen.queryByTestId('audit-table-actor-filter-btn')).toBeNull();
   });
 
+  it('links the affected record without opening its audit drawer', () => {
+    const onSelectEntry = vi.fn();
+    render(<AuditEventTable {...baseProps} entries={[makeAuditEntry()]} onSelectEntry={onSelectEntry} />, {
+      wrapper: TestWrapper,
+    });
+    const link = screen.getByTestId('audit-table-target-link');
+    expect(link).toHaveAttribute('href', '/admin/users/user-1');
+    fireEvent.click(link);
+    expect(onSelectEntry).not.toHaveBeenCalled();
+  });
+
+  it('shows recorded reasons and paginates the loaded events', () => {
+    const entries = Array.from({ length: 26 }, (_, index) =>
+      makeAuditEntry({ id: `entry-${index}`, reason: `Recorded reason ${index}` })
+    );
+    render(<AuditEventTable {...baseProps} entries={entries} />, { wrapper: TestWrapper });
+    expect(screen.getByText('Recorded reason 0')).toBeVisible();
+    expect(screen.queryByTestId('audit-table-row-entry-25')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    expect(screen.getByTestId('audit-table-row-entry-25')).toBeVisible();
+  });
+
+  it('retries a failed query rather than loading the next cursor', () => {
+    const onRetry = vi.fn();
+    const onLoadMore = vi.fn();
+    render(<AuditEventTable {...baseProps} errorMessage="Could not load" onRetry={onRetry} onLoadMore={onLoadMore} />, {
+      wrapper: TestWrapper,
+    });
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onLoadMore).not.toHaveBeenCalled();
+  });
+
   it('offers actor and target filters only when handlers are given', () => {
     const onFilterActor = vi.fn();
     const onFilterTarget = vi.fn();

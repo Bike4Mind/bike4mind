@@ -99,6 +99,8 @@ interface SessionLayoutProps {
   dockedChatTitle?: React.ReactNode;
   /** Forwarded to FloatingChatWindow: its close button collapses to the pill instead of hiding the chat. */
   floatingChatCloseToPill?: boolean;
+  /** Forwarded to FloatingChatWindow: offer the dock layouts. Off where the host clips a docked panel (e.g. /admin). */
+  floatingChatDockable?: boolean;
   /** Called when the server auto-creates a session (e.g. first prompt with no session). Lets parent pages like /opti sync their local session state. */
   onSessionCreated?: (sessionId: string) => void;
   /** Show the conversation for reading only: no composer, no drop zone, no writing message actions. See SessionReadOnlyContext. */
@@ -225,6 +227,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
   floatingChatHeaderActions,
   dockedChatTitle,
   floatingChatCloseToPill,
+  floatingChatDockable,
   onSessionCreated,
 }) => {
   const readOnly = useSessionReadOnly();
@@ -613,6 +616,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
             headerActions={floatingChatHeaderActions}
             title={dockedChatTitle}
             closeToPill={floatingChatCloseToPill}
+            dockable={floatingChatDockable}
           >
             <Box
               ref={containerRef}

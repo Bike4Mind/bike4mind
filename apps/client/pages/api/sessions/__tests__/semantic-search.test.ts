@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
+
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const { mockGetEffectiveLLMApiKeys, mockGetSettingsValue, mockGetProviderFromModel, mockGenerateEmbedding } =
   vi.hoisted(() => ({

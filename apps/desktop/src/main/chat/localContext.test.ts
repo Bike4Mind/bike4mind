@@ -202,10 +202,11 @@ describe('chatContextTokens', () => {
     { machine: 'CPU 5 GiB, nothing resident', footprint: on(5), expected: 16384 },
     { machine: 'CPU 7 GiB', footprint: on(7), expected: 16384 },
     { machine: 'CPU 9 GiB', footprint: on(9), expected: 32768 },
-    { machine: 'CPU 13 GiB', footprint: on(13), expected: 65536 },
-    { machine: 'CPU 25 GiB', footprint: on(25), expected: 131072 },
-    { machine: 'CPU 40 GiB, the whole 256K', footprint: on(40), expected: 262144 },
-    { machine: 'CPU 9 GiB, trained on 40K', footprint: on(9, stubArch(40960)), expected: 40960 },
+    // Without a GPU Auto stops at 32K, however much memory is free.
+    { machine: 'CPU 13 GiB', footprint: on(13), expected: 32768 },
+    { machine: 'CPU 40 GiB, room for the whole 256K', footprint: on(40), expected: 32768 },
+    { machine: 'CPU 64 GiB, trained on 40K', footprint: on(64, stubArch(40960)), expected: 32768 },
+    { machine: 'CPU 9 GiB, trained on 24K', footprint: on(9, stubArch(24576)), expected: 24576 },
     // 16K fits on the GPU; 32K would move layers to system RAM.
     { machine: 'GPU 7 GiB / RAM 32 GiB', footprint: on(discreteMachine(7, 32)), expected: 16384 },
     { machine: 'GPU 9 GiB / RAM 32 GiB', footprint: on(discreteMachine(9, 32)), expected: 32768 },
@@ -214,6 +215,10 @@ describe('chatContextTokens', () => {
     { machine: 'unified 7 GiB', footprint: on(unifiedMachine(7)), expected: 16384 },
     { machine: 'unified 9 GiB', footprint: on(unifiedMachine(9)), expected: 32768 },
     { machine: 'unified 13 GiB', footprint: on(unifiedMachine(13)), expected: 65536 },
+    { machine: 'unified 25 GiB', footprint: on(unifiedMachine(25)), expected: 131072 },
+    { machine: 'unified 40 GiB, the whole 256K', footprint: on(unifiedMachine(40)), expected: 262144 },
+    { machine: 'unified 9 GiB, trained on 40K', footprint: on(unifiedMachine(9), stubArch(40960)), expected: 40960 },
+    { machine: 'GPU 40 GiB / RAM 64 GiB, the whole 256K', footprint: on(discreteMachine(40, 64)), expected: 262144 },
     // A GPU the probe cannot measure may be there; nothing larger is picked up front.
     { machine: 'low-confidence probe, 64 GiB', footprint: on(lowConfidenceMachine(64)), expected: 16384 },
   ])('Auto on $machine: $expected', ({ footprint, expected }) => {
@@ -225,6 +230,10 @@ describe('chatContextTokens', () => {
     expect(
       chatContextTokens({ setting: { mode: 'fixed', tokens: 262144 }, footprint: on(64), modelLimit: 32768 })
     ).toBe(32768);
+  });
+
+  it('gives a fixed Settings size past 32K on a machine without a GPU', () => {
+    expect(chatContextTokens({ setting: { mode: 'fixed', tokens: 131072 }, footprint: on(64) })).toBe(131072);
   });
 
   it.each([
@@ -239,8 +248,9 @@ describe('chatContextTokens', () => {
 
   it('honours a larger Modelfile num_ctx only when it stays resident within the trained length', () => {
     expect(auto(on(9), 4096)).toBe(32768);
-    expect(auto(on(17), 98304)).toBe(98304);
-    expect(auto(on(17), 262144)).toBe(65536);
+    expect(auto(on(unifiedMachine(17)), 98304)).toBe(98304);
+    expect(auto(on(unifiedMachine(17)), 262144)).toBe(65536);
+    expect(auto(on(64), 65536)).toBe(32768);
     expect(auto(on(discreteMachine(7, 32)), 32768)).toBe(16384);
     expect(auto(on(lowConfidenceMachine(64)), 40960)).toBe(16384);
     expect(auto(on(64, stubArch(32768)), 65536)).toBe(32768);
@@ -266,6 +276,16 @@ describe('grownContext', () => {
       tokens: 57344,
       slower: false,
     });
+  });
+
+  it('grows a model without a GPU one Settings size at a time from 32K, where a GPU jumps to the largest', () => {
+    const grow = (footprint: LocalModelFootprint, measured: number, current: number) =>
+      grownContext(footprint, measured, undefined, undefined, current);
+    expect(grow(on(64), 17_000, 16384)).toEqual({ tokens: 32768, slower: false });
+    expect(grow(on(64), 33_000, 32768)).toEqual({ tokens: 65536, slower: false });
+    expect(grow(on(64), 70_000, 65536)).toEqual({ tokens: 131072, slower: false });
+    expect(grow(on(64, stubArch(40960)), 33_000, 32768)).toEqual({ tokens: 40960, slower: false });
+    expect(grow(on(unifiedMachine(64)), 17_000, 16384)).toEqual({ tokens: 262144, slower: false });
   });
 
   it('grows to the next Settings size anyway when no resident size holds the prompt, and says it is slower', () => {

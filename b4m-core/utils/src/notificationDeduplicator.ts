@@ -1,6 +1,8 @@
+import { escapeSlackLine } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { CloudWatchLogsDecodedData, CloudWatchLogsLogEvent } from 'aws-lambda';
 import { postMessageToSlack } from './slack';
+import { formatErrorLogSlackMessage } from './errorLogSlackMessage';
 
 interface DeduplicationEntry {
   count: number;
@@ -88,8 +90,8 @@ export class NotificationDeduplicator {
     }
 
     if (shouldNotify) {
-      const message = `${tierMessage}\n*User:* ${username} (${email})\n*User ID:* ${userId}\n*Current Credits:* ${currentCredits}${
-        organization ? `\n*Organization:* ${organization.name} (${organization.id})` : ''
+      const message = `${tierMessage}\n*User:* ${escapeSlackLine(username)} (${escapeSlackLine(email)})\n*User ID:* ${userId}\n*Current Credits:* ${currentCredits}${
+        organization ? `\n*Organization:* ${escapeSlackLine(organization.name)} (${organization.id})` : ''
       }`;
 
       await postMessageToSlack(slackWebhookUrl, message);
@@ -173,28 +175,27 @@ export class NotificationDeduplicator {
     firstOccurrence?: Date,
     lastOccurrence?: Date
   ): Promise<void> {
-    const tags = Object.entries(metadata)
-      .map(([key, value]) => `\`${key}: ${value}\``)
-      .join(' ');
-
     const group = encodeURIComponent(logData.logGroup);
     const stream = encodeURIComponent(logData.logStream);
     const url = `https://console.aws.amazon.com/cloudwatch/home?region=${process.env.AWS_REGION}#logEventViewer:group=${group};stream=${stream};start=${logEvent.timestamp};end=${logEvent.timestamp}`;
+    const duration =
+      count > 1 && lastOccurrence && firstOccurrence
+        ? this.formatDuration(lastOccurrence.getTime() - firstOccurrence.getTime())
+        : undefined;
 
-    let slackMessage: string;
-
-    if (count === 1) {
-      slackMessage = `*${severity.toUpperCase()}* - ${message}\n\`env: ${stage}\` ${tags} [AWS](${url})`;
-    } else {
-      const duration =
-        lastOccurrence && firstOccurrence
-          ? this.formatDuration(lastOccurrence.getTime() - firstOccurrence.getTime())
-          : '';
-
-      slackMessage = `*${severity.toUpperCase()}* - ${message}\n\`count: ${count}\` \`duration: ${duration}\` \`env: ${stage}\` ${tags} [AWS](${url})`;
-    }
-
-    await postMessageToSlack(slackUrl, slackMessage);
+    await postMessageToSlack(
+      slackUrl,
+      formatErrorLogSlackMessage({
+        message,
+        severity,
+        metadata,
+        stage,
+        logGroup: logData.logGroup,
+        url,
+        count,
+        duration,
+      })
+    );
   }
 
   private normalizeErrorMessage(message: string): string {

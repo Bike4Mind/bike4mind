@@ -60,16 +60,18 @@ describe('dlqAlarmToSlack handler', () => {
     expect(init.method).toBe('POST');
     const body = JSON.parse(init.body as string);
     expect(body.text).toContain('Test alarm');
-    expect(JSON.stringify(body.blocks)).toContain('Test alarm description');
-    expect(JSON.stringify(body.blocks)).toContain('bike4mind-dev-test-alarm');
+    expect(JSON.stringify(body.blocks)).toContain(':small_blue_diamond: dev alarm: Test alarm');
+    expect(JSON.stringify(body.attachments)).toContain('Test alarm description');
+    expect(JSON.stringify(body.attachments)).toContain('bike4mind-dev-test-alarm');
   });
 
   it('posts a resolved message when the alarm returns to OK', async () => {
     await handler(makeEvent(alarmPayload('OK')));
     expect(fetchMock).toHaveBeenCalledOnce();
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body.text).toBe('✅ Resolved: Test alarm');
-    expect(body.blocks).toHaveLength(2);
+    expect(body.text).toBe(':white_check_mark: Resolved: Test alarm');
+    expect(body.blocks).toBeUndefined();
+    expect(body.attachments[0].color).toBe('#2EB67D');
   });
 
   it('posts to the alarms channel when SLACK_ALARMS_WEBHOOK_URL is set', async () => {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { Box, Button, Card, Modal, ModalDialog, Sheet, Typography } from '@mui/joy';
+import { Box, Button, Card, Input, Modal, ModalDialog, Select, Sheet, Textarea, Typography } from '@mui/joy';
 import type { Components, Theme } from '@mui/joy/styles';
+import { adminFocusScope } from '@client/app/components/admin/shared/adminStyles';
 import AppTheme from '../AppTheme';
 import {
   IN_ADMIN,
@@ -89,6 +90,37 @@ describe('admin skin scope', () => {
     expect(keys.length).toBeGreaterThan(0);
     const scopes = [IN_ADMIN, IN_ADMIN_PORTAL, IN_ADMIN_POPUP, IN_ADMIN_TOOLTIP, IN_ADMIN_ROW];
     expect(keys.filter(key => !scopes.includes(key))).toEqual([]);
+  });
+});
+
+// A field's only focus indicator is the ring on its root; an outline on the native control inside
+// draws a second, square box (the outline rule comes from both the skin and `adminFocusScope`).
+describe('admin focus ring', () => {
+  const outlineOf = (testId: string) => {
+    const element = screen.getByTestId(testId);
+    element.focus();
+    return getComputedStyle(element).outline;
+  };
+
+  it.each([
+    ['the skin', {}],
+    ['adminFocusScope', adminFocusScope],
+  ])('from %s outlines controls but not a field or its native control', (_label, scopeSx) => {
+    render(
+      <AppTheme>
+        <Sheet data-admin-surface sx={scopeSx}>
+          <Button data-testid="button">Save</Button>
+          <Input slotProps={{ input: { 'data-testid': 'input' } }} />
+          <Textarea slotProps={{ textarea: { 'data-testid': 'textarea' } }} />
+          <Select className="Mui-focusVisible" data-testid="select" />
+        </Sheet>
+      </AppTheme>
+    );
+
+    expect(outlineOf('button')).toContain('var(--joy-palette-admin-accent)');
+    for (const field of ['input', 'textarea', 'select']) {
+      expect(outlineOf(field)).not.toContain('var(--joy-palette-admin-accent)');
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-import type { WorktreeRemoval } from './worktreeRemoval';
+import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -9,7 +9,16 @@ import type {
   CookieImportState,
 } from './browserCookies';
 import type { ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
+import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
+import type {
+  ModelServerAddInput,
+  ModelServerMutationResult,
+  ModelServerProbeInput,
+  ModelServerProbeResult,
+  ModelServerUpdateInput,
+  ModelServerView,
+} from './modelServers';
 import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
@@ -25,6 +34,7 @@ import type {
   ChatImageActionResult,
   ChatImageRef,
   ChatModelCatalog,
+  CreationTool,
   ChatMoveToBackgroundResult,
   ChatQueueEvent,
   ChatQueuedMessage,
@@ -85,10 +95,17 @@ import type {
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type {
+  CuratedCheckResult,
+  CuratedList,
+  CuratedListSettings,
+  CuratedPullResult,
+  HfTokenResult,
+  HfTokenStatus,
   HubDetailResult,
   HubSearchRequest,
   HubSearchResult,
   InstalledModelsResult,
+  MachineView,
   ModelPull,
   ModelPullRequest,
   ModelPullResult,
@@ -133,6 +150,7 @@ export const IPC_CHANNELS = {
   chatGetLocalContext: 'chat:get-local-context',
   chatSetLocalContext: 'chat:set-local-context',
   chatGetLocalContextFit: 'chat:get-local-context-fit',
+  chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
   chatSettleLocalModel: 'chat:settle-local-model',
   chatSetSessionHistory: 'chat:set-session-history',
@@ -163,6 +181,9 @@ export const IPC_CHANNELS = {
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
   chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
+  chatListWorktrees: 'chat:list-worktrees',
+  chatRemoveWorktrees: 'chat:remove-worktrees',
+  chatRevealWorktree: 'chat:reveal-worktree',
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
@@ -248,6 +269,15 @@ export const IPC_CHANNELS = {
   mcpReconnectServer: 'mcp:reconnect-server',
   /** main -> renderer push; a server changed state, which the renderer never polls for. */
   mcpServersChanged: 'mcp:servers-changed',
+  modelServersList: 'servers:list',
+  modelServersProbe: 'servers:probe',
+  modelServersAdd: 'servers:add',
+  modelServersUpdate: 'servers:update',
+  modelServersRemove: 'servers:remove',
+  modelServersCheck: 'servers:check',
+  modelServersProbedHardware: 'servers:probed-hardware',
+  /** main -> renderer push; a server was added, changed, or its health was rechecked. */
+  modelServersChanged: 'servers:changed',
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
@@ -258,6 +288,8 @@ export const IPC_CHANNELS = {
   permissionsGetState: 'permissions:get-state',
   permissionsSetRules: 'permissions:set-rules',
   permissionsSetSharing: 'permissions:set-sharing',
+  capabilitiesGetState: 'capabilities:get-state',
+  capabilitiesRevoke: 'capabilities:revoke',
   /**
    * Import from Claude, Settings only. No channel takes a path: folders and export files are
    * picked through native dialogs in main, and the importer only ever reads them.
@@ -286,12 +318,28 @@ export const IPC_CHANNELS = {
   modelsListInstalled: 'models:list-installed',
   modelsSearch: 'models:search',
   modelsGetDetail: 'models:get-detail',
+  modelsListCurated: 'models:list-curated',
+  modelsGetCuratedPull: 'models:get-curated-pull',
+  modelsCheckCurated: 'models:check-curated',
+  /** Check now on the list itself: skips the 6 h throttle; the result arrives as modelsCuratedChanged. */
+  modelsCheckCuratedList: 'models:check-curated-list',
+  modelsCuratedSettings: 'models:curated-settings',
+  modelsCuratedSetEnabled: 'models:curated-set-enabled',
+  /** main -> renderer push; the curated list or its check status changed. */
+  modelsCuratedChanged: 'models:curated-changed',
   modelsListPulls: 'models:list-pulls',
   /** Starts a download; resolves when it finishes, fails or is cancelled. */
   modelsPull: 'models:pull',
   modelsCancelPull: 'models:cancel-pull',
+  /** Continues a pull paused by a dropped connection; resolves like `modelsPull`. */
+  modelsResumePull: 'models:resume-pull',
   modelsDismissPull: 'models:dismiss-pull',
   modelsRemove: 'models:remove',
+  /** Hugging Face sign-in: whether a token is saved, save one, forget it. None of them returns the token. */
+  modelsGetHfAccess: 'models:get-hf-access',
+  modelsSaveHfAccess: 'models:save-hf-access',
+  modelsClearHfAccess: 'models:clear-hf-access',
+  modelsHfAccessChanged: 'models:hf-access-changed',
   /** main -> renderer push of every pull in flight or failed. */
   modelsPullsChanged: 'models:pulls-changed',
   /** main -> renderer push: a pull finished or a model was removed. */
@@ -541,18 +589,36 @@ export interface DesktopApi {
     install(force: boolean): Promise<UpdateInstallResult>;
     onStateChanged(listener: (state: UpdateState) => void): () => void;
   };
+  /** The Models screen. `serverId` picks a saved model server; omitted means this computer. */
   models: {
-    getStatus(): Promise<ModelRuntimeStatus>;
-    listInstalled(): Promise<InstalledModelsResult>;
+    getStatus(serverId?: string): Promise<ModelRuntimeStatus>;
+    listInstalled(serverId?: string): Promise<InstalledModelsResult>;
     search(request: HubSearchRequest): Promise<HubSearchResult>;
-    getDetail(repo: string): Promise<HubDetailResult>;
+    getDetail(repo: string, serverId?: string): Promise<HubDetailResult>;
+    listCurated(serverId?: string): Promise<CuratedList>;
+    getCuratedPull(entryId: string, buildId: string, serverId?: string): Promise<CuratedPullResult>;
+    /** Checks an installed curated build against its review again, after Ollama could not describe it. */
+    checkCurated(entryId: string, buildId: string, serverId?: string): Promise<CuratedCheckResult>;
+    /** Checks for a newer curated list now. */
+    checkCuratedList(): Promise<void>;
+    getCuratedSettings(): Promise<CuratedListSettings>;
+    setCuratedEnabled(enabled: boolean): Promise<CuratedListSettings>;
+    onCuratedChanged(listener: () => void): () => void;
     listPulls(): Promise<ModelPull[]>;
     pull(request: ModelPullRequest): Promise<ModelPullResult>;
     cancelPull(key: string): Promise<void>;
+    resumePull(key: string): Promise<ModelPullResult>;
     dismissPull(key: string): Promise<void>;
-    remove(name: string): Promise<ModelRemoveResult>;
+    remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
+    /** Whether a Hugging Face token is saved; the token itself never comes back to the renderer. */
+    getHfToken(): Promise<HfTokenStatus>;
+    /** Saves the token once Hugging Face accepts it. */
+    setHfToken(token: string): Promise<HfTokenResult>;
+    clearHfToken(): Promise<HfTokenResult>;
+    onHfTokenChanged(listener: (status: HfTokenStatus) => void): () => void;
     onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
-    onInstalledChanged(listener: () => void): () => void;
+    /** Called with the id of the server (`local` for this computer) whose models changed. */
+    onInstalledChanged(listener: (serverId: string) => void): () => void;
   };
   auth: {
     getState(): Promise<AuthState>;
@@ -615,6 +681,8 @@ export interface DesktopApi {
     setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
     /** Which local models each fixed size may not fit, by the memory estimate. */
     getLocalContextFit(): Promise<LocalContextFit>;
+    /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
+    listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** Device-local only: moves a conversation whose model is not installed to the pick a send would use. */
@@ -672,6 +740,12 @@ export interface DesktopApi {
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
     inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
+    /** Checkouts under the repository's app worktree root, with the conversation that owns each. */
+    listWorktrees(directory: string): Promise<AppWorktree[]>;
+    /** Removes the named orphan checkouts, or every safe one when `paths` is omitted. */
+    removeWorktrees(directory: string, paths?: string[]): Promise<WorktreeSweepItem[]>;
+    /** Reveals a currently listed worktree in the file manager; false when it is not listed. */
+    revealWorktree(directory: string, path: string): Promise<boolean>;
     /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
@@ -945,6 +1019,22 @@ export interface DesktopApi {
     /** Subscribe to connection-state pushes; returns the unsubscribe. */
     onChanged(listener: (state: McpServersState) => void): () => void;
   };
+  /**
+   * Model servers on other machines, "This computer" first. A credential travels renderer -> main
+   * on probe, add and update, and never back: a view names only its kind. See @shared/modelServers.
+   */
+  modelServers: {
+    list(): Promise<ModelServerView[]>;
+    probe(input: ModelServerProbeInput): Promise<ModelServerProbeResult>;
+    add(input: ModelServerAddInput): Promise<ModelServerMutationResult>;
+    update(id: string, input: ModelServerUpdateInput): Promise<ModelServerMutationResult>;
+    remove(id: string): Promise<ModelServerMutationResult>;
+    /** Rechecks one server, or all of them when `id` is omitted. */
+    check(id?: string): Promise<ModelServerView[]>;
+    /** This computer's hardware as probed, before entered specs; null when the probe failed. */
+    probedHardware(): Promise<MachineView | null>;
+    onChanged(listener: (servers: ModelServerView[]) => void): () => void;
+  };
   /** User-made sidebar sections; see @shared/sidebarSections. */
   sidebar: {
     getSections(): Promise<SidebarSectionsState>;
@@ -967,6 +1057,10 @@ export interface DesktopApi {
     /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
     setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
     setSharing(share: boolean): Promise<PermissionsState>;
+  };
+  capabilities: {
+    getState(): Promise<CapabilityLedgerState>;
+    revoke(grantId: string): Promise<CapabilityLedgerState>;
   };
   claudeImport: {
     getState(): Promise<ClaudeImportState>;

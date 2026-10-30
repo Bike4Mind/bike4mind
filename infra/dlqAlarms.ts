@@ -19,6 +19,8 @@
  */
 
 import { secrets } from './secrets';
+import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
+import { businessMetricAlertsDLQ } from './businessMetricAlerts';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
   fabFileVectorizeQueueDLQ,
@@ -58,6 +60,7 @@ import {
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueueDLQ,
+  contributedQueues,
 } from './queues';
 import {
   telemetryAlertDeadLetter,
@@ -77,6 +80,7 @@ import {
 } from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -120,11 +124,13 @@ if (isMonitoredStage) {
     ),
   });
 
+  const mentionArgs = alarmSlackMentionFunctionArgs();
   dlqAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
-      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...mentionArgs.environment },
+      permissions: mentionArgs.permissions,
     },
     {
       transform: {
@@ -511,11 +517,24 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
   },
 ];
 
+// Contributed pairs follow the core descriptors, so adding one appends dashboard widgets
+// rather than moving the existing ones.
+const ALARMED_DLQS: InfraDlqDescriptor[] = [
+  ...DLQ_DESCRIPTORS,
+  ...Object.values(contributedQueues).map(({ spec, dlq }) => ({
+    label: spec.label,
+    displayName: spec.displayName,
+    application: spec.application,
+    sourceQueue: spec.name,
+    queue: dlq,
+  })),
+];
+
 // --- Alarm creation ---
 
 /**
  * Creates the standard pair of CloudWatch alarms (message count + message age) for a DLQ,
- * wired to the shared dlqAlarmTopic. Shared by the DLQ_DESCRIPTORS loop below and by any
+ * wired to the shared dlqAlarmTopic. Shared by the ALARMED_DLQS loop below and by any
  * alarm-only DLQ (one with no DLQ_REGISTRY/admin-replay counterpart — see fabFileModerationDLQ).
  * `sourceQueue` is omitted: this function only alarms on the DLQ itself and never needs it.
  */
@@ -534,7 +553,7 @@ function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
 }
 
 if (isMonitoredStage) {
-  for (const dlq of DLQ_DESCRIPTORS) {
+  for (const dlq of ALARMED_DLQS) {
     createDlqAlarms(dlq);
   }
 
@@ -544,6 +563,15 @@ if (isMonitoredStage) {
       displayName: 'Young Account Spend Alert',
       application: 'Signup',
       queue: youngAccountSpendAlertDeadLetter.queue,
+    });
+  }
+
+  if (signupGrantHeldReleaseDeadLetter) {
+    createDlqAlarms({
+      label: 'signup-grant-held-release',
+      displayName: 'Signup Grant Held Release',
+      application: 'Signup',
+      queue: signupGrantHeldReleaseDeadLetter.queue,
     });
   }
 
@@ -605,17 +633,26 @@ if (isMonitoredStage) {
   });
 }
 
+if (businessMetricAlertsDLQ && dlqAlarmTopic) {
+  createDlqAlarms({
+    label: 'business-metric-alerts',
+    displayName: 'Business Metric Alerts',
+    application: 'Analytics',
+    queue: businessMetricAlertsDLQ,
+  });
+}
+
 // --- Dashboard ---
 
 export let dlqHealthDashboard: aws.cloudwatch.Dashboard | undefined;
 
 if (isMonitoredStage) {
-  const dlqNames = DLQ_DESCRIPTORS.map(d => d.queue.nodes.queue.name);
+  const dlqNames = ALARMED_DLQS.map(d => d.queue.nodes.queue.name);
 
   const dashboardBody = $util
     .all([$util.all(dlqNames), aws.getRegionOutput().name, aws.getCallerIdentityOutput().accountId])
     .apply(([names, region, accountId]) => {
-      const alarmArns = DLQ_DESCRIPTORS.flatMap(d => [
+      const alarmArns = ALARMED_DLQS.flatMap(d => [
         `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-${d.label}-messages`,
         `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-${d.label}-age`,
       ]);
@@ -642,7 +679,7 @@ if (isMonitoredStage) {
       ];
 
       // Per-DLQ metric widgets: 2 per row, message count + age on dual Y axes
-      DLQ_DESCRIPTORS.forEach((dlq, idx) => {
+      ALARMED_DLQS.forEach((dlq, idx) => {
         const queueName = names[idx];
         const row = Math.floor(idx / 2);
         const col = idx % 2;

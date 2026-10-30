@@ -24,6 +24,7 @@ import InfoIcon from '@mui/icons-material/Info';
 import { DateFilterComponent } from './Analytics/filters/DateFilterComponent';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useModelLogDetail, useModelLogs, ModelLogSummary } from '@client/app/hooks/useModelLogs';
+import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { ErrorState } from './shared';
 import {
   MODEL_LOGS_MODEL_OPTIONS,
@@ -151,13 +152,13 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   const [view, updateView] = useModelLogsView();
   const { page: currentPage, limit: itemsPerPage, startDate, endDate } = view;
   const modelFilter = view.model ?? ALL_MODELS;
-  const [searchQuery, setSearchQuery] = useState('');
+  const { value: searchQuery, debouncedValue: debouncedSearch, setValue: setSearchQuery } = useDebounceValue('');
 
   const modelLogsQuery = useModelLogs({
     startDate,
     endDate,
     model: view.model,
-    search: searchQuery || undefined,
+    search: debouncedSearch || undefined,
     page: currentPage,
     limit: itemsPerPage,
   });
@@ -165,11 +166,6 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   // Any filter change goes back to the first page.
   const setDateRange = (range: Partial<Pick<ModelLogsView, 'startDate' | 'endDate'>>) =>
     updateView({ ...range, page: 1 });
-  const selectLastDays = (days: number) =>
-    setDateRange({
-      startDate: dayjs().subtract(days, 'day').format('YYYY-MM-DD'),
-      endDate: dayjs().format('YYYY-MM-DD'),
-    });
   const handleSearchChange = (query: string) => {
     setSearchQuery(query);
     if (currentPage !== 1) updateView({ page: 1 });
@@ -195,41 +191,9 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
 
   const currentItems = modelLogsQuery.data?.logs ?? [];
 
-  if (loading || modelLogsQuery.isLoading) {
-    return (
-      <Box>
-        <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
-          <Typography level="h4" sx={{ flex: 1 }}>
-            Model Response Logs
-          </Typography>
-          <Button
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            startDecorator={<RefreshIcon />}
-            onClick={handleRefresh}
-            disabled={loading || modelLogsQuery.isLoading}
-          >
-            Refresh
-          </Button>
-        </Stack>
-
-        <Card variant="outlined" sx={{ p: 2, mb: 3 }}>
-          <Stack spacing={2}>
-            <DateFilterComponent
-              startDate={startDate}
-              endDate={endDate}
-              onStartDateChange={date => setDateRange({ startDate: date })}
-              onEndDateChange={date => setDateRange({ endDate: date })}
-              onRangeSelect={selectLastDays}
-            />
-          </Stack>
-        </Card>
-
-        <LinearProgress />
-      </Box>
-    );
-  }
+  const isLoadingLogs = loading || modelLogsQuery.isLoading;
+  // keepPreviousData leaves isLoading false on a refetch, so the old rows stay up under this.
+  const isFetchingLogs = loading || modelLogsQuery.isFetching;
 
   return (
     <Box>
@@ -244,7 +208,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
           color="neutral"
           startDecorator={<RefreshIcon />}
           onClick={handleRefresh}
-          disabled={loading || modelLogsQuery.isLoading}
+          disabled={isFetchingLogs}
           data-testid="model-logs-refresh-btn"
         >
           Refresh
@@ -254,16 +218,11 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
       <Card variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Stack spacing={2}>
           <Grid container spacing={2}>
-            <Grid xs={12} md={4}>
-              <DateFilterComponent
-                startDate={startDate}
-                endDate={endDate}
-                onStartDateChange={date => setDateRange({ startDate: date })}
-                onEndDateChange={date => setDateRange({ endDate: date })}
-                onRangeSelect={selectLastDays}
-              />
+            {/* Full row: two date inputs plus three range buttons overflow a narrower cell. */}
+            <Grid xs={12}>
+              <DateFilterComponent value={{ startDate, endDate }} onChange={setDateRange} />
             </Grid>
-            <Grid xs={12} md={4}>
+            <Grid xs={12} md={6}>
               <FormControl>
                 <Select
                   value={modelFilter}
@@ -283,7 +242,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                 </Select>
               </FormControl>
             </Grid>
-            <Grid xs={12} md={4}>
+            <Grid xs={12} md={6}>
               <Input
                 placeholder="Search logs..."
                 value={searchQuery}
@@ -299,7 +258,12 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
         View detailed logs of model responses, including performance metrics, token usage, and execution tracking.
       </Alert>
 
-      {modelLogsQuery.isError ? (
+      {/* Only the results swap while loading: re-rendering the filters in another layout would
+          remount them and drop focus on every keystroke. */}
+      {!isLoadingLogs && isFetchingLogs && <LinearProgress sx={{ mb: 2 }} data-testid="model-logs-refetching" />}
+      {isLoadingLogs ? (
+        <LinearProgress data-testid="model-logs-loading" />
+      ) : modelLogsQuery.isError ? (
         <Card variant="outlined" sx={{ p: 2 }} data-testid="model-logs-error">
           <ErrorState message="Could not load model logs." onRetry={() => modelLogsQuery.refetch()} />
         </Card>

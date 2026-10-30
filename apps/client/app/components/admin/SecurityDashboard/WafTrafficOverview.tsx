@@ -245,6 +245,8 @@ export const WafTrafficOverview = ({ isActive = true }: { isActive?: boolean }) 
           blockedRequestsLoading={blockedRequestsQuery.isLoading}
           blockedRequestsError={blockedRequestsQuery.isError}
           blockedRequestsErrorDetail={blockedRequestsQuery.error}
+          onRetry={() => void logsInsightsQuery.refetch()}
+          onRetryBlockedRequests={() => void blockedRequestsQuery.refetch()}
         />
       )}
 

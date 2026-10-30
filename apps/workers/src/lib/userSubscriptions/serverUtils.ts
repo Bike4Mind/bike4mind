@@ -11,6 +11,7 @@ import {
   SubscriptionOwnerType,
   SubscriptionSource,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import { acquisitionFromStripeMetadata } from '@server/analytics/acquisition';
 
 import { Logger } from '@bike4mind/observability';
@@ -19,7 +20,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
 import { sendToClient } from '@server/websocket/utils';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { findSubscriptionPlan } from '@client/lib/userSubscriptions/constants';
 import { resolveSubscriptionCycleCredits } from '@client/lib/userSubscriptions/cycleCredits';
 import { organizationService, creditService } from '@bike4mind/services';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
@@ -277,6 +278,7 @@ export const handleOrganizationSubscriptionInvoice = async (
             periodEndsAt: dayjs.unix(periodEnd).toDate(),
             canceledAt: null,
             quantity: subscriptionQuantity,
+            ...stripeMirrorFields(subscription),
           });
           if (!flipped) {
             logger.warn(
@@ -312,6 +314,7 @@ export const handleOrganizationSubscriptionInvoice = async (
             periodEndsAt: dayjs.unix(periodEnd).toDate(),
             canceledAt: null,
             quantity: subscriptionQuantity,
+            ...stripeMirrorFields(subscription),
             // Recorded at checkout (pages/api/organizations/subscriptions/subscribe.ts).
             ...(acquisition && { acquisition }),
           });
@@ -518,7 +521,7 @@ export const handleUserSubscriptionInvoice = async (
   }
 
   const [item] = subscription.items.data;
-  const planDetail = SUBSCRIPTION_PLANS.find(plan => plan.priceId === item.price.id);
+  const planDetail = findSubscriptionPlan(item.price.id);
 
   if (!planDetail) {
     // A miss here means a PAID invoice grants no subscription and no credits, so it must
@@ -569,6 +572,7 @@ export const handleUserSubscriptionInvoice = async (
           periodEndsAt: dayjs.unix(item.current_period_end).toDate(),
           canceledAt: null,
           quantity: 1, // Always 1 for user subscriptions
+          ...stripeMirrorFields(subscription),
           // Recorded at checkout (pages/api/subscriptions/subscribe.ts); absent when the browser
           // carried no campaign touch.
           ...(acquisition && { acquisition }),

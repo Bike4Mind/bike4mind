@@ -18,10 +18,16 @@ export const OAUTH_FAILURE_REASONS = [
   'state_expired',
   'state_missing',
   'registration_closed',
+  'signup_limited',
+  'signup_email_unverified',
+  'signup_email_blocked',
   // Set by the callback itself from the provider's `?error=access_denied` (user cancelled consent).
   'access_denied',
   'internal',
 ] as const;
+
+/** The one refusal both signup paths show (OTC via signupNetworkLimits, OAuth via the redirect below). */
+export const SIGNUP_LIMITED_MESSAGE = 'Too many new accounts from your network. Please try again later.';
 
 export type OAuthFailureReason = (typeof OAUTH_FAILURE_REASONS)[number];
 
@@ -47,6 +53,12 @@ export function oauthFailureLoginErrorCode(reason: OAuthFailureReason): LoginErr
       return 'invalid_state';
     case 'registration_closed':
       return 'registration_closed';
+    case 'signup_limited':
+      return 'signup_limited';
+    case 'signup_email_unverified':
+      return 'verified_email_required';
+    case 'signup_email_blocked':
+      return 'signup_not_allowed';
     default:
       return 'callback_error';
   }

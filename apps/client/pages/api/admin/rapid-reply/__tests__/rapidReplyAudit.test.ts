@@ -32,10 +32,14 @@ type Route = (req: unknown, res: unknown) => unknown;
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, Route> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const chain: Record<string, unknown> & Route = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return routes[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
-        use: () => chain,
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: (fn: Route) => ((routes.GET = fn), chain),
         post: (fn: Route) => ((routes.POST = fn), chain),
         put: (fn: Route) => ((routes.PUT = fn), chain),
@@ -464,6 +468,7 @@ describe('rapid reply admin audit on failed writes', () => {
     ['mapping PUT', () => call(mappingById, 'PUT', { isAdmin: false, id: 'm1', body: {} })],
     ['mapping DELETE', () => call(mappingById, 'DELETE', { isAdmin: false, id: 'm1' })],
     ['mappings bulk', () => call(mappingsBulk, 'POST', { isAdmin: false, body: { operations: [] } })],
+    ['test run', () => call(testRun, 'POST', { isAdmin: false, body: { mainModelId: 'm' } })],
   ])('records nothing for a non-admin on %s', async (_name, run) => {
     await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
     expect(h.audit).not.toHaveBeenCalled();

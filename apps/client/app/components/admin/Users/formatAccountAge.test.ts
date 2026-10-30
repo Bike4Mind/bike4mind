@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatAccountAge, formatAccountCreatedTitle } from './formatAccountAge';
+import { formatAccountAge, formatAccountCreatedTitle, formatLastActiveTitle } from './formatAccountAge';
 
 const NOW = new Date('2026-08-27T12:00:00.000Z');
 const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
@@ -44,5 +44,18 @@ describe('formatAccountCreatedTitle', () => {
   it('is null when there is nothing to show', () => {
     expect(formatAccountCreatedTitle(undefined)).toBeNull();
     expect(formatAccountCreatedTitle('nope')).toBeNull();
+  });
+});
+
+describe('formatLastActiveTitle', () => {
+  it('labels the hover as last activity, not account creation', () => {
+    const title = formatLastActiveTitle('2026-08-24T00:00:00.000Z');
+    expect(title).toMatch(/^Last active /);
+    expect(title).not.toContain('Account created');
+  });
+
+  it('is null when there is nothing to show', () => {
+    expect(formatLastActiveTitle(undefined)).toBeNull();
+    expect(formatLastActiveTitle('nope')).toBeNull();
   });
 });

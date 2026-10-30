@@ -62,7 +62,7 @@ async function findConfiguredSecretField(page: Page) {
     if ((await field.count()) === 0) continue;
     const value = await field.inputValue().catch(() => '');
     if (value.startsWith(SENSITIVE_SETTING_MASK)) {
-      return { key, field, save: page.getByTestId(`admin-setting-${key}-save-btn`) };
+      return { key, field };
     }
   }
   return null;
@@ -117,14 +117,14 @@ test.describe('Admin Settings - sensitive values never reach the browser', () =>
     expect(sawRealValue, 'expected at least one non-sensitive string value to come through intact').toBe(true);
   });
 
-  test('focusing a configured secret reveals nothing and leaves Save disabled', async ({ page, adminPage }) => {
+  test('focusing a configured secret reveals nothing and stages no change', async ({ page, adminPage }) => {
     await gotoAdminSettings(page, adminPage);
 
     const target = await findConfiguredSecretField(page);
     // A hard failure rather than test.skip: core.setup seeds a throwaway sensitive setting, so
     // finding none means the seed regressed, and a silent skip would hide that permanently.
     expect(target, 'no configured sensitive field found - did core.setup seeding regress?').not.toBeNull();
-    const { field, save } = target!;
+    const { field } = target!;
 
     await field.scrollIntoViewIfNeeded();
     await field.focus();
@@ -134,15 +134,21 @@ test.describe('Admin Settings - sensitive values never reach the browser', () =>
     // toHaveValue prints the actual value into the report, which on the exact regression this
     // test exists to catch would be a live secret.
     expect(await field.inputValue(), 'focus must clear the field, not reveal a value').toBe('');
-    await expect(save).toBeDisabled();
+    // Admin Settings stages edits into the shared SaveBar (SettingsDraftProvider) instead of a
+    // per-field Save button, so "not an edit" means the bar never appears.
+    await page.waitForTimeout(TIMEOUTS.POST_ACTION);
+    await expect(page.getByTestId('admin-save-bar')).toHaveCount(0);
   });
 
-  test('Save after focusing without typing issues no write and keeps the stored value', async ({ page, adminPage }) => {
+  test('Cmd/Ctrl+S after focusing without typing issues no write and keeps the stored value', async ({
+    page,
+    adminPage,
+  }) => {
     await gotoAdminSettings(page, adminPage);
 
     const target = await findConfiguredSecretField(page);
     expect(target, 'no configured sensitive field found - did core.setup seeding regress?').not.toBeNull();
-    const { field, save } = target!;
+    const { field } = target!;
 
     const writes: string[] = [];
     page.on('request', request => {
@@ -153,10 +159,10 @@ test.describe('Admin Settings - sensitive values never reach the browser', () =>
     await field.focus();
     expect(await field.inputValue(), 'focus must clear the field, not reveal a value').toBe('');
 
-    // Before the guard this path wrote '' straight over the stored key. force:true bypasses
-    // Playwright's actionability wait so a disabled button still receives the click, which is
-    // what a real user hitting it mid-render would do.
-    await save.click({ force: true });
+    // Before the guard this path wrote '' straight over the stored key. The shortcut is the one
+    // save path still reachable from a focused field with nothing staged (SaveBar listens for it
+    // on window regardless of what is staged).
+    await page.keyboard.press('ControlOrMeta+s');
     await page.waitForTimeout(TIMEOUTS.POST_ACTION);
 
     expect(writes, 'an empty sensitive value must never be written').toEqual([]);

@@ -76,6 +76,8 @@ export interface PullOptions {
   onProgress?: (progress: PullProgress) => void;
   /** Fails the pull when the runtime sends nothing for this long (ms). Must be positive; Infinity disables the check. */
   idleTimeoutMs?: number;
+  /** Ollama only: the manifest-list variant to fetch, e.g. `llamacpp`. Ollama before 0.40 ignores it. */
+  runner?: string;
 }
 
 export interface LoadedModel {
@@ -86,7 +88,7 @@ export interface LoadedModel {
   expiresAt: string | null;
 }
 
-export type RuntimeKind = 'ollama' | 'openai-compatible';
+export type RuntimeKind = 'ollama' | 'openai-compatible' | 'llama-server';
 
 export interface RuntimeCapabilities {
   canPull: boolean;
@@ -101,12 +103,50 @@ export interface ModelInspection {
   arch: ModelArch | null;
   /** MoE weight split, when the runtime lists tensor types and shapes; null for dense models. */
   tensorStats: TensorStats | null;
+  /** The Modelfile's PARAMETER lines as Ollama's /api/show prints them (`num_ctx 4096`, one per line). */
+  parameters?: string | null;
+  /** The trained context limit the runtime reports, even when `arch` could not be read. */
+  contextLength?: number | null;
+  /** What the installed model was built from, for checking it against reviewed registry layers. */
+  contents?: ModelContents;
+}
+
+export interface ModelContents {
+  /** The chat template text, byte for byte as its layer stores it. */
+  template: string | null;
+  /** License layers' text; Ollama joins several with a newline. */
+  license: string | null;
+  /** sha256 hex of the weights blob. */
+  modelBlob: string | null;
+  /** Projector FROM lines after the weights; null entries name a blob path that could not be read. */
+  projectorBlobs?: (string | null)[];
+  /** DRAFT lines, kept as a list so duplicate or unreadable drafts cannot pass an integrity check. */
+  draftBlobs?: (string | null)[];
+  /** ADAPTER lines; curated builds do not accept adapters, including unreadable paths. */
+  adapterBlobs?: (string | null)[];
+}
+
+export interface InspectOptions {
+  /** false skips re-reading the installed list, for callers that already have it; `model` then carries no size. */
+  tags?: boolean;
+  signal?: AbortSignal;
+  /** Deadline for the read (ms), in place of the runtime's request deadline. */
+  timeoutMs?: number;
+}
+
+/** The layers an Ollama registry (ollama.com or hf.co) serves for one tag; digests are hex with no `sha256:`. */
+export interface OllamaRegistryLayers {
+  model: string | null;
+  /** Every other layer in manifest order, e.g. `application/vnd.ollama.image.template`. */
+  others: { mediaType: string; digest: string }[];
 }
 
 export interface LocalRuntime {
   /**
    * `'ollama'` for the default daemon, otherwise `'<kind>:<host:port>'` for HTTP server roots.
    * HTTPS and reverse-proxy paths use `'<kind>:<canonical base URL>'` to keep distinct endpoints unique.
+   * `'llama-server'` for the managed llama-server runtime, of which a process runs one.
+   * A caller-supplied `id` option replaces both.
    */
   readonly id: string;
   readonly kind: RuntimeKind;
@@ -115,7 +155,7 @@ export interface LocalRuntime {
   /** Never throws. */
   health(): Promise<RuntimeHealth>;
   list(): Promise<InstalledModel[]>;
-  inspect(model: string): Promise<ModelInspection>;
+  inspect(model: string, options?: InspectOptions): Promise<ModelInspection>;
   pull(ref: string, opts?: PullOptions): Promise<void>;
   remove(model: string): Promise<void>;
   loaded(): Promise<LoadedModel[]>;

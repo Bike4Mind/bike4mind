@@ -15,6 +15,7 @@ import OrganizationAnalysisSection from '@client/app/components/organizations/Or
 import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIntegration';
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
+import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -52,7 +53,9 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import {
+  canManageOrgConnectors,
   canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
@@ -120,6 +123,10 @@ const OrganizationPage: FC = () => {
   // Billing is owner-only, narrower than canManageOrg - see canViewOrgBilling for why, and for
   // why a platform admin is not admitted here either.
   const canViewBilling = useMemo(() => canViewOrgBilling(currentUser, organization), [currentUser, organization]);
+  const canManageConnectors = useMemo(
+    () => canManageOrgConnectors(currentUser, organization),
+    [currentUser, organization]
+  );
 
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = useMemo(() => {
@@ -141,6 +148,7 @@ const OrganizationPage: FC = () => {
     canManageIntegrations,
     canManageGroups,
     canViewBilling,
+    canManageConnectors,
   });
 
   useDocumentTitle(organization?.name, ' | Team');
@@ -258,6 +266,12 @@ const OrganizationPage: FC = () => {
                 </Tab>
               </>
             )}
+            {canManageConnectors && (
+              <Tab value={OrganizationTabs.Connectors} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <HubOutlinedIcon sx={{ fontSize: 16 }} />
+                Connectors
+              </Tab>
+            )}
             {canManageOrg && (
               <Tab value={OrganizationTabs.Settings} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
@@ -326,6 +340,14 @@ const OrganizationPage: FC = () => {
                   <OrgWebhookConfig organization={organization} />
                 </TabPanel>
               </>
+            )}
+            {canManageConnectors && (
+              <TabPanel value={OrganizationTabs.Connectors}>
+                <Typography level="title-lg" startDecorator={<HubOutlinedIcon />} sx={{ mb: 3 }}>
+                  Custom Connectors
+                </Typography>
+                <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
+              </TabPanel>
             )}
             {canManageOrg && (
               <TabPanel value={OrganizationTabs.Settings}>
