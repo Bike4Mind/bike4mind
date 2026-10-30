@@ -13,7 +13,7 @@
 import { systemSecretRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { encryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import {
@@ -37,9 +37,7 @@ function maskSecretValue(value: string | undefined): string {
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
+    ensureAdmin(req.user?.isAdmin);
 
     try {
       const dbSecrets = await systemSecretRepository.findAll();
@@ -83,9 +81,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
+    ensureAdmin(req.user?.isAdmin);
 
     try {
       const { secretName, value } = req.body;

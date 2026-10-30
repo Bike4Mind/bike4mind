@@ -33,6 +33,8 @@ vi.mock('@server/managers/systemSecretsManager', () => ({
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.fn() } }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
+import { Logger } from '@bike4mind/observability';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import handler from '../[id]';
 
 const remove = async () => {
@@ -80,5 +82,18 @@ describe('DELETE /api/admin/system-secrets/[id] admin audit', () => {
     expect(res._getStatusCode()).toBe(500);
     expect(res._getJSONData()).not.toHaveProperty('success');
     expect(h.clearSecretCache).not.toHaveBeenCalled();
+  });
+});
+
+describe('non-admin access', () => {
+  it.each(['GET', 'DELETE'] as const)('%s rejects with ForbiddenError without logging an error', async method => {
+    const { req, res } = createMocks({ method, query: { id: 'secret-1' } });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
+
+    await expect(
+      (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(Logger.error).not.toHaveBeenCalled();
+    expect(h.deleteSecret).not.toHaveBeenCalled();
   });
 });

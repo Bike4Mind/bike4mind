@@ -19,7 +19,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import {
@@ -85,9 +85,7 @@ function getTier1Status(stage: string): Tier1SecretInfo[] {
 }
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
+  ensureAdmin(req.user?.isAdmin);
 
   try {
     const stage = Config.STAGE;
