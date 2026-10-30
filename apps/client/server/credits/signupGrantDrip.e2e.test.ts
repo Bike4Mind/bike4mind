@@ -341,6 +341,29 @@ describe('signup activity drip', () => {
     expect(await CreditTransaction.countDocuments({})).toBe(0);
   });
 
+  it('gives a staged-off environment seeded with drip cap 0 the flat grant, no drip and no unset-cap alert', async () => {
+    const seeded = {
+      stagedSignupGrantEnabled: 'false',
+      signupGrantActivityEnabled: 'false',
+      signupGrantInitialCredits: '1000',
+      signupGrantDailyCredits: '0',
+      signupGrantDripCap: '0',
+    };
+    const prior = { ...config };
+    Object.assign(config, seeded);
+    try {
+      const user = await createSignupStageUser();
+      expect(await creditsOf(user.id)).toBe(1000);
+      expect((await User.findById(user.id))?.signupGrant).toMatchObject({ unlockCredits: 0, creditsReleased: 1000 });
+      expect((await drip(user.id, 0)).creditsGranted).toBe(0);
+      expect(await creditsOf(user.id)).toBe(1000);
+      expect(notifyConfig).not.toHaveBeenCalled();
+    } finally {
+      for (const key of Object.keys(seeded)) delete config[key];
+      Object.assign(config, prior);
+    }
+  });
+
   it('hands a failed payout back to the budget', async () => {
     const user = await createSignupStageUser();
     config.signupGrantDailyBudget = '1000';

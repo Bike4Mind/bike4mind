@@ -6,6 +6,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOwnSessions } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useSignupGrantCredits } from '@client/app/hooks/useSignupGrantCredits';
+import { useSignupGrantSchedule } from '@client/app/hooks/useSignupGrantSchedule';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useSelectedModelAnswerCost } from '@client/app/hooks/useSelectedModelAnswerCost';
 import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
@@ -47,11 +48,11 @@ const NewUserWelcome = () => {
   const { data: sessions, isSuccess, isFetching } = useGetOwnSessions('');
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const defaultFreeCredits = useSignupGrantCredits();
-  const activityEnabled = useGetSettingsValue('signupGrantActivityEnabled');
+  const schedule = useSignupGrantSchedule();
   const minActiveSeconds = useGetSettingsValue('signupGrantActivityMinActiveSeconds');
   const dailyDripCredits = advertisedDripCredits({
-    enabled: activityEnabled,
-    dailyCredits: Number(useGetSettingsValue('signupGrantActivityDailyCredits')) || 0,
+    enabled: schedule.dailyCredits > 0,
+    dailyCredits: schedule.dailyCredits,
     unlockCredits: currentUser?.signupGrant?.unlockCredits,
   });
   const balance = useEffectiveCredits();

@@ -58,11 +58,19 @@ describe('activity signup drip evaluation', () => {
     expect(h.drip).not.toHaveBeenCalled();
   });
 
-  it('does not drip when the activity flag is off', async () => {
-    settings({ signupGrantActivityEnabled: 'false' });
+  it('does not drip when the daily amount is 0, even with the retired activity flag on', async () => {
+    h.limits.mockResolvedValue({ dailyCredits: 0, dripCap: 9000, dripCapSource: 'setting' });
     h.findById.mockResolvedValue(grantedUser());
     await unlockSignupGrantFromActivity('user-1', NOW);
     expect(h.drip).not.toHaveBeenCalled();
+  });
+
+  it('still drips with the retired activity flag off when the daily amount is positive', async () => {
+    settings({ signupGrantActivityEnabled: 'false' });
+    h.findById.mockResolvedValue(grantedUser());
+    h.drip.mockResolvedValue({ creditsGranted: 1000, currentCredits: 1 });
+    await unlockSignupGrantFromActivity('user-1', NOW);
+    expect(h.drip).toHaveBeenCalled();
   });
 
   it.each([['0'], ['abc'], [undefined], ['59'], ['7201'], ['90.5']])(

@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { signupGrantRemaining } from '@bike4mind/common';
+import { signupGrantDripRemaining } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useSignupGrantSchedule } from '@client/app/hooks/useSignupGrantSchedule';
 
 // Cadence must stay within the server's MIN_GAP_MS / MAX_CREDIT_MS in server/credits/recordActiveSession.ts.
 export const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -37,14 +37,9 @@ function anotherTabLeads(tabId: string): boolean {
 export function useSignupGrantHeartbeat() {
   const { currentUser } = useUser();
   const queryClient = useQueryClient();
-  const enabledSetting = useGetSettingsValue('signupGrantActivityEnabled');
-  const dailyCredits = Number(useGetSettingsValue('signupGrantActivityDailyCredits')) || 0;
+  const { dailyCredits, dripCap } = useSignupGrantSchedule();
   const grant = currentUser?.signupGrant;
-  const eligible =
-    (enabledSetting === true || enabledSetting === 'true') &&
-    dailyCredits > 0 &&
-    grant?.stage === 'signup' &&
-    signupGrantRemaining(grant) > 0;
+  const eligible = dailyCredits > 0 && grant?.stage === 'signup' && signupGrantDripRemaining(grant, dripCap) > 0;
   const userId = currentUser?.id;
 
   useEffect(() => {

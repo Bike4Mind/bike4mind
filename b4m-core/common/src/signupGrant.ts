@@ -149,24 +149,20 @@ export async function resolveSignupGrantSchedule(
   return signupGrantScheduleFromValues(key => stored.get(key));
 }
 
-/** Missing new settings preserve the installed grant; migration never enables staging. */
 export async function resolveSignupGrantSettings(adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>) {
-  const enabled = await adminSettings.findBySettingName('stagedSignupGrantEnabled');
   const schedule = await resolveSignupGrantSchedule(adminSettings);
-  return {
-    enabled: enabled?.settingValue === 'true' || (enabled?.settingValue as unknown) === true,
-    signupCredits: schedule.initialCredits,
-    unlockCredits: schedule.dripCap,
-  };
+  return { signupCredits: schedule.initialCredits, unlockCredits: schedule.dripCap };
 }
 
-/** `totalCredits` fixes the whole entitlement (tranche first, remainder locked) instead of the signup settings. */
+/**
+ * Every signup enrolls a staged grant. A drip cap of 0 (seeded where staging used to be off) locks nothing,
+ * so the grant pays the same initial credits the flat path did.
+ * `totalCredits` fixes the whole entitlement (tranche first, remainder locked) instead of the signup settings.
+ */
 export async function newSignupGrant(
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>,
   totalCredits?: number
 ) {
-  const enabled = await adminSettings.findBySettingName('stagedSignupGrantEnabled');
-  if (enabled?.settingValue !== 'true' && (enabled?.settingValue as unknown) !== true) return undefined;
   const config = await resolveSignupGrantSettings(adminSettings);
   const signupCredits =
     totalCredits === undefined ? config.signupCredits : Math.min(config.signupCredits, totalCredits);

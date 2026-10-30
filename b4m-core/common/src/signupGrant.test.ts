@@ -12,8 +12,10 @@ const settings = (values: Record<string, unknown>) =>
   }) as unknown as Parameters<typeof newSignupGrant>[0];
 
 describe('signup grant configuration', () => {
-  it('does not enroll accounts unless explicitly enabled', async () => {
-    expect(await newSignupGrant(settings({ defaultFreeCredits: '75' }))).toBeUndefined();
+  it('enrolls with the retired staged flag off, locking nothing when the drip cap is 0', async () => {
+    const offEnv = { stagedSignupGrantEnabled: 'false', defaultFreeCredits: '75', signupGrantDripCap: '0' };
+    expect(await newSignupGrant(settings(offEnv))).toMatchObject({ signupCredits: 75, unlockCredits: 0 });
+    expect(await newSignupGrant(settings(offEnv), 60)).toMatchObject({ signupCredits: 60, unlockCredits: 0 });
   });
 
   it.each(['0', '75', '-1', 'invalid'])(

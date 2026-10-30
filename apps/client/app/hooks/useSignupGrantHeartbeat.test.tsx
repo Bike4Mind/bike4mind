@@ -15,7 +15,13 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: 'u1', signupGrant: h.grant } }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => (key === 'signupGrantActivityDailyCredits' ? h.daily : h.enabled),
+  useSettingsFromServer: () => ({
+    data: [
+      { settingName: 'signupGrantActivityEnabled', settingValue: h.enabled },
+      { settingName: 'signupGrantActivityDailyCredits', settingValue: h.daily },
+      { settingName: 'signupGrantDripCap', settingValue: '9000' },
+    ],
+  }),
 }));
 import {
   useSignupGrantHeartbeat,
@@ -51,6 +57,14 @@ describe('useSignupGrantHeartbeat', () => {
     renderHook(() => useSignupGrantHeartbeat());
     await advance(HEARTBEAT_INTERVAL_MS * 2);
     expect(h.post).not.toHaveBeenCalled();
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
+    expect(h.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('pings with the retired activity flag off while the daily amount is positive', async () => {
+    h.enabled = false;
+    renderHook(() => useSignupGrantHeartbeat());
     touch();
     await advance(HEARTBEAT_INTERVAL_MS);
     expect(h.post).toHaveBeenCalledTimes(1);
@@ -137,7 +151,17 @@ describe('useSignupGrantHeartbeat', () => {
   });
 
   it.each([
-    ['the setting is off', () => (h.enabled = false)],
+    [
+      'the drip already reached the cap',
+      () =>
+        (h.grant = {
+          stage: 'signup',
+          signupCredits: 1000,
+          unlockCredits: 9000,
+          creditsReleased: 1000,
+          dripCredits: 9000,
+        }),
+    ],
     ['the daily credit is 0', () => (h.daily = 0)],
     ['the account has no grant', () => (h.grant = undefined)],
     [

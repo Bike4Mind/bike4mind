@@ -282,14 +282,30 @@ describe('active session heartbeat', () => {
     expect(await creditsOf(user.id)).toBe(1000);
   });
 
-  it('does nothing for a user without a grant or before the tranche is released, and when the flag is off', async () => {
+  it('pays with the retired activity flag off when the daily amount is positive', async () => {
+    const user = await createSignupStageUser(0);
+    config.signupGrantActivityEnabled = 'false';
+    await User.updateOne({ _id: user.id }, { currentCredits: 0 });
+    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 1000, paidToday: true });
+  });
+
+  it('pays nothing when the daily amount is 0, even with the retired activity flag on', async () => {
+    const user = await createSignupStageUser(0);
+    config.signupGrantDailyCredits = '0';
+    await ping(user.id, 0);
+    await ping(user.id, 60);
+    expect(await activityOf(user.id)).toBeUndefined();
+    expect(await dripRows(user.id)).toHaveLength(0);
+  });
+
+  it('does nothing for a user without a grant or before the tranche is released, and when the daily amount is 0', async () => {
     const plain = await User.create({ username: 'plain', name: 'Plain', email: 'plain@example.test' });
     const plainResult = await ping(plain.id, 0);
     expect(plainResult).toMatchObject({ activeSeconds: 0 });
     expect(plainResult).not.toHaveProperty('requiredSeconds');
     expect((await User.findById(plain.id))?.signupGrant).toBeUndefined();
     const user = await createSignupStageUser(1);
-    config.signupGrantActivityEnabled = 'false';
+    config.signupGrantActivityDailyCredits = '0';
     await ping(user.id, 0);
     await ping(user.id, 60);
     expect(await activityOf(user.id)).toBeUndefined();

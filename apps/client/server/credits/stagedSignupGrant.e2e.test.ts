@@ -778,12 +778,12 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(12);
   });
 
-  it.each([['false'], [undefined]])('does not unlock from activity when the flag is %s', async flag => {
+  it.each([['0'], [undefined]])('does not unlock from activity when the daily amount is %s', async daily => {
     const user = await createUser();
     const at = new Date('2030-03-01T10:00:00Z');
     await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date('2030-02-01T00:00:00Z') } });
     await userService.releaseSignupTranche(user.id, adapters);
-    activitySettings({ signupGrantActivityEnabled: flag });
+    activitySettings({ signupGrantActivityDailyCredits: daily });
     await accrue(user.id, '2030-03-01', 600_000);
     expect((await unlockSignupGrantFromActivity(user.id, at)).creditsGranted).toBe(0);
     expect((await User.findById(user.id))?.currentCredits).toBe(12);

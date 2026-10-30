@@ -3,7 +3,7 @@ import { resolveSignupDripPeriod } from './signupDripPeriod';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { signupProtection } from '@server/auth/signupProtection';
-import { isActivityDripEnabled, payActivityDripForDay, resolveRequiredActiveSeconds } from './activityUnlock';
+import { isDripScheduleOn, payActivityDripForDay, resolveRequiredActiveSeconds } from './activityUnlock';
 
 // Client interval/idle constants live in app/hooks/useSignupGrantHeartbeat.ts; MAX_CREDIT_MS must exceed its interval.
 const MIN_GAP_MS = 45_000;
@@ -33,7 +33,7 @@ export async function recordHeartbeat(userId: string, now: Date = new Date()): P
   const { day } = period;
   result.nextEligibleAt = period.endsAt;
   if (hasPaidSignupDrip(grant, day, period.key)) return { ...result, paidToday: true };
-  if (!(await isActivityDripEnabled())) return result;
+  if (!(await isDripScheduleOn())) return result;
   const requiredSeconds = await resolveRequiredActiveSeconds();
   result.requiredSeconds = requiredSeconds;
   const { dailyCredits, dripCap } = await userService.resolveDripLimits(adminSettingsRepository);

@@ -15,12 +15,13 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { signupGrant: h.grant, signupGrantHeldReason: h.held } }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) =>
-    key === 'signupGrantActivityDailyCredits'
-      ? h.daily
-      : key === 'signupGrantActivityMinActiveSeconds'
-        ? h.minSeconds
-        : h.activity,
+  useGetSettingsValue: (key: string) => (key === 'signupGrantActivityMinActiveSeconds' ? h.minSeconds : undefined),
+  useSettingsFromServer: () => ({
+    data: [
+      { settingName: 'signupGrantActivityEnabled', settingValue: h.activity },
+      { settingName: 'signupGrantActivityDailyCredits', settingValue: h.daily },
+    ],
+  }),
 }));
 import SignupGrantStatus from './SignupGrantStatus';
 const theme = extendTheme({ ...getThemeConfig() });
@@ -76,9 +77,8 @@ describe('signup grant status', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
   it.each([
-    [false, 1000],
-    ['false', 1000],
     [true, 0],
+    [true, '0'],
     [true, undefined],
   ])('omits the daily drip when activity=%j and daily=%j', (activity, daily) => {
     h.activity = activity;
@@ -87,6 +87,11 @@ describe('signup grant status', () => {
     const paths = screen.getByTestId('signup-grant-unlock-paths');
     expect(paths).not.toHaveTextContent('each day');
     expect(paths).toHaveTextContent('when you subscribe');
+  });
+  it('advertises the daily drip with the retired activity flag off while the daily amount is positive', () => {
+    h.activity = false;
+    show();
+    expect(screen.getByTestId('signup-grant-unlock-paths')).toHaveTextContent('each day');
   });
   it('drops the unlock paths once the grant is fully released', () => {
     h.grant = { ...h.grant!, creditsReleased: 10000, stage: 'unlocked', nextCondition: null };

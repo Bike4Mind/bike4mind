@@ -17,9 +17,9 @@ import { resolveSignupDripPeriod, type SignupDripPeriod } from './signupDripPeri
 type DripResult = Awaited<ReturnType<typeof userService.dripSignupGrant>>;
 const noGrant = (): DripResult => ({ creditsGranted: 0, currentCredits: null });
 
-export async function isActivityDripEnabled(): Promise<boolean> {
-  const enabled = await adminSettingsRepository.findBySettingName('signupGrantActivityEnabled');
-  return enabled?.settingValue === 'true' || (enabled?.settingValue as unknown) === true;
+/** The drip runs whenever the schedule pays a positive daily amount; there is no separate on/off toggle. */
+export async function isDripScheduleOn(): Promise<boolean> {
+  return (await userService.resolveDripLimits(adminSettingsRepository)).dailyCredits > 0;
 }
 
 export async function resolveRequiredActiveSeconds(): Promise<number> {
@@ -30,7 +30,7 @@ export async function resolveRequiredActiveSeconds(): Promise<number> {
 
 /** The server-accrued active time in this earning window reached the minimum. */
 async function qualifiesForPeriod(user: IUserDocument, period: SignupDripPeriod): Promise<boolean> {
-  if (!(await isActivityDripEnabled())) return false;
+  if (!(await isDripScheduleOn())) return false;
   const activity = user.signupGrant?.activity;
   if (activity?.day !== period.day || activity.period !== period.key) return false;
   return activity.ms >= (await resolveRequiredActiveSeconds()) * 1000;
