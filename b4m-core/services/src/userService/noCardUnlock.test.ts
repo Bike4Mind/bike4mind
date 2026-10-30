@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { resolveNoCardUnlockSettings } from '@bike4mind/common';
-import { GithubApiError, githubValidator, workEmailValidator, type GithubClient } from './noCardUnlock';
+import { GithubApiError, githubValidator, phoneValidator, workEmailValidator, type GithubClient } from './noCardUnlock';
 
 const NOW = new Date('2030-01-01T00:00:00Z');
 const daysAgo = (n: number) => new Date(NOW.getTime() - n * 86_400_000).toISOString();
@@ -228,5 +228,62 @@ describe('workEmailValidator', () => {
     });
     const check = await full.run(user);
     expect(check.ok ? await check.commit?.() : null).toEqual({ ok: false, refusal: 'domain_cap_reached' });
+  });
+});
+
+describe('phoneValidator', () => {
+  const PHONE = '+14155552671';
+  const phoneDeps = (over: Record<string, unknown> = {}) => ({
+    settings: settings({ noCardUnlockPhoneEnabled: true, noCardUnlockPhoneCredits: 5 }),
+    code: '123456',
+    getPendingPhone: vi.fn(async () => PHONE),
+    checkCode: vi.fn(async () => 'approved' as const),
+    claimPhone: vi.fn(async () => ({ claimed: true })),
+    releasePhone: vi.fn(async () => undefined),
+    ...over,
+  });
+
+  it('accepts an approved code, then claims the number only on commit', async () => {
+    const deps = phoneDeps();
+    const check = await phoneValidator(deps)(user);
+    expect(deps.checkCode).toHaveBeenCalledWith(PHONE, '123456');
+    expect(deps.claimPhone).not.toHaveBeenCalled();
+    const commit = check.ok ? await check.commit?.() : undefined;
+    expect(commit).toMatchObject({ ok: true });
+    expect(deps.claimPhone).toHaveBeenCalledWith(PHONE, 'u1');
+    if (commit?.ok) await commit.release({ reasonGranted: true });
+    expect(deps.releasePhone).not.toHaveBeenCalled();
+    if (commit?.ok) await commit.release({ reasonGranted: false });
+    expect(deps.releasePhone).toHaveBeenCalledWith(PHONE, 'u1');
+  });
+
+  it('refuses when no code was sent for this user', async () => {
+    const deps = phoneDeps({ getPendingPhone: vi.fn(async () => null) });
+    expect(await phoneValidator(deps)(user)).toEqual({ ok: false, refusal: 'phone_not_started' });
+    expect(deps.checkCode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a number blocked after the code was sent, without checking the code', async () => {
+    const deps = phoneDeps({
+      settings: settings({ noCardUnlockPhoneBlockedPrefixes: ['+1415'] }),
+    });
+    expect(await phoneValidator(deps)(user)).toEqual({ ok: false, refusal: 'phone_blocked' });
+    expect(deps.checkCode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a wrong code', async () => {
+    const deps = phoneDeps({ checkCode: vi.fn(async () => 'rejected' as const) });
+    expect(await phoneValidator(deps)(user)).toEqual({ ok: false, refusal: 'phone_code_invalid' });
+  });
+
+  it('refuses as retryable, not as a wrong code, when the provider cannot answer', async () => {
+    const deps = phoneDeps({ checkCode: vi.fn(async () => 'unavailable' as const) });
+    expect(await phoneValidator(deps)(user)).toEqual({ ok: false, refusal: 'phone_unavailable' });
+  });
+
+  it('refuses a number another account already unlocked with', async () => {
+    const deps = phoneDeps({ claimPhone: vi.fn(async () => ({ claimed: false })) });
+    const check = await phoneValidator(deps)(user);
+    expect(check.ok && (await check.commit?.())).toEqual({ ok: false, refusal: 'phone_already_claimed' });
   });
 });

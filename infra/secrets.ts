@@ -53,6 +53,10 @@ export const secrets = {
   ANTHROPIC_ADMIN_API_KEY: new sst.Secret('ANTHROPIC_ADMIN_API_KEY', 'not-configured'),
   // Cloudflare Turnstile secret key; the check stays off until a real value is set.
   TURNSTILE_SECRET_KEY: new sst.Secret('TURNSTILE_SECRET_KEY', 'not-configured'),
+  // Twilio Verify + Lookup for the phone credit unlock; it refuses every attempt until all three are set.
+  TWILIO_ACCOUNT_SID: new sst.Secret('TWILIO_ACCOUNT_SID', 'not-configured'),
+  TWILIO_AUTH_TOKEN: new sst.Secret('TWILIO_AUTH_TOKEN', 'not-configured'),
+  TWILIO_VERIFY_SERVICE_SID: new sst.Secret('TWILIO_VERIFY_SERVICE_SID', 'not-configured'),
   GEMINI_API_KEY: new sst.Secret('GEMINI_API_KEY', 'not-configured'),
   // Deployment-level provider keys for model discovery (spec 5.7). Discovery has
   // no user, so its only other source is the admin demo-key tier, which exists

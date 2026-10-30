@@ -197,6 +197,18 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "TWILIO_ACCOUNT_SID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "TWILIO_AUTH_TOKEN": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "TWILIO_VERIFY_SERVICE_SID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "OVERWATCH_INGEST_ENABLED": {
       "type": "sst.sst.Secret"
       "value": string
