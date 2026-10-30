@@ -199,7 +199,11 @@ describe('executeCompletion - serverTools opt-in', () => {
     // guard skips them), the terminal turn emits the accumulated whole-completion totals.
     const { db, usageEvents } = buildDb();
     completeImpl = async onChunk => {
-      await onChunk(['tool output\n'], { inputTokens: 0, outputTokens: 0, toolsUsed: ['search_knowledge_base'] });
+      await onChunk(['tool output\n'], {
+        inputTokens: 0,
+        outputTokens: 0,
+        toolsUsed: [{ name: 'search_knowledge_base', arguments: '{}' }],
+      });
       await onChunk(['answer'], { inputTokens: 300, outputTokens: 80 });
     };
 

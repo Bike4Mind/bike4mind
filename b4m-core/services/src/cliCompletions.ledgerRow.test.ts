@@ -103,6 +103,19 @@ describe('executeCompletion - ledger row detail', () => {
     });
   });
 
+  it('still settles and writes the row when a tool entry is malformed', async () => {
+    complete.mockImplementation(async (_model, _messages, _options, onChunk) => {
+      // A backend or fixture that strays from the { name } shape must not break settlement.
+      await onChunk([''], { toolsUsed: ['bare-string', { arguments: '{}' }, null, { name: 'bash' }] });
+      await onChunk(['done'], { inputTokens: 12, outputTokens: 3 });
+    });
+
+    await run('s-1');
+
+    expect(vi.mocked(subtractCredits)).toHaveBeenCalledOnce();
+    expect(ledgerRow().metadata).toMatchObject({ toolNames: ['bash'] });
+  });
+
   it('leaves the session and tool names off a plain request', async () => {
     complete.mockImplementation(async (_model, _messages, _options, onChunk) => {
       await onChunk(['hi'], { inputTokens: 12, outputTokens: 3 });

@@ -195,16 +195,6 @@ export const CompletionMessageSchema = z.object({
 export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
 
 /**
- * Schema for CLI LLM completion requests
- * Shared between Next.js API route (dev) and Lambda function (production)
- *
- * `response_format`, `stream`, `tools`, `temperature`, and `max_tokens` are all
- * accepted at the top level (OpenAI-compatible, matching how every major LLM
- * SDK shapes a completion request) AND nested under `options` (legacy shape).
- * Use `normalizeCompletionRequest()` to collapse both surfaces into the
- * canonical `options.<field>` location before downstream consumption.
- */
-/**
  * The caller's own conversation id. Recorded on the credit ledger row so spend can be traced back
  * to a conversation; never used for authorization or lookups.
  */
@@ -216,6 +206,16 @@ export const CompletionSessionIdSchema = z
     "Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise."
   );
 
+/**
+ * Schema for CLI LLM completion requests
+ * Shared between Next.js API route (dev) and Lambda function (production)
+ *
+ * `response_format`, `stream`, `tools`, `temperature`, and `max_tokens` are all
+ * accepted at the top level (OpenAI-compatible, matching how every major LLM
+ * SDK shapes a completion request) AND nested under `options` (legacy shape).
+ * Use `normalizeCompletionRequest()` to collapse both surfaces into the
+ * canonical `options.<field>` location before downstream consumption.
+ */
 export const CompletionRequestSchema = z.object({
   model: ModelIdSchema,
   messages: z.array(CompletionMessageSchema).min(1),

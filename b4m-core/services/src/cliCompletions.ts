@@ -924,8 +924,14 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (info?.outputTokens !== undefined && info.reasoningTokens !== undefined)
       finalReasoningTokens = info.reasoningTokens;
     if (info?.stopReason) finalStopReason = info.stopReason;
-    if (info?.toolStarted) toolNamesUsed.add(info.toolStarted.name);
-    for (const tool of info?.toolsUsed ?? []) toolNamesUsed.add(tool.name);
+    // Strings only: these feed the ledger row written inside settlement, so a malformed entry
+    // must never be able to throw there and veto the billing write.
+    const startedName: unknown = info?.toolStarted?.name;
+    if (typeof startedName === 'string' && startedName) toolNamesUsed.add(startedName);
+    for (const tool of info?.toolsUsed ?? []) {
+      const toolName: unknown = tool?.name;
+      if (typeof toolName === 'string' && toolName) toolNamesUsed.add(toolName);
+    }
     // Tool-artifact frames carry a tool's own output for a renderer, not the model's, so they are not
     // output the provider bills on this call.
     if (info?.channel !== 'tool-artifact') {
