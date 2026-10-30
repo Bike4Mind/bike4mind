@@ -282,6 +282,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     // No default: $inc needs the field absent or numeric, never null.
     voiceBilledCredits: { type: Number, required: false },
     voiceHoldUserId: { type: String, required: false },
+    voiceHoldApiKeyId: { type: String, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -769,25 +770,40 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
         },
-        $unset: { voiceBilledCredits: '', voiceHoldUserId: '' },
+        $unset: { voiceBilledCredits: '', voiceHoldUserId: '', voiceHoldApiKeyId: '' },
       },
-      { new: false, projection: { voiceBilledCredits: 1, voiceHoldUserId: 1 } }
+      { new: false, projection: { voiceBilledCredits: 1, voiceHoldUserId: 1, voiceHoldApiKeyId: 1 } }
     );
     return before
-      ? { billedCredits: before.voiceBilledCredits ?? null, payerId: before.voiceHoldUserId ?? null }
+      ? {
+          billedCredits: before.voiceBilledCredits ?? null,
+          payerId: before.voiceHoldUserId ?? null,
+          apiKeyId: before.voiceHoldApiKeyId ?? null,
+        }
       : null;
   }
 
   async openVoiceHold(
     sessionId: string,
     priorStartedAt: Date | null,
-    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
+    hold: {
+      voiceReservedCredits: number | null;
+      voiceSessionStartedAt: Date;
+      realtime: boolean;
+      payerId: string;
+      apiKeyId?: string;
+    }
   ) {
     // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
     // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
     // hold makes this match nothing, so only one of them keeps a reserve. The prior start matches
     // only without a reserve: a reserved hold whose settlement failed still owes it (settleVoiceHold),
     // so it must not be overwritten.
+    // A JWT call must not inherit the key of an earlier key-opened call that was never claimed.
+    const unset = {
+      ...(hold.apiKeyId ? {} : { voiceHoldApiKeyId: '' }),
+      ...(hold.realtime ? {} : { voiceBilledCredits: '' }),
+    };
     const { matchedCount } = await this.sessionModel.updateOne(
       {
         _id: sessionId,
@@ -803,10 +819,11 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
           voiceHoldUserId: hold.payerId,
+          ...(hold.apiKeyId ? { voiceHoldApiKeyId: hold.apiKeyId } : {}),
           // Realtime holds are billed per response against this marker (server/websocket/voiceSessionEnded.ts).
           ...(hold.realtime ? { voiceBilledCredits: 0 } : {}),
         },
-        ...(hold.realtime ? {} : { $unset: { voiceBilledCredits: '' } }),
+        ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
       }
     );
     return matchedCount === 1;

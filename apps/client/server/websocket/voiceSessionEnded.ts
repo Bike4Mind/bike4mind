@@ -156,6 +156,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
           model,
           credits: actualCredits - shortfall,
           transactionId: `realtime-voice:${sessionId}:${responseId}`,
+          apiKeyId: session.voiceHoldApiKeyId,
           ...(shortfall > 0 ? { metadata: { shortfallCredits: shortfall } } : {}),
         });
         return before;
@@ -238,6 +239,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
             model,
             credits: charged,
             transactionId: `realtime-voice-close:${sessionId}:${startedAt.toISOString()}`,
+            apiKeyId: claimed.apiKeyId,
             ...(shortfall > 0 ? { metadata: { shortfallCredits: shortfall } } : {}),
           });
         }

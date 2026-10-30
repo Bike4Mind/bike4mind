@@ -54,6 +54,7 @@ const FAB_FILE_RESPONSE_FIELDS = {
   moderationETag: true,
   moderationRevision: true,
   clientUpload: true,
+  apiKeyId: true,
   uploadRejectedAt: true,
   storageChargedAt: true,
   moderationAttempts: true,

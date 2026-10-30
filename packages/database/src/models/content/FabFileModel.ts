@@ -4007,6 +4007,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     moderationRevision: { type: Number, required: false },
     // See IFabFile.clientUpload and packages/server-utils/src/s3/uploadSizeGate.ts.
     clientUpload: { type: Boolean, required: false },
+    apiKeyId: { type: String, required: false },
     uploadRejectedAt: { type: Date, required: false },
     // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
     // IFabFile.moderationAttempts / .moderationLastAttemptAt. Left unset (not defaulted to 0) so

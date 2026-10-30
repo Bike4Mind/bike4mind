@@ -91,6 +91,21 @@ describe('createPresignedUpload - owning organization', () => {
     // Marks the row for the landed-size gate, which judges only client uploads.
     expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ clientUpload: true });
   });
+
+  it('stamps the API key that requested the upload, so its later indexing charge is attributed to it', async () => {
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+    const keyReq = { user: { id: 'u1' }, ability: {}, logger: { warn: vi.fn() }, apiKeyInfo: { keyId: 'key-1' } };
+    await createPresignedUpload(keyReq as never, upload() as never);
+
+    expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ apiKeyId: 'key-1' });
+  });
+
+  it('stamps no API key on a JWT upload', async () => {
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+    await createPresignedUpload(req, upload() as never);
+
+    expect(created()).not.toHaveProperty('apiKeyId');
+  });
 });
 
 describe('createPresignedUpload - quota owner', () => {

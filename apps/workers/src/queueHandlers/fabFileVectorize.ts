@@ -487,6 +487,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
                 inputTokens: missTokenTotal,
                 outputTokens: 0,
                 source: 'system',
+                ...(existingFabFile.apiKeyId ? { apiKeyId: existingFabFile.apiKeyId } : {}),
               })
               .catch(err => {
                 logger.error(`[fabFileVectorize] credit settlement failed for ${fabFileId}: ${err}`);

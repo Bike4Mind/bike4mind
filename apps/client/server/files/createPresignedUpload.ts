@@ -173,6 +173,7 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
       // could not identify. Mirrors the batch door and the connector/chat-platform doors.
       sourceType: FabFileSourceType.MANUAL_UPLOAD,
       clientUpload: true,
+      ...(req.apiKeyInfo?.keyId && { apiKeyId: req.apiKeyInfo.keyId }),
       ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
       ...(provenance && { sourceMetadata: provenance.sourceMetadata }),
       ...(data.contentHash && { contentHash: data.contentHash }),

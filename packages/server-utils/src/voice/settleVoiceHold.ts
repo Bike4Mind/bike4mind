@@ -45,6 +45,8 @@ export async function recordVoiceUsage(row: {
   model: string;
   credits: number;
   transactionId: string;
+  /** The UserApiKey that opened the hold (voiceHoldApiKeyId); omitted for a JWT caller. */
+  apiKeyId?: string | null;
   metadata?: Record<string, unknown>;
 }): Promise<void> {
   const recorded = await creditTransactionRepository.createTransaction('realtime_voice_usage', {
@@ -55,6 +57,7 @@ export async function recordVoiceUsage(row: {
     model: row.model,
     sessionId: row.sessionId,
     transactionId: row.transactionId,
+    ...(row.apiKeyId ? { apiKeyId: row.apiKeyId } : {}),
     ...(row.metadata ? { metadata: row.metadata } : {}),
   });
   if (!recorded) throw new VoiceLedgerKeyTaken(row.transactionId);
@@ -143,6 +146,7 @@ export async function settleVoiceHold(
           model: billedCredits !== null ? 'openai-realtime' : CONVERSATIONAL_VOICE_MODEL_ID,
           credits: unrecorded,
           transactionId: voiceHoldSettleTransactionId(hold.id, hold.voiceSessionStartedAt),
+          apiKeyId: claimed.apiKeyId,
         });
       }
       return { settled: true, connected, chargedCredits, refundedCredits };
@@ -183,6 +187,8 @@ export async function reserveVoiceHold(args: {
   reservedCredits: number | null;
   startedAt: Date;
   realtime: boolean;
+  /** The UserApiKey that authenticated the bootstrap; every ledger row billed against the hold names it. */
+  apiKeyId?: string;
   unaffordable: () => Error;
 }): Promise<boolean> {
   return withTransaction(async () => {
@@ -191,6 +197,7 @@ export async function reserveVoiceHold(args: {
       voiceSessionStartedAt: args.startedAt,
       realtime: args.realtime,
       payerId: args.userId,
+      ...(args.apiKeyId ? { apiKeyId: args.apiKeyId } : {}),
     });
     if (!opened) return false;
     if (args.reservedCredits) {
