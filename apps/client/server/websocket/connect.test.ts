@@ -182,11 +182,32 @@ describe('websocket connect - token gates', () => {
 
     await expect(func(event as any, {} as any, noopLogger as any)).rejects.toThrow('network blocked');
     expect(mockIpBlockRefusal).toHaveBeenCalledWith(
-      { headers: event.headers, socket: { remoteAddress: '203.0.113.9' } },
+      { headers: {}, socket: { remoteAddress: '203.0.113.9' } },
       'app',
       noopLogger
     );
     expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('resolves the address from the API Gateway source IP, never a spoofed forwarding header', async () => {
+    const { getClientIp } = await vi.importActual<typeof import('@bike4mind/server-utils/utils/ip')>(
+      '@bike4mind/server-utils/utils/ip'
+    );
+    const base = eventWithToken();
+    const event = {
+      ...base,
+      headers: {
+        ...base.headers,
+        'x-forwarded-for': '198.51.100.77',
+        'x-real-ip': '198.51.100.77',
+        'cloudfront-viewer-address': '198.51.100.77:443',
+      },
+      requestContext: { connectionId: 'conn-1', identity: { sourceIp: '203.0.113.9' } },
+    };
+
+    await func(event as never, {} as never, noopLogger as never);
+    const [clientRequest] = mockIpBlockRefusal.mock.calls[0];
+    expect(getClientIp(clientRequest)).toBe('203.0.113.9');
   });
 
   it('lets an admin connect from a blocked address', async () => {

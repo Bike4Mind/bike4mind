@@ -195,8 +195,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
     await assertRealtimeSessionActive(auth.sid);
     // Completions and agent runs stream over this socket, so an admin's `all` IP block refuses the connection.
     if (!user.isAdmin) {
+      // No CloudFront fronts the WebSocket API, so every forwarding header on the upgrade request is
+      // client-supplied: resolve the address from API Gateway's sourceIp alone.
       const clientRequest = {
-        headers: event.headers,
+        headers: {},
         socket: { remoteAddress: event.requestContext.identity?.sourceIp },
       };
       const refusal = await ipBlockRefusal(clientRequest, 'app', logger);
