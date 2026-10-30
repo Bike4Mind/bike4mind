@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { activityLabel } from './activity';
 import { BoardView } from './BoardView';
 import type { AgentView } from './roster';
 import { agentFixture, createThemedMount, el, query } from './testUtils';
@@ -52,14 +53,13 @@ describe('BoardView', () => {
     expect(onSelect).toHaveBeenCalledWith('a');
   });
 
-  it('shows activity for working agents, snippet otherwise, plus cost and PR', async () => {
+  it('shows live activity for a working agent', async () => {
     await renderBoard([
-      agentFixture('a', 'done', { lastSnippet: 'all finished', usdCost: 1.5, pr: { number: 7, state: 'open' } }),
+      agentFixture('a', 'working', { activity: { kind: 'phase', phase: 'thinking' }, lastSnippet: 'old words' }),
     ]);
-    const card = el('orchestrator-board-card-a');
-    expect(card.textContent).toContain('all finished');
-    expect(card.textContent).toContain('#7');
-    expect(card.textContent).toContain('$');
+    const text = el('orchestrator-board-card-a').textContent ?? '';
+    expect(text).toContain(activityLabel({ kind: 'phase', phase: 'thinking' }));
+    expect(text).not.toContain('old words');
   });
 
   it('survives a reorder re-render in jsdom (FLIP is a no-op there)', async () => {
@@ -67,5 +67,52 @@ describe('BoardView', () => {
     await renderBoard([agentFixture('b', 'working'), agentFixture('a', 'done')]);
     expect(el('orchestrator-board-column-done').contains(el('orchestrator-board-card-a'))).toBe(true);
     expect(query('orchestrator-board')).not.toBeNull();
+  });
+
+  describe('FLIP', () => {
+    const animate = vi.fn();
+    let top = 0;
+    const setReduced = (matches: boolean) => {
+      vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
+        matches,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }));
+    };
+
+    beforeEach(() => {
+      top = 0;
+      HTMLElement.prototype.animate = animate as unknown as HTMLElement['animate'];
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        const moved = this.getAttribute('data-testid') === 'orchestrator-board-card-a' ? top : 0;
+        return { left: 0, top: moved, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: moved } as DOMRect;
+      });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      Reflect.deleteProperty(HTMLElement.prototype, 'animate');
+    });
+
+    it('animates a card that moved, but not on first mount', async () => {
+      await renderBoard([agentFixture('a', 'working')]);
+      expect(animate).not.toHaveBeenCalled();
+      top = 40;
+      await renderBoard([agentFixture('a', 'working')]);
+      expect(animate).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not animate under reduced motion', async () => {
+      setReduced(true);
+      await renderBoard([agentFixture('a', 'working')]);
+      top = 40;
+      await renderBoard([agentFixture('a', 'working')]);
+      expect(animate).not.toHaveBeenCalled();
+    });
   });
 });
