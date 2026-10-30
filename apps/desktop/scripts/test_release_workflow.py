@@ -55,6 +55,18 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('run: python3 apps/desktop/scripts/reserve-source-tag.py', reserve)
         self.assertNotIn('2>/dev/null', reserve)
 
+    def test_windows_leg_packages_installs_and_uploads(self):
+        build = job('build')
+        self.assertIn('--win --publish never', build)
+        step = '- name: Install and launch packaged Windows installer'
+        self.assertLess(build.index('--win --publish never'), build.index(step))
+        smoke = build.split(step, 1)[1].split('- name:', 1)[0]
+        self.assertIn('shell: pwsh', smoke)
+        self.assertIn("'/S'", smoke)
+        self.assertIn('smoke-packaged.mjs', smoke)
+        self.assertIn('apps/desktop/release/*.exe', build)
+        self.assertIn('installers/latest.yml', job('validate'))
+
     def test_curated_build_check_runs_between_each_build_and_packaging(self):
         build = job('build')
         self.assertIn('B4M_CURATED_MANIFEST_URL: ${{ vars.B4M_CURATED_MANIFEST_URL }}', build)

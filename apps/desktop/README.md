@@ -18,11 +18,12 @@ No Node.js, pnpm, or source checkout is required.
    and drag Bike4Mind into Applications.
 2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
    and launch it. Some distributions require FUSE support to run AppImages.
+3. On Windows x64, download `setup.exe` and run it. The installer is not code signed yet,
+   so SmartScreen shows a warning on first run. In-app updates work on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned
 builds in the source repository do not gain an updater retroactively: install the first signed
 feed-enabled build manually. `SHA256SUMS.txt` accompanies each release for checksum verification.
-Windows packaging exists locally but is not yet part of the release pipeline.
 
 ## Running it
 
@@ -207,22 +208,22 @@ commit since the last desktop release, including pending shared dependency chang
 
 Pull requests targeting `main` run the same builds and artifact validation without
 publishing a release. In the workflow run's Artifacts section, download
-`desktop-mac-arm64` and `desktop-linux-x64` for installers,
+`desktop-mac-arm64`, `desktop-linux-x64` and `desktop-win-x64` for installers,
 plus `installer-checksums` for `SHA256SUMS.txt`. PR jobs have only
 read access to repository contents; the publication job runs only for pushes or manual
 dispatches on `main`. PR runs are isolated from the main release concurrency group.
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
-typechecks and tests on macOS and Linux, then packages Apple Silicon and Linux x64.
-The two platform jobs run in parallel; Turbo also builds independent shared packages
+typechecks and tests on macOS, Linux and Windows, then packages Apple Silicon, Linux x64 and Windows x64.
+The three platform jobs run in parallel; Turbo also builds independent shared packages
 in parallel while respecting dependency order. Intel macOS release builds are temporarily
-paused; local x64 packaging remains available. Publication waits for both build jobs and
-validates the arm64 DMG, arm64 ZIP, and Linux AppImage.
+paused; local x64 packaging remains available. Publication waits for all build jobs and
+validates the arm64 DMG, arm64 ZIP, Linux AppImage, and Windows installer.
 Failed uploads leave a draft release, not a partially published download page.
 
 macOS jobs read the repository or organization Actions variable `OSX_RUNNER_LABEL`,
 defaulting to `macos-26-runner` when unset or empty. The selected runner must be
-Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`.
+Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`. Windows runs on `windows-2025`.
 Paid runner usage is billed by GitHub.
 
 Publication uses the existing release App only to reserve protected source version tags.
@@ -256,6 +257,10 @@ Apple Silicon runs on a native standard runner. The tests use a mock keychain
 to avoid system prompts or accessing a real login keychain. It does not verify secure
 credential persistence. This does
 not verify Gatekeeper approval on a fresh machine.
+
+The Windows job runs the NSIS installer silently into a temporary directory and runs the same
+startup checks against the installed app. `win-x64-smoke-results` contains the screenshot and
+logs. It does not verify SmartScreen behaviour or a real user profile.
 
 Installer versions follow SemVer, selected automatically by
 `scripts/desktop_release_version.py`. The first release uses the package version
@@ -315,8 +320,8 @@ The override is ignored in packaged apps and builds without test keys. Test-key
 builds use a separate cache directory and are rejected by `curated:check-build`;
 never enable the dev flag for a release.
 
-The validation job generates `latest-mac.yml` and `latest-linux.yml` from the actual
-installer bytes, with SHA-512 and size. ZIP blockmaps are mandatory; AppImage blockmaps
+The validation job generates `latest-mac.yml`, `latest-linux.yml` and `latest.yml` (Windows) from the actual
+installer bytes, with SHA-512 and size. ZIP and setup.exe blockmaps are mandatory; AppImage blockmaps
 are embedded by electron-builder, and any external blockmaps are retained. Payload URLs
 are pinned to the version tag, so a later Latest switch cannot break an already offered
 update. All assets are uploaded to a draft and downloaded for byte comparison before
@@ -344,7 +349,7 @@ partial manifest. Published assets are not overwritten on retry.
    `CURATED_PUBLIC_URL` together as described above; otherwise leave both unset.
 6. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
-   `latest-linux.yml` downloads redirect successfully (also `latest-mac.yml` for
+   `latest-linux.yml` and `latest.yml` downloads redirect successfully (also `latest-mac.yml` for
    the Developer ID path only). CI logs record
    publication and tag operations; organization audit-log retention is managed separately.
 7. Test two signed versions using a temporary installation and profile. Check, download,

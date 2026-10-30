@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
@@ -22,7 +22,11 @@ if (process.platform === 'darwin') {
   // A temporary HOME has no login keychain; startup tests must not prompt or touch the real one.
   platformArgs.push('--use-mock-keychain');
 }
-assert.ok(executable, 'Pass the installed macOS app executable');
+if (process.platform === 'win32') {
+  // Hosted Windows runners have no GPU.
+  platformArgs.push('--disable-gpu');
+}
+assert.ok(executable, 'Pass the installed app executable');
 const server = createServer();
 await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
 const port = server.address().port;
@@ -39,6 +43,9 @@ const child = spawn(executable, [
   env: {
     ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, 'config'),
     XDG_CACHE_HOME: join(home, 'cache'), XDG_DATA_HOME: join(home, 'data'),
+    ...(process.platform === 'win32' && {
+      APPDATA: join(home, 'AppData', 'Roaming'), LOCALAPPDATA: join(home, 'AppData', 'Local'), USERPROFILE: home,
+    }),
     ELECTRON_RENDERER_URL: '', ELECTRON_RUN_AS_NODE: '',
   },
 });
@@ -122,7 +129,9 @@ try {
   console.log('Packaged app rendered its auth screen and passed main/preload IPC checks.');
 } finally {
   socket?.close();
-  if (child.pid) {
+  if (child.pid && process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F']);
+  } else if (child.pid) {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { /* Already exited. */ }
     await delay(1000);
     try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Already exited. */ }
