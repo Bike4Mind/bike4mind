@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { Alert, Box, Button, CircularProgress, Sheet, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import type { ArenaChoice, ArenaPairView } from '@bike4mind/common';
@@ -94,10 +94,18 @@ export default function ArenaPage() {
   const noCardUnlockEnabled = !!useGetSettingsValue('noCardUnlockEnabled');
   const canOpenVerification = enforceCredits && noCardUnlockEnabled;
 
-  const submitVote = (pairId: string, choice: ArenaChoice) =>
+  const voteInFlight = useRef(false);
+
+  const submitVote = (pairId: string, choice: ArenaChoice) => {
+    // A second click can land before isPending re-renders the buttons disabled.
+    if (voteInFlight.current) return;
+    voteInFlight.current = true;
     vote.mutate(
       { pairId, choice },
       {
+        onSettled: () => {
+          voteInFlight.current = false;
+        },
         onSuccess: result => {
           toast.success(formatVoteToast(result.creditsAwarded));
           void refetch();
@@ -108,6 +116,7 @@ export default function ArenaPage() {
         },
       }
     );
+  };
 
   const renderBody = () => {
     if (isPending) {

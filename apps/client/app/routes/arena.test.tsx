@@ -85,14 +85,31 @@ describe('ArenaPage', () => {
     expect(state.mutate).toHaveBeenCalledWith({ pairId: PAIR_ID, choice }, expect.any(Object));
   });
 
+  it('ignores a second click while the first vote is in flight and allows another once it settles', () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('arena-vote-a-btn'));
+    fireEvent.click(screen.getByTestId('arena-vote-b-btn'));
+    expect(state.mutate).toHaveBeenCalledTimes(1);
+
+    state.mutate.mock.calls[0][1].onSettled();
+    fireEvent.click(screen.getByTestId('arena-vote-b-btn'));
+    expect(state.mutate).toHaveBeenCalledTimes(2);
+  });
+
   it('shows credits only when some were awarded, then fetches the next pair', () => {
-    state.mutate.mockImplementation((_request, options) => options.onSuccess({ creditsAwarded: 3 }));
+    state.mutate.mockImplementation((_request, options) => {
+      options.onSuccess({ creditsAwarded: 3 });
+      options.onSettled();
+    });
     renderPage();
     fireEvent.click(screen.getByTestId('arena-vote-a-btn'));
     expect(state.toastSuccess).toHaveBeenCalledWith('+3 credits');
     expect(state.next.refetch).toHaveBeenCalled();
 
-    state.mutate.mockImplementation((_request, options) => options.onSuccess({ creditsAwarded: 0 }));
+    state.mutate.mockImplementation((_request, options) => {
+      options.onSuccess({ creditsAwarded: 0 });
+      options.onSettled();
+    });
     fireEvent.click(screen.getByTestId('arena-vote-b-btn'));
     expect(state.toastSuccess).toHaveBeenLastCalledWith('Thanks for your feedback');
   });
