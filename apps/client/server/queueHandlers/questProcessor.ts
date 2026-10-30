@@ -33,6 +33,7 @@ import {
   Quest,
   scopedSettingsRepository,
   usageEventRepository,
+  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError } from '@bike4mind/utils';
@@ -113,6 +114,7 @@ export const getStaticOptions = () => {
       projects: projectRepository,
       organizations: organizationRepository,
       mcpServers: mcpServerRepository,
+      newAccountSpendCap: newAccountSpendCapAdapters,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
       operationalBilling: operationalBillingAdapters,

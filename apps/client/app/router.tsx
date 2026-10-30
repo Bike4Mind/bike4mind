@@ -101,6 +101,7 @@ const SlackSuccessPage = lazy(() => import('./routes/integrations/slack/success'
 const SlackErrorPage = lazy(() => import('./routes/integrations/slack/error'));
 const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
 const DesktopDownloadPage = lazy(() => import('./routes/desktop'));
+const ArenaPage = lazy(() => import('./routes/arena'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
@@ -396,6 +397,17 @@ export const integrationsRoute = createRoute({
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <IntegrationsPage />
+    </Suspense>
+  ),
+});
+
+// Preference arena - verified users compare two blind answers and earn capped promotional credits.
+const arenaRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/arena',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ArenaPage />
     </Suspense>
   ),
 });
@@ -1282,6 +1294,7 @@ const routeTree = rootRoute.addChildren([
     notebookShellRoute.addChildren([newRoute, notebookRoute]),
     gearsRoute,
     integrationsRoute,
+    arenaRoute,
     projectsRoute,
     projectRoute,
     profileRoute,

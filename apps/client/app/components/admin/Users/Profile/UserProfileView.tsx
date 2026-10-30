@@ -14,6 +14,7 @@ import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
 import {
   ApiKeyTrustDialog,
+  NewAccountSpendCapDialog,
   DeleteUserDialog,
   EmailVerificationDialog,
   LoginAsDialog,
@@ -71,6 +72,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <EmailVerificationDialog {...props} />;
     case 'apiKeyTrust':
       return <ApiKeyTrustDialog {...props} />;
+    case 'newAccountSpendCap':
+      return <NewAccountSpendCapDialog {...props} />;
     case 'subscription':
       return <GrantSubscriptionModal user={props.user} open onClose={props.onClose} />;
     case 'loginAs':
@@ -198,6 +201,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
             onAction={setAction}
             onViewActivity={() => onTabChange('activity')}
             onViewCredits={() => onTabChange('credits')}
+            onAudit={openAdminLog}
           />
         );
       case 'activity':

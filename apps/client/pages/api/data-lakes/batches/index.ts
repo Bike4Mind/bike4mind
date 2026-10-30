@@ -11,7 +11,12 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { CreateBatchRequestInput, isLakeIngestable } from '@bike4mind/common';
+import {
+  CreateBatchRequestInput,
+  dataLakeBatchListResponseSchema,
+  dataLakeBatchResponseSchema,
+  isLakeIngestable,
+} from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { recordReconcilerForcedTerminal } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -19,6 +24,7 @@ import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatch
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { respond } from '@server/utils/respond';
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -77,7 +83,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // Both finders currently project the same fields, so this is not load-bearing for shape
     // today, but if that symmetry is ever broken again, freshTaxonomyAttention must stay last.
     const byId = new Map([...freshIngestActive, ...freshTaxonomyAttention].map(b => [b.id, b]));
-    return res.json({ data: Array.from(byId.values()) });
+    return respond(res, dataLakeBatchListResponseSchema, { data: Array.from(byId.values()) });
   })
   // POST: create a new batch
   .post(async (req: Request, res) => {
@@ -164,7 +170,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // presigned-but-never-uploaded file (client fails outright, or the tab closes before any
     // byte lands) cannot count toward that membership no matter which door recomputes the lake
     // or how long the row survives.
-    return res.json(batch);
+    return respond(res, dataLakeBatchResponseSchema, batch);
   });
 
 export const config = {

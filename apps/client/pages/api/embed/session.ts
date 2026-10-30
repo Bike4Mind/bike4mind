@@ -22,6 +22,7 @@
  */
 
 import { baseApi } from '@server/middlewares/baseApi';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { verifyEmbedApiKey } from '@server/cli/auth';
@@ -42,6 +43,7 @@ const PER_CLIENT_IDENTIFIED_RATE_LIMIT = 300;
 
 const handler = baseApi({ auth: false })
   .use(embedCors())
+  .use(checkBlockedIP({ surface: 'app', writesOnly: true }))
   .use(rateLimit({ limit: MINT_RATE_LIMIT, windowMs: RATE_WINDOW_MS, bucket: 'embed-session-mint' }))
   .post(async (req, res) => {
     const headers = flattenHeaders(req.headers);

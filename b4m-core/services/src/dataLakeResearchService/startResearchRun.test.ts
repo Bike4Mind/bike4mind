@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IDataLakeDocument, IDataLakeResearchConfigDocument } from '@bike4mind/common';
 import { getQuestErrorCode, usdToCredits } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
 
 // The pre-flight keys off `enforceCredits` alone; pin it rather than standing up the settings cache.
@@ -57,7 +57,13 @@ const makeAdapters = (
     config?: IDataLakeResearchConfigDocument | null;
     active?: number;
     startedToday?: number;
-    owner?: { id: string; currentCredits?: number; organizationId?: string | null } | null;
+    owner?: {
+      id: string;
+      currentCredits?: number;
+      organizationId?: string | null;
+      isBanned?: boolean;
+      disputePending?: boolean;
+    } | null;
     organization?: { id: string; currentCredits?: number } | null;
   } = {}
 ) => {
@@ -261,8 +267,19 @@ describe('startResearchRun', () => {
       await startResearchRun('config-1', lake(), onDemand(), adapters);
 
       expect(runs.createRun).toHaveBeenCalled();
-      // Short-circuited before the holder read - nothing to check against.
-      expect(users.findById).not.toHaveBeenCalled();
+      // Read only for the account-state gate; no organization pool is consulted.
+      expect(users.findById).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ['banned', { isBanned: true }],
+      ['dispute-pending', { disputePending: true }],
+    ])('refuses a %s owner before a run row exists, even with credits off', async (_label, state) => {
+      areCreditsEnforcedMock.mockResolvedValue(false);
+      const { adapters, runs } = makeAdapters({ owner: fundedOwner(state) });
+
+      await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).rejects.toBeInstanceOf(ForbiddenError);
+      expect(runs.createRun).not.toHaveBeenCalled();
     });
 
     // No owner means nothing can be billed, the same reason assertOwnerHasCredits throws on a null

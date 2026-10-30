@@ -52,6 +52,11 @@ vi.mock('@bike4mind/database', () => ({
     findById: (...a: unknown[]) => mockFindById(...a),
   },
   questRepository: {},
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -60,6 +65,8 @@ vi.mock('@bike4mind/services', () => ({
     createSession: (...a: unknown[]) => mockCreateSession(...a),
     getSession: (...a: unknown[]) => mockGetSession(...a),
   },
+  // reserveVoiceHold's new-account spend cap; these users are never capped.
+  creditService: { assertNewAccountSpendWithinCap: async () => {} },
 }));
 
 vi.mock('@bike4mind/utils', async importOriginal => {

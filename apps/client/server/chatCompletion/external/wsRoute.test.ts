@@ -219,6 +219,7 @@ describe('a completion that fails after the 202', () => {
       requestId: BODY.requestId,
       error: 'Model does not support tool search.',
       errorCode: 'tool_search_unsupported',
+      status: 400,
     });
     expect(emitMetrics).not.toHaveBeenCalled();
   });

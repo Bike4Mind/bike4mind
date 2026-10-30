@@ -14,7 +14,6 @@ import {
   FabFile,
   Project,
   Memento,
-  QuestMasterPlan,
   applySharedShareableRules,
 } from '@bike4mind/database';
 import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
@@ -94,15 +93,6 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
     // No admin branch, matching the Session rule above. MUST STAY IN SYNC with the db-core copy.
     allow('export', FabFile, ownDocumentPermission);
     allow('clone', Session, ownDocumentPermission);
-
-    // QuestMasterPlan read access follows read access to its associated Session (via notebookId)
-    allow(Permission.read, QuestMasterPlan, {
-      notebookId: {
-        $in: Session.find({
-          userId: user.id,
-        }).select('_id'),
-      },
-    });
 
     // Accept and refuse invites
     allow<MongoQuery>(InvitePermission.acceptOrRefuse, Invite, {

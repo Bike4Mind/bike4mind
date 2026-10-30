@@ -44,6 +44,11 @@ vi.mock('@bike4mind/database', () => ({
     findSessionIdsByUserId: async () => ['s1'],
     find: async () => [{ id: 's1', name: 'Bike trip' }],
   },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@bike4mind/database/content', () => ({
   Quest: { find: () => ({ lean: async () => [{ sessionId: 's1', prompt: 'bike trip plans', reply: 'Go to Paris' }] }) },

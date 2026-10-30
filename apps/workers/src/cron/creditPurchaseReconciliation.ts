@@ -15,6 +15,10 @@
  * A row repaired by packages/scripts/src/auditPartialCreditPurchases.ts carries metadata.balanceBackfilledAt
  * (that script does not stamp the user), so it is treated as applied.
  *
+ * A row whose owner no longer exists is not an ungranted purchase: the grant's balance increment
+ * throws when the user is missing, which aborts the transaction and the row with it, so the row
+ * proves the user existed and was credited before being deleted. It is logged, not alerted.
+ *
  * Read-only against Stripe and the ledger: it never grants, so a rerun only repeats the alert, and
  * an unresolved purchase is reported on every run whose window still covers it.
  *
@@ -60,13 +64,17 @@ const contextToLogs = (context: Context) => ({
   stage: Resource.App.stage,
 });
 
-export type UngrantedReason = 'no_transaction' | 'balance_not_applied' | 'owner_missing';
+export type UngrantedReason = 'no_transaction' | 'balance_not_applied';
 
-interface UngrantedFinding {
-  reason: UngrantedReason;
-  /** The ledger row's owner. The intent's metadata.userId can differ, so the alert prefers this. */
-  ownerId?: string;
-}
+type PurchaseCheck =
+  | { status: 'granted' }
+  | { status: 'owner_deleted'; ownerId: string }
+  | {
+      status: 'ungranted';
+      reason: UngrantedReason;
+      /** The ledger row's owner. The intent's metadata.userId can differ, so the alert prefers this. */
+      ownerId?: string;
+    };
 
 export interface UngrantedPurchase {
   paymentIntentId: string;
@@ -82,6 +90,8 @@ export interface UngrantedPurchase {
 export interface CreditPurchaseReconciliationResult {
   checked: number;
   ungranted: UngrantedPurchase[];
+  /** Granted purchases whose owner was deleted afterwards; logged, not alerted. */
+  ownerDeleted: number;
   /** True when MAX_PAGES was hit before Stripe ran out of intents in the window. */
   truncated: boolean;
 }
@@ -95,7 +105,6 @@ function isStageCreditPurchase(intent: PaymentIntent, stage: string): boolean {
 const REASON_LABELS: Record<UngrantedReason, string> = {
   no_transaction: 'no purchase transaction',
   balance_not_applied: 'transaction recorded but balance never credited',
-  owner_missing: 'transaction recorded but owner user no longer exists',
 };
 
 // The webhook only grants purchases to users, so other owner types are not balance-checked.
@@ -103,16 +112,16 @@ const REASON_LABELS: Record<UngrantedReason, string> = {
 // (packages/scripts/src/auditPartialCreditPurchases.ts). This cron leans toward applied (60s skew, a
 // later stamp counts); the audit leans toward not repairing (it needs a pack lot and has a stamp
 // cutoff), so keep the audit at least as strict before it grants.
-async function findUngrantedReason(intentId: string): Promise<UngrantedFinding | null> {
+async function checkPurchase(intentId: string): Promise<PurchaseCheck> {
   const tx = await creditTransactionRepository.findByPaymentIntentId(intentId);
-  if (!tx) return { reason: 'no_transaction' };
-  if (tx.ownerType !== CreditHolderType.User) return null;
-  if (tx.metadata?.balanceBackfilledAt) return null;
+  if (!tx) return { status: 'ungranted', reason: 'no_transaction' };
+  if (tx.ownerType !== CreditHolderType.User) return { status: 'granted' };
+  if (tx.metadata?.balanceBackfilledAt) return { status: 'granted' };
   const owner = await userRepository.findById(tx.ownerId);
-  if (!owner) return { reason: 'owner_missing', ownerId: tx.ownerId };
+  if (!owner) return { status: 'owner_deleted', ownerId: tx.ownerId };
   const appliedAt = owner.lastCreditsPurchasedAt;
   const applied = appliedAt && appliedAt.getTime() >= tx.createdAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
-  return applied ? null : { reason: 'balance_not_applied', ownerId: tx.ownerId };
+  return applied ? { status: 'granted' } : { status: 'ungranted', reason: 'balance_not_applied', ownerId: tx.ownerId };
 }
 
 function formatAlert(stage: string, result: CreditPurchaseReconciliationResult): string {
@@ -144,9 +153,6 @@ function formatAlert(stage: string, result: CreditPurchaseReconciliationResult):
             'purchase (the row exists, so a redelivery will not grant).',
         ]
       : []),
-    ...(result.ungranted.some(p => p.reason === 'owner_missing')
-      ? ['Owner missing: the purchasing user was deleted; there is no balance to credit, so refund or review manually.']
-      : []),
   ].join('\n');
 }
 
@@ -160,7 +166,12 @@ export async function runCreditPurchaseReconciliation(
     lte: Math.floor((now.getTime() - GRACE_MS) / 1000),
   };
 
-  const result: CreditPurchaseReconciliationResult = { checked: 0, ungranted: [], truncated: false };
+  const result: CreditPurchaseReconciliationResult = {
+    checked: 0,
+    ungranted: [],
+    ownerDeleted: 0,
+    truncated: false,
+  };
   let startingAfter: string | undefined;
   for (let page = 0; ; page++) {
     if (page === MAX_PAGES) {
@@ -177,13 +188,21 @@ export async function runCreditPurchaseReconciliation(
     for (const intent of data) {
       if (!isStageCreditPurchase(intent, stage)) continue;
       result.checked++;
-      const finding = await findUngrantedReason(intent.id);
-      if (!finding) continue;
+      const check = await checkPurchase(intent.id);
+      if (check.status === 'granted') continue;
+      if (check.status === 'owner_deleted') {
+        result.ownerDeleted++;
+        logger.info('[CreditPurchaseReconciliation] Granted credit purchase whose owner was later deleted', {
+          paymentIntentId: intent.id,
+          userId: check.ownerId,
+        });
+        continue;
+      }
       result.ungranted.push({
         paymentIntentId: intent.id,
-        reason: finding.reason,
+        reason: check.reason,
         // The webhook credits the Stripe customer's user; metadata.userId is only its fallback.
-        userId: finding.ownerId ?? intent.metadata?.userId,
+        userId: check.ownerId ?? intent.metadata?.userId,
         amount: intent.amount,
         currency: intent.currency,
         credits: Number(intent.metadata.credits),
@@ -211,7 +230,8 @@ export async function runCreditPurchaseReconciliation(
 
   logger.log(
     `[CreditPurchaseReconciliation] Checked ${result.checked} succeeded purchase(s): ` +
-      `${result.ungranted.length} ungranted${result.truncated ? ' (truncated)' : ''}`
+      `${result.ungranted.length} ungranted, ${result.ownerDeleted} granted to a since-deleted owner` +
+      `${result.truncated ? ' (truncated)' : ''}`
   );
   return result;
 }

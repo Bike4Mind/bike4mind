@@ -15,13 +15,18 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
+import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
 import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
+import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { readNetworkMeta } from '@server/auth/networkMeta';
+import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
+  .use(refuseBlockedAccount())
   .post<Request<{}, {}, z.infer<typeof OrgSubscriptionSubscribeSchema>>>(async (req, res) => {
     const { priceId, organizationId, quantity, organizationData, callbackUrl, attributionConsent, surface } =
       OrgSubscriptionSubscribeSchema.parse(req.body);
@@ -68,6 +73,8 @@ const handler = baseApi()
     // block below still keys off organizationData (#3166). Pre-existing billing-attribution bug,
     // not an authorization one; this gate does not widen it.
     const organization = organizationId ? await verifyOrgOwner(req.user, organizationId) : null;
+    // The buyer is the signed-in user, whichever org the plan is for.
+    await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'team_subscription');
 
     // Everything below keys off the CANONICAL id from the gated document, never the raw body
     // string. `isValidObjectId` accepts uppercase hex and findById casts it, so an owner could
@@ -138,11 +145,18 @@ const handler = baseApi()
           }),
     });
 
+    // The org's customer carries the charge history; the buyer's own account age drives the window.
+    const threeDSecureOptions = await firstPurchaseCardOptions(
+      { stripeCustomerId: customerId, accountCreatedAt: req.user.createdAt },
+      req.logger
+    );
+
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       ...USD_CHECKOUT_SESSION_PARAMS,
       customer: customerId,
       payment_method_types: ['card'],
+      ...threeDSecureOptions,
       line_items: [
         {
           price: priceId,

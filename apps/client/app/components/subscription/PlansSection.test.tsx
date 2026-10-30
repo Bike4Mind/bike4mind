@@ -56,6 +56,16 @@ vi.mock('@client/app/hooks/data/stripe', () => ({
   useStripePortal: () => ({ mutate: (...args: unknown[]) => portalMutate(...args), isPending: false }),
 }));
 
+const payInvoice = vi.fn();
+vi.mock('@client/app/components/subscription/usePayFailedInvoice', () => ({
+  usePayFailedInvoice: () => ({
+    pay: (...args: unknown[]) => payInvoice(...args),
+    isPending: false,
+    isPaid: false,
+    declineMessage: null,
+  }),
+}));
+
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: USER_ID } }),
 }));
@@ -245,6 +255,7 @@ describe('PlansSection', () => {
     subscribeMutate.mockReset();
     changeMutate.mockReset();
     portalMutate.mockReset();
+    payInvoice.mockReset();
     sessionStorage.clear();
   });
 
@@ -474,6 +485,37 @@ describe('PlansSection', () => {
       renderSection();
 
       expect(manageButton()).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Pay now', () => {
+    const payNowButton = () => screen.queryByTestId('plan-card-pay-now-btn');
+
+    it.each(['past_due', 'unpaid', 'incomplete'] as const)('pays the open invoice of a %s plan', async status => {
+      subscriptions = [subRow({ status, source: SubscriptionSource.Stripe })];
+
+      renderSection();
+
+      await userEvent.setup({ delay: null }).click(payNowButton()!);
+      expect(payInvoice).toHaveBeenCalledWith('sub_1');
+    });
+
+    it('is not offered on a plan in good standing', () => {
+      subscriptions = [subRow({ status: 'active' })];
+
+      renderSection();
+
+      expect(payNowButton()).not.toBeInTheDocument();
+    });
+
+    it('is not offered on an admin-granted plan, even a delinquent one', () => {
+      subscriptions = [
+        subRow({ status: 'past_due', subscriptionId: 'admin_grant_x', source: SubscriptionSource.AdminGrant }),
+      ];
+
+      renderSection();
+
+      expect(payNowButton()).not.toBeInTheDocument();
     });
   });
 });

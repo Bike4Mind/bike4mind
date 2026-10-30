@@ -136,6 +136,15 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
 }));
 
+const ipGate = vi.hoisted(() => ({ blocked: false, options: [] as unknown[] }));
+vi.mock('@server/middlewares/checkBlockedIP', () => ({
+  checkBlockedIP: (options: unknown) => {
+    ipGate.options.push(options);
+    return (_req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }, next: () => void) =>
+      ipGate.blocked ? res.status(403).json({ error: 'network blocked' }) : next();
+  },
+}));
+
 import { checkModelCatalogWired, createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
 
@@ -810,5 +819,37 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
       expect.objectContaining({ name: 'ProcessingFailed', dimensions: { Stage: 'test', Surface: 'cli-ws' } })
     );
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatCompletion IP block gate', () => {
+  afterEach(() => {
+    ipGate.blocked = false;
+  });
+
+  it('mounts one app-surface gate', () => {
+    expect(ipGate.options).toEqual([{ surface: 'app' }]);
+  });
+
+  it.each(['/api/ai/v1/completions', '/api/ai/v1/ws-completions', '/api/embed/chat'])(
+    'refuses %s from a blocked address before auth',
+    async path => {
+      ipGate.blocked = true;
+      const res = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'network blocked' });
+      expect(mockAuth.verifyApiKey).not.toHaveBeenCalled();
+      expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    }
+  );
+
+  it('leaves the internal /process route and /health alone', async () => {
+    ipGate.blocked = true;
+    expect((await post(VALID_BODY, { authorization: AUTH })).status).toBe(202);
+    expect((await fetch(`${baseUrl}/health`)).status).not.toBe(403);
   });
 });

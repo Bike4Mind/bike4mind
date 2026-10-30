@@ -5,18 +5,31 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
 import { CreditPurchaseEvents, MIN_PRICE_PER_CREDIT_USD } from '@bike4mind/common';
 
-// baseApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
+type Middleware = (req: unknown, res: unknown, next: (error?: unknown) => void) => void;
+
+// baseApi: unwrap the chain so handler.post(fn) runs the route's .use() middlewares, then fn; an error passed
+// to next() rejects, as the real error handler would answer it. refuseBlockedAccount runs for real.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    use: function () {
-      return this;
-    },
-    post: (fn: unknown) => fn,
-  }),
+  baseApi: () => {
+    const middlewares: Middleware[] = [];
+    return {
+      use(middleware: Middleware) {
+        middlewares.push(middleware);
+        return this;
+      },
+      post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) {
+          await new Promise<void>((resolve, reject) =>
+            middleware(req, res, error => (error ? reject(error) : resolve()))
+          );
+        }
+        return fn(req, res);
+      },
+    };
+  },
 }));
 
-// requireStripeWebhook is applied via .use(), which our baseApi mock drops. Stub the
-// factory so importing the handler module doesn't touch real webhook config.
+// Stub the factory so importing the handler module doesn't touch real webhook config.
 vi.mock('@server/middlewares/requireStripeWebhook', () => ({
   requireStripeWebhook: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
@@ -52,6 +65,13 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
 }));
 
 const mockLogEventSafe = vi.fn();
+const mockRecordPaymentStart = vi.fn();
+vi.mock('@server/billing/paymentRisk', () => ({
+  recordPaymentStart: (...args: unknown[]) => mockRecordPaymentStart(...args),
+}));
+const network = { ip: '203.0.113.7', isDatacenter: true, wafAnonIp: null };
+vi.mock('@server/auth/networkMeta', () => ({ readNetworkMeta: () => network }));
+
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEventSafe: (...args: unknown[]) => mockLogEventSafe(...args),
 }));
@@ -66,6 +86,14 @@ vi.mock('@client/lib/credits/utils', () => ({
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test', STRIPE_PUBLISHABLE_KEY: 'pk_test_123' },
 }));
+
+const mockFirstPurchaseCardOptions = vi.fn();
+vi.mock('@server/integrations/stripe/threeDSecure', () => ({
+  firstPurchaseCardOptions: (...args: unknown[]) => mockFirstPurchaseCardOptions(...args),
+}));
+// The gate's own rules are covered in server/billing/checkoutGate.test.ts; here only that the route calls it.
+const { mockAssertCheckoutAllowed } = vi.hoisted(() => ({ mockAssertCheckoutAllowed: vi.fn() }));
+vi.mock('@server/billing/checkoutGate', () => ({ assertCheckoutAllowed: mockAssertCheckoutAllowed }));
 
 import handler from '../start-payment';
 
@@ -103,6 +131,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     });
     mockPaymentIntentsCreate.mockResolvedValue({ client_secret: 'cs_test_abc', id: 'pi_1' });
     mockCustomersDel.mockResolvedValue({ id: 'cus_new', deleted: true });
+    mockFirstPurchaseCardOptions.mockResolvedValue({});
   });
 
   it('creates a payment intent for a non-subscribed user buying a package', async () => {
@@ -117,6 +146,17 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
       publishableKey: 'pk_test_123',
       paymentIntentId: 'pi_1',
     });
+  });
+
+  it('records where the payment started, for the payment risk alert', async () => {
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockRecordPaymentStart).toHaveBeenCalledWith(
+      { paymentIntentId: 'pi_1', userId: 'user_1', amount: 2000, currency: 'usd', network },
+      expect.anything()
+    );
   });
 
   it('creates a payment intent for a non-subscribed user buying per-credit', async () => {
@@ -261,4 +301,36 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
       expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
     }
   );
+
+  describe('3-D Secure on first purchase', () => {
+    const accountCreatedAt = new Date('2026-10-01T00:00:00Z');
+    const challengeOptions = { payment_method_options: { card: { request_three_d_secure: 'challenge' } } };
+
+    it('adds the challenge options to the payment intent and asks the helper about this account', async () => {
+      mockFirstPurchaseCardOptions.mockResolvedValue(challengeOptions);
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { createdAt: accountCreatedAt }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockFirstPurchaseCardOptions).toHaveBeenCalledWith(
+        { stripeCustomerId: 'cus_existing', accountCreatedAt },
+        expect.anything()
+      );
+      expect(mockPaymentIntentsCreate).toHaveBeenCalledWith(expect.objectContaining(challengeOptions));
+    });
+
+    it('leaves payment_method_options off when the helper returns nothing', async () => {
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { createdAt: accountCreatedAt }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockPaymentIntentsCreate.mock.calls[0][0]).not.toHaveProperty('payment_method_options');
+    });
+  });
 });

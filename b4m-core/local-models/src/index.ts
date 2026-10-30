@@ -43,18 +43,23 @@ export {
 } from './errors';
 export { isAbliteratedModel } from './abliterated';
 export {
+  configuredNumCtx,
   curatedBuildForRef,
+  curatedEntryForRef,
   curatedLibrary,
   curatedListing,
   curatedOllamaBlocked,
   curatedParamsLabel,
   curatedPicks,
   curatedPins,
+  curatedRunner,
   curatedSource,
+  installedReviewed,
   isCuratedListable,
   isCuratedPullable,
   isPermissiveEntry,
   loadCuratedManifest,
+  servesReviewed,
   type CuratedListing,
   type CuratedSource,
   type CuratedTierPick,

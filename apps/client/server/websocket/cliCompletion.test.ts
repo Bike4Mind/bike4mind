@@ -256,6 +256,7 @@ describe('cliCompletion websocket handler', () => {
       requestId: '7f0c3f0e-5b1a-4c58-9a57-2f1e8f6f3a11',
       error: 'Model does not support tool search.',
       errorCode: 'tool_search_unsupported',
+      status: 400,
     });
   });
 

@@ -28,6 +28,11 @@ const makeAdapters = (balances: { user: number; org?: number }) => {
       }),
     } as unknown as CreditHoldAdapters['organizations'],
     creditTransactions: {} as CreditHoldAdapters['creditTransactions'],
+    // The test user has no createdAt, so the new-account spend cap never applies here.
+    newAccountSpendCap: {
+      adminSettings: { findAll: vi.fn(async () => []), findBySettingNames: vi.fn(async () => []) },
+      personalSpendSince: vi.fn(async () => []),
+    } as unknown as CreditHoldAdapters['newAccountSpendCap'],
   };
   return { adapters, state };
 };

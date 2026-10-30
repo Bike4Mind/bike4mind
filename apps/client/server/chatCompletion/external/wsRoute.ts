@@ -191,7 +191,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
       return;
     }
 
-    const { requestId, model, messages, options } = body;
+    const { requestId, model, messages, options, sessionId } = body;
     logger.updateMetadata({ userId, model, requestId });
 
     // The CLI must already hold a WebSocket connection to receive the stream.
@@ -294,6 +294,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             billingOrganizationId: apiKeyInfo?.organizationId,
             requestId,
             source,
+            sessionId,
             logger,
             onChunk: async (text, info) => {
               if (info?.inputTokens) finalInputTokens = info.inputTokens;
