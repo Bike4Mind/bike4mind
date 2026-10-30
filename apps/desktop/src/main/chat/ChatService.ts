@@ -77,6 +77,7 @@ import {
 } from '@shared/mcp';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
+import type { PrMonitor } from '../pr/PrMonitor';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import type { CapabilityLedger } from './capabilities/CapabilityLedger';
 import { capabilityFor, capabilityScope } from './capabilities/approvalCapabilities';
@@ -454,6 +455,8 @@ export interface ChatServiceDeps {
   mcp?: McpManager;
   /** The agent's hidden browser. Absent in tests that do not exercise it; the tools are then not declared. */
   browser?: BrowserProvider;
+  /** Each conversation's PR binding. Absent in tests that do not exercise it; set_session_pull_request is then not declared. */
+  pullRequests?: Pick<PrMonitor, 'bindForAgent' | 'dismiss'>;
   /** Other apps' windows, for screen_capture. Absent in tests that do not exercise it; the tool is then not declared. */
   screen?: ScreenCapturer;
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
@@ -2605,6 +2608,9 @@ export class ChatService {
       const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
       const ask = !session.origin || this.attendedTurns.has(sessionId);
+      // Narrower than `ask`: a relay or automatic turn in a main session can still show a card,
+      // but nobody typed it.
+      const attended = this.attendedTurns.has(sessionId);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = api && !localTurn ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
@@ -2710,6 +2716,7 @@ export class ChatService {
               suggestions: !session.origin,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
+              pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
             });
       let tools = toolsFor(roots);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
@@ -3038,6 +3045,7 @@ export class ChatService {
                 web,
                 patchEdits,
                 ask,
+                attended,
                 title: session.title,
                 directories: directoryTurn,
                 permissions: {
@@ -3533,6 +3541,8 @@ export class ChatService {
       patchEdits: boolean;
       /** Whether a user is present to answer an ask_user card. */
       ask: boolean;
+      /** Whether the user typed this turn, as opposed to a relay, an automatic turn or a seed prompt. */
+      attended: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
@@ -3558,7 +3568,9 @@ export class ChatService {
       web,
       patchEdits,
       ask,
+      attended,
     } = scope;
+    const pullRequests = this.deps.pullRequests;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -3694,6 +3706,16 @@ export class ChatService {
           ...(skills ? { skills } : {}),
           ...(web ? { web } : {}),
           ...(this.deps.mcp ? { mcp: this.deps.mcp } : {}),
+          // Not on the declaration alone: an undeclared tool still resolves by name, and in a turn
+          // the user did not type nobody can have asked for the change.
+          ...(pullRequests && attended
+            ? {
+                pullRequests: {
+                  bind: (target: string) => pullRequests.bindForAgent(sessionId, target),
+                  clear: () => pullRequests.dismiss(sessionId),
+                },
+              }
+            : {}),
           report,
           isStanding: key => !!this.deps.approvals?.isStanding(sessionId, key),
         };
