@@ -6,6 +6,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatStreamEvent } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -50,6 +51,7 @@ describe('ChatService set_session_pull_request', () => {
       access: { list: async () => [] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       pullRequests: { bindForAgent, dismiss },
+      queue: new MessageQueue(() => undefined),
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
@@ -106,5 +108,34 @@ describe('ChatService set_session_pull_request', () => {
       call: { status: 'done', label: "Set the session's PR to example-org/widgets#700" },
     });
     expect(events.some(event => event.type === 'tool-start' && event.call.approvalId)).toBe(false);
+  });
+
+  it('is withheld from, and refused in, a turn the user did not type', async () => {
+    const created = await service.createCodeSession({ directory: project, branch: '', workspace: false });
+    if (!created.ok) throw new Error(created.error);
+    const { id } = created.session;
+    const started = await service.startAutomaticTurn(id, 'the build finished', {
+      kind: 'background-exit',
+      processIds: ['aaaa1111'],
+      summary: 'build exited 0',
+    });
+    expect(started).toEqual({ ok: true });
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    expect(declared(0)).not.toContain('set_session_pull_request');
+
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 't1', name: 'set_session_pull_request', arguments: JSON.stringify({ clear: true }) }],
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    const end = await vi.waitUntil(
+      () => events.find(event => event.type === 'tool-end' && event.call.name === 'set_session_pull_request'),
+      { timeout: 5000, interval: 5 }
+    );
+    expect(JSON.stringify(end)).toContain('The PR bar can only be changed in a conversation the user is in.');
+    expect(dismiss).not.toHaveBeenCalled();
+    expect(bindForAgent).not.toHaveBeenCalled();
   });
 });
