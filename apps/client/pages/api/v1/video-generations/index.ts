@@ -24,6 +24,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
@@ -88,7 +89,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {
-      user: { id: req.user.id, organizationId },
+      user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
       request,
       source,
       // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per

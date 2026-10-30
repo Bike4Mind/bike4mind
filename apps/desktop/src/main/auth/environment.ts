@@ -1,10 +1,15 @@
-import { LOCAL_DEV_URL, parseApiUrl, selectApiEndpoint, type ApiEndpoint } from '@bike4mind/client-auth';
+import {
+  LOCAL_DEV_URL,
+  normalizeEnvKey,
+  parseApiUrl,
+  selectApiEndpoint,
+  type ApiEndpoint,
+} from '@bike4mind/client-auth';
 import type { EnvironmentSelection, ResolvedEnvironment } from '@shared/auth';
 
 /**
  * Default service endpoint, baked in at build time (see the `define` block in
- * electron.vite.config.ts), exactly as the CLI bakes `B4M_DEFAULT_API_URL` via tsdown. Empty
- * for an unbranded fork, which then has no `hosted` option and must pick local or custom.
+ * electron.vite.config.ts). Builds default to Production; publishers can override the URL.
  */
 export function bakedDefaultApiUrl(): string {
   return process.env.B4M_DEFAULT_API_URL ?? '';
@@ -12,6 +17,26 @@ export function bakedDefaultApiUrl(): string {
 
 export function hostedAvailable(): boolean {
   return bakedDefaultApiUrl() !== '';
+}
+
+/** Require both the same endpoint and token key before reusing a stored session. */
+function isBakedDefault(url: string): boolean {
+  const bakedUrl = bakedDefaultApiUrl();
+  const baked = parseApiUrl(bakedUrl);
+  if ('error' in baked) return false;
+  // Cache keys lowercase paths too; endpoint matching must preserve their case.
+  return new URL(url).href === new URL(bakedUrl).href && normalizeEnvKey(url) === normalizeEnvKey(bakedUrl);
+}
+
+/**
+ * A `custom` pick of the baked production URL, which a build released without its baked default
+ * forced users to type in, is really `hosted`: it should say "Production" and follow the default
+ * if that ever moves. Anything else is returned as is.
+ */
+export function migrateSelection<T extends EnvironmentSelection | undefined>(selection: T): T | EnvironmentSelection {
+  if (selection?.preset !== 'custom' || !selection.customUrl) return selection;
+  const parsed = parseApiUrl(selection.customUrl);
+  return 'url' in parsed && isBakedDefault(parsed.url) ? { preset: 'hosted' } : selection;
 }
 
 /**
@@ -28,15 +53,16 @@ function labelFor(endpoint: Extract<ApiEndpoint, { status: 'configured' }>): str
 /**
  * Turn a user's picker choice into a concrete endpoint, or report that none resolves.
  *
- * `devFallback` is `!app.isPackaged`: a developer running from source gets the local server
- * rather than an unconfigured app, while a packaged unbranded build is honestly unconfigured
- * instead of silently pointing at a localhost that is not there.
+ * `devFallback` is `!app.isPackaged`: when no baked default is available, a source run uses
+ * the local server while a packaged build stays unconfigured. Non-development builds bake
+ * Production; `pnpm dev` bakes nothing unless a value is supplied, so it reaches Local Dev.
  */
 export function resolveEnvironment(
   selection: EnvironmentSelection | undefined,
   devFallback: boolean
 ): { status: 'configured'; environment: ResolvedEnvironment } | { status: 'unconfigured' } {
-  const preset = selection?.preset;
+  const migrated = migrateSelection(selection);
+  const preset = migrated?.preset;
 
   // `local` is an explicit pick, so it bypasses the precedence rule entirely - the baked
   // default must not win over a user who deliberately chose the dev server.
@@ -44,7 +70,7 @@ export function resolveEnvironment(
     return { status: 'configured', environment: { preset: 'local', url: LOCAL_DEV_URL, label: 'Local Dev' } };
   }
 
-  const customUrl = preset === 'custom' ? selection?.customUrl : undefined;
+  const customUrl = preset === 'custom' ? migrated?.customUrl : undefined;
   const endpoint = selectApiEndpoint({
     customUrl,
     // A `custom` pick that lost its URL must not silently fall back to the hosted service
@@ -77,5 +103,5 @@ export function normalizeSelection(selection: EnvironmentSelection): Environment
   if (selection.preset !== 'custom') return { preset: selection.preset };
 
   const parsed = parseApiUrl(selection.customUrl ?? '');
-  return { preset: 'custom', customUrl: 'url' in parsed ? parsed.url : selection.customUrl };
+  return migrateSelection({ preset: 'custom', customUrl: 'url' in parsed ? parsed.url : selection.customUrl });
 }

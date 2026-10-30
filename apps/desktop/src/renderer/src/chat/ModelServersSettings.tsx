@@ -19,9 +19,12 @@ import type {
   ModelServerKind,
   ModelServerMutationResult,
   ModelServerProbeResult,
+  ModelServerSpecs,
   ModelServerState,
   ModelServerView,
 } from '@shared/modelServers';
+import { specsProblem } from '@shared/modelServers';
+import { formatMemory, type MachineView } from '@shared/models';
 
 const KIND_LABEL: Record<ModelServerKind, string> = { ollama: 'Ollama', 'openai-compatible': 'OpenAI-compatible' };
 const ACCESS_LABEL: Record<ModelServerAccess, string> = { chat: 'Chat only', manage: 'Chat and manage' };
@@ -150,6 +153,161 @@ function CredentialFields({
   );
 }
 
+type SpecsDraft = { ram: string; gpu: string; bandwidth: string; unified: boolean };
+
+const figure = (value: number | null | undefined) => (value === null || value === undefined ? '' : String(value));
+const parsed = (value: string) => (value.trim() === '' ? null : Number(value));
+
+function specsDraft(specs: ModelServerSpecs | null): SpecsDraft {
+  return {
+    ram: figure(specs?.ramGiB),
+    gpu: figure(specs?.gpuMemoryGiB),
+    bandwidth: figure(specs?.bandwidthGBps),
+    unified: specs?.unified ?? false,
+  };
+}
+
+function draftSpecs(draft: SpecsDraft): ModelServerSpecs {
+  return {
+    ramGiB: parsed(draft.ram),
+    gpuMemoryGiB: parsed(draft.gpu),
+    bandwidthGBps: parsed(draft.bandwidth),
+    unified: draft.unified,
+  };
+}
+
+export function specsSummary(specs: ModelServerSpecs): string {
+  return [
+    specs.ramGiB !== null ? `${specs.ramGiB} GB RAM${specs.unified ? ' shared with the GPU' : ''}` : null,
+    specs.gpuMemoryGiB !== null ? `${specs.gpuMemoryGiB} GB GPU memory` : null,
+    specs.bandwidthGBps !== null ? `${specs.bandwidthGBps} GB/s memory bandwidth` : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
+export function probedSummary(machine: MachineView): string {
+  const memory = formatMemory(machine.totalMemoryBytes);
+  const gpu = machine.gpuMemoryBytes ? formatMemory(machine.gpuMemoryBytes) : null;
+  const name = machine.gpuName ? ` (${machine.gpuName})` : '';
+  if (machine.memoryKind === 'unified')
+    return gpu
+      ? `${memory} of memory shared with the GPU${name}, which can use ${gpu}`
+      : `${memory} of memory shared with the GPU${name}`;
+  if (machine.memoryKind === 'discrete' && gpu) return `${memory} of RAM and ${gpu} of GPU memory${name}`;
+  return `${memory} of RAM and no GPU memory`;
+}
+
+/** Hardware typed in for a server, or in place of this computer's probe, which Models rates downloads against. */
+function SpecsFields({
+  server,
+  busy,
+  onSave,
+  onDone,
+}: {
+  server: ModelServerView;
+  busy: boolean;
+  onSave: (specs: ModelServerSpecs | null) => Promise<boolean>;
+  onDone: () => void;
+}) {
+  const [draft, setDraft] = useState<SpecsDraft>(() => specsDraft(server.specs));
+  const [problem, setProblem] = useState<string | null>(null);
+  const [probed, setProbed] = useState<MachineView | null | undefined>(server.local ? undefined : null);
+
+  useEffect(() => {
+    if (!server.local) return;
+    let live = true;
+    void window.b4m.modelServers.probedHardware().then(
+      machine => live && setProbed(machine),
+      () => live && setProbed(null)
+    );
+    return () => {
+      live = false;
+    };
+  }, [server.local]);
+
+  const save = (specs: ModelServerSpecs | null) => {
+    const issue = specs && specsProblem(specs, server.local);
+    setProblem(issue ?? null);
+    if (issue) return;
+    void onSave(specs).then(ok => ok && onDone());
+  };
+  const placeholder = (bytes: number | null | undefined) =>
+    bytes ? String(Math.round((bytes / 1024 ** 3) * 10) / 10) : undefined;
+  const field = (key: 'ram' | 'gpu' | 'bandwidth', label: string, testId: string, hint?: string) => (
+    <FormControl size="sm" sx={{ flex: 1, minWidth: 130 }}>
+      <FormLabel>{label}</FormLabel>
+      <Input
+        size="sm"
+        type="number"
+        value={draft[key]}
+        placeholder={hint}
+        onChange={event => setDraft({ ...draft, [key]: event.target.value })}
+        slotProps={{ input: { 'data-testid': testId, min: 0, step: 'any' } }}
+      />
+    </FormControl>
+  );
+
+  return (
+    <Stack spacing={1} data-testid="model-servers-specs-form">
+      <Typography level="body-xs" textColor="text.tertiary">
+        {server.local
+          ? 'Fill in only what Desktop detected wrong. Fit badges, Curated picks and chat context use these figures in place of the detected ones.'
+          : 'Fit badges and Curated picks for this server use these figures. Without RAM its models stay unrated.'}
+      </Typography>
+      {server.local && probed !== undefined && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-specs-probed">
+          {probed ? `Detected: ${probedSummary(probed)}.` : "Desktop could not detect this computer's hardware."}
+        </Typography>
+      )}
+      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        {field('ram', 'RAM (GB)', 'model-servers-specs-ram-input', placeholder(probed?.totalMemoryBytes))}
+        {field('gpu', 'GPU memory (GB)', 'model-servers-specs-gpu-input', placeholder(probed?.gpuMemoryBytes))}
+        {field('bandwidth', 'Memory bandwidth (GB/s)', 'model-servers-specs-bandwidth-input')}
+      </Stack>
+      {!server.local && (
+        <Checkbox
+          size="sm"
+          label="The GPU shares this RAM (unified memory)"
+          checked={draft.unified}
+          onChange={event => setDraft({ ...draft, unified: event.target.checked })}
+          slotProps={{ input: { 'data-testid': 'model-servers-specs-unified-checkbox' } }}
+        />
+      )}
+      <Typography level="body-xs" textColor="text.tertiary">
+        Ratings use the memory figures. Bandwidth is saved but does not change them yet.
+      </Typography>
+      {problem && (
+        <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-specs-error">
+          {problem}
+        </Alert>
+      )}
+      <Stack direction="row" spacing={1}>
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={() => save(draftSpecs(draft))}
+          data-testid="model-servers-specs-save-btn"
+        >
+          Save hardware
+        </Button>
+        {server.specs && (
+          <Button
+            size="sm"
+            variant="plain"
+            color="neutral"
+            disabled={busy}
+            onClick={() => save(null)}
+            data-testid="model-servers-specs-clear-btn"
+          >
+            {server.local ? 'Use detected hardware' : 'Clear'}
+          </Button>
+        )}
+      </Stack>
+    </Stack>
+  );
+}
+
 function ServerRow({
   server,
   onResult,
@@ -157,6 +315,7 @@ function ServerRow({
   server: ModelServerView;
   onResult: (result: ModelServerMutationResult) => void;
 }) {
+  const [editingSpecs, setEditingSpecs] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<CredentialDraft>(EMPTY_CREDENTIAL);
   const [busy, setBusy] = useState(false);
@@ -294,9 +453,25 @@ function ServerRow({
           </Stack>
         )}
         {!server.local && server.access === 'manage' && (
-          <Typography level="body-xs" textColor="text.tertiary">
-            This setting is on this device only. Pulling and removing models on this server is not available yet.
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-access-note">
+            This setting is on this device only.{' '}
+            {server.kind === 'ollama'
+              ? 'Download and remove models on this server from the Models screen.'
+              : 'Downloading and removing models works only on Ollama servers.'}
           </Typography>
+        )}
+        {server.specs && (
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-specs-summary">
+            Hardware entered: {specsSummary(server.specs)}.
+          </Typography>
+        )}
+        {editingSpecs && (
+          <SpecsFields
+            server={server}
+            busy={busy}
+            onSave={specs => update({ specs })}
+            onDone={() => setEditingSpecs(false)}
+          />
         )}
         {error && (
           <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-row-error">
@@ -315,6 +490,16 @@ function ServerRow({
             data-testid="model-servers-recheck-btn"
           >
             Check now
+          </Button>
+          <Button
+            size="sm"
+            variant="plain"
+            color="neutral"
+            disabled={busy}
+            onClick={() => setEditingSpecs(open => !open)}
+            data-testid="model-servers-specs-btn"
+          >
+            Hardware
           </Button>
           {!server.local &&
             (confirmRemove ? (

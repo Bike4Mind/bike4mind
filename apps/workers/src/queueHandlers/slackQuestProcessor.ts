@@ -61,7 +61,7 @@ import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-uti
 import { logEvent } from '@server/utils/analyticsLog';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
-import { IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
+import { isTerminalCreditRefusal, IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { withEventContext } from '@workers/utils/eventContext';
@@ -473,10 +473,14 @@ export const handler = withEventContext(async (event, logger) => {
       videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
     });
   } catch (processError) {
-    logger.error('[SLACK-NOTIFY] Chat processing failed before a reply was delivered', {
-      questId: params.questId,
-      error: processError,
-    });
+    // A credit refusal fails identically on every retry, so it is an expected outcome, not a fault.
+    const isCreditRefusal = isTerminalCreditRefusal(processError);
+    const failureLog = { questId: params.questId, error: processError };
+    if (isCreditRefusal) {
+      logger.warn('[SLACK-NOTIFY] Chat processing refused by billing before a reply was delivered', failureLog);
+    } else {
+      logger.error('[SLACK-NOTIFY] Chat processing failed before a reply was delivered', failureLog);
+    }
     try {
       await deliverSlackProcessingFailure(params.questId, logger);
     } catch (notifyError) {
@@ -485,6 +489,8 @@ export const handler = withEventContext(async (event, logger) => {
         error: notifyError,
       });
     }
+    // The notice already tells the user; consume the event rather than retrying into the DLQ.
+    if (isCreditRefusal) return;
     throw processError;
   }
 

@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { ApiKeyScope, type IntegrationRequestersResponse } from '@bike4mind/common';
 import { integrationRequestRepository, organizationRepository, userRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
-import { ForbiddenError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 /**
@@ -30,8 +30,11 @@ const ONE_MINUTE_MS = 60 * 1000;
 // Higher than the summary route: "Copy emails" walks every page of one integration in a burst.
 export const INTEGRATION_REQUESTERS_RATE_LIMIT = 60;
 
-// Same gate as the summary route: admin:* for API keys, isAdmin for everyone.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+// Same gate as the summary route: admin:* for API keys, adminApi permission for everyone.
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .use(
     rateLimit({
       limit: INTEGRATION_REQUESTERS_RATE_LIMIT,
@@ -40,10 +43,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const query = QuerySchema.safeParse(req.query);
     if (!query.success) {
       throw new UnprocessableEntityError(

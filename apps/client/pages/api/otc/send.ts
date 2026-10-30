@@ -16,6 +16,7 @@ import {
 import { otcRecipientRefusal } from '@server/utils/otcRecipient';
 import { checkTurnstileToken, requireTurnstile } from '@server/middlewares/requireTurnstile';
 import { getTurnstileStepUpPolicy } from '@server/utils/auth/turnstile';
+import { wasTurnstileVerified } from '@server/auth/signupChallenge';
 import type { Request } from 'express';
 import { TURNSTILE_ACTION_OTC_SEND } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
@@ -137,7 +138,9 @@ const handler = baseApi({ auth: false })
             },
           },
           signPendingToken: payload => {
-            return jwt.sign(payload, Config.JWT_SECRET, { algorithm: 'HS256' });
+            return jwt.sign({ ...payload, challengeVerified: wasTurnstileVerified(req) }, Config.JWT_SECRET, {
+              algorithm: 'HS256',
+            });
           },
         }
       )

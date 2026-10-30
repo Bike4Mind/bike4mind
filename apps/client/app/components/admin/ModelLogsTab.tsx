@@ -166,11 +166,6 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   // Any filter change goes back to the first page.
   const setDateRange = (range: Partial<Pick<ModelLogsView, 'startDate' | 'endDate'>>) =>
     updateView({ ...range, page: 1 });
-  const selectLastDays = (days: number) =>
-    setDateRange({
-      startDate: dayjs().subtract(days, 'day').format('YYYY-MM-DD'),
-      endDate: dayjs().format('YYYY-MM-DD'),
-    });
   const handleSearchChange = (query: string) => {
     setSearchQuery(query);
     if (currentPage !== 1) updateView({ page: 1 });
@@ -225,13 +220,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
           <Grid container spacing={2}>
             {/* Full row: two date inputs plus three range buttons overflow a narrower cell. */}
             <Grid xs={12}>
-              <DateFilterComponent
-                startDate={startDate}
-                endDate={endDate}
-                onStartDateChange={date => setDateRange({ startDate: date })}
-                onEndDateChange={date => setDateRange({ endDate: date })}
-                onRangeSelect={selectLastDays}
-              />
+              <DateFilterComponent value={{ startDate, endDate }} onChange={setDateRange} />
             </Grid>
             <Grid xs={12} md={6}>
               <FormControl>

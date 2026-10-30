@@ -80,8 +80,9 @@ export const isTurnstileOAuthProvider = (provider: unknown): provider is Turnsti
   typeof provider === 'string' && (TURNSTILE_OAUTH_PROVIDERS as readonly string[]).includes(provider);
 
 /**
- * Entitlement key held by a user with an active paid ladder plan (Basic or Pro, org seats included).
- * Derived only from subscriptions in apps/client/server/entitlements/index.ts, never from a tag,
+ * Entitlement key held by a user with an active paid ladder plan (Basic or Pro, org seats included)
+ * or a credit purchase (`lastCreditsPurchasedAt`). Derived only from those in
+ * apps/client/server/entitlements/index.ts, never from a tag,
  * partner rule or contribution (reserved in isReservedContributionKey). The free-tier model gate in
  * b4m-core/services/src/llm/modelAdmission.ts reads it.
  */

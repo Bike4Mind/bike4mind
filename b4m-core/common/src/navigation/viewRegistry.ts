@@ -384,10 +384,10 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.subscribers',
     section: 'admin',
-    label: 'Subscribers',
-    description: 'Manage subscriber waitlist and access approvals',
+    label: 'Waitlist',
+    description: 'Manage the waitlist and send invites to people waiting for access',
     navigationType: 'tab',
-    target: '12', // AdminTab.Subscribers
+    target: '12', // AdminTab.Waitlist
     keywords: ['subscribers', 'waitlist', 'approvals', 'signups'],
     requiresAdmin: true,
   },
@@ -669,6 +669,33 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '68', // AdminTab.SignupDomainHolds
     keywords: ['domain holds', 'suspicious signups', 'disposable email', 'signup abuse', 'held credits', 'fraud'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.signup_risk_review',
+    section: 'admin',
+    label: 'Risk review',
+    description: 'Review new accounts whose signup risk score reached the review threshold; approve or suspend them',
+    navigationType: 'tab',
+    target: '69', // AdminTab.SignupRiskReview
+    keywords: [
+      'risk review',
+      'risk score',
+      'flagged signups',
+      'suspicious accounts',
+      'signup abuse',
+      'approve account',
+    ],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.held_signup_grants',
+    section: 'admin',
+    label: 'Held signup grants',
+    description: 'Release free signup credits held by the daily budget, in bulk, with revoke',
+    navigationType: 'tab',
+    target: '70', // AdminTab.HeldSignupGrants
+    keywords: ['held grants', 'signup budget', 'free credits', 'release credits', 'bulk release'],
     requiresAdmin: true,
   },
   {

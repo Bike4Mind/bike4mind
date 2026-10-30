@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { archFromModelInfo, positiveInt, tensorStatsFromTensors } from './arch';
-import { LocalRuntimeError, ModelNotFoundError, RuntimeHttpError, RuntimeProtocolError } from './errors';
+import {
+  LocalRuntimeError,
+  ModelNotFoundError,
+  PullIdleTimeoutError,
+  RuntimeHttpError,
+  RuntimeProtocolError,
+} from './errors';
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   HEALTH_TIMEOUT_MS,
@@ -303,10 +309,7 @@ export class OllamaRuntime implements LocalRuntime {
       throw new LocalRuntimeError(`idleTimeoutMs must be a positive number or Infinity, got ${idleTimeoutMs}`, this.id);
     }
     const idle = new AbortController();
-    const idleError = new LocalRuntimeError(
-      `${this.id} sent nothing for ${idleTimeoutMs}ms while pulling ${ref}`,
-      this.id
-    );
+    const idleError = new PullIdleTimeoutError(this.id, ref, idleTimeoutMs);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const arm = () => {
       clearTimeout(timer);

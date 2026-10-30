@@ -27,6 +27,7 @@ import {
 } from '@shared/models';
 import { ExternalLink } from '../chat/ExternalLink';
 import { BuildRow, hubErrorText, startPull } from './ExploreTab';
+import type { ModelTarget } from './modelTarget';
 import { PullDialog, type PullConsent } from './PullDialog';
 
 const SLOT_LABELS: Record<CuratedSlot, string> = {
@@ -132,7 +133,7 @@ function VisionChip({ entry }: { entry: CuratedEntryView }) {
 }
 
 // Lets the shared row show a curated build; the dialog and the pull use what main hands back for it.
-function rowBuild(build: CuratedBuildView): HubBuildView {
+function rowBuild(build: CuratedBuildView, rated: boolean): HubBuildView {
   return {
     id: build.pullBuildId,
     label: build.quant,
@@ -140,8 +141,21 @@ function rowBuild(build: CuratedBuildView): HubBuildView {
     ollamaRef: build.ollamaRef,
     installedNames: [build.ollamaRef.toLowerCase()],
     blockedReason: build.blockedReason,
-    fit: build.fit,
+    fit: rated ? build.fit : null,
   };
+}
+
+/** The hardware typed in Settings that the badges rate. */
+function enteredText(machine: MachineView, name: string): string {
+  const memory = formatMemory(machine.totalMemoryBytes);
+  const gpu = machine.gpuMemoryBytes ? formatMemory(machine.gpuMemoryBytes) : null;
+  const rated = `${name} is rated from the hardware entered in Settings:`;
+  if (machine.memoryKind === 'unified')
+    return gpu
+      ? `${rated} ${memory} of memory shared with its GPU, which can use ${gpu}.`
+      : `${rated} ${memory} of memory shared with its GPU.`;
+  if (machine.memoryKind === 'discrete' && gpu) return `${rated} ${memory} of RAM and ${gpu} of GPU memory.`;
+  return `${rated} ${memory} of RAM and no GPU, so badges assume models run on the CPU.`;
 }
 
 interface Confirming {
@@ -163,7 +177,8 @@ interface RowError {
 }
 
 /** The Download flow shared by the picks and the full list: check with main, confirm, then pull. */
-function useCuratedPull(onRecheck: () => void) {
+function useCuratedPull(onRecheck: () => void, target: ModelTarget) {
+  const serverId = target.local ? undefined : target.id;
   const [preparing, setPreparing] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [error, setError] = useState<RowError | null>(null);
@@ -185,7 +200,7 @@ function useCuratedPull(onRecheck: () => void) {
     setError(null);
     setPreparing(where);
     try {
-      const result = await window.b4m.models.getCuratedPull(entry.id, build.id);
+      const result = await window.b4m.models.getCuratedPull(entry.id, build.id, serverId);
       if (request !== latest.current) return;
       if (result.ok)
         setConfirming({
@@ -205,7 +220,10 @@ function useCuratedPull(onRecheck: () => void) {
   const confirm = async (pending: Confirming, consent: PullConsent, build: CuratedBuildView) => {
     setConfirming(null);
     try {
-      const failure = await startPull(pending.model, pending.build, consent, onRecheck, pending.curated);
+      const failure = await startPull(pending.model, pending.build, consent, onRecheck, {
+        serverId,
+        curated: pending.curated,
+      });
       if (failure) showError(pending.where, failure, build, true);
     } catch {
       setError({ where: pending.where, text: CHECK_FAILED, repo: null });
@@ -215,7 +233,7 @@ function useCuratedPull(onRecheck: () => void) {
   const checkAgain = async (where: string, entry: CuratedEntryView, build: CuratedBuildView) => {
     setChecking(current => new Set(current).add(where));
     try {
-      await window.b4m.models.checkCurated(entry.id, build.id);
+      await window.b4m.models.checkCurated(entry.id, build.id, serverId);
       // Main updates the failed pull on either outcome. Keeping a second copy here would restore
       // its warning after Dismiss, including when the check finishes after it was dismissed.
       setError(current => (current?.where === where ? null : current));
@@ -225,7 +243,7 @@ function useCuratedPull(onRecheck: () => void) {
         text: CHECK_FAILED,
         repo: null,
         recheck: true,
-        pullKey: pullKey(build.repo, build.pullBuildId),
+        pullKey: pullKey(build.repo, build.pullBuildId, target.id),
       });
     } finally {
       setChecking(current => {
@@ -243,6 +261,9 @@ type CuratedPull = ReturnType<typeof useCuratedPull>;
 
 interface RowContext {
   flow: CuratedPull;
+  target: ModelTarget;
+  /** The list's fits describe the target; false on a saved server without entered hardware. */
+  rated: boolean;
   installedNames: Set<string>;
   pulls: ModelPull[];
   runtimeReady: boolean;
@@ -260,8 +281,9 @@ function CuratedBuild({
   build: CuratedBuildView;
   context: RowContext;
 }) {
-  const { flow, installedNames, pulls, runtimeReady, onOpenInExplore } = context;
-  const pull = pulls.find(candidate => candidate.key === pullKey(build.repo, build.pullBuildId));
+  const { flow, target, rated, installedNames, pulls, runtimeReady, onOpenInExplore } = context;
+  const canPull = target.management === 'allowed';
+  const pull = pulls.find(candidate => candidate.key === pullKey(build.repo, build.pullBuildId, target.id));
   const failure = pull?.phase === 'failed' ? pull.error : null;
   // The row's own failed recheck outranks the pull's stored warning; a pullKey ties it to that pull.
   const own =
@@ -285,10 +307,11 @@ function CuratedBuild({
     <>
       <BuildRow
         repo={build.repo}
-        build={rowBuild(build)}
+        build={rowBuild(build, rated)}
         pull={pull}
         installed={installedNames.has(build.ollamaRef.toLowerCase())}
         runtimeReady={runtimeReady}
+        canPull={canPull}
         preparing={flow.preparing === where}
         onPull={() => void flow.review(where, entry, build)}
       />
@@ -328,11 +351,12 @@ function CuratedBuild({
           {error.text}
         </Alert>
       )}
-      {confirming && (
+      {confirming && canPull && (
         <PullDialog
           key={where}
           model={confirming.model}
           build={confirming.build}
+          target={target}
           onClose={flow.cancel}
           onConfirm={consent => void flow.confirm(confirming, consent, build)}
         />
@@ -450,15 +474,17 @@ function Section({ title, children, testId }: { title: string; children: ReactNo
   );
 }
 
-/** Open models Bike4Mind picked: this computer's picks first, then every model on the list with its fit. */
+/** Open models Bike4Mind picked: the picks for the target's hardware first, then every model on the list with its fit. */
 export function CuratedTab({
   status,
+  target,
   installed,
   pulls,
   onRecheck,
   onOpenInExplore,
 }: {
   status: ModelRuntimeStatus | null;
+  target: ModelTarget;
   installed: InstalledModelsResult | null;
   pulls: ModelPull[];
   onRecheck: () => void;
@@ -467,7 +493,8 @@ export function CuratedTab({
   const [list, setList] = useState<CuratedList | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const flow = useCuratedPull(onRecheck);
+  const flow = useCuratedPull(onRecheck, target);
+  const serverId = target.local ? undefined : target.id;
 
   const installedNames = useMemo(
     () => new Set(installed?.ok ? installed.models.map(model => model.name.toLowerCase()) : []),
@@ -482,14 +509,14 @@ export function CuratedTab({
     if (runtimeReachable === undefined) return;
     let live = true;
     setLoadFailed(false);
-    window.b4m.models.listCurated().then(
+    window.b4m.models.listCurated(serverId).then(
       next => live && setList(next),
       () => live && setLoadFailed(true)
     );
     return () => {
       live = false;
     };
-  }, [attempt, runtimeReachable, runtimeVersion, installedKey]);
+  }, [attempt, runtimeReachable, runtimeVersion, installedKey, serverId]);
 
   // The shown list stays up while a check runs; a newer one replaces it when main says so.
   useEffect(() => window.b4m.models.onCuratedChanged(() => setAttempt(n => n + 1)), []);
@@ -524,7 +551,9 @@ export function CuratedTab({
     );
 
   const runtimeReady = status?.reachable === true;
-  const context: RowContext = { flow, installedNames, pulls, runtimeReady, onOpenInExplore };
+  const rated = list.rating !== null;
+  const subject = target.local ? 'this computer' : target.name;
+  const context: RowContext = { flow, target, rated, installedNames, pulls, runtimeReady, onOpenInExplore };
   const picks = list.picks.flatMap(pick => {
     const entry = list.entries.find(candidate => candidate.id === pick.entryId);
     const build = entry?.builds.find(candidate => candidate.id === pick.buildId);
@@ -535,7 +564,11 @@ export function CuratedTab({
     <Stack spacing={1} data-testid="models-curated">
       <Typography level="body-xs" textColor="text.tertiary" data-testid="models-curated-machine">
         <span data-testid="models-curated-date">Curated list from {listDate(list.updatedAt)}.</span>{' '}
-        {machineText(list.machine)} Hover a badge for why.
+        {list.rating === 'probe' && `${machineText(list.machine)} Hover a badge for why.`}
+        {list.rating === 'entered' &&
+          `${enteredText(list.machine, target.local ? 'This computer' : target.name)} Hover a badge for why.`}
+        {list.rating === null &&
+          'Fit is not rated for a saved server. Enter its hardware under Settings, Model servers to rate it.'}
       </Typography>
       <Stack direction="row" spacing={1} alignItems="center">
         <Typography
@@ -559,15 +592,19 @@ export function CuratedTab({
           </Button>
         )}
       </Stack>
-      {!runtimeReady && (
+      {target.management === 'allowed' && !runtimeReady && (
         <Alert color="neutral" variant="soft" data-testid="models-curated-runtime-down">
-          Downloads need Ollama running on this computer.
+          {target.local
+            ? 'Downloads need Ollama running on this computer.'
+            : `Downloads need ${target.name} to be reachable.`}
         </Alert>
       )}
-      <Section title="For this computer" testId="models-curated-picks">
+      <Section title={rated ? `For ${subject}` : 'Curated picks'} testId="models-curated-picks">
         {picks.length === 0 ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="models-curated-no-picks">
-            The list has no picks for this computer&apos;s memory yet. Every model below shows whether it fits.
+            {rated
+              ? `The list has no picks for ${subject}'s memory yet. Every model below shows whether it fits.`
+              : 'The list has no picks yet. Every model is listed below.'}
           </Typography>
         ) : (
           picks.map(({ pick, entry, build }) => (

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
@@ -159,6 +160,34 @@ describe('DataTable', () => {
     fireEvent.click(screen.getByTestId('action-1'));
     expect(activate.mock.calls.map(call => call[0].id)).toEqual(['1', '2', '3']);
     expect(cellClick).toHaveBeenCalledOnce();
+  });
+
+  it('ignores clicks from portalled cell content such as a row menu', () => {
+    const activate = vi.fn();
+    renderTable({
+      onRowActivate: activate,
+      columns: [
+        {
+          id: 'menu',
+          label: 'Menu',
+          render: row =>
+            row.id === '1' &&
+            createPortal(
+              <>
+                <div role="menuitem" data-testid="portal-item">
+                  Approve
+                </div>
+                {/* Matches no CELL_CONTROLS selector, so only the contains() check stops it. */}
+                <div data-testid="portal-popover">Details</div>
+              </>,
+              document.body
+            ),
+        },
+      ],
+    });
+    fireEvent.click(screen.getByTestId('portal-item'));
+    fireEvent.click(screen.getByTestId('portal-popover'));
+    expect(activate).not.toHaveBeenCalled();
   });
 
   it('shows skeletons, actionable empty and actionable error states', () => {

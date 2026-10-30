@@ -3,6 +3,7 @@ import {
   IRealtimeConnectionRepository,
   IUserDocument,
   IUserRepository,
+  escapeSlackLine,
 } from '@bike4mind/common';
 import { NotFoundError, UnauthorizedError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -50,7 +51,9 @@ export const adminDeleteUser = async (
   ]);
 
   if (enableSlackNotification) {
-    await notify.send(`Admin user: ${adminId} User deleted: *${user.name}* *${user.email}*`);
+    await notify.send(
+      `Admin user: ${adminId} User deleted: *${escapeSlackLine(user.name ?? '')}* *${escapeSlackLine(user.email ?? '')}*`
+    );
   }
 
   if (enableEmailNotification) {

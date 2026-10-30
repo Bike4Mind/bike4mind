@@ -12,6 +12,7 @@ import { BadRequestError, ForbiddenError, getLlmWithFallback } from '@bike4mind/
 import { Logger } from '@bike4mind/observability';
 import {
   createModelAdmission,
+  isFreeTierModel,
   isUnpricedTextModel,
   loadFreeTierAllowedModels,
   loadModelConfigurations,
@@ -102,6 +103,38 @@ describe('createModelAdmission', () => {
     const admission = createModelAdmission({ user: { isModerated: false }, configs: [] });
     await expect(admission.admits('anything')).resolves.toBe(true);
   });
+
+  it.each([false, true])('holds all models pending signup review, with isAdmin=%s', async isAdmin => {
+    const getEntitlements = vi.fn().mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    const admission = createModelAdmission({
+      user: { isAdmin, riskScore: { reviewState: 'pending' } },
+      configs: [],
+      models,
+      enforceCredits: false,
+      getEntitlements,
+    });
+    for (const model of models) {
+      await expect(admission.assert(model.id)).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(admission.admits(model.id)).rejects.toThrow('awaits review');
+    }
+    expect(getEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('restores AI access on approval, reapplies the hold on undo, and keeps manual restrictions', async () => {
+    const user: Parameters<typeof createModelAdmission>[0]['user'] = {
+      isModerated: false,
+      riskScore: { reviewState: 'pending' },
+    };
+    const admission = createModelAdmission({ user, configs: [] });
+    await expect(admission.assert('free')).rejects.toThrow('awaits review');
+    user.riskScore = { reviewState: 'approved' };
+    await expect(admission.assert('free')).resolves.toBeUndefined();
+    user.riskScore = { reviewState: 'pending' };
+    await expect(admission.assert('free')).rejects.toThrow('awaits review');
+    user.riskScore = { reviewState: 'approved' };
+    user.isModerated = true;
+    await expect(admission.assert('free')).rejects.toThrow('disabled on your account by an administrator');
+  });
 });
 
 describe('isUnpricedTextModel', () => {
@@ -167,13 +200,13 @@ describe('free-tier model gate', () => {
     await expect(freeUser().admits('premium')).resolves.toBe(false);
   });
 
-  it('admits a free account an allowlisted model and a non-text model', async () => {
+  it('admits a free account an allowlisted model', async () => {
     const admission = freeUser();
     await expect(admission.admits('priced')).resolves.toBe(true);
-    await expect(admission.admits('img')).resolves.toBe(true);
+    await expect(admission.admits('img')).resolves.toBe(false);
   });
 
-  it('gates an id missing from the catalog as a text model', async () => {
+  it('gates an id missing from the catalog', async () => {
     await expect(freeUser().admits('not-in-catalog')).resolves.toBe(false);
   });
 
@@ -259,6 +292,46 @@ describe('free-tier model gate', () => {
   });
 });
 
+describe('free-tier media admission', () => {
+  it.each(['image', 'video', 'speech-to-text'] as const)(
+    'requires a paid plan for an unlisted %s model before any credits can be spent',
+    async type => {
+      const model = { ...image, id: `premium-${type}`, type } as ModelInfo;
+      const allowedModels = new Set(['priced']);
+      expect(isFreeTierModel(model.id, allowedModels)).toBe(false);
+      const admission = createModelAdmission({
+        user: {},
+        configs: [],
+        models: [model],
+        freeTierAllowedModels: allowedModels,
+        getEntitlements: async () => ['base'],
+      });
+      await expect(admission.admits(model.id)).resolves.toBe(false);
+      await expect(admission.assert(model.id)).rejects.toMatchObject({
+        additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+      });
+      expect(isFreeTierModel(model.id, new Set([model.id]))).toBe(true);
+      await expect(
+        createModelAdmission({
+          user: {},
+          configs: [],
+          models: [model],
+          freeTierAllowedModels: new Set([model.id]),
+        }).assert(model.id)
+      ).resolves.toBeUndefined();
+      await expect(
+        createModelAdmission({
+          user: {},
+          configs: [],
+          models: [model],
+          freeTierAllowedModels: allowedModels,
+          getEntitlements: async () => [PAID_PLAN_ENTITLEMENT_KEY],
+        }).assert(model.id)
+      ).resolves.toBeUndefined();
+    }
+  );
+});
+
 describe('loadFreeTierAllowedModels', () => {
   const adminSettings = {} as Parameters<typeof loadFreeTierAllowedModels>[0];
 
@@ -267,15 +340,13 @@ describe('loadFreeTierAllowedModels', () => {
     await expect(loadFreeTierAllowedModels(adminSettings)).resolves.toBeUndefined();
   });
 
-  it('returns the allowlist plus the Default API Model while the gate is on', async () => {
+  it('returns only the allowlist while the gate is on, never the Default API Model', async () => {
     getSettingsMap.mockResolvedValueOnce({
       freeTierModelGateEnabled: 'true',
       freeTierAllowedModels: JSON.stringify(['cheap']),
-      DefaultAPIModel: ChatModels.CLAUDE_5_SONNET,
+      DefaultAPIModel: ChatModels.CLAUDE_5_5_OPUS,
     });
-    await expect(loadFreeTierAllowedModels(adminSettings)).resolves.toEqual(
-      new Set(['cheap', ChatModels.CLAUDE_5_SONNET])
-    );
+    await expect(loadFreeTierAllowedModels(adminSettings)).resolves.toEqual(new Set(['cheap']));
   });
 
   it('propagates a settings read failure instead of opening the gate', async () => {

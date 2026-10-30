@@ -1,13 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const findSetting = vi.hoisted(() => vi.fn());
 const config = vi.hoisted(() => ({ TURNSTILE_SECRET_KEY: 'secret' as string | undefined }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findBySettingName: findSetting },
 }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: config }));
+const deployed = vi.hoisted(() => ({ value: false }));
+const warn = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: config, isDeployedStage: () => deployed.value }));
+vi.mock('@bike4mind/observability', () => ({
+  Logger: class {
+    warn = warn;
+  },
+}));
 
-import { getTurnstilePolicy, getTurnstileStepUpPolicy, turnstileAllowedHostnames } from './turnstile';
+import {
+  TURNSTILE_INACTIVE_LOG_INTERVAL_MS,
+  getTurnstilePolicy,
+  getTurnstileStepUpPolicy,
+  turnstileAllowedHostnames,
+  type TurnstileInactiveReason,
+} from './turnstile';
 
 describe('getTurnstilePolicy', () => {
   beforeEach(() => {
@@ -92,6 +105,79 @@ describe('getTurnstileStepUpPolicy', () => {
     config.TURNSTILE_SECRET_KEY = undefined;
     settings.turnstileSiteKey = 'site';
     expect(await getTurnstileStepUpPolicy()).toMatchObject({ active: false, secret: '' });
+  });
+});
+
+describe('inactive policy warning', () => {
+  let clock = Date.now();
+  const settingsFor = (overrides: Record<string, unknown>) => {
+    const settings: Record<string, unknown> = {
+      turnstileEnabled: true,
+      turnstileFailClosed: true,
+      turnstileSiteKey: 'site',
+      ...overrides,
+    };
+    findSetting.mockImplementation(async (key: string) => ({ settingValue: settings[key] }));
+  };
+  const inactive: Record<TurnstileInactiveReason, () => void> = {
+    'secret-not-configured': () => {
+      config.TURNSTILE_SECRET_KEY = undefined;
+    },
+    disabled: () => settingsFor({ turnstileEnabled: false }),
+    'site-key-empty': () => settingsFor({ turnstileSiteKey: '  ' }),
+  };
+  const reasons = Object.keys(inactive) as TurnstileInactiveReason[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // The throttle is module state; a later clock per test keeps every test clear of earlier warnings.
+    clock += 10 * TURNSTILE_INACTIVE_LOG_INTERVAL_MS;
+    vi.setSystemTime(clock);
+    warn.mockReset();
+    findSetting.mockReset();
+    config.TURNSTILE_SECRET_KEY = 'secret';
+    deployed.value = true;
+    settingsFor({});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    deployed.value = false;
+  });
+
+  it.each(reasons)('stays silent off a deployed stage: %s', async reason => {
+    deployed.value = false;
+    inactive[reason]();
+    expect(await getTurnstilePolicy()).toMatchObject({ active: false });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each(reasons)('logs the reason once on a deployed stage: %s', async reason => {
+    inactive[reason]();
+    expect(await getTurnstilePolicy()).toMatchObject({ active: false });
+    expect(warn).toHaveBeenCalledExactlyOnceWith('turnstile-policy-inactive', { reason });
+  });
+
+  it.each(reasons)('does not repeat within the interval: %s', async reason => {
+    inactive[reason]();
+    await getTurnstilePolicy();
+    await getTurnstilePolicy();
+    vi.advanceTimersByTime(TURNSTILE_INACTIVE_LOG_INTERVAL_MS - 1);
+    await getTurnstilePolicy();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(reasons)('logs again once the interval has passed: %s', async reason => {
+    inactive[reason]();
+    await getTurnstilePolicy();
+    vi.advanceTimersByTime(TURNSTILE_INACTIVE_LOG_INTERVAL_MS);
+    await getTurnstilePolicy();
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenLastCalledWith('turnstile-policy-inactive', { reason });
+  });
+
+  it('logs nothing for an active policy', async () => {
+    expect(await getTurnstilePolicy()).toMatchObject({ active: true });
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 
