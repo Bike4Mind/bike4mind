@@ -51,6 +51,7 @@ import type {
 import {
   awaitsWorktree,
   branchHolder,
+  defaultSpawnPlacement,
   findModelOption,
   isLocalBackend,
   isLocalModel,
@@ -4158,7 +4159,7 @@ export class ChatService {
       // A spawned session has no suggestion tray, so it keeps the approval-gated start. With
       // Orchestrate on, the user's switch is the approval and a spawn starts at once.
       ...(orchestratesAgents(session)
-        ? { delegates: true }
+        ? { delegates: { placement: (title, prompt) => this.delegatedPlacement(project, title, prompt) } }
         : session.origin
           ? {}
           : { suggestions: this.suggestionHost(session.id, project) }),
@@ -4889,6 +4890,19 @@ export class ChatService {
    * Only reads: the cut itself happens in launchSpawned, from the base the card showed (see
    * spawnBaseFor), so the child starts on the parent's commits rather than on main.
    */
+  /** The suggestion card's default placement, decided the way its card would be drawn. */
+  private async delegatedPlacement(
+    project: ChatProject,
+    title: string | undefined,
+    prompt: string
+  ): Promise<SpawnPlacement> {
+    const repository = await isGitRepository(project.workingDirectory);
+    if (defaultSpawnPlacement(repository) === 'local') return { kind: 'local' };
+    const base = await spawnBaseFor(project);
+    prefetchBase(project.directory, base);
+    return { kind: 'worktree', branch: suggestBranchName(title, prompt), base };
+  }
+
   private async checkSpawnBranch(
     project: ChatProject,
     branch: string

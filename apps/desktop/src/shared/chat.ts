@@ -1749,6 +1749,14 @@ export interface ChatSpawnSuggestion {
 /** 'here' runs the task as the user's own next message in the suggesting conversation. */
 export type SpawnSuggestionPlacement = 'worktree' | 'local' | 'here';
 
+/**
+ * Where a started task goes when nobody picked otherwise: the suggestion card's first choice
+ * and a delegated spawn's placement (ChatService.delegatedPlacement), kept as one rule.
+ */
+export function defaultSpawnPlacement(repository: boolean): 'worktree' | 'local' {
+  return repository ? 'worktree' : 'local';
+}
+
 interface SpawnSuggestionStartBase {
   title: string;
   /** The user changed the prompt or title before starting. */

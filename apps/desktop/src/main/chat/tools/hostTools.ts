@@ -125,6 +125,20 @@ const RUN_HERE_NOTE =
   'The user chose to run this task here, in this conversation, instead of starting a session. ' +
   'Nothing was started. Do the work yourself now, in this turn, and do not call session_spawn for it again.';
 
+/**
+ * Set by the approval card and by nothing else - none of these properties is in the schema
+ * below, so a model cannot send one. Absent means no gate was configured at all, and the answer
+ * there is the placement that touches nothing: creating a checkout nobody asked for is the worse
+ * of the two ways to be wrong.
+ */
+async function cardPlacement(input: Record<string, unknown>, host: HostContext): Promise<SpawnPlacement> {
+  const branch = typeof input.branch === 'string' ? input.branch.trim() : '';
+  if (input.placement !== 'worktree' || branch === '') return { kind: 'local' };
+  // Only empty when no card ran to resolve it, and then resolved the same way the card would.
+  const carried = typeof input.base === 'string' ? input.base.trim() : '';
+  return { kind: 'worktree', branch, base: carried || (await host.spawnBase()) };
+}
+
 export const sessionSpawn: ToolDefinition = {
   schema: {
     name: 'session_spawn',
@@ -237,26 +251,27 @@ export const sessionSpawn: ToolDefinition = {
       ].join('\n');
     }
 
-    // Set by the approval card and by nothing else - none of these properties is in the schema
-    // above, so a model cannot send one. Absent means no gate was configured at all, and the
-    // answer there is the placement that touches nothing: creating a checkout nobody asked for is
-    // the worse of the two ways to be wrong.
-    const branch = typeof input.branch === 'string' ? input.branch.trim() : '';
-    const worktree = input.placement === 'worktree' && branch !== '';
-    // Only empty when no card ran to resolve it, and then resolved the same way the card would.
-    const carried = typeof input.base === 'string' ? input.base.trim() : '';
-    const base = worktree ? carried || (await host.spawnBase()) : '';
-    const placement: SpawnPlacement = worktree ? { kind: 'worktree', branch, base } : { kind: 'local' };
+    let placement = host.delegates ? await host.delegates.placement(title, prompt) : await cardPlacement(input, host);
 
     context.beginWrite?.();
     if (placement.kind === 'worktree') context.report?.progress(`Creating branch ${placement.branch} and worktree...`);
-    const outcome = await host.spawn(prompt, title, placement);
+    let outcome = await host.spawn(prompt, title, placement);
+    // A delegated branch was chosen here, not by the user, so a collision falls back to the
+    // placement the card offers outside a repository rather than failing the agent.
+    let fallback: string | null = null;
+    if (host.delegates && !outcome.ok && outcome.reason === 'branch' && placement.kind === 'worktree') {
+      fallback = `No worktree was made: ${outcome.message}`;
+      placement = { kind: 'local' };
+      outcome = await host.spawn(prompt, title, placement);
+    }
     if (!outcome.ok) throw new Error(outcome.message);
     context.report?.label(`Started a session: ${outcome.session.title}`);
+    const who = host.delegates ? 'It has' : 'The user gave it';
     return [
       `Started session ${outcome.session.id} ("${outcome.session.title}").`,
+      ...(fallback ? [fallback] : []),
       placement.kind === 'worktree'
-        ? `The user gave it its own worktree on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
+        ? `${who} its own worktree on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
         : host.delegates
           ? 'It shares this working directory, so it is editing the same files you are.'
           : 'The user had it share this working directory, so it is editing the same files you are.',

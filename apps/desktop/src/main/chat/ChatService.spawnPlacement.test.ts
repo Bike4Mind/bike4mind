@@ -301,6 +301,39 @@ describe('ChatService spawn placement', () => {
     expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
   });
 
+  /** An orchestrating parent asks for one spawn, which starts without a card. */
+  async function delegate(task: { prompt: string; title: string } = { prompt: 'do the thing', title: 'The thing' }) {
+    const parent = await parentSession();
+    await service.setSessionOrchestrate(parent.id, true);
+    await service.send(parent.id, 'go');
+    await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+    requestSpawn(streams[0], 'call-1', task.prompt, task.title);
+    await awaitSettled(1);
+    return { parent, call: settled()[0] };
+  }
+
+  it('gives a delegated agent a worktree of its own in a repository, as the card does by default', async () => {
+    const { parent, call } = await delegate();
+
+    expect(call?.status).toBe('done');
+    expect(call?.preview).toContain('It has its own worktree on agent/the-thing, cut from main');
+    await worktreeOf('agent/the-thing');
+    expect((await stat(join(appWorktreeRoot(container), 'agent+the-thing', 'README.md'))).isFile()).toBe(true);
+    expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
+  });
+
+  it('starts a delegated agent in this working directory when its worktree cannot be made, and says so', async () => {
+    await git(main, ['branch', 'agent/the-thing']);
+
+    const { call } = await delegate();
+
+    expect(call?.status).toBe('done');
+    expect(call?.preview).toContain('No worktree was made');
+    expect(call?.preview).toContain('already exists');
+    expect(call?.preview).toContain('It shares this working directory');
+    expect((await child())?.project).toMatchObject({ workingDirectory: main, workspace: false });
+  });
+
   it('starts nothing when the model only suggests, and leaves the tool call done', async () => {
     const parent = await parentSession();
     await service.send(parent.id, 'go');

@@ -497,11 +497,16 @@ export interface HostContext {
    */
   suggestions?: SpawnSuggestionHost;
   /**
-   * Set when the user turned on Orchestrate for this conversation (ChatSession.orchestrate):
-   * session_spawn then starts the child at once, in this working directory, with no card. The
-   * spawn caps still apply. Never set together with `suggestions`.
+   * Set when Orchestrate is in effect for this conversation (orchestratesAgents): session_spawn
+   * then starts the child at once with no card. The spawn caps still apply. Never set together
+   * with `suggestions`.
    */
-  delegates?: boolean;
+  delegates?: DelegationHost;
+}
+
+export interface DelegationHost {
+  /** Where a delegated child goes: the card's default choice, with the branch it would prefill. */
+  placement(title: string | undefined, prompt: string): Promise<SpawnPlacement>;
 }
 
 export interface SpawnSuggestionTask {

@@ -366,6 +366,9 @@ describe('ChatService spawn suggestions', () => {
 
     expect(call?.status).toBe('done');
     expect(call?.preview).toContain('Started session');
+    // Not a repository, so the card's default would be here too.
+    expect(call?.preview).toContain('It shares this working directory');
+    expect(call?.preview).not.toContain('No worktree was made');
     expect(requested).not.toHaveBeenCalled();
     expect(latestSuggestions(parent.id)).toEqual([]);
     const child = (await store.list()).find(session => session.origin?.parentSessionId === parent.id);
