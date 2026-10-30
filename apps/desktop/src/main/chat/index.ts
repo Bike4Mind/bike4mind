@@ -74,7 +74,7 @@ import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
-import { ChatService, type ChatServiceDeps } from './ChatService';
+import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { parseDeferredToolsSetting } from './deferredTools';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
@@ -885,7 +885,9 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
     service.removeContextDirectory(sessionId, directory)
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetSession, (_event, sessionId: string) => service.getSession(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string) =>
+    sessionForRenderer(await service.getSession(sessionId))
+  );
   // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
   // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
   // and a repository git cannot read already says so on the branch chip beside it.

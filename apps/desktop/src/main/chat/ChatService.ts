@@ -2908,7 +2908,7 @@ export class ChatService {
           stopReason,
           usage,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
-          ...(keepRounds ? { rounds } : {}),
+          ...(keepRounds ? { rounds: withoutSent(rounds) } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
         });
       };
@@ -6915,6 +6915,26 @@ function sentRounds(message: ChatMessage): CompletionMessage[] | undefined {
     });
   }
   return out;
+}
+
+/** The rounds minus `sent`, which only replay reads, for the renderer: it roughly doubles a tool turn. */
+function withoutSent(rounds: ChatReplyRound[]): ChatReplyRound[] {
+  return rounds.map(round => {
+    if (!round.sent) return round;
+    const { sent, ...shown } = round;
+    return shown;
+  });
+}
+
+/** The session the renderer is sent; see withoutSent. */
+export function sessionForRenderer(session: ChatSession | null): ChatSession | null {
+  if (!session?.messages.some(message => message.rounds?.some(round => round.sent))) return session;
+  return {
+    ...session,
+    messages: session.messages.map(message =>
+      message.rounds ? { ...message, rounds: withoutSent(message.rounds) } : message
+    ),
+  };
 }
 
 /** App-written notes ride after the turn's own words, so what the user said stays first. */
