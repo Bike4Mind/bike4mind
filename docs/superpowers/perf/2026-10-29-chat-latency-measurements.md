@@ -100,6 +100,20 @@ other column-0 line has ended the list; a skipped frame keeps the last parse's `
 The never-settle tight-list benchmark ran at 1.07-1.15x base across runs (the splitter is about
 1 ms of it), so its gate is 1.3x.
 
+## Regression pass, round 6 (2026-10-30), render PR only
+
+No rendering difference. Three more missed settles in the re-parse trigger, all from guessing
+where a list ends with a regex: a line indented less than the item's content ended the list
+without being seen; a lone `*` or `-` that later grew into `**bold**` or `---` kept its first
+class; `- - -` under a `-` list counted as an item. Fixed by taking the list's facts from the
+parse instead: the tail's list carries its start, marker and its last item's content indent
+(from the first child's column); a line continues the list only as a further same-marker item
+(thematic breaks excluded) or when indented to the content; an item still without content on
+the tail's last line is a line the list waits on; the unterminated last line inside a list is
+not classified at all, which keeps the count monotone (pinned by a fuzz over 500 texts x 5
+chunkings). Never-settle shapes: loose list with code 210 vs 246 ms, long table 319 vs 314 ms,
+tight list 276 vs 226 ms, one code block 30 vs 29 ms (A vs B, 60 frames).
+
 ## Browser A/B on the local host-dev stack (2026-10-29)
 
 Same machine, same Docker backing services (Mongo, WS gateway, MinIO, SQS), same user and
