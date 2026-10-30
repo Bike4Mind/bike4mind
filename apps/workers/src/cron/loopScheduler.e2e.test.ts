@@ -763,6 +763,46 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     expect((await reload(loop.id)).status).toBe('live');
   });
 
+  it('keeps an owner pause made during a run that is then refused for credits', async () => {
+    balance = { currentCredits: 100 };
+    const loop = await createLoop({ status: 'paused', activeExecutionId: 'exec-0', lastExecutionId: 'exec-0' });
+    executions['exec-0'] = { status: 'failed', failureReason: 'insufficient_credits', error: { message: 'x' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+    await runLoopSchedulerTick(NOW, logger);
+
+    const after = await reload(loop.id);
+    expect(after.status).toBe('paused');
+    expect(after.autoResume).toBeUndefined();
+    expect(after.activeExecutionId).toBeUndefined();
+  });
+
+  it('starts no run and keeps the owner pause when it lands before the budget pause is written', async () => {
+    const loop = await createLoop({ budgetCreditsPerDay: 10 });
+    spentToday = 10;
+    vi.mocked(agentExecutionRepository.sumCreditsByLoop).mockImplementationOnce((async () => {
+      await Loop.updateOne({ _id: loop.id }, { $set: { status: 'paused' } });
+      return { [loop.id]: spentToday };
+    }) as never);
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    const after = await reload(loop.id);
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(after.status).toBe('paused');
+    expect(after.autoResume).toBeUndefined();
+    expect(after.leaseUntil).toBeUndefined();
+  });
+
+  it('keeps a credit pause when the billing account is gone', async () => {
+    balance = null;
+    const loop = await createLoop({ status: 'paused', autoResume: 'credits' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect((await reload(loop.id)).status).toBe('paused');
+  });
+
   it('never resumes an owner pause', async () => {
     balance = { currentCredits: 100 };
     const loop = await createLoop({ status: 'paused' });

@@ -183,14 +183,18 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
   if (execution?.failureReason === 'insufficient_credits') {
     // Not the ticket's fault: it goes back to open, and the loop pauses.
     if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' });
-    await loopRepository.foldRun(loop.id, executionId, {
-      $set: {
-        status: 'paused',
-        statusReason: 'Out of credits',
-        autoResume: 'credits',
-        lastRunAt: execution.completedAt ?? now,
-      },
+    const folded = await loopRepository.foldRun(loop.id, executionId, {
+      $set: { lastRunAt: execution.completedAt ?? now },
     });
+    // Conditional on 'live' so an owner's pause during the run stays an owner pause (no autoResume).
+    if (folded) {
+      await loopRepository.updateForUser(
+        loop.id,
+        loop.userId,
+        { status: 'paused', statusReason: 'Out of credits', autoResume: 'credits' },
+        'live'
+      );
+    }
     return;
   }
 
@@ -311,8 +315,9 @@ async function resumeIfDue(loop: ILoop, now: Date): Promise<void> {
   });
 }
 
-// ponytail: any positive balance resumes, though one iteration may cost more; such a run is refused and
-// the loop pauses again, at most once per tick. Compare against the executor's requiredCredits if noisy.
+// ponytail: any positive balance resumes, though one iteration may cost more; such a run is refused and the
+// loop pauses again, so it cycles about every 10 minutes (a refused run, an event and a fresh notice each
+// time) until the balance covers a run. Compare against the executor's nextIterationCredits if that is noisy.
 async function canPayAgain(loop: ILoop): Promise<boolean> {
   if (loop.organizationId) {
     const org = await organizationRepository.findById(loop.organizationId);
@@ -328,7 +333,7 @@ async function canPayAgain(loop: ILoop): Promise<boolean> {
  * by at most its own cost.
  */
 async function pausedForBudget(loop: ILoop, now: Date, logger: Logger): Promise<boolean> {
-  if (loop.budgetCreditsPerDay === undefined) return false;
+  if (!loop.budgetCreditsPerDay) return false;
   const today = startOfUtcDay(now);
   const spent = await agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId], today);
   if ((spent[loop.id] ?? 0) < loop.budgetCreditsPerDay) return false;
@@ -347,7 +352,7 @@ async function pausedForBudget(loop: ILoop, now: Date, logger: Logger): Promise<
     'live'
   );
   if (!paused) await loopRepository.releaseLease(loop.id);
-  logger.info(`[Loops] Loop ${loop.id} reached its daily budget`);
+  else logger.info(`[Loops] Loop ${loop.id} reached its daily budget`);
   return true;
 }
 

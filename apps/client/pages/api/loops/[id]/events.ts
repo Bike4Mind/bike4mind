@@ -7,7 +7,7 @@ import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@serve
 /** Events returned per loop, newest first; older ones stay in the DB. */
 export const LOOP_EVENT_LIMIT = 100;
 
-/** A loop's event log (unsure runs and how their owner answered), newest first. */
+/** A loop's event log (unsure runs and how their owner answered, scheduler auto-resumes), newest first. */
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: LOOP_RATE_LIMIT, windowMs: LOOP_RATE_WINDOW_MS, bucket: 'loops-events' }))
   .get(async (req, res) => {

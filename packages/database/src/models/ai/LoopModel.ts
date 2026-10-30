@@ -3,6 +3,7 @@ import {
   DEFAULT_LOOP_STAGES,
   ILoop,
   ILoopRepository,
+  LOOP_AUTO_RESUME_KINDS,
   LOOP_STATUSES,
   LoopAutoResume,
   LoopStatus,
@@ -158,7 +159,7 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     },
     status: { type: String, enum: LOOP_STATUSES, required: true, default: 'draft' },
     statusReason: { type: String },
-    autoResume: { type: String, enum: ['budget', 'credits'] },
+    autoResume: { type: String, enum: LOOP_AUTO_RESUME_KINDS },
     memory: {
       type: new Schema(
         { notes: { type: String, default: '' }, nextAction: { type: String, default: '' }, updatedAt: Date },

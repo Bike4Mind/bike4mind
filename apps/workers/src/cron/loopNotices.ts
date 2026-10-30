@@ -23,7 +23,7 @@ export interface LoopNotice {
 type BlockedTicket = Pick<IWorkItem, 'id' | 'loopId' | 'title' | 'statusReason' | 'executionId'>;
 
 const NEXT_STEP: Record<NonNullable<ILoop['autoResume']> | 'owner', string> = {
-  budget: 'It resumes by itself at 00:00 UTC.',
+  budget: 'Raise the budget and set it live to run sooner.',
   credits: 'It resumes by itself once the account has credits.',
   owner: 'Open the loop and set it live again once fixed.',
 };

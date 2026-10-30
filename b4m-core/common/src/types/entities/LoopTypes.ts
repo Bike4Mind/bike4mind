@@ -25,7 +25,9 @@ export const loopStatusNeedsOwner = (loop: Pick<ILoop, 'status' | 'statusReason'
  */
 export const LOOP_TICKET_TOOL_NAMES = ['loop_ticket_list', 'loop_ticket_create', 'loop_ticket_update'] as const;
 
-export type LoopAutoResume = 'budget' | 'credits';
+export const LOOP_AUTO_RESUME_KINDS = ['budget', 'credits'] as const;
+
+export type LoopAutoResume = (typeof LOOP_AUTO_RESUME_KINDS)[number];
 
 /** Midnight UTC of `now`'s day; a loop's daily budget counts runs started since then. */
 export const startOfUtcDay = (now: Date): Date =>
