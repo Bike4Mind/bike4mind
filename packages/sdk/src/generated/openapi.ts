@@ -2147,6 +2147,8 @@ export interface components {
       )[];
       temperature?: number;
       max_tokens?: number;
+      /** @description Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise. */
+      sessionId?: string;
       options?: {
         temperature?: number;
         maxTokens?: number;

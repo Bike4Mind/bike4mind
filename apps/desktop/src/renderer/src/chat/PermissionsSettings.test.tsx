@@ -232,6 +232,7 @@ describe('PermissionsSettings mutation failures', () => {
   let host: HTMLDivElement;
   let root: Root;
   let setRules: ReturnType<typeof vi.fn>;
+  const exportApprovalSummary = vi.fn();
   const onState = vi.fn();
 
   beforeEach(async () => {
@@ -239,7 +240,7 @@ describe('PermissionsSettings mutation failures', () => {
     setRules = vi.fn();
     (window as unknown as { b4m: unknown }).b4m = {
       chat: { listRecentFolders: async () => [] },
-      permissions: { setRules },
+      permissions: { setRules, exportApprovalSummary },
     };
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -255,6 +256,26 @@ describe('PermissionsSettings mutation failures', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+  });
+
+  it('exports the approval summary and says where it stands', async () => {
+    const button = () => host.querySelector<HTMLButtonElement>('[data-testid="permissions-export-summary-btn"]');
+    const note = () => host.querySelector('[data-testid="permissions-export-summary-note"]')?.textContent;
+    exportApprovalSummary.mockResolvedValueOnce(false);
+    await act(async () => {
+      button()?.click();
+    });
+    expect(note()).toContain('never full commands');
+    exportApprovalSummary.mockResolvedValueOnce(true);
+    await act(async () => {
+      button()?.click();
+    });
+    expect(note()).toContain('Saved.');
+    exportApprovalSummary.mockRejectedValueOnce(new Error('disk full'));
+    await act(async () => {
+      button()?.click();
+    });
+    expect(note()).toBe('Could not save the summary.');
   });
 
   it('blocks replacement mutations until the first save finishes', async () => {

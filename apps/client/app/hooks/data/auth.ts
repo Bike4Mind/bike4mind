@@ -117,7 +117,7 @@ export function useSendOTC() {
 // when the stage does not enforce the challenge.
 type TurnstileAction = TurnstileClientFailure['action'];
 
-async function solveTurnstileIfRequired(
+export async function solveTurnstileIfRequired(
   queryClient: QueryClient,
   action: TurnstileAction
 ): Promise<string | undefined> {

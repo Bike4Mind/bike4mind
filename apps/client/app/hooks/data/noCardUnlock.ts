@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { NoCardUnlockReason, NoCardUnlockRefusal } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { CREDITS_BALANCE_KEY } from './credits';
+import { ARENA_NEXT_KEY } from './preferenceArena';
 
 export interface NoCardUnlockResult {
   creditsGranted: number;
@@ -19,6 +20,8 @@ export function useNoCardUnlock() {
   return useMutation<NoCardUnlockResult, Error, NoCardUnlockReason>({
     mutationFn: async reason => (await api.post<NoCardUnlockResult>(ROUTES[reason])).data,
     onSuccess: result => {
+      // Verifying flips an arena 'unverified' answer to eligible, so the cached next-pair is stale.
+      queryClient.invalidateQueries({ queryKey: ARENA_NEXT_KEY });
       if (result.creditsGranted > 0) {
         queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY });
         queryClient.invalidateQueries({ queryKey: ['credit-transactions'] });

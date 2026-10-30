@@ -128,6 +128,16 @@ describe('POST /api/subscriptions/pay-invoice', () => {
     expect(mockPay).not.toHaveBeenCalled();
   });
 
+  it('refuses a request with no user before looking anything up', async () => {
+    const { req, res } = makeReq();
+    (req as Record<string, unknown>).user = undefined;
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: BadRequestError,
+      message: 'Subscription not found',
+    });
+    expect(mockFindByStripeId).not.toHaveBeenCalled();
+  });
+
   it('answers an unknown subscription exactly like one owned by someone else', async () => {
     mockFindByStripeId.mockResolvedValue(null);
     await expect(run()).rejects.toMatchObject({ constructor: BadRequestError, message: 'Subscription not found' });

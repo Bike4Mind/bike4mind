@@ -144,4 +144,65 @@ describe('CheckoutForm', () => {
     expect(onPayment).not.toHaveBeenCalled();
     expect(reportCreditPurchaseConversion).not.toHaveBeenCalled();
   });
+
+  describe('3-D Secure authentication failure', () => {
+    it('shows an actionable message when the confirm error is an authentication failure', async () => {
+      confirmPayment.mockResolvedValue({
+        error: {
+          type: 'invalid_request_error',
+          code: 'payment_intent_authentication_failure',
+          message: 'We are unable to authenticate your payment method.',
+        },
+      });
+      const { onPayment, onConfirmResult } = renderForm();
+
+      await userEvent.click(screen.getByTestId('checkout-submit-btn'));
+
+      await waitFor(() =>
+        expect(onConfirmResult).toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: 'error', errorCode: 'payment_intent_authentication_failure' })
+        )
+      );
+      const message = await screen.findByTestId('checkout-payment-message');
+      expect(message.textContent).toMatch(/could not verify your card/);
+      expect(message.textContent).toMatch(/use a different card/);
+      expect(screen.getByTestId('checkout-submit-btn')).toHaveProperty('disabled', false);
+      expect(onPayment).not.toHaveBeenCalled();
+    });
+
+    it('shows the actionable message when the confirm returns the intent to requires_payment_method', async () => {
+      confirmPayment.mockResolvedValue({ paymentIntent: { id: 'pi_1', status: 'requires_payment_method' } });
+      const { onPayment } = renderForm();
+
+      await userEvent.click(screen.getByTestId('checkout-submit-btn'));
+
+      const message = await screen.findByTestId('checkout-payment-message');
+      expect(message.textContent).toMatch(/could not verify your card/);
+      expect(screen.getByTestId('checkout-submit-btn')).toHaveProperty('disabled', false);
+      expect(onPayment).not.toHaveBeenCalled();
+    });
+
+    it('shows the actionable message when returning from a failed redirect challenge', async () => {
+      retrievePaymentIntent.mockResolvedValue({
+        paymentIntent: {
+          status: 'requires_payment_method',
+          last_payment_error: { code: 'payment_intent_authentication_failure' },
+        },
+      });
+      renderForm();
+
+      const message = await screen.findByTestId('checkout-payment-message');
+      expect(message.textContent).toMatch(/could not verify your card/);
+    });
+
+    it('keeps the generic fallback for unknown errors', async () => {
+      confirmPayment.mockResolvedValue({ error: { type: 'api_error', code: 'something_else', message: 'boom' } });
+      renderForm();
+
+      await userEvent.click(screen.getByTestId('checkout-submit-btn'));
+
+      const message = await screen.findByTestId('checkout-payment-message');
+      expect(message.textContent).toBe('An unexpected error occurred.');
+    });
+  });
 });
