@@ -324,6 +324,30 @@ describe('applySignupDomainGrant', () => {
       expect(logger.error).not.toHaveBeenCalled();
     });
 
+    // The claim sits after the DB-rule/env-registry branch, so it must gate both. Without this,
+    // claiming only on the matched-rule branch passes every other test in the suite.
+    it('withholds env-registry credits too, not only a matched DB rule', async () => {
+      mockPartnerGrant.mockResolvedValue({
+        matched: false,
+        entitlements: new Set(),
+        signupCredits: 0,
+        organizationId: null,
+        tags: [],
+      });
+      mockEntitlementsForEmail.mockReturnValue(new Set(['optihashi:pro']));
+      mockSignupCreditsForKeys.mockReturnValue(250);
+      mockClaimFreeCreditGrant.mockResolvedValue(false);
+      const logger = makeLogger();
+
+      const result = await run(logger);
+
+      expect(mockClaimFreeCreditGrant).toHaveBeenCalledWith('user-1');
+      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(result.creditsGranted).toBe(0);
+      expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('withheld'));
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
     it('still applies membership, tags and the subscription when the credits are withheld', async () => {
       mockClaimFreeCreditGrant.mockResolvedValue(false);
       mockPartnerGrant.mockResolvedValue({
