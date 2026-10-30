@@ -41,6 +41,20 @@ function pendingEmailMatch(pendingEmail: string) {
   };
 }
 
+// A list that is not stored stays absent rather than becoming [].
+const withoutEmail = (list: 'pending' | 'refused', email: string) => ({
+  $cond: [
+    { $isArray: `$recipients.${list}` },
+    {
+      $filter: {
+        input: `$recipients.${list}`,
+        cond: { $ne: [{ $toLower: '$$this' }, { $literal: email.toLowerCase() }] },
+      },
+    },
+    `$recipients.${list}`,
+  ],
+});
+
 export const InviteRecipientSchema: Schema<IInviteDocument['recipients']> = new Schema<IInviteDocument['recipients']>({
   pending: {
     type: [String],
@@ -162,6 +176,93 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
   constructor(private inviteModel: IInviteModel) {
     super(inviteModel);
     this.inviteModel = inviteModel;
+  }
+
+  async acceptRecipient(id: string, email: string): Promise<IInviteDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return this.pipelineUpdate({ _id: id, remaining: { $gt: 0 } }, [
+      {
+        $set: {
+          recipients: {
+            $cond: [
+              { $eq: [{ $type: '$recipients' }, 'object'] },
+              {
+                $mergeObjects: [
+                  '$recipients',
+                  {
+                    pending: withoutEmail('pending', email),
+                    refused: withoutEmail('refused', email),
+                    accepted: { $concatArrays: [{ $ifNull: ['$recipients.accepted', []] }, [{ $literal: email }]] },
+                  },
+                ],
+              },
+              '$recipients',
+            ],
+          },
+          accepted: { $add: [{ $ifNull: ['$accepted', 0] }, 1] },
+          remaining: { $subtract: ['$remaining', 1] },
+          updatedAt: '$$NOW',
+        },
+      },
+    ]);
+  }
+
+  async refusePendingRecipient(id: string, email: string): Promise<IInviteDocument | null> {
+    return this.updatePendingRecipient(id, email, [
+      {
+        $set: {
+          'recipients.pending': withoutEmail('pending', email),
+          'recipients.refused': { $concatArrays: [{ $ifNull: ['$recipients.refused', []] }, [{ $literal: email }]] },
+          remaining: { $subtract: ['$remaining', 1] },
+          updatedAt: '$$NOW',
+        },
+      },
+    ]);
+  }
+
+  async cancelPendingRecipient(id: string, email: string): Promise<IInviteDocument | null> {
+    return this.updatePendingRecipient(id, email, [
+      { $set: { 'recipients.pending': withoutEmail('pending', email), updatedAt: '$$NOW' } },
+      {
+        $set: {
+          remaining: { $max: [0, { $min: [{ $subtract: ['$remaining', 1] }, { $size: '$recipients.pending' }] }] },
+        },
+      },
+    ]);
+  }
+
+  async closeInvite(id: string): Promise<IInviteDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return this.pipelineUpdate({ _id: id }, [
+      {
+        $set: {
+          remaining: 0,
+          recipients: {
+            $cond: [
+              { $eq: [{ $type: '$recipients' }, 'object'] },
+              { $mergeObjects: ['$recipients', { pending: [] }] },
+              '$recipients',
+            ],
+          },
+          updatedAt: '$$NOW',
+        },
+      },
+    ]);
+  }
+
+  private async updatePendingRecipient(id: string, email: string, stages: Record<string, unknown>[]) {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const pendingLower = { $map: { input: { $ifNull: ['$recipients.pending', []] }, in: { $toLower: '$$this' } } };
+    return this.pipelineUpdate({ _id: id, $expr: { $in: [{ $literal: email.toLowerCase() }, pendingLower] } }, stages);
+  }
+
+  private async pipelineUpdate(filter: Record<string, unknown>, stages: Record<string, unknown>[]) {
+    const query = this.inviteModel.findOneAndUpdate(filter, stages as mongoose.UpdateWithAggregationPipeline, {
+      new: true,
+    });
+    if (this._txn) query.session(this._txn);
+    const result = await query;
+    return (result?.toJSON() as IInviteDocument | undefined) ?? null;
   }
 
   async countPendingByUserId(userId: string): Promise<number> {
