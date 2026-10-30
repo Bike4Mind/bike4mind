@@ -44,9 +44,14 @@ describe('splitStreamingBlocks render oracle, round 2', () => {
       '- a\n\n\tcontinued\n\nend',
       '- a\n\n- - -\n\nPara',
       'para\n\n    $$\n\nx\n\ny',
-      'text [a] [b]\n\n[a]: http://a\n\n[b]: http://b',
     ];
     for (const text of cases) expect(splitRender(text)).toBe(md(text));
+  });
+
+  it('leaves reference links raw until completion when their definitions trail the reply', () => {
+    const text = 'text [a] [b]\n\n[a]: http://a\n\n[b]: http://b';
+    expect(splitRender(text)).toBe('<p>text [a] [b]</p>');
+    expect(splitStreamingBlocks(text).crossBlock).toBe(true);
   });
 });
 
@@ -66,10 +71,12 @@ describe('settled blocks only grow across frames', () => {
     }
   });
 
-  it('a partial `[x]` line un-settles the block before it once the colon arrives (index keys keep content in place)', () => {
-    const a = splitStreamingBlocks('text [a]\n\n[a]').blocks;
-    const b = splitStreamingBlocks('text [a]\n\n[a]:').blocks;
-    expect(a).toEqual(['text [a]\n\n']);
-    expect(b).toEqual([]);
+  it('a partial `[x]` line that becomes a definition keeps the block before it settled and flags the reply', () => {
+    const a = splitStreamingBlocks('text [a]\n\n[a]');
+    const b = splitStreamingBlocks('text [a]\n\n[a]: http://a');
+    expect(a.blocks).toEqual(['text [a]\n\n']);
+    expect(a.crossBlock).toBe(false);
+    expect(b.blocks).toEqual(['text [a]\n\n']);
+    expect(b.crossBlock).toBe(true);
   });
 });

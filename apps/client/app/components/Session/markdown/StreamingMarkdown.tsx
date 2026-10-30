@@ -1,6 +1,6 @@
 import React, { memo, useMemo, useState } from 'react';
 import ReactMarkdown, { type Components, type Options } from 'react-markdown';
-import { splitStreamingBlocks } from './streamingSplit';
+import { createBlockParser, splitStreamingBlocks, type StreamingBlocks } from './streamingSplit';
 
 export interface StreamingMarkdownProps {
   text: string;
@@ -17,10 +17,6 @@ interface PositionedNode {
   position?: { start: { line: number }; end: { line: number } };
   children?: PositionedNode[];
 }
-
-// Constructs whose meaning spans blocks: footnotes, link reference definitions and HTML blocks,
-// which a single parse resolves differently from one parse per block.
-const CROSS_BLOCK = /\[\^|^ {0,3}\[[^\]]+\]:|^ {0,3}<[a-zA-Z!?/]/m;
 
 // A block parses on its own, so its node lines are shifted back to reply-relative ones for the
 // components that key on them (the code block artifact ids in PromptReplies).
@@ -51,26 +47,48 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, lineOffset, remarkPlug
 
 const countLines = (text: string) => text.split('\n').length - 1;
 
+interface SplitState {
+  text: string;
+  streaming: boolean;
+  streamedHere: boolean;
+  split: StreamingBlocks | null;
+}
+
+const INITIAL: SplitState = { text: '', streaming: false, streamedHere: false, split: null };
+
 /**
  * Renders a reply's markdown. While streaming, each settled block and the live tail parse
  * separately and render as siblings keyed by block index, so a block keeps its React identity
  * (and any per-block state) when it settles. A reply that streamed here keeps that structure
- * once complete unless it holds a cross-block construct; a reply mounted complete is one parse.
+ * once complete, unless it holds a definition that only one parse can resolve across blocks; a
+ * reply mounted complete is always one parse.
  */
 export const StreamingMarkdown = ({ text, streaming, ...options }: StreamingMarkdownProps) => {
-  const [streamedHere, setStreamedHere] = useState(false);
-  if (streaming && !streamedHere) setStreamedHere(true);
-  const perBlock = streaming || (streamedHere && !CROSS_BLOCK.test(text));
+  const parse = useMemo(() => createBlockParser(options.remarkPlugins), [options.remarkPlugins]);
+  // Derived from the previous frame during render, so settled blocks (and their keys) carry over.
+  const [state, setState] = useState<SplitState>(INITIAL);
+  let current = state;
+  if (state.text !== text || state.streaming !== streaming) {
+    const streamedHere = state.streamedHere || streaming;
+    let split: StreamingBlocks | null = null;
+    if (streaming || streamedHere) {
+      split = splitStreamingBlocks(text, parse, state.split ?? undefined);
+      if (!streaming && split.crossBlock) split = null;
+    }
+    current = { text, streaming, streamedHere, split };
+    setState(current);
+  }
+
   const parts = useMemo(() => {
-    if (!perBlock) return null;
-    const { blocks, tail } = splitStreamingBlocks(text);
+    if (!current.split) return null;
+    const { blocks, tail } = current.split;
     const texts = tail ? [...blocks, tail] : blocks;
     const offsets = texts.reduce<number[]>((acc, _, i) => {
       acc.push(i === 0 ? 0 : acc[i - 1] + countLines(texts[i - 1]));
       return acc;
     }, []);
     return texts.map((part, i) => ({ text: part, lineOffset: offsets[i] }));
-  }, [text, perBlock]);
+  }, [current.split]);
 
   if (!parts) return <MarkdownBlock key={0} text={text} lineOffset={0} {...options} />;
 
