@@ -21,6 +21,7 @@ import {
   Typography,
 } from '@mui/joy';
 import GitHubIcon from '@mui/icons-material/GitHub';
+import AppleIcon from '@mui/icons-material/Apple';
 import Image from 'next/image';
 import Link from '@mui/joy/Link';
 import OktaIcon from './svgs/flags/OktaIcon';
@@ -61,6 +62,8 @@ interface MultiStepLoginProps {
   enableSocials?: boolean;
   enableGithubAuth?: boolean;
   enableOktaAuth?: boolean;
+  /** Sign in with Apple; off unless the server has Apple credentials configured. */
+  enableAppleAuth?: boolean;
 }
 
 type LoginStep = 'email' | 'otc' | 'register-username' | 'redirect';
@@ -78,6 +81,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   enableSocials = true,
   enableGithubAuth = true,
   enableOktaAuth = true,
+  enableAppleAuth = false,
 }) => {
   const { setCurrentUser, currentUser } = useUser();
   const { mutate: logEvent } = useLogEvent();
@@ -478,7 +482,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     }
   };
 
-  const handleSocialLogin = (provider: 'google' | 'github' | 'okta') => {
+  const handleSocialLogin = (provider: 'google' | 'github' | 'okta' | 'apple') => {
     startOAuthSignIn(`/api/auth/${provider}`).catch((error: unknown) => {
       toast.error(error instanceof Error ? error.message : 'Sign-in could not start. Please try again.');
     });
@@ -704,6 +708,39 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     </Button>
                   )}
                 </Box>
+
+                {enableAppleAuth && (
+                  // Apple's identity guidelines: a black button with white text (inverted in dark mode)
+                  // and the exact "Sign in with Apple" label.
+                  <Button
+                    className="apple-login-button"
+                    data-testid="login-apple-btn"
+                    type="button"
+                    variant="solid"
+                    fullWidth
+                    sx={{
+                      mt: '8px',
+                      minHeight: '40px',
+                      borderRadius: '8px',
+                      gap: '.4rem',
+                      color: '#fff',
+                      backgroundColor: '#000',
+                      '&:hover': { backgroundColor: '#1a1a1a' },
+                      '[data-joy-color-scheme="dark"] &': {
+                        color: '#000',
+                        backgroundColor: '#fff',
+                        '&:hover': { backgroundColor: '#e6e6e6' },
+                      },
+                    }}
+                    disabled={isCheckingStrategy || isSendingOTC}
+                    onClick={() => handleSocialLogin('apple')}
+                  >
+                    <AppleIcon sx={{ width: '18px', height: '18px' }} />
+                    <Typography sx={{ color: 'inherit', fontWeight: '500', fontSize: '14px' }}>
+                      Sign in with Apple
+                    </Typography>
+                  </Button>
+                )}
 
                 <Divider sx={dividerStyles}>or</Divider>
 

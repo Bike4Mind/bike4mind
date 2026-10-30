@@ -22,6 +22,9 @@ const SERVICES: { [service: string]: { scope: string[] | string } } = {
   github: {
     scope: ['user', 'user:email'],
   },
+  apple: {
+    scope: ['name', 'email'],
+  },
   okta: {
     scope: ['openid', 'profile', 'email'],
   },

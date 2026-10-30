@@ -1,7 +1,11 @@
 import { AuthStrategy, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 
 /** The consumer OAuth providers that signed users up with no starting grant before the fix. */
-export const STARTING_GRANT_STRATEGIES: readonly string[] = [AuthStrategy.Google, AuthStrategy.Github];
+export const STARTING_GRANT_STRATEGIES: readonly string[] = [
+  AuthStrategy.Google,
+  AuthStrategy.Github,
+  AuthStrategy.Apple,
+];
 
 export type StartingGrantUser = {
   id: string;

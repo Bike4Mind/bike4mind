@@ -200,6 +200,10 @@ Callback URLs:
 |--------|-------------|
 | `GITHUB_CLIENT_ID` | GitHub OAuth client ID |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth client secret |
+| `APPLE_CLIENT_ID` | Sign in with Apple Services ID (leave unset to disable Sign in with Apple) |
+| `APPLE_TEAM_ID` | Apple Developer team ID |
+| `APPLE_KEY_ID` | Key ID of the Sign in with Apple private key |
+| `APPLE_PRIVATE_KEY` | Contents of the `.p8` private key (PEM) |
 
 Callback URL: `https://app.yourdomain.com/api/auth/github/callback`
 

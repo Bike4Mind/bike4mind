@@ -34,7 +34,12 @@ function adminUserRef(userId: string): string {
 const DEDUPE_KEY_PREFIX = 'signup-network-alert';
 
 // Enterprise SSO (Okta, SAML) onboards whole teams from one office network by design.
-const SELF_SERVE_SIGNUP_METHODS: ReadonlySet<string> = new Set(['otc', AuthStrategy.Google, AuthStrategy.Github]);
+const SELF_SERVE_SIGNUP_METHODS: ReadonlySet<string> = new Set([
+  'otc',
+  AuthStrategy.Google,
+  AuthStrategy.Github,
+  AuthStrategy.Apple,
+]);
 
 export type SignupNetworkAlertThresholds = {
   enabled: boolean;

@@ -3,11 +3,15 @@ import { createMocks } from 'node-mocks-http';
 
 // Middleware: collapse the baseApi chain so `.get(fn)` yields the raw handler,
 // mirroring apps/client/pages/api/auth/okta/__tests__/callback.test.ts.
-const mockChain = vi.hoisted(() => ({ order: [] as string[] }));
+const mockChain = vi.hoisted(() => ({ order: [] as string[], post: undefined as undefined | ((...a: any[]) => void) }));
 vi.mock('@server/middlewares/baseApi', () => {
-  type Chain = { use: () => Chain; get: (fn: unknown) => unknown };
+  type Chain = { use: () => Chain; post: (fn: (...a: any[]) => void) => Chain; get: (fn: unknown) => unknown };
   const chain: Chain = {
     use: () => chain,
+    post: fn => {
+      mockChain.post = fn;
+      return chain;
+    },
     get: fn => {
       mockChain.order.push('get');
       return fn;
@@ -640,5 +644,27 @@ describe('[strategy]/callback - second factor gate', () => {
       trustedDevice,
     });
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+  });
+});
+
+describe('POST /api/auth/apple/callback (form_post bounce)', () => {
+  const post = (strategy: string, body: Record<string, unknown>) => {
+    const { req, res } = createMocks({ method: 'POST', query: { strategy }, body });
+    return { run: () => mockChain.post!(req, res), res };
+  };
+
+  it('303-redirects the form fields to the GET callback and maps a cancelled consent to access_denied', () => {
+    const { run, res } = post('apple', { code: 'c', state: 's', user: '{"name":{}}', junk: 'x' });
+    run();
+    expect(res._getStatusCode()).toBe(303);
+    expect(res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s&user=%7B%22name%22%3A%7B%7D%7D');
+
+    const cancelled = post('apple', { error: 'user_cancelled_authorize', state: 's' });
+    cancelled.run();
+    expect(cancelled.res._getRedirectUrl()).toBe('/api/auth/apple/callback?state=s&error=access_denied');
+  });
+
+  it('refuses a POST for any other strategy', () => {
+    expect(post('github', { code: 'c' }).run).toThrow(/Invalid auth strategy/);
   });
 });
