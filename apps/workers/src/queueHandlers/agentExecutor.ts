@@ -44,8 +44,10 @@ import {
   mcpServerRepository,
   scopedSettingsRepository,
   cacheRepository,
+  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   registerLambdaErrorHandlers,
   getSettingsByNames,
@@ -60,6 +62,7 @@ import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from '@bike4mind/fab-pipeline';
 import {
   applyWorkspaceSessionSettings,
+  workspaceAnswersTurns,
   defaultEmbeddingModelForEnv,
   isSupportedEmbeddingModel,
   libraryFlagForScope,
@@ -108,6 +111,10 @@ import {
   type ChildExecutionStatus,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
+  buildSubagentUsageMeta,
+  buildToolUsageEvent,
+  recordToolUsageEvent,
+  type SubagentUsageMeta,
 } from '@bike4mind/services/llm';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd, sessionService } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services/llm';
@@ -200,6 +207,7 @@ import {
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
+  stopBlockedAccountIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
@@ -744,6 +752,12 @@ async function readPayerBalance(payer: { organizationId?: string | null; userId:
   return loadPayerBalance(payer, { organizations: organizationRepository, users: userRepository });
 }
 
+/** A fresh read of the run's user, so the per-iteration account gate never decides on the invocation's snapshot. */
+async function readUserAccessDenial(userId: string): Promise<string | null> {
+  const user = await userRepository.findById(userId);
+  return user ? aiAccessDeniedMessage(user) : 'User not found';
+}
+
 /**
  * Flat token allowance set aside for instructions before the attachment share is computed.
  * Matches SYSTEM_PROMPT_RESERVE in ChatCompletionProcess so an agent turn and a chat turn size the
@@ -1026,6 +1040,14 @@ async function processExecution(
       await sendWs('failed', { executionId, reason: 'unauthorized' });
       return;
     }
+    // Such a workspace scripts every reply, so an agent model must not improvise one.
+    if (workspaceAnswersTurns(loadedSession, premiumWorkspaceSessionSettings)) {
+      await agentExecutionRepository.markFailed(executionId, {
+        message: 'This workspace answers its own turns, so agent runs are not available in it',
+      });
+      await sendWs('failed', { executionId, reason: 'workspace_answers_turns' });
+      return;
+    }
     const session = await applyWorkspaceSessionSettings(
       loadedSession,
       { user, logger },
@@ -1144,7 +1166,17 @@ async function processExecution(
       return;
     }
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: execution.userId });
-    if (!llm) throw new Error(`Failed to create LLM backend for model "${execution.model}"`);
+    // No backend means the model id is unknown to the catalog: a retired snapshot with no successor in
+    // resolveDeprecatedModel.ts, or a backend this deployment has no key for. That is a stale agent
+    // setting, not a platform fault, so fail the run with a reason the user can act on.
+    if (!llm) {
+      logger.warn('[AgentExecutor] No LLM backend for model; refusing execution', { model: resolvedModelId });
+      await agentExecutionRepository.markFailed(executionId, {
+        message: `Model "${resolvedModelId}" is no longer available. Choose a different model for this agent.`,
+      });
+      await sendWs('failed', { executionId, reason: 'model_unavailable' });
+      return;
+    }
     llm.currentModel = resolvedModelId;
 
     // Same admission rule as chat (b4m-core/services/src/llm/modelAdmission.ts), after the remap so the
@@ -1613,6 +1645,7 @@ async function processExecution(
             questId: execution.questId,
             model: result.model,
             completionInfo: result.completionInfo,
+            usage: subagentUsageMeta(models, result.model, result.completionInfo, logger),
           },
           logger
         );
@@ -1654,6 +1687,7 @@ async function processExecution(
               questId: execution.questId,
               model: partialResult.model,
               completionInfo: partialResult.completionInfo,
+              usage: subagentUsageMeta(models, partialResult.model, partialResult.completionInfo, logger),
             },
             logger
           );
@@ -2036,6 +2070,7 @@ async function processExecution(
               totalInputTokens: meta?.inputTokens ?? 0,
               totalOutputTokens: meta?.outputTokens ?? 0,
             },
+            usage: meta,
           },
           logger
         );
@@ -2833,6 +2868,26 @@ async function processExecution(
         return;
       }
 
+      // A run outlives the message that admitted it, so an account blocked mid-run stops at the next iteration.
+      const blocked = await stopBlockedAccountIteration(
+        {
+          executionId,
+          readAccessDenial: () => readUserAccessDenial((user as IUserDocument).id),
+          snapshot: () => {
+            const checkpoint = agent.toCheckpoint();
+            return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
+          },
+        },
+        {
+          markFailed: (id, error) => agentExecutionRepository.markFailed(id, error),
+          sendWs,
+          persistRunAsQuest: (id, message) =>
+            persistRunAsQuest(id, message, logger, generatedImages, undefined, allSideEffects, retrievalSummary),
+          logger,
+        }
+      );
+      if (blocked) return;
+
       // Each iteration settles with an unconditional debit, so stop before one the payer's live
       // balance cannot cover rather than letting the run carry the balance below zero. The one
       // aggregation-only wake extension is exempt for its first iteration only.
@@ -2851,6 +2906,16 @@ async function processExecution(
             lastInputTokens,
             readBalance: () =>
               readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id }),
+            checkSpendCap: requiredCredits =>
+              creditService.checkNewAccountSpendCap(
+                {
+                  user: user as IUserDocument,
+                  requestedCredits: requiredCredits,
+                  billedToOrganization: Boolean(organization),
+                  logger,
+                },
+                newAccountSpendCapAdapters
+              ),
             snapshot: () => {
               const checkpoint = agent.toCheckpoint();
               return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
@@ -3541,10 +3606,27 @@ async function loadRunnableModels(
   return { ok: true, models: filterRunnableModels(models, configurations, user.tags ?? [], isAdmin, entitlementKeys) };
 }
 
+function subagentUsageMeta(
+  models: ModelInfo[],
+  model: string,
+  completionInfo: AgentResult['completionInfo'],
+  logger: Logger
+): SubagentUsageMeta | undefined {
+  const modelInfo = models.find(m => m.id === model);
+  if (!modelInfo) return undefined;
+  try {
+    return buildSubagentUsageMeta(modelInfo, model, completionInfo);
+  } catch (err) {
+    logger.warn('[AgentExecutor] failed to price subagent usage; usage event skipped', { model, err });
+    return undefined;
+  }
+}
+
 /**
  * Debits a subagent's own LLM spend from the run's payer (the org pool when org-billed),
- * the same wallet the parent's iterations settle against. Logged rather than thrown, so a
- * billing failure never replaces the subagent's terminal status.
+ * the same wallet the parent's iterations settle against, and records the usage event the
+ * in-chat delegation path records (ToolBuilder's onSubagentCredits). Logged rather than
+ * thrown, so a billing failure never replaces the subagent's terminal status.
  */
 async function chargeSubagentTokens(
   args: {
@@ -3554,39 +3636,71 @@ async function chargeSubagentTokens(
     questId: string;
     model: string;
     completionInfo: Pick<AgentResult['completionInfo'], 'totalCredits' | 'totalInputTokens' | 'totalOutputTokens'>;
+    /** Absent when the model can't be resolved; no event is fabricated from zeros then. */
+    usage: SubagentUsageMeta | undefined;
   },
   logger: Logger
 ): Promise<void> {
   const credits = args.completionInfo.totalCredits ?? 0;
-  if (credits <= 0) return;
-  await creditService
-    .deductCreditsWithOrgSupport(
-      {
-        type: 'text_generation_usage',
+  if (credits > 0) {
+    await creditService
+      .deductCreditsWithOrgSupport(
+        {
+          type: 'text_generation_usage',
+          user: args.user,
+          organization: args.organization,
+          credits,
+          sessionId: args.sessionId,
+          questId: args.questId,
+          model: args.model,
+          inputTokens: args.completionInfo.totalInputTokens ?? 0,
+          outputTokens: args.completionInfo.totalOutputTokens ?? 0,
+          cacheReadTokens: args.usage?.cacheReadTokens || undefined,
+          cacheWriteTokens: args.usage?.cacheWriteTokens || undefined,
+        },
+        {
+          db: {
+            creditTransactions: creditTransactionRepository,
+            users: userRepository,
+            organizations: organizationRepository,
+          },
+        }
+      )
+      .catch(err =>
+        logger.error('[AgentExecutor] failed to charge subagent usage', {
+          credits,
+          model: args.model,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+  }
+  const { usage } = args;
+  // A run that stopped before its first model call reports no tokens; there is nothing to record.
+  const reportedTokens = usage
+    ? usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
+    : 0;
+  if (usage && reportedTokens > 0) {
+    await recordToolUsageEvent(
+      { usageEvents: usageEventRepository },
+      logger,
+      'delegate_to_agent',
+      buildToolUsageEvent({
+        quest: { id: args.questId, sessionId: args.sessionId },
         user: args.user,
         organization: args.organization,
-        credits,
-        sessionId: args.sessionId,
-        questId: args.questId,
-        model: args.model,
-        inputTokens: args.completionInfo.totalInputTokens ?? 0,
-        outputTokens: args.completionInfo.totalOutputTokens ?? 0,
-      },
-      {
-        db: {
-          creditTransactions: creditTransactionRepository,
-          users: userRepository,
-          organizations: organizationRepository,
-        },
-      }
-    )
-    .catch(err =>
-      logger.error('[AgentExecutor] failed to charge subagent usage', {
-        credits,
-        model: args.model,
-        error: err instanceof Error ? err.message : String(err),
+        provider: usage.provider,
+        model: usage.model,
+        costUsd: usage.usdCost,
+        creditsCharged: credits,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cachedInputTokens: usage.cacheReadTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        finishReason: usage.finishReason,
+        priceStamp: usage.priceStamp,
       })
     );
+  }
 }
 
 /**
@@ -3808,16 +3922,12 @@ async function processSubagentDispatch(
         : enforceCredits && modelInfo && uncoveredIterationCredits(availableCredits, modelInfo, 0) !== undefined
           ? { message: 'Insufficient credits to run subagent', error: 'insufficient_credits' }
           : null;
-    if (refusal) {
-      logger.warn('[SubagentDispatch] Refusing to start subagent', { model: childModel, reason: refusal.error });
-      await agentExecutionRepository.markFailed(childExecutionId, { message: refusal.message });
-      await sendWs('subagent_failed', {
-        executionId: parentId,
-        childExecutionId,
-        agentName,
-        error: refusal.error,
-        isTimeout: false,
-      });
+    // Every pre-start refusal fails the child the same way: mark it failed, tell the parent, and
+    // terminate its DAG node so the parent's wake is not left waiting on it.
+    const refuseSubagent = async ({ message, error }: { message: string; error: string }) => {
+      logger.warn('[SubagentDispatch] Refusing to start subagent', { model: childModel, reason: error });
+      await agentExecutionRepository.markFailed(childExecutionId, { message });
+      await sendWs('subagent_failed', { executionId: parentId, childExecutionId, agentName, error, isTimeout: false });
       await fireDagNodeTerminalOnRefusal({
         dagNodeId,
         parentExecutionId: dagParentExecutionId,
@@ -3826,11 +3936,18 @@ async function processSubagentDispatch(
         logger,
         sendWs,
       });
+    };
+    if (refusal) {
+      await refuseSubagent(refusal);
       return;
     }
 
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
-    if (!llm) throw new Error(`Failed to create LLM backend for model "${childModel}"`);
+    // Same as the parent run: an id the catalog no longer carries fails this child cleanly.
+    if (!llm) {
+      await refuseSubagent({ message: `Model "${childModel}" is no longer available`, error: 'model_unavailable' });
+      return;
+    }
     llm.currentModel = childModel;
 
     const modelAdmission = await createModelAdmission(user as IUserDocument, models);
@@ -3839,22 +3956,7 @@ async function processSubagentDispatch(
       (err: Error) => err
     );
     if (admissionRefusal) {
-      await agentExecutionRepository.markFailed(childExecutionId, { message: admissionRefusal.message });
-      await sendWs('subagent_failed', {
-        executionId: parentId,
-        childExecutionId,
-        agentName,
-        error: 'model_not_admitted',
-        isTimeout: false,
-      });
-      await fireDagNodeTerminalOnRefusal({
-        dagNodeId,
-        parentExecutionId: dagParentExecutionId,
-        childExecutionId,
-        connectionId,
-        logger,
-        sendWs,
-      });
+      await refuseSubagent({ message: admissionRefusal.message, error: 'model_not_admitted' });
       return;
     }
 
@@ -4039,7 +4141,8 @@ async function processSubagentDispatch(
     const grandchildCharges: Promise<void>[] = [];
     const settleTokenCost = async (
       model: string,
-      completionInfo: Parameters<typeof chargeSubagentTokens>[0]['completionInfo']
+      completionInfo: Parameters<typeof chargeSubagentTokens>[0]['completionInfo'],
+      usage: SubagentUsageMeta | undefined
     ): Promise<void> => {
       await chargeSubagentTokens(
         {
@@ -4049,6 +4152,7 @@ async function processSubagentDispatch(
           questId: child.questId,
           model,
           completionInfo,
+          usage,
         },
         logger
       );
@@ -4123,11 +4227,15 @@ async function processSubagentDispatch(
       // This subagent's own in-process delegations (no tracker is wired here, so the
       // orchestrator never dispatches them and this is their only charge).
       onSubagentCredits: async (credits, meta) => {
-        const charge = settleTokenCost(meta?.model ?? childModel, {
-          totalCredits: credits,
-          totalInputTokens: meta?.inputTokens ?? 0,
-          totalOutputTokens: meta?.outputTokens ?? 0,
-        });
+        const charge = settleTokenCost(
+          meta?.model ?? childModel,
+          {
+            totalCredits: credits,
+            totalInputTokens: meta?.inputTokens ?? 0,
+            totalOutputTokens: meta?.outputTokens ?? 0,
+          },
+          meta
+        );
         grandchildCharges.push(charge);
         await charge;
       },
@@ -4402,7 +4510,11 @@ async function processSubagentDispatch(
       await Promise.all(grandchildCharges);
       const credits = result.completionInfo.totalCredits ?? 0;
       // Every exit with a result (completed, aborted, timed out) spent these tokens.
-      await settleTokenCost(result.model, result.completionInfo);
+      await settleTokenCost(
+        result.model,
+        result.completionInfo,
+        subagentUsageMeta(models, result.model, result.completionInfo, logger)
+      );
 
       // If the abort signal fired during the run, treat the result as terminal.
       // The orchestrator's timeout-handling path returns partial results on
@@ -4499,7 +4611,11 @@ async function processSubagentDispatch(
       await Promise.all(grandchildCharges);
       const spent = spentResultOf(err);
       if (spent) {
-        await settleTokenCost(spent.model, spent.completionInfo);
+        await settleTokenCost(
+          spent.model,
+          spent.completionInfo,
+          subagentUsageMeta(models, spent.model, spent.completionInfo, logger)
+        );
       }
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:

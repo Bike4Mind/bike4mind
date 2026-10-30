@@ -111,6 +111,8 @@ export type YoungAccountSpender = {
   userId: string;
   creditsSpent: number;
   accountCreatedAt: Date;
+  /** Null when the account never reached Stripe checkout, itself a signal for a big spender. */
+  stripeCustomerId: string | null;
 };
 
 export type YoungAccountSpendSummary = {
@@ -145,7 +147,15 @@ function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.Pipeli
     },
     { $unwind: '$user' },
     { $match: { $expr: newAccountExpression('$user.createdAt', end) } },
-    { $project: { _id: 0, userId: '$_id', creditsSpent: 1, accountCreatedAt: '$user.createdAt' } },
+    {
+      $project: {
+        _id: 0,
+        userId: '$_id',
+        creditsSpent: 1,
+        accountCreatedAt: '$user.createdAt',
+        stripeCustomerId: { $ifNull: ['$user.stripeCustomerId', null] },
+      },
+    },
     { $sort: { creditsSpent: -1, userId: 1 } },
   ];
 }

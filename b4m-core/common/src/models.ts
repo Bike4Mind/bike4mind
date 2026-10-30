@@ -810,7 +810,7 @@ export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
 
 /** The pricing-map key whose tier covers `tokens` (the largest tier when `tokens` exceeds them all), or null when unpriced. */
-export const pricingTierForTokens = (model: ModelInfo, tokens: number): number | null => {
+export const pricingTierForTokens = (model: Pick<ModelInfo, 'pricing'>, tokens: number): number | null => {
   const thresholds = Object.keys(model.pricing)
     .map(Number)
     .sort((a, b) => a - b);
@@ -865,7 +865,10 @@ export type AppliedRates = IUsageEventRates;
  * place tier selection and cache-rate defaults live, so a stamped rate can never disagree with the
  * cost it explains.
  */
-export const resolveAppliedRates = (model: ModelInfo, tierBasisTokens: number): Required<AppliedRates> | null => {
+export const resolveAppliedRates = (
+  model: Pick<ModelInfo, 'pricing' | 'backend'>,
+  tierBasisTokens: number
+): Required<AppliedRates> | null => {
   const tier = pricingTierForTokens(model, tierBasisTokens);
   // Guard against a malformed or non-tiered pricing map (e.g. a flat
   // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing

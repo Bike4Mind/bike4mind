@@ -197,6 +197,43 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
     expect(h.assignFinding).toHaveBeenCalledWith('lakeDoc1', 'f1', null);
   });
 
+  it('strips undeclared fields from the assigned finding', async () => {
+    h.assignFinding.mockResolvedValue({
+      ...existing,
+      assigneeUserId: 'curator-2',
+      _id: 'raw-object-id',
+      __v: 7,
+      notInSchema: 'secret',
+    });
+    const { json, done } = invoke({ action: 'assign', assigneeUserId: 'curator-2' });
+    await done;
+
+    const [body] = json.mock.calls[0];
+    expect(body.data).toMatchObject({ id: 'f1', lakeId: 'lakeDoc1', assigneeUserId: 'curator-2' });
+    expect(body.data).not.toHaveProperty('_id');
+    expect(body.data).not.toHaveProperty('__v');
+    expect(body.data).not.toHaveProperty('notInSchema');
+  });
+
+  it('strips undeclared fields from the resolved finding, keeping beliefRecorded', async () => {
+    h.resolveFinding.mockImplementation(async (_lakeId, _id, input) => ({
+      ...existing,
+      ...input,
+      _id: 'raw-object-id',
+      __v: 7,
+      notInSchema: 'secret',
+    }));
+    const { json, done } = invoke({ action: 'resolve', resolution: 'settled' });
+    await done;
+
+    const [body] = json.mock.calls[0];
+    expect(body.data).toMatchObject({ id: 'f1', status: 'resolved', resolution: 'settled' });
+    expect(body.beliefRecorded).toBe(true);
+    expect(body.data).not.toHaveProperty('_id');
+    expect(body.data).not.toHaveProperty('__v');
+    expect(body.data).not.toHaveProperty('notInSchema');
+  });
+
   it('rejects an unknown action rather than falling through to a resolution', async () => {
     await expect(invoke({ action: 'delete' }).done).rejects.toThrow();
     await expect(invoke({}).done).rejects.toThrow();

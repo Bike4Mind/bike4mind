@@ -714,6 +714,7 @@ function CliApp() {
         apiClient,
         tokenGetter,
         startupLog,
+        getSessionId: () => useCliStore.getState().session?.id,
       });
 
       // Create new session with the ACTUAL model being used.

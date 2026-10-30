@@ -46,6 +46,9 @@ vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 vi.mock('@bike4mind/common', () => ({
   ApiKeyScope: { AI_GENERATE: 'ai_generate', AI_CHAT: 'ai_chat', CC_BRIDGE: 'cc_bridge' },
 }));
+// The IP-block refusal path is covered in ../connect.test.ts; this suite stubs @bike4mind/common,
+// which the real gate needs.
+vi.mock('@server/middlewares/checkBlockedIP', () => ({ ipBlockRefusal: async () => null }));
 vi.mock('@server/auth/tokenGenerator', () => ({ authTokenGenerator: { verifyToken: h.verifyToken } }));
 vi.mock('@server/cli/auth', () => ({ verifyApiKey: h.verifyApiKey }));
 vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({

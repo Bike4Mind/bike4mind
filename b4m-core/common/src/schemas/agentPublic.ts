@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModelIdSchema } from './modelId';
 import { paginatedResponseSchema } from './pagination';
 
 /**
@@ -46,7 +47,7 @@ export const AgentIdParamSchema = z.object({
 const agentFields = {
   description: z.string(),
   system_prompt: z.string(),
-  preferred_model: z.string().min(1).describe('A chat model id. An unknown model is rejected with a 422.'),
+  preferred_model: ModelIdSchema.describe('A chat model id. An unknown model is rejected with a 422.'),
   temperature: z.number().min(0).max(2),
   max_tokens: z.number().int().min(1).max(128000),
   allowed_tools: z.array(z.string()).describe(`Tools the agent may call. ${TOOL_LIST_NOTE}`),
@@ -93,13 +94,9 @@ export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
 /** Strict, so the SPA route's camelCase `imageModel` is a 422 rather than silently ignored. */
 export const GenerateAgentAvatarRequestSchema = z
   .object({
-    image_model: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        'An image model id. Omit to use the deployment image model. An unknown or non-image model is rejected with a 400.'
-      ),
+    image_model: ModelIdSchema.optional().describe(
+      'An image model id. Omit to use the deployment image model. An unknown or non-image model is rejected with a 400.'
+    ),
   })
   .strict();
 export type GenerateAgentAvatarRequest = z.infer<typeof GenerateAgentAvatarRequestSchema>;
