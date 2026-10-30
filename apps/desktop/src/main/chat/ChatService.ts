@@ -2823,13 +2823,20 @@ export class ChatService {
       const declarable = (name: string) => schemaFor(name) !== undefined;
       // Names the wire's tool changes reference; each must stay declared for the rest of the turn.
       const referenced = new Set<string>();
+      // Schemas pinned when first seen, so a server dropping mid-turn cannot orphan a named tool.
+      const pinned = new Map<string, ToolSchema>();
+      const pin = (names: readonly string[]) =>
+        names.forEach(name => {
+          const schema = pinned.has(name) ? undefined : schemaFor(name);
+          if (schema) pinned.set(name, schema);
+        });
       // The conversation's loaded start set; declared on every turn, offered or not.
       let start: string[] = [];
       const requestTools = () =>
         deferred
           ? declareDeferredTools(
               toolsFor(roots),
-              [...new Set([...start, ...referenced])].flatMap(name => schemaFor(name) ?? []),
+              [...new Set([...start, ...referenced])].flatMap(name => pinned.get(name) ?? schemaFor(name) ?? []),
               new Set(start)
             )
           : toolsFor(roots);
@@ -2837,6 +2844,7 @@ export class ChatService {
       let wire: CompletionMessage[];
       if (deferred) {
         liveState = toolState();
+        pin(liveState.tools);
         await this.recordToolStates(session, liveState, declarable);
         const mcpNames = new Set(mcpTools.map(binding => binding.definition.schema.name));
         start = startToolNames(
@@ -2853,6 +2861,8 @@ export class ChatService {
           start
         );
         wire = replayed.wire;
+        pin(start);
+        pin(replayed.referenced);
         replayed.referenced.forEach(name => referenced.add(name));
         tools = requestTools();
       } else {
@@ -2975,6 +2985,7 @@ export class ChatService {
           const next = toolState();
           if (!sameToolState(liveState, next)) {
             appendLiveToolChange(wire, liveState.tools, next);
+            pin(next.tools);
             [...liveState.tools, ...next.tools].forEach(name => referenced.add(name));
             await this.recordMidTurnToolState(session, next);
             liveState = next;

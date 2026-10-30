@@ -152,6 +152,18 @@ describe('ChatService deferred tools', () => {
     ),
   });
 
+  /** Every name in a tool change is in that request's tools; the proxy rejects the request otherwise. */
+  function expectChangesDeclared(request: Body): void {
+    const declared = new Set(request.options.tools.map(tool => tool.toolSchema.name));
+    for (const message of request.messages) {
+      if (message.role !== 'system') continue;
+      for (const type of ['tool_addition', 'tool_removal']) {
+        for (const name of blockNames(message, type))
+          expect(declared.has(name!), `${type} ${name} declared`).toBe(true);
+      }
+    }
+  }
+
   /** Every replayed tool_use names a loaded tool or one a change surfaced before it. */
   function expectDeclaredBeforeUse(request: Body): void {
     const surfaced = new Set(
@@ -383,12 +395,24 @@ describe('ChatService deferred tools', () => {
         expect((result.content as { type: string }[]).map(block => block.type)).toContain('tool_result');
         expect(live.role).toBe('system');
         expect(blockNames(live, change)).toContain('mcp__echo_echo');
+        expectChangesDeclared(second);
 
         streams[before + 1].write(frame({ type: 'content', text: 'It says z.' }));
         streams[before + 1].write(frame('[DONE]'));
         await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 3000, interval: 5 });
       }
     );
+
+    it('names no tool a request does not declare when its server is gone by the next turn', async () => {
+      bindings = [echo];
+      const { id } = await service.createSession();
+      const first = await turn(id, 'hello');
+      expectChangesDeclared(first);
+      bindings = [];
+      const next = await turn(id, 'again');
+      expectChangesDeclared(next);
+      expect(JSON.stringify(changes(next))).not.toContain('mcp__echo_echo');
+    });
   });
 
   it.each([
