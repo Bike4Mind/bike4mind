@@ -38,13 +38,19 @@ export function useAgentActivity(trackedIds: ReadonlySet<string>): ReadonlyMap<s
         untracked.current = bufferUntrackedActivity(untracked.current, event, UNTRACKED_BUFFER_CAP);
         return;
       }
-      // A live event supersedes anything buffered before the id was tracked.
-      if (untracked.current.has(event.sessionId)) {
+      // The id can be tracked (set during render) before the effect below adopts its buffered entry,
+      // so the first live event takes that entry over and folds on top of it.
+      const buffered = untracked.current.get(event.sessionId);
+      if (buffered) {
         const without = new Map(untracked.current);
         without.delete(event.sessionId);
         untracked.current = without;
       }
-      setActivity(current => foldActivity(current, event));
+      setActivity(current => {
+        const seeded =
+          buffered && !current.has(event.sessionId) ? new Map(current).set(event.sessionId, buffered) : current;
+        return foldActivity(seeded, event);
+      });
     });
   }, []);
 

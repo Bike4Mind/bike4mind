@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, useLayoutEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { ChatStreamEvent } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -97,18 +97,54 @@ describe('useAgentActivity for a just-spawned child', () => {
     expect(latest.get('child')).toEqual({ kind: 'tool', tool: 'read_file', detail: 'file.ts' });
   });
 
-  it('lets a live event for a tracked id win over what was buffered for it', () => {
-    let latest: ReadonlyMap<string, AgentActivity> = new Map();
-    const Probe = ({ tracked }: { tracked: ReadonlySet<string> }) => {
-      latest = useAgentActivity(tracked);
-      return null;
+  // Fires an event from a layout effect: after the render that tracks the id (so the listener already
+  // sees it tracked) but before the passive effect that adopts its buffered activity.
+  function InGap({ event }: { event?: ChatStreamEvent }) {
+    useLayoutEffect(() => {
+      if (event) listener?.(event);
+    }, [event]);
+    return null;
+  }
+
+  function gapProbe() {
+    const seen: { latest: ReadonlyMap<string, AgentActivity> } = { latest: new Map() };
+    const Probe = ({ tracked, gapEvent }: { tracked: ReadonlySet<string>; gapEvent?: ChatStreamEvent }) => {
+      seen.latest = useAgentActivity(tracked);
+      return <InGap event={gapEvent} />;
     };
+    return { seen, Probe };
+  }
+
+  it('keeps the buffered activity when an event it does not fold lands before adoption', () => {
+    const { seen, Probe } = gapProbe();
     act(() => root.render(<Probe tracked={new Set<string>()} />));
     act(() => listener?.(toolStart('child')));
-    act(() => root.render(<Probe tracked={new Set(['child'])} />));
-    act(() => listener?.({ type: 'done', sessionId: 'child', messageId: 'm', content: '' } as ChatStreamEvent));
-    act(() => root.render(<Probe tracked={new Set(['child'])} />));
-    expect(latest.has('child')).toBe(false);
+    const unfolded = { type: 'background-output', sessionId: 'child', processId: 'p', text: 'x' } as never;
+    act(() => root.render(<Probe tracked={new Set(['child'])} gapEvent={unfolded} />));
+    expect(seen.latest.get('child')).toEqual({ kind: 'tool', tool: 'read_file', detail: 'file.ts' });
+  });
+
+  it('lets a live phase landing before adoption replace the buffered activity', () => {
+    const { seen, Probe } = gapProbe();
+    act(() => root.render(<Probe tracked={new Set<string>()} />));
+    act(() => listener?.(toolStart('child')));
+    const thinking: ChatStreamEvent = {
+      type: 'phase',
+      sessionId: 'child',
+      messageId: 'm',
+      phase: { kind: 'thinking' },
+    };
+    act(() => root.render(<Probe tracked={new Set(['child'])} gapEvent={thinking} />));
+    expect(seen.latest.get('child')).toEqual({ kind: 'phase', phase: 'thinking' });
+  });
+
+  it('never resurrects buffered activity for a turn that ended before adoption', () => {
+    const { seen, Probe } = gapProbe();
+    act(() => root.render(<Probe tracked={new Set<string>()} />));
+    act(() => listener?.(toolStart('child')));
+    const done = { type: 'done', sessionId: 'child', messageId: 'm', content: '' } as ChatStreamEvent;
+    act(() => root.render(<Probe tracked={new Set(['child'])} gapEvent={done} />));
+    expect(seen.latest.has('child')).toBe(false);
   });
 });
 
