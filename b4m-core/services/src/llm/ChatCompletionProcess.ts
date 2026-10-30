@@ -60,6 +60,7 @@ import {
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
+  respondFromWorkspace,
   createReasoningWithholder,
   reasoningChannelOf,
   withholdsReasoning,
@@ -2285,6 +2286,27 @@ export class ChatCompletionProcess {
         // The finally block's terminal frame carries the record, so end it here rather than
         // leaving a total-less record that would read as "still running" forever.
         turnTiming.finish();
+        return;
+      }
+
+      const workspaceReply = await respondFromWorkspace(
+        {
+          user: this.user,
+          logger,
+          session,
+          quest: { id: questId, prompt: quest.prompt, fabFileIds: quest.fabFileIds },
+        },
+        this.workspaceSessionSettings
+      );
+      if (workspaceReply) {
+        quest.replies = workspaceReply.replies;
+        quest.reply = workspaceReply.replies.join('');
+        if (workspaceReply.structuredReplies) quest.structuredReplies = workspaceReply.structuredReplies;
+        if (workspaceReply.toolResults) quest.toolResults = workspaceReply.toolResults;
+        if (workspaceReply.uiSideEffects) quest.uiSideEffects = workspaceReply.uiSideEffects;
+        setTerminalQuestStatus(quest, 'done');
+        turnTiming.finish();
+        await saveQuest(quest);
         return;
       }
       quest.status = 'running';
