@@ -1,13 +1,19 @@
 import type { UserRiskSignalType } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { hkdfSync } from 'crypto';
 import jwt from 'jsonwebtoken';
 
 const PURPOSE = 'signup_form';
 const AUDIENCE = 'signup-form';
 
+// A purpose-derived key, so a form token and a JWT_SECRET-signed token can never stand in for each other.
+let formTokenKey: Buffer | undefined;
+const signupFormTokenKey = (): Buffer =>
+  (formTokenKey ??= Buffer.from(hkdfSync('sha256', Config.JWT_SECRET, '', 'signup-form-token', 32)));
+
 // issuedAtMs rather than iat: iat is whole seconds, too coarse for a sub-2s timing check.
 export const signSignupFormToken = (nowMs = Date.now()): string =>
-  jwt.sign({ purpose: PURPOSE, issuedAtMs: nowMs }, Config.JWT_SECRET, {
+  jwt.sign({ purpose: PURPOSE, issuedAtMs: nowMs }, signupFormTokenKey(), {
     algorithm: 'HS256',
     expiresIn: '1h',
     audience: AUDIENCE,
@@ -30,7 +36,7 @@ export function evaluateSignupSignals(input: {
   }
 
   try {
-    const payload = jwt.verify(input.formToken, Config.JWT_SECRET, {
+    const payload = jwt.verify(input.formToken, signupFormTokenKey(), {
       algorithms: ['HS256'],
       audience: AUDIENCE,
     }) as {
