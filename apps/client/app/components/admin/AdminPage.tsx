@@ -25,6 +25,7 @@ import AnalyticsTab from './Analytics';
 import UsersTab from './Users';
 import dynamic from 'next/dynamic';
 import AdminSubscriptions from './Subscriptions';
+import AdminRevenue from './Revenue';
 import OrganizationsTab from './OrganizationsTab';
 import CreditAnalyticsTab from './CreditAnalysis';
 import SecretsRotationTab from './SecretsRotationTab';
@@ -198,6 +199,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
             {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
           </TabPanel>
+          <TabPanel value={AdminTab.Revenue}>{activeTab === AdminTab.Revenue && <AdminRevenue />}</TabPanel>
           <TabPanel value={AdminTab.Subscriptions}>
             {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
           </TabPanel>

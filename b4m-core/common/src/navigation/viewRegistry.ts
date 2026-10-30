@@ -392,6 +392,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.revenue',
+    section: 'admin',
+    label: 'Revenue',
+    description: 'MRR, ARR, paying customers, new and churned MRR, MRR by plan and at-risk subscriptions over time',
+    navigationType: 'tab',
+    target: '71', // AdminTab.Revenue
+    keywords: ['revenue', 'mrr', 'arr', 'churn', 'recurring revenue', 'paying customers', 'at risk'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.subscriptions',
     section: 'admin',
     label: 'Subscriptions',

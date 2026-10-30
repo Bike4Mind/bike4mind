@@ -34,6 +34,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Analysts]: 'analysts',
   [AdminTab.Waitlist]: 'waitlist',
   [AdminTab.Subscriptions]: ADMIN_SUBSCRIPTIONS_TAB_SLUG,
+  [AdminTab.Revenue]: 'revenue',
   [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
   [AdminTab.CreditAnalytics]: 'credit-analytics',
   [AdminTab.SecretsRotation]: 'secrets-rotation',

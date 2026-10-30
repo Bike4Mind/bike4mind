@@ -24,6 +24,7 @@ import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { websocketApi } from './websocket';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
+import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import './businessMetricAlerts';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
@@ -1025,6 +1026,40 @@ const creditPurchaseReconciliationCron = runsScheduledJobs
     })
   : undefined;
 
+// Revenue Snapshot -- one RevenueSnapshot per UTC day for the admin Revenue trend. Upserts on the day, so
+// retries are safe; a run that still fails lands in the DLQ.
+const revenueSnapshotCron =
+  runsScheduledJobs && revenueSnapshotDeadLetter
+    ? new sst.aws.Cron('revenueSnapshot', {
+        schedule: 'cron(20 0 * * ? *)', // Daily at 00:20 UTC
+        function: {
+          vpc: lambdaVpc,
+          handler: 'apps/workers/src/cron/revenueSnapshot.handler',
+          runtime: 'nodejs24.x',
+          timeout: '2 minutes',
+          link: [...allSecrets],
+          environment: {
+            ...DEFAULT_LAMBDA_ENVIRONMENT,
+          },
+          permissions: [revenueSnapshotDeadLetter.sendPermission],
+          transform: revenueSnapshotDeadLetter.functionTarget,
+          logging: {
+            retention: '1 month',
+          },
+        },
+        transform: {
+          target: {
+            ...revenueSnapshotDeadLetter.ruleTarget.target,
+            input: undefined,
+          },
+        },
+      })
+    : undefined;
+
+if (revenueSnapshotCron && revenueSnapshotDeadLetter) {
+  revenueSnapshotDeadLetter.allowRules([$util.output(revenueSnapshotCron)]);
+}
+
 // Storage Reconciliation -- compares each user's currentStorageSize with the bytes their charged
 // files hold, records drift and alerts over threshold. Dry run unless STORAGE_RECONCILIATION_REPAIR
 // is 'true'; a daily pass resumes across hourly invocations.
@@ -1335,6 +1370,7 @@ export {
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
   creditPurchaseReconciliationCron,
+  revenueSnapshotCron,
   storageReconciliationCron,
   driveLakeResyncPollCron,
   githubLakeReconcileCron,
