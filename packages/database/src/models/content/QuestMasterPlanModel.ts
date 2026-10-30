@@ -16,7 +16,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
-export const QuestMasterDataSchema = new Schema<QuestMasterData>(
+export const QuestMasterDataSchema: Schema<QuestMasterData> = new Schema<QuestMasterData>(
   {
     id: { type: String, required: true },
     title: { type: String, required: true, maxlength: 500 },
@@ -55,7 +55,7 @@ export const QuestMasterDataSchema = new Schema<QuestMasterData>(
   { _id: false }
 );
 
-export const QuestMasterPlanSchema = new Schema<IQuestMasterPlan>(
+export const QuestMasterPlanSchema: Schema<IQuestMasterPlan> = new Schema<IQuestMasterPlan>(
   {
     notebookId: { type: String, required: true },
     goal: { type: String, required: true, maxlength: 2000 },

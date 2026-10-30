@@ -184,7 +184,11 @@ export const musicGenerationTool: ToolDefinition = {
         }
         const request = toRequest(args);
         const result = await config.createJob({
-          user: { id: context.userId, organizationId: context.organizationId ?? null },
+          user: {
+            id: context.userId,
+            organizationId: context.organizationId ?? null,
+            adminRoleWithheld: !context.user.isAdmin,
+          },
           request,
           source: 'agent',
           sessionId: context.sessionId,

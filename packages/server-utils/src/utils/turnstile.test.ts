@@ -35,14 +35,36 @@ describe('verifyTurnstile', () => {
     });
   });
 
-  it.each(['internal-error', 'missing-input-secret', 'invalid-input-secret', 'bad-request'])(
-    'reports provider configuration errors as unavailable: %s',
+  it.each(['missing-input-secret', 'invalid-input-secret', 'bad-request'])(
+    'reports a rejected secret or request as misconfigured: %s',
     async code => {
-      expect(
-        await verifyTurnstile({ ...base, token: 'tok', fetchImpl: respond({ success: false, 'error-codes': [code] }) })
-      ).toMatchObject({ ok: false, reason: 'unavailable' });
+      const fetchImpl = respond({ success: false, 'error-codes': [code] });
+      expect(await verifyTurnstile({ ...base, token: 'tok', fetchImpl })).toEqual({
+        ok: false,
+        reason: 'misconfigured',
+        errorCodes: [code],
+      });
     }
   );
+
+  it('keeps misconfigured when a configuration code is mixed with other codes', async () => {
+    const codes = ['invalid-input-response', 'invalid-input-secret'];
+    const fetchImpl = respond({ success: false, 'error-codes': codes });
+    expect(await verifyTurnstile({ ...base, token: 'tok', fetchImpl })).toEqual({
+      ok: false,
+      reason: 'misconfigured',
+      errorCodes: codes,
+    });
+  });
+
+  it('reports a Cloudflare internal-error as unavailable', async () => {
+    const fetchImpl = respond({ success: false, 'error-codes': ['internal-error'] });
+    expect(await verifyTurnstile({ ...base, token: 'tok', fetchImpl })).toEqual({
+      ok: false,
+      reason: 'unavailable',
+      errorCodes: ['internal-error'],
+    });
+  });
 
   it('rejects oversized tokens without contacting the provider', async () => {
     const fetchImpl = respond({ success: true });
@@ -80,6 +102,44 @@ describe('verifyTurnstile', () => {
       allowedHostnames: ['app.example.com'],
     });
     expect(good).toEqual({ ok: true });
+  });
+
+  describe('requireAllowedHostnames', () => {
+    const body = { success: true, action: 'otc-send', hostname: 'app.example.com' };
+
+    it('reports misconfigured without contacting the provider when the allowlist is empty', async () => {
+      const fetchImpl = respond(body);
+      const result = await verifyTurnstile({
+        ...base,
+        token: 'tok',
+        fetchImpl,
+        allowedHostnames: [],
+        requireAllowedHostnames: true,
+      });
+      expect(result).toEqual({ ok: false, reason: 'misconfigured', errorCodes: ['hostname-allowlist-empty'] });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it('behaves normally when the allowlist is not empty', async () => {
+      const result = await verifyTurnstile({
+        ...base,
+        token: 'tok',
+        fetchImpl: respond(body),
+        allowedHostnames: ['app.example.com'],
+        requireAllowedHostnames: true,
+      });
+      expect(result).toEqual({ ok: true });
+    });
+
+    it.each([false, undefined])('skips the hostname check on an empty allowlist when %s', async required => {
+      const result = await verifyTurnstile({
+        ...base,
+        token: 'tok',
+        fetchImpl: respond(body),
+        requireAllowedHostnames: required,
+      });
+      expect(result).toEqual({ ok: true });
+    });
   });
 
   it('reports unavailable on network error, timeout and non-2xx', async () => {

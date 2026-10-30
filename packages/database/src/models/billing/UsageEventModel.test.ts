@@ -951,3 +951,21 @@ describe('UsageEventRepository.creditsSpentByUser', () => {
     await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(0);
   });
 });
+
+describe('UsageEventRepository.creditsSpentByUsers', () => {
+  it('sums charged and written-off credits per user, leaving out users who spent nothing', async () => {
+    await record({ userId: 'user-1', creditsCharged: 30 });
+    await record({ userId: 'user-1', creditsCharged: 20, writtenOffCredits: 5 });
+    await record({ userId: 'user-2', creditsCharged: 7 });
+    await record({ userId: 'someone-else', creditsCharged: 1000 });
+
+    await expect(usageEventRepository.creditsSpentByUsers(['user-1', 'user-2', 'user-3'])).resolves.toEqual({
+      'user-1': 55,
+      'user-2': 7,
+    });
+  });
+
+  it('returns nothing for no users', async () => {
+    await expect(usageEventRepository.creditsSpentByUsers([])).resolves.toEqual({});
+  });
+});

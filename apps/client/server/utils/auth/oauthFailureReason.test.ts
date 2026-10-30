@@ -49,9 +49,20 @@ describe('oauthFailureLoginErrorCode', () => {
     expect(getLoginErrorMessage('signup_limited')).toBe(SIGNUP_LIMITED_MESSAGE);
   });
 
+  it('maps the sign-up email refusals to their own codes', () => {
+    expect(oauthFailureLoginErrorCode('signup_email_unverified')).toBe('verified_email_required');
+    expect(oauthFailureLoginErrorCode('signup_email_blocked')).toBe('signup_not_allowed');
+  });
+
   // The reasons above are the only ones allowed to say something specific; everything
   // else must stay generic so a failure code cannot become an account oracle.
-  const SPECIFIC_CODE_REASONS = ['state_expired', 'registration_closed', 'signup_limited'];
+  const SPECIFIC_CODE_REASONS = [
+    'state_expired',
+    'registration_closed',
+    'signup_limited',
+    'signup_email_unverified',
+    'signup_email_blocked',
+  ];
 
   it('gives a generic code for every other canonical reason', () => {
     for (const reason of OAUTH_FAILURE_REASONS) {

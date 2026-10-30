@@ -29,7 +29,11 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://example.test' } } }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+// parseAdminActionReason stays real so the 400s are the route's own.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionFromRequest: h.audit,
+}));
 
 import handler from '../admin-send';
 
@@ -45,7 +49,7 @@ describe('POST /api/inbox/admin-send', () => {
   it('records support.inbox.message_sent targeting the recipient, without the message body', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      body: { receiverId: 'user-7', title: 'Heads up', message: 'private message text' },
+      body: { receiverId: 'user-7', title: 'Heads up', message: 'private message text', reason: 'Billing follow-up' },
     });
     (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
 
@@ -57,9 +61,27 @@ describe('POST /api/inbox/admin-send', () => {
     expect(input).toMatchObject({
       action: 'support.inbox.message_sent',
       target: { kind: 'user', id: 'user-7', displayName: 'receiver' },
+      reason: 'Billing follow-up',
       details: { inboxMessageId: 'inbox-1' },
     });
     expect(JSON.stringify(input)).not.toContain('private message text');
     expect(h.createInbox.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it.each([
+    [undefined, /outdated version/],
+    ['no', /at least/i],
+  ])('rejects reason %j with no inbox write, no push and no audit', async reason => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: { receiverId: 'user-7', title: 'Heads up', message: 'text', reason },
+    });
+    (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toThrow();
+
+    expect(h.createInbox).not.toHaveBeenCalled();
+    expect(h.sendToClient).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
   });
 });

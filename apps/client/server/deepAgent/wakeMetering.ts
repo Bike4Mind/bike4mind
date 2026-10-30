@@ -1,5 +1,11 @@
-import { BadRequestError, ForbiddenError, getQuestErrorCode, type IUserDocument } from '@bike4mind/common';
-import { organizationRepository, userRepository } from '@bike4mind/database';
+import {
+  BadRequestError,
+  ForbiddenError,
+  getQuestErrorCode,
+  type IUserDocument,
+  type TooManyRequestsError,
+} from '@bike4mind/common';
+import { deepAgentHandoffRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { assertOwnerHasCredits } from '@bike4mind/services';
 import { usdToCredits } from '@bike4mind/utils';
@@ -67,6 +73,26 @@ export async function assertOwnerCanFundWake(owner: IUserDocument, logger: Logge
 }
 
 export const isInsufficientCredits = (err: unknown): boolean => getQuestErrorCode(err) === 'insufficient_credits';
+
+/** Fallback when a cap refusal carries no Retry-After, in ms. */
+const CAP_RESET_FALLBACK_MS = 60 * 60 * 1000;
+
+/**
+ * The free-tier daily cap clears at the next UTC midnight, so pausing the mission (as for an empty
+ * balance) would be too harsh, and letting the cron re-claim it every lease would re-refuse until
+ * then. Push the next wake to the cap's Retry-After instead.
+ */
+export async function deferWakeUntilCapReset(
+  agentId: string,
+  err: TooManyRequestsError,
+  logger: Logger
+): Promise<void> {
+  const retryAfterSeconds = err.additionalInfo?.retryAfter;
+  const delayMs = typeof retryAfterSeconds === 'number' ? retryAfterSeconds * 1000 : CAP_RESET_FALLBACK_MS;
+  const resumeAt = new Date(Date.now() + delayMs);
+  await deepAgentHandoffRepository.releaseWakeClaim(agentId, resumeAt);
+  logger.info('deep agent wake: owner hit the free-tier daily cap; deferring', { agentId, resumeAt });
+}
 
 /**
  * Stop scheduling a mission whose next wake cannot run (owner out of credits, model no longer

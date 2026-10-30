@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { IShareableDocument } from '@bike4mind/common';
+import { IShareableDocument, ISessionDocument } from '@bike4mind/common';
 import {
   fabFileRepository,
   projectRepository,
@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
+import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request, Response } from 'express';
 
@@ -33,6 +34,9 @@ const handler = baseApi().use(
     }
     const body = revokeBodySchema.parse(req.body);
 
+    // Read before the revoke: its cascade prunes the project's file list.
+    const projectTargets = type === 'projects' ? await projectRevokeCleanupTargets(id, body.userId, req.logger) : [];
+
     // id and type come after the body spread so URL params win over any body field with the same name.
     // Wrap in a transaction so the guarded doc write and revokeFromProject's side effects are atomic:
     // a ConcurrencyConflictError from a racing grant rolls the whole revoke back (mirrors accept).
@@ -54,19 +58,16 @@ const handler = baseApi().use(
       )
     );
 
-    // After the commit, outside its session (see cleanUpDeletedFileReferences). A projectId-scoped
-    // revoke drops one project's grant only, so it leaves the user's own references alone.
-    if (type === 'files' && !body.projectId) {
-      await sharingService.cleanUpRevokedFileReferences(id, body.userId, {
-        db: { users: userRepository, fabFiles: fabFileRepository, sessions: sessionRepository },
-        // Imported at call time, like the session routes: the resolver's graph reaches the Mongoose models.
-        resolveAttachmentLakeAccess: async user =>
-          (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(user, req.logger, {
-            requireCompleteView: true,
-          })(),
-        logger: req.logger,
-      });
-    }
+    // After the commit, outside its session (see cleanUpDeletedFileReferences). Each target is
+    // re-checked, so a user who still reads a file through another grant keeps it.
+    const cleanUpTargets =
+      type === 'files'
+        ? [{ userId: body.userId, fileIds: [id] }]
+        : type === 'sessions' && !body.projectId
+          ? // An unscoped session revoke also drops the grants it minted on the session's files.
+            [{ userId: body.userId, fileIds: (document as ISessionDocument).knowledgeIds ?? [] }]
+          : projectTargets;
+    await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
 
     return res.json(document);
   }

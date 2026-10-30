@@ -1,7 +1,7 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
-import { ICountersDocument } from '@bike4mind/common';
+import { ICounter, ICountersDocument } from '@bike4mind/common';
 
-export const IndividualCounterSchema = new Schema({
+export const IndividualCounterSchema: Schema<ICounter> = new Schema<ICounter>({
   type: { type: String, required: true },
   value: { type: Number, required: true },
   threshold: { type: Number },
@@ -9,7 +9,7 @@ export const IndividualCounterSchema = new Schema({
   updatedAt: { type: Date },
 });
 
-export const CountersSchema = new Schema<ICountersDocument>(
+export const CountersSchema: Schema<ICountersDocument> = new Schema<ICountersDocument>(
   {
     counters: [IndividualCounterSchema],
   },

@@ -4,7 +4,14 @@
 // scope — it would be undefined at that point.
 import { wafWebAcl } from './waf';
 import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/usercontentRequest';
-import { minifyRouterFunction, noindexResponseInjection } from './routerFunctionCode';
+import { isPreviewStage } from './constants';
+import {
+  USER_FILE_MARKER_HEADER,
+  minifyRouterFunction,
+  noindexResponseInjection,
+  userFileCdnPrefixes as bareUserFileCdnPrefixes,
+  userFileCspInjection as userFileCspInjectionFor,
+} from './routerFunctionCode';
 import { CLOUDFRONT_VIEWER_JA4_HEADER } from '../packages/server-utils/src/utils/trustedClientIpHeaders';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
@@ -82,37 +89,12 @@ const sharedDevDomain = isSharedDevStage && process.env.SERVER_DOMAIN ? `files.d
  */
 export const routePrefix = $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? `/${$app.stage}` : '';
 
-// Public CDN path prefixes that serve user-uploaded or user-influenced files from S3.
-// The base list must mirror resolveProxyTarget in appFileProxy.ts (the allowlist of prefixes
-// routed through CloudFront) - i.e. the router.routeBucket(...) registrations in
-// infra/buckets.ts PLUS the tavern overlay's /tavern-sounds + /tavern-icons routes
-// (contributed via contributeTavernInfra, sst.config.ts).
-// KEEP IN SYNC with both; packages/scripts/src/checkUserFileCdnPrefixes.test.ts is the guard.
-// routePrefix is baked in so the prefixes are the literal URIs the viewer requests on EVERY
-// stage that owns its router - '' on deployed stages, '/<stage>' on `sst dev --stage
-// shared-dev` (routeBucket registers `${routePrefix}/generated`, etc.), where a bare
-// '/generated/' would never match.
-const userFileCdnPrefixes = [
-  '/generated/',
-  '/proxied-images/',
-  '/admin-logos/',
-  '/profile-photos/',
-  '/org-files/',
-  '/tavern-sounds/',
-  '/tavern-icons/',
-  '/app-config/',
-].map(prefix => `${routePrefix}${prefix}`);
-
-// Same inert-document CSP the self-host proxy sets (apps/client/pages/api/app-files/serve/
-// [...key].ts). KEEP THE TWO IN SYNC - both serve these prefixes same-origin with the app.
-// allow-downloads keeps legitimate downloads of non-executable generated files (PDF, xlsx)
-// working; it grants no script/form/same-origin/popup capability, so the inertness the
-// backstop exists for is unchanged.
-const USER_FILE_CSP = "default-src 'none'; sandbox allow-downloads";
-// Request header stamped in the viewer-REQUEST function to mark a user-file request; read
-// back in the viewer-response function (see below). Any inbound value is cleared before the
-// prefix check so the marker stays function-owned, not client-settable.
-const USER_FILE_MARKER_HEADER = 'x-b4m-user-file';
+// Public CDN path prefixes that serve user-uploaded or user-influenced files from S3 (the list
+// itself lives in routerFunctionCode.ts). routePrefix is baked in so the prefixes are the
+// literal URIs the viewer requests on EVERY stage that owns its router - '' on deployed
+// stages, '/<stage>' on `sst dev --stage shared-dev` (routeBucket registers
+// `${routePrefix}/generated`, etc.), where a bare '/generated/' would never match.
+const userFileCdnPrefixes = bareUserFileCdnPrefixes.map(prefix => `${routePrefix}${prefix}`);
 
 // Defense-in-depth CSP backstop for hosted/CDN-served user files. A user-supplied file
 // (an SVG or HTML uploaded as e.g. a profile photo) opened directly at its CDN URL must not
@@ -170,20 +152,7 @@ const usercontentGateInjection = `
 
 // Applied ONLY to user-file responses so the SPA (default behavior) and the ALB API routes
 // (/api/ai/v1/completions, ...) are left untouched.
-const userFileCspInjection = `
-  var __cspHit = event.request.headers["${USER_FILE_MARKER_HEADER}"] !== undefined;
-  if (!__cspHit) {
-    var __cspUri = event.request.uri;
-    var __cspPrefixes = ${JSON.stringify(userFileCdnPrefixes)};
-    for (var __cspI = 0; __cspI < __cspPrefixes.length; __cspI++) {
-      if (__cspUri.indexOf(__cspPrefixes[__cspI]) === 0) { __cspHit = true; break; }
-    }
-  }
-  if (__cspHit) {
-    event.response.headers["content-security-policy"] = { value: "${USER_FILE_CSP}" };
-    event.response.headers["x-content-type-options"] = { value: "nosniff" };
-  }
-`;
+const userFileCspInjection = userFileCspInjectionFor(userFileCdnPrefixes);
 
 // Dev-only permissive CORS on every path (unchanged behavior; deployed stages rely on
 // per-bucket CORS config instead).
@@ -199,6 +168,13 @@ $transform(aws.cloudfront.Function, (args, _opts, name) => {
   if (name !== 'RouterCloudfrontFunctionRequest') return;
   args.code = $output(args.code).apply(minifyRouterFunction);
 });
+
+// CloudFront caps functions per account, and every preview's viewer-response code is the same
+// (sharedPreviewResponseFunctionCode in routerFunctionCode.ts), so previews attach one
+// account-level function the deployer points at instead of each creating its own. Unset keeps
+// today's per-stage function; the shared one is never created or deleted by a stage.
+const sharedResponseFunctionArn =
+  isPreviewStage && !$dev ? process.env.PREVIEW_SHARED_RESPONSE_FUNCTION_ARN || undefined : undefined;
 
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
@@ -243,13 +219,18 @@ const routerInstance = shouldUseSharedRouter
       // user-file marker BEFORE SST's URI rewrite; the viewer-response function reads the
       // marker to apply the CSP backstop, adds x-robots-tag noindex on every non-production
       // stage, and additionally injects permissive CORS on personal `sst dev` stages.
+      // Previews on the shared response function get it attached in transform.cdn below.
       edge: {
         viewerRequest: {
           injection: $interpolate`${usercontentGateInjection}${originVerifyInjection}${userFileMarkerInjection}`,
         },
-        viewerResponse: {
-          injection: userFileCspInjection + noindexResponseInjection($app.stage) + ($dev ? devCorsInjection : ''),
-        },
+        ...(sharedResponseFunctionArn
+          ? {}
+          : {
+              viewerResponse: {
+                injection: userFileCspInjection + noindexResponseInjection($app.stage) + ($dev ? devCorsInjection : ''),
+              },
+            }),
       },
       transform: {
         // When reusing an existing cache policy, import it into Pulumi state\
@@ -268,6 +249,19 @@ const routerInstance = shouldUseSharedRouter
             args.defaultCacheBehavior = {
               ...args.defaultCacheBehavior,
               cachePolicyId: cachePolicyId,
+            };
+          }
+
+          // With edge.viewerResponse absent SST emits only the viewer-request association;
+          // append the shared function rather than replacing the list.
+          if (sharedResponseFunctionArn && args.defaultCacheBehavior) {
+            const behavior = args.defaultCacheBehavior as aws.types.input.cloudfront.DistributionDefaultCacheBehavior;
+            args.defaultCacheBehavior = {
+              ...behavior,
+              functionAssociations: $output(behavior.functionAssociations ?? []).apply(associations => [
+                ...associations,
+                { eventType: 'viewer-response', functionArn: sharedResponseFunctionArn },
+              ]),
             };
           }
 

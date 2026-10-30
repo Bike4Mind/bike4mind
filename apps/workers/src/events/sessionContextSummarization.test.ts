@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   update: vi.fn(),
   complete: vi.fn(),
   recordUsage: vi.fn(),
+  findUser: vi.fn(),
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
@@ -16,6 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   Quest: { find: vi.fn(() => ({ sort: async () => h.quests })) },
   Session: { findById: async () => h.session },
   sessionRepository: { update: h.update },
+  userRepository: { findById: h.findUser },
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
@@ -36,6 +38,7 @@ const run = () =>
 describe('sessionContextSummarization stopped turns', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.findUser.mockResolvedValue({ id: 'user-1' });
     h.session = { id: 'session-1', userId: 'user-1', contextSummary: 'Existing context' };
     h.quests = [
       { id: '000000000000000000000001', prompt: 'partial ask', status: 'stopped', replies: ['partial answer'] },
@@ -72,5 +75,24 @@ describe('sessionContextSummarization stopped turns', () => {
       id: 'session-1',
       contextSummaryUpToQuestId: '000000000000000000000002',
     });
+  });
+
+  it.each([null, { id: 'user-1', riskScore: { reviewState: 'pending' } }, { id: 'user-1', isModerated: true }])(
+    'skips the model and billing when the owner cannot use AI: %j',
+    async user => {
+      h.findUser.mockResolvedValue(user);
+      await run();
+      expect(h.findUser).toHaveBeenCalledWith('user-1');
+      expect(h.complete).not.toHaveBeenCalled();
+      expect(h.recordUsage).not.toHaveBeenCalled();
+      expect(h.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not run the model when the account lookup fails', async () => {
+    h.findUser.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(run()).rejects.toThrow('database unavailable');
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
   });
 });

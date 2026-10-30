@@ -63,6 +63,26 @@ describe('UserProfileHeader', () => {
     expect(screen.getByTestId('user-profile-org-chip')).toHaveTextContent('Acme');
   });
 
+  it('shows an unlisted signup method and level as stored', () => {
+    renderHeader(
+      buildProfile({
+        level: 'TrialUser' as AdminUserProfile['level'],
+        photoUrl: 'https://example.com/a.png',
+        acquisition: { signupMethod: 'saml', capturedAt: new Date() },
+      })
+    );
+
+    expect(screen.getByTestId('user-profile-joined')).toHaveTextContent(/^Joined with saml \u00b7 /);
+    expect(screen.getByTestId('user-profile-level-chip')).toHaveTextContent('TrialUser');
+  });
+
+  it('leaves out the level chip and email when the account has neither', () => {
+    renderHeader(buildProfile({ level: undefined, email: null }));
+
+    expect(screen.queryByTestId('user-profile-level-chip')).not.toBeInTheDocument();
+    expect(screen.queryByText('ada@example.com')).not.toBeInTheDocument();
+  });
+
   it('leaves the org chip out while the org is an unpopulated id, as an update response carries it', () => {
     renderHeader(buildProfile({ organizationId: 'org-1' as unknown as AdminUserProfile['organizationId'] }));
 
@@ -92,7 +112,7 @@ describe('UserProfileHeader', () => {
     expect(screen.getByTestId('user-profile-adjust-credits-btn')).toBeInTheDocument();
   });
 
-  it.each(['loginAs', 'message', 'subscription', 'role', 'productAccess', 'restrict', 'delete'])(
+  it.each(['editProfile', 'loginAs', 'message', 'subscription', 'role', 'productAccess', 'restrict', 'delete'])(
     'the More menu reports %s',
     async action => {
       const { onAction } = renderHeader();
