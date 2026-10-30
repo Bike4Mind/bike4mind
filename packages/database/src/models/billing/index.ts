@@ -4,6 +4,7 @@ export * from './CreditLotModel';
 export * from './CreditTransactionModel';
 export * from './FailedRefundModel';
 export * from './PaymentAttemptModel';
+export * from './PaymentRiskActionModel';
 export * from './PendingCreditHoldModel';
 export * from './UsageEventModel';
 export * from './ModelPriceModel';
