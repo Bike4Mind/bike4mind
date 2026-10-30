@@ -114,6 +114,18 @@ describe('serveNextPair', () => {
     ).toEqual({ status: 'ineligible', reason: 'blocked' });
   });
 
+  it('blocks users whose AI access is revoked or whose signup risk review is pending', async () => {
+    const blocked = { status: 'ineligible', reason: 'blocked' };
+    expect(await build({ user: { ...verifiedUser, isModerated: true } }).service.serveNextPair('u1')).toEqual(blocked);
+    expect(
+      await build({ user: { ...verifiedUser, riskScore: { reviewState: 'pending' } } }).service.serveNextPair('u1')
+    ).toEqual(blocked);
+    expect(
+      (await build({ user: { ...verifiedUser, riskScore: { reviewState: 'approved' } } }).service.serveNextPair('u1'))
+        .status
+    ).toBe('ready');
+  });
+
   it('returns the outstanding pair without serving another', async () => {
     const { service, votes, pairs } = build();
     votes.findOutstanding.mockResolvedValue(servedRow({ swapped: true }));
@@ -151,6 +163,15 @@ describe('serveNextPair', () => {
       pair: { pairId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },
     });
     expect(votes.deleteUnclaimedServed).toHaveBeenCalledWith('stale', new Date('2025-12-31T23:59:10Z'));
+  });
+
+  it('keeps a retired pair claimed row when its crashed submit already paid', async () => {
+    const { service, votes, pairs, findPaidCredits } = build();
+    votes.findOutstanding.mockResolvedValue(servedRow({ claimedAt: new Date('2025-12-31T00:00:00Z') }));
+    pairs.findById.mockResolvedValue(pair({ active: false }));
+    findPaidCredits.mockResolvedValue(2);
+    await service.serveNextPair('u1');
+    expect(votes.deleteUnclaimedServed).not.toHaveBeenCalled();
   });
 
   it('shows the winner of a serve race', async () => {
@@ -277,7 +298,8 @@ describe('submitVote', () => {
       'u1',
       'aaaaaaaaaaaaaaaaaaaaaaaa',
       claimedAt,
-      new Date('2025-12-31T23:59:10Z')
+      new Date('2025-12-31T23:59:10Z'),
+      'a'
     );
     expect(votes.claim.mock.invocationCallOrder[0]).toBeLessThan(votes.goldRecord.mock.invocationCallOrder[0]);
   });
@@ -343,6 +365,28 @@ describe('submitVote', () => {
       expect.any(String),
       expect.any(Date),
       expect.objectContaining({ credited: true, creditsAwarded: 2 })
+    );
+  });
+
+  it('honors the ledger on a fresh claim after a released grant failure', async () => {
+    const { service, votes, addCredits, findPaidCredits } = build();
+    findPaidCredits.mockResolvedValue(2);
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
+    expect(addCredits).not.toHaveBeenCalled();
+    expect(votes.goldRecord).not.toHaveBeenCalled();
+  });
+
+  it('keeps the first stored choice when a retry finds the ledger already paid', async () => {
+    const { service, votes, findPaidCredits } = build();
+    findPaidCredits.mockResolvedValue(2);
+    votes.claim.mockImplementation(async (_u, _p, claimedAt) => servedRow({ claimedAt, choice: 'b' }));
+    await service.submitVote('u1', { ...vote, choice: 'a' });
+    expect(votes.claim).toHaveBeenCalledWith('u1', expect.any(String), expect.any(Date), expect.any(Date), 'a');
+    expect(votes.recordVote).toHaveBeenCalledWith(
+      'u1',
+      expect.any(String),
+      expect.any(Date),
+      expect.objectContaining({ choice: 'b', credited: true, creditsAwarded: 2 })
     );
   });
 

@@ -56,7 +56,9 @@ async function loadNoCardUnlocks(userId: string): Promise<NoCardUnlockReason[]> 
 export async function loadArenaUser(userId: string): Promise<ArenaUser | null> {
   const [user, noCardUnlocks] = await Promise.all([
     User.findById(userId)
-      .select('emailVerified isSynthetic deletedAt signupGrant isBanned disputePending moderation.status')
+      .select(
+        'emailVerified isSynthetic deletedAt signupGrant isBanned disputePending moderation.status isModerated riskScore.reviewState'
+      )
       .lean<ArenaUser>(),
     loadNoCardUnlocks(userId),
   ]);

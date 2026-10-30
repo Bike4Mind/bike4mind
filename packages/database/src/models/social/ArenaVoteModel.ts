@@ -139,8 +139,15 @@ export class ArenaVoteRepository extends BaseRepository<IArenaVoteDocument> {
    * Claims the outstanding row for judging, so concurrent submits of one pair cannot each judge it
    * differently and pay. Returns null when another submit holds a live claim or the row is settled.
    * A claim older than `staleBefore` is taken over, so a crashed submit does not strand the row.
+   * `choice` is stored only when the row has none yet.
    */
-  async claim(userId: string, pairId: string, claimedAt: Date, staleBefore: Date): Promise<IArenaVoteDocument | null> {
+  async claim(
+    userId: string,
+    pairId: string,
+    claimedAt: Date,
+    staleBefore: Date,
+    choice?: ArenaChoice
+  ): Promise<IArenaVoteDocument | null> {
     const claimed = await this.model.findOneAndUpdate(
       {
         userId,
@@ -148,7 +155,8 @@ export class ArenaVoteRepository extends BaseRepository<IArenaVoteDocument> {
         status: 'served',
         $or: [{ claimedAt: { $exists: false } }, { claimedAt: null }, { claimedAt: { $lt: staleBefore } }],
       },
-      { $set: { claimedAt } },
+      // The first claimant's choice sticks, so a retry cannot diverge from what the ledger paid for.
+      choice ? [{ $set: { claimedAt, choice: { $ifNull: ['$choice', choice] } } }] : { $set: { claimedAt } },
       { new: true }
     );
     return claimed?.toObject() ?? null;
