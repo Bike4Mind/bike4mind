@@ -3840,7 +3840,14 @@ export class ChatService {
         if (gated.approval) {
           // The mode the gate decided under, or - on a path no mode can answer - the one in force now.
           const mode = gated.mode ?? (await this.currentApprovalMode(sessionId));
-          this.logApproval(sessionId, call.name, gated.settled?.input ?? gated.input, gated.approval, mode);
+          this.logApproval(
+            sessionId,
+            call.name,
+            gated.settled?.input ?? gated.input,
+            gated.approval,
+            mode,
+            gated.patterns
+          );
         }
         if (gated.settled) return gated.settled;
         // The user's choice becomes part of the call, so every later reader of this row - the
@@ -4821,7 +4828,8 @@ export class ChatService {
     tool: string,
     input: Record<string, unknown>,
     approval: ChatToolApproval,
-    mode: ChatApprovalMode | undefined
+    mode: ChatApprovalMode | undefined,
+    patterns: readonly string[] | undefined
   ): void {
     const log = this.deps.approvalLog;
     if (!log) return;
@@ -4835,8 +4843,12 @@ export class ChatService {
         sessionId,
         ...(session ? { sessionTitle: session.title } : {}),
         ...(mode ? { mode } : {}),
+        ...(session?.project ? { project: session.project.directory } : {}),
         tool,
         input: summarizeToolInput(input),
+        ...(patterns && patterns.length > 0
+          ? { patterns: patterns.map(pattern => summarizeToolInput({ command: pattern })) }
+          : {}),
         approval,
       });
     })().catch((error: unknown) => this.deps.logger.warn(`PERMISSIONS: could not log an approval: ${String(error)}`));
@@ -4943,6 +4955,7 @@ export class ChatService {
     // either - only the options that actually run the call can have been remembered.
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
     const mode = await this.deps.store.approvalMode(sessionId);
+    const patterns = prompt.always?.commands.map(command => command.pattern);
     // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
     // the model is more likely stuck than making progress, and this is the point to find out.
     const stuck = looping && mode === 'auto';
@@ -4958,6 +4971,7 @@ export class ChatService {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', ruleDecider(verdict.rule)),
         mode,
+        patterns,
       };
     }
     if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
@@ -5002,6 +5016,7 @@ export class ChatService {
         input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value),
         approval: approvalRecord('allowed', { kind: 'chat-allowance' }),
         mode,
+        patterns,
       };
     }
 
@@ -5014,6 +5029,7 @@ export class ChatService {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', { kind: 'mode', mode }),
         mode,
+        patterns,
       };
     }
 
@@ -5167,20 +5183,21 @@ export class ChatService {
         approval,
       };
       this.emit({ type: 'tool-end', sessionId, messageId, call: redirected });
-      return { settled: redirected, input: call.input, approval, mode };
+      return { settled: redirected, input: call.input, approval, mode, patterns };
     }
 
     if (answer.decision === 'deny' || answer.decision === 'redirect') {
       const approval = approvalRecord('denied', decidedBy, card);
       const denied: ChatToolCall = { ...call, status: 'denied', error: deniedMessage(decidedBy), approval };
       this.emit({ type: 'tool-end', sessionId, messageId, call: denied });
-      return { settled: denied, input: call.input, approval, mode };
+      return { settled: denied, input: call.input, approval, mode, patterns };
     }
 
     return {
       input: applyOption(call.input, picked ?? runnable[0], answer.value),
       approval: approvalRecord('allowed', decidedBy, card),
       mode,
+      patterns,
     };
   }
 
@@ -6494,6 +6511,8 @@ interface ApprovalOutcome {
   approval?: ChatToolApproval;
   /** The approval mode the decision was made under, when the gate consulted one. */
   mode?: ChatApprovalMode;
+  /** What "always allow" would remember for each sub-command, e.g. `git commit *`; for the approval log. */
+  patterns?: string[];
 }
 
 const LOOP_ASK_REASON = `Asked because the same call was repeated ${LOOP_THRESHOLD} times in a row.`;

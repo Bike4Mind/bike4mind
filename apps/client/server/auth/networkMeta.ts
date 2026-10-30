@@ -5,6 +5,7 @@ import { isDeployedStage } from '@bike4mind/server-utils/utils/config';
 import { getClientIp, getClientNetwork, type ClientIpRequest } from '@bike4mind/server-utils/utils/ip';
 import { CLOUDFRONT_VIEWER_JA4_HEADER } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import { DATACENTER_ASNS } from './datacenterAsns';
+import { alertSignupNetworkBurst } from './signupNetworkAlerts';
 
 // x-amzn-waf- + the InsertHeaders name of the forward-anon-ip-label / forward-bot-signal-label rules
 // in infra/waf/bike4mind-api-protection-dev.json.
@@ -51,8 +52,9 @@ function warnNotRecorded(what: string, err: unknown): void {
 }
 
 /**
- * Stamp the signup's network on the new user (once: a retried handler keeps the first capture) and
- * log a signup AuthEvent. Each write fails on its own. Never throws: losing this metadata must not
+ * Stamp the signup's network on the new user (once: a retried handler keeps the first capture), log a
+ * signup AuthEvent, and raise a burst alert when its IP or network is busy. Each step fails on its
+ * own. Never throws: losing this metadata must not
  * fail an account creation.
  */
 export async function recordSignupNetwork(opts: {
@@ -74,6 +76,8 @@ export async function recordSignupNetwork(opts: {
   } catch (err) {
     warnNotRecorded('signup event', err);
   }
+  // After the AuthEvent write, so the burst count includes this account.
+  await alertSignupNetworkBurst({ network: meta, userId: opts.userId, method: opts.method });
 }
 
 /** Log a login AuthEvent. Never throws: a lost row must not fail the sign-in. */

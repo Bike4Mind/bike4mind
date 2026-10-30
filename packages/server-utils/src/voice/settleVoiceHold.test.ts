@@ -11,8 +11,14 @@ const { claimVoiceHold, openVoiceHold, incrementCredits, createTransaction, logI
 vi.mock('@bike4mind/database', () => ({
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   sessionRepository: { claimVoiceHold, openVoiceHold },
-  userRepository: { incrementCredits },
+  // A user without createdAt predates the new-account spend cap, so reserveVoiceHold's cap check passes.
+  userRepository: { incrementCredits, findById: async (id: string) => ({ id }) },
   creditTransactionRepository: { createTransaction },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {

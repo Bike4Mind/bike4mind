@@ -87,6 +87,14 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test', STRIPE_PUBLISHABLE_KEY: 'pk_test_123' },
 }));
 
+const mockFirstPurchaseCardOptions = vi.fn();
+vi.mock('@server/integrations/stripe/threeDSecure', () => ({
+  firstPurchaseCardOptions: (...args: unknown[]) => mockFirstPurchaseCardOptions(...args),
+}));
+// The gate's own rules are covered in server/billing/checkoutGate.test.ts; here only that the route calls it.
+const { mockAssertCheckoutAllowed } = vi.hoisted(() => ({ mockAssertCheckoutAllowed: vi.fn() }));
+vi.mock('@server/billing/checkoutGate', () => ({ assertCheckoutAllowed: mockAssertCheckoutAllowed }));
+
 import handler from '../start-payment';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
@@ -123,6 +131,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     });
     mockPaymentIntentsCreate.mockResolvedValue({ client_secret: 'cs_test_abc', id: 'pi_1' });
     mockCustomersDel.mockResolvedValue({ id: 'cus_new', deleted: true });
+    mockFirstPurchaseCardOptions.mockResolvedValue({});
   });
 
   it('creates a payment intent for a non-subscribed user buying a package', async () => {
@@ -292,4 +301,36 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
       expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
     }
   );
+
+  describe('3-D Secure on first purchase', () => {
+    const accountCreatedAt = new Date('2026-10-01T00:00:00Z');
+    const challengeOptions = { payment_method_options: { card: { request_three_d_secure: 'challenge' } } };
+
+    it('adds the challenge options to the payment intent and asks the helper about this account', async () => {
+      mockFirstPurchaseCardOptions.mockResolvedValue(challengeOptions);
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { createdAt: accountCreatedAt }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockFirstPurchaseCardOptions).toHaveBeenCalledWith(
+        { stripeCustomerId: 'cus_existing', accountCreatedAt },
+        expect.anything()
+      );
+      expect(mockPaymentIntentsCreate).toHaveBeenCalledWith(expect.objectContaining(challengeOptions));
+    });
+
+    it('leaves payment_method_options off when the helper returns nothing', async () => {
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { createdAt: accountCreatedAt }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockPaymentIntentsCreate.mock.calls[0][0]).not.toHaveProperty('payment_method_options');
+    });
+  });
 });
