@@ -2,7 +2,7 @@ import * as z from 'zod';
 import type { IUserDocument } from '../types/entities/UserTypes';
 import type { USER_SECRET_FIELDS } from '../serializers/toSafeUser';
 import { passthroughField, passthroughShape } from './responseShape';
-import { SIGNUP_GRANT_UNLOCK_REASONS } from '../signupGrant';
+import { PAYMENT_UNLOCK_REASONS, SIGNUP_GRANT_UNLOCK_REASONS } from '../signupGrant';
 
 export const VALID_USER_TAGS = [
   '',
@@ -263,6 +263,9 @@ export const selfUserResponseSchema = z.object({
             .regex(/^preview:\d{1,4}:\d+$/)
             .optional(),
         })
+        .optional(),
+      heldUnlock: z
+        .object({ reason: z.enum(PAYMENT_UNLOCK_REASONS), heldAt: z.coerce.date(), releaseAt: z.coerce.date() })
         .optional(),
     })
     .optional(),

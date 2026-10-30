@@ -35,6 +35,11 @@ import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
+import {
+  forfeitHeldUnlockForFraudWarning,
+  forfeitHeldUnlockForRefund,
+  forfeitSignupUnlock,
+} from '@server/credits/paymentUnlockForfeit';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
@@ -530,6 +535,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             realtimeConnections: realtimeConnectionRepository,
           },
         });
+        // Cancels a signup bonus still held for this payment to settle.
+        await forfeitSignupUnlock(user.id, 'dispute', req.logger);
 
         await postMessageToSlack(
           `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.${disputeRadarSuffix}`
@@ -598,6 +605,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         req.logger.debug(`charge.refunded has no refund objects, skipping`);
         break;
       }
+
+      // Before the purchase lookup: a refunded subscription charge has no credit purchase row.
+      await forfeitHeldUnlockForRefund(charge, req.logger);
 
       const refundPaymentIntentId =
         typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
@@ -734,6 +744,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     case 'radar.early_fraud_warning.created':
     case 'review.opened': {
       await alertStripeRiskEvent(event, req.logger);
+      if (event.type === 'radar.early_fraud_warning.created') {
+        await forfeitHeldUnlockForFraudWarning(event.data.object, req.logger);
+      }
       break;
     }
 
