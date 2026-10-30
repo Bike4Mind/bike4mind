@@ -5,6 +5,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import DesktopMacOutlinedIcon from '@mui/icons-material/DesktopMacOutlined';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useDesktopPromoEnabled } from '@client/app/hooks/useDesktopPromoEnabled';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 
 // There is no mobile or tablet build, so the promo only shows on a wide screen with a mouse.
 export const DESKTOP_PROMO_MEDIA_QUERY = '(min-width: 900px) and (hover: hover) and (pointer: fine)';
@@ -25,7 +26,7 @@ export default function DesktopAppPromoButton() {
   // isHydrated: the preference defaults to false until the user record lands.
   if (!enabled || !isHydrated || settings.desktopPromoDismissed || !wideScreenWithMouse) return null;
 
-  const openDesktopPage = () => window.open('/desktop', '_blank', 'noopener,noreferrer');
+  const openDesktopPage = () => openInNewTab('/desktop');
 
   // Glass pill copied from the marketing site's announcement bar (fixed primary tint, not the theme
   // channel, so both color schemes match it). The whole pill is the link, so the dismiss button
@@ -37,6 +38,8 @@ export default function DesktopAppPromoButton() {
       tabIndex={0}
       onClick={openDesktopPage}
       onKeyDown={e => {
+        // A keydown on the nested dismiss button bubbles here; leave it to become that button's click.
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           openDesktopPage();
