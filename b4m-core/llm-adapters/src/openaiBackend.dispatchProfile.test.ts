@@ -307,12 +307,20 @@ describe('OpenAI reasoning_effort for a catalog-only model', () => {
     expect(params.reasoning_effort).toBe('high');
   });
 
-  it('classifies complexity into an effort through the profile effort map', async () => {
-    const { backend, chatCreate } = buildBackend();
-    backend.setDispatchModel(catalogOnly());
-    const params = await callChat(backend, chatCreate, 'gpt-6-sol', { complexity: 'simple' });
-    expect(params.reasoning_effort).toBe('low');
-  });
+  // The two effort maps are value-identical today, so this pins that either variant yields a level, not which table ran.
+  it.each(['gpt5', 'gpt5_1_2'] as const)(
+    'auto-classifies complexity into an effort under the %s effort-map variant',
+    async effortMapVariant => {
+      const { backend, chatCreate } = buildBackend();
+      backend.setDispatchModel(
+        catalogOnly({
+          dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'responses', effortMapVariant },
+        })
+      );
+      const params = await callChat(backend, chatCreate, 'gpt-6-sol', { complexity: 'simple' });
+      expect(params.reasoning_effort).toBe('low');
+    }
+  );
 
   it('does not send it when the catalog never stated the style, even with can_think and max_completion_tokens', async () => {
     const { backend, chatCreate } = buildBackend();
