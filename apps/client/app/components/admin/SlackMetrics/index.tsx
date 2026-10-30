@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Typography, LinearProgress, Alert, Button } from '@mui/joy';
-import { Warning } from '@mui/icons-material';
+import Warning from '@mui/icons-material/Warning';
 
 import { useEventMetrics } from '../EventMetrics/hooks/useEventMetrics';
 import { useEventMetricsState } from '../EventMetrics/hooks/useEventMetricsState';

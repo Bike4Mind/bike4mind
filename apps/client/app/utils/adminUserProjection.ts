@@ -20,6 +20,7 @@ export const ADMIN_USER_LIST_FIELDS = [
   'username',
   'email',
   'isAdmin',
+  'adminPermissions',
   'level',
   'tags',
   'isBanned',
@@ -31,20 +32,26 @@ export const ADMIN_USER_LIST_FIELDS = [
   'isOnline',
   'preferences',
   'storageLimit',
+  'storageLimitOverride',
+  'planStorageLimit',
   'currentStorageSize',
   'createdAt',
   'updatedAt',
   'lastActiveAt',
-  // loginRecords is admin-only PII (IPs/userAgents): it is in USER_SECRET_FIELDS so the
-  // toSafeUser/redactUserSecretsForSelf serializers drop it, but the admin activity view
-  // reads it here. Intentional admin-only exposure, not a serialize-everywhere field.
+  // loginRecords and signupMeta are admin-only PII (IPs/userAgents): they are in
+  // USER_SECRET_FIELDS so the toSafeUser/redactUserSecretsForSelf serializers drop them, but the
+  // admin activity view reads them here. Intentional admin-only exposure, not serialize-everywhere.
   'loginRecords',
+  'signupMeta',
   'subscribedUntil',
   'numReferralsAvailable',
   'currentCredits',
+  'signupGrant',
+  'signupGrantAssessment',
   'organizationId',
   'pendingEmail',
   'emailVerified',
+  'apiKeyTrustApproved',
 ] as const satisfies readonly (keyof IUserDocument)[];
 
 export const ADMIN_USER_PROJECTION: Record<string, 1> = {

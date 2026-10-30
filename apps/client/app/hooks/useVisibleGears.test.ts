@@ -61,6 +61,13 @@ describe('useVisibleGears', () => {
     const { result } = renderHook(() => useVisibleGears());
     expect(result.current.gears.map(g => g.key)).toEqual(['projects']);
   });
+  it('keeps the same array across renders while nothing changes', () => {
+    withGears([gear('projects', 'destination')]);
+    const { result, rerender } = renderHook(() => useVisibleGears());
+    const first = result.current.gears;
+    rerender();
+    expect(result.current.gears).toBe(first);
+  });
 });
 
 describe('useGearsNavSignal', () => {

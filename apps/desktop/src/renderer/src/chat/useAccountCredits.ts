@@ -14,7 +14,7 @@ import type { AccountCredits } from '@shared/account';
  * the trade a poll would buy back, and it is not worth a standing request.
  */
 export function useAccountCredits(spentAt: number): AccountCredits {
-  const [credits, setCredits] = useState<AccountCredits>({ balance: null });
+  const [credits, setCredits] = useState<AccountCredits>({ balance: null, monthlyAllowance: null });
 
   const refresh = useCallback(() => {
     let current = true;

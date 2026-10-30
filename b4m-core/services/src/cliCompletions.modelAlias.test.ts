@@ -6,6 +6,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * snapshot id (ChatModels.GPT4_1 = 'gpt-4.1-2025-04-14'), which a plain `.find()` never
  * matches against the bare name.
  */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -19,8 +25,10 @@ let capturedCompleteModel: unknown;
 const { DATED_GPT_4_1 } = vi.hoisted(() => ({
   DATED_GPT_4_1: {
     id: 'gpt-4.1-2025-04-14',
+    type: 'text',
     backend: 'openai',
     max_tokens: 32_768,
+    pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
   },
 }));
 
@@ -56,10 +64,10 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTextModelCost: vi.fn(() => 0.001),
 }));
 
-import { BadRequestError, ChatModels } from '@bike4mind/common';
+import { BadRequestError, ChatModels, ModelBackend } from '@bike4mind/common';
 import { executeCompletion } from './cliCompletions';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
-import { getAvailableModels, isModelProviderConfigured } from '@bike4mind/llm-adapters';
+import { getAvailableModels, getLlmByModel, isModelProviderConfigured } from '@bike4mind/llm-adapters';
 
 function buildDb() {
   const users = {
@@ -199,6 +207,102 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
       statusCode: 503,
       additionalInfo: { errorCode: 'provider_not_configured' },
     });
+  });
+
+  // An Ollama pull is in no catalog; when the listing that would name it failed, absence proves nothing.
+  it('raises a retryable 503 for an uncatalogued id when the Ollama listing failed', async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ ollama: 'http://ollama.local:11434' } as never);
+    vi.mocked(getAvailableModels).mockImplementationOnce(async (_keys, options) => {
+      options?.onFailedListings?.([ModelBackend.Ollama]);
+      return [];
+    });
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: 'llama3.2:latest', db });
+    await expect(rejection).rejects.not.toBeInstanceOf(BadRequestError);
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 503,
+      message: 'Model listing for ollama is unavailable; retry shortly.',
+      additionalInfo: { errorCode: 'provider_not_configured' },
+    });
+  });
+
+  it('raises a 400 unknown_model for an uncatalogued id when the Ollama listing succeeded without it', async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ ollama: 'http://ollama.local:11434' } as never);
+    vi.mocked(getAvailableModels).mockImplementationOnce(async (_keys, options) => {
+      options?.onFailedListings?.([]);
+      return [];
+    });
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: 'llama3.2:latest', db });
+    await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
+    await expect(rejection).rejects.toMatchObject({ additionalInfo: { errorCode: 'unknown_model' } });
+  });
+
+  it('raises a retryable 503 and logs for an uncatalogued id when the local-image listing failed', async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ imageGen: 'http://imagegen:7860' } as never);
+    vi.mocked(getAvailableModels).mockImplementationOnce(async (_keys, options) => {
+      options?.onFailedListings?.([ModelBackend.LocalImage]);
+      return [];
+    });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: 'local-image/sd15', db, logger: logger as never });
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 503,
+      message: `Model listing for ${ModelBackend.LocalImage} is unavailable; retry shortly.`,
+      additionalInfo: { errorCode: 'provider_not_configured' },
+    });
+    expect(logger.warn).toHaveBeenCalledWith(expect.any(String), {
+      model: 'local-image/sd15',
+      failedListings: [ModelBackend.LocalImage],
+    });
+  });
+
+  it('raises a 400 unknown_model for an uncatalogued id when only a static backend listing failed', async () => {
+    vi.mocked(getAvailableModels).mockImplementationOnce(async (_keys, options) => {
+      options?.onFailedListings?.([ModelBackend.OpenAI]);
+      return [];
+    });
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: 'llama3.2:latest', db });
+    await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
+    await expect(rejection).rejects.toMatchObject({ additionalInfo: { errorCode: 'unknown_model' } });
+  });
+
+  it('keeps the 400 for a catalogued model missing on a configured provider while Ollama is down', async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ gemini: 'gemini-key' } as never);
+    vi.mocked(getAvailableModels).mockImplementationOnce(async (_keys, options) => {
+      options?.onFailedListings?.([ModelBackend.Ollama]);
+      return [];
+    });
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: ChatModels.GEMINI_2_5_FLASH, db });
+    await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
+    await expect(rejection).rejects.toMatchObject({ additionalInfo: { errorCode: 'unknown_model' } });
+  });
+
+  it('lists and dispatches with the backend-keyed table, so local-image keeps its base URL', async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({
+      ollama: 'http://ollama.local:11434',
+      imageGen: 'http://imagegen:7860',
+      typesafe: 'typesafe-key',
+    } as never);
+    const { db } = buildDb();
+
+    await executeCompletion({ ...baseParams, model: 'gpt-4.1', db });
+
+    const listedWith = vi.mocked(getAvailableModels).mock.calls[0][0];
+    expect(listedWith).toMatchObject({
+      [ModelBackend.Ollama]: 'http://ollama.local:11434',
+      [ModelBackend.LocalImage]: 'http://imagegen:7860',
+    });
+    expect(listedWith).not.toHaveProperty('imageGen');
+    expect(vi.mocked(getLlmByModel).mock.calls[0][0]).toBe(listedWith);
   });
 
   it('falls back to a retryable 503 and logs when the provider check throws', async () => {

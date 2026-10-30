@@ -5,12 +5,17 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import {
   creditLotRepository,
   creditTransactionRepository,
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
   integrationRequestRepository,
   partnerSignupRuleRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { creditService, organizationService } from '@bike4mind/services';
 import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
@@ -18,7 +23,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/er
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const updateOrgBodySchema = z.object({
   name: z.string().optional(),
@@ -64,11 +69,10 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
     metadata,
   } as const;
 
-  if (credits > 0) {
-    await creditService.addCredits({ ...ledgerEntry, type: 'generic_add' }, creditAdapters);
-  } else {
-    await creditService.subtractCredits({ ...ledgerEntry, type: 'generic_deduct' }, creditAdapters);
-  }
+  const { creditTransactionId } =
+    credits > 0
+      ? await creditService.addCreditsWithLedgerRow({ ...ledgerEntry, type: 'generic_add' }, creditAdapters)
+      : await creditService.subtractCreditsWithLedgerRow({ ...ledgerEntry, type: 'generic_deduct' }, creditAdapters);
   await recordAdminActionFromRequest(req, {
     action: 'org.credits.adjusted',
     target: { kind: 'organization', id: organization.id, displayName: organization.name },
@@ -76,6 +80,7 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
     reason,
     changes: [{ field: 'currentCredits', before: previousBalance, after: requestedBalance }],
     details: { credits, ownerId: organization.userId },
+    related: creditTransactionId ? { creditTransactionId } : undefined,
   });
 };
 
@@ -131,11 +136,16 @@ const handler = baseApi()
     })
   )
   .delete<Request<unknown, unknown, unknown, { id: string }>>(async (req, res) => {
+    // In-handler so GET and PUT keep their scope behaviour: deleting the org lapses members' lake
+    // grants and can hand lakes to the billing owner. No-ops for a session caller.
+    assertDataLakeShareScope(req);
+
     const id = req.query.id;
 
     // Wrapped in withTransaction (org-groups #1172/#1219): the member purge, the group
-    // soft-deletes, the user organizationId reset, and the org delete must commit together, or a
-    // partial failure leaves either dangling group access or an org that never actually deletes.
+    // soft-deletes, the members' lake-grant lapse, the user organizationId reset, and the org delete
+    // must commit together, or a partial failure leaves dangling group or lake access or an org that
+    // never actually deletes.
     // Repositories join the session automatically via transactionAsyncLocalStorage.
     await withTransaction(() =>
       organizationService.deleteOrganization(
@@ -146,7 +156,12 @@ const handler = baseApi()
             organizations: organizationRepository,
             groups: groupRepository,
             users: userRepository,
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
           },
+          auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
+          logger: req.logger,
           validation: {
             canDeleteOrganization: async organization => {
               const subscriptions = await subscriptionRepository.findActiveSubscriptionsByOwner(

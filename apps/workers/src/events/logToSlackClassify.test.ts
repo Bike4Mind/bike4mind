@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SreClassification } from '@bike4mind/common';
+import { createAnthropicRequestTimeoutError, createAnthropicStreamTimeoutError } from '@bike4mind/llm-adapters';
 import { classifyError } from './logToSlackClassify';
 
 describe('classifyError', () => {
@@ -55,6 +56,16 @@ describe('classifyError', () => {
 
     it('still skips aborts', () => {
       expect(classifyError('AbortError: The operation was aborted')).toBe(SreClassification.SKIP);
+    });
+
+    it.each([
+      createAnthropicStreamTimeoutError('stream_idle', 180_000).stack!,
+      String(createAnthropicStreamTimeoutError('first_event', 30_000)),
+      // Legacy wording from backends deployed before the typed timeout errors.
+      'Error: Anthropic API stream timeout - no response received within 90 seconds.',
+      String(createAnthropicRequestTimeoutError(60_000)),
+    ])('skips our own stream/request timeouts: %s', message => {
+      expect(classifyError(message)).toBe(SreClassification.SKIP);
     });
 
     it('still skips ECONNREFUSED / ETIMEDOUT', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { chatContract, executeToolContract, ApiKeyScope, ForbiddenError } from '@bike4mind/common';
+import { chatContract, executeToolContract, ApiKeyScope, ForbiddenError, UnauthorizedError } from '@bike4mind/common';
 
 const verifyApiKey = vi.fn();
 const verifyJwtToken = vi.fn();
@@ -9,6 +9,7 @@ vi.mock('./auth', () => ({
 }));
 
 import { resolveContractAuth } from './resolveContractAuth';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 
 const headers = { authorization: 'Bearer b4m_live_key' };
 
@@ -37,19 +38,31 @@ describe('resolveContractAuth', () => {
     verifyApiKey.mockRejectedValueOnce(new Error('Invalid or expired API key'));
     const result = await resolveContractAuth(headers, chatContract);
     expect(result).toEqual({ method: 'jwt', userId: 'u2', user: { id: 'u2' } });
+    expect(verifyJwtToken).toHaveBeenCalledWith('b4m_live_key', { requireApiAccess: true });
   });
 
   it('surfaces a forbidden key owner over the JWT failure when both fail', async () => {
     const forbidden = new ForbiddenError('Account suspended');
     verifyApiKey.mockRejectedValueOnce(forbidden);
-    verifyJwtToken.mockRejectedValueOnce(new Error('Invalid authorization token'));
+    verifyJwtToken.mockRejectedValueOnce(new UnauthorizedError('Invalid authorization token'));
     await expect(resolveContractAuth(headers, chatContract)).rejects.toBe(forbidden);
+  });
+
+  it('preserves a JWT lookup outage over a forbidden second credential', async () => {
+    const unavailable = toApiKeyAuthError(
+      Object.assign(new Error('connect ECONNREFUSED'), { name: 'MongoNetworkError' })
+    );
+    verifyApiKey.mockRejectedValueOnce(new ForbiddenError('API key does not have permission for this endpoint'));
+    verifyJwtToken.mockRejectedValueOnce(unavailable);
+    await expect(resolveContractAuth(headers, chatContract)).rejects.toBe(unavailable);
+    expect(unavailable.statusCode).toBe(503);
   });
 
   it('still serves a valid JWT when the key owner is forbidden', async () => {
     verifyApiKey.mockRejectedValueOnce(new ForbiddenError('Account suspended'));
     const result = await resolveContractAuth(headers, chatContract);
     expect(result).toEqual({ method: 'jwt', userId: 'u2', user: { id: 'u2' } });
+    expect(verifyJwtToken).toHaveBeenCalledWith('b4m_live_key', { requireApiAccess: true });
   });
 
   it('reports the JWT error when the key failure is not a 403', async () => {
@@ -59,9 +72,20 @@ describe('resolveContractAuth', () => {
     await expect(resolveContractAuth(headers, chatContract)).rejects.toBe(jwtError);
   });
 
+  it('rethrows an infra failure from the key check without consulting JWT', async () => {
+    const unavailable = toApiKeyAuthError(
+      Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' })
+    );
+    verifyApiKey.mockRejectedValueOnce(unavailable);
+    await expect(resolveContractAuth(headers, chatContract)).rejects.toBe(unavailable);
+    expect(unavailable.statusCode).toBe(503);
+    expect(verifyJwtToken).not.toHaveBeenCalled();
+  });
+
   it('runs JWT only for a jwtOnly contract, never touching verifyApiKey', async () => {
     const result = await resolveContractAuth(headers, executeToolContract);
     expect(verifyApiKey).not.toHaveBeenCalled();
     expect(result).toEqual({ method: 'jwt', userId: 'u2', user: { id: 'u2' } });
+    expect(verifyJwtToken).toHaveBeenCalledWith('b4m_live_key', { requireApiAccess: true });
   });
 });

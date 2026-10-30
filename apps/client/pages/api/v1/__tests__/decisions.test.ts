@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { CreditHolderType, insufficientCreditsError, isZodError } from '@bike4mind/common';
+import { CreditHolderType, insufficientCreditsError, isZodError, TooManyRequestsError } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -48,7 +48,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   usageEventRepository: { record: (...a: unknown[]) => recordUsage(...a) },
@@ -60,7 +60,7 @@ vi.mock('@bike4mind/utils', async importActual => ({
 }));
 vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: (...a: unknown[]) => reserve(...a) }));
 // The real TestDecisionProvider behind a spy, so the route runs the real retry policy and normalizer.
-vi.mock('@server/decisions/providers', async () => {
+vi.mock('@bike4mind/server-utils/decisions/providers', async () => {
   const { TestDecisionProvider } = await import('@bike4mind/utils/decisionProviders');
   const real = new TestDecisionProvider();
   const provider = {
@@ -84,6 +84,17 @@ vi.mock('@bike4mind/utils/imageResize', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: (...a: unknown[]) => download(...a) }),
+}));
+
+const { mockAdmitRequestCompletion, mockQuotaRelease } = vi.hoisted(() => {
+  const mockQuotaRelease = vi.fn(async () => {});
+  return {
+    mockQuotaRelease,
+    mockAdmitRequestCompletion: vi.fn(async (..._a: unknown[]) => ({ release: mockQuotaRelease })),
+  };
+});
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: (...a: unknown[]) => mockAdmitRequestCompletion(...a),
 }));
 
 import { NotFoundError } from '@bike4mind/utils';
@@ -372,5 +383,41 @@ describe('POST /api/v1/decisions', () => {
       expect(status).toBe(422);
       expect(body.errorCode).toBe('unsupported_input');
     });
+  });
+});
+
+describe('POST /api/v1/decisions - untrusted owner quotas', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    registeredModels.value = ['test-decisions', 'gpt-6-luna'];
+    resolveKey.mockResolvedValue('test-key');
+    recordUsage.mockResolvedValue(undefined);
+    settle.mockImplementation(async (credits: number) => credits);
+    reserve.mockResolvedValue({ ownerId: 'u1', ownerType: CreditHolderType.User, reservedCredits: 1, refund, settle });
+    mockAdmitRequestCompletion.mockResolvedValue({ release: mockQuotaRelease });
+  });
+
+  it('holds a slot for the decision and frees it once answered', async () => {
+    const { status } = await run({ input: 'Payouts failing' });
+    expect(status).toBe(200);
+    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(expect.anything(), { holdSlot: true });
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('frees the slot when the decision fails', async () => {
+    resolveKey.mockRejectedValue(new Error('boom'));
+    const { status } = await run({ input: 'Payouts failing' });
+    expect(status).toBeGreaterThanOrEqual(500);
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses with a 429 without reserving credits or calling the provider', async () => {
+    mockAdmitRequestCompletion.mockRejectedValue(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 4 })
+    );
+    const { status } = await run({ input: 'Payouts failing' });
+    expect(status).toBe(429);
+    expect(reserve).not.toHaveBeenCalled();
+    expect(providerSpy).not.toHaveBeenCalled();
   });
 });

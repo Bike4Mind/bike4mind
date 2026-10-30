@@ -9,7 +9,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { generateWebhookSecret } from '@server/integrations/github/webhookUtils';
 import { Logger } from '@bike4mind/observability';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 const logger = new Logger({ metadata: { service: 'github-webhook-config' } });

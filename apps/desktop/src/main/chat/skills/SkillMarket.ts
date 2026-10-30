@@ -29,7 +29,7 @@ import type {
   SkillUploadPreview,
   SkillWriteCode,
 } from '@shared/skillMarket';
-import { isExternallyOpenable } from '../../externalLinks';
+import { isExternallyOpenable } from '@shared/externalLinks';
 import { buildDiff } from '../tools/diff';
 import type { SkillCatalog } from './SkillCatalog';
 import { readSkillSource } from './readSkillSource';
@@ -427,8 +427,8 @@ export class SkillMarket {
     const importedFrom = asRecord(skill?.importedFrom);
     if (typeof skill?.body !== 'string' || importedFrom?.versionId === version.id) return undefined;
 
-    const before = asStrings(skill.allowedTools);
-    const after = version.snapshot.allowedTools ?? [];
+    const before = [...asStrings(skill.allowedTools), ...asStrings(skill.claudeCodeAllowedTools)];
+    const after = [...(version.snapshot.allowedTools ?? []), ...(version.snapshot.claudeCodeAllowedTools ?? [])];
     return {
       skillId: copy.id,
       ...(typeof importedFrom?.version === 'number' ? { fromVersion: importedFrom.version } : {}),
@@ -470,7 +470,16 @@ function toFields(value: unknown): SkillUploadFields | null {
     description: fields.description,
     body: fields.body,
     argumentHint: typeof fields.argumentHint === 'string' ? fields.argumentHint : '',
+    // Always sent, like argumentHint, so an update clears tools the file no longer declares.
+    claudeCodeAllowedTools: Array.isArray(fields.claudeCodeAllowedTools)
+      ? fields.claudeCodeAllowedTools.filter((tool): tool is string => typeof tool === 'string')
+      : [],
     disableModelInvocation: fields.disableModelInvocation === true,
+    // Always sent, so re-uploading over a skill replaces its files (the server validates paths and limits).
+    files: (Array.isArray(fields.files) ? fields.files : []).flatMap(file => {
+      const f = asRecord(file);
+      return typeof f?.path === 'string' && typeof f.content === 'string' ? [{ path: f.path, content: f.content }] : [];
+    }),
   };
 }
 
@@ -613,6 +622,7 @@ function toVersion(data: unknown): SkillMarketVersion | null {
       body: snapshot.body,
       ...(typeof snapshot.argumentHint === 'string' ? { argumentHint: snapshot.argumentHint } : {}),
       allowedTools: asStrings(snapshot.allowedTools),
+      claudeCodeAllowedTools: asStrings(snapshot.claudeCodeAllowedTools),
     },
     ...(asRecord(version.honestSummary)
       ? { honestSummary: version.honestSummary as SkillMarketVersion['honestSummary'] }

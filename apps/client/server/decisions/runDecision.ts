@@ -48,7 +48,7 @@ import {
   getDecisionProviderRegistry,
   resolveCallableDecisionProviders,
   resolveDecisionProviderKey,
-} from '@server/decisions/providers';
+} from '@bike4mind/server-utils/decisions/providers';
 import { resolveDecisionInput } from '@server/decisions/resolveDecisionInput';
 import type { FabFileAccessRequest } from '@server/files/loadAccessibleFabFile';
 
@@ -157,7 +157,10 @@ export async function runDecision({
 
   // The hold comes before image resolution, so a caller who cannot pay cannot make us download and decode files.
   // The worst-case cost does not depend on the images.
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
   const maxCostUsd = maxDecisionCostUsd(caps);
   const reservation = await reserveRequestCredits({
     // Separate from `fileRequest`: billing reads the key's owner slice, file access its scopes.

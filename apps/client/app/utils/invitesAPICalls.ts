@@ -1,7 +1,9 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { IInviteDocument, IInviteDocumentWithDetails, InviteType } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
-import { isNull, isUndefined, pickBy } from 'lodash';
+import isNull from 'lodash/isNull';
+import isUndefined from 'lodash/isUndefined';
+import pickBy from 'lodash/pickBy';
 
 export const fetchInvite = async (id: string): Promise<IInviteDocumentWithDetails | null | 'expired'> => {
   try {

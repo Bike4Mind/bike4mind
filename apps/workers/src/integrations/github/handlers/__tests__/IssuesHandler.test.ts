@@ -1,17 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Hoist mock functions to avoid initialization issues
-const { mockNotify, mockFindByOrgAndRepo, mockUserFind, mockDispatchIssueToSre, mockSyncSreIssueState } = vi.hoisted(
+const { mockNotify, mockFindByOrgAndRepo, mockAccounts, mockDispatchIssueToSre, mockSyncSreIssueState } = vi.hoisted(
   () => ({
     mockNotify: vi.fn(),
     mockFindByOrgAndRepo: vi.fn(),
-    mockUserFind: vi.fn(),
+    mockAccounts: vi.fn(),
     mockDispatchIssueToSre: vi.fn(),
     mockSyncSreIssueState: vi.fn(),
   })
 );
 
 vi.mock('@bike4mind/slack', () => ({
+  findVerifiedGitHubAccounts: mockAccounts,
   GitHubSlackNotifier: vi.fn().mockImplementation(function () {
     return { notify: mockNotify };
   }),
@@ -25,11 +26,11 @@ vi.mock('@bike4mind/database', () => ({
     findByOrgAndRepo: mockFindByOrgAndRepo,
   },
   User: {
-    find: mockUserFind,
+    find: mockAccounts,
   },
 }));
 
-vi.mock('@server/integrations/github/sreWebhookDispatch', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => ({
   dispatchIssueToSre: mockDispatchIssueToSre,
   syncSreIssueStateFromWebhook: mockSyncSreIssueState,
 }));
@@ -74,11 +75,7 @@ describe('IssuesHandler', () => {
     vi.clearAllMocks();
     mockNotify.mockResolvedValue({ notifiedUserIds: [], failedNotifications: [] });
     mockFindByOrgAndRepo.mockResolvedValue([]);
-    mockUserFind.mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        lean: vi.fn().mockResolvedValue([]),
-      }),
-    });
+    mockAccounts.mockResolvedValue([]);
     mockDispatchIssueToSre.mockResolvedValue({ dispatched: false, reason: 'pipeline-disabled' });
     mockSyncSreIssueState.mockResolvedValue(undefined);
     const notifier = new GitHubSlackNotifier({} as never);
@@ -287,16 +284,10 @@ describe('IssuesHandler', () => {
         { userId: 'user-2', events: ['issues'], enabled: true },
       ]);
 
-      mockUserFind.mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          lean: vi
-            .fn()
-            .mockResolvedValue([
-              { slackSettings: { githubNotifications: { githubUsername: 'subscriber1' } } },
-              { slackSettings: { githubNotifications: { githubUsername: 'subscriber2' } } },
-            ]),
-        }),
-      });
+      mockAccounts.mockResolvedValue([
+        { metadata: { githubLogin: 'subscriber1' } },
+        { metadata: { githubLogin: 'subscriber2' } },
+      ]);
 
       const payload = createIssuesPayload({
         action: 'opened',
@@ -315,13 +306,9 @@ describe('IssuesHandler', () => {
     it('should NOT notify subscribers who are the issue author', async () => {
       mockFindByOrgAndRepo.mockResolvedValue([{ userId: 'user-1', events: [], enabled: true }]);
 
-      mockUserFind.mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          lean: vi.fn().mockResolvedValue([
-            { slackSettings: { githubNotifications: { githubUsername: 'author-user' } } }, // Author is a subscriber
-          ]),
-        }),
-      });
+      mockAccounts.mockResolvedValue([
+        { metadata: { githubLogin: 'author-user' } }, // Author is a subscriber
+      ]);
 
       const payload = createIssuesPayload({
         action: 'opened',
@@ -342,16 +329,10 @@ describe('IssuesHandler', () => {
         { userId: 'user-3', events: [], enabled: true }, // Empty = all events
       ]);
 
-      mockUserFind.mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          lean: vi
-            .fn()
-            .mockResolvedValue([
-              { slackSettings: { githubNotifications: { githubUsername: 'subscriber2' } } },
-              { slackSettings: { githubNotifications: { githubUsername: 'subscriber3' } } },
-            ]),
-        }),
-      });
+      mockAccounts.mockResolvedValue([
+        { metadata: { githubLogin: 'subscriber2' } },
+        { metadata: { githubLogin: 'subscriber3' } },
+      ]);
 
       const payload = createIssuesPayload({
         action: 'opened',
@@ -361,10 +342,10 @@ describe('IssuesHandler', () => {
 
       await handler.handle(payload, mockMcpServer, { orgId: 'org-123' });
 
-      // User.find should only be called with user-2 and user-3, not user-1
-      expect(mockUserFind).toHaveBeenCalledWith(
+      // OAuth account lookup should only be called with user-2 and user-3, not user-1
+      expect(mockAccounts).toHaveBeenCalledWith(
         expect.objectContaining({
-          _id: { $in: ['user-2', 'user-3'] },
+          userIds: ['user-2', 'user-3'],
         })
       );
     });
@@ -373,13 +354,9 @@ describe('IssuesHandler', () => {
       // subscriber1 is also an assignee - should only get ONE notification
       mockFindByOrgAndRepo.mockResolvedValue([{ userId: 'user-1', events: [], enabled: true }]);
 
-      mockUserFind.mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          lean: vi.fn().mockResolvedValue([
-            { slackSettings: { githubNotifications: { githubUsername: 'assignee1' } } }, // Also an assignee
-          ]),
-        }),
-      });
+      mockAccounts.mockResolvedValue([
+        { metadata: { githubLogin: 'assignee1' } }, // Also an assignee
+      ]);
 
       const payload = createIssuesPayload({
         action: 'opened',
@@ -433,13 +410,9 @@ describe('IssuesHandler', () => {
       expect(result.notifiedUserIds).toEqual([]);
     });
 
-    it('should surface notificationDispatchError when User.find fails', async () => {
+    it('should surface notificationDispatchError when OAuth account lookup fails', async () => {
       mockFindByOrgAndRepo.mockResolvedValue([{ userId: 'user-1', events: [], enabled: true }]);
-      mockUserFind.mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          lean: vi.fn().mockRejectedValue(new Error('Replica failover')),
-        }),
-      });
+      mockAccounts.mockRejectedValue(new Error('Replica failover'));
 
       const payload = createIssuesPayload({
         action: 'opened',

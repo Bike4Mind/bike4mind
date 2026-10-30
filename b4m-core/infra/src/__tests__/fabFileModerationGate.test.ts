@@ -31,9 +31,11 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..'
 const SCAN_ROOTS = [
   'apps/client/pages',
   'apps/client/server',
+  'packages/server-utils/src',
   'apps/workers/src',
   'b4m-core/services/src',
   'b4m-core/slack/src',
+  'packages/server-utils/src',
 ];
 
 const EXCLUDED_DIR_NAMES = new Set(['__tests__', 'dist', '.next', 'node_modules']);
@@ -205,11 +207,11 @@ const ALLOWLIST: Record<string, string> = {
   // --- Generated output: delivery and the saveGeneratedAsset passthrough. ---
   'apps/client/server/utils/generatedAudioDelivery.ts':
     'audio-only - signs a GET for oversized generated audio it just uploaded under generated-audio-offload/ (no FabFile row, audio/* only); a saved copy is served by the fileUrl the already-gated createFabFile minted, so isImageServeable is inapplicable',
-  'apps/client/server/utils/saveGeneratedAssetToFiles.ts':
+  'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts':
     'DI passthrough to saveGeneratedAsset -> the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
   // --- Synchronous pre-persist moderation, not the stored-moderationStatus gate. ---
-  'apps/client/pages/api/agents/[id]/generate-avatar.ts':
+  'apps/client/server/agents/authoring/generateAgentAvatar.ts':
     'freshly generated avatar is moderated synchronously via moderateImageOrThrow/RekognitionImageModerationService before upload+mint (throws ImageModerationBlockedError first); not a stored-moderationStatus read path since no FabFile/moderationStatus exists yet',
 
   // --- Caller already gates before handing bytes to this module. ---
@@ -222,8 +224,6 @@ const ALLOWLIST: Record<string, string> = {
     'githubService.getFileContent — GitHub repo content fetch for SRE code review, unrelated to FabFile storage',
   'apps/workers/src/queueHandlers/sreAnalysis.ts':
     'githubService.getFileContent — GitHub repo content fetch for SRE code review, unrelated to FabFile storage',
-  'apps/client/server/services/whatsNewDataCollector.ts':
-    'githubService.getFileContent — GitHub repo content fetch (CHANGELOG.md), unrelated to FabFile storage',
   'b4m-core/services/src/sreAgentService/tools.ts':
     'toolContext.getFileContent is wired to githubService.getFileContent — GitHub repo content fetch, unrelated to FabFile storage',
   'b4m-core/services/src/sreAgentService/index.ts':

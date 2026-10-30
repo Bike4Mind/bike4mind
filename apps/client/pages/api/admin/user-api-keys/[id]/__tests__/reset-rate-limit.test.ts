@@ -63,6 +63,9 @@ vi.mock('@bike4mind/services', async importOriginal => {
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+
 import '@pages/api/admin/user-api-keys/[id]/reset-rate-limit';
 
 const storedKey = {
@@ -153,6 +156,24 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
       { ability: (req as any).ability },
       (req as any).logger,
       'API key key-1'
+    );
+  });
+
+  it('records user.api_key.rate_limit_reset against the key after the reset', async () => {
+    const { req, res } = post({ id: 'key-1' }, admin);
+    await mockRefs.postHandler!(req, res);
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.api_key.rate_limit_reset',
+        target: { kind: 'apiKey', id: 'key-1', displayName: 'wedged key' },
+        details: expect.objectContaining({ ownerUserId: 'owner-1' }),
+      })
+    );
+    expect(recordAdminActionFromRequest.mock.invocationCallOrder[0]).toBeGreaterThan(
+      resetApiKeyRateLimit.mock.invocationCallOrder[0]
     );
   });
 

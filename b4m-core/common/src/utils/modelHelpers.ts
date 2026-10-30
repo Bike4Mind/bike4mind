@@ -1,4 +1,4 @@
-import { IMAGE_MODELS, ImageModels } from '../models';
+import { IMAGE_MODELS, ImageModels, type ModelInfo } from '../models';
 import { EXTENDED_GPT_IMAGE_QUALITIES, OPENAI_IMAGE_MODELS, type ExtendedGptImageQuality } from '../schemas/openai';
 import { GEMINI_IMAGE_MODELS, type GeminiImageModel } from '../schemas/gemini';
 import { BFL_IMAGE_MODELS, type BFLImageModel } from '../schemas/bfl';
@@ -51,19 +51,29 @@ export function isBflUltraImageModel(model?: string | null): boolean {
 }
 
 /**
+ * FLUX.2 endpoints take a reference image as `input_image`; every FLUX.1 model takes
+ * `image_prompt`. Must stay in sync with the body builder in `BFLImageService.generate`, which
+ * picks the field from this predicate and redacts whichever one it sent.
+ */
+export function isFlux2ImageModel(model?: string | null): boolean {
+  return typeof model === 'string' && model.startsWith('flux-2-');
+}
+
+/**
  * Image models sized by discrete `width`/`height` rather than a size string or an aspect ratio.
- * Deliberately just the Flux Pro generation pair: Ultra takes an aspect ratio, and Fill and
- * Kontext are dispatched through the edit path, which reads neither. The settings UI and the
- * generation dispatch both key off this, so they cannot disagree about which controls matter.
+ * The Flux Pro generation pair and the whole FLUX.2 family take width/height; Ultra takes an
+ * aspect ratio, and Fill and Kontext are dispatched through the edit path, which reads neither.
+ * The settings UI and the generation dispatch both key off this, so they cannot disagree about
+ * which controls matter.
  */
 export function usesDiscreteImageDimensions(model?: string | null): boolean {
-  return model === ImageModels.FLUX_PRO || model === ImageModels.FLUX_PRO_1_1;
+  return model === ImageModels.FLUX_PRO || model === ImageModels.FLUX_PRO_1_1 || isFlux2ImageModel(model);
 }
 
 /**
  * Image models offering a prompt-enhancement toggle in the UI, where the provider is meant to
- * rewrite and expand the prompt before generating. BFL takes it as `prompt_upsampling` and honors
- * it. Gemini models are still included here for historical/UI-grouping reasons, but
+ * rewrite and expand the prompt before generating. BFL takes `prompt_upsampling` or its inverse
+ * `disable_pup`; Klein has neither. Gemini is included for historical/UI-grouping reasons, but
  * GeminiImageService.buildGenerationConfig() deliberately never forwards this to Google's API -
  * `generateImages` rejects the mere presence of `enhancePrompt`, so the toggle is a no-op for
  * Gemini today. Do not reintroduce a Gemini enhancePrompt mapping without confirming Google's API
@@ -73,7 +83,7 @@ export function usesDiscreteImageDimensions(model?: string | null): boolean {
  * have to agree about this field, and they previously did so through three separate BFL checks.
  */
 export function supportsPromptUpsampling(model?: string | null): boolean {
-  return isBflImageModel(model) || isGeminiImageModel(model);
+  return (isBflImageModel(model) && !model?.startsWith('flux-2-klein-')) || isGeminiImageModel(model);
 }
 
 /**
@@ -204,6 +214,26 @@ export function isModelAccessible(
 }
 
 /**
+ * The catalog models a user may run: not disabled, and accessible under the admin
+ * `llmModelConfigurations` row when one exists (a model with no row is unrestricted).
+ * Mirrors the rule `ChatCompletionInvoke` applies inline to a chat turn's model; keep the two in sync.
+ */
+export function filterRunnableModels(
+  models: ModelInfo[],
+  configurations: LLMModelConfig[],
+  userTags: string[],
+  isAdmin: boolean,
+  entitlementKeys: string[]
+): ModelInfo[] {
+  const configById = new Map(configurations.map(config => [config.id, config]));
+  return models.filter(model => {
+    if (model.disabled) return false;
+    const config = configById.get(model.id);
+    return !config || isModelAccessible(config, userTags, isAdmin, entitlementKeys);
+  });
+}
+
+/**
  * Image models that can serve an *edit* (image + optional mask) request. Deliberately
  * narrower than the generation catalog: of the BFL family only Fill does mask inpainting
  * (Kontext models are image-to-image transforms dispatched through ImageGeneration's
@@ -245,3 +275,10 @@ export const IMAGES_PER_EDIT_REQUEST = 1;
  * prices through OpenAIImageCostCalculator.getInputImageCost - keep the two together.
  */
 export const MAX_REFERENCE_IMAGES = 15;
+
+/** FLUX.2's limit includes the primary input; GPT reserves a separate primary slot. */
+export function getMaxReferenceImages(model: string): number {
+  if (isGPTImageModel(model)) return MAX_REFERENCE_IMAGES;
+  if (!isFlux2ImageModel(model)) return 0;
+  return model.startsWith('flux-2-klein-') ? 4 : 8;
+}

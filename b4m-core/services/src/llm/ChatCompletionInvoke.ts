@@ -5,6 +5,8 @@ import {
   ChatCompletionInvokeParamsSchema,
   isPromptMetaModelType,
   isSupportedEmbeddingModel,
+  IOrganizationDocument,
+  ISessionDocument,
   IUserDocument,
   LLMModelConfig,
   ModelInfo,
@@ -16,7 +18,6 @@ import {
   ForbiddenError,
   InternalServerError,
   NotFoundError,
-  isModelAccessible,
   isZodError,
   getSettingsByNames,
 } from '@bike4mind/utils';
@@ -26,9 +27,11 @@ import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
+import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './modelAdmission';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { filterBuiltInTools } from './tools/toolManager';
+import { randomUUID } from 'crypto';
 
 export class ChatCompletionInvoke {
   public db: IChatCompletionServiceOptions['db'];
@@ -41,9 +44,9 @@ export class ChatCompletionInvoke {
   private invokeLambda?: (params: z.infer<typeof QuestStartBodySchema>) => Promise<void>;
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   /** Session fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
-  public prefetchedSession: any | null = null;
+  public prefetchedSession: ISessionDocument | null = null;
   /** Organization fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
-  public prefetchedOrganization: any | null = null;
+  public prefetchedOrganization: IOrganizationDocument | null = null;
 
   constructor(options: IChatCompletionServiceOptions) {
     this.db = options.db;
@@ -83,6 +86,7 @@ export class ChatCompletionInvoke {
     userId,
     authOrigin,
     apiKeyId,
+    adminRoleWithheld,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
     userId: string;
@@ -90,6 +94,8 @@ export class ChatCompletionInvoke {
     authOrigin: AuthOrigin;
     /** Server-derived from `req.apiKeyInfo` - never from `body` (see QuestStartBodySchema.apiKeyId). */
     apiKeyId?: string;
+    /** See QuestStartBodySchema.adminRoleWithheld. */
+    adminRoleWithheld?: boolean;
   }) {
     // Fail at the door, not later in the worker that builds the tools.
     assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
@@ -132,6 +138,7 @@ export class ChatCompletionInvoke {
       allowedAgents,
       enableSlackTools,
       toolMode,
+      timezone,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
     // Parallelize independent operations: API keys, session, organization, and the correction
@@ -336,89 +343,104 @@ export class ChatCompletionInvoke {
     }
 
     // Parallelize independent operations: quest ops + admin settings + session update
-    const [quest, defaultEmbeddingModel, modelConfigurations] = await Promise.all([
-      // Quest creation/update
-      questId
-        ? this.db.quests.findById(questId).then(async q => {
-            if (!q) {
-              this.logger.warn(
-                `Quest not found for questId: ${questId}. Quest may have been deleted before the quest was started.`
+    const [quest, defaultEmbeddingModel, modelConfigurations, enforceCredits, freeTierAllowedModels] =
+      await Promise.all([
+        // Quest creation/update
+        questId
+          ? this.db.quests.findById(questId).then(async q => {
+              if (!q) {
+                this.logger.warn(
+                  `Quest not found for questId: ${questId}. Quest may have been deleted before the quest was started.`
+                );
+                throw new NotFoundError('Quest not found');
+              }
+              // Bind the retry to the caller's target session. `sessionId` was resolved through an
+              // access-scoped lookup upstream (getOrCreateSession), so refusing a quest that belongs
+              // to a different session stops a caller retrying/overwriting another user's quest by id.
+              // Throw rather than returning null: a bare null flowed to `if (!quest) return` and made
+              // the invoke a silent no-op (a 200 with no quest on the media routes). The same generic
+              // NotFound as the missing-quest case keeps the refusal from leaking whether the quest
+              // exists in a session the caller cannot see.
+              if (q.sessionId !== sessionId) {
+                this.logger.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
+                throw new NotFoundError('Quest not found');
+              }
+              // Retry path: clear prior replies and images.
+              q.type = 'message';
+              q.reply = null;
+              q.replies = [];
+              q.questMasterReply = null;
+              q.fallbackInfo = null;
+              q.images = [];
+              q.prompt = message;
+              q.fabFileIds = messageFileIds || []; // ONLY message files
+              q.timestamp = now;
+              q.status = 'running';
+              q.promptMeta = promptMeta;
+              q.agentIds = session.agentIds || [];
+              // Clear a stale classifier from a prior failed attempt - otherwise a retry that
+              // succeeds (or fails for a different, uncoded reason) still reports the old code.
+              // Two clears, both needed: this one is what the caller sees, because the function
+              // returns this local `q` and not the update's result. It does NOT reach the database
+              // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
+              // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
+              q.errorCode = undefined;
+              q.turnTiming = undefined;
+              // A later API-key attempt must not inherit a first-party attempt's evidence.
+              if (authOrigin !== 'session') delete q.signupActivity;
+              await this.db.quests.update(
+                {
+                  id: q.id,
+                  type: q.type,
+                  reply: q.reply,
+                  replies: q.replies,
+                  questMasterReply: q.questMasterReply,
+                  fallbackInfo: q.fallbackInfo,
+                  images: q.images,
+                  prompt: q.prompt,
+                  fabFileIds: q.fabFileIds,
+                  timestamp: q.timestamp,
+                  status: q.status,
+                  promptMeta: q.promptMeta,
+                  agentIds: q.agentIds,
+                },
+                {
+                  unset: [
+                    'errorCode',
+                    'turnTiming',
+                    ...(authOrigin !== 'session' ? (['signupActivity'] as const) : []),
+                  ],
+                }
               );
-              throw new NotFoundError('Quest not found');
-            }
-            // Bind the retry to the caller's target session. `sessionId` was resolved through an
-            // access-scoped lookup upstream (getOrCreateSession), so refusing a quest that belongs
-            // to a different session stops a caller retrying/overwriting another user's quest by id.
-            // Throw rather than returning null: a bare null flowed to `if (!quest) return` and made
-            // the invoke a silent no-op (a 200 with no quest on the media routes). The same generic
-            // NotFound as the missing-quest case keeps the refusal from leaking whether the quest
-            // exists in a session the caller cannot see.
-            if (q.sessionId !== sessionId) {
-              this.logger.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
-              throw new NotFoundError('Quest not found');
-            }
-            // Retry path: clear prior replies and images.
-            q.type = 'message';
-            q.reply = null;
-            q.replies = [];
-            q.questMasterReply = null;
-            q.fallbackInfo = null;
-            q.images = [];
-            q.prompt = message;
-            q.fabFileIds = messageFileIds || []; // ONLY message files
-            q.timestamp = now;
-            q.status = 'running';
-            q.promptMeta = promptMeta;
-            q.agentIds = session.agentIds || [];
-            // Clear a stale classifier from a prior failed attempt - otherwise a retry that
-            // succeeds (or fails for a different, uncoded reason) still reports the old code.
-            // Two clears, both needed: this one is what the caller sees, because the function
-            // returns this local `q` and not the update's result. It does NOT reach the database
-            // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
-            // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
-            q.errorCode = undefined;
-            await this.db.quests.update(
-              {
-                id: q.id,
-                type: q.type,
-                reply: q.reply,
-                replies: q.replies,
-                questMasterReply: q.questMasterReply,
-                fallbackInfo: q.fallbackInfo,
-                images: q.images,
-                prompt: q.prompt,
-                fabFileIds: q.fabFileIds,
-                timestamp: q.timestamp,
-                status: q.status,
-                promptMeta: q.promptMeta,
-                agentIds: q.agentIds,
-              },
-              { unset: ['errorCode'] }
-            );
-            return q;
-          })
-        : this.db.quests.create({
-            sessionId,
-            prompt: message,
-            fabFileIds: messageFileIds || [], // ONLY message files
-            type: 'message' as const,
-            timestamp: now,
-            replies: [],
-            status: 'running',
-            promptMeta,
-            agentIds: session.agentIds || [],
-            // Session-bound by the guard above, so the chain a correction claims to extend is
-            // always one the caller can actually see.
-            correctsQuestId,
-          }),
+              return q;
+            })
+          : this.db.quests.create({
+              sessionId,
+              prompt: message,
+              fabFileIds: messageFileIds || [], // ONLY message files
+              type: 'message' as const,
+              timestamp: now,
+              replies: [],
+              status: 'running',
+              ...(authOrigin === 'session' && this.user.id === userId && this.user.signupGrant
+                ? { signupActivity: { userId, turnId: randomUUID(), startedAt: now } }
+                : {}),
+              promptMeta,
+              agentIds: session.agentIds || [],
+              // Session-bound by the guard above, so the chain a correction claims to extend is
+              // always one the caller can actually see.
+              correctsQuestId,
+            }),
 
-      // Admin settings fetches
-      this.db.adminSettings.getSettingsValue('defaultEmbeddingModel'),
-      this.modelConfigurationsCache || this.getModelConfigurations(),
+        // Admin settings fetches
+        this.db.adminSettings.getSettingsValue('defaultEmbeddingModel'),
+        this.modelConfigurationsCache || this.getModelConfigurations(),
+        this.db.adminSettings.getSettingsValue('enforceCredits'),
+        loadFreeTierAllowedModels(this.db.adminSettings),
 
-      // Session update (fire-and-forget but ensure completion)
-      sessionUpdatePromise,
-    ]);
+        // Session update (fire-and-forget but ensure completion)
+        sessionUpdatePromise,
+      ]);
 
     if (!this.modelConfigurationsCache && modelConfigurations) {
       this.modelConfigurationsCache = modelConfigurations;
@@ -431,32 +453,25 @@ export class ChatCompletionInvoke {
         throw new InternalServerError('Default embedding model not found or not supported');
       }
       const originalModel = model.id;
-
-      // Check if primary model is accessible
       const modelToUse = originalModel;
 
-      if (modelConfigurations.length > 0) {
-        // Entitlement-aware admission: a tag-less subscriber can reach an
-        // entitlement-gated model via their resolved keys. Fail-safe to [].
-        // Only resolve when keys can change the outcome - skip the DB lookup
-        // for admins (always allowed) and for models with no allowedEntitlements
-        // (tag-only), keeping the entitlement branch inert. Research-mode
-        // configuration models are admitted by the same rule as the primary.
-        const isAdmin = this.user.isAdmin || false;
-        let entitlementKeys: string[] | undefined;
-        for (const gatedModelId of [originalModel, ...researchModelIds]) {
-          const gatedConfig = modelConfigurations.find(config => config.id === gatedModelId);
-          if (!gatedConfig) continue;
-          if (!isAdmin && (gatedConfig.allowedEntitlements?.length ?? 0) > 0) {
-            entitlementKeys ??= await this.resolveEntitlementKeys();
-          }
-          const hasUserAccess = isModelAccessible(gatedConfig, this.user.tags || [], isAdmin, entitlementKeys ?? []);
-
-          if (!gatedConfig.enabled || !hasUserAccess) {
-            this.logger.error(`Model ${gatedModelId} is not accessible and no fallback available`);
-            throw new ForbiddenError(`Model "${gatedModelId}" is not accessible and no fallback available`);
-          }
-        }
+      // Same admission rule as every other model-selection path (see ./modelAdmission). Research-mode
+      // configuration models are admitted by the same rule as the primary.
+      const admission = createModelAdmission({
+        user: this.user,
+        configs: modelConfigurations,
+        // Not resolveEntitlementKeys(): admission must see a failed read to answer the free-tier gate
+        // with a retryable 503 rather than the upgrade prompt; it degrades to [] for other gates itself.
+        getEntitlements: async () => (await this.getEntitlements?.(this.user)) ?? [],
+        models: modelInfo,
+        enforceCredits: enforceCredits === true,
+        freeTierAllowedModels,
+      });
+      for (const gatedModelId of [originalModel, ...researchModelIds]) {
+        await admission.assert(gatedModelId).catch(err => {
+          this.logger.error(`Model ${gatedModelId} is not admitted: ${(err as Error).message}`);
+          throw err;
+        });
       }
 
       let currentEmbeddingModel = embeddingModel;
@@ -499,6 +514,7 @@ export class ChatCompletionInvoke {
         deniedTools,
         authOrigin,
         apiKeyId,
+        ...(adminRoleWithheld ? { adminRoleWithheld } : {}),
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,
@@ -519,6 +535,7 @@ export class ChatCompletionInvoke {
         extraContextMessages,
         allowedAgents,
         enableSlackTools,
+        timezone,
       });
 
       if (this.invokeLambda && this.questStartParams) {
@@ -560,19 +577,5 @@ export class ChatCompletionInvoke {
     return quest;
   }
 
-  private getModelConfigurations = async (): Promise<LLMModelConfig[]> => {
-    try {
-      const setting = await this.db.adminSettings.findOne({ settingName: 'llmModelConfigurations' });
-      const configs = setting?.settingValue;
-
-      if (Array.isArray(configs)) {
-        return configs as LLMModelConfig[];
-      }
-
-      return [];
-    } catch (error) {
-      console.error('Failed to fetch model configurations:', error);
-      return [];
-    }
-  };
+  private getModelConfigurations = (): Promise<LLMModelConfig[]> => loadModelConfigurations(this.db.adminSettings);
 }

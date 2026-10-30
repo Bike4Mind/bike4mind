@@ -1,4 +1,5 @@
-import { Box, LinearProgress, Sheet, Stack, Table, Typography, useTheme } from '@mui/joy';
+import { Box, LinearProgress, Sheet, Stack, Typography, useTheme } from '@mui/joy';
+import { DataTable } from '../shared';
 import dynamic from 'next/dynamic';
 import type { WafRangeInput } from '@/server/security/wafTraffic';
 import type {
@@ -23,6 +24,8 @@ interface WafLogsInsightsSectionProps {
   blockedRequestsLoading?: boolean;
   blockedRequestsError?: boolean;
   blockedRequestsErrorDetail?: unknown;
+  onRetry?(): void;
+  onRetryBlockedRequests?(): void;
 }
 
 /** WAF log insights charts sourced from CloudWatch Logs Insights queries. */
@@ -36,6 +39,8 @@ export const WafLogsInsightsSection = ({
   blockedRequestsLoading,
   blockedRequestsError,
   blockedRequestsErrorDetail,
+  onRetry = () => {},
+  onRetryBlockedRequests,
 }: WafLogsInsightsSectionProps) => {
   const theme = useTheme();
   const chartTheme = useWafChartTheme();
@@ -197,71 +202,44 @@ export const WafLogsInsightsSection = ({
               </Typography>
             ) : (
               <Box sx={{ overflowX: 'auto' }} data-testid="waf-logs-rate-limit-list">
-                <Table
-                  size="sm"
-                  sx={{
-                    '& thead th': { fontWeight: 700, fontSize: '0.72rem', whiteSpace: 'nowrap' },
-                    '& tbody td': { fontSize: '0.72rem', verticalAlign: 'middle' },
-                  }}
-                >
-                  <thead>
-                    <tr>
-                      <th style={{ width: 130 }}>IP</th>
-                      <th>URI</th>
-                      <th style={{ width: 160, textAlign: 'right' }}>Peak / Limit</th>
-                      <th style={{ width: 180 }}>Usage</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(data.managedRuleGroups?.rateLimitUsage?.topIps ?? []).map(item => {
-                      const limit = data.managedRuleGroups?.rateLimitUsage?.limitPerWindow ?? 10000;
-                      const peak = item.peakRequests ?? 0;
-                      const pct = Math.min(100, (peak / limit) * 100);
-                      const color = pct >= 80 ? 'danger' : pct >= 50 ? 'warning' : 'success';
-                      return (
-                        <tr key={`${item.ip}:${item.uri}`}>
-                          <td>
-                            <Typography level="body-xs" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
-                              {item.ip}
-                            </Typography>
-                          </td>
-                          <td>
-                            <Typography
-                              level="body-xs"
-                              sx={{
-                                color: 'neutral.600',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                                maxWidth: 320,
-                              }}
-                              title={item.uri}
-                            >
-                              {item.uri}
-                            </Typography>
-                          </td>
-                          <td style={{ textAlign: 'right' }}>
-                            <Typography
-                              level="body-xs"
-                              sx={{ color: `${color}.500`, fontVariantNumeric: 'tabular-nums' }}
-                            >
-                              {peak.toLocaleString()} / {limit.toLocaleString()}
-                            </Typography>
-                          </td>
-                          <td>
-                            <LinearProgress
-                              determinate
-                              value={pct}
-                              color={color}
-                              size="sm"
-                              sx={{ borderRadius: 'sm' }}
-                            />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </Table>
+                <DataTable
+                  rows={data.managedRuleGroups?.rateLimitUsage?.topIps ?? []}
+                  getRowId={item => `${item.ip}:${item.uri}`}
+                  label="Rate limit usage"
+                  onRetry={onRetry}
+                  pageResetKey={JSON.stringify(range)}
+                  columns={[
+                    { id: 'ip', label: 'IP', render: item => item.ip },
+                    {
+                      id: 'uri',
+                      label: 'URI',
+                      render: item => <Typography sx={{ overflowWrap: 'anywhere' }}>{item.uri}</Typography>,
+                    },
+                    {
+                      id: 'peak',
+                      label: 'Peak / limit',
+                      numeric: true,
+                      render: item =>
+                        `${(item.peakRequests ?? 0).toLocaleString()} / ${(data.managedRuleGroups?.rateLimitUsage?.limitPerWindow ?? 10000).toLocaleString()}`,
+                    },
+                    {
+                      id: 'usage',
+                      label: 'Usage',
+                      render: item => (
+                        <LinearProgress
+                          determinate
+                          value={Math.min(
+                            100,
+                            ((item.peakRequests ?? 0) /
+                              (data.managedRuleGroups?.rateLimitUsage?.limitPerWindow ?? 10000)) *
+                              100
+                          )}
+                          color="neutral"
+                        />
+                      ),
+                    },
+                  ]}
+                />
               </Box>
             )}
           </Sheet>
@@ -271,6 +249,7 @@ export const WafLogsInsightsSection = ({
             isLoading={blockedRequestsLoading}
             isError={blockedRequestsError}
             error={blockedRequestsErrorDetail}
+            onRetry={onRetryBlockedRequests}
           />
         </>
       )}

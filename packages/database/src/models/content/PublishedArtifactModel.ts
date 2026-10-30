@@ -31,11 +31,26 @@ export interface PublishedArtifactAccessGate {
   allowedDomains?: string[];
 }
 
+/**
+ * Owner-only screenshot of a bundle's current version, rendered off the request path by the
+ * publish-thumbnail worker (apps/workers/src/queueHandlers/publishThumbnail.ts). `key` lives in
+ * the private published-artifacts bucket under PUBLISH_THUMBNAIL_PREFIX and is only ever handed
+ * out as a short-lived presigned GET on the owner's own management listing - never on a serve,
+ * share or meta surface. Declared host-side only, like accessGate.
+ */
+export interface PublishedArtifactThumbnail {
+  key: string;
+  /** sha256Index of the index.html the image depicts; stale once it differs from the artifact's. */
+  versionId: string;
+  renderedAt: Date;
+}
+
 export interface IPublishedArtifactDocument extends Omit<PublishedArtifactData, 'createdAt' | 'updatedAt'>, Document {
   id: string; // required by IMongoDocument (Mongoose's Document.id is optional)
   createdAt: Date;
   updatedAt: Date;
   accessGate?: PublishedArtifactAccessGate | null;
+  thumbnail?: PublishedArtifactThumbnail | null;
   softDelete(deletedBy?: string): Promise<IPublishedArtifactDocument>;
   restore(): Promise<IPublishedArtifactDocument>;
 }
@@ -64,6 +79,8 @@ const VersionMetaSubSchema = new Schema(
     publishedBy: { type: String, required: true },
     size: { type: SizeSubSchema, required: true },
     sha256Index: { type: String, required: true },
+    /** See ArtifactVersionMetaSchema in @bike4mind/common: archived index.html bytes, quota-counted. */
+    indexBytes: { type: Number, min: 0 },
   },
   { _id: false }
 );
@@ -76,6 +93,15 @@ const AccessGateSubSchema = new Schema(
     // opts in explicitly with .select('+accessGate.passphraseHash').
     passphraseHash: { type: String, default: null, select: false },
     allowedDomains: { type: [String], default: undefined },
+  },
+  { _id: false }
+);
+
+const ThumbnailSubSchema = new Schema(
+  {
+    key: { type: String, required: true },
+    versionId: { type: String, required: true },
+    renderedAt: { type: Date, required: true },
   },
   { _id: false }
 );
@@ -108,6 +134,8 @@ const SourceSubSchema = new Schema(
     sessionId: { type: String },
     messageId: { type: String },
     fabFileId: { type: String },
+    // Multi-file React publishes only; see PublishSourceSchema in @bike4mind/common.
+    reactSiblings: { type: [String], default: undefined },
   },
   { _id: false }
 );
@@ -201,6 +229,8 @@ const PublishedArtifactSchema = new Schema(
      *  restore. Each entry's bytes are archived at `{storageKeyPrefix}versions/
      *  {sha256Index}.html`. Enables walking across versions + restore-to-any. */
     versions: { type: [VersionMetaSubSchema], default: [] },
+    /** See PublishedArtifactThumbnail. Absent until the first render lands. */
+    thumbnail: { type: ThumbnailSubSchema, default: undefined },
     viewCount: { type: Number, default: 0, min: 0 },
     /** Views by anyone OTHER than the signed-in owner (anonymous counts as
      *  external). Feeds the Published gear and social proof; best-effort. */
@@ -294,6 +324,9 @@ PublishedArtifactSchema.virtual('isDeleted').get(function () {
 PublishedArtifactSchema.methods.softDelete = function (deletedBy?: string) {
   this.deletedAt = new Date();
   if (deletedBy) this.deletedBy = deletedBy;
+  // The caller deletes the thumbnail objects (deletePublishThumbnails in packages/server-utils);
+  // dropping the record too means a later restore shows the generated cover, not a missing image.
+  this.thumbnail = undefined;
   return this.save();
 };
 
@@ -331,7 +364,12 @@ export interface ShareTokenBearing {
  * Callers still add their own `deletedAt: null`, since this is only the token half.
  */
 export function shareTokenFilter(shareToken: string): Record<string, unknown> {
-  return { shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } } };
+  return {
+    // Repeats the partial filter of the `shareTokens.token` index: the planner only uses a partial
+    // index when the query implies its filter, and neither the `$elemMatch` nor a bare equality does.
+    'shareTokens.token': { $type: 'string', $eq: shareToken },
+    shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } },
+  };
 }
 
 /**
@@ -344,9 +382,29 @@ export function liveShareTokens(artifact: ShareTokenBearing): PublishedArtifactS
   return (artifact.shareTokens ?? []).filter(entry => !!entry?.token && !entry.revokedAt);
 }
 
-export const PublishedArtifact =
+export const PublishedArtifact: Model<IPublishedArtifactDocument> =
   (mongoose.models.PublishedArtifact as mongoose.Model<IPublishedArtifactDocument>) ||
   model<IPublishedArtifactDocument>('PublishedArtifact', PublishedArtifactSchema);
+
+/**
+ * Store a rendered thumbnail, but only while `thumbnail.versionId` is still the artifact's current
+ * version: a render that finishes after a newer publish (or a delete) must not overwrite the
+ * record. Returns null when nothing matched - the caller then owns the orphaned object - and
+ * otherwise the key of the thumbnail this one replaced, if any, so the caller can delete it.
+ */
+export async function recordPublishedArtifactThumbnail(
+  publicId: string,
+  thumbnail: PublishedArtifactThumbnail
+): Promise<{ replacedKey: string | null } | null> {
+  const before = await PublishedArtifact.findOneAndUpdate(
+    { publicId, deletedAt: null, sha256Index: thumbnail.versionId },
+    { $set: { thumbnail } },
+    { new: false, projection: { thumbnail: 1 } }
+  ).lean<{ thumbnail?: PublishedArtifactThumbnail | null } | null>();
+  if (!before) return null;
+  const replacedKey = before.thumbnail?.key;
+  return { replacedKey: replacedKey && replacedKey !== thumbnail.key ? replacedKey : null };
+}
 
 export class PublishedArtifactRepository extends BaseRepository<IPublishedArtifactDocument> {
   constructor(model: Model<IPublishedArtifactDocument>) {

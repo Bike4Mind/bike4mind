@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { Logger } from '@bike4mind/observability';
-import { ISessionDocument, IKeywordRoutingRule, canUpdateShareable } from '@bike4mind/common';
+import { ISessionDocument, IKeywordRoutingRule, IUser, canUpdateShareable } from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 
@@ -36,7 +36,7 @@ function findMatchingKeywordRule(text: string, rules: IKeywordRoutingRule[]): st
 /**
  * Resolves a saved notebook id (agent/keyword routing, slack default, web last notebook) to one the
  * user can still write to: it must exist, not be deleted, and pass the same write check as
- * canAccessSession(..., 'write') in apps/client/server/utils/sessionAccess.ts (owner, update share by
+ * canAccessSession(..., 'write') in packages/server-utils/src/utils/sessionAccess.ts (owner, update share by
  * user or group, isGlobalWrite). Admin rights are deliberately not honored, so a DM never lands in
  * another user's notebook. Returns null for a missing, malformed or denied id so the caller falls
  * through; lookup errors propagate rather than silently creating a new notebook.
@@ -64,7 +64,7 @@ export async function resolveAccessibleNotebookId(
 /**
  * Helper function to update user's slack settings
  */
-export async function updateUserSlackSettings(userId: string, slackSettings: any) {
+export async function updateUserSlackSettings(userId: string, slackSettings: NonNullable<IUser['slackSettings']>) {
   const { User } = getSlackDb();
   await (User as any).findByIdAndUpdate(userId, { $set: { slackSettings } }, { new: true, upsert: false });
 }
@@ -94,7 +94,7 @@ export async function getOrCreateNotebookForSlackUser(
   threadTs?: string,
   agentName?: string | null,
   workspaceId?: string // Slack workspace ID for async notification
-) {
+): Promise<string> {
   const { User, Session, sessionRepository, projectRepository, fabFileRepository, defineAbilitiesFor } = getSlackDb();
   const { sessionManager } = getSlackDeps();
 

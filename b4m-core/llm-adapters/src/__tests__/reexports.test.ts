@@ -15,6 +15,7 @@ import {
   stripAllToolBlocks,
 } from '../index.js';
 import { ChoiceStatus, DEFAULT_MAX_TOOL_CALLS, replaceLastToolResultObservationCanonical } from '../backend.js';
+import { buildThinkingParams, reasonsWithinOutputBudget, resolveDispatchForRecord } from '../modelSizing.js';
 
 test('public exports resolve', () => {
   expect(typeof getLlmByModel).toBe('function');
@@ -37,4 +38,10 @@ test('./backend sub-path exports resolve', () => {
   expect(ChoiceStatus.STREAM).toBe('stream');
   expect(DEFAULT_MAX_TOOL_CALLS).toBe(10);
   expect(typeof replaceLastToolResultObservationCanonical).toBe('function');
+});
+
+test('./model-sizing sub-path exports resolve', () => {
+  expect(typeof buildThinkingParams).toBe('function');
+  expect(typeof reasonsWithinOutputBudget).toBe('function');
+  expect(typeof resolveDispatchForRecord).toBe('function');
 });

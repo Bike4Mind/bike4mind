@@ -1,6 +1,7 @@
 import { Connection } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyBridgeApiKey, verifyJwtToken } from '@server/cli/auth';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 
 export interface ResolvedBridgeAuth {
   userId: string;
@@ -16,7 +17,9 @@ export interface ResolvedBridgeAuth {
  * Returns `null` when auth fails or the body-token identity doesn't match
  * the identity that authenticated at `$connect` time. The caller is
  * expected to stop processing and return a non-2xx status back to the
- * client so the bridge can surface the failure.
+ * client so the bridge can surface the failure. Throws a 5xx HTTPError when
+ * the API-key check itself failed (database unreachable), so the handler
+ * answers with that status instead of reporting a bad credential.
  *
  * Three layered checks:
  *   1. `accessToken` in the body is a valid bridge-scoped API key or JWT.
@@ -48,8 +51,11 @@ export async function resolveBridgeWsAuth(params: {
     userId = apiKeyInfo.userId;
     apiKeyId = apiKeyInfo.keyId;
   } catch (apiKeyErr) {
+    // The key check itself failed (database unreachable): throw it so the handler answers 5xx,
+    // rather than null, which callers report as a bad credential.
+    if (isAuthInfraFailure(apiKeyErr)) throw apiKeyErr;
     try {
-      const user = await verifyJwtToken(accessToken);
+      const user = await verifyJwtToken(accessToken, { requireApiAccess: true });
       await checkRateLimit(user.id, undefined, { bucket: 'ws' });
       userId = user.id;
       // A bridge action authenticated by a JWT is unusual in steady state -
@@ -57,6 +63,7 @@ export async function resolveBridgeWsAuth(params: {
       // through is visible in routine audits.
       logger.warn(`[${handlerName}] bridge action authenticated via JWT fallback`, { userId });
     } catch (jwtErr) {
+      if (isAuthInfraFailure(jwtErr)) throw jwtErr;
       logger.warn(`[${handlerName}] auth failed`, {
         apiKeyError: apiKeyErr instanceof Error ? apiKeyErr.message : String(apiKeyErr),
         jwtError: jwtErr instanceof Error ? jwtErr.message : String(jwtErr),

@@ -6,12 +6,10 @@ import {
   deleteFileUtility,
   moderateFabFileNow,
 } from '@client/app/utils/filesAPICalls';
-import {
-  ContentCopy as ContentCopyIcon,
-  Download as DownloadIcon,
-  Edit as EditIcon,
-  Description as DescriptionIcon,
-} from '@mui/icons-material';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DownloadIcon from '@mui/icons-material/Download';
+import EditIcon from '@mui/icons-material/Edit';
+import DescriptionIcon from '@mui/icons-material/Description';
 import {
   Box,
   Button,
@@ -24,7 +22,8 @@ import {
   Typography,
 } from '@mui/joy';
 import SaveIcon from '@mui/icons-material/Save';
-import { ArrowBack as ArrowBackIcon, ArrowForward as ArrowForwardIcon } from '@mui/icons-material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { FC, useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import ImageMaskerFlux from './ImageMaskerFlux';
@@ -51,6 +50,8 @@ type ImageContainerProps = {
   index: number;
   totalImages: number;
   images: string[];
+  /** Author-supplied description of `src`; falls back to the generated label when blank. */
+  alt?: string;
   onSendMessage: (message: Partial<IChatHistoryItemDocument>, options: SendMessageOptions) => Promise<void>;
   onNavigate?: (newIndex: number) => void;
   /**
@@ -122,6 +123,7 @@ const ImageContainer: FC<ImageContainerProps> = ({
   index,
   totalImages,
   images,
+  alt,
   onNavigate,
   onSendMessage,
   variant = 'thumbnail',
@@ -573,7 +575,7 @@ const ImageContainer: FC<ImageContainerProps> = ({
             src={src}
             height={previewSize}
             width={previewSize}
-            alt={`Generated image ${index + 1} of ${totalImages}`}
+            alt={alt?.trim() || `Generated image ${index + 1} of ${totalImages}`}
             onError={() => setFailedSrc(src)}
             sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
             style={{
@@ -638,7 +640,7 @@ const ImageContainer: FC<ImageContainerProps> = ({
             <img
               src={images[currentIndex]}
               height={'700em'}
-              alt={`Generated image ${currentIndex + 1} of ${totalImages}`}
+              alt={(currentIndex === index && alt?.trim()) || `Generated image ${currentIndex + 1} of ${totalImages}`}
               onError={handleImageError}
               sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
               style={{ objectFit: 'scale-down' }}

@@ -11,6 +11,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const sourceFileMock = vi.fn();
+const sourceShredMock = vi.fn();
 const findByIdMock = vi.fn();
 const findLakeMemoryExtractionMembersMock = vi.fn();
 const findTextsByFabFileIdMock = vi.fn();
@@ -24,6 +26,7 @@ const setLakeMemoryCursorIfFenceUnmovedMock = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
   apiKeyRepository: {},
+  userRepository: { findById: async (id: string) => ({ id }) },
   dataLakeRepository: {
     findById: (...a: unknown[]) => findByIdMock(...a),
     claimLakeMemoryExtraction: (...a: unknown[]) => claimLakeMemoryExtractionMock(...a),
@@ -35,7 +38,9 @@ vi.mock('@bike4mind/database', () => ({
     getLakeMemoryFence: async () => ({ exists: true, purgedAt: null }),
   },
   fabFileChunkRepository: { findTextsByFabFileId: (...a: unknown[]) => findTextsByFabFileIdMock(...a) },
+  memoryLedgerRepository: { markSourceShredded: (...args: unknown[]) => sourceShredMock(...args) },
   fabFileRepository: {
+    findById: (...args: unknown[]) => sourceFileMock(...args),
     findLakeMemoryExtractionMembers: (...a: unknown[]) => findLakeMemoryExtractionMembersMock(...a),
     // The two unbounded readers this producer used to use, kept here as THROWING stubs. Between them
     // they resolved every id the lake had ever held and hydrated all of them unprojected, which is what
@@ -53,10 +58,14 @@ vi.mock('@bike4mind/common', () => ({
   MEMENTO_EMBEDDING_MODEL: 'text-embedding-3-small',
   toMementoVector: (v: number[]) => v,
   LAKE_MEMORY_EXTRACTION_LEASE_MS: 15 * 60_000,
+  isTerminalCreditRefusal: (e: { additionalInfo?: { errorCode?: string } }) =>
+    e?.additionalInfo?.errorCode === 'insufficient_credits' ||
+    e?.additionalInfo?.errorCode === 'daily_free_limit_reached',
 }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => vi.fn() }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
-  dataLakeService: { lakeMembershipScope: () => 'datalake:test' },
+  dataLakeService: { lakeMembershipScope: () => 'datalake:test', lakeMembershipSignals: () => ({ inLake: true }) },
 }));
 vi.mock('@bike4mind/services/llm', () => ({
   LakeMemoryExtractionService: class {
@@ -72,7 +81,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   resolveEmbeddingConfig: () => ({ config: undefined, missing: true }),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@server/memory/mementoLedgerMirror', () => ({
+vi.mock('@bike4mind/server-utils/memory/mementoLedgerMirror', () => ({
   createLedgerAppendSession: async () => ({ append: (...a: unknown[]) => appendMock(...a) }),
 }));
 
@@ -108,6 +117,8 @@ const seedLake = (docCount: number) => {
 describe('extractLakeMemoryForBatch deadline guard (#1440)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sourceFileMock.mockResolvedValue({ id: 'source-file' });
+    sourceShredMock.mockResolvedValue(1);
     // Win the per-lake extraction lease by default; the concurrency-skip case overrides this.
     claimLakeMemoryExtractionMock.mockResolvedValue(true);
     // release/setCursor return promises - the producer awaits (and .catch-es) them.
@@ -221,6 +232,8 @@ describe('extractLakeMemoryForBatch deadline guard (#1440)', () => {
 describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sourceFileMock.mockResolvedValue({ id: 'source-file' });
+    sourceShredMock.mockResolvedValue(1);
     claimLakeMemoryExtractionMock.mockResolvedValue(true);
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);

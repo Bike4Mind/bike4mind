@@ -11,7 +11,8 @@ import { parseClaudeModelId, type ClaudeModelFamily } from '../claudeModelId';
  * stays a lower bound: it cannot over-reserve credits or reject a turn that actually fits.
  */
 // Opus 4.7, 4.8, 5, 5.5 and Sonnet 5, 5.5 all measured identically: 1.51x (JSON) to 2.09x (code).
-// Haiku 5.5 is NOT measured: it inherits this factor on the assumption it shares the 4.7+ tokenizer.
+// Haiku 5.5 measured 2026-10-21 on a fresh sample set: within 0.001x of Sonnet 5 on every sample, so it
+// shares this tokenizer.
 const CLAUDE_4_7_PLUS_MULTIPLIER = 1.5;
 // Opus/Sonnet 4.5 and 4.6, Haiku 4.5: 1.10x (prose) to 1.46x (code).
 const CLAUDE_4_5_MULTIPLIER = 1.09;

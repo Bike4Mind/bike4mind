@@ -2,7 +2,7 @@ import type { DiscoveryRunHost } from '@bike4mind/common';
 import { whenCatalogSeeded } from '@bike4mind/database';
 import { modelDiscoveryService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
-import { buildModelDiscoveryAdapters } from './adapters';
+import { buildModelDiscoveryAdapters } from '@bike4mind/server-utils/modelDiscovery/adapters';
 
 /** Worker cadence (sec 6.2); also the staleness threshold for the startup leg. */
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60_000;

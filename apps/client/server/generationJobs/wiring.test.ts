@@ -7,13 +7,34 @@ import {
   type VideoProviderId,
 } from '@bike4mind/common';
 
-const { queueLink, getSourceQueueUrl, sendToQueue, userFindById, checkStorageLimit } = vi.hoisted(() => ({
-  queueLink: { mode: 'direct' as 'direct' | 'throws' },
-  getSourceQueueUrl: vi.fn(),
-  sendToQueue: vi.fn(),
-  userFindById: vi.fn(),
-  checkStorageLimit: vi.fn(),
+const { queueLink, getSourceQueueUrl, sendToQueue, userFindById, checkStorageLimit, getSettingsMap } = vi.hoisted(
+  () => ({
+    queueLink: { mode: 'direct' as 'direct' | 'throws' },
+    getSourceQueueUrl: vi.fn(),
+    sendToQueue: vi.fn(),
+    userFindById: vi.fn(),
+    checkStorageLimit: vi.fn(),
+    getSettingsMap: vi.fn(),
+  })
+);
+
+const notifications = vi.hoisted(() => ({
+  sendToClient: vi.fn(),
+  deliverToSlack: vi.fn(),
+  slackDeps: { marker: 'slack-delivery-deps' },
+  notify: undefined as ((job: IGenerationJobDocument) => Promise<void>) | undefined,
 }));
+
+vi.mock('@bike4mind/services/generationJobs', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/generationJobs')>()),
+  GenerationJobEngine: class {
+    constructor(deps: { notify(job: IGenerationJobDocument): Promise<void> }) {
+      notifications.notify = deps.notify;
+    }
+  },
+}));
+vi.mock('./slackJobDelivery', () => ({ deliverJobToSlack: notifications.deliverToSlack }));
+vi.mock('./slackJobDeliveryDeps', () => ({ createSlackJobDeliveryDeps: () => notifications.slackDeps }));
 
 // A getter mirrors sst's Resource proxy, which throws when a key is not linked to the Lambda.
 vi.mock('sst', () => ({
@@ -49,9 +70,17 @@ vi.mock('@bike4mind/database', async importOriginal => {
 });
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
-  return { ...actual, checkStorageLimit };
+  return {
+    ...actual,
+    checkStorageLimit,
+    getSettingsMap,
+    ClientMessageSender: class {
+      sendToClient = notifications.sendToClient;
+    },
+  };
 });
 
+import { adminSettingsRepository } from '@bike4mind/database';
 import { createMusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import {
@@ -59,6 +88,7 @@ import {
   buildProviders,
   checkStorageFor,
   enqueueGenerationJob,
+  getGenerationJobEngine,
   getMusicJobDeps,
   getVideoJobDeps,
   selectMusicProviderKey,
@@ -76,6 +106,48 @@ const baseJob = {
   rawProviderError: { secret: 'internal' },
   payload: { providerId: 'test', request: { model: 'm' } },
 } as unknown as IGenerationJobDocument;
+
+describe('generation job notification wiring', () => {
+  beforeEach(() => {
+    notifications.sendToClient.mockReset().mockResolvedValue(undefined);
+    notifications.deliverToSlack.mockReset().mockResolvedValue(undefined);
+    getGenerationJobEngine();
+  });
+
+  const notify = (job: IGenerationJobDocument) => {
+    if (!notifications.notify) throw new Error('GenerationJobEngine notification callback was not wired');
+    return notifications.notify(job);
+  };
+
+  it('sends the job update and the original job to their respective channels', async () => {
+    await expect(notify(baseJob)).resolves.toBeUndefined();
+    expect(notifications.sendToClient).toHaveBeenCalledWith(
+      baseJob.requestedBy,
+      'https://ws.example.test',
+      toJobUpdate(baseJob)
+    );
+    expect(notifications.deliverToSlack.mock.calls[0][0]).toBe(baseJob);
+    expect(notifications.deliverToSlack.mock.calls[0][1]).toBe(notifications.slackDeps);
+  });
+
+  it('still delivers to Slack when the websocket update fails', async () => {
+    const error = new Error('websocket unavailable');
+    notifications.sendToClient.mockRejectedValue(error);
+    await expect(notify(baseJob)).rejects.toBe(error);
+    expect(notifications.deliverToSlack).toHaveBeenCalledWith(baseJob, notifications.slackDeps);
+  });
+
+  it('still sends the websocket update when Slack delivery fails', async () => {
+    const error = new Error('Slack unavailable');
+    notifications.deliverToSlack.mockRejectedValue(error);
+    await expect(notify(baseJob)).rejects.toBe(error);
+    expect(notifications.sendToClient).toHaveBeenCalledWith(
+      baseJob.requestedBy,
+      'https://ws.example.test',
+      toJobUpdate(baseJob)
+    );
+  });
+});
 
 describe('usableApiKey', () => {
   it('returns a real key unchanged', () => {
@@ -317,5 +389,33 @@ describe('buildMusicProviders', () => {
   it('builds a registry the catalog-owner check accepts', () => {
     process.env.ENABLE_TEST_MUSIC_PROVIDER = 'true';
     expect(() => createMusicProviderRegistry(buildMusicProviders())).not.toThrow();
+  });
+});
+
+describe('generation job billing settings', () => {
+  beforeEach(() => {
+    getSettingsMap.mockReset();
+    // A stored enforceCredits=false only reads as off on self-host; hosted always meters.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { kind: 'video', settingName: 'videoGeneration', model: 'veo-3', getDeps: getVideoJobDeps },
+    { kind: 'music', settingName: 'musicGeneration', model: 'lyria-002', getDeps: getMusicJobDeps },
+  ] as const)('reads fresh enforcement and model switches for $kind jobs', async ({ settingName, model, getDeps }) => {
+    const modelSettings = { enabledModels: { [model]: false } };
+    getSettingsMap.mockResolvedValue({ enforceCredits: 'false', [settingName]: JSON.stringify(modelSettings) });
+
+    const settings = await getDeps().getSettings();
+
+    expect(getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: adminSettingsRepository },
+      { names: ['enforceCredits', settingName], skipCache: true }
+    );
+    expect(settings).toEqual({ enforceCredits: false, [settingName]: modelSettings });
   });
 });

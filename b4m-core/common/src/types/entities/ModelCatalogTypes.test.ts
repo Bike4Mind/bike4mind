@@ -65,6 +65,14 @@ describe('field groups', () => {
 });
 
 describe('ModelRecordWrite', () => {
+  it('validates superseded metadata independently from lifecycle status and dates', () => {
+    const lifecycle = { status: 'active', isSuperseded: true };
+    expect(ModelRecordWrite.parse({ ...minimalRecord, lifecycle }).lifecycle).toEqual(lifecycle);
+    expect(() =>
+      ModelRecordWrite.parse({ ...minimalRecord, lifecycle: { ...lifecycle, isSuperseded: 'true' } })
+    ).toThrow();
+  });
+
   it('accepts a record carrying only the required fields', () => {
     expect(ModelRecordWrite.parse(minimalRecord)).toMatchObject({ id: 'gpt-x', contextWindow: 128_000 });
   });

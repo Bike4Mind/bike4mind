@@ -7,6 +7,7 @@ import { getAvailableModels, setModelPriceRowsProvider } from './index';
 const TARGET = ChatModels.CLAUDE_4_6_SONNET_BEDROCK;
 
 const row: IModelPrice = {
+  id: 'catalog-row-42',
   modelId: TARGET,
   unit: 'per_token',
   pricing: { '200000': { input: 42 / 1_000_000, output: 84 / 1_000_000 } },
@@ -27,6 +28,7 @@ describe('getAvailableModels price catalog provider', () => {
     const models = await getAvailableModels(null);
     const target = models.find(m => m.id === TARGET);
     expect(target?.pricing[200_000]).toEqual({ input: 42 / 1_000_000, output: 84 / 1_000_000 });
+    expect(target).toMatchObject({ priceSource: 'catalog', priceRowId: row.id });
   });
 
   it('falls back to adapter literals when the provider throws', async () => {
@@ -38,6 +40,8 @@ describe('getAvailableModels price catalog provider', () => {
     const target = models.find(m => m.id === TARGET);
     expect(target).toBeDefined();
     expect(target!.pricing[200_000].input).not.toBe(42 / 1_000_000);
+    expect(target).not.toHaveProperty('priceSource');
+    expect(target).not.toHaveProperty('priceRowId');
   });
 
   it('uses adapter literals when no provider is wired', async () => {
@@ -45,6 +49,8 @@ describe('getAvailableModels price catalog provider', () => {
     const target = models.find(m => m.id === TARGET);
     expect(target).toBeDefined();
     expect(target!.pricing[200_000].input).not.toBe(42 / 1_000_000);
+    expect(target).not.toHaveProperty('priceSource');
+    expect(target).not.toHaveProperty('priceRowId');
   });
 
   it('caches the overlaid list (provider is called once per rebuild, not per request)', async () => {
@@ -54,9 +60,11 @@ describe('getAvailableModels price catalog provider', () => {
       return [row];
     });
 
-    await getAvailableModels(null);
-    await getAvailableModels(null);
+    const cold = await getAvailableModels(null);
+    const cached = await getAvailableModels(null);
     expect(calls).toBe(1);
+    expect(cold.find(model => model.id === TARGET)).toMatchObject({ priceSource: 'catalog', priceRowId: row.id });
+    expect(cached.find(model => model.id === TARGET)).toMatchObject({ priceSource: 'catalog', priceRowId: row.id });
   });
 
   it('bounds a hanging price read instead of waiting out mongo socket timeout', async () => {
@@ -86,18 +94,27 @@ describe('getAvailableModels price catalog provider', () => {
       });
 
       const literal = await getAvailableModels(null);
-      expect(literal.find(m => m.id === TARGET)!.pricing[200_000].input).not.toBe(42 / 1_000_000);
+      const literalTarget = literal.find(model => model.id === TARGET);
+      expect(literalTarget!.pricing[200_000].input).not.toBe(42 / 1_000_000);
+      expect(literalTarget).not.toHaveProperty('priceSource');
+      expect(literalTarget).not.toHaveProperty('priceRowId');
 
       // Still inside the retry window: serves the cached literal fallback.
       vi.advanceTimersByTime(10_000);
-      await getAvailableModels(null);
+      const cachedLiteral = await getAvailableModels(null);
       expect(calls).toBe(1);
+      expect(cachedLiteral.find(model => model.id === TARGET)).not.toHaveProperty('priceSource');
+      expect(cachedLiteral.find(model => model.id === TARGET)).not.toHaveProperty('priceRowId');
 
       // Past the 30s retry window (but far inside the normal 5min TTL): refetches and overlays.
       vi.advanceTimersByTime(25_000);
       const recovered = await getAvailableModels(null);
       expect(calls).toBe(2);
       expect(recovered.find(m => m.id === TARGET)!.pricing[200_000].input).toBe(42 / 1_000_000);
+      expect(recovered.find(model => model.id === TARGET)).toMatchObject({
+        priceSource: 'catalog',
+        priceRowId: row.id,
+      });
     } finally {
       vi.useRealTimers();
     }

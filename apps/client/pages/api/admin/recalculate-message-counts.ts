@@ -6,6 +6,7 @@ import { SpiderEvents } from '@server/utils/eventBus';
 import { v4 as uuidv4 } from 'uuid';
 import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 import { ApiKeyScope, HTTPError } from '@bike4mind/common';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'embeddings';
 
@@ -116,7 +117,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
         await assertSessionOperationalCredits({
           userId,
-          requesterId: userId,
           operationCount: ungroomedCounts.reduce((total, count) => total + count, 0),
           operation: 'notebook grooming',
           logger: req.logger,
@@ -133,6 +133,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         operations: requestedOperations,
         dryRun,
       });
+
+      if (!dryRun) {
+        await recordAdminActionFromRequest(req, {
+          action: 'ops.spider_job.started',
+          target: { kind: 'system', id: 'spider-job', displayName: 'Spider notebook grooming job' },
+          summary: `started notebook grooming job for ${totalNotebooks} notebooks`,
+          details: { spiderJobId, totalNotebooks, operations: requestedOperations },
+        });
+      }
 
       return res.json({
         success: true,

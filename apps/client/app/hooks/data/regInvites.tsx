@@ -1,3 +1,4 @@
+import { useUser } from '@client/app/contexts/UserContext';
 import {
   createRegInvites,
   deleteRegInvites,
@@ -76,5 +77,10 @@ export function useSubmitUserInvitation() {
 export function useSubmitReferral() {
   return useMutation({
     mutationFn: async (data: IUserInvitation) => await submitReferral(data),
+    // Fire and forget: the server owns the quota, so a slow /api/identify call must not hold
+    // the modal's spinner open until its timeout.
+    onSettled: () => {
+      void useUser.getState().refreshUser();
+    },
   });
 }

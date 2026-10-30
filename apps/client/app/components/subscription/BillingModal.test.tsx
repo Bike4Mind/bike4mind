@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
-import { SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { BillingView } from '@client/app/utils/billingDeepLink';
 
 const state = vi.hoisted(() => ({
@@ -47,6 +47,10 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
+vi.mock('./NoCardUnlockCard', () => ({ NoCardUnlockCard: () => <div data-testid="no-card-unlock-card" /> }));
+vi.mock('./CreditsExplanation', () => ({
+  default: () => <div data-testid="credits-explanation" />,
+}));
 vi.mock('./CreditsSection', () => ({
   CreditsSection: ({
     onClose,
@@ -242,6 +246,7 @@ describe('BillingModal', () => {
   it('leads with plans when the user has no subscription, and says they are on Free', () => {
     renderModal();
     expect(sectionOrder()).toEqual(['billing-section-plans', 'billing-section-credits']);
+    expect(screen.getByTestId('credits-explanation')).toBeInTheDocument();
     expect(screen.getByTestId('billing-current-plan')).toHaveTextContent('Free');
     expect(screen.getByTestId('billing-balance')).toHaveTextContent('5,000');
     const icon = screen.getByTestId('billing-balance-icon');

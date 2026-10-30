@@ -43,19 +43,20 @@ describe('proxy CSP header', () => {
   it('global style-src does not contain the blanket https: wildcard', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
-    // style-src https: was narrowed — HTML artifacts load from /api/artifact-sandbox
-    // which sets its own per-response CSP with style-src https:. The global
-    // style-src keeps the explicit MailerLite host (the only external stylesheet
-    // the app itself loads) but no longer permits arbitrary https: stylesheets.
-    expect(csp).toContain("style-src 'self' 'unsafe-inline' https://assets.mailerlite.com");
-    // Ensure the blanket `https:` wildcard is not present (only the explicit MailerLite host).
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
     expect(csp).not.toMatch(/style-src [^;]*\bhttps:(?!\/\/)/);
   });
 
-  it('global style-src includes the MailerLite host so universal.css loads on app pages', () => {
+  it('does not admit executable or other resources from the retired marketing vendor', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/new'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
-    expect(csp).toContain('https://assets.mailerlite.com');
+    expect(csp).not.toContain('https://assets.mailerlite.com');
+  });
+
+  it('keeps sandbox-only script hosts out of the app CSP', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/new')).headers.get('Content-Security-Policy') ?? '';
+    expect(csp).not.toContain('unpkg.com');
+    expect(csp).not.toContain('cdn.tailwindcss.com');
   });
 
   it('allow-lists every host the ad pixels need, in each directive that governs them', () => {
@@ -78,6 +79,14 @@ describe('proxy CSP header', () => {
     expect(sources('connect-src')).toContain('https://www.facebook.com');
   });
 
+  it('allows the Turnstile script, widget frame and verification calls', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/login')).headers.get('Content-Security-Policy') ?? '';
+    const sources = (name: string) => (csp.match(new RegExp(`${name} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    for (const directive of ['script-src', 'frame-src', 'connect-src']) {
+      expect(sources(directive)).toContain('https://challenges.cloudflare.com');
+    }
+  });
+
   // connect-src too: the service worker's image cache re-fetches tiles, and a worker fetch is
   // checked against connect-src, so img-src alone leaves the map blank once the SW is active.
   it.each(['img-src', 'connect-src'])('%s allows the OpenStreetMap tiles the inline location map loads', directive => {
@@ -85,6 +94,42 @@ describe('proxy CSP header', () => {
     const csp = response.headers.get('Content-Security-Policy') ?? '';
     const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
     expect(values).toContain('https://tile.openstreetmap.org');
+  });
+
+  // Social post thumbnails load straight from each network's image CDN. connect-src as well, for
+  // the same service-worker re-fetch as the map tiles above. video.cdn.bsky.app is where
+  // video.bsky.app redirects every poster frame, and CSP checks each redirect hop.
+  const socialImageHosts = [
+    'https://cdn.bsky.app',
+    'https://video.bsky.app',
+    'https://video.cdn.bsky.app',
+    'https://*.fbcdn.net',
+    'https://i.ytimg.com',
+  ];
+
+  it.each(['img-src', 'connect-src'])('%s allows the social CDN hosts that serve post thumbnails', directive => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values).toEqual(expect.arrayContaining(socialImageHosts));
+  });
+
+  // These CDNs serve whatever their users upload, so they may load images and be fetched, never
+  // run as script, frame or media.
+  it('keeps the social CDN hosts out of every other directive', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/dashboard')).headers.get('Content-Security-Policy') ?? '';
+    for (const directive of csp.split(';')) {
+      const [name, ...sources] = directive.trim().split(/\s+/);
+      if (name === 'img-src' || name === 'connect-src') continue;
+      for (const host of socialImageHosts) expect(sources, name).not.toContain(host);
+    }
+  });
+
+  it('connect-src allows the GitHub API the desktop download page reads its latest release from', () => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/desktop'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const connectSrc = (csp.match(/connect-src ([^;]*)/)?.[1] ?? '').split(/\s+/);
+    expect(connectSrc).toContain('https://api.github.com');
   });
 
   it('frame-src allows only the -nocookie YouTube host', () => {
@@ -443,6 +488,83 @@ describe('proxy origin verification', () => {
     expect(response.status).toBe(200);
     expect(response.forwardedRequestHeaders).toBeUndefined();
   });
+
+  it('removes unverified fingerprint headers without refusing access', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', '');
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'cloudfront-viewer-ja4-fingerprint': 'client-supplied',
+      })
+    ) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders?.has('cloudfront-viewer-ja4-fingerprint')).toBe(false);
+  });
+
+  it('preserves a fingerprint only after origin verification', () => {
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'x-b4m-origin-verify': SECRET,
+        'cloudfront-viewer-ja4-fingerprint': 'synthetic',
+      })
+    ) as unknown as Forwarded;
+    expect(response.forwardedRequestHeaders?.get('cloudfront-viewer-ja4-fingerprint')).toBe('synthetic');
+  });
+
+  it('strips the fingerprint on self-host even after origin verification', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const response = proxy(
+      makeRequest('https://example.com/api/otc/verify', {
+        'x-b4m-origin-verify': SECRET,
+        'cloudfront-viewer-ja4-fingerprint': 'synthetic',
+      })
+    ) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders?.has('cloudfront-viewer-ja4-fingerprint')).toBe(false);
+  });
+});
+
+describe('proxy server-action probes', () => {
+  function makePost(url: string, headers: Record<string, string> = {}): NextRequest {
+    return { ...makeRequest(url, headers), method: 'POST' } as NextRequest;
+  }
+
+  it.each(['/', '/dashboard', '/api/health'])('404s a POST to %s carrying Next-Action + RSC headers', path => {
+    const response = proxy(makePost(`https://app.bike4mind.com${path}`, { 'Next-Action': 'x', RSC: '1' }));
+    expect(response.status).toBe(404);
+  });
+
+  it('404s a Next-Action header even without RSC', () => {
+    expect(proxy(makePost('https://app.bike4mind.com/', { 'Next-Action': 'x' })).status).toBe(404);
+  });
+
+  it('passes an ordinary API POST through', () => {
+    const response = proxy(makePost('https://app.bike4mind.com/api/health', { 'content-type': 'application/json' }));
+    expect(response.status).toBe(200);
+  });
+
+  describe('ordering against the [SECURITY] guards', () => {
+    beforeEach(() => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    });
+
+    it('still 403s and logs a direct-origin probe', () => {
+      vi.stubEnv('ORIGIN_VERIFY_SECRET', 'a'.repeat(48));
+      const response = proxy(makePost('https://abc.lambda-url.us-east-2.on.aws/', { 'Next-Action': 'x' }));
+      expect(response.status).toBe(403);
+      expect(String(vi.mocked(console.warn).mock.calls)).toContain('Blocked direct-origin request');
+    });
+
+    it('still 400s and logs a probe on a malformed path', () => {
+      const response = proxy(makePost('https://app.bike4mind.com/%25zz', { 'Next-Action': 'x' }));
+      expect(response.status).toBe(400);
+      expect(String(vi.mocked(console.warn).mock.calls)).toContain('Blocked malformed URL encoding');
+    });
+  });
 });
 
 describe('proxy configured object-store origin', () => {
@@ -510,5 +632,69 @@ describe('proxy configured object-store origin', () => {
   it.each(['/api/files', '/p/example', '/embed/chat'])('preserves policy exclusions for %s', path => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
     expect(proxy(makeRequest(`https://app.example.invalid${path}`)).headers.get('Content-Security-Policy')).toBeNull();
+  });
+});
+
+// The owner's management listing shows thumbnails as presigned GETs on the published-artifacts
+// bucket (server/services/publish/thumbnailUrl.ts). img-src governs the <img>; connect-src governs
+// the service worker's image-cache re-fetch. A policy that narrows either drops them silently.
+describe('proxy CSP admits owner-only artifact thumbnail links', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const admits = (csp: string, directive: string, url: string) => {
+    const { protocol, host, origin } = new URL(url);
+    const sources = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').trim().split(/\s+/);
+    return sources.some(source => {
+      if (source === origin) return true;
+      const wildcard = /^(https?:)\/\/\*\.([^/]+)$/.exec(source);
+      return !!wildcard && wildcard[1] === protocol && host.endsWith(`.${wildcard[2]}`);
+    });
+  };
+  const thumbnailPath = `/publish-thumbnails/pub1/${'a'.repeat(64)}.webp?X-Amz-Signature=fixture`;
+
+  it.each(['img-src', 'connect-src'])('%s admits a hosted presigned S3 link', directive => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const csp = proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy') ?? '';
+    expect(admits(csp, directive, `https://example-bucket.s3.us-east-1.amazonaws.com${thumbnailPath}`)).toBe(true);
+  });
+
+  it.each(['img-src', 'connect-src'])('%s admits a self-host object-store link', directive => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
+    const csp = proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy') ?? '';
+    expect(admits(csp, directive, `https://objects.example.invalid/example-bucket${thumbnailPath}`)).toBe(true);
+  });
+});
+
+describe("proxy upstream What's New feed origin", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const policy = () => proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy')!;
+  const sourcesOf = (csp: string, name: string) =>
+    csp
+      .split(';')
+      .map(part => part.trim().split(/\s+/))
+      .find(([directive]) => directive === name)!
+      .slice(1);
+
+  it('lets media, posters and the service worker load from the upstream origin', () => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', 'https://upstream.example.invalid/api/v1/whats-new');
+    const csp = policy();
+    for (const name of ['connect-src', 'img-src', 'media-src']) {
+      expect(sourcesOf(csp, name)).toContain('https://upstream.example.invalid');
+    }
+    expect(sourcesOf(csp, 'script-src')).not.toContain('https://upstream.example.invalid');
+  });
+
+  it('adds nothing for an unset or non-https feed', () => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', '');
+    const baseline = policy();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('WHATS_NEW_FEED_URL', 'http://upstream.example.invalid/api/v1/whats-new');
+    expect(policy()).toBe(baseline);
   });
 });

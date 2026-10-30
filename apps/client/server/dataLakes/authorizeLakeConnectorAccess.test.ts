@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({ verifyOrgAccess: vi.fn(), verifyOrgAdminRead: vi.fn() }));
 
-vi.mock('@server/utils/orgAccess', () => ({
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
   verifyOrgAccess: h.verifyOrgAccess,
   verifyOrgAdminRead: h.verifyOrgAdminRead,
 }));

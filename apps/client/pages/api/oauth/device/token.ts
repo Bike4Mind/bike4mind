@@ -2,8 +2,13 @@ import { cacheRepository, deviceAuthorizationRepository, userRepository } from '
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS } from '@server/utils/oauth/deviceAuthHelpers';
+import {
+  CLI_ACCESS_DENIED_MESSAGE,
+  SUBSCRIPTION_REQUIRED_ERROR,
+  isApiKeyAccessAllowed,
+} from '@server/utils/apiKeyAccessGate';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { LEGACY_DEVICE_CLIENT_ID, OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
@@ -14,6 +19,7 @@ const TokenRequestSchema = z.object({
   client_id: z.enum(OAUTH_DEVICE_CLIENT_IDS),
 });
 
+const MIN_POLL_INTERVAL_MS = 5000;
 const TOKEN_GLOBAL_KEY = 'rate-limit:device-token-global';
 const TOKEN_GLOBAL_LIMIT_PER_MIN = MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS * 12;
 
@@ -70,21 +76,13 @@ const handler = baseApi({ auth: false })
       });
     }
 
-    if (authorization.lastPolledAt) {
-      const timeSinceLastPoll = Date.now() - authorization.lastPolledAt.getTime();
-      if (timeSinceLastPoll < 5000) {
-        return res.status(400).json({
-          error: 'slow_down',
-          error_description: 'Polling too frequently, wait at least 5 seconds',
-        });
-      }
+    const polled = await deviceAuthorizationRepository.recordPollIfDue(authorization.id, MIN_POLL_INTERVAL_MS);
+    if (!polled) {
+      return res.status(400).json({
+        error: 'slow_down',
+        error_description: 'Polling too frequently, wait at least 5 seconds',
+      });
     }
-
-    await deviceAuthorizationRepository.update({
-      id: authorization.id,
-      pollCount: authorization.pollCount + 1,
-      lastPolledAt: new Date(),
-    });
 
     switch (authorization.status) {
       case 'pending':
@@ -111,17 +109,26 @@ const handler = baseApi({ auth: false })
           throw new BadRequestError('Authorization approved but user no longer exists');
         }
 
+        // Re-checked here for approvals made before the switch was flipped.
+        if (!(await isApiKeyAccessAllowed(authorizedUser, undefined, req))) {
+          return res
+            .status(403)
+            .json({ error: SUBSCRIPTION_REQUIRED_ERROR, error_description: CLI_ACCESS_DENIED_MESSAGE });
+        }
+
+        const claimed = await deviceAuthorizationRepository.claimApproved(authorization.id);
+        if (!claimed) {
+          return res.status(400).json({
+            error: 'invalid_grant',
+            error_description: 'Device code has already been used',
+          });
+        }
+
         // same session service used for regular login
         const { accessToken, refreshToken } = await issueSessionForRequest(req, authorizedUser.id, {
           createdVia: 'device',
           tokenVersion: authorizedUser.tokenVersion ?? 0,
           clientId: client_id,
-        });
-
-        // mark consumed to prevent token reuse
-        await deviceAuthorizationRepository.update({
-          id: authorization.id,
-          status: 'consumed',
         });
 
         return res.json({

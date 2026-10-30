@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -33,7 +34,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_r: unknown, _s: unknown, n: () => void) => n() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_r: unknown, _s: unknown, n: () => void) => n(),
+}));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 
 // PublishedArtifact.findOne(...).select(...).lean() - capture the select string.
@@ -64,8 +67,15 @@ vi.mock('bcryptjs', () => ({ default: { compare: () => Promise.resolve(true) } }
 
 import handler from '../passphrase';
 
-const run = (body: unknown) => {
-  const { req, res } = createMocks({ method: 'POST', body });
+const viewerIp = '203.0.113.10';
+const viewerId = createHash('sha256').update(viewerIp).digest('hex');
+
+const run = (body: unknown, ip = viewerIp) => {
+  const { req, res } = createMocks({
+    method: 'POST',
+    body,
+    headers: { 'cloudfront-viewer-address': `${ip}:12345`, 'x-forwarded-for': 'spoofed' },
+  });
   (req as Record<string, unknown>).user = { id: 'u1' };
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
@@ -171,7 +181,7 @@ describe('POST /api/publish/gate/passphrase - per-artifact lockout', () => {
 
     expect(res._getStatusCode()).toBe(423);
     expect(res.getHeader('Retry-After')).toBe(120);
-    expect(lockout.recordFailure).toHaveBeenCalledWith('pub1');
+    expect(lockout.recordFailure).toHaveBeenCalledWith('pub1', viewerId);
   });
 
   it('records a failure but stays 403 while under the cap', async () => {
@@ -184,7 +194,7 @@ describe('POST /api/publish/gate/passphrase - per-artifact lockout', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(403);
-    expect(lockout.recordFailure).toHaveBeenCalledWith('pub1');
+    expect(lockout.recordFailure).toHaveBeenCalledWith('pub1', viewerId);
   });
 
   it('clears the lock on a correct passphrase', async () => {
@@ -194,7 +204,21 @@ describe('POST /api/publish/gate/passphrase - per-artifact lockout', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(204);
-    expect(lockout.clear).toHaveBeenCalledWith('pub1');
+    expect(lockout.clear).toHaveBeenCalledWith('pub1', viewerId);
     expect(lockout.recordFailure).not.toHaveBeenCalled();
   });
+});
+
+it('keys every lock operation by the trusted viewer IP, ignoring spoofed forwarding headers', async () => {
+  gated();
+  const first = run({ path: '/p/u/scope/slug', passphrase: 'correct' });
+  await first.promise;
+  expect(lockout.checkLock).toHaveBeenLastCalledWith('pub1', viewerId);
+  expect(lockout.clear).toHaveBeenLastCalledWith('pub1', viewerId);
+  const secondIp = '203.0.113.20';
+  const second = run({ path: '/p/u/scope/slug', passphrase: 'correct' }, secondIp);
+  await second.promise;
+  const secondId = createHash('sha256').update(secondIp).digest('hex');
+  expect(lockout.checkLock).toHaveBeenLastCalledWith('pub1', secondId);
+  expect(lockout.clear).toHaveBeenLastCalledWith('pub1', secondId);
 });

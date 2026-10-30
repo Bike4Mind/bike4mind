@@ -7,6 +7,10 @@ export enum RegInviteStatusType {
   waiting = 'waiting',
 }
 
+export enum RegInviteSource {
+  referral = 'referral',
+}
+
 export interface RegInviteUsageEntry {
   userId: string;
   usedAt: Date;
@@ -22,6 +26,7 @@ export type IRegistrationInvite = {
   email?: undefined | string;
   title?: undefined | string;
   description?: undefined | string;
+  source?: undefined | RegInviteSource; // set only on invites a user sent through the refer flow
   unlimitedUse?: boolean; // allow reuse until expiration
   usageHistory?: RegInviteUsageEntry[]; // record of each usage event
   tags?: string[];

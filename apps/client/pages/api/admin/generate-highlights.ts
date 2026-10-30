@@ -2,13 +2,14 @@ import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import type { WhatsNewHighlightsPayload } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { Logger } from '@bike4mind/observability';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import {
   HIGHLIGHTS_NOTE_LIMIT,
   loadHighlightsReleaseNotes,
@@ -149,6 +150,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         },
         { upsert: true }
       );
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.whats_new.generation_triggered',
+        target: { kind: 'settings', id: SETTING_NAME, displayName: "What's New highlights" },
+        summary: `generated What's New highlights for ${startDateStr} to ${endDateStr}`,
+        details: { job: 'highlights', correlationId, startDate: startDateStr, endDate: endDateStr },
+      });
 
       return res.json({
         success: true,

@@ -15,6 +15,11 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   },
 }));
 
+const { config } = vi.hoisted(() => ({
+  config: { data: undefined as { whatsNewUpstreamOrigin: string } | undefined, isLoading: false },
+}));
+vi.mock('./settings', () => ({ useConfig: () => config }));
+
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
@@ -44,6 +49,50 @@ const route = (feed: () => Promise<unknown>) => (url: string) =>
 describe('useModalsWithReleaseNotes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    config.data = { whatsNewUpstreamOrigin: 'https://upstream.example.com' };
+    config.isLoading = false;
+  });
+
+  it("plays this deployment's media route from the browsed origin and leaves the upstream's alone", async () => {
+    const video = {
+      landscape_url: 'https://other-domain.example.com/api/v1/whats-new/media/rn1/landscape',
+      portrait_url: 'https://upstream.example.com/api/v1/whats-new/media/rn1/portrait',
+    };
+    mockApiGet.mockImplementation(route(() => Promise.resolve({ data: { data: [{ ...note, video }] } })));
+
+    const { result } = renderHook(() => useModalsWithReleaseNotes(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.data).toHaveLength(2));
+    expect(result.current.data?.[1].video).toMatchObject({
+      landscapeUrl: '/api/v1/whats-new/media/rn1/landscape',
+      portraitUrl: 'https://upstream.example.com/api/v1/whats-new/media/rn1/portrait',
+    });
+  });
+
+  it("localizes a still image from the browsed origin and leaves the upstream's alone", async () => {
+    const image = {
+      landscape_url: 'https://other-domain.example.com/api/v1/whats-new/media/rn1/image-landscape',
+      portrait_url: 'https://upstream.example.com/api/v1/whats-new/media/rn1/image-portrait',
+    };
+    mockApiGet.mockImplementation(route(() => Promise.resolve({ data: { data: [{ ...note, image }] } })));
+
+    const { result } = renderHook(() => useModalsWithReleaseNotes(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.data).toHaveLength(2));
+    expect(result.current.data?.[1].stillImage).toEqual({
+      landscapeUrl: '/api/v1/whats-new/media/rn1/image-landscape',
+      portraitUrl: 'https://upstream.example.com/api/v1/whats-new/media/rn1/image-portrait',
+    });
+  });
+
+  it('waits for the config before reading the feed', async () => {
+    config.isLoading = true;
+    mockApiGet.mockImplementation(route(() => Promise.resolve({ data: { data: [note] } })));
+
+    const { result } = renderHook(() => useModalsWithReleaseNotes(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+    expect(mockApiGet).not.toHaveBeenCalledWith('/api/v1/whats-new?limit=5');
   });
 
   it('appends release-note slides to the modals', async () => {

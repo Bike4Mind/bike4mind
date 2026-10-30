@@ -20,12 +20,19 @@ const emitted: {
   abortMidStream?: AbortController;
 } = { text: '', info: {} };
 
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
   subtractCredits: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  buildApiKeyTable: (keys: object) => keys,
   reasonsWithinOutputBudget: vi.fn(() => false),
   isAdaptiveThinkingByDefault: vi.fn(() => false),
   resolveOutputMaxTokens: vi.fn(

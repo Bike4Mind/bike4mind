@@ -13,7 +13,11 @@ import {
   Checkbox,
   Input,
 } from '@mui/joy';
-import { CheckCircle, GitHub as GitHubIcon, Warning, Search, CallSplit } from '@mui/icons-material';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import GitHubIcon from '@mui/icons-material/GitHub';
+import Warning from '@mui/icons-material/Warning';
+import Search from '@mui/icons-material/Search';
+import CallSplit from '@mui/icons-material/CallSplit';
 import { toast } from 'sonner';
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -54,7 +58,7 @@ interface GitHubRepository {
 
 const GitHubIntegrationSection = ({ userId }: GitHubIntegrationProps) => {
   const { currentUser } = useUser();
-  const isSlackLinked = Boolean(currentUser?.slackSettings?.slackUserId);
+  const isSlackLinked = Boolean(currentUser?.slackSettings?.slackUserId && currentUser?.slackSettings?.slackTeamId);
   const [status, setStatus] = useState<GitHubStatus>({ connected: false });
   const [connecting, setConnecting] = useState(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);

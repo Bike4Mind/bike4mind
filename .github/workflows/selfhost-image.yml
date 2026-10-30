@@ -15,7 +15,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'apps/client/**'
+      # The Dockerfile copies all of apps/ and turbo-builds every app but the client too.
+      - 'apps/**'
+      - 'catalog/**'
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
@@ -33,6 +35,8 @@ on:
       # even when the lockfile is unchanged.
       - 'package.json'
       - 'pnpm-workspace.yaml'
+      - 'turbo.json'
+      - 'patches/**'
       - 'pnpm-lock.yaml'
       # The builder loads this template as the built-API-route probe's placeholder env, so a key
       # change can flip the image build's verdict.
@@ -40,7 +44,9 @@ on:
       - '.github/workflows/selfhost-image.yml'
   pull_request:
     paths:
-      - 'apps/client/**'
+      # The Dockerfile copies all of apps/ and turbo-builds every app but the client too.
+      - 'apps/**'
+      - 'catalog/**'
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
@@ -50,14 +56,13 @@ on:
       # .dockerignore now decides whether docs-site/docs reaches the builder, and the
       # client prebuild fails without it - an edit there can break the image on its own.
       - '.dockerignore'
-      # The docs are baked into the image by the same prebuild, so a docs-only edit changes
-      # what ships and has to revalidate it.
-      - 'docs-site/docs/**'
       # Root package.json and pnpm-workspace.yaml drive pnpm install and the turbo build graph in
       # this image, so a manifest-only edit that changes what gets built has to revalidate the image
       # even when the lockfile is unchanged.
       - 'package.json'
       - 'pnpm-workspace.yaml'
+      - 'turbo.json'
+      - 'patches/**'
       - 'pnpm-lock.yaml'
       # The builder loads this template as the built-API-route probe's placeholder env, so a key
       # change can flip the image build's verdict.
@@ -121,7 +126,6 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: false
           cache-from: type=gha,scope=selfhost-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=selfhost-${{ matrix.arch }}
 
       - name: Build and push by digest
         if: github.event_name != 'pull_request'

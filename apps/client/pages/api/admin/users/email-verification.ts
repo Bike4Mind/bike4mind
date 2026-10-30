@@ -1,7 +1,8 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { User } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, emailVerificationResponseSchema, emailVerificationUserResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
@@ -12,6 +13,9 @@ const EmailVerificationQuerySchema = z.object({
   status: z.enum(['all', 'verified', 'unverified', 'pending']).prefault('all'),
   search: z.string().optional(),
 });
+
+// Project exactly the response contract's keys, so the query and the schema cannot drift.
+const USER_PROJECTION = Object.keys(emailVerificationUserResponseSchema.shape).join(' ');
 
 // Admin-only endpoint to list users by email verification status
 const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).get(
@@ -50,9 +54,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).get
 
     // Get users with verification info
     const users = await User.find(filter)
-      .select(
-        'username email name emailVerified emailVerifiedAt emailVerificationSentAt emailVerificationExpires pendingEmail pendingEmailSentAt pendingEmailExpires createdAt'
-      )
+      .select(USER_PROJECTION)
       .sort({ emailVerificationSentAt: -1, createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -61,7 +63,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).get
     const totalCount = await User.countDocuments(filter);
     const totalPages = Math.ceil(totalCount / limit);
 
-    return res.json({
+    return respond(res, emailVerificationResponseSchema, {
       users,
       pagination: {
         page,

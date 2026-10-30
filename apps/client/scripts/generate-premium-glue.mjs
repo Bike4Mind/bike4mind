@@ -15,12 +15,16 @@
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
+ *   server/premium-generated/premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
+ *   app/premium-generated/premiumAdminSettings.generated.ts - contributed admin setting definitions
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
  *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   server/premium-generated/premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
+ *   app/premium-generated/premiumEntitlementGrants.generated.ts - entitlement registry rows
+ *   app/premium-generated/premiumApiKeyScopes.generated.ts - contributed API-key scopes
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
@@ -800,6 +804,251 @@ function generateToolDisplayLabels(packages) {
   );
 }
 
+// --- Generate entitlement grants ---
+
+// Entitlement registry rows (b4mContributions.entitlementGrants), added to the built-in rows in
+// lib/entitlements/registry.ts. Pure data like the labels above. Keys must already be normalized,
+// since the registry matches on the lowercase form. The built-in rows are TypeScript this script
+// cannot load, so a collision with them is dropped by mergeContributedRows instead of failing here.
+const GRANT_KEY_RE = /^[a-z0-9][a-z0-9:_-]*$/;
+// Must stay in sync with isReservedContributionKey and MAX_CONTRIBUTED_SIGNUP_CREDITS in the registry.
+const isReservedGrantKey = key =>
+  key === 'base' ||
+  key.startsWith('datalake:') ||
+  key.startsWith('embed:') ||
+  key.startsWith('source:') ||
+  key === 'customer' ||
+  key === 'pending-free-credits' ||
+  key === 'plan:paid';
+const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
+const ENTITLEMENT_GRANT_FIELDS = ['tagGrants', 'impliedEntitlements', 'signupCredits', 'internalStaffEntitlements'];
+
+function generateEntitlementGrants(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumEntitlementGrants.generated.ts');
+  const typeImport = `import type { PremiumEntitlementGrants } from '../premiumContract';`;
+
+  const fail = (pkg, detail) => {
+    throw new Error(`[codegen] invalid entitlementGrants from package "${pkg.name}": ${detail}`);
+  };
+  const readKey = (pkg, where, value) => {
+    if (typeof value !== 'string' || !GRANT_KEY_RE.test(value)) {
+      fail(pkg, `${where} ${JSON.stringify(value)} must be lowercase and match ${GRANT_KEY_RE}`);
+    }
+    if (isReservedGrantKey(value)) fail(pkg, `${where} ${JSON.stringify(value)} is reserved`);
+    return value;
+  };
+  const readKeyList = (pkg, where, value) => {
+    if (!Array.isArray(value) || value.length === 0) fail(pkg, `${where} must be a non-empty array of keys`);
+    return [...new Set(value.map(key => readKey(pkg, where, key)))];
+  };
+  const readRows = (pkg, field, value) => {
+    if (!Array.isArray(value)) fail(pkg, `${field} must be an array`);
+    return value.map(row => {
+      if (!isPlainObject(row)) fail(pkg, `${field} rows must be objects, got ${JSON.stringify(row)}`);
+      return row;
+    });
+  };
+  // One value per id across every package; an identical repeat collapses, a different one fails.
+  const claim = (table, field, id, value, pkg) => {
+    const prior = table.get(id);
+    if (prior && JSON.stringify(prior.value) !== JSON.stringify(value)) {
+      throw new Error(
+        `[codegen] entitlementGrants.${field} gives "${id}" different values in packages "${prior.from}" and ` +
+          `"${pkg.name}"; declare it in one.`
+      );
+    }
+    if (!prior) table.set(id, { value, from: pkg.name });
+  };
+
+  const tagGrants = new Map();
+  const tagOfKey = new Map();
+  const implied = new Map();
+  const signupCredits = new Map();
+  const internalStaff = new Set();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.entitlementGrants;
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) fail(pkg, `expected an object, got ${JSON.stringify(declared)}`);
+    for (const field of Object.keys(declared)) {
+      if (!ENTITLEMENT_GRANT_FIELDS.includes(field)) fail(pkg, `unknown field ${JSON.stringify(field)}`);
+    }
+    if (declared.tagGrants !== undefined) {
+      for (const row of readRows(pkg, 'tagGrants', declared.tagGrants)) {
+        const tag = readKey(pkg, 'tagGrants tag', row.tag);
+        const keys = readKeyList(pkg, `tagGrants entitlements for "${tag}"`, row.entitlements).sort();
+        claim(tagGrants, 'tagGrants', tag, keys, pkg);
+        for (const key of keys) {
+          const other = tagOfKey.get(key);
+          if (other && other.tag !== tag) {
+            throw new Error(
+              `[codegen] entitlementGrants.tagGrants grants "${key}" from tag "${other.tag}" (package "${other.from}") ` +
+                `and tag "${tag}" (package "${pkg.name}"); a key has one granting tag.`
+            );
+          }
+          tagOfKey.set(key, { tag, from: pkg.name });
+        }
+      }
+    }
+    if (declared.impliedEntitlements !== undefined) {
+      for (const row of readRows(pkg, 'impliedEntitlements', declared.impliedEntitlements)) {
+        const ifHeld = readKey(pkg, 'impliedEntitlements ifHeld', row.ifHeld);
+        const keys = readKeyList(pkg, `impliedEntitlements alsoGrant for "${ifHeld}"`, row.alsoGrant).sort();
+        claim(implied, 'impliedEntitlements', ifHeld, keys, pkg);
+      }
+    }
+    if (declared.signupCredits !== undefined) {
+      for (const row of readRows(pkg, 'signupCredits', declared.signupCredits)) {
+        const key = readKey(pkg, 'signupCredits key', row.key);
+        if (!Number.isInteger(row.credits) || row.credits <= 0 || row.credits > MAX_CONTRIBUTED_SIGNUP_CREDITS) {
+          fail(
+            pkg,
+            `signupCredits for "${key}" must be an integer from 1 to ${MAX_CONTRIBUTED_SIGNUP_CREDITS}, ` +
+              `got ${JSON.stringify(row.credits)}`
+          );
+        }
+        claim(signupCredits, 'signupCredits', key, row.credits, pkg);
+      }
+    }
+    if (declared.internalStaffEntitlements !== undefined) {
+      for (const key of readKeyList(pkg, 'internalStaffEntitlements', declared.internalStaffEntitlements)) {
+        internalStaff.add(key);
+      }
+    }
+  }
+
+  // Built-in grants are invisible here, so an implication may only start from a key a contribution grants.
+  const granted = new Set([...tagOfKey.keys(), ...internalStaff]);
+  const grounded = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [ifHeld, { value }] of implied) {
+      if (grounded.has(ifHeld) || !granted.has(ifHeld)) continue;
+      grounded.add(ifHeld);
+      for (const key of value) granted.add(key);
+      grew = true;
+    }
+  }
+  for (const [ifHeld, { from }] of implied) {
+    if (!grounded.has(ifHeld)) {
+      fail({ name: from }, `impliedEntitlements ifHeld "${ifHeld}" is not granted by any contributed row`);
+    }
+  }
+  for (const [key, { from }] of signupCredits) {
+    if (!internalStaff.has(key)) {
+      fail({ name: from }, `signupCredits key "${key}" must be a contributed internalStaffEntitlements key`);
+    }
+  }
+
+  const grants = {};
+  if (tagGrants.size > 0) grants.tagGrants = [...tagGrants].map(([tag, { value }]) => ({ tag, entitlements: value }));
+  if (implied.size > 0) {
+    grants.impliedEntitlements = [...implied].map(([ifHeld, { value }]) => ({ ifHeld, alsoGrant: value }));
+  }
+  if (signupCredits.size > 0) {
+    grants.signupCredits = [...signupCredits].map(([key, { value }]) => ({ key, credits: value }));
+  }
+  if (internalStaff.size > 0) grants.internalStaffEntitlements = [...internalStaff].sort();
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumEntitlementGrants: PremiumEntitlementGrants = ${JSON.stringify(grants, null, 2)};\n`
+  );
+}
+
+// --- Generate API-key scopes ---
+
+// API-key scopes (b4mContributions.apiKeyScopes), merged into the built-in catalog in
+// constants/apiKeyScopes.ts. Like the grants above, the built-in rows are TypeScript this script
+// cannot load, so a collision with them is resolved by the merge in that module, not here.
+const API_KEY_SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$/;
+// isWellFormedApiKeyScope (@bike4mind/common) caps stored values at this length.
+const API_KEY_SCOPE_VALUE_MAX = 100;
+// Resources bound to privileged or dedicated-flow keys; a contributed scope may not join them.
+const RESERVED_API_KEY_SCOPE_RESOURCES = ['admin', 'cc-bridge', 'embed', 'datalake'];
+const API_KEY_SCOPE_FIELDS = ['value', 'label', 'description', 'endpoints', 'requiredEntitlement'];
+const API_KEY_SCOPE_DESCRIPTION_MAX = 200;
+const API_KEY_SCOPE_ENDPOINTS_MAX = 50;
+const API_KEY_SCOPE_ENDPOINT_RE = /^(GET|POST|PUT|PATCH|DELETE) \/[A-Za-z0-9._~:/{}-]*$/;
+const API_KEY_SCOPE_ENDPOINT_MAX = 160;
+
+function generateApiKeyScopes(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumApiKeyScopes.generated.ts');
+  const typeImport = `import type { PremiumApiKeyScope } from '../premiumContract';`;
+
+  const fail = (pkg, detail) => {
+    throw new Error(`[codegen] invalid apiKeyScopes from package "${pkg.name}": ${detail}`);
+  };
+  const readText = (pkg, where, value, max) => {
+    if (typeof value !== 'string' || value.length > max || !GRANT_LABEL_RE.test(value) || /\p{Cc}/u.test(value)) {
+      fail(pkg, `${where} must be 1-${max} characters with no control characters or edge whitespace`);
+    }
+    return value;
+  };
+
+  const scopes = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.apiKeyScopes;
+    if (declared === undefined) continue;
+    if (!Array.isArray(declared)) fail(pkg, `expected an array, got ${JSON.stringify(declared)}`);
+    for (const entry of declared) {
+      if (!isPlainObject(entry)) fail(pkg, `rows must be objects, got ${JSON.stringify(entry)}`);
+      for (const field of Object.keys(entry)) {
+        if (!API_KEY_SCOPE_FIELDS.includes(field)) fail(pkg, `unknown field ${JSON.stringify(field)}`);
+      }
+      const { value } = entry;
+      if (typeof value !== 'string' || !API_KEY_SCOPE_VALUE_RE.test(value)) {
+        fail(pkg, `value ${JSON.stringify(value)} must match ${API_KEY_SCOPE_VALUE_RE}`);
+      }
+      if (value.length > API_KEY_SCOPE_VALUE_MAX) {
+        fail(pkg, `value ${JSON.stringify(value)} must be at most ${API_KEY_SCOPE_VALUE_MAX} characters`);
+      }
+      if (RESERVED_API_KEY_SCOPE_RESOURCES.includes(value.slice(0, value.indexOf(':')))) {
+        fail(pkg, `value ${JSON.stringify(value)} uses a reserved resource`);
+      }
+      const row = {
+        value,
+        label: readText(pkg, `label of "${value}"`, entry.label, GRANT_LABEL_MAX),
+        description: readText(pkg, `description of "${value}"`, entry.description, API_KEY_SCOPE_DESCRIPTION_MAX),
+        endpoints: [],
+      };
+      if (!Array.isArray(entry.endpoints) || entry.endpoints.length > API_KEY_SCOPE_ENDPOINTS_MAX) {
+        fail(pkg, `endpoints of "${value}" must be an array of at most ${API_KEY_SCOPE_ENDPOINTS_MAX} lines`);
+      }
+      for (const line of entry.endpoints) {
+        if (
+          typeof line !== 'string' ||
+          line.length > API_KEY_SCOPE_ENDPOINT_MAX ||
+          !API_KEY_SCOPE_ENDPOINT_RE.test(line)
+        ) {
+          fail(pkg, `endpoint ${JSON.stringify(line)} of "${value}" must look like "GET /api/path"`);
+        }
+        row.endpoints.push(line);
+      }
+      if (entry.requiredEntitlement !== undefined) {
+        if (typeof entry.requiredEntitlement !== 'string' || !GRANT_KEY_RE.test(entry.requiredEntitlement)) {
+          fail(pkg, `requiredEntitlement of "${value}" must be lowercase and match ${GRANT_KEY_RE}`);
+        }
+        row.requiredEntitlement = entry.requiredEntitlement;
+      }
+
+      const prior = scopes.get(value);
+      if (prior && JSON.stringify(prior.row) !== JSON.stringify(row)) {
+        throw new Error(
+          `[codegen] apiKeyScopes gives "${value}" different rows in packages "${prior.from}" and "${pkg.name}"; ` +
+            `declare it in one.`
+        );
+      }
+      if (!prior) scopes.set(value, { row, from: pkg.name });
+    }
+  }
+
+  const rows = [...scopes.values()].map(({ row }) => row);
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumApiKeyScopes: readonly PremiumApiKeyScope[] = ${JSON.stringify(rows, null, 2)};\n`
+  );
+}
+
 // --- Generate localStorage key prefixes ---
 
 // Overlays own localStorage keys core cannot name without naming their surface, so
@@ -1043,9 +1292,13 @@ function generateServerHandlerStubs(packages) {
       // forwards all named exports (handler, dispatch, ...) that SST references.
       assertModuleSpecifier(exportFrom, pkg.name, 'serverHandlerStubs.exportFrom');
 
+      // Cron and queue Lambdas do not go through baseApi, so each stub registers the contributed
+      // admin settings itself before the handler module reads one.
+      let registerSpec = relative(dirname(outPath), ADMIN_SETTINGS_REGISTER_MODULE).split(sep).join('/');
+      if (!registerSpec.startsWith('.')) registerSpec = `./${registerSpec}`;
       writeFile(
         outPath,
-        `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.serverHandlerStubs\nexport * from '${exportFrom}';\n`
+        `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.serverHandlerStubs\nimport '${registerSpec}';\nexport * from '${exportFrom}';\n`
       );
     }
   }
@@ -1149,6 +1402,77 @@ function generatePartnerSignupHooks(packages) {
   writeFile(
     outPath,
     `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumPartnerSignupHooks: PartnerSignupHook[] = [\n${spreads}\n];\n`
+  );
+}
+
+// Premium packages can contribute agent-executor extensions (b4mContributions.agentExtensionsExport
+// -> a module exporting `agentExtensions: AgentExtensionContribution`): a per-surface orchestration
+// profile and tool-map guards. The workers' executor registry imports this file statically, so like
+// the LLM tools it must exist in BOTH forms.
+function generateAgentExtensions(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumAgentExtensions.generated.ts');
+  const typeImport = `import type { AgentExtensionContribution } from '@bike4mind/agents';`;
+
+  const contributors = packages.filter(p => p.contributions.agentExtensionsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumAgentExtensions: AgentExtensionContribution[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.agentExtensionsExport, p.name, 'agentExtensionsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => `import { agentExtensions as extensions${i} } from '${p.contributions.agentExtensionsExport}';`)
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  extensions${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumAgentExtensions: AgentExtensionContribution[] = [\n${items}\n];\n`
+  );
+}
+
+// --- Generate admin setting contributions ---
+//
+// Premium packages can contribute admin setting definitions (b4mContributions.adminSettingsExport ->
+// a module exporting `adminSettings: SettingDefinition<string>[]`, built with core's make*Setting
+// factories). lib/settings/registerContributedSettings.ts imports this file for its side effect on
+// both the server and the client, so it must exist in BOTH forms and stay serializable data. Whatever the
+// export module imports reaches the client bundle: no server-only imports, and no secret defaults.
+const ADMIN_SETTINGS_REGISTER_MODULE = join(CLIENT_ROOT, 'lib/settings/registerContributedSettings');
+
+function generateAdminSettings(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumAdminSettings.generated.ts');
+  const typeImport = `import type { SettingDefinition } from '@bike4mind/common';`;
+
+  const contributors = packages.filter(p => p.contributions.adminSettingsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumAdminSettings: SettingDefinition<string>[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.adminSettingsExport, p.name, 'adminSettingsExport'));
+
+  const imports = contributors
+    .map((p, i) => `import { adminSettings as settings${i} } from '${p.contributions.adminSettingsExport}';`)
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...settings${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumAdminSettings: SettingDefinition<string>[] = [\n${items}\n];\n`
   );
 }
 
@@ -1452,6 +1776,194 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
   }
 }
 
+// Infra resources an overlay declares as plain data (b4mContributions.infraResources).
+// The same literal goes to infra/ (deploy side) and to server-utils (runtime side), so
+// the two can never register different lists. Name rules (collisions with core,
+// duplicates, bad characters) are applied by both consumers via @bike4mind/infra's
+// partitionContributed; this only checks shape, since the values become TS literals.
+// The core name list is read from infra/, so it is only as complete as that tree.
+const INFRA_RESOURCE_TARGETS = [
+  join(INFRA_GENERATED_DIR, 'infraResources.generated.ts'),
+  join(REPO_ROOT, 'packages/server-utils/src/premium-generated/infraResources.generated.ts'),
+];
+
+function readInfraResources(pkg) {
+  const raw = pkg.contributions.infraResources;
+  const fail = msg => {
+    throw new Error(`[codegen] invalid b4mContributions.infraResources from package "${pkg.name}": ${msg}`);
+  };
+  if (!isPlainObject(raw)) fail('must be an object');
+  const list = field => {
+    const value = raw[field] === undefined ? [] : raw[field];
+    if (!Array.isArray(value) || !value.every(isPlainObject)) fail(`${field} must be an array of objects`);
+    return value;
+  };
+  const secrets = list('secrets').map(s => {
+    if (typeof s.name !== 'string') fail('secret name must be a string');
+    if (s.placeholder !== undefined && typeof s.placeholder !== 'string')
+      fail(`${s.name}.placeholder must be a string`);
+    if (s.env !== undefined && typeof s.env !== 'boolean') fail(`${s.name}.env must be a boolean`);
+    if (s.env && s.name.length < 2) fail(`${s.name}.env requires a name of at least two characters for Lambda`);
+    return { name: s.name, placeholder: s.placeholder, env: s.env };
+  });
+  const rotations = list('rotations').map(r => {
+    if (typeof r.secret !== 'string') fail('rotation secret must be a string');
+    if (typeof r.description !== 'string' || typeof r.rotationProcess !== 'string') {
+      fail(`${r.secret} rotation needs string description and rotationProcess`);
+    }
+    if (!Number.isInteger(r.rotationIntervalDays) || r.rotationIntervalDays <= 0) {
+      fail(`${r.secret}.rotationIntervalDays must be a positive integer`);
+    }
+    // Same ceiling as the admin rotation PATCH (apps/client/pages/api/secret-rotations/[id]).
+    if (r.rotationIntervalDays > 365) fail(`${r.secret}.rotationIntervalDays must be at most 365`);
+    if (typeof r.isAutomatic !== 'boolean') fail(`${r.secret}.isAutomatic must be a boolean`);
+    const { secret, description, rotationIntervalDays, isAutomatic, rotationProcess } = r;
+    return { secret, description, rotationIntervalDays, isAutomatic, rotationProcess };
+  });
+  const optional = (q, field, check, what) => {
+    if (q[field] !== undefined && !check(q[field])) fail(`${q.name}.${field} must be ${what}`);
+    return q[field];
+  };
+  const isString = v => typeof v === 'string';
+  const isIntBetween = (min, max) => v => Number.isInteger(v) && v >= min && v <= max;
+  const queues = list('queues').map(q => {
+    for (const field of ['name', 'visibilityTimeout', 'label', 'displayName', 'application']) {
+      if (typeof q[field] !== 'string') fail(`queue ${field} must be a string`);
+    }
+    const tags = optional(q, 'tags', v => isPlainObject(v) && Object.values(v).every(isString), 'an object of strings');
+    return {
+      name: q.name,
+      dlqName: optional(q, 'dlqName', isString, 'a string'),
+      visibilityTimeout: q.visibilityTimeout,
+      retry: optional(q, 'retry', isIntBetween(1, 1000), 'an integer from 1 to 1000'),
+      encryption: optional(q, 'encryption', v => ['kms', 'sse-sqs', 'none'].includes(v), "'kms', 'sse-sqs' or 'none'"),
+      dlqEncryption: optional(q, 'dlqEncryption', v => ['kms', 'none'].includes(v), "'kms' or 'none'"),
+      dlqMessageRetentionSeconds: optional(
+        q,
+        'dlqMessageRetentionSeconds',
+        isIntBetween(60, 1209600),
+        'an integer from 60 to 1209600'
+      ),
+      tags: tags === undefined ? undefined : Object.fromEntries(Object.entries(tags)),
+      label: q.label,
+      displayName: q.displayName,
+      application: q.application,
+    };
+  });
+  return { secrets, rotations, queues };
+}
+
+// Every name core links into Resource: its secrets plus the other SST components declared
+// in infra/*.ts, and the built-in App. Null when infra/ is absent (an image install step
+// that runs before the source copy): the runtime then registers no contributed secret
+// rather than one that might shadow a core name, until a later run sees infra/.
+function readCoreResourceNames() {
+  const infraDir = join(REPO_ROOT, 'infra');
+  if (!existsSync(join(infraDir, 'secrets.ts'))) return null;
+  const names = new Set(['App']);
+  for (const file of readdirSync(infraDir)
+    .filter(f => f.endsWith('.ts'))
+    .sort()) {
+    const source = readFileSync(join(infraDir, file), 'utf8');
+    const code = source
+      .split('\n')
+      .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
+      .join('\n');
+    const captured = [...code.matchAll(/new sst\.[A-Za-z.]+\(\s*'([A-Za-z0-9_]+)'/g)];
+    // The contributed secret and queue loops are the only constructors named from data;
+    // those names are not core's. Each pattern exempts one constructor, so a second one named
+    // the same way is counted as unreadable instead of silently left out.
+    const fromData = { 'secrets.ts': [/^\s*spec\.name,/], 'queues.ts': [/^\s*pair\.name,/, /^\s*pair\.dlqName,/] };
+    const exempted = new Set();
+    const constructors = [...code.matchAll(/new sst\.[A-Za-z.]+\(/g)].filter(m => {
+      const rest = code.slice(m.index + m[0].length);
+      const pattern = (fromData[file] ?? []).find(p => !exempted.has(p) && p.test(rest));
+      if (pattern) exempted.add(pattern);
+      return !pattern;
+    });
+    if (constructors.length !== captured.length) {
+      throw new Error(
+        `infra/${file}: ${constructors.length - captured.length} sst constructor(s) not named by a ` +
+          `single-quoted literal; core resource names cannot be read reliably`
+      );
+    }
+    for (const m of captured) names.add(m[1]);
+  }
+  return [...names];
+}
+
+// Mirrors toEnvKey in b4m-core/resource/src/index.ts; keep in sync.
+function toEnvKey(name) {
+  if (/^[A-Z0-9_]+$/.test(name)) return name;
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+}
+
+// Env var names core is known to own: the env form of every core resource, plus every upper-snake
+// key in infra/*.ts. This catches accidental collisions only; it is not a sandbox, since a package's
+// own code can read process.env. The env example files are not scanned: they list core secrets a
+// package may later take over. Null when coreNames is null.
+function readCoreEnvNames(coreNames) {
+  if (coreNames === null) return null;
+  const names = new Set(coreNames.map(toEnvKey));
+  const keyPattern = /(?:^|[{,])\s*(?:-\s*)?#?\s*([A-Z][A-Z0-9_]*)\s*[:=]/gm;
+  const infraDir = join(REPO_ROOT, 'infra');
+  const files = readdirSync(infraDir)
+    .filter(f => f.endsWith('.ts'))
+    .map(f => join(infraDir, f));
+  for (const file of files) {
+    for (const m of readFileSync(file, 'utf8').matchAll(keyPattern)) names.add(m[1]);
+  }
+  return [...names].sort();
+}
+
+// Every DLQ label infra/dlqAlarms.ts alarms on, registry-listed or alarm-only. Null when
+// infra/ is absent, like the core resource names. A label that is not a string literal
+// would be missed, so one fails codegen; the contributed pairs' spec.label is the exception.
+function readCoreDlqLabels() {
+  const file = join(REPO_ROOT, 'infra/dlqAlarms.ts');
+  if (!existsSync(file)) return null;
+  const code = readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
+    .join('\n');
+  // Only the contributed loop's spec.label is exempt; a second one is reported like any other.
+  let contributedLabelSeen = false;
+  const computed = [...code.matchAll(/\blabel:\s*(?![\s'"])([^,}\n]+)/g)]
+    .map(m => m[1].trim())
+    .filter(value => {
+      if (value !== 'spec.label' || contributedLabelSeen) return true;
+      contributedLabelSeen = true;
+      return false;
+    });
+  if (computed.length > 0) {
+    throw new Error(
+      `infra/dlqAlarms.ts: DLQ label(s) not written as a string literal: ${computed.join(', ')}. ` +
+        'Codegen reads core labels from literals; write the label inline.'
+    );
+  }
+  const labels = [...code.matchAll(/\blabel:\s*(['"])([a-z0-9]+(?:-[a-z0-9]+)*)\1/g)].map(m => m[2]);
+  return [...new Set(labels)].sort();
+}
+
+function generateInfraResources(packages) {
+  const merged = { secrets: [], rotations: [], queues: [] };
+  for (const pkg of packages) {
+    if (pkg.contributions.infraResources === undefined) continue;
+    const { secrets, rotations, queues } = readInfraResources(pkg);
+    merged.secrets.push(...secrets);
+    merged.rotations.push(...rotations);
+    merged.queues.push(...queues);
+  }
+  const coreNames = readCoreResourceNames();
+  const content =
+    `${GENERATED_BANNER}import type { InfraResourceContributions } from '@bike4mind/infra';\n\n` +
+    `export const contributedInfraResources: InfraResourceContributions = ${JSON.stringify(merged, null, 2)};\n\n` +
+    `export const coreResourceNames: readonly string[] | null = ${JSON.stringify(coreNames)};\n\n` +
+    `export const coreEnvNames: readonly string[] | null = ${JSON.stringify(readCoreEnvNames(coreNames))};\n\n` +
+    `export const coreDlqLabels: readonly string[] | null = ${JSON.stringify(readCoreDlqLabels())};\n`;
+  for (const target of INFRA_RESOURCE_TARGETS) writeFile(target, content);
+}
+
 // --- Main ---
 
 const packages = discoverPremiumPackages();
@@ -1497,6 +2009,8 @@ generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
 generatePartnerSignupHooks(linkedPackages);
+generateAgentExtensions(linkedPackages);
+generateAdminSettings(linkedPackages);
 generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
@@ -1509,5 +2023,8 @@ generateLocalStorageKeyPrefixes(packages);
 generateWorkspaceCopyEntitlements(packages);
 generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
+generateEntitlementGrants(packages);
+generateApiKeyScopes(packages);
+generateInfraResources(packages);
 
 console.log('[codegen] done.');

@@ -1,12 +1,12 @@
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { subscriptionCheckoutSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { findSubscriptionPlan } from '@client/lib/userSubscriptions/constants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
@@ -35,7 +35,7 @@ const handler = baseApi()
     // comp-grants go through a different route and are intentionally unaffected.
     // Only configured plans are purchasable; any other Stripe price id is refused here
     // rather than relying on stripe.prices.retrieve below, which accepts any live price.
-    const requestedPlan = SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId);
+    const requestedPlan = findSubscriptionPlan(priceId);
     if (!requestedPlan) {
       throw new BadRequestError('Unknown plan');
     }

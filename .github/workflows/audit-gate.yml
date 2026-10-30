@@ -16,6 +16,19 @@ name: Dependency Audit Gate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'package.json'
+      - '**/package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - 'patches/**'
+      - 'scripts/audit-*'
+      - 'scripts/lib-pnpm-workspace.mjs'
+      - 'scripts/__tests__/audit-*'
+      - 'vitest.config.ts'
+      - 'vitest.shared.ts'
+      - '.github/workflows/audit-gate.yml'
   merge_group:
     branches: [main]
   schedule:
@@ -33,7 +46,7 @@ jobs:
   audit-gate:
     name: Dependency Audit Gate
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
       contents: read

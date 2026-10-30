@@ -1,4 +1,4 @@
-import { APP_NAME, WEBSITE_URL } from '@bike4mind/common';
+import { APP_NAME, UrlBlockedError, WEBSITE_URL } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
 import type { Cheerio, CheerioAPI } from 'cheerio';
@@ -772,7 +772,7 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
       // This blocks requests to internal networks, cloud metadata endpoints, etc.
       const ssrfValidation = await validateUrlForFetch(currentUrl);
       if (!ssrfValidation.valid) {
-        throw new Error(`URL blocked for security reasons: ${ssrfValidation.error}`);
+        throw new UrlBlockedError(`URL blocked for security reasons: ${ssrfValidation.error}`);
       }
 
       const remainingMs = deadline - Date.now();

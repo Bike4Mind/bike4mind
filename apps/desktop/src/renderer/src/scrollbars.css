@@ -1,0 +1,70 @@
+:root {
+  --b4m-scrollbar-thumb: color-mix(in srgb, var(--joy-palette-text-secondary, #636b74) 50%, transparent);
+  --b4m-scrollbar-thumb-hover: color-mix(in srgb, var(--joy-palette-text-secondary, #636b74) 75%, transparent);
+}
+
+/* Non-auto standard properties make Chromium ignore the custom scrollbar shapes. */
+* {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-width: 24px;
+  min-height: 24px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-color: var(--b4m-scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+  background-color: var(--b4m-scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  border-width: 2px;
+  background-color: var(--joy-palette-text-secondary, #636b74);
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.xterm .xterm-scrollable-element > .scrollbar:is(.vertical, .horizontal) > .slider {
+  box-sizing: border-box;
+  border: 5px solid transparent;
+  border-radius: 999px;
+  background-color: var(--b4m-scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+.xterm .xterm-scrollable-element > .scrollbar:is(.vertical, .horizontal) > .slider:hover {
+  border-width: 4px;
+  background-color: var(--b4m-scrollbar-thumb-hover);
+}
+
+.xterm .xterm-scrollable-element > .scrollbar:is(.vertical, .horizontal) > .slider.active {
+  border-width: 4px;
+  background-color: var(--joy-palette-text-secondary, #636b74);
+}
+
+@media (forced-colors: active) {
+  *::-webkit-scrollbar-thumb,
+  .xterm .xterm-scrollable-element > .scrollbar:is(.vertical, .horizontal) > .slider {
+    background-color: CanvasText;
+  }
+}

@@ -2,10 +2,10 @@
  * `fetch` for attacker-influenced URLs, pinned at CONNECT time.
  *
  * Every TCP connection - first request, redirect hops, and whatever the caller fetches next - resolves
- * through `createSsrfSafeLookup`, so the address that is validated is the address the socket dials. That
- * closes the DNS-rebinding residual documented on `safeFetch` in `packages/server-utils/src/utils/ssrfProtection.ts`,
- * which cannot hook global fetch's resolver. Node skips `lookup` entirely for an IP-literal host, so literals
- * are judged per hop in `assertHopAllowed` instead.
+ * through `createSsrfSafeLookup`, so the address that is validated is the address the socket dials. Global
+ * fetch's resolver cannot be hooked that way, so `safeFetch`/`fetchPinned` in
+ * `packages/server-utils/src/utils/ssrfProtection.ts` build on this. Node skips `lookup` entirely for an
+ * IP-literal host, so literals are judged per hop in `assertHopAllowed` instead.
  *
  * Also enforced: https only (unless `allowHttp`), a decoded-byte body cap, a whole-request timeout that
  * covers the body as well as the headers, and manual redirects capped and revalidated per hop.
@@ -44,7 +44,7 @@ export interface PinnedFetchOptions {
   allowPrivateCidrs?: string[];
   /** Permit plain http. Default false. */
   allowHttp?: boolean;
-  /** Cap on DECODED body bytes per response (after content-encoding). Default 2 MiB. */
+  /** Cap on DECODED body bytes per response (after content-encoding). Default 2 MiB; `Infinity` disables it. */
   maxBodyBytes?: number;
   /** Deadline for the whole request including the body, in ms. Default 30000. */
   timeoutMs?: number;

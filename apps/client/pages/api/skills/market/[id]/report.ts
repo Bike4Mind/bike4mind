@@ -1,7 +1,7 @@
 // apps/client/pages/api/skills/market/[id]/report.ts
 import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   SKILL_LISTING_REPORT_REASONS,
   SkillListing,

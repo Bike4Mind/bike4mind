@@ -2,7 +2,7 @@ import type { ToolDefinition } from '@bike4mind/services/llm';
 import { isImageServeable } from '@bike4mind/common';
 import { generateHelpMessage } from './slackbotHelp';
 import { listCuratedFiles, getCuratedFiles } from './listCuratedFiles';
-import { getSlackDeps } from '../di/registry';
+import { z } from 'zod';
 import { notebookNew } from './notebookNew';
 import { notebookStatus } from './notebookStatus';
 
@@ -46,9 +46,10 @@ export const shareCuratedFileToolDef: ToolDefinition = {
   name: 'share_curated_file',
   implementation: context => ({
     toolFn: async (rawParams?: unknown) => {
-      const params = (rawParams || {}) as { fileName?: string };
-      // In the Quest Processor context, we don't have SlackClient/channel/thread.
-      // The LLM response text will include any download link and get posted to Slack.
+      const params = z.object({ fileName: z.string().max(255).optional() }).parse(rawParams ?? {});
+      if (!context.requestConfirmation || !context.slackDestination) {
+        return 'File sharing requires a Slack confirmation. Request it from Slack.';
+      }
       const files = await getCuratedFiles(
         context.userId,
         {
@@ -75,18 +76,20 @@ export const shareCuratedFileToolDef: ToolDefinition = {
         return 'This file is not available right now.';
       }
 
-      const { storage } = getSlackDeps();
-      const presignedUrl = await storage.filesStorage.getSignedUrl(file.filePath, 'get', {
-        expiresIn: 604800,
+      if (params.fileName && files.length > 1) {
+        return 'Multiple files match. Please specify the exact file name.';
+      }
+      await context.requestConfirmation({
+        tool: 'share_curated_file',
+        params: { fileId: file.id, fileName: file.fileName, userId: context.userId, ...context.slackDestination },
+        ts: Date.now(),
       });
-      const fileSizeKB = file.fileSize ? (file.fileSize / 1024).toFixed(1) : '?';
-      const expiresAt = new Date(Date.now() + 604800 * 1000).toLocaleDateString();
-      return `📔 *${file.fileName}* (${fileSizeKB} KB)\n🔗 <${presignedUrl}|Download File>\n⏰ Link expires on ${expiresAt}`;
+      return 'File sharing is awaiting your Confirm button click. No download link has been created.';
     },
     toolSchema: {
       name: 'share_curated_file',
       description:
-        'Share a curated notebook file. Call this when the user asks to "share file", "send file", or "share my latest file". Optionally specify a file name.',
+        'Request confirmation to share a curated notebook file. Call this when the user asks to "share file", "send file", or "share my latest file". Optionally specify a file name.',
       parameters: {
         type: 'object',
         properties: {

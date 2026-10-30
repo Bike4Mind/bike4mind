@@ -42,4 +42,15 @@ describe('ApiKeyRepository encrypt-on-write / decrypt-on-read', () => {
     const byTypes = await apiKeyRepository.findByUserIdAndTypes('user-read', [ApiKeyType.anthropic]);
     expect(byTypes[0]?.apiKey).toBe('sk-ant-readable');
   });
+  it('treats a submitted ciphertext blob literally and rejects stored blobs copied across records', async () => {
+    const source = await apiKeyRepository.create({ ...base('owner-a'), apiKey: 'source-key' });
+    const raw = await ApiKey.findById(source.id).lean();
+    const submitted = await apiKeyRepository.create({ ...base('owner-b'), apiKey: raw!.apiKey });
+    expect((await apiKeyRepository.findByUserIdAndType('owner-b', ApiKeyType.anthropic))?.apiKey).toBe(raw!.apiKey);
+    await ApiKey.collection.updateOne({ _id: raw!._id }, { $set: { userId: 'different-owner' } });
+    expect((await apiKeyRepository.findByUserIdAndType('different-owner', ApiKeyType.anthropic))?.apiKey).toBe('');
+    const other = await ApiKey.findById(submitted.id).lean();
+    await ApiKey.collection.updateOne({ _id: other!._id }, { $set: { apiKey: raw!.apiKey } });
+    expect((await apiKeyRepository.findByUserIdAndType('owner-b', ApiKeyType.anthropic))?.apiKey).toBe('');
+  });
 });

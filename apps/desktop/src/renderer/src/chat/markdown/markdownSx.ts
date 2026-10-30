@@ -57,12 +57,6 @@ export const markdownSx: SxProps = {
     borderTop: '1px solid var(--joy-palette-divider)',
   },
 
-  '& a': {
-    color: 'var(--joy-palette-primary-plainColor)',
-    textDecoration: 'underline',
-    textUnderlineOffset: '2px',
-  },
-
   // Anything but a fenced block, which CodeBlock draws with its own container.
   '& :not(pre) > code': {
     fontFamily: 'var(--joy-fontFamily-code)',

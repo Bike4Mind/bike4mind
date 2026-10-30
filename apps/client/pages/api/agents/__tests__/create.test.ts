@@ -32,6 +32,9 @@ vi.mock('@bike4mind/services', () => ({
   creditService: { subtractCredits: h.subtractCredits, addCredits: h.addCredits },
 }));
 
+const getCallerModelList = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/callerModelList', () => ({ getCallerModelList }));
+
 vi.mock('@server/utils/refreshAgentAvatarUrls', () => ({ refreshAgentAvatarUrls: vi.fn() }));
 
 await import('../index');
@@ -52,7 +55,14 @@ describe('POST /api/agents - credit allocation', () => {
 
   const post = (body: Record<string, unknown>) => {
     const r = makeRes();
-    return { ...r, run: () => h.handler!({ user: { id: 'user-1' }, body }, r.res) };
+    const warn = vi.fn();
+    const error = vi.fn();
+    return {
+      ...r,
+      warn,
+      error,
+      run: () => h.handler!({ user: { id: 'user-1' }, body, logger: { warn, error } }, r.res),
+    };
   };
 
   it('funds the agent through a ledgered transfer and reports the persisted user balance', async () => {
@@ -107,24 +117,51 @@ describe('POST /api/agents - credit allocation', () => {
 
   it('fails with 400 and does not credit the agent when the user debit finds no user', async () => {
     h.subtractCredits.mockResolvedValue(null);
-    const { run, json, status } = post({ name: 'Agent', useOwnCredits: true, currentCredits: 30 });
+    const { run, json, status, warn, error } = post({ name: 'Agent', useOwnCredits: true, currentCredits: 30 });
 
     await run();
 
     expect(status).toHaveBeenCalledWith(400);
     expect(json).toHaveBeenCalledWith({ error: 'User not found' });
     expect(h.addCredits).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
   });
 
   it('fails the create when crediting the agent finds no agent', async () => {
     h.subtractCredits.mockResolvedValue({ id: 'user-1', currentCredits: 70 });
     h.addCredits.mockResolvedValue(null);
-    const { run, json, status } = post({ name: 'Agent', useOwnCredits: true, currentCredits: 30 });
+    const { run, json, status, warn, error } = post({ name: 'Agent', useOwnCredits: true, currentCredits: 30 });
 
     await run();
 
     expect(status).toHaveBeenCalledWith(500);
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ details: 'Failed to fund agent credits' }));
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 and logs at error when the model catalog is empty', async () => {
+    getCallerModelList.mockResolvedValue({ models: [], supersededModels: [] });
+    const { run, status, warn, error } = post({ name: 'Agent', preferredModel: 'gpt-9-nope' });
+
+    await run();
+
+    expect(status).toHaveBeenCalledWith(503);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    expect(h.agentCreate).not.toHaveBeenCalled();
+  });
+
+  it('answers 500 when the model catalog lookup fails', async () => {
+    getCallerModelList.mockRejectedValue(new Error('catalog down'));
+    const { run, status, error } = post({ name: 'Agent', preferredModel: 'gpt-9-nope' });
+
+    await run();
+
+    expect(status).toHaveBeenCalledWith(500);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(h.agentCreate).not.toHaveBeenCalled();
   });
 
   it.each([-5, 'abc', Number.NaN])('rejects a funded create with currentCredits %s', async currentCredits => {
@@ -142,7 +179,10 @@ describe('POST /api/agents - credit allocation', () => {
     h.countByUserId.mockResolvedValue(10);
     const { res, json, status } = makeRes();
 
-    await h.handler!({ user: { id: 'user-1' }, body: { name: 'Agent' } }, res);
+    await h.handler!(
+      { user: { id: 'user-1' }, body: { name: 'Agent' }, logger: { warn: vi.fn(), error: vi.fn() } },
+      res
+    );
 
     expect(status).toHaveBeenCalledWith(400);
     expect(json).toHaveBeenCalledWith({ error: 'Agent limit reached for your tier (10 max)' });

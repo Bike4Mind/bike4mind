@@ -17,12 +17,16 @@ function sanitizeFilename(filename: string): string {
  *
  * @returns The path to the temporary file.
  */
-export async function createTempFile(filename: string, content: string): Promise<string> {
+export async function createTempFile(
+  filename: string,
+  content: string,
+  baseDir: string = os.tmpdir()
+): Promise<string> {
   const safeFilename = sanitizeFilename(filename);
-  const tempFileName = path.join(os.tmpdir(), safeFilename);
+  const tempFileName = path.join(baseDir, safeFilename);
 
   const resolvedPath = path.resolve(tempFileName);
-  if (!resolvedPath.startsWith(os.tmpdir())) {
+  if (!resolvedPath.startsWith(path.resolve(baseDir) + path.sep)) {
     throw new Error('Invalid file path');
   }
 

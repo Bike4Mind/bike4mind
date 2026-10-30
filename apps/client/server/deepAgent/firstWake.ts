@@ -1,12 +1,15 @@
 import { randomUUID } from 'crypto';
 import type { Logger } from '@bike4mind/observability';
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps, type WakeOutcome } from '@bike4mind/agents';
+import '@server/deepAgent/contributedToolbelts';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
-import { LlmWakeSteps } from './llmSteps';
+import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
 import { loadLinkedAgentContext } from './missions';
-import { bridgeWakeToSession } from './missionSessionBridge';
+import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
+import { missionWakeMeter } from './wakeMetering';
+import { resolveThinkingVisibilityForUserId } from '@server/utils/thinkingVisibility';
 
 /**
  * Run a freshly-enrolled mission's FIRST wake so it is born alive - the single
@@ -30,7 +33,15 @@ export interface FirstWakeOptions {
 }
 
 export async function runMissionFirstWake(missionId: string, opts: FirstWakeOptions): Promise<WakeOutcome> {
-  const resolved = await resolveDeepAgentBackend(opts.modelId ?? DEFAULT_WAKE_MODEL_ID, opts.logger, opts.userId);
+  const store = new MongoDeepAgentStore();
+  // Billed to the mission owner; an owner who cannot cover the first call gets the 422 before any provider call.
+  const meter = await missionWakeMeter(store, missionId, opts.logger);
+  const resolved = await resolveDeepAgentBackend(
+    opts.modelId ?? DEFAULT_WAKE_MODEL_ID,
+    opts.logger,
+    opts.userId,
+    meter
+  );
   if (!resolved) throw new Error('could not resolve wake model');
 
   const runAct = opts.enableTools
@@ -44,11 +55,12 @@ export async function runMissionFirstWake(missionId: string, opts: FirstWakeOpti
           logger: opts.logger,
         }),
         loadLinkedAgent: loadLinkedAgentContext,
+        resolveThinkingVisibility: resolveThinkingVisibilityForUserId,
       })
     : noopRunAct;
 
   const deps: WakeDeps = {
-    store: new MongoDeepAgentStore(),
+    store,
     steps: new LlmWakeSteps({
       adapters: { llm: resolved.llm, modelId: resolved.modelId },
       runAct,

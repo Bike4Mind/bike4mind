@@ -5,7 +5,10 @@ import {
   type DecisionModelId,
   type ListDecisionModelsResponse,
 } from '@bike4mind/common';
-import { getDecisionProviderRegistry, resolveCallableDecisionProviders } from '@server/decisions/providers';
+import {
+  getDecisionProviderRegistry,
+  resolveCallableDecisionProviders,
+} from '@bike4mind/server-utils/decisions/providers';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 

@@ -1,6 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { agentExecutionRepository } from '@bike4mind/database';
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { Connection } from '@bike4mind/database/social';
@@ -32,9 +33,10 @@ export type CleanupResponse = {
  * have already reached a terminal state are no-ops. `markAbandoned` filters
  * to sweepable statuses to avoid clobbering a concurrent natural completion.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const parsed = BodySchema.safeParse(req.body);
   if (!parsed.success) {
     throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
@@ -116,6 +118,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       }
     });
   }
+
+  await recordAdminActionFromRequest(req, {
+    action: 'ops.agent_executions.cleaned_up',
+    target: { kind: 'system', id: 'agent-executions-cleanup', displayName: 'Agent executions cleanup' },
+    summary: `cleaned up ${swept.length} agent executions`,
+    details: {
+      requested: executionIds.length,
+      marked: swept.length,
+      questsSettled: quests.settled,
+      executionIds: swept.map(s => s.id),
+    },
+  });
 
   const body: CleanupResponse = {
     requested: executionIds.length,

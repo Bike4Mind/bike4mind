@@ -2,12 +2,26 @@ import { IBaseRepository, IMongoDocument } from '.';
 import { PaginatedResponse } from '../common';
 
 /**
+ * Where a waitlist signup came from. Everything but `subscribe_page` is a person who
+ * tried to create an account while open registration was off.
+ */
+export const SUBSCRIBER_SOURCES = [
+  'subscribe_page',
+  'login_signup_closed',
+  'register_signup_closed',
+  'oauth_signup_closed',
+] as const;
+
+export type SubscriberSource = (typeof SUBSCRIBER_SOURCES)[number];
+
+/**
  * Base interface for subscriber data
  */
 export interface ISubscriber {
   firstName: string;
   lastName: string;
   email: string;
+  source?: SubscriberSource;
   createdAt: Date;
   // Soft delete support
   deletedAt?: Date | null;

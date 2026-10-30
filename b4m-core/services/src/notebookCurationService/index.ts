@@ -9,12 +9,12 @@ import {
   NotebookCurationError,
   ISessionRepository,
   IFabFileRepository,
-  ICreditTransactionRepository,
   IUserRepository,
   IOrganizationRepository,
   IAdminSettingsRepository,
   ISessionDocument,
   IChatHistoryItem,
+  isTerminalCreditRefusal,
 } from '@bike4mind/common';
 import type { CurationTokenUsage, LLMContext } from './llmMarkdownGenerator';
 import type { CurationMessage } from './artifactExtractor';
@@ -40,7 +40,6 @@ export interface NotebookCurationAdapters {
   chatHistoryRepository: ChatHistorySource;
   fabFileRepository: IFabFileRepository;
   fileStorageService: CreateFabFileAdapters['storage'];
-  creditTransactionRepository: ICreditTransactionRepository;
   userRepository: IUserRepository;
   organizationRepository: Pick<IOrganizationRepository, 'findById'>;
   /**
@@ -70,7 +69,7 @@ const CURATION_HASH_VERSION = 'v1';
  * stored file and skip the LLM + credit charge (issue #91).
  *
  * Intentionally NOT hashed:
- * - options.tokenBudget: affects only the base credit deduction, not the document.
+ * - options.tokenBudget: does not affect the document.
  * - session.name: curation is a point-in-time snapshot, so a rename alone should
  *   not force a full (paid) re-curation just to refresh the header title.
  * - message.timestamp: the extractor reads it for artifact metadata, but it is fixed
@@ -295,48 +294,11 @@ export class NotebookCurationService {
         const fileId = file.id;
         const fileName = file.fileName;
         const fileSize = file.fileSize;
-        // Deduct tokens/credits for curation
-        const { subtractCredits } = await import('../creditService/subtractCredits');
-        const { CreditHolderType } = await import('@bike4mind/common');
-
-        // Calculate total tokens: base cost (100 for processing) + LLM tokens (if executive summary)
-        const baseCost = options.tokenBudget ?? 100;
-        const tokensDeducted = baseCost + llmTokensUsed;
-
-        await subtractCredits(
-          {
-            ownerId: userId,
-            ownerType: CreditHolderType.User,
-            credits: tokensDeducted,
-            type: 'generic_deduct',
-            reason: 'notebook_curation',
-            description: `Curated notebook for session ${sessionId}`,
-            metadata: {
-              sessionId,
-              artifactCount: artifacts.length,
-              messageCount: messages.length,
-              tokensProcessed: totalTokens,
-              curatedFileId: fileId,
-            },
-          },
-          {
-            db: {
-              creditTransactions: this.adapters.creditTransactionRepository,
-            },
-            creditHolderMethods: this.adapters.userRepository,
-          }
-        );
-
         await this.adapters.sessionRepository.update({
           id: sessionId,
           curatedNotebookFileId: fileId,
           curatedAt: new Date(),
           curationContentHash: contentHash,
-        });
-        this.adapters.logger.info('Deducted tokens for curation', {
-          sessionId,
-          userId,
-          tokensDeducted,
         });
 
         return {
@@ -347,7 +309,9 @@ export class NotebookCurationService {
           artifactCount: artifacts.length,
           messageCount: messages.length,
           tokensProcessed: totalTokens,
-          tokensDeducted,
+          // The executive-summary LLM calls are billed per call by the host's metered llmService;
+          // the host reports what was charged.
+          tokensDeducted: 0,
         };
       };
       return this.adapters.commitCuration
@@ -358,6 +322,11 @@ export class NotebookCurationService {
 
       if (error instanceof BadRequestError) {
         return { success: false, error: error.message, retryable: false };
+      }
+      // The owner cannot pay for the summary (no credits, or the free-tier daily cap); a redelivery
+      // would be refused the same way.
+      if (isTerminalCreditRefusal(error)) {
+        return { success: false, error: (error as Error).message, retryable: false };
       }
       if (error instanceof NotebookCurationError) {
         return {

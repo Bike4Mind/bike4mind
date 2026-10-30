@@ -18,6 +18,12 @@ describe('SessionBadge with a PR', () => {
     expect(html).toContain('aria-label="PR #42 - Merged"');
   });
 
+  it('names a PR in the merge queue as queued to merge', () => {
+    const html = renderSidebar({ number: 42, state: 'queued' });
+    expect(html).toContain('data-session-pr-state="queued"');
+    expect(html).toContain('title="PR #42 - Queued to merge"');
+  });
+
   it.each(['processing', 'needs-action'] as const)('lets a live %s status outrank the PR icon', status => {
     const html = renderSidebar(PR, status);
     expect(html).toContain(`data-session-status="${status}" data-session-pr-state="merged"`);

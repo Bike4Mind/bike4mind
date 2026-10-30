@@ -9,8 +9,12 @@ import { createMocks } from 'node-mocks-http';
  * emits - no real database, so we mock the DB layer and inspect the pipeline handed to it.
  */
 
-const { aggregate, buildListVisibilityFilter, buildListQuery, projectFind } = vi.hoisted(() => ({
+const { aggregate, buildListVisibilityFilter, buildListQuery, projectFind, signOwnerThumbnailUrl } = vi.hoisted(() => ({
   aggregate: vi.fn(),
+  signOwnerThumbnailUrl: vi.fn(
+    async (publicId: string, key: string): Promise<string | undefined> =>
+      `https://signed.example.test/${key}?for=${publicId}`
+  ),
   buildListVisibilityFilter: vi.fn(),
   // Narrowing/sort is unit-tested in buildListQuery.test.ts; here it is a seam so these tests
   // can assert WHERE its output lands in the pipeline without restating its logic.
@@ -43,6 +47,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/services/publish', () => ({
   buildListVisibilityFilter: (...a: unknown[]) => buildListVisibilityFilter(...a),
   buildListQuery: (...a: unknown[]) => buildListQuery(...a),
+}));
+
+vi.mock('@server/services/publish/thumbnailUrl', () => ({
+  signOwnerThumbnailUrl: (publicId: string, key: string) => signOwnerThumbnailUrl(publicId, key),
 }));
 
 import handler from '../index';
@@ -489,5 +497,70 @@ describe('GET /api/publish/artifacts - reply titles', () => {
     const [row] = artifacts(await run({ mine: 'true' }));
     expect('replyTitleBody' in row).toBe(false);
     expect(row.title).toBe('Recap: Tides');
+  });
+});
+
+describe('GET /api/publish/artifacts - owner-only thumbnails', () => {
+  const KEY = `publish-thumbnails/own1/${'a'.repeat(64)}.webp`;
+  const withRows = (rows: unknown[]) =>
+    aggregate.mockResolvedValue([{ rows, total: [{ n: rows.length }], byKind: [], byVisibility: [], byGate: [] }]);
+  const artifacts = (res: { _getJSONData: () => { artifacts: Array<Record<string, unknown>> } }) =>
+    res._getJSONData().artifacts;
+
+  it('projects only the thumbnail key, never the stored subdocument', async () => {
+    await run({ mine: 'true' });
+    expect(projectStage().thumbnailKey).toBe('$thumbnail.key');
+    expect(projectStage().thumbnail).toBeUndefined();
+  });
+
+  it('signs a short-lived URL for the caller own rows on ?mine and never ships the raw key', async () => {
+    withRows([{ publicId: 'own1', ownerId: USER, thumbnailKey: KEY }]);
+    const [row] = artifacts(await run({ mine: 'true' }));
+    expect(signOwnerThumbnailUrl).toHaveBeenCalledWith('own1', KEY);
+    expect(row.thumbnailUrl).toBe(`https://signed.example.test/${KEY}?for=own1`);
+    expect('thumbnailKey' in row).toBe(false);
+  });
+
+  it('omits thumbnailUrl for a row that has not rendered yet', async () => {
+    withRows([{ publicId: 'own2', ownerId: USER }]);
+    const [row] = artifacts(await run({ mine: 'true' }));
+    expect(signOwnerThumbnailUrl).not.toHaveBeenCalled();
+    expect('thumbnailUrl' in row).toBe(false);
+  });
+
+  it('omits thumbnailUrl when signing declines the key', async () => {
+    signOwnerThumbnailUrl.mockResolvedValueOnce(undefined);
+    withRows([{ publicId: 'own1', ownerId: USER, thumbnailKey: KEY }]);
+    const [row] = artifacts(await run({ mine: 'true' }));
+    expect('thumbnailUrl' in row).toBe(false);
+  });
+
+  it('never signs on a browse listing, even for the caller own row', async () => {
+    withRows([{ publicId: 'own1', ownerId: USER, thumbnailKey: KEY }]);
+    const [row] = artifacts(await run({}));
+    expect(signOwnerThumbnailUrl).not.toHaveBeenCalled();
+    expect('thumbnailUrl' in row).toBe(false);
+    expect('thumbnailKey' in row).toBe(false);
+  });
+
+  it('never signs another user row, admins included', async () => {
+    withRows([{ publicId: 'theirs', ownerId: 'user-2', thumbnailKey: KEY }]);
+    for (const query of [{}, { mine: 'true' }]) {
+      const [row] = artifacts(await run(query, { id: USER, isAdmin: true }));
+      expect('thumbnailUrl' in row).toBe(false);
+      expect('thumbnailKey' in row).toBe(false);
+    }
+    expect(signOwnerThumbnailUrl).not.toHaveBeenCalled();
+  });
+
+  it('signs per row on a mixed page', async () => {
+    withRows([
+      { publicId: 'own1', ownerId: USER, thumbnailKey: KEY },
+      { publicId: 'theirs', ownerId: 'user-2', thumbnailKey: KEY },
+    ]);
+    const [own, theirs] = artifacts(await run({ mine: 'true' }));
+    expect(own.thumbnailUrl).toBeDefined();
+    expect('thumbnailUrl' in theirs).toBe(false);
+    expect(signOwnerThumbnailUrl).toHaveBeenCalledTimes(1);
   });
 });

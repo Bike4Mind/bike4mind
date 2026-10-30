@@ -4,20 +4,24 @@ import { postMessageToSlack } from '@bike4mind/utils';
 import { getSettingsMap } from '@bike4mind/utils';
 import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { SECRET_ROTATION_CONFIG } from '@bike4mind/server-utils/lib/secretRotation/constants';
+import { getSecretRotationConfig } from '@bike4mind/server-utils/lib/secretRotation/constants';
+import { SECRET_ROTATION_GRACE_MS } from '@server/auth/secretRotationGrace';
 import { Resource } from 'sst';
 
 export async function handler() {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
 
   try {
+    // Retire rotated-out secrets whose grace window has closed. Kept out of the read paths so
+    // verifying a token never writes.
+    await secretRotationRepository.expirePreviousKey('JWT_SECRET', SECRET_ROTATION_GRACE_MS);
     const now = new Date();
     const warningThreshold = 7; // days before expiration to warn
 
     // Get all active secrets, filtered to only those present in the current config.
-    // This makes the cron self-healing: removing an entry from SECRET_ROTATION_CONFIG
+    // This makes the cron self-healing: removing an entry from the rotation config
     // immediately stops alerts for it even if the DB record still has isActive: true.
-    const configKeys = new Set(Object.keys(SECRET_ROTATION_CONFIG));
+    const configKeys = new Set(Object.keys(getSecretRotationConfig()));
     const allActiveSecrets = await secretRotationRepository.find({ isActive: true });
     const secrets = allActiveSecrets.filter(s => configKeys.has(s.keyName));
 

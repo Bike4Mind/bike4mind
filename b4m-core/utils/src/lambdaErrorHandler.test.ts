@@ -142,6 +142,45 @@ describe('registerLambdaErrorHandlers', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { code: 'EPIPE' },
+    { code: 'ECONNRESET' },
+    { code: 'ETIMEDOUT' },
+    { code: 'ECONNREFUSED' },
+    { code: 'ENOTFOUND' },
+    { name: 'MongoNetworkError' },
+    { name: 'MongoNetworkTimeoutError' },
+    { name: 'MongoPoolClearedError' },
+  ])('classifies structured network errors %j on both process handlers', async properties => {
+    const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
+    registerLambdaErrorHandlers(logger as never);
+    const error = Object.assign(new Error('This socket has been ended by the other party'), properties);
+    const promise = Promise.resolve();
+    const catchSpy = vi.spyOn(promise, 'catch');
+
+    process.emit('unhandledRejection', error, promise);
+    process.emit('uncaughtException', error);
+    await flushMicrotasks();
+
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(logger.warn.mock.calls.map(call => call[1].category)).toEqual(['network_connection', 'network_connection']);
+    expect(catchSpy).toHaveBeenCalledTimes(1);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it.each([{ code: 11000 }, { code: 'UNKNOWN' }, { name: 'MongoServerError' }])(
+    'keeps non-network structured errors %j at error severity',
+    properties => {
+      const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
+      registerLambdaErrorHandlers(logger as never);
+      const error = Object.assign(new Error('Database operation failed'), properties);
+      process.emit('unhandledRejection', error, Promise.resolve());
+      process.emit('uncaughtException', error);
+      expect(logger.error).toHaveBeenCalledTimes(2);
+      expect(logger.warn).not.toHaveBeenCalled();
+    }
+  );
+
   it('is idempotent — repeated calls do not stack listeners', () => {
     const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
     const before = process.listenerCount('unhandledRejection');

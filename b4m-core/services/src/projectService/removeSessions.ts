@@ -4,6 +4,7 @@ import {
   IUserRepository,
   secureParameters,
   BadRequestError,
+  ForbiddenError,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
@@ -55,7 +56,7 @@ export const removeSessions = async (
     throw new BadRequestError('Some sessions are not accessible');
   }
   if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {
-    throw new Error('You are not authorized to remove sessions from this project');
+    throw new ForbiddenError('You are not authorized to remove sessions from this project');
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id

@@ -131,11 +131,92 @@ export enum ApiKeyScope {
    * to carry the `qa-ingest` user tag (QA_INGEST_USER_TAG in schemas/qa.ts).
    */
   QA_INGEST = 'qa:ingest',
+  /**
+   * List and download the Claude Code plugin feed of an org's approved Skill Market listings, and
+   * browse listings and read one listing's detail (`/api/v1/skills/market/*`). Confined: the key ends
+   * up in plaintext in `~/.claude/settings.json`, so it reaches only those read-only routes, each of
+   * which serves just what the key's owner can already see. Minted from the Skill Market's "Use in
+   * Claude Code" dialog.
+   * Not bound to an org: membership is re-checked on every request (`memberOrgIdsFor` in
+   * apps/client/server/skillMarket/market.ts), so a member who leaves or is removed loses that org's
+   * feed and zips while the key stays valid for their other orgs.
+   */
+  SKILLS_READ = 'skills:read',
+  /**
+   * Author on the Skill Market from a script or the CLI (`/api/v1/skills/market/listings*`):
+   * publish a listing, submit a new version, list your own listings, rescan, withdraw, browse, read
+   * a listing, and import one into your library. Not confined, because `b4m skills push --publish`
+   * upserts the skill through the scope-less `/api/skills` with the same key, which a confined key is
+   * denied. Kept out of the New-Key modal's Read & write preset despite its suffix, since publishing
+   * is outward-facing (UserApiKeysTab.tsx).
+   */
+  SKILLS_WRITE = 'skills:write',
+  /**
+   * Review held Skill Market versions (`/api/v1/skills/market/review-queue`,
+   * `/api/v1/skills/market/versions/{vid}/review`): list the pending queue, approve or reject. Org
+   * admins only, since isAdmin is withheld under a key without `admin:*`: it reaches the Organization
+   * listings of the orgs the key's owner administers, never Public or unlisted ones. Not confined.
+   */
+  SKILLS_REVIEW = 'skills:review',
+  /**
+   * Release-note automation: find a release note and set its video, and upload the What's New
+   * media for it. Admin-provisioned and confined so the job needs no `admin:*`
+   * key: it reaches only the routes that name it, and those still require a platform-admin owner.
+   */
+  RELEASE_NOTES_WRITE = 'release-notes:write',
+  /**
+   * Read the key owner's own Bob results: single-site reads, two-site comparisons and
+   * re-checks, the recent-reports list, and how many runs are left. It starts nothing and
+   * spends nothing, so the `:read` suffix that puts it in the New-Key modal's Read-only
+   * preset is deliberate, and safe there because every read is scoped to the key's owner.
+   * Split from {@link BOB_RUN} so an agent can be handed the read half alone.
+   *
+   * Like every scope, it authorizes but never entitles. The Bob routes, and the gate that
+   * decides which of the two scopes each one accepts, live in the Bob overlay package and
+   * have no implementation in this repository, so nothing here verifies either claim.
+   */
+  BOB_READ = 'bob:read',
+  /**
+   * Start a Bob site read, a two-site comparison or a re-check. This is the spend half of
+   * the Bob pair: it spends the key owner's credits and publishes a report as them, so it
+   * is never implied by {@link BOB_READ}, and it is deliberately unsuffixed so it stays out
+   * of the Read-only and Read & write presets, as {@link OPTIHASHI_COMPUTE} does. Nor does
+   * it imply {@link BOB_READ} at this repository's scope gate.
+   *
+   * Authorizes without entitling, like {@link BOB_READ}: the gate that enforces it lives in
+   * the Bob overlay package, with no implementation here.
+   */
+  BOB_RUN = 'bob:run',
 }
 
 /**
+ * A scope value as stored on a key: a built-in {@link ApiKeyScope} or one an overlay contributes at
+ * build time. Whether a value is known is decided by the app's merged catalog, not by this type.
+ */
+export type ApiKeyScopeValue = ApiKeyScope | (string & {});
+
+// Matches the codegen's API_KEY_SCOPE_VALUE_RE (apps/client/scripts/generate-premium-glue.mjs); only a
+// built-in scope may carry the `*` action.
+const API_KEY_SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$/;
+export const API_KEY_SCOPE_VALUE_MAX_LENGTH = 100;
+const BUILT_IN_API_KEY_SCOPES: ReadonlySet<string> = new Set(Object.values(ApiKeyScope));
+
+/** True for a built-in {@link ApiKeyScope} value. */
+export const isBuiltInApiKeyScope = (value: unknown): value is ApiKeyScope =>
+  typeof value === 'string' && BUILT_IN_API_KEY_SCOPES.has(value);
+
+/**
+ * Shape check only (`<resource>:<action>`, lowercase): any built-in scope, or a value an overlay
+ * could contribute. For storage, where the contributed catalog may not be loaded; it says nothing
+ * about whether the value is offered or authorizes anything.
+ */
+export const isWellFormedApiKeyScope = (value: unknown): value is ApiKeyScopeValue =>
+  isBuiltInApiKeyScope(value) ||
+  (typeof value === 'string' && value.length <= API_KEY_SCOPE_VALUE_MAX_LENGTH && API_KEY_SCOPE_VALUE_RE.test(value));
+
+/**
  * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
- * Overwatch ingest, QA run ingest. A key carrying ANY of these is *confined* and
+ * Overwatch ingest, QA run ingest, release-note automation. A key carrying ANY of these is *confined* and
  * both ends of the system say the same thing about it in the same words:
  *  - at mint (createUserApiKey): a confined scope must be the key's only scope, so
  *    a confined key is never persisted alongside reach it would then lose;
@@ -149,7 +230,29 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.EMBED_CHAT,
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
   ApiKeyScope.QA_INGEST,
+  ApiKeyScope.SKILLS_READ,
+  ApiKeyScope.RELEASE_NOTES_WRITE,
 ];
+
+/**
+ * Built-in scopes left out of the public API reference. An explicit list, not a rule: `admin:*`, the
+ * confined integration scopes except `skills:read`, and the `optihashi:*` family. Documentation only -
+ * it never affects which scopes a key may hold or what the runtime accepts.
+ */
+export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.ADMIN,
+  ...CONFINED_API_KEY_SCOPES.filter(scope => scope !== ApiKeyScope.SKILLS_READ),
+  ApiKeyScope.OPTIHASHI_READ,
+  ApiKeyScope.OPTIHASHI_COMPUTE,
+];
+
+/**
+ * Built-in scopes published in the public OpenAPI spec: every {@link ApiKeyScope} not in
+ * {@link UNDOCUMENTED_API_KEY_SCOPES}. Built-in scopes only: scopes an overlay contributes are not listed.
+ */
+export const PUBLIC_DOC_API_KEY_SCOPES: readonly ApiKeyScope[] = Object.values(ApiKeyScope).filter(
+  scope => !UNDOCUMENTED_API_KEY_SCOPES.includes(scope)
+);
 
 export enum ApiKeyStatus {
   ACTIVE = 'active',
@@ -259,7 +362,7 @@ export interface IUserApiKey {
    */
   keyDigest?: string;
   keyPrefix: string; // First 16 chars for lookup (e.g., "b4m_live_xxxxxxx")
-  scopes: ApiKeyScope[]; // Permissions array
+  scopes: ApiKeyScopeValue[]; // Permissions array
   status: ApiKeyStatus;
   expiresAt?: Date; // Optional expiration
   lastUsedAt?: Date;
@@ -278,6 +381,8 @@ export interface IUserApiKey {
   revokedBy?: string;
   /** Why the key was revoked, when the caller supplied a reason. */
   revokedReason?: string;
+  /** The admin users-list bulk batch that revoked the key; only that batch's undo may restore it. */
+  revokedBatchId?: string;
   /**
    * HMAC key that signs this key's generation completion callbacks, encrypted at rest and
    * `select: false`, so it is absent from every read except findCallbackSigningSecret. The
@@ -353,15 +458,20 @@ export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
  * Which per-user active-key cap a key counts against. Federated-exchange keys
  * (`createdFrom === 'oauth-exchange'`) are short-lived, at most one per (user, client),
  * and minted by a relying party rather than the user, so they get their own pool
- * instead of eating the user's dashboard/admin key slots. Caps live in
- * b4m-core/services/src/userApiKeyService/create.ts.
+ * instead of eating the user's dashboard/admin key slots. `personal` is the user-billed subset
+ * of `standard`, which the API key trust gate caps for untrusted owners (org-billed keys are not
+ * limited by trust). Caps live in b4m-core/services/src/userApiKeyService/create.ts.
  */
-export type ApiKeyCapPool = 'standard' | 'oauth-exchange';
+export type ApiKeyCapPool = 'standard' | 'personal' | 'oauth-exchange';
 
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
   findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;
+  /** When the user's first key was created, deleted and revoked keys included; null when none. */
+  findFirstCreatedAtByUserId: (userId: string) => Promise<Date | null>;
+  /** Keys each user has created, deleted and revoked keys included; users with none are absent. */
+  countCreatedByUserIds: (userIds: string[]) => Promise<Record<string, number>>;
   updateUsage: (id: string, usage: Partial<IUserApiKeyUsage>) => Promise<void>;
   /** Atomically adds settled credits to `usage.totalSpendCredits`. No-op for non-finite or <= 0 amounts. */
   incrementSpend: (id: string, credits: number) => Promise<void>;
@@ -387,9 +497,10 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**
    * Disables the key and stamps revokedAt/revokedBy/revokedReason, only if it is not already DISABLED.
+   * Resolves true when this call revoked it.
    * Optional so adding it stays additive: an external implementer of this interface is not broken by the new member.
    */
-  revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
+  revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<boolean>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
   /**
    * Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot.

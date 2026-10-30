@@ -12,6 +12,8 @@ import { buildVideoToolSchema, type VideoToolArgs } from './buildSchema';
 export type VideoToolConfig = {
   usableModels: readonly VideoModelId[];
   createJob: (input: CreateVideoJobInput) => Promise<CreateVideoJobResult>;
+  /** Surfaces with no progress UI use this to tell the model how the finished clip reaches the user. */
+  deliveryNote?: string;
 };
 
 type PopulatedVideoToolConfig = VideoToolConfig & { usableModels: readonly [VideoModelId, ...VideoModelId[]] };
@@ -25,6 +27,9 @@ export const isVideoToolConfig = (value: unknown): value is PopulatedVideoToolCo
   Array.isArray(value.usableModels) &&
   value.usableModels.length > 0;
 
+// Still the legacy single-image fields (read as one first_frame input), not `inputs`: a handler from before
+// `inputs` existed cannot read an inputs-only payload, so a rollback would fail every pending agent job. Switch
+// once that rollback window has passed, or when the tool offers more than one image.
 const toRequest = (args: VideoToolArgs) => {
   const caps = VIDEO_MODEL_CATALOG[args.model];
   return {
@@ -54,7 +59,11 @@ export const videoGenerationTool: ToolDefinition = {
         }
         const request = toRequest(args);
         const result = await config.createJob({
-          user: { id: context.userId, organizationId: context.organizationId ?? null },
+          user: {
+            id: context.userId,
+            organizationId: context.organizationId ?? null,
+            adminRoleWithheld: !context.user.isAdmin,
+          },
           request,
           source: 'agent',
           questId: context.questId,
@@ -69,6 +78,7 @@ export const videoGenerationTool: ToolDefinition = {
         return JSON.stringify({
           jobId: result.job.id,
           estimatedSeconds: VIDEO_MODEL_CATALOG[args.model].typicalRenderSeconds,
+          ...(config.deliveryNote && { note: config.deliveryNote }),
         });
       },
       toolSchema: { name: 'video_generation', description, parameters: toToolParameters(schema) },

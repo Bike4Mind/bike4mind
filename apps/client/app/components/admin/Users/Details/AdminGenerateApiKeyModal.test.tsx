@@ -25,6 +25,7 @@ vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAc
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
+  useApiKeyScopeEntitlements: () => ({ bypass: false, entitlements: new Set<string>() }),
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -206,6 +207,8 @@ describe('AdminGenerateApiKeyModal - premium scopes', () => {
       hasOptiAccess: false,
       hasOverwatchAccess: true,
       hearthEnabled: true,
+      bypass: false,
+      entitlements: new Set(),
     }).length;
     expect(screen.getByTestId('admin-generate-key-scopes-count').textContent).toContain(
       `(${offered}/${offered} selected)`

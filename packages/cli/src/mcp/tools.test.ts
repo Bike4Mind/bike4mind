@@ -53,6 +53,13 @@ describe('TOOL_NAMES', () => {
       'generate_image',
       'create_artifact',
       'publish_artifact',
+      'bob_read_site',
+      'bob_compare_sites',
+      'bob_recheck',
+      'get_bob_report',
+      'get_bob_comparison',
+      'list_bob_reports',
+      'bob_runs_left',
     ]);
   });
 });
@@ -1089,6 +1096,12 @@ describe('registerTools', () => {
   it('rename_notebook input schema rejects an empty name', () => {
     const schema = z.object(collectTools(mockClient({})).schemas.get('rename_notebook')!);
     expect(schema.safeParse({ notebookId: NB_ID, name: '' }).success).toBe(false);
+  });
+
+  it('generate_sound_effect input schema accepts 450 characters and rejects 451', () => {
+    const schema = z.object(collectTools(mockClient({})).schemas.get('generate_sound_effect')!);
+    expect(schema.safeParse({ text: 'x'.repeat(450) }).success).toBe(true);
+    expect(schema.safeParse({ text: 'x'.repeat(451) }).success).toBe(false);
   });
 
   // An empty or dot-segment id collapses the URL onto /api/sessions, whose DELETE wipes every notebook.

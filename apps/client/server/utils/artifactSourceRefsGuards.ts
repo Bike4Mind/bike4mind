@@ -1,7 +1,7 @@
 import { artifactRepository, questRepository, sessionRepository } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
 import type { artifactService } from '@bike4mind/services';
-import { assertArtifactSourceRefsAccessible } from '@server/utils/assertArtifactSourceRefsAccessible';
+import { assertArtifactSourceRefsAccessible } from '@bike4mind/server-utils/utils/assertArtifactSourceRefsAccessible';
 import { artifactSourceRefDeps } from '@server/artifacts/artifactAccess';
 
 type ArtifactSourceRefsGuard = artifactService.ArtifactSourceRefsGuard;

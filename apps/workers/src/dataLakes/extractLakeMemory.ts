@@ -4,15 +4,18 @@ import {
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  memoryLedgerRepository,
+  userRepository,
 } from '@bike4mind/database';
-import { LAKE_MEMORY_EXTRACTION_LEASE_MS } from '@bike4mind/common';
+import { isTerminalCreditRefusal, LAKE_MEMORY_EXTRACTION_LEASE_MS, type IUserDocument } from '@bike4mind/common';
 import { apiKeyService, dataLakeService } from '@bike4mind/services';
 import { LakeMemoryExtractionService } from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { EvidenceTier } from '@bike4mind/memory';
 import type { Logger } from '@bike4mind/observability';
-import { createLedgerAppendSession } from '@server/memory/mementoLedgerMirror';
+import { createLedgerAppendSession } from '@bike4mind/server-utils/memory/mementoLedgerMirror';
 import { createMementoEmbedder } from '@bike4mind/server-utils/memory/mementoEmbedder';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 /**
  * Reserved curator-tag markers that promote a lake document's facts to the `human-reviewed` tier. A
@@ -172,6 +175,14 @@ export async function extractLakeMemoryForBatch(
     const embed = createMementoEmbedder(apiKeyTable, logger);
 
     const extractor = new LakeMemoryExtractionService(logger);
+    // Every extraction call is billed to the lake owner (their org seat when present), even when a
+    // grantee's upload triggered it: extraction is lake-owned work.
+    const owner = (await userRepository.findById(ownerUserId)) as IUserDocument | null;
+    if (!owner) {
+      logger.warn('[lakeMemory] lake owner not found; skipping extraction', { dataLakeId: params.dataLakeId });
+      return { docsProcessed: 0, factsWritten: 0, factsRefused: 0, hasMore: false };
+    }
+    const meter = createCompletionMeter(owner, logger, 'data lake memory extraction', { systemModel: true });
 
     // Bounded continuation: resume AFTER the last document a prior interrupted run attempted (the
     // persisted cursor), not from the cap boundary - the deadline guard can end a run mid-slice, so the
@@ -321,8 +332,14 @@ export async function extractLakeMemoryForBatch(
           docTitle: doc.fileName ?? doc.fabFileId,
           docText: text,
           endUserId: ownerUserId,
+          meter,
         });
-        if (!facts?.length) continue;
+        if (!facts) throw new Error('Lake memory extraction failed');
+        if (facts.length === 0) {
+          lastCoveredId = doc.fabFileId;
+          consecutiveFailures = 0;
+          continue;
+        }
 
         const tier = evidenceTierForDoc((doc.tags ?? []).map(t => t.name));
         for (const { fact } of facts) {
@@ -341,11 +358,26 @@ export async function extractLakeMemoryForBatch(
             factsRefused++;
             break;
           }
+          const current = await fabFileRepository.findById(doc.fabFileId);
+          if (!current || !dataLakeService.lakeMembershipSignals(lake, current).inLake) {
+            await memoryLedgerRepository.markSourceShredded('lake', datalakeTag, ownerUserId, doc.fabFileId);
+            break;
+          }
           factsWritten++;
         }
         lastCoveredId = doc.fabFileId;
         consecutiveFailures = 0;
       } catch (err) {
+        // A credit refusal (out of credits, free-tier daily cap) is not a bad document: every later doc
+        // would be refused too. Stop like an abort, so the cursor stays at the last covered doc and the
+        // next finalize resumes there.
+        if (isTerminalCreditRefusal(err)) {
+          aborted = true;
+          logger.warn(
+            `[lakeMemory] lake ${datalakeTag}: the lake owner cannot be billed after ${docsAttempted}/${docs.length} docs; stopping: ${(err as Error).message}`
+          );
+          break;
+        }
         // One bad document must not abort the whole lake. Without this, a doc that reliably throws in
         // extractor.evaluate aborts the run, SQS redelivers, every earlier doc is re-billed (the LLM call
         // precedes the ledger de-dup), it throws again, and the run DLQs - docs after it never fold. Skip

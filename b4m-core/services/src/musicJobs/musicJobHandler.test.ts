@@ -54,6 +54,7 @@ const setup = (overrides: Partial<CreateMusicJobDeps> = {}) => {
   const commit = vi.spyOn(repository, 'commit');
   const queue: string[] = [];
   const deps: CreateMusicJobDeps = {
+    assertModelAdmission: vi.fn(async () => {}),
     repository,
     providers: createMusicProviderRegistry([new TestMusicProvider()]),
     getSettings: async () => ({ enforceCredits: true, musicGeneration: undefined }),
@@ -184,6 +185,17 @@ describe('music job end to end with the test provider', () => {
     );
   });
 
+  it('stores the validated request with the generation', async () => {
+    const t = setup();
+    await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generation: expect.objectContaining({ request: expect.objectContaining({ model: expect.any(String) }) }),
+      })
+    );
+  });
+
   it('falls back to the requested duration when the audio cannot be measured', async () => {
     const t = setup({
       providers: createMusicProviderRegistry([
@@ -222,6 +234,7 @@ describe('music job end to end with the test provider', () => {
           prompt: 'a ballad',
           lyrics: 'la la la',
           durationSeconds: expect.closeTo(5, 1),
+          request: expect.objectContaining({ model: 'test-music', prompt: 'a ballad' }),
         },
       })
     );

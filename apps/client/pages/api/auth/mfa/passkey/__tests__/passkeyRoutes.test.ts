@@ -8,7 +8,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockLogAuthAudit = vi.fn((..._args: any[]) => Promise.resolve());
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: any[]) => mockLogAuthAudit(...a) }));
@@ -57,6 +57,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   redactUserSecretsForSelf: (user: unknown) => user,
 }));
 
+import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 import authenticateHandler from '@pages/api/auth/mfa/passkey/authenticate';
 import registerHandler from '@pages/api/auth/mfa/passkey/register';
 import registerOptionsHandler from '@pages/api/auth/mfa/passkey/register-options';
@@ -109,6 +110,20 @@ describe('/api/auth/mfa/passkey/authenticate', () => {
       { id: 'user-1', tokenVersion: 3 },
       { rememberDevice: true }
     );
+  });
+
+  it('strips secrets and undeclared fields from the user in the response', async () => {
+    mockFinishAuthentication.mockResolvedValue({ user: { id: 'user-1', ...secretUserFields() }, credentialId: 'pk-1' });
+    const { req, res } = makeReqRes({ response: assertion });
+
+    await authenticateHandler(
+      req as unknown as Parameters<typeof authenticateHandler>[0],
+      res as unknown as Parameters<typeof authenticateHandler>[1]
+    );
+
+    const body = res._getJSONData();
+    expect(body.accessToken).toBe('full-access');
+    expectSelfUserStripped(body.user, body, 'user-1');
   });
 
   it('honours the shared MFA lockout before verifying anything', async () => {

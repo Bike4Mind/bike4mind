@@ -26,7 +26,7 @@ vi.mock('@bike4mind/database', () => ({
   voiceRepository: {},
 }));
 
-import { resolveTtsProvider, TtsProviderNotConfiguredError } from './resolveTtsProvider';
+import { hasTtsProviderKey, resolveTtsProvider, TtsProviderNotConfiguredError } from './resolveTtsProvider';
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
@@ -131,5 +131,23 @@ describe('resolveTtsProvider', () => {
       const resolved = await resolveTtsProvider({ provider: 'elevenlabs', userId: 'u1' });
       expect(resolved).toEqual({ apiKey: 'xi-admin-key', voice: undefined });
     });
+  });
+});
+
+describe('hasTtsProviderKey', () => {
+  it.each([null, '', 'configured-key'])('checks the effective provider key (%s)', async key => {
+    mocks.getEffectiveApiKey.mockResolvedValue(key);
+    expect(await hasTtsProviderKey('elevenlabs', 'u1')).toBe(Boolean(key));
+    expect(mocks.getEffectiveApiKey).toHaveBeenCalledWith(
+      'u1',
+      { type: 'elevenlabs', nullIfMissing: true },
+      expect.anything()
+    );
+    expect(mocks.getVoiceId).not.toHaveBeenCalled();
+  });
+  it('propagates lookup failures', async () => {
+    const fault = new Error('lookup failed');
+    mocks.getEffectiveApiKey.mockRejectedValue(fault);
+    await expect(hasTtsProviderKey('openai', 'u1')).rejects.toBe(fault);
   });
 });

@@ -5,6 +5,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { logEventSafe } from '@server/utils/analyticsLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { evaluateCounterLockout, resetApiKeyRateLimit, resolveCounterLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
@@ -80,6 +81,13 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         req.logger,
         `API key ${apiKey.id}`
       );
+
+      await recordAdminActionFromRequest(req, {
+        action: 'user.api_key.rate_limit_reset',
+        target: { kind: 'apiKey', id: apiKey.id, displayName: apiKey.name },
+        summary: 'reset API key rate-limit counters',
+        details: { ownerUserId: apiKey.userId, lockout },
+      });
 
       req.logger.info(
         `Admin ${req.user.username} (${req.user.id}) reset rate-limit counters for API key ${apiKey.id} (owner ${apiKey.userId})`

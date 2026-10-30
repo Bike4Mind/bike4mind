@@ -1,3 +1,4 @@
+import type { GeneratedAssetLineageEntry } from '../../generatedAsset';
 import { type ChunkStallReason } from '../../constants/chunking';
 import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
@@ -488,7 +489,7 @@ export interface IFabFile {
 
   /**
    * Set by the doors that hand a client a URL to PUT this row's bytes to (a presign, or the self-host
-   * proxy). Only such a row's landing is judged by the measured-size gate (apps/client/server/s3/uploadSizeGate.ts):
+   * proxy). Only such a row's landing is judged by the measured-size gate (packages/server-utils/src/s3/uploadSizeGate.ts):
    * a server-side door writes bytes it already holds, and judging those would discard its file.
    */
   clientUpload?: boolean;
@@ -546,6 +547,11 @@ export interface IFabFile {
    * body, or a caller could forge the audit trail this exists to provide.
    */
   sourceMetadata?: Record<string, unknown>;
+  /**
+   * For generated files: the FabFiles this one was made from, typed by role. Server-supplied only -
+   * never accepted from a request body - and only real FabFile ids.
+   */
+  derivedFrom?: GeneratedAssetLineageEntry[];
   /** Whether this file was automatically processed (vs manual upload) */
   automaticallyProcessed?: boolean;
   /** Metadata for data lake files */

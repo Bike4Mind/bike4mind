@@ -55,6 +55,8 @@ const create = vi.hoisted(() =>
 );
 vi.mock('@bike4mind/services', () => ({ organizationService: { search, create } }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository: {}, userRepository: {} }));
+const audit = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
 
 import '@pages/api/organizations/index';
 
@@ -109,7 +111,10 @@ describe('GET /api/organizations - scoping + safe serialization', () => {
 });
 
 describe('POST /api/organizations - admin gate + safe serialization', () => {
-  beforeEach(() => create.mockClear());
+  beforeEach(() => {
+    create.mockClear();
+    audit.mockClear();
+  });
 
   it('rejects a non-admin caller and does not create (#1428)', async () => {
     // The route creates an org and re-points the caller's own billing/scope (#1405) onto a
@@ -118,6 +123,22 @@ describe('POST /api/organizations - admin gate + safe serialization', () => {
     (req as any).body = { name: 'Acme' };
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/admin/i);
     expect(create).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('records a best-effort org.created entry after the create (admin)', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true });
+    Object.assign(req, { body: { name: 'Acme' } });
+    await mockRefs.postHandler!(req, res);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.created',
+        target: { kind: 'organization', id: 'orgNew', displayName: 'Acme' },
+      })
+    );
+    expect(create.mock.invocationCallOrder[0]).toBeLessThan(audit.mock.invocationCallOrder[0]);
   });
 
   it('strips stripeCustomerId from the created org before returning it (admin)', async () => {

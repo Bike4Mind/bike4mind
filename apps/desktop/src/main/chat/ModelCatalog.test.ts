@@ -2,6 +2,13 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { publicVideoModel } from './media/__fixtures__/videoModels';
 import { ModelCatalog, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
+import { GIB, stubArch, unifiedMachine } from './fitStub.testHelper';
+import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
+
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  estimateFit: (await import('./fitStub.testHelper')).stubEstimateFit,
+}));
 
 function wireModel(overrides: Record<string, unknown> = {}) {
   return {
@@ -19,6 +26,15 @@ describe('selectUsableModels', () => {
   it("carries the model's output ceiling from the catalog's max_tokens", () => {
     expect(selectUsableModels([wireModel({ max_tokens: 16_384 })])[0]).toMatchObject({ maxOutputTokens: 16_384 });
     expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('maxOutputTokens');
+  });
+
+  it('carries the release date only when the server sent a non-empty string', () => {
+    expect(selectUsableModels([wireModel({ releaseDate: '2025-04-14' })])[0]).toMatchObject({
+      releaseDate: '2025-04-14',
+    });
+    expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('releaseDate');
+    expect(selectUsableModels([wireModel({ releaseDate: '' })])[0]).not.toHaveProperty('releaseDate');
+    expect(selectUsableModels([wireModel({ releaseDate: 20250414 })])[0]).not.toHaveProperty('releaseDate');
   });
 
   it('keeps only text models that can call tools', () => {
@@ -93,17 +109,165 @@ describe('ModelCatalog', () => {
   beforeEach(() => {
     get = vi.fn().mockResolvedValue({ models: [wireModel(), wireModel({ id: 'dall-e-3', type: 'image' })] });
     environmentUrl = 'http://localhost:3000';
-    catalog = new ModelCatalog({
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
-      getEnvironmentUrl: () => environmentUrl,
-    });
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      { models: async () => [] } as never
+    );
   });
 
   it('serves a second read from cache', async () => {
     expect((await catalog.list()).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929']);
     await catalog.list();
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('expires a catalog containing local models quickly so a stopped runtime disappears', async () => {
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.list();
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5_001);
+    local.models.mockResolvedValue([]);
+    expect((await catalog.list()).models.some(model => model.id.startsWith('local:'))).toBe(false);
+  });
+
+  it('keeps the last local list past its expiry, without asking the device, until forgotten', async () => {
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    expect(catalog.lastLocal()).toBeNull();
+    await catalog.listLocal();
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+    expect(catalog.lastLocal()?.map(model => model.id)).toEqual(['local:ollama:qwen']);
+    expect(local.models).toHaveBeenCalledTimes(1);
+    catalog.forgetLocal();
+    expect(catalog.lastLocal()).toBeNull();
+  });
+
+  it('discovers a newly started local runtime without expiring or refetching the hosted list', async () => {
+    const local = { models: vi.fn().mockResolvedValue([]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    await catalog.list();
+    local.models.mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5_001);
+    expect((await catalog.list()).models.map(model => model.id)).toEqual([
+      'claude-sonnet-4-5-20250929',
+      'local:ollama:qwen',
+    ]);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks the device and the server at the same time', async () => {
+    let finishLocal: (models: unknown[]) => void = () => undefined;
+    const local = {
+      models: vi.fn(
+        () =>
+          new Promise<unknown[]>(resolve => {
+            finishLocal = resolve;
+          })
+      ),
+    };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    const listed = catalog.list();
+    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
+    finishLocal([{ id: 'local:ollama:qwen', name: 'qwen' }]);
+    expect((await listed).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
+  });
+
+  it("shows a local model's context as it is now: grown by a conversation, or sized again after Settings", async () => {
+    // The stub estimator: 64K is the most that fits 13 GiB, 32K the most that fits 10 GiB.
+    let hardware = unifiedMachine(13);
+    const footprint = () => ({ arch: stubArch(131072), weightsBytes: 4 * GIB, hardware });
+    const replies = [
+      () =>
+        Response.json(
+          { error: 'request (70000 tokens) exceeds the available context size (65536 tokens), try increasing it' },
+          { status: 400 }
+        ),
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.endsWith('/api/tags')) return Response.json({ models: [{ name: 'qwen', size: 1, digest: 'one' }] });
+        if (url.endsWith('/api/show'))
+          return Response.json({ capabilities: ['completion'], model_info: { 'llama.context_length': 131072 } });
+        return (replies.shift() ?? (() => new Response(`${JSON.stringify({ done: true })}\n`)))();
+      })
+    );
+    const local = new OllamaLocal(undefined, {
+      setting: async () => ({ mode: 'auto' }),
+      footprint: async () => footprint(),
+      cachedFootprint: footprint,
+    });
+    catalog = new ModelCatalog(
+      { logger: { debug: vi.fn(), warn: vi.fn() }, getApiClient: () => null, getEnvironmentUrl: () => environmentUrl },
+      local
+    );
+    try {
+      const contextOf = async () => (await catalog.list()).models.find(model => model.id === 'local:ollama:qwen');
+      expect((await contextOf())?.contextWindow).toBe(65536);
+      await local.stream(
+        { model: 'local:ollama:qwen', messages: [{ role: 'user', content: 'long' }] },
+        () => undefined
+      );
+      const grown = await local.contextTokens('local:ollama:qwen');
+      expect(grown).toBeGreaterThan(65536);
+      expect(catalog.cached()?.find(model => model.id === 'local:ollama:qwen')?.contextWindow).toBe(grown);
+      expect((await contextOf())?.contextWindow).toBe(grown);
+
+      hardware = unifiedMachine(10);
+      forgetLocalContexts();
+      catalog.forgetLocal();
+      expect((await contextOf())?.contextWindow).toBe(32768);
+    } finally {
+      forgetLocalContexts();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([false, true])('offers local models while signed out or the hosted catalog fails (%s)', async failed => {
+    if (failed) get.mockRejectedValue(new Error('offline'));
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => (failed ? ({ get } as unknown as AuthenticatedApiClient) : null),
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      { models: async () => [{ id: 'local:ollama:qwen', name: 'qwen' }] } as never
+    );
+    expect(await catalog.list()).toEqual({ models: [{ id: 'local:ollama:qwen', name: 'qwen' }] });
+    if (!failed) expect(get).not.toHaveBeenCalled();
   });
 
   it('retains thinking capability through an expired failed read without offering stale models', async () => {
@@ -166,11 +330,14 @@ describe('ModelCatalog', () => {
   });
 
   it('refuses to guess while signed out', async () => {
-    catalog = new ModelCatalog({
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      getApiClient: () => null,
-      getEnvironmentUrl: () => environmentUrl,
-    });
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      { models: async () => [] } as never
+    );
 
     expect((await catalog.list()).error).toMatch(/sign in/i);
   });

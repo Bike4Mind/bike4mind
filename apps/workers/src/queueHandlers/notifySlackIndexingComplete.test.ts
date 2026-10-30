@@ -29,7 +29,7 @@ vi.mock('@bike4mind/database/infra', () => ({
     findBySlackTeamIdWithToken: findBySlackTeamIdWithTokenOrg,
   },
 }));
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken }));
 // Ctor args recorded (not discarded) so a regression sending the wrong/encrypted token is caught.
 vi.mock('@bike4mind/slack', async importOriginal => {
   // escapeSlackMrkdwn imported from the REAL module, not reimplemented: these tests assert on

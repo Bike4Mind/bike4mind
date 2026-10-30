@@ -65,3 +65,51 @@ describe('artifactService - list includeDeleted', () => {
     expect(searchByText).toHaveBeenCalledWith('needle', expect.objectContaining({ deletedAt: null }), false);
   });
 });
+
+describe('artifactService - list identifier filter', () => {
+  const makeAdapters = () => {
+    const find = vi.fn().mockResolvedValue([]);
+    return { adapters: { db: { artifacts: { find } as unknown as IArtifactRepository } }, find };
+  };
+
+  const params = (over: Record<string, unknown> = {}) =>
+    ({
+      limit: 1,
+      offset: 0,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+      includeDeleted: false,
+      sessionId: 's1',
+      type: 'react',
+      ...over,
+    }) as Parameters<typeof list>[1];
+
+  it('matches the identifier field, or metadata.originalIdentifier on rows written before the field', async () => {
+    const { adapters, find } = makeAdapters();
+
+    await list('user-1', params({ identifier: 'todo_app' }), adapters);
+
+    expect(find).toHaveBeenCalledWith({
+      userId: 'user-1',
+      sessionId: 's1',
+      type: 'react',
+      deletedAt: null,
+      $or: [{ identifier: 'todo_app' }, { identifier: { $exists: false }, 'metadata.originalIdentifier': 'todo_app' }],
+    });
+  });
+
+  it('adds no identifier clause when none is given', async () => {
+    const { adapters, find } = makeAdapters();
+
+    await list('user-1', params(), adapters);
+
+    expect(find.mock.calls[0][0]).not.toHaveProperty('$or');
+  });
+
+  it.each([{ $ne: 'x' }, ['a', 'b'], ''])('rejects a non-string or empty identifier (%j)', async identifier => {
+    const { adapters, find } = makeAdapters();
+
+    await expect(list('user-1', params({ identifier }), adapters)).rejects.toThrow(/identifier/);
+    expect(find).not.toHaveBeenCalled();
+  });
+});

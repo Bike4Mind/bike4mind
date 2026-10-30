@@ -10,6 +10,7 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import type { ApiKeyInfo } from '@server/cli/auth';
 import { requestTurnAuth, type TurnAuth } from '@server/auth/turnAuth';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
 
 /**
@@ -23,9 +24,9 @@ import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '@server
  * The org-membership doors are the other out-of-family site, for `datalake:share`:
  * DELETE `organizations/[id]/members/[userId]` declares `DATA_LAKE_SHARE_SCOPES` on
  * `baseApi`, and DELETE `organizations/[id]/members` asserts `assertDataLakeShareScope`
- * in-handler so its GET/POST keep their existing scope behaviour. Both end a departing
- * member's lake grants below the service boundary, which is why a membership route
- * needs a data-lake scope at all.
+ * in-handler so its GET/POST keep their existing scope behaviour, as does DELETE
+ * `organizations/[id]` (org delete) for its GET/PUT. All three end members' lake grants
+ * below the service boundary, which is why an org route needs a data-lake scope at all.
  *
  * The ownership-offer doors are the third: the transfer-ownership DELETE and the
  * recipient `ownership-offers/[offerId]/accept` and `/decline` all assert
@@ -88,14 +89,17 @@ export function dataLakeToolsDeniedFor(req: ScopedRequest): string[] {
 
 /**
  * The persisted run fields derived from the request's credential (`req.apiKeyInfo`, undefined for a
- * signed-in session): always the turn auth, plus the scope denials when there are any.
+ * signed-in session): always the turn auth, plus the scope denials and the withheld admin role when
+ * the key calls for them.
  */
 export function credentialExecutionFields(apiKeyInfo: ApiKeyCredential | undefined): TurnAuth & {
   scopeDeniedTools?: string[];
+  adminRoleWithheld?: boolean;
 } {
   const scopeDeniedTools = dataLakeToolsDeniedFor({ apiKeyInfo });
   return {
     ...(scopeDeniedTools.length ? { scopeDeniedTools } : {}),
+    ...(adminRoleWithheldFor(apiKeyInfo) ? { adminRoleWithheld: true } : {}),
     ...requestTurnAuth({ apiKeyInfo }),
   };
 }

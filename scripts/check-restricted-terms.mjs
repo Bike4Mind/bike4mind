@@ -15,7 +15,8 @@
 // Modes, picked from GITHUB_EVENT_NAME:
 //   pull_request_target  title, body, head branch, every commit message, the
 //                        added lines of the PR diff and of each commit's own
-//                        diff. Fails on any hit.
+//                        diff (for a merge, the lines none of its parents
+//                        had). Fails on any hit.
 //   push                 the same for the pushed commits. Main is already
 //                        updated by then, so this only reports.
 //
@@ -132,6 +133,27 @@ function isBinary(buffer) {
   return buffer.subarray(0, 8000).includes(0);
 }
 
+/**
+ * Splits file content into `{ line, text }` rows to match. Binary content is
+ * still published with the repository, so its printable text is returned
+ * instead (with no line numbers). The NUL-stripped view catches UTF-16LE
+ * strings, which have a NUL between every character and so never form a
+ * printable run on their own.
+ */
+function contentLines(buffer) {
+  if (!isBinary(buffer)) {
+    return buffer
+      .toString('utf8')
+      .split('\n')
+      .map((text, i) => ({ line: i + 1, text }));
+  }
+  const views = [buffer.toString('latin1'), buffer.toString('utf8')];
+  return views
+    .flatMap(text => [text, text.replace(/\0/g, '')])
+    .flatMap(view => view.match(/[^\p{Cc}]+/gu) ?? [])
+    .map(run => ({ text: run }));
+}
+
 function github(token, fetchImpl) {
   const headers = {
     Accept: 'application/vnd.github+json',
@@ -195,22 +217,7 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
         note(`${where}: could not fetch content to check (HTTP ${err.status ?? 'error'}).`);
         continue;
       }
-      if (isBinary(content)) {
-        // Binary content is still published with the repository, so scan its
-        // printable text rather than skipping it; it has no lines to number. The
-        // NUL-stripped view catches UTF-16LE strings, which have a NUL between
-        // every character and so never form a printable run on their own.
-        const views = [content.toString('latin1'), content.toString('utf8')];
-        lines = views
-          .flatMap(text => [text, text.replace(/\0/g, '')])
-          .flatMap(view => view.match(/[^\p{Cc}]+/gu) ?? [])
-          .map(run => ({ text: run }));
-      } else {
-        lines = content
-          .toString('utf8')
-          .split('\n')
-          .map((text, i) => ({ line: i + 1, text }));
-      }
+      lines = contentLines(content);
     }
     for (const { line, text } of lines) {
       if (matches(matcher, text)) hit(line === undefined ? `${where} (binary text)` : `${where} line ${line}`);
@@ -218,27 +225,99 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
   }
 }
 
+/**
+ * Lists the blobs a merge commit changed relative to EVERY parent, as
+ * `{ path, sha, parentShas }`, where `parentShas` are the parents' blobs at the
+ * same path. A file or directory identical to one parent's holds nothing that
+ * parent did not already have, so the walk descends only into directories that
+ * differ from all parents. Read from git trees, so unlike compare (300 files)
+ * the result is never capped by the size of the branches being merged.
+ */
+async function mergeOnlyBlobs({ commit, gh, repo, incomplete, trees }) {
+  const entriesOf = async sha => {
+    if (sha === undefined) return new Map();
+    if (!trees.has(sha)) {
+      const tree = await gh.json(`/repos/${repo}/git/trees/${sha}`);
+      // The directory path is withheld: it may itself contain a term.
+      if (tree.truncated) incomplete(`merge ${commit.sha.slice(0, 12)} has a directory too large to list.`);
+      trees.set(sha, new Map((tree.tree ?? []).map(entry => [entry.path, entry])));
+    }
+    return trees.get(sha);
+  };
+
+  const blobs = [];
+  const walk = async (dir, treeSha, parentTreeShas) => {
+    const [own, ...parents] = await Promise.all([treeSha, ...parentTreeShas].map(entriesOf));
+    for (const [name, entry] of own) {
+      const inParents = parents.map(entries => entries.get(name));
+      if (inParents.some(parentEntry => parentEntry?.sha === entry.sha)) continue;
+      const shasOfType = type =>
+        inParents.map(parentEntry => (parentEntry?.type === type ? parentEntry.sha : undefined));
+      if (entry.type === 'tree') {
+        await walk(`${dir}${name}/`, entry.sha, shasOfType('tree'));
+      } else if (entry.type === 'blob') {
+        blobs.push({ path: `${dir}${name}`, sha: entry.sha, parentShas: shasOfType('blob').filter(Boolean) });
+      }
+      // A submodule ('commit') entry is only a pointer, with no content to read.
+    }
+  };
+  // A commit sha resolves to its root tree.
+  await walk(
+    '',
+    commit.sha,
+    commit.parents.map(parent => parent.sha)
+  );
+  return blobs;
+}
+
+/**
+ * Scans what a merge commit itself introduced: lines present in none of its
+ * parents' versions of a file, i.e. conflict resolutions and edits made in the
+ * merge. Content either parent already had is not charged to it; PR-side
+ * content was checked through the commits that added it, base-side content is
+ * not the PR's.
+ */
+async function scanMergeCommit({ commit, matcher, gh, repo, hit, incomplete, trees }) {
+  const label = `commit ${commit.sha.slice(0, 12)} `;
+  const readBlob = async sha => {
+    const blob = await gh.json(`/repos/${repo}/git/blobs/${sha}`);
+    return Buffer.from(blob.content ?? '', blob.encoding === 'base64' ? 'base64' : 'utf8');
+  };
+
+  const blobs = await mergeOnlyBlobs({ commit, gh, repo, incomplete, trees });
+  for (const [index, blob] of blobs.entries()) {
+    const pathHit = matches(matcher, blob.path);
+    const where = `${label}${pathHit ? `merged file #${index + 1} (path withheld)` : `file ${blob.path}`}`;
+    // A path any parent already had is inherited, not introduced by the merge.
+    if (pathHit && blob.parentShas.length === 0) hit(`${where}: the file path`);
+
+    const matching = contentLines(await readBlob(blob.sha)).filter(({ text }) => matches(matcher, text));
+    if (matching.length === 0) continue;
+    const parentContents = await Promise.all(blob.parentShas.map(readBlob));
+    const inherited = new Set(parentContents.flatMap(content => contentLines(content).map(({ text }) => text)));
+    for (const { line, text } of matching) {
+      if (inherited.has(text)) continue;
+      hit(line === undefined ? `${where} (binary text)` : `${where} line ${line}`);
+    }
+  }
+}
+
 // Net diffs miss additions later removed, including merge resolutions. Scan
-// every commit's own diff. For merges, compare from the PR/push baseline so
-// GitHub diffs its merge base with the commit. Either parent can carry inherited
-// base-branch content; choosing a parent would charge that content to the PR.
-async function scanCommitDiffs({ commits, base, matcher, gh, repo, hit, incomplete }) {
+// every commit's own diff, and for a merge only what it added beyond its parents.
+async function scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete }) {
   if (commits.length < 2) return;
+  // Shared across merges: tree shas are content-addressed, and repeated merges of
+  // the base branch see mostly the same unchanged subtrees.
+  const trees = new Map();
   for (const c of commits) {
-    const sha = c.sha.slice(0, 12);
-    let files;
     if (c.parents?.length > 1) {
-      files = (await gh.json(`/repos/${repo}/compare/${base}...${c.sha}`)).files ?? [];
-      if (files.length >= MAX_COMPARE_FILES) {
-        incomplete(
-          `merge ${sha} changes ${MAX_COMPARE_FILES}+ files; only the first ${MAX_COMPARE_FILES} were checked.`
-        );
-      }
-    } else {
-      files = await gh.paginate(`/repos/${repo}/commits/${c.sha}`, body => body.files ?? []);
-      if (files.length >= MAX_PR_FILES) {
-        incomplete(`commit ${sha} changes ${MAX_PR_FILES}+ files; the API lists only ${MAX_PR_FILES}.`);
-      }
+      await scanMergeCommit({ commit: c, matcher, gh, repo, hit, incomplete, trees });
+      continue;
+    }
+    const sha = c.sha.slice(0, 12);
+    const files = await gh.paginate(`/repos/${repo}/commits/${c.sha}`, body => body.files ?? []);
+    if (files.length >= MAX_PR_FILES) {
+      incomplete(`commit ${sha} changes ${MAX_PR_FILES}+ files; the API lists only ${MAX_PR_FILES}.`);
     }
     await scanFiles({ files, matcher, gh, repo, ref: c.sha, hit, note: incomplete, label: `commit ${sha} ` });
   }
@@ -263,7 +342,7 @@ async function scanPullRequest({ event, matcher, gh, repo, hit, incomplete }) {
   }
   const files = await gh.paginate(`/repos/${repo}/pulls/${pr.number}/files`);
   await scanFiles({ files, matcher, gh, repo, ref: pr.head.sha, hit, note: incomplete });
-  await scanCommitDiffs({ commits, base: pr.base.sha, matcher, gh, repo, hit, incomplete });
+  await scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete });
   return `PR #${pr.number}: title, body, branch name, ${commits.length} commit(s), ${files.length} file(s)`;
 }
 
@@ -298,7 +377,7 @@ async function scanPush({ event, matcher, gh, repo, hit, incomplete }) {
     if (matches(matcher, c.commit.message ?? '')) hit(`commit ${c.sha.slice(0, 12)} message`);
   }
   await scanFiles({ files, matcher, gh, repo, ref: event.after, hit, note: incomplete });
-  await scanCommitDiffs({ commits, base: event.before, matcher, gh, repo, hit, incomplete });
+  await scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete });
   return `push to ${event.ref}: ${commits.length} commit(s), ${files.length} file(s)`;
 }
 

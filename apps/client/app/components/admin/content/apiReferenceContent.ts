@@ -137,10 +137,18 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
   \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
-- Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
+- Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`,
+  \`/api/v1/text-refinements\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
-- Release notes: \`/api/v1/whats-new\` (public, no key needed)
+- Skill Market as a Claude Code plugin marketplace: \`/api/v1/skills/market/claude-marketplace.json\`,
+  \`/api/v1/skills/market/{id}/claude-plugin.zip\`
+- Skill Market listings: \`/api/v1/skills/market/listings\`, \`/api/v1/skills/market/listings/mine\`,
+  \`/api/v1/skills/market/listings/{id}\` (+ \`/versions\`, \`/import\`),
+  \`/api/v1/skills/market/versions/{vid}/rescan\`
+- Skill Market review (org admins): \`/api/v1/skills/market/review-queue\`,
+  \`/api/v1/skills/market/versions/{vid}/review\`
+- Release notes: \`/api/v1/whats-new\`, \`/api/v1/whats-new/media/*\` (public, no key needed)
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.
@@ -210,9 +218,9 @@ still hand-written.
 Custom AI agents with configurable personas, system prompts, and tool access.
 
 **Required API-key scope:** \`agents:read\` (or \`agents:write\`) to list and read,
-\`agents:write\` to create, update, and delete.
+\`agents:write\` to create, update, delete, and run the authoring assistants.
 
-#### List, Get, Create, Update, and Delete Agents
+#### List, Get, Create, Update, Delete, and Author Agents
 
 \`\`\`
 GET    /api/v1/agents
@@ -220,11 +228,16 @@ GET    /api/v1/agents/[id]
 POST   /api/v1/agents
 PATCH  /api/v1/agents/[id]
 DELETE /api/v1/agents/[id]
+POST   /api/v1/agents/[id]/generate-avatar
+POST   /api/v1/agents/[id]/generate-description
+POST   /api/v1/agents/[id]/generate-system-prompt
+POST   /api/v1/agents/[id]/enhance-field
 \`\`\`
 
 > **These endpoints are generated from their contracts.** The full request/response
 > reference lives in the [generated API docs](/api/v1/docs) under \`listAgents\`,
-> \`getAgent\`, \`createAgent\`, \`updateAgent\`, and \`deleteAgent\`.
+> \`getAgent\`, \`createAgent\`, \`updateAgent\`, \`deleteAgent\`, \`generateAgentAvatar\`,
+> \`generateAgentDescription\`, \`generateAgentSystemPrompt\`, and \`enhanceAgentField\`.
 
 #### List Agents (existing app route)
 
@@ -245,24 +258,8 @@ DELETE /api/v1/agents/[id]
 | GET | /api/agents/[id] | Get agent details |
 | PUT | /api/agents/[id] | Update agent |
 | DELETE | /api/agents/[id] | Delete agent |
-| POST | /api/agents/[id]/generate-avatar | AI-generate agent avatar |
-| POST | /api/agents/[id]/generate-description | AI-generate agent description |
-| POST | /api/agents/[id]/generate-system-prompt | AI-generate system prompt |
-| POST | /api/agents/[id]/enhance-field | AI-enhance a specific field |
 | POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
 | POST | /api/agents/create-from-context | Create agent from conversation context |
-
----
-
-### AI Services
-
-Transcription is covered by the generated docs (see above).
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/ai/refineText | Refine and improve text |
-
-**Required API-key scope for \`refineText\`:** \`ai:generate\`.
 
 ---
 

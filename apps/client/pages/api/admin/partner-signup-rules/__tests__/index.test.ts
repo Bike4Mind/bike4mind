@@ -5,19 +5,29 @@ import { createMocks } from 'node-mocks-http';
 // invoked directly (same middleware-strip pattern as pages/api/email/__tests__/verify.test.ts).
 // Everything referenced inside a vi.mock factory must live in vi.hoisted (mocks are hoisted
 // above top-level const initialization).
-const { handlers, repo, invalidatePartnerRuleCache } = vi.hoisted(() => ({
+const { handlers, repo, invalidatePartnerRuleCache, audit } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => unknown>,
   repo: { listRules: vi.fn(), findByDomain: vi.fn(), create: vi.fn() },
   invalidatePartnerRuleCache: vi.fn(),
+  audit: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: Record<string, (fn: (req: unknown, res: unknown) => unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain: Record<string, unknown> = {
+      use: (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+        middlewares.push(middleware);
+        return chain;
+      },
+    };
     for (const method of ['get', 'post', 'put', 'delete']) {
       chain[method] = (fn: (req: unknown, res: unknown) => unknown) => {
-        handlers[method] = fn;
+        handlers[method] = async (req: unknown, res: unknown) => {
+          for (const middleware of middlewares) middleware(req, res, () => undefined);
+          return fn(req, res);
+        };
         return chain;
       };
     }
@@ -25,7 +35,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@bike4mind/database', () => ({ partnerSignupRuleRepository: repo }));
+vi.mock('@bike4mind/database', () => ({
+  partnerSignupRuleRepository: repo,
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
+}));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
 // Keep assertKnownEntitlements real (exercises the actual known-key validation); spy only on invalidate.
 vi.mock('@server/entitlements/partnerRules', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/entitlements/partnerRules')>()),
@@ -56,7 +70,7 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
 
   it('rejects a non-admin with 403 (ForbiddenError) and never writes', async () => {
     const { req, res } = makeReqRes('POST', { user: { isAdmin: false }, body: validRule });
-    await expect(handlers.post(req, res)).rejects.toThrow(/admin access required/i);
+    await expect(handlers.post(req, res)).rejects.toThrow(/missing permission/i);
     expect(repo.create).not.toHaveBeenCalled();
   });
 
@@ -108,6 +122,28 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
   });
 
+  it('records a strict org.partner_signup_rule.created entry after the create', async () => {
+    const { req, res } = makeReqRes('POST', { body: validRule });
+    await handlers.post(req, res);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.partner_signup_rule.created',
+        target: { kind: 'settings', id: 'r1', displayName: 'partner.com' },
+      })
+    );
+    expect(repo.create.mock.invocationCallOrder[0]).toBeLessThan(audit.mock.invocationCallOrder[0]);
+  });
+
+  it('does not report success or bust the cache when the audit write rejects', async () => {
+    audit.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = makeReqRes('POST', { body: validRule });
+    await expect(handlers.post(req, res)).rejects.toThrow(/audit down/);
+    expect(res._isEndCalled()).toBe(false);
+    expect(invalidatePartnerRuleCache).not.toHaveBeenCalled();
+  });
+
   it('accepts a datalake:<slug> entitlement, unlisted but matching the registered key family (#1669)', async () => {
     const body = { ...validRule, entitlements: ['datalake:acme-legal'] };
     repo.create.mockResolvedValue({ id: 'r1', ...body, enabled: true });
@@ -132,7 +168,7 @@ describe('/api/admin/partner-signup-rules — list (GET)', () => {
 
   it('rejects a non-admin', async () => {
     const { req, res } = makeReqRes('GET', { user: { isAdmin: false } });
-    await expect(handlers.get(req, res)).rejects.toThrow(/admin access required/i);
+    await expect(handlers.get(req, res)).rejects.toThrow(/missing permission/i);
     expect(repo.listRules).not.toHaveBeenCalled();
   });
 

@@ -53,6 +53,19 @@ describe('prepareShareMeta', () => {
     expect(metaTags).toContain('<link rel="canonical" href="https://example.com/p/u/scope/slug">');
   });
 
+  it('emits no image meta - owner-only artifact thumbnails must never become an unfurl image', () => {
+    const { metaTags, noscriptBody } = prepareShareMeta({
+      title: 'Hello',
+      description: 'A short description',
+      bodyForExcerpt: '<p>Body</p>',
+      canonicalUrl: 'https://example.com/p/u/scope/slug',
+      siteName: 'ExampleApp',
+    });
+
+    expect(`${metaTags}\n${noscriptBody}`).not.toMatch(/og:image|twitter:image|publish-thumbnails|<img/);
+    expect(metaTags).toContain('<meta name="twitter:card" content="summary">');
+  });
+
   it('omits the unfurl CTA when no siteName is configured (fork-safe neutral default)', () => {
     const { metaTags } = prepareShareMeta({
       title: 'Hello',

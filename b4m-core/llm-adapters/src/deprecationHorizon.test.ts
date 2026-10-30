@@ -97,6 +97,16 @@ describe('catalogLifecycles', () => {
     expect(lifecycles.has('gpt-y')).toBe(false);
   });
 
+  it.each([true, false])(
+    'keeps explicit superseded metadata (%s) when narrowing the effective lifecycle',
+    isSuperseded => {
+      const lifecycles = catalogLifecycles([
+        makeRow({ modelId: 'gpt-x', patch: { lifecycle: { status: 'active', isSuperseded } } }),
+      ]);
+      expect(lifecycles.get('gpt-x')?.isSuperseded).toBe(isSuperseded);
+    }
+  );
+
   it('carries a lifecycle a later build wrote with no status', () => {
     // The read schema is partial all the way down, so a status-less lifecycle
     // reaches here instead of costing the row: the date still has to drive the

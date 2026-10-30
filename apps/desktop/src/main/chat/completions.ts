@@ -21,6 +21,11 @@ export interface CompletionMessage {
   content: string | unknown[];
   /** Asks the provider to cache the request up to and including this message. Anthropic only. */
   cache?: boolean;
+  /**
+   * A user message that belongs to the turn before it (tool screenshots), so local history
+   * trimming never starts a turn here. Never sent: streamCompletion and OllamaLocal drop it.
+   */
+  continuesTurn?: boolean;
 }
 
 /**
@@ -112,7 +117,7 @@ export async function streamCompletion(
       endpoint,
       {
         model: request.model,
-        messages: request.messages,
+        messages: request.messages.map(({ continuesTurn: _continuesTurn, ...message }) => message),
         ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
         // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
         // this client executes it locally, then sends the result back as another turn.
@@ -256,12 +261,17 @@ function readSseStream(
  * Turn a pre-stream failure into a message worth showing. The HTML case is not hypothetical:
  * a proxy or WAF sitting in front of the completions service answers with an error page, and
  * the raw axios message for that is just a status code.
+ *
+ * An expired session never reaches here as a 401: the shared client refreshes and retries it,
+ * and one it cannot recover arrives as its own SessionRevokedError, passed through untouched. A
+ * 401 that does arrive is one whose body says the credential was accepted, and a 403 is "not
+ * allowed", so neither is described as an expiry.
  */
 function toRequestError(error: unknown, body?: string): Error {
   if (isAxiosError(error)) {
     const status = error.response?.status;
-    if (status === 401 || status === 403) {
-      return new Error(`The server refused the request (${status}). Your session may have expired.`);
+    if (status === 403) {
+      return new Error(body ? `${body} (status 403)` : 'The server does not allow this request (403).');
     }
     if (status) {
       return new Error(body ? `${body} (status ${status})` : `The completion request failed with status ${status}.`);
@@ -283,7 +293,7 @@ function toRequestError(error: unknown, body?: string): Error {
 async function readErrorBody(error: unknown): Promise<string | undefined> {
   if (!isAxiosError(error)) return undefined;
   const data = error.response?.data;
-  if (typeof data === 'string') return data.slice(0, ERROR_BODY_LIMIT) || undefined;
+  if (typeof data === 'string') return messageOf(data.slice(0, ERROR_BODY_LIMIT).trim());
   if (!data || typeof (data as Readable).on !== 'function') return undefined;
 
   try {
@@ -294,26 +304,31 @@ async function readErrorBody(error: unknown): Promise<string | undefined> {
       size += chunk.length;
       if (size >= ERROR_BODY_LIMIT) break;
     }
-    const text = Buffer.concat(chunks).toString('utf8').slice(0, ERROR_BODY_LIMIT).trim();
-    if (!text) return undefined;
-    // The server wraps a provider failure in its own envelope; either shape may show up, and a
-    // body that parses as neither is returned as written rather than dropped.
-    try {
-      const parsed = JSON.parse(text) as { message?: unknown; error?: { message?: unknown } | string };
-      const message =
-        typeof parsed.message === 'string'
-          ? parsed.message
-          : typeof parsed.error === 'string'
-            ? parsed.error
-            : typeof parsed.error?.message === 'string'
-              ? parsed.error.message
-              : undefined;
-      return message ?? text;
-    } catch {
-      return text;
-    }
+    return messageOf(Buffer.concat(chunks).toString('utf8').slice(0, ERROR_BODY_LIMIT).trim());
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * The server wraps a provider failure in its own envelope; either shape may show up, and a body
+ * that parses as neither is returned as written rather than dropped.
+ */
+function messageOf(text: string): string | undefined {
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text) as { message?: unknown; error?: { message?: unknown } | string };
+    const message =
+      typeof parsed.message === 'string'
+        ? parsed.message
+        : typeof parsed.error === 'string'
+          ? parsed.error
+          : typeof parsed.error?.message === 'string'
+            ? parsed.error.message
+            : undefined;
+    return message ?? text;
+  } catch {
+    return text;
   }
 }
 

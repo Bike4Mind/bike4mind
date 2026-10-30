@@ -3,15 +3,16 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
-import { WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
+import { createModalVideoSchema } from '@bike4mind/common';
+import { definedKeys } from '@server/utils/adminAudit';
+import { modalAuditTitle } from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
+import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
-import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
-import { Logger } from '@bike4mind/observability';
-import { extractVariantForViewer, viewerClassifier, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
+import { extractVariantForViewer, viewerClassifier } from '@bike4mind/services';
 
-const logger = new Logger({ metadata: { service: 'modals/update' } });
+const ModalVideoSchema = createModalVideoSchema({ extraOrigins: deploymentMediaOrigins() });
 
 const ModalImageSchema = z.object({
   url: z.url(),
@@ -19,13 +20,13 @@ const ModalImageSchema = z.object({
   height: z.number().nullable().optional(),
 });
 
-// Length limits match WhatsNewModalPayloadSchema in whatsNewDistribution.ts
 const UpdateModalRequestSchema = z.object({
   title: z.string().max(200).nullable().optional(),
   subtitle: z.string().max(500).nullable().optional(),
   description: z.string().max(15000).nullable().optional(),
   imageUrl: z.string().nullable().optional(),
   images: z.array(ModalImageSchema).nullable().optional(),
+  video: ModalVideoSchema.nullable().optional(),
   textMessage: z.string().nullable().optional(),
   isBanner: z.coerce.boolean().optional(),
   tags: z.array(z.string()).nullable().optional(),
@@ -78,72 +79,34 @@ const handler = baseApi().put(
       updateData.images = await cacheExternalImages(updateData.images);
     }
 
+    const before = modal.toObject() as unknown as Record<string, unknown>;
     const updatedModal = await ModalModel.findOneAndUpdate(
       { _id: id },
       { $set: updateData },
       { new: true, runValidators: true } // Return the updated modal and ensure schema validations are applied
     );
 
-    // Sync to S3 distribution for What's New modals (non-critical).
-    // Gate on customer-variant presence: internal-only modals have raw
-    // internal text at top-level. Fork environments store the S3 payload as a
-    // flat doc with no variants map, so extractVariantForViewer takes the
-    // legacy-passthrough branch and would serve internal text to all fork viewers.
-    const modalVariants = updatedModal?.variants;
-    // Treat absent map AND empty map {} as "no customer variant" - both mean
-    // no customer-facing content exists and S3 distribution must be skipped.
-    const hasCustomerVariant = !modalVariants || MODAL_SAFE_DEFAULT_KEY in modalVariants;
-
-    if (
-      updatedModal?._id &&
-      updatedModal.tags?.includes('whats-new') &&
-      updatedModal.generationMetadata?.generatedDate &&
-      hasCustomerVariant
-    ) {
-      const modalId = updatedModal._id.toString();
-      const key = `production/${updatedModal.generationMetadata.generatedDate}.json`;
-      const payload = {
-        version: '1.0' as const,
-        modalId,
-        title: updatedModal.title || '',
-        subtitle: updatedModal.subtitle || '',
-        description: updatedModal.description || '',
-        generatedDate: updatedModal.generationMetadata.generatedDate,
-        releaseTag: updatedModal.generationMetadata.releaseTag,
-        environment: 'production' as const,
-        createdAt: updatedModal.createdAt?.toISOString() || new Date().toISOString(),
-        metadata: {
-          modelUsed: updatedModal.generationMetadata.modelUsed || 'unknown',
-          correlationId: updatedModal.generationMetadata.correlationId || 'manual-edit',
-          repositoryUrl: `https://github.com/${WHATS_NEW_DEFAULT_REPOSITORY}`,
+    if (!updatedModal) throw new NotFoundError('Modal not found');
+    await recordModalChanges(
+      req,
+      [
+        {
+          kind: 'updated',
+          id: String(updatedModal._id),
+          title: modalAuditTitle(updatedModal),
+          fields: definedKeys(updateData).filter(
+            key => JSON.stringify(updateData[key as keyof typeof updateData]) !== JSON.stringify(before[key])
+          ),
         },
-      };
-      const content = JSON.stringify(payload, null, 2);
-
-      // Await S3 sync to prevent Lambda from freezing before the operation completes
-      try {
-        await WhatsNewDistributionService.updateExistingModal(modalId, key, content, updatedModal.title || '');
-      } catch (error) {
-        logger.warn('Failed to sync modal update to S3 distribution', {
-          error: error instanceof Error ? error.message : String(error),
-          modalId,
-        });
-        // Awaited for the same reason as the S3 sync above.
-        await emitModalGenerationMetrics([
-          { name: 'S3SyncFailure', value: 1, dimensions: { operation: 'update', modalId } },
-        ]);
-      }
-    } else if (updatedModal?._id && updatedModal.tags?.includes('whats-new') && !hasCustomerVariant) {
-      logger.log('Skipping S3 distribution sync — internal-only modal has no customer content for fork environments', {
-        modalId: updatedModal._id.toString(),
-      });
-    }
+      ],
+      'admin-modals'
+    );
 
     // Defense-in-depth: strip variants + generationMetadata from the response even
     // though this endpoint is admin-only today. Insulates the invariant from future
     // ability-rule changes.
     const audienceKey = await viewerClassifier.classify({ isAdmin: req.user?.isAdmin ?? false } as never);
-    return res.json(extractVariantForViewer(updatedModal?.toObject() ?? {}, audienceKey));
+    return res.json(extractVariantForViewer(updatedModal.toObject(), audienceKey));
   })
 );
 

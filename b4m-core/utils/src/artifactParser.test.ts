@@ -68,43 +68,58 @@ const HEAVY_INPUT_MIN_BASELINE_MS = 150;
 // Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and cubic
 // (~8x) - see MIN_BASELINE_MS above for why this is a secondary check in practice.
 const GROWTH_RATIO_CEILING = 3;
+// The same headroom as a growth exponent, so a check spanning more than 2x keeps it: at 8x the
+// ceiling is 27, against ~8x linear and ~64x quadratic.
+const GROWTH_EXPONENT_CEILING = Math.log2(GROWTH_RATIO_CEILING);
 const MEASUREMENT_ATTEMPTS = 5;
 
+const fastest = (runs: number[]) => Math.min(...runs);
+const median = (runs: number[]) => [...runs].sort((a, b) => a - b)[Math.floor(runs.length / 2)];
+
 /**
- * Asserts near-linear scaling from `small` to `small * 2` input size, in place of a
+ * Asserts near-linear scaling from `small` to `small * scale` input size, in place of a
  * fixed time budget: a budget only fails once the synchronous scan already returned,
  * so a real quadratic regression hangs the test runner instead of failing it. Both
  * sizes stay small enough to run fast even on a quadratic (or worse) implementation.
+ * A `scale` above 2 suits a heavy input whose cost bends upward at small sizes (GC, heap
+ * growth): the wider spread leaves linear growth room to wobble and still keeps quadratic
+ * well past the ceiling.
  */
 function assertLinearGrowth(
   build: (n: number) => string,
   small: number,
   checkOutput: (out: string, input: string) => void = (out, input) => expect(out).toBe(input),
   run: (input: string) => string = convertCodeBlocksToArtifacts,
-  minBaselineMs: number = MIN_BASELINE_MS
+  minBaselineMs: number = MIN_BASELINE_MS,
+  scale: number = 2
 ) {
   const smallInput = build(small);
-  const doubledInput = build(small * 2);
-  const timeOnce = (input: string, verifyOutput: boolean) => {
+  const scaledInput = build(small * scale);
+  const timeOnce = (input: string) => {
     const startedAt = performance.now();
-    const out = run(input);
-    const elapsedMs = performance.now() - startedAt;
-    if (verifyOutput) checkOutput(out, input);
-    return elapsedMs;
+    run(input);
+    return performance.now() - startedAt;
   };
 
-  // Best of N with the two sizes interleaved: a GC pause or a CPU-starved slice then lands in
-  // both series instead of only one, while a genuinely super-linear scan is slow on every attempt.
-  let baselineMs = Infinity;
-  let doubledMs = Infinity;
-  for (let attempt = 0; attempt < MEASUREMENT_ATTEMPTS; attempt++) {
-    const verifyOutput = attempt === 0;
-    baselineMs = Math.min(baselineMs, timeOnce(smallInput, verifyOutput));
-    doubledMs = Math.min(doubledMs, timeOnce(doubledInput, verifyOutput));
-  }
+  // Untimed first pass: checks the output and keeps JIT warm-up out of the baseline.
+  checkOutput(run(smallInput), smallInput);
+  checkOutput(run(scaledInput), scaledInput);
 
-  const ratio = doubledMs / Math.max(baselineMs, minBaselineMs);
-  expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+  // N runs per size with the two sizes interleaved, so a GC pause or a CPU-starved slice lands in
+  // both series instead of only one, while a genuinely super-linear scan is slow on every attempt.
+  const baselineRuns: number[] = [];
+  const scaledRuns: number[] = [];
+  for (let attempt = 0; attempt < MEASUREMENT_ATTEMPTS; attempt++) {
+    baselineRuns.push(timeOnce(smallInput));
+    scaledRuns.push(timeOnce(scaledInput));
+  }
+  // Judged on the better of two statistics, so the check fails only when both see super-linear
+  // growth. The minimum suits a floored baseline, but a short run is likelier than a long one to
+  // land a lucky slice no other process preempted, which inflates its ratio under load; the
+  // median of each series is symmetric there. A quadratic scan breaches the ceiling on both.
+  const ratioOf = (pick: (runs: number[]) => number) => pick(scaledRuns) / Math.max(pick(baselineRuns), minBaselineMs);
+  const ratio = Math.min(ratioOf(fastest), ratioOf(median));
+  expect(ratio).toBeLessThan(scale ** GROWTH_EXPONENT_CEILING);
 }
 
 /**
@@ -847,39 +862,16 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     // openings inside an unterminated fence. This test only cares about growth, not
     // the output shape (the first two get promoted, the third stays a code block
     // since its fence never closes), so it skips the output equality check.
-    // Sized (as with the long-whitespace-run test above) so pre-fix code breaches the
-    // 500ms small-input ceiling outright instead of tripping a ratio: at a small size
-    // where pre-fix is merely slow, the current parser's own cost is a few milliseconds,
-    // so an unraised floor turns the ratio into an absolute ~75ms budget on the doubled
-    // run that a loaded shared runner can miss on noise alone. Measured in-suite on a
-    // quiet host, pre-fix core breaches the ceiling by about 2.2x at n=28000 alone on
-    // the first shape (the call aborts at the first shape, so the other two sizes are
-    // not independently measured here), against 4.7/10.6ms, 0.5/0.9ms and 0.5/1.0ms
-    // now. The first shape promotes every document, so its output allocation dominates
-    // and its cost swings with host load, which is the reading the raised floor stops
-    // the ratio from turning into a verdict now that the ceiling is the real guard.
+    // The first shape promotes every document, so output allocation dominates its cost and
+    // bends it upward at small sizes: measured 2.5-3x per doubling on a quiet host, which a
+    // 2x check against a 3x ceiling misses on load alone. So each shape is checked across 8x
+    // (ceiling 27), where linear lands near 9 and quadratic near 64.
     const noOutputCheck = () => {};
-    assertLinearGrowth(
-      n => '<html></html>\n'.repeat(n),
-      28000,
-      noOutputCheck,
-      convertCodeBlocksToArtifacts,
-      HEAVY_INPUT_MIN_BASELINE_MS
-    );
-    assertLinearGrowth(
-      n => '<html>\n'.repeat(n),
-      32000,
-      noOutputCheck,
-      convertCodeBlocksToArtifacts,
-      HEAVY_INPUT_MIN_BASELINE_MS
-    );
-    assertLinearGrowth(
-      n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n),
-      22000,
-      noOutputCheck,
-      convertCodeBlocksToArtifacts,
-      HEAVY_INPUT_MIN_BASELINE_MS
-    );
+    const assertHtmlShapeLinear = (build: (n: number) => string, small: number) =>
+      assertLinearGrowth(build, small, noOutputCheck, convertCodeBlocksToArtifacts, MIN_BASELINE_MS, 8);
+    assertHtmlShapeLinear(n => '<html></html>\n'.repeat(n), 7000);
+    assertHtmlShapeLinear(n => '<html>\n'.repeat(n), 8000);
+    assertHtmlShapeLinear(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 5500);
   });
 });
 

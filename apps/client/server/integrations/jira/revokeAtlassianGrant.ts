@@ -1,5 +1,5 @@
 import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 const ATLASSIAN_REVOKE_URL = 'https://auth.atlassian.com/oauth/token/revoke';
 // Well inside the 60s server Lambda timeout, so a stalled provider cannot take the caller down with it.

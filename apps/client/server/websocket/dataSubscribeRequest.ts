@@ -29,7 +29,7 @@ import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import crypto from 'crypto';
-import { pickBy } from 'lodash';
+import pickBy from 'lodash/pickBy';
 import pLimit from 'p-limit';
 import ability from '../auth/ability';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
@@ -313,7 +313,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   if (!(await Connection.findOne({ connectionId }, { _id: 1 }).lean())) {
     await realtimeConnectionRepository
       .removeConnectionSubscribers(connectionId)
-      .catch(error =>
+      .catch((error: unknown) =>
         logger.warn(`[dataSubscribeRequest] Failed to remove subscribers of ended connection ${connectionId}`, error)
       );
     await closeConnection(connectionId, endpoint).catch(error =>

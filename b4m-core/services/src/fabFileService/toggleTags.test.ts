@@ -613,6 +613,7 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] });
 
     expect(adapters.store.get('f1')?.tags).toEqual([]);
+    expect(adapters.db.memoryLedger.markSourceShredded).toHaveBeenCalledWith('lake', 'datalake:lake', 'owner', 'f1');
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
       fileCount: 3,
       totalSizeBytes: 99,

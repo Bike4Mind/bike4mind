@@ -14,18 +14,16 @@ import {
   Sheet,
   Chip,
 } from '@mui/joy';
-import {
-  WbSunny as SunIcon,
-  NightsStay as MoonIcon,
-  Add as AddIcon,
-  Close as CloseIcon,
-  Search as SearchIcon,
-  Star as StarIcon,
-  StarBorder as StarBorderIcon,
-  Schedule as ClockIcon,
-  CalendarToday as CalendarIcon,
-  Language as GlobeIcon,
-} from '@mui/icons-material';
+import SunIcon from '@mui/icons-material/WbSunny';
+import MoonIcon from '@mui/icons-material/NightsStay';
+import AddIcon from '@mui/icons-material/Add';
+import CloseIcon from '@mui/icons-material/Close';
+import SearchIcon from '@mui/icons-material/Search';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
+import ClockIcon from '@mui/icons-material/Schedule';
+import CalendarIcon from '@mui/icons-material/CalendarToday';
+import GlobeIcon from '@mui/icons-material/Language';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';

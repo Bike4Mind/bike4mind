@@ -19,6 +19,7 @@ export interface AuthParams {
   error?: string;
   /** True only when the OAuth callback just created a brand-new account. */
   isNewUser?: boolean;
+  firstSignupSession?: boolean;
   /** OAuth strategy that created the account (e.g. "google"); set with isNewUser. */
   signupMethod?: string;
   /**
@@ -63,6 +64,7 @@ export function parseHashParams(hash: string): AuthParams | null {
       userId,
       error: error || undefined,
       isNewUser: hashParams.get('isNewUser') === '1' || undefined,
+      firstSignupSession: hashParams.get('firstSignupSession') === '1' || undefined,
       signupMethod: hashParams.get('signupMethod') || undefined,
     };
   }
@@ -74,6 +76,7 @@ export function parseHashParams(hash: string): AuthParams | null {
       userId,
       mfa: { token: mfaToken, mode: mfaMode, passkeyAvailable: hashParams.get('passkey') === '1' },
       isNewUser: hashParams.get('isNewUser') === '1' || undefined,
+      firstSignupSession: hashParams.get('firstSignupSession') === '1' || undefined,
       signupMethod: hashParams.get('signupMethod') || undefined,
     };
   }

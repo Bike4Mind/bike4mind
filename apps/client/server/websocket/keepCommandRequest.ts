@@ -1,5 +1,7 @@
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 import { KeepCommandRequestAction } from '@bike4mind/common';
-import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
+import { verifyJwtToken, checkRateLimit } from '@server/cli/auth';
 import { withWebSocketContext, sendToClient, sendToConnection } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
@@ -41,30 +43,24 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   const { accessToken, requestId, commandType, params } = body;
 
-  // Authenticate (try API key first, then JWT)
+  // Session JWT only: a Keep command runs on the user's own machine, so an API key,
+  // whatever its scopes, must not be able to send one. Same rule as /api/keep/command.
   let userId: string;
   try {
-    const apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${accessToken}` });
-    userId = apiKeyInfo.userId;
-    await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
-      userId: apiKeyInfo.userId,
-      endpoint: 'ws/keep_command_request',
-      method: 'WS',
+    const user = await verifyJwtToken(accessToken);
+    userId = user.id;
+    await checkRateLimit(userId, undefined, { bucket: 'ws' });
+  } catch (error) {
+    await sendToConnection(connectionId, endpoint, {
+      action: 'keep_command_result' as const,
+      requestId,
+      success: false,
+      error:
+        error instanceof ForbiddenError || isAuthInfraFailure(error)
+          ? error.message
+          : 'Authentication failed. Sign in again and retry.',
     });
-  } catch {
-    try {
-      const user = await verifyJwtToken(accessToken);
-      userId = user.id;
-      await checkRateLimit(userId, undefined, { bucket: 'ws' });
-    } catch {
-      await sendToConnection(connectionId, endpoint, {
-        action: 'keep_command_result' as const,
-        requestId,
-        success: false,
-        error: 'Authentication failed. Provide a valid API key or JWT token.',
-      });
-      return { statusCode: 200 };
-    }
+    return { statusCode: 200 };
   }
 
   logger.info(`[KEEP_CMD_REQ] User ${userId} requesting ${commandType} via Keep relay`);

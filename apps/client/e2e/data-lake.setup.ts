@@ -1,5 +1,5 @@
 import { setupSpecUser } from './helpers/spec-setup';
-import { apiEnableDataLakes } from './helpers/api';
+import { apiEnableDataLakes, apiUpdateAdminSetting } from './helpers/api';
 import { getTestUsers } from './helpers/test-users';
 
 /**
@@ -11,6 +11,10 @@ import { getTestUsers } from './helpers/test-users';
  *
  * Note: EnableDataLakes is a GLOBAL admin flag — enabling it affects the whole stage for the
  * duration of the run. It is left on afterwards (idempotent, and other suites don't touch it).
+ *
+ * `EnableDataLakeVectorSearch` (default off, on in production) is flipped for the same reason: it
+ * is what lets forced retrieval pick a large lake's candidates by relevance instead of by file
+ * name, and the large-lake spec asserts on exactly that path.
  */
 setupSpecUser({
   key: 'dataLake',
@@ -19,5 +23,6 @@ setupSpecUser({
   afterCreate: async ({ request }) => {
     const { admin } = getTestUsers();
     await apiEnableDataLakes(request, admin.accessToken);
+    await apiUpdateAdminSetting(request, admin.accessToken, 'EnableDataLakeVectorSearch', true);
   },
 });

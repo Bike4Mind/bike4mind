@@ -26,6 +26,7 @@ const state = vi.hoisted(() => ({
 const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 
 const sendToClient = vi.hoisted(() => vi.fn());
+const getSettingsMap = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock('@server/websocket/utils', () => ({
   withWebSocketContext: (handler: (...args: unknown[]) => unknown) => (event: unknown) => handler(event, {}, logger),
   sendToClient,
@@ -40,7 +41,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   usdToCreditsStochastic: (usd: number) => usd,
-  getSettingsMap: async () => ({}),
+  getSettingsMap,
   getSettingsValue: () => state.enforceCredits,
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -115,6 +116,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+import { adminSettingsRepository } from '@bike4mind/database';
 import { func } from './voiceSessionEnded';
 import { realtimeCreditsFloor, shouldReuseVoiceHold } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
@@ -161,7 +163,16 @@ describe('voiceSessionEnded realtime billing', () => {
     state.enforceCredits = true;
     state.failActivity = false;
     sendToClient.mockClear();
+    getSettingsMap.mockClear();
     logger.error.mockClear();
+  });
+
+  it('reads fresh credit enforcement for each settlement frame', async () => {
+    await send(30, 'resp-1');
+    expect(getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: adminSettingsRepository },
+      { names: ['enforceCredits'], skipCache: true }
+    );
   });
 
   it('bills every response of a multi-turn call, then refunds the unused hold at the end', async () => {

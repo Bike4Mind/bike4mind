@@ -1,12 +1,15 @@
 import {
   BrowserWindow,
+  nativeImage,
   WebContentsView,
   session as electronSession,
   type BaseWindow,
+  type NativeImage,
   type Session,
   type WebContents,
 } from 'electron';
 import type { CookieImportState } from '@shared/browserCookies';
+import { browserSnapshotSchema, type BrowserSnapshot } from '@shared/browserPage';
 import type { ChatMedia } from '@shared/chat';
 import { browserTabShortcut, MAX_BROWSER_TABS, type BrowserTabShortcut } from '@shared/browserTabs';
 import { normalizeUrl } from '@shared/browserUrl';
@@ -28,7 +31,6 @@ import {
   SNAPSHOT_PAGE,
   type ElementOutcome,
   type ScrollTarget,
-  type SnapshotResult,
 } from './pageScripts';
 
 /**
@@ -50,6 +52,9 @@ const EVALUATE_TIMEOUT_MS = 30_000;
 /** How long a script held by a load gets to run once that load is stopped. Measured at under 10ms. */
 const STOP_RELEASE_MS = 2_000;
 const CAPTURE_TIMEOUT_MS = 15_000;
+const CAPTURE_FAILED =
+  'Could not capture a screenshot of this page. browser_snapshot still reads its text and elements; ' +
+  "if a picture is needed, ask the user to open this conversation's browser pane, then try browser_screenshot again.";
 /** A freeze-frame later than this is drawn after the hide it was for has usually ended. */
 const STILL_TIMEOUT_MS = 1_000;
 const STILL_JPEG_QUALITY = 80;
@@ -70,6 +75,7 @@ type TabBarState = Omit<BrowserPaneState, 'tabs' | 'activeTabId'>;
 interface TabHooks {
   onClosed: () => void;
   onChanged: () => void;
+  onSnapshot: (snapshot: BrowserSnapshot) => void;
   /** A popup or `target=_blank` asked for `url`. `fromAgent` when one of the agent's own steps caused it. */
   onWindowOpen: (url: string, fromAgent: boolean, background: boolean) => void;
   onShortcut: (shortcut: BrowserTabShortcut) => void;
@@ -122,8 +128,8 @@ function consoleEntry(args: ConsoleArgs): { level: string; message: string; sour
  * A `WebContentsView` rather than a window of its own, because that is the only thing Electron
  * can put INSIDE the app window as a pane. It is always the child of some window: the app
  * window while the user is looking at it, and otherwise the hidden one created alongside it.
- * That hidden window is what keeps a parked page composited, so `capturePage` still has
- * something to return - a view belonging to no window at all paints nothing.
+ * That hidden window keeps a parked page alive and laid out at the viewport, but it is never
+ * shown, so it gives the page no surface for `capturePage` to read; see {@link capture}.
  */
 class ElectronPage implements BrowserPage {
   /** Where the view sits when it is not in the pane. Also the page's keep-alive; see above. */
@@ -139,6 +145,16 @@ class ElectronPage implements BrowserPage {
   private lastError = '';
   /** Main-frame navigations committed so far; tells a load that showed nothing from one that showed a page. */
   private commits = 0;
+  /** Set by close(), so the host's own 'closed' does not run the teardown a second time. */
+  private closing = false;
+  /** In the app window but hidden for a moment; see hold(). */
+  private held = false;
+  /**
+   * Live screenshots using the debugger, and whether they own its attachment. A timeout
+   * releases only its own use so overlapping captures can finish within their deadlines.
+   */
+  private debuggerUsers = 0;
+  private attachedDebugger = false;
   /** Agent steps running in this page right now; a popup opened during one is the agent's. */
   private acting = 0;
   private actedAt = 0;
@@ -168,6 +184,14 @@ class ElectronPage implements BrowserPage {
     });
     this.host.contentView.addChildView(this.view);
     this.parent = this.host;
+    // The page and its host go together. Whatever closes every window (a quit, an update
+    // install) closes this one too, and closing a window leaves its views' contents running: a
+    // page that outlived its host could never be parked again, and every pane update threw.
+    this.host.on('closed', () => {
+      if (this.closing) return;
+      void this.close();
+      this.hooks.onClosed();
+    });
     this.view.setBounds({ x: 0, y: 0, ...VIEWPORT });
 
     const contents = this.view.webContents;
@@ -230,7 +254,12 @@ class ElectronPage implements BrowserPage {
       this.record(`the page crashed (${details.reason})`);
       this.fail(`The page crashed (${details.reason}).`);
     });
-    contents.on('destroyed', () => this.hooks.onClosed());
+    // A page that closed itself (`window.close()`) would otherwise leak its hidden host.
+    contents.on('destroyed', () => {
+      this.closing = true;
+      if (!this.host.isDestroyed()) this.host.destroy();
+      this.hooks.onClosed();
+    });
   }
 
   /** Say why nothing arrived, and tell the pane: a silent failure is a blank pane with no reason. */
@@ -260,14 +289,20 @@ class ElectronPage implements BrowserPage {
 
   /** Whether this page is worth putting on screen. One that has been nowhere is not. */
   get showable(): boolean {
-    return !this.webContents.isDestroyed() && hasContent(this.currentUrl());
+    return !this.gone && hasContent(this.currentUrl());
+  }
+
+  private get gone(): boolean {
+    return this.webContents.isDestroyed() || this.host.isDestroyed();
   }
 
   /** Put the view in the app window at the pane's bounds, which are window-relative and in DIP. */
   showIn(window: BrowserWindow, bounds: BrowserPaneBounds): void {
+    if (this.gone || window.isDestroyed()) return;
     this.moveTo(window);
     this.view.setBounds(bounds);
     this.view.setVisible(true);
+    this.held = false;
   }
 
   /**
@@ -275,15 +310,29 @@ class ElectronPage implements BrowserPage {
    * to the parked viewport and back for every menu, and {@link still} captures it as it looked.
    */
   hold(): void {
+    if (this.gone) return;
     this.view.setVisible(false);
+    this.held = true;
   }
 
   /** Take the view back out of the app window, at the size every tool has always seen. */
   park(): void {
+    this.held = false;
+    if (this.host.isDestroyed()) {
+      this.detach();
+      return;
+    }
+    if (this.webContents.isDestroyed()) return;
     this.view.setVisible(true);
     if (this.parent === this.host) return;
     this.moveTo(this.host);
     this.view.setBounds({ x: 0, y: 0, ...VIEWPORT });
+  }
+
+  /** Out of whatever window holds the view, for a page with no host left to park in. */
+  private detach(): void {
+    if (this.parent !== this.host && !this.parent.isDestroyed()) this.parent.contentView.removeChildView(this.view);
+    this.parent = this.host;
   }
 
   /** The held page as a JPEG data URL, or null when it painted nothing or took too long. */
@@ -300,7 +349,7 @@ class ElectronPage implements BrowserPage {
   }
 
   private moveTo(next: BaseWindow): void {
-    if (this.parent === next || this.webContents.isDestroyed()) return;
+    if (this.parent === next || this.webContents.isDestroyed() || next.isDestroyed()) return;
     if (!this.parent.isDestroyed()) this.parent.contentView.removeChildView(this.view);
     next.contentView.addChildView(this.view);
     this.parent = next;
@@ -433,8 +482,11 @@ class ElectronPage implements BrowserPage {
     history.goBack();
   }
 
-  async snapshot(maxChars: number, inView = false): Promise<SnapshotResult> {
-    return this.script<SnapshotResult>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
+  async snapshot(maxChars: number, inView = false): Promise<BrowserSnapshot> {
+    const snapshot = await this.script<unknown>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
+    const parsed = browserSnapshotSchema.parse(snapshot);
+    this.hooks.onSnapshot(parsed);
+    return parsed;
   }
 
   async scroll(target: ScrollTarget): Promise<string> {
@@ -474,16 +526,83 @@ class ElectronPage implements BrowserPage {
   }
 
   async screenshot(): Promise<Buffer> {
-    const image = await within(this.contents.capturePage(), CAPTURE_TIMEOUT_MS);
-    if (image === TIMED_OUT) {
-      throw new Error(
-        `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
-      );
+    const controller = new AbortController();
+    try {
+      const image = await within(this.capture(controller.signal), CAPTURE_TIMEOUT_MS);
+      if (image === TIMED_OUT) {
+        throw new Error(
+          `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
+        );
+      }
+      if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
+      // A Retina capture is twice the viewport; the extra pixels only cost the model image tokens.
+      const { width } = image.getSize();
+      return (width > VIEWPORT.width ? image.resize({ width: VIEWPORT.width, quality: 'best' }) : image).toPNG();
+    } finally {
+      controller.abort();
     }
-    if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
-    // A Retina capture is twice the viewport; the extra pixels only cost the model image tokens.
-    const { width } = image.getSize();
-    return (width > VIEWPORT.width ? image.resize({ width: VIEWPORT.width, quality: 'best' }) : image).toPNG();
+  }
+
+  /**
+   * `capturePage` reads the compositor surface, which only a view on screen in the pane has. A
+   * parked view's host is never shown: one never in the pane rejects with "Current display
+   * surface not available for capture" however long it waits, and one parked since rejects with
+   * a viz error or returns a frame from before it was parked. DevTools draws a fresh frame
+   * without a surface, so it takes every page off screen, and any the pane fails to capture.
+   */
+  private async capture(signal: AbortSignal): Promise<NativeImage> {
+    const contents = this.contents;
+    let failure: unknown = 'off screen';
+    if (this.parent !== this.host && !this.held) {
+      try {
+        const image = await contents.capturePage();
+        if (!image.isEmpty()) return image;
+        failure = 'an empty frame';
+      } catch (err) {
+        failure = err;
+      }
+    }
+    // capturePage can settle after its caller has timed out; do not start more work then.
+    signal.throwIfAborted();
+    try {
+      return await this.captureWithDevTools(contents, signal);
+    } catch (err) {
+      signal.throwIfAborted();
+      console.warn(`BROWSER: could not capture ${this.currentUrl()}: ${String(failure)}; DevTools: ${String(err)}`);
+      throw new Error(CAPTURE_FAILED);
+    }
+  }
+
+  /** Attached for this capture only. A debugger something else attached is used and left attached. */
+  private async captureWithDevTools(contents: WebContents, signal: AbortSignal): Promise<NativeImage> {
+    const cdp = contents.debugger;
+    if (!cdp.isAttached()) {
+      cdp.attach('1.3');
+      this.attachedDebugger = true;
+    }
+    this.debuggerUsers += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      signal.removeEventListener('abort', release);
+      this.debuggerUsers -= 1;
+      if (this.debuggerUsers === 0) this.releaseDebugger();
+    };
+    signal.addEventListener('abort', release, { once: true });
+    try {
+      const { data } = (await cdp.sendCommand('Page.captureScreenshot', { format: 'png' })) as { data: string };
+      return nativeImage.createFromBuffer(Buffer.from(data, 'base64'));
+    } finally {
+      release();
+    }
+  }
+
+  /** Detaching the last live capture also rejects commands abandoned after their deadline. */
+  private releaseDebugger(): void {
+    if (!this.attachedDebugger) return;
+    this.attachedDebugger = false;
+    if (!this.webContents.isDestroyed() && this.webContents.debugger.isAttached()) this.webContents.debugger.detach();
   }
 
   async evaluate(expression: string): Promise<unknown> {
@@ -516,6 +635,7 @@ class ElectronPage implements BrowserPage {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     // Out of the app window first: destroying a view that is still a child of it would tear a
     // hole in the pane the renderer is drawing around.
     this.park();
@@ -565,6 +685,8 @@ export class BrowserManager implements BrowserProvider {
   /** The one tab that is a child of the app window, so apply never has to walk every conversation. */
   private shown: ElectronPage | undefined;
   private readonly watchedWindows = new WeakSet<BrowserWindow>();
+  /** Placement failures already logged, so a wedged page logs once rather than on every event. */
+  private readonly warned = new Set<string>();
 
   /**
    * The user's own Chrome sessions, for sites they named. Public because the renderer drives it
@@ -574,7 +696,9 @@ export class BrowserManager implements BrowserProvider {
 
   constructor(
     private readonly onPageState: (sessionId: string, state: BrowserPaneState) => void = () => undefined,
-    onCookieState: (state: CookieImportState) => void = () => undefined
+    onCookieState: (state: CookieImportState) => void = () => undefined,
+    private readonly onSnapshot: (sessionId: string, snapshot: BrowserSnapshot) => void | Promise<void> = () =>
+      undefined
   ) {
     this.cookies = new CookieImporter(() => this.session(), onCookieState);
   }
@@ -728,11 +852,33 @@ export class BrowserManager implements BrowserProvider {
 
   private hidePane(): void {
     this.pane = undefined;
-    this.shown?.park();
-    this.shown = undefined;
+    this.contain(() => {
+      this.shown?.park();
+      this.shown = undefined;
+    });
   }
 
+  /**
+   * apply() runs from webContents listeners and IPC handlers, where a throw is an Uncaught
+   * Exception dialog or a pane that fails every request after it. Keep tracking a possibly
+   * attached page on failure, so the next update can retry parking it.
+   */
   private apply(): void {
+    this.contain(() => this.place());
+  }
+
+  private contain(work: () => void): void {
+    try {
+      work();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (this.warned.has(message)) return;
+      this.warned.add(message);
+      console.warn(`BROWSER: could not place the page: ${err instanceof Error ? err.stack : message}`);
+    }
+  }
+
+  private place(): void {
     const pane = this.pane;
     const active = pane ? this.sessions.get(pane.sessionId)?.active : undefined;
     const next = pane && active?.showable && !pane.window.isDestroyed() ? active : undefined;
@@ -803,6 +949,10 @@ export class BrowserManager implements BrowserProvider {
         this.push(sessionId);
         this.apply();
       },
+      onSnapshot: snapshot => {
+        // A script can settle after its tab closed or an account switch closed every tab.
+        if (this.sessions.get(sessionId)?.list.includes(tab)) void this.recordSnapshot(sessionId, snapshot);
+      },
       onWindowOpen: (url, fromAgent, background) => this.openFromPage(sessionId, tab, url, fromAgent, background),
       // Out of the input event first: Cmd+W destroys the very contents that is dispatching it.
       onShortcut: shortcut => setImmediate(() => void this.onShortcut(sessionId, shortcut)),
@@ -812,6 +962,14 @@ export class BrowserManager implements BrowserProvider {
     if (activate || !tabs.active) this.activate(sessionId, tab);
     else this.push(sessionId);
     return tab;
+  }
+
+  private async recordSnapshot(sessionId: string, snapshot: BrowserSnapshot): Promise<void> {
+    try {
+      await this.onSnapshot(sessionId, snapshot);
+    } catch (error) {
+      console.warn('BROWSER: could not index page snapshot:', error);
+    }
   }
 
   /**

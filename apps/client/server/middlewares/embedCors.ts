@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { setAllowOrigin } from '@server/utils/allowOrigin';
 
 /**
  * Route-scoped CORS for the public embed surfaces. A plain Express handler (no
@@ -10,7 +11,7 @@ import { Request, Response, NextFunction } from 'express';
  * This sets the response CORS headers and answers the OPTIONS preflight; it does
  * NOT decide whether an origin is approved. Preflight carries no credential, so
  * the allow-list can only be checked once the handler has resolved the key/token
- * - each embed handler enforces `isEmbedOriginAllowed` (first-party origin or
+ * - each embed handler enforces `resolveEmbedOriginDecision` (first-party origin or
  * the key's allow-list, see firstPartyOrigin.ts) and rejects a disallowed
  * origin before doing any work. Echoing the requesting
  * origin here keeps that rejection (and every real response) readable by the
@@ -26,7 +27,7 @@ export function embedCors(opts: { methods?: string } = {}) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const origin = req.headers.origin;
     if (origin) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
+      setAllowOrigin(req, res, origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Methods', allowMethods);
       res.setHeader('Access-Control-Allow-Headers', ALLOW_HEADERS);

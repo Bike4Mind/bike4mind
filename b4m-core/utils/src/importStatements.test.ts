@@ -4,10 +4,14 @@ import { describe, expect, it } from 'vitest';
 import {
   codeImportDependencies,
   createImportScanner,
+  findRelativeImport,
+  findRelativeImports,
   hasSingleLineImportFrom,
   IMPORT_SCANNER_FACTORY_SRC,
+  moduleBaseName,
   scanImportStatements,
-  type ImportScanner,
+  stripTypeOnlyImports,
+  type ModuleImportScanner as ImportScanner,
 } from './importStatements';
 
 /**
@@ -340,6 +344,107 @@ describe('hasSingleLineImportFrom', () => {
   });
 });
 
+describe('findRelativeImports', () => {
+  /** The three relative-reference patterns findRelativeImport replaced, run to exhaustion (`g`). */
+  const originalRelativeAll = (source: string): string[] => {
+    const out: string[] = [];
+    for (const re of [
+      /(?:import|export)\b[^;'"]*\bfrom\s*['"](\.\.?\/[^'"]+)['"]/g,
+      /\bimport\s*['"](\.\.?\/[^'"]+)['"]/g,
+      /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
+    ]) {
+      for (const m of source.matchAll(re)) if (!out.includes(m[1])) out.push(m[1]);
+    }
+    return out;
+  };
+
+  /** Relative-heavy cases: every reference form, mixed quotes, near misses and noise between them. */
+  const RELATIVE_CORPUS: readonly string[] = (() => {
+    const rand = lcg(0x0e1a7);
+    const pick = (arr: readonly string[]): string => arr[Math.floor(rand() * arr.length)];
+    const specs = ['./a', '../b', './dir/C.tsx', './a', '.x', './', '../', 'pkg', './import', './d e'];
+    const forms = [
+      (q: string, s: string) => `import A from ${q}${s}${q};`,
+      (q: string, s: string) => `import { a, b as c } from${q}${s}${q}`,
+      (q: string, s: string) => `export { x } from ${q}${s}${q};`,
+      (q: string, s: string) => `export * from ${q}${s}${q}`,
+      (q: string, s: string) => `import type { T } from ${q}${s}${q};`,
+      (q: string, s: string) => `import ${q}${s}${q};`,
+      (q: string, s: string) => `const m = require( ${q}${s}${q} );`,
+      (q: string, s: string) => `reimport x from ${q}${s}${q}`,
+      (q: string, s: string) => `const s = "import a from ${s}";`,
+    ];
+    const noise = ['\n', ' ', '', ';', "'", '"', '// from \n', 'export default App;\n', 'import\n'];
+    const cases: string[] = [];
+    for (let i = 0; i < 2000; i++) {
+      let text = pick(noise);
+      const n = 1 + Math.floor(rand() * 4);
+      for (let j = 0; j < n; j++) {
+        text += forms[Math.floor(rand() * forms.length)](pick(QUOTES), pick(specs)) + pick(noise);
+      }
+      cases.push(text);
+    }
+    return cases;
+  })();
+
+  it('finds every match of the original patterns and nothing else, on both corpora', () => {
+    const mismatches: string[] = [];
+    for (const source of [...CORPUS, ...RELATIVE_CORPUS]) {
+      if (JSON.stringify(findRelativeImports(source)) !== JSON.stringify(originalRelativeAll(source))) {
+        mismatches.push(JSON.stringify(source));
+      }
+    }
+    expect({ count: mismatches.length, examples: mismatches.slice(0, 5) }).toEqual({ count: 0, examples: [] });
+  });
+
+  it('leads with what findRelativeImport reports', () => {
+    for (const source of [...CORPUS, ...RELATIVE_CORPUS]) {
+      expect(findRelativeImports(source)[0] ?? null).toBe(findRelativeImport(source));
+    }
+  });
+
+  it('exercises multi-match cases rather than passing vacuously', () => {
+    expect(RELATIVE_CORPUS.filter(s => findRelativeImports(s).length > 1).length).toBeGreaterThan(300);
+  });
+
+  it('collects every reference form once, in form order', () => {
+    const code = [
+      "import Panel from './Panel';",
+      "import './styles.css';",
+      'export { helper } from "../utils/helper";',
+      "const legacy = require('./legacy');",
+      "import Again from './Panel';",
+      "import React from 'react';",
+    ].join('\n');
+    expect(findRelativeImports(code)).toEqual(['./Panel', '../utils/helper', './styles.css', './legacy']);
+  });
+
+  it('drops a type-only relative import once the type imports are stripped, as the sandbox does', () => {
+    const code = "import type { Props } from './types';\nimport Panel from './Panel';";
+    expect(findRelativeImports(code)).toEqual(['./types', './Panel']);
+    expect(findRelativeImports(stripTypeOnlyImports(code))).toEqual(['./Panel']);
+  });
+
+  it('returns nothing for a self-contained file', () => {
+    expect(findRelativeImports("import React from 'react';\nexport default function App() {}")).toEqual([]);
+  });
+});
+
+describe('moduleBaseName', () => {
+  it('keeps the last path segment, drops a JS/TS extension and lowercases', () => {
+    expect(moduleBaseName('./Chronosphere')).toBe('chronosphere');
+    expect(moduleBaseName('../components/ui/Panel.tsx')).toBe('panel');
+    expect(moduleBaseName('./a.MJS')).toBe('a');
+    expect(moduleBaseName('lib.cjs')).toBe('lib');
+    expect(moduleBaseName('Chronosphere')).toBe('chronosphere');
+  });
+
+  it('keeps any other extension', () => {
+    expect(moduleBaseName('./styles.css')).toBe('styles.css');
+    expect(moduleBaseName('./data.json')).toBe('data.json');
+  });
+});
+
 describe('createImportScanner serialized for the sandbox preview', () => {
   const SRC = IMPORT_SCANNER_FACTORY_SRC;
 
@@ -406,6 +511,8 @@ describe('createImportScanner serialized for the sandbox preview', () => {
       for (const source of CORPUS.slice(0, 300)) {
         scanner.stripTypeOnlyImports(source);
         scanner.findRelativeImport(source);
+        scanner.findRelativeImports(source);
+        scanner.moduleBaseName(source);
       }
       expect(Object.keys(context)).toEqual([]);
     }
@@ -424,6 +531,8 @@ describe('createImportScanner serialized for the sandbox preview', () => {
           sc.replaceImportStatements(source, { consumeTrailing: true }, tag),
           sc.stripTypeOnlyImports(source),
           sc.findRelativeImport(source),
+          sc.findRelativeImports(source),
+          sc.moduleBaseName(source),
           sc.braceSpan(source),
           sc.braceSpan(source, true),
         ]);

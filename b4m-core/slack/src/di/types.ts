@@ -218,6 +218,7 @@ export interface ISlackDatabaseDependencies {
   apiKeyRepository: unknown;
   adminSettingsRepository: unknown;
   slackDevWorkspaceRepository: unknown;
+  orgSlackWorkspaceRepository?: unknown;
   slackChannelConfigRepository: unknown;
   slackAuditLogRepository: unknown;
   webhookSubscriptionRepository: unknown;

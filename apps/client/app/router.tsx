@@ -25,6 +25,7 @@ import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
+import { AdminLayoutRoute } from './components/admin/AdminLayout';
 import NotFound from './components/NotFound';
 import ExperimentalFeatureGate from './components/common/ExperimentalFeatureGate';
 import { ProviderBundle } from './contexts/ProviderBundle';
@@ -35,8 +36,14 @@ import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
+import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
-import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
+import {
+  isIntegrationsPageSource,
+  SUBSCRIBER_SOURCES,
+  type IntegrationsPageSource,
+  type SubscriberSource,
+} from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
 // /new and /notebooks/$id render through one shell (see notebookShellRoute).
@@ -87,11 +94,13 @@ const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callbac
 const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/callback'));
 const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
+const AdminUserProfilePage = lazy(() => import('./routes/admin/users/$userId'));
 const QuestsPage = lazy(() => import('./routes/quests'));
 const SlackInstallPage = lazy(() => import('./routes/integrations/slack/install'));
 const SlackSuccessPage = lazy(() => import('./routes/integrations/slack/success'));
 const SlackErrorPage = lazy(() => import('./routes/integrations/slack/error'));
 const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
+const DesktopDownloadPage = lazy(() => import('./routes/desktop'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
@@ -999,6 +1008,9 @@ const subscribeRoute = createRoute({
       <SubscribePage />
     </Suspense>
   ),
+  validateSearch: (search: Record<string, unknown>): { source?: SubscriberSource } => ({
+    source: SUBSCRIBER_SOURCES.find(source => source === search.source),
+  }),
 });
 
 // Artifacts demo route (replaces /artifacts-demo.tsx)
@@ -1168,25 +1180,38 @@ const activateRoute = createRoute({
   },
 });
 
-// Admin route (replaces /admin/index.tsx)
-export const adminRoute = createRoute({
+// Admin layout: every admin page renders inside it, so the guard, the providers and the sidebar
+// are wired once (AdminLayoutRoute) and no admin page can go full-screen. Pathless, so the
+// children keep their URLs and every `to: '/admin'` stays typed against the console's search.
+const adminLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/admin',
+  id: 'admin-layout',
   beforeLoad: ({ location }) => enforceConsentRedirect(location),
-  component: () => (
-    <RestrictedPage requireAdmin={true}>
-      {/* These providers are not usually needed in an unprotected page. This prevents unnecessary API fetch */}
-      <ProviderBundle>
-        <Suspense fallback={<RouteLoadingFallback />}>
-          <Admin />
-        </Suspense>
-      </ProviderBundle>
-    </RestrictedPage>
-  ),
+  component: () => <AdminLayoutRoute fallback={<RouteLoadingFallback />} />,
+});
+
+// The tabbed admin console (replaces /admin/index.tsx)
+export const adminRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin',
+  beforeLoad: async ({ search }) => {
+    // The user view used to be a modal held in `?userId=`; keep those shared links working.
+    const legacyUserLink = legacyUserLinkRedirect(search);
+    if (legacyUserLink) throw redirect(legacyUserLink);
+  },
+  component: Admin,
   // `tab` (a stable slug, never the positional AdminTab enum value - see common/utils/deepLinks)
   // makes the console addressable, and each tab's own params come from the registry in
   // adminTabParams.ts, which the tab-sync hook rebuilds the URL from too.
   validateSearch: parseAdminSearch,
+});
+
+// Admin user profile; adminRoute redirects its legacy `?userId=` here.
+export const adminUserProfileRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/users/$userId',
+  component: AdminUserProfilePage,
+  validateSearch: parseUserProfileSearch,
 });
 
 // Email unsubscribe route - public page for managing email preferences
@@ -1203,6 +1228,17 @@ const emailUnsubscribeRoute = createRoute({
       token: optionalStringParam(search, 'token'),
     };
   },
+});
+
+// Desktop app download page - no layout, public, so it can be linked from anywhere.
+const desktopDownloadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/desktop',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <DesktopDownloadPage />
+    </Suspense>
+  ),
 });
 
 // OAuth Authorization endpoint - no layout, public
@@ -1299,7 +1335,7 @@ const routeTree = rootRoute.addChildren([
   gitHubLakeCallbackRoute,
   subscribeRoute,
   activateRoute,
-  adminRoute,
+  adminLayoutRoute.addChildren([adminRoute, adminUserProfileRoute]),
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,
   // Slack integration routes (no layout)
@@ -1307,6 +1343,7 @@ const routeTree = rootRoute.addChildren([
   slackSuccessRoute,
   slackErrorRoute,
   emailUnsubscribeRoute,
+  desktopDownloadRoute,
   // Atlassian integration routes (no layout)
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint
@@ -1349,5 +1386,9 @@ export const router = createRouter({
 declare module '@tanstack/react-router' {
   interface Register {
     router: typeof router;
+  }
+  interface HistoryState {
+    // Prefill for /subscribe; see useJoinWaitlist.
+    waitlistEmail?: string;
   }
 }

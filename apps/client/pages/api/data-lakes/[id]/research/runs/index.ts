@@ -17,7 +17,8 @@ import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
+import { queueResearchRun } from '@bike4mind/server-utils/dataLakes/queueResearchRun';
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 
 const StartInput = z.object({ configId: z.string() });
 
@@ -71,6 +72,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       if (!queueUrl) {
         throw new InternalServerError('Research runs are not available on this deployment');
       }
+
+      await admitRequestCompletion(req, { holdSlot: false });
 
       const started = await dataLakeResearchService.startResearchRun(
         configId,

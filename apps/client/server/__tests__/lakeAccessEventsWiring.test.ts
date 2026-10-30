@@ -28,11 +28,12 @@ import { fileURLToPath } from 'node:url';
  * lake-capable in the first place, which is exactly the population that owes an audit row - it is
  * 1:1 with `lakeAccessEvents:` at every real site today, including agentExecutor's two. This is
  * tighter about intent, not looser: a bundle wiring `dataLakes` without `lakeAccessEvents` still
- * fails, and one wiring neither has no lake access to audit. Scoped to apps/client/server and
- * apps/workers/src on purpose: both depend directly on @bike4mind/database and so can construct
- * the concrete, database-backed adapter bundle; b4m-core/services only ever CONSUMES ToolContext
- * (the same import-direction rule DataLakeAccessGrantModel and LakeAccessEventModel both split
- * around), so a real construction site can only ever live in one of the two apps.
+ * fails, and one wiring neither has no lake access to audit. Scoped to apps/client/server,
+ * packages/server-utils/src and apps/workers/src on purpose: all three depend directly on
+ * @bike4mind/database and so can construct the concrete, database-backed adapter bundle;
+ * b4m-core/services only ever CONSUMES ToolContext (the same import-direction rule
+ * DataLakeAccessGrantModel and LakeAccessEventModel both split around), so a real construction
+ * site can only ever live in one of those three.
  *
  * Pure string parsing - no imports of the modules, no AWS/SST calls. Lives outside `pages/api/`
  * for the same NFT-bundling reason as sessionRedactionGuard.test.ts.
@@ -40,7 +41,9 @@ import { fileURLToPath } from 'node:url';
 
 // This test lives at apps/client/server/__tests__ -> repo root is four levels up.
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const SCAN_ROOTS = ['apps/client/server', 'apps/workers/src'].map(root => resolve(REPO_ROOT, root));
+const SCAN_ROOTS = ['apps/client/server', 'packages/server-utils/src', 'apps/workers/src'].map(root =>
+  resolve(REPO_ROOT, root)
+);
 
 /** Recursively collect every `.ts` file under `dir`, skipping tests. */
 const collectServerFiles = (dir: string): string[] => {

@@ -1,4 +1,4 @@
-import { ApiKeyScope, CONFINED_API_KEY_SCOPES, QA_INGEST_USER_TAG } from '@bike4mind/common';
+import { ApiKeyScope, type ApiKeyScopeValue, CONFINED_API_KEY_SCOPES, QA_INGEST_USER_TAG } from '@bike4mind/common';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
@@ -38,13 +38,15 @@ interface AdminGenerateApiKeyModalProps {
 const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => s.value !== ApiKeyScope.OVERWATCH_INGEST_WRITE);
 // A confined scope must be a key's only scope (createUserApiKey enforces it), so picking one
 // replaces the selection and picking any other scope drops it.
-const confinedScopeValues = new Set<ApiKeyScope>(CONFINED_API_KEY_SCOPES);
+const confinedScopeValues = new Set<ApiKeyScopeValue>(CONFINED_API_KEY_SCOPES);
 
 export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminGenerateApiKeyModalProps) {
   // Embed keys are minted through the dedicated embed flow, not this generic modal, so
-  // embed:chat is excluded from the offered scopes. Premium scopes gate on the admin's own
-  // access, which useOptiAccess grants admins whenever the overlay is mounted, so they are
-  // hidden only in builds without the overlay, not per target user.
+  // embed:chat is excluded from the offered scopes. Built-in premium scopes gate on the admin's
+  // own access, which useOptiAccess grants admins whenever the overlay is mounted, so they are
+  // hidden only in builds without the overlay, not per target user. A contributed scope with a
+  // requiredEntitlement is also listed under the admin's bypass, but the mint route checks it
+  // against the TARGET user, so it is marked and left out of Select All.
   const scopeOptions = useGenericApiKeyScopes();
   const [formData, setFormData] = useState<AdminCreateUserApiKeyRequest>({
     name: '',
@@ -108,11 +110,12 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     });
   };
 
-  const allScopesSelected = scopeOptions.every(s => formData.scopes.includes(s.value));
+  const selectAllScopeOptions = useMemo(() => scopeOptions.filter(s => !s.requiredEntitlement), [scopeOptions]);
+  const allScopesSelected = selectAllScopeOptions.every(s => formData.scopes.includes(s.value));
   const genericSelectedCount = formData.scopes.filter(s => !confinedScopeValues.has(s)).length;
 
-  const toggleScope = (value: ApiKeyScope, checked: boolean) => {
-    let scopes: ApiKeyScope[];
+  const toggleScope = (value: ApiKeyScopeValue, checked: boolean) => {
+    let scopes: ApiKeyScopeValue[];
     if (!checked) scopes = formData.scopes.filter(s => s !== value);
     else if (confinedScopeValues.has(value)) scopes = [value];
     else scopes = [...formData.scopes.filter(s => !confinedScopeValues.has(s)), value];
@@ -130,11 +133,21 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
       <Typography level="body-xs" color="neutral" sx={{ ml: 4 }}>
         {scope.description}
       </Typography>
+      {scope.requiredEntitlement && (
+        <Typography
+          level="body-xs"
+          color="warning"
+          sx={{ ml: 4 }}
+          data-testid={`admin-generate-key-scope-${scope.value}-entitlement`}
+        >
+          Requires the {scope.requiredEntitlement} entitlement on this account.
+        </Typography>
+      )}
     </Box>
   );
 
   const toggleAllScopes = () => {
-    setFormData({ ...formData, scopes: allScopesSelected ? [] : scopeOptions.map(s => s.value) });
+    setFormData({ ...formData, scopes: allScopesSelected ? [] : selectAllScopeOptions.map(s => s.value) });
   };
 
   if (generatedKey) {
@@ -226,7 +239,8 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
             <FormLabel sx={{ mb: 0.5 }}>Service ingest key</FormLabel>
             <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
               Admin-only. An ingest scope must be the key&apos;s only scope, so selecting one clears the generic scopes
-              above. A QA ingest key is refused (403) unless its owner carries the {QA_INGEST_USER_TAG} user tag.
+              above. A QA ingest key is refused (403) unless its owner carries the {QA_INGEST_USER_TAG} user tag, and a
+              release-notes key can only be minted for a platform admin.
             </Typography>
             <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
               {ingestScopeOptions.map(renderScope)}

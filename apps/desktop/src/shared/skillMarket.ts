@@ -1,4 +1,5 @@
 import type {
+  ISkillFile,
   ISkillHonestSummary,
   ISkillSnapshot,
   SkillListingStatus,
@@ -141,24 +142,30 @@ export type SkillMarketWebTarget = { kind: 'listing'; id: string } | { kind: 'sk
  * never a path from the renderer), and every write runs only from an explicit click.
  */
 
-/** The account-skill fields an upload sends. Built field by field in main: no allowedTools. */
+/**
+ * The account-skill fields an upload sends. Built field by field in main: no allowedTools. The
+ * SKILL.md's allowed-tools travels as claudeCodeAllowedTools, kept for Claude Code exports only.
+ */
 export interface SkillUploadFields {
   name: string;
   description: string;
   body: string;
   argumentHint?: string;
+  claudeCodeAllowedTools?: string[];
   disableModelInvocation?: boolean;
+  /** A SKILL.md folder's scripts/ and references/ text files, sorted by path. */
+  files?: ISkillFile[];
 }
 
 export type SkillUploadPreview =
   | {
       ok: true;
       fields: SkillUploadFields;
-      /** Frontmatter keys Bike4Mind skills have no field for, allowed-tools included. */
+      /** Frontmatter keys Bike4Mind skills have no field for, such as model or hooks. */
       dropped: string[];
       /** Set when the file is a Bike4Mind export (it carries the source stamp). */
       source?: { url: string; thirdParty: boolean };
-      /** Other files beside a SKILL.md, which are not uploaded. The first few names, and the count. */
+      /** Other files beside a SKILL.md, which are not uploaded (anything outside scripts/ and references/, and symlinks). The first few names, and the count. */
       extraFiles: string[];
       extraFileCount: number;
     }

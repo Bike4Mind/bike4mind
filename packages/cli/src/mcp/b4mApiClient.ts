@@ -1,5 +1,5 @@
 import { isAxiosError } from 'axios';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { B4mApiError, createClient, parseRetryAfterSeconds, type B4mClient, type JsonBody } from '@bike4mind/sdk';
 import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
 import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
@@ -33,6 +33,93 @@ import {
 export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
 
 const STOP_REPLY_TIMEOUT_MS = 10 * 1000;
+
+/** Only the route is known here: the solver roster and limits are fetched at runtime. */
+const SOLVER_ROUTE = '/api/premium-optihashi/quantum/solve';
+
+/**
+ * The catalog and the key-scope lookup run before the stdio handshake completes, so they must not
+ * inherit the client's 10-minute default: a hung backend would otherwise stall `initialize` for every
+ * user, entitled or not.
+ */
+const SOLVER_CATALOG_TIMEOUT_MS = 5 * 1000;
+
+/** Bob's routes. Bob is deployed apart from the host, so a server may not serve them. */
+const BOB_ROUTE = '/api/premium-bob';
+
+/**
+ * One Bob run as `GET bob-run?id=&view=agent` answers it. Every field the tools read is required or
+ * nullable here, so a server that ignores `view=agent` (and answers the app's own shape) fails the
+ * parse rather than reading as a run with no report.
+ */
+const bobAgentRunSchema = z.looseObject({
+  runId: z.string(),
+  url: z.string(),
+  status: z.enum(['reading', 'ok', 'failed']),
+  progress: z.object({ done: z.number(), total: z.number() }).nullish(),
+  createdAt: z.string(),
+  settledAt: z.string().nullish(),
+  error: z.string().nullish(),
+  scanOnly: z.string().nullish(),
+  reportMarkdown: z.string().nullish(),
+  appPath: z.string(),
+  publishedPath: z.string().nullish(),
+  visibility: z.string().nullish(),
+});
+
+export type BobAgentRun = z.infer<typeof bobAgentRunSchema>;
+
+const bobAgentComparisonSchema = z.looseObject({
+  comparisonId: z.string(),
+  status: z.enum(['reading', 'ok', 'failed']),
+  you: bobAgentRunSchema.nullable(),
+  them: bobAgentRunSchema.nullable(),
+  summaryMarkdown: z.string().nullish(),
+  appPath: z.string(),
+});
+
+export type BobAgentComparison = z.infer<typeof bobAgentComparisonSchema>;
+
+/**
+ * One row of `GET bob-run?list=recent`: a single-site run or a two-site comparison (`you` and
+ * `them` are the two URLs). A server that predates comparison rows sends runs with no `kind`.
+ */
+const bobRecentRowSchema = z.union([
+  z.looseObject({
+    kind: z.literal('run').optional(),
+    runId: z.string(),
+    url: z.string(),
+    createdAt: z.string().nullish(),
+  }),
+  z.looseObject({
+    kind: z.literal('comparison'),
+    comparisonId: z.string(),
+    you: z.string(),
+    them: z.string(),
+    createdAt: z.string().nullish(),
+  }),
+]);
+
+export type BobRecentRow = z.infer<typeof bobRecentRowSchema>;
+
+const bobRecentListSchema = z.object({ runs: z.array(z.unknown()) });
+
+/** A start's 200 refusal: the daily cap or a credits refusal, in Bob's words. */
+const bobRefusalSchema = z.object({ ok: z.literal(false), error: z.string() });
+
+/** The account a Bob start bills: an org id, null for personal, absent for the caller's home org. */
+export type BobOrganizationId = string | null | undefined;
+
+const bobOrganizationField = (organizationId: BobOrganizationId) =>
+  organizationId === undefined ? {} : { organizationId };
+
+const keyScopeListSchema = z.array(
+  z.object({
+    keyPrefix: z.string().optional(),
+    scopes: z.array(z.string()).optional(),
+    status: z.string().optional(),
+  })
+);
 
 /**
  * An empty or dot-segment id collapses `/api/sessions/{id}` to `/api/sessions`, whose DELETE wipes every
@@ -245,9 +332,11 @@ export class B4mApiClient {
   private readonly client: ApiClient;
   private readonly sdk: B4mClient;
   readonly baseURL: string;
+  private readonly apiKey?: string;
 
   constructor(baseURL: string, configStore?: ConfigStore, apiKey?: string) {
     this.baseURL = baseURL;
+    this.apiKey = apiKey;
     this.client = new ApiClient(baseURL, configStore, apiKey);
     this.sdk = createClient({ baseUrl: baseURL, fetch: this.client.fetch });
   }
@@ -569,6 +658,111 @@ export class B4mApiClient {
     );
     return result.prompt;
   }
+
+  /**
+   * Scopes held by the API key this client authenticates with, read from the caller's own key list by
+   * matching the key's stored prefix. Undefined for a login (JWT) caller, who has no scopes to check;
+   * an empty list when the key is not found or cannot be told apart from another, so a caller that cannot be
+   * identified is never treated as scoped. Stored prefixes differ in length (older keys keep a shorter one),
+   * and the list can include other keys, so the longest matching prefix wins and a tie at that length is refused.
+   */
+  async getOwnKeyScopes(): Promise<string[] | undefined> {
+    const apiKey = this.apiKey;
+    if (!apiKey) return undefined;
+    const keys = keyScopeListSchema.parse(
+      await this.client.get<unknown>('/api/user-api-keys', { timeout: SOLVER_CATALOG_TIMEOUT_MS })
+    );
+    const matches = keys.filter(k => k.status === 'active' && !!k.keyPrefix && apiKey.startsWith(k.keyPrefix));
+    const longest = matches.reduce((length, key) => Math.max(length, key.keyPrefix?.length ?? 0), 0);
+    const best = matches.filter(k => k.keyPrefix?.length === longest);
+    return best.length === 1 ? (best[0].scopes ?? []) : [];
+  }
+
+  /** GET on the entitlement-gated solver route: the runnable rosters and limits for this caller. */
+  async getSolverCatalog(): Promise<unknown> {
+    return this.client.get<unknown>(SOLVER_ROUTE, { timeout: SOLVER_CATALOG_TIMEOUT_MS });
+  }
+
+  /** POST on the same route: run a bounded solver race. The body is validated server-side. */
+  async runSolverRace(body: Record<string, unknown>): Promise<unknown> {
+    return this.client.post<unknown>(SOLVER_ROUTE, body);
+  }
+
+  /** POST bob-run: start one site read under a caller-minted run id. Throws Bob's words on a refusal. */
+  async startBobRun(args: { url: string; runId: string; organizationId?: BobOrganizationId }): Promise<void> {
+    const body = { url: args.url, runId: args.runId, ...bobOrganizationField(args.organizationId) };
+    throwBobRefusal(await this.client.post<unknown>(`${BOB_ROUTE}/bob-run`, body));
+  }
+
+  async getBobRun(runId: string): Promise<BobAgentRun> {
+    const result = await this.client.get<unknown>(`${BOB_ROUTE}/bob-run`, { params: { id: runId, view: 'agent' } });
+    return this.parseBobView(z.object({ run: bobAgentRunSchema }), result, 'run').run;
+  }
+
+  /** POST bob-compare: start a read of each site, linked as one comparison. Throws Bob's words on a refusal. */
+  async startBobComparison(args: {
+    comparisonId: string;
+    you: { url: string; runId: string };
+    them: { url: string; runId: string };
+    organizationId?: BobOrganizationId;
+  }): Promise<void> {
+    const { organizationId, ...ids } = args;
+    const body = { ...ids, ...bobOrganizationField(organizationId) };
+    throwBobRefusal(await this.client.post<unknown>(`${BOB_ROUTE}/bob-compare`, body));
+  }
+
+  async getBobComparison(comparisonId: string): Promise<BobAgentComparison> {
+    const result = await this.client.get<unknown>(`${BOB_ROUTE}/bob-compare`, {
+      params: { id: comparisonId, view: 'agent' },
+    });
+    return this.parseBobView(z.object({ comparison: bobAgentComparisonSchema }), result, 'comparison').comparison;
+  }
+
+  /** POST bob-recheck: re-run one check of a run against its site. Answers with the new reading. */
+  async recheckBob(args: { runId: string; checkId: string }): Promise<unknown> {
+    const result = await this.client.post<{ recheck?: unknown }>(`${BOB_ROUTE}/bob-recheck`, args);
+    throwBobRefusal(result);
+    return result.recheck;
+  }
+
+  /**
+   * GET bob-run?list=recent: the caller's finished runs and comparisons, newest first. The server caps
+   * `limit`. A row of a kind this CLI does not know is dropped, so a newer server cannot break the list.
+   */
+  async listBobReports(limit?: number): Promise<BobRecentRow[]> {
+    const result = await this.client.get<unknown>(`${BOB_ROUTE}/bob-run`, {
+      params: { list: 'recent', ...(limit !== undefined ? { limit } : {}) },
+    });
+    return bobRecentListSchema.parse(result).runs.flatMap(row => {
+      const parsed = bobRecentRowSchema.safeParse(row);
+      return parsed.success ? [parsed.data] : [];
+    });
+  }
+
+  /** GET bob-run?quota: runs left under the daily cap, for the account a start would bill. */
+  async getBobQuota(organizationId?: BobOrganizationId): Promise<Record<string, unknown>> {
+    // The route reads an empty organizationId as the personal account and an absent one as the home org.
+    const result = await this.client.get<{ quota?: Record<string, unknown> }>(`${BOB_ROUTE}/bob-run`, {
+      params: { quota: '', ...(organizationId === undefined ? {} : { organizationId: organizationId ?? '' }) },
+    });
+    return result.quota ?? {};
+  }
+
+  private parseBobView<T>(schema: z.ZodType<T>, body: unknown, what: string): T {
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      throw new Error(
+        `the Bike4Mind server at ${this.baseURL} answered the Bob ${what} without its agent view; it likely predates these tools`
+      );
+    }
+    return parsed.data;
+  }
+}
+
+/** A 2xx `{ ok: false, error }` from Bob is a refusal (the daily cap, credits), not a transport error. */
+function throwBobRefusal(body: unknown): void {
+  const refusal = bobRefusalSchema.safeParse(body);
+  if (refusal.success) throw new Error(refusal.data.error);
 }
 
 /**
@@ -643,6 +837,27 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     return serverMsg;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * {@link mapApiError} for Bob's routes, which do enforce their scopes. A scope 403 (Bob's own
+ * `missing_scope`, or the host gate's `required_scopes`) names the scope to grant; a 429 or 503 that
+ * carries `retryAfterMs` says how long to wait; a 404 with no error body means the server has no Bob.
+ */
+export function mapBobApiError(error: unknown, baseURL: string, scope: string): string {
+  const failure = httpFailure(error);
+  const message = extractServerMessage(failure?.data);
+  const body = failure?.data && typeof failure.data === 'object' ? (failure.data as Record<string, unknown>) : {};
+  if (failure?.status === 403 && (body.code === 'missing_scope' || Array.isArray(body.required_scopes))) {
+    return `${message ?? 'API key forbidden'} (grant the key ${scope})`;
+  }
+  if ((failure?.status === 429 || failure?.status === 503) && typeof body.retryAfterMs === 'number') {
+    return `${message ?? 'Bob is busy'} (retry after ${Math.ceil(body.retryAfterMs / 1000)}s)`;
+  }
+  if (failure?.status === 404 && !message) {
+    return `Bob is not available on the Bike4Mind server at ${baseURL}`;
+  }
+  return mapApiError(error, baseURL, scope);
 }
 
 /**

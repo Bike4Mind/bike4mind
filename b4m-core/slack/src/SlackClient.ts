@@ -1,6 +1,13 @@
-import { isPlaceholderValue } from '@bike4mind/common';
+import { escapeSlackText, isPlaceholderValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { WebClient, WebClientEvent, KnownBlock, Block, ChatPostEphemeralArguments } from '@slack/web-api';
+import {
+  WebClient,
+  WebClientEvent,
+  KnownBlock,
+  Block,
+  ChatPostEphemeralArguments,
+  MessageAttachment,
+} from '@slack/web-api';
 import { getSlackDeps, getSlackDb } from './di/registry';
 
 /**
@@ -164,8 +171,8 @@ export interface SlackSearchResult {
     text: string;
     permalink: string;
     no_reactions: boolean;
-    blocks?: Array<any>;
-    attachments?: Array<any>;
+    blocks?: (KnownBlock | Block)[];
+    attachments?: MessageAttachment[];
   }>;
 }
 
@@ -177,9 +184,7 @@ export interface SlackSearchResult {
  * Slack's own text-escaping rules) is sufficient, since those special forms cannot parse without
  * them.
  */
-export function escapeSlackMrkdwn(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+export const escapeSlackMrkdwn = escapeSlackText;
 
 /**
  * Centralized interface for all Slack API interactions via the @slack/web-api SDK.
@@ -1395,7 +1400,7 @@ export class SlackClient {
    * @param outputs - Optional outputs from the step
    * @deprecated Use functionCompleteSuccess for new Workflow Steps API
    */
-  async workflowStepCompleted(workflowStepExecuteId: string, outputs?: Record<string, any>): Promise<void> {
+  async workflowStepCompleted(workflowStepExecuteId: string, outputs?: Record<string, unknown>): Promise<void> {
     this.logger.info('Reporting workflow step completion', { workflowStepExecuteId });
 
     try {

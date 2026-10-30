@@ -109,7 +109,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
         with:
           run_install: false
 
@@ -202,7 +202,7 @@ jobs:
   # Automated release: creates Version Packages PR or publishes when that PR is merged
   release:
     if: github.event_name == 'push' && github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 20
     permissions:
       contents: write
@@ -236,7 +236,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
         with:
           run_install: false
 
@@ -271,7 +271,7 @@ jobs:
       # var is absent, and npm authenticates via OIDC trusted publishing.
       - name: Create Release PR or Publish
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         with:
           version: pnpm changeset:version
           publish: pnpm changeset:publish
@@ -294,12 +294,19 @@ jobs:
   # Snapshot (prerelease) publish for feature branches, triggered when the
   # "Branch Tests" workflow completes successfully. It lives in this file so
   # npm's single trusted publisher (this workflow) covers snapshot publishes
-  # too - see the header comment.
+  # too - see the header comment. The release PR branch is skipped: it already
+  # carries the real versions, so snapshot-publishing it would upload them under a
+  # snapshot tag and the post-merge publish could then never move latest.
   snapshot:
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.path == '.github/workflows/test.yaml' &&
       github.event.workflow_run.head_branch != 'main' &&
+      github.event.workflow_run.head_branch != 'changeset-release/main' &&
+      !startsWith(github.event.workflow_run.head_branch, 'gh-readonly-queue/') &&
       github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
     concurrency:
       group: snapshot-${{ github.event.workflow_run.head_branch }}

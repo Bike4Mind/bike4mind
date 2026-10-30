@@ -22,13 +22,11 @@ import {
   Option,
   Divider,
 } from '@mui/joy';
-import {
-  Close as CloseIcon,
-  Check as CheckIcon,
-  RestartAlt as RestartAltIcon,
-  KeyboardArrowDown as KeyboardArrowDownIcon,
-  ArrowBack as ArrowBackIcon,
-} from '@mui/icons-material';
+import CloseIcon from '@mui/icons-material/Close';
+import CheckIcon from '@mui/icons-material/Check';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { Theme } from '@mui/joy/styles';
 import { useTheme } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -52,7 +50,9 @@ import {
   REASONING_SUPPORTED_MODELS,
   UserReasoningEffort,
   isKontextModel as isKontextImageModel,
+  ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
 } from '@bike4mind/common';
+import { reasonsWithinOutputBudget, sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
 import { ResearchModeConfiguration, ResearchModeState } from '@client/app/types/ResearchMode';
 import { useLLM, LLMContextProps } from '@client/app/contexts/LLMContext';
@@ -82,6 +82,7 @@ import {
   buildModelSelectionPatch,
   ChipVariant,
   computeDefaultMaxTokens,
+  formatTokenBudget,
   getModelPriceTier,
   getModelSpeedFromStats,
   getModelSpeedTooltip,
@@ -567,9 +568,6 @@ const formatTrainingCutoff = (cutoff: string): string => {
 // indicators on it rather than competing with a card's own controls.
 const INDICATOR_SIZE = 32;
 
-// Space thousands separators, matching the Context total these two numbers split.
-const formatTokenCount = (tokens: number): string => tokens.toLocaleString().replace(/,/g, ' ');
-
 /**
  * Floor for the output-token slider. Replaces `max(1024, min(2048, ctx / 4))`, whose other two
  * branches were dead for any window of 8192 or more - i.e. every current model - so the floor was
@@ -658,6 +656,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   commonInputStyles,
   mode,
 }) => {
+  const thinking = useLLM(s => s.thinking);
   if (!modelInfo) return null;
 
   // Provider and capability notices, rendered as one stacked block below the description.
@@ -713,6 +712,15 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // the bounds would invert outright, which MUI leaves undefined. The read-out and the sentence below
   // still state the budget, so nothing is lost by omitting the track.
   const isOutputAdjustable = outputCeiling > MIN_OUTPUT_TOKENS;
+  // A model that reasons inside this budget can spend all of it before writing a reply, and the
+  // server sends the value as set (resolveOutputMaxTokens), so warn below the floor it would give an
+  // unset budget. Measured on what is sent, as the server's sentBelowReasoningFloor telemetry is: with
+  // thinking on, the Anthropic adapters already raise it to the floor (sentMaxTokensFor).
+  const reasoningFloor = Math.min(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, outputCeiling);
+  const isBelowReasoningFloor =
+    !readOnly &&
+    reasonsWithinOutputBudget(modelInfo) &&
+    sentMaxTokensFor(modelInfo, thinking, outputTokens) < reasoningFloor;
 
   // The session-wide switches, defined once and rendered two ways. Desktop keeps them inline beside
   // the section title; mobile has no room for four controls on that row, so there the title keeps
@@ -1045,11 +1053,11 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   data-testid="token-allocation-output"
                 >
                   <Box component="span" sx={{ color: readOnly ? 'text.tertiary' : brand[800], fontWeight: 'bold' }}>
-                    {formatTokenCount(outputTokens)}
+                    {formatTokenBudget(outputTokens)}
                   </Box>
                   <Box component="span" sx={{ color: 'text.tertiary', fontWeight: 400 }}>
                     {' / '}
-                    {formatTokenCount(outputCeiling)}
+                    {formatTokenBudget(outputCeiling)}
                   </Box>
                 </Typography>
               </Box>
@@ -1107,9 +1115,20 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   mt: isOutputAdjustable ? '-12px' : 0,
                 }}
               >
-                Reserved from the {formatTokenCount(contextWindow)} token context window, leaving{' '}
-                {formatTokenCount(inputTokens)} for input.
+                Reserved from the {formatTokenBudget(contextWindow)} token context window, leaving{' '}
+                {formatTokenBudget(inputTokens)} for input.
               </Typography>
+              {isBelowReasoningFloor && (
+                <Typography
+                  level="body-sm"
+                  color="warning"
+                  data-testid="token-allocation-reasoning-floor-warning"
+                  sx={{ fontSize: '12px', lineHeight: 1.4 }}
+                >
+                  Values below {formatTokenBudget(reasoningFloor)} can leave reasoning models with no room to answer,
+                  because the reasoning can use the whole budget.
+                </Typography>
+              )}
             </Box>
           )}
 

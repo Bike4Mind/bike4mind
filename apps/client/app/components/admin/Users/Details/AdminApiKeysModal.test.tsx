@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -7,7 +7,8 @@ import { toast } from 'sonner';
 
 const h = vi.hoisted(() => ({
   keys: [] as Record<string, unknown>[],
-  liveUsage: {} as Record<string, { minute: number; day: number }>,
+  hookArgs: [] as unknown[],
+  liveUsage: {} as Record<string, { minute: number; day: number; minuteResetAt?: number; dayResetAt?: number }>,
   resetMutate: vi.fn(),
   // Auto-invokes onOk so the confirm-then-mutate flow runs synchronously;
   // individual tests override the implementation to model a dismissal.
@@ -15,12 +16,15 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
-  useAdminGetUserApiKeys: () => ({
-    data: { apiKeys: h.keys, liveUsage: h.liveUsage },
-    isLoading: false,
-    error: null,
-    refetch: vi.fn(),
-  }),
+  useAdminGetUserApiKeys: (...args: unknown[]) => {
+    h.hookArgs = args;
+    return {
+      data: { apiKeys: h.keys, liveUsage: h.liveUsage },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    };
+  },
   useAdminResetApiKeyRateLimit: () => ({ mutate: h.resetMutate, isPending: false }),
 }));
 
@@ -34,6 +38,10 @@ vi.mock('sonner', () => ({
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const USER = { id: 'u1', username: 'target-user' } as never;
+
+// Pinned clock: the minute window formats in seconds, the day window in hours.
+const NOW_MS = new Date('2026-10-21T12:00:00Z').getTime();
+const NOW_S = Math.floor(NOW_MS / 1000);
 
 const renderModal = () =>
   render(
@@ -52,6 +60,8 @@ const KEY = {
 };
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW_MS);
   h.keys = [];
   h.liveUsage = {};
   h.resetMutate.mockReset();
@@ -62,6 +72,10 @@ beforeEach(() => {
   // this file and is otherwise never reset.
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('AdminApiKeysModal', () => {
@@ -76,6 +90,67 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-key-usage-k1').textContent).toContain('42/1000 per day');
     expect(screen.getByTestId('admin-api-key-status-k1').textContent).toBe('Active');
     expect(screen.getByTestId('admin-api-key-status-k2').textContent).toBe('Disabled');
+  });
+
+  it('shows the reset time for each open window', () => {
+    h.keys = [KEY];
+    h.liveUsage = { k1: { minute: 3, day: 42, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S + 3600 } };
+    renderModal();
+
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).toContain('3/60 per min · resets in 42s');
+    expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('42/1000 per day · resets in 1h 0m');
+  });
+
+  it('polls while open so the minute window does not freeze at fetch time', () => {
+    h.keys = [KEY];
+    renderModal();
+
+    expect(h.hookArgs[1]).toEqual({ refetchInterval: 15_000 });
+  });
+
+  it('gates each reset on its own window', () => {
+    // Both resets are future; k1 has only day usage and k2 only minute usage, so swapping
+    // the two `> 0` gates fails one line in each direction.
+    h.keys = [KEY, { ...KEY, id: 'k2', name: 'busy minute key' }];
+    h.liveUsage = {
+      k1: { minute: 0, day: 42, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S + 3600 },
+      k2: { minute: 3, day: 0, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S + 3600 },
+    };
+    renderModal();
+
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).not.toContain('resets in');
+    expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('resets in 1h 0m');
+    expect(screen.getByTestId('admin-api-key-usage-minute-k2').textContent).toContain('resets in 42s');
+    expect(screen.getByTestId('admin-api-key-usage-day-k2').textContent).not.toContain('resets in');
+  });
+
+  it('drops a reset whose window already closed, keeping the other line', () => {
+    // A snapshot taken while a window was open outlives it: the counter is still
+    // non-zero, but the formatter returns ''. Without the truthiness guard the line
+    // would end in a bare "resets in ".
+    h.keys = [KEY, { ...KEY, id: 'k2', name: 'stale day key' }];
+    h.liveUsage = {
+      k1: { minute: 3, day: 42, minuteResetAt: NOW_S - 1, dayResetAt: NOW_S + 3600 },
+      k2: { minute: 3, day: 42, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S - 1 },
+    };
+    renderModal();
+
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).toContain('3/60 per min');
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).not.toContain('resets in');
+    expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('resets in 1h 0m');
+    expect(screen.getByTestId('admin-api-key-usage-day-k2').textContent).not.toContain('resets in');
+    expect(screen.getByTestId('admin-api-key-usage-minute-k2').textContent).toContain('resets in 42s');
+  });
+
+  it('omits the reset time while a window is empty', () => {
+    h.keys = [KEY];
+    h.liveUsage = {
+      k1: { minute: 0, day: 0, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S + 3600 },
+    };
+    renderModal();
+
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).not.toContain('resets in');
+    expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).not.toContain('resets in');
   });
 
   it('flags an active key whose live counter sits at its limit as rate limited', () => {

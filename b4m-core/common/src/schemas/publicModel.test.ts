@@ -58,6 +58,7 @@ describe('toPublicModel', () => {
       supports_tools: true,
       supports_tool_search: false,
       supports_tool_changes: false,
+      supports_assistant_prefill: true,
       supports_vision: true,
       deprecation_date: '2027-01-01',
       replaced_by: 'gpt-5',
@@ -169,6 +170,14 @@ describe('toPublicModel', () => {
     expect(projected).toMatchObject({ supports_tool_search: toolSearch, supports_tool_changes: toolChanges });
   });
 
+  it('publishes assistant prefill support with a true default and documented Claude exceptions', () => {
+    expect(project(textModel).supports_assistant_prefill).toBe(true);
+    expect(
+      project({ ...textModel, id: 'claude-haiku-5-5' as ModelInfo['id'], backend: ModelBackend.Anthropic })
+        .supports_assistant_prefill
+    ).toBe(false);
+  });
+
   it('publishes null on image models, which are not priced per token', () => {
     expect(project(imageModel(ImageModels.GPT_IMAGE_1)).credits_per_1m_tokens).toBeNull();
   });
@@ -217,6 +226,7 @@ describe('listModelsContract example', () => {
     expect(row).toMatchObject({
       supports_tool_search: projected.supports_tool_search,
       supports_tool_changes: projected.supports_tool_changes,
+      supports_assistant_prefill: projected.supports_assistant_prefill,
     });
   });
 });

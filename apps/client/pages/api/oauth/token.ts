@@ -11,7 +11,7 @@
 
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
 import {
   cacheRepository,
@@ -28,7 +28,7 @@ import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/token
 import { grantCovers, oauthAccessTokenAudience } from '@server/auth/oauthConsent';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
 import { mintRefreshFamily, refreshFamilyExpiresAt } from '@server/auth/oauthRefreshToken';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { getClientIp } from '@server/utils/ip';
 

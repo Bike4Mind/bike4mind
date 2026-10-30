@@ -1738,6 +1738,30 @@ describe('DataLakeRepository - lake-memory extraction lease + continuation curso
   });
 });
 
+describe('DataLakeBatchRepository - taxonomyBilling', () => {
+  setupMongoTest();
+
+  it.each(['orgB', null])('persists payer %s through the taxonomy claim and list projection', async organizationId => {
+    const taxonomyBilling = { organizationId, apiKeyId: 'key1', source: 'cli' as const };
+    const batch = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      wantsTaxonomy: true,
+      taxonomyBilling,
+    });
+
+    const claimed = await dataLakeBatchRepository.setTaxonomyStatusIfActive(batch.id, ['none'], 'queued');
+    expect(claimed?.taxonomyBilling).toMatchObject(taxonomyBilling);
+    const listed = await dataLakeBatchRepository.findActiveByUserId('u1');
+    expect(listed.find(item => item.id === batch.id)?.taxonomyBilling).toMatchObject(taxonomyBilling);
+  });
+
+  it('leaves legacy batches without a billing snapshot for the legacy owner fallback', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+    expect(batch.taxonomyBilling).toBeUndefined();
+  });
+});
+
 describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', () => {
   setupMongoTest();
 

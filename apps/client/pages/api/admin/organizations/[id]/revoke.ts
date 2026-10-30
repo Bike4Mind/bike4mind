@@ -5,16 +5,11 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
-import { z } from 'zod';
 import { Resource } from 'sst';
-
-const RevokeSchema = z.object({
-  reason: z.string().min(1).max(500).optional(),
-});
 
 interface RequestQuery {
   id: string;
@@ -33,7 +28,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const { id } = req.query as RequestQuery;
     if (!id) throw new BadRequestError('Organization id required');
 
-    const { reason } = RevokeSchema.parse(req.body);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     const organization = await organizationRepository.findById(id);
     if (!organization) throw new NotFoundError('Organization not found');

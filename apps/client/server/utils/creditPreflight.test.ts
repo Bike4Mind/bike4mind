@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { mocks } = vi.hoisted(() => {
   // The enforceCredits default (hosted on, self-host off) is computed when the
@@ -16,6 +16,8 @@ const { mocks } = vi.hoisted(() => {
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
+  organizationRepository: {},
+  creditTransactionRepository: {},
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
   organizationRepository: { findById: (...a: unknown[]) => mocks.orgFindById(...a) },
 }));
@@ -51,7 +53,20 @@ beforeEach(() => {
   mocks.getSettingsMap.mockResolvedValue({});
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe('assertPreflightCredits', () => {
+  it('reads enforceCredits past the settings cache so an admin flip applies on the next call', async () => {
+    mocks.findById.mockResolvedValue({ currentCredits: 100 });
+    await check(1);
+    expect(mocks.getSettingsMap).toHaveBeenCalledWith(expect.anything(), {
+      names: ['enforceCredits'],
+      skipCache: true,
+    });
+  });
+
   describe('enforcement on (the hosted default when the setting is unset)', () => {
     it('rejects a user that does not exist', async () => {
       mocks.findById.mockResolvedValue(null);
@@ -126,6 +141,7 @@ describe('assertPreflightCredits', () => {
     });
 
     it('admits a zero-balance pool when enforcement is off, but still requires the org to exist', async () => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
       mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
       mocks.orgFindById.mockResolvedValue({ currentCredits: 0, userDetails: [] });
       await expect(checkOrg(100)).resolves.toBeUndefined();
@@ -136,7 +152,10 @@ describe('assertPreflightCredits', () => {
   });
 
   describe('enforcement off (an explicit false setting)', () => {
-    beforeEach(() => mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' }));
+    beforeEach(() => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+      mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
+    });
 
     it('admits a zero-balance user', async () => {
       mocks.findById.mockResolvedValue({ currentCredits: 0 });

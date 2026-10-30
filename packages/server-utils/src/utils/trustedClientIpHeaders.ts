@@ -63,3 +63,30 @@ export function getTrustedHeaderClientIp(readHeader: HeaderReader): string | nul
   if (isSelfHost()) return getTrustedForwardedForIp(readHeader, readTrustedProxyHops());
   return getCloudFrontViewerIp(readHeader);
 }
+
+/** CloudFront's JA4 TLS fingerprint of the viewer. Trusted only behind origin verification. */
+export const CLOUDFRONT_VIEWER_JA4_HEADER = 'cloudfront-viewer-ja4-fingerprint';
+
+export type CloudFrontViewerNetwork = {
+  /** Autonomous system number of the viewer's network, or null when CloudFront did not send it. */
+  asn: number | null;
+  /** ISO 3166-1 alpha-2 country code, or null when CloudFront did not send it. */
+  country: string | null;
+};
+
+/**
+ * The viewer ASN and country CloudFront stamps on origin requests. Like cloudfront-viewer-address,
+ * CloudFront overwrites any client-supplied copy, so these are trusted on deployed stages only; a
+ * self-host has no CloudFront in front, where the same headers would be whatever the client sent.
+ * They reach the origin only when the distribution's origin request policy forwards them, so
+ * absence is normal and yields nulls.
+ */
+export function getCloudFrontViewerNetwork(readHeader: HeaderReader): CloudFrontViewerNetwork {
+  if (isSelfHost()) return { asn: null, country: null };
+  const asnRaw = readHeader('cloudfront-viewer-asn')?.trim();
+  const countryRaw = readHeader('cloudfront-viewer-country')?.trim().toUpperCase();
+  return {
+    asn: asnRaw && /^\d+$/.test(asnRaw) ? Number(asnRaw) : null,
+    country: countryRaw && /^[A-Z]{2}$/.test(countryRaw) ? countryRaw : null,
+  };
+}

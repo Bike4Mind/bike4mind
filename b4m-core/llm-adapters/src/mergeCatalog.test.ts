@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { ChatModels, ModelBackend, toModelRecord } from '@bike4mind/common';
+import { ChatModels, ImageModels, ModelBackend, toModelRecord } from '@bike4mind/common';
 import type { IModelCatalogRow, ModelInfo } from '@bike4mind/common';
 import { getAvailableModels, setModelCatalogProvider, setModelPriceRowsProvider } from './index';
 import { mergeCatalog, mergeCatalogWithDrops, resolveCatalogRecords } from './mergeCatalog';
@@ -690,6 +690,29 @@ describe('mergeCatalog: a non-operator lifecycle only moves toward sunset', () =
     setModelPriceRowsProvider(null);
   });
 
+  it('keeps an adapter superseded marker when discovery only reports an active status', () => {
+    const seed = seedModel({ isSuperseded: true });
+    const [merged] = mergeCatalog([seed], [lifecycleRow(seed.id, 'discovery', { status: 'active' })], NO_KEYS);
+    expect(merged.isSuperseded).toBe(true);
+    expect(merged.disabled).toBeFalsy();
+  });
+
+  it('keeps seeded superseded metadata over discovery but lets an operator clear it', () => {
+    const seed = seedModel();
+    const rows = [
+      lifecycleRow(seed.id, 'seed', { status: 'active', isSuperseded: true }),
+      lifecycleRow(seed.id, 'discovery', { status: 'active', isSuperseded: false }),
+    ];
+    expect(mergeCatalog([seed], rows, NO_KEYS)[0].isSuperseded).toBe(true);
+    expect(
+      mergeCatalog(
+        [seed],
+        [...rows, lifecycleRow(seed.id, 'operator', { status: 'active', isSuperseded: false })],
+        NO_KEYS
+      )[0].isSuperseded
+    ).toBe(false);
+  });
+
   it('keeps a past adapter-literal deprecation hidden when discovery reports it active with a later date', async () => {
     setModelPriceRowsProvider(null);
     setModelCatalogProvider(async () => []);
@@ -933,5 +956,313 @@ describe('mergeCatalog: a non-operator availability row cannot clear a disable',
       NO_KEYS
     );
     expect(merged.disabled).toBe(false);
+  });
+});
+
+describe('mergeCatalog: a discovery introduction under a curated record', () => {
+  const imageSeed = (overrides: Partial<ModelInfo> = {}): ModelInfo =>
+    seedModel({
+      id: ImageModels.FLUX_2_PRO,
+      type: 'image',
+      name: 'FLUX.2 Pro',
+      backend: ModelBackend.BFL,
+      contextWindow: 10_000,
+      supportsImageVariation: true,
+      ...overrides,
+    });
+
+  /** What the writer produced for an endpoint no adapter table curated: slug, 0, disabled. */
+  const introduction = (overrides: Partial<IModelCatalogRow> = {}): IModelCatalogRow =>
+    row({
+      modelId: String(ImageModels.FLUX_2_PRO),
+      source: 'discovery',
+      ownedGroups: ['identity', 'limits', 'availability', 'lifecycle'],
+      patch: {
+        id: String(ImageModels.FLUX_2_PRO),
+        vendor: 'black-forest-labs',
+        backend: ModelBackend.BFL,
+        type: 'image',
+        name: String(ImageModels.FLUX_2_PRO),
+        contextWindow: 0,
+        autoDisabled: true,
+        autoDisabledReason: 'discovered, not invocable by this build',
+        lifecycle: { status: 'discovered' },
+      },
+      ...overrides,
+    });
+
+  it('yields the name, the window and the disable to the curated record', () => {
+    const seed = imageSeed();
+    const [merged] = mergeCatalog([seed], [introduction()], NO_KEYS);
+
+    expect(merged).toMatchObject({ name: 'FLUX.2 Pro', contextWindow: 10_000 });
+    expect(merged.disabled).toBeFalsy();
+    expect(merged.disabledReason).toBeUndefined();
+  });
+
+  it('yields from a snapshot of the introduction that claims no lifecycle', () => {
+    const seed = imageSeed();
+    // A snapshot carries forward only the groups it re-decides: discovery's own disable, not
+    // lifecycle or limits. The name is one a feed supplied rather than the id the writer pins, so
+    // the id-for-a-name clause cannot apply and the flag alone has to say it is still an introduction.
+    // Production's snapshot for these ids also claims lifecycle (see the discovery suite's next-run
+    // case, which pins that shape).
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        introduction({
+          ownedGroups: ['identity', 'availability'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'black-forest-labs',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            name: 'FLUX.2 Pro [feed]',
+            autoDisabled: true,
+            autoDisabledReason: 'discovered, not invocable by this build',
+          },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged).toMatchObject({ name: 'FLUX.2 Pro', contextWindow: 10_000 });
+    expect(merged.disabled).toBeFalsy();
+  });
+
+  it('keeps a provider-declared disable while the curated record supplies the identity', () => {
+    const seed = imageSeed();
+    // How the Bedrock source reports an unentitled model: a real name, the provider's own reason.
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        introduction({
+          ownedGroups: ['identity', 'limits', 'availability', 'lifecycle'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'black-forest-labs',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            name: 'FLUX.2 Pro [prov]',
+            contextWindow: 8_000,
+            autoDisabled: true,
+            autoDisabledReason: 'not entitled in this AWS account',
+            lifecycle: { status: 'discovered' },
+          },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged).toMatchObject({
+      name: 'FLUX.2 Pro',
+      contextWindow: 10_000,
+      disabled: true,
+      disabledReason: 'not entitled in this AWS account',
+    });
+  });
+
+  it('still lets a promoted discovery row claim the groups it owns', () => {
+    const seed = imageSeed();
+    // The row promotion writes: the whole introduction carried forward, with autoDisabled false.
+    // A feed that names models by id (Ollama), or one the writer pinned the slug for, keeps that
+    // name through promotion - so the name alone cannot say the row is still an introduction.
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        row({
+          modelId: seed.id,
+          source: 'discovery',
+          ownedGroups: ['limits'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'black-forest-labs',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            name: String(ImageModels.FLUX_2_PRO),
+            contextWindow: 400_000,
+            autoDisabled: false,
+            lifecycle: { status: 'active' },
+          },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged.contextWindow).toBe(400_000);
+  });
+
+  it('yields the pinned id as a name from a promoted row, keeping the window it measured', () => {
+    const seed = imageSeed();
+    // Promotion clears autoDisabled but keeps the name the writer pinned for a feed that published
+    // none - the model id. Identity has to yield to the curated label while limits stays the row's.
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        row({
+          modelId: seed.id,
+          source: 'discovery',
+          ownedGroups: ['identity', 'limits'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'black-forest-labs',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            name: String(ImageModels.FLUX_2_PRO),
+            contextWindow: 400_000,
+            autoDisabled: false,
+            lifecycle: { status: 'active' },
+          },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged).toMatchObject({ name: 'FLUX.2 Pro', contextWindow: 400_000 });
+  });
+
+  it('keeps a measured window on a row a source has since disabled, and the disable', () => {
+    const seed = imageSeed();
+    // The window is not the introduction's zero: an aggregator joined it, or the source measured it.
+    // Curation keeps the disable (the provider's answer) but has no better window to offer.
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        row({
+          modelId: seed.id,
+          source: 'discovery',
+          ownedGroups: ['identity', 'limits', 'availability', 'lifecycle'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'black-forest-labs',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            name: 'FLUX.2 Pro',
+            contextWindow: 400_000,
+            autoDisabled: true,
+            autoDisabledReason: 'not entitled in this AWS account',
+            lifecycle: { status: 'active' },
+          },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged).toMatchObject({
+      contextWindow: 400_000,
+      disabled: true,
+      disabledReason: 'not entitled in this AWS account',
+    });
+  });
+
+  it('reclaims from a row written before autoDisabled was carried forward', () => {
+    const seed = imageSeed();
+    // The build before the flag existed wrote no autoDisabled anywhere; the lifecycle alone says
+    // discovery never promoted this row.
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        row({
+          modelId: seed.id,
+          source: 'discovery',
+          ownedGroups: ['identity', 'limits', 'lifecycle'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'black-forest-labs',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            name: String(ImageModels.FLUX_2_PRO),
+            contextWindow: 0,
+            lifecycle: { status: 'discovered' },
+          },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged).toMatchObject({ name: 'FLUX.2 Pro', contextWindow: 10_000 });
+  });
+
+  it('reclaims an availability group the row credits to discovery but states no reason for', () => {
+    const seed = imageSeed();
+    // A row written before the verdict wording existed: the contributor credit is the only evidence
+    // of who disabled the model.
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        row({
+          modelId: seed.id,
+          source: 'discovery',
+          ownedGroups: ['availability'],
+          patch: { autoDisabled: true },
+          contributors: [{ group: 'availability', source: 'discovery' }],
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged.disabled).toBeFalsy();
+  });
+
+  it('keeps a disable the row credits to the provider even when the reason wears discovery wording', () => {
+    const seed = imageSeed();
+    // The row a writer that credited a group to whoever supplied its first field leaves when one run
+    // both clears the provider's disable and has its promotion refused: the disable in force is
+    // discovery's verdict, but the clearance supplied `autoDisabled`, so the row credits the
+    // provider. That row cannot be told from the one main's writer left by restamping a provider
+    // disable to a verdict, and the contributor is what the read path trusts - so it keeps its
+    // disable until a run that decides the disable itself re-credits it (a run with no availability
+    // answer keeps the credit). The contributor, not the wording, says who disabled it.
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        row({
+          modelId: seed.id,
+          source: 'discovery',
+          ownedGroups: ['availability', 'lifecycle'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'black-forest-labs',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            autoDisabled: true,
+            autoDisabledReason: 'discovered, awaiting admin approval',
+            lifecycle: { status: 'discovered' },
+          },
+          contributors: [{ group: 'availability', source: 'bedrock' }],
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged).toMatchObject({ disabled: true, disabledReason: 'discovered, awaiting admin approval' });
+  });
+
+  it('reclaims a verdict disable the row credits to discovery', () => {
+    const seed = imageSeed();
+    // The other side of the contributor test: discovery's own refusal still yields to curation.
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        row({
+          modelId: seed.id,
+          source: 'discovery',
+          ownedGroups: ['availability', 'lifecycle'],
+          patch: {
+            id: String(ImageModels.FLUX_2_PRO),
+            vendor: 'black-forest-labs',
+            backend: ModelBackend.BFL,
+            type: 'image',
+            autoDisabled: true,
+            autoDisabledReason: 'discovered, awaiting price',
+            lifecycle: { status: 'discovered' },
+          },
+          contributors: [{ group: 'availability', source: 'discovery' }],
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(merged.disabled).toBeFalsy();
   });
 });

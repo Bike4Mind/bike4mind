@@ -13,6 +13,7 @@ import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX, deriveArtifactPublishSlug } fro
 import { detectElidedSafe } from '@client/app/utils/artifactParser';
 import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
 import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
+import { encodeReactPublishUpload } from '@client/app/utils/reactArtifactPublish';
 import { SLUG_OWNED_BY_OTHER } from '@server/services/publish/slugOwnership';
 
 /** Summary row for the published-artifacts management list. */
@@ -27,7 +28,7 @@ export interface ManagedArtifact {
   commentPolicy?: CommentPolicy;
   /** Owner opt-in to search-engine indexing; absent/false means the page is served noindex. */
   discoverable?: boolean;
-  source: { kind: 'bundle' | 'reply' | 'fabfile'; artifactId?: string };
+  source: { kind: 'bundle' | 'reply' | 'fabfile'; artifactId?: string; reactSiblings?: string[] };
   size?: { totalBytes: number; fileCount: number };
   viewCount?: number;
   publishedAt?: string;
@@ -40,6 +41,10 @@ export interface ManagedArtifact {
   /** Number of entries in the published version history (drives the version switcher
    *  and the single-version hint). 0/1 means no switcher yet; 2+ shows the switcher. */
   versionsCount?: number;
+  /** Short-lived (15-30 min) link to the owner-only screenshot, present only on the caller's own
+   *  rows of `?mine=true` once a render has landed; unchanged across refetches within a 15-minute
+   *  window, so the image stays cached. Absent means show the generated cover. */
+  thumbnailUrl?: string;
 }
 
 /** How a re-publish of an already-published artifact should land. */
@@ -436,8 +441,36 @@ export function canRefreshFromSource(a: ManagedArtifact): boolean {
 
 /** Slice of `GET /api/artifacts/{id}?includeContent=true` a refresh needs. */
 interface SourceArtifactResponse {
-  artifact?: { type?: string; title?: string };
+  artifact?: { type?: string; title?: string; sessionId?: string };
   content?: { content?: string };
+}
+
+/**
+ * The current source of each sibling a multi-file React publication was built with, by identifier:
+ * the newest React artifact carrying that identifier in the entry's session, the same lookup chat
+ * persistence versions by, so a refresh picks up sibling edits the way it picks up entry edits.
+ */
+export async function loadReactSiblingSources(
+  sessionId: string | undefined,
+  identifiers: readonly string[]
+): Promise<Record<string, string>> {
+  if (!sessionId) throw new Error('The source artifact is no longer linked to a chat, so its files cannot be found');
+  const entries = await Promise.all(
+    identifiers.map(async identifier => {
+      const { data: list } = await api.get<{ artifacts?: { id?: string }[] }>('/api/artifacts', {
+        params: { sessionId, type: 'react', identifier, sortBy: 'createdAt', sortOrder: 'desc', limit: 1 },
+      });
+      const id = list?.artifacts?.[0]?.id;
+      if (!id) throw new Error(`The file "${identifier}" this app imports can no longer be found in its chat`);
+      const { data } = await api.get<SourceArtifactResponse>(
+        `/api/artifacts/${encodeURIComponent(id)}?includeContent=true`
+      );
+      const content = data.content?.content;
+      if (!content?.trim()) throw new Error(`The file "${identifier}" this app imports has no content`);
+      return [identifier, content] as const;
+    })
+  );
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -471,11 +504,14 @@ export async function refreshPublishedFromSource(a: ManagedArtifact): Promise<Pu
   const content = data.content?.content;
   if (!type) throw new Error('The source artifact could not be read');
   if (!content?.trim()) throw new Error('The source artifact has no content to publish');
+  const siblings = type === 'react' ? (a.source.reactSiblings ?? []) : [];
+  const reactFiles = siblings.length ? await loadReactSiblingSources(data.artifact?.sessionId, siblings) : undefined;
 
   return publishArtifactBundle({
     artifactId,
     type,
     content,
+    reactFiles,
     title: data.artifact?.title || a.title,
     tier: a.tier,
     scopeId: a.scopeId,
@@ -536,6 +572,11 @@ export async function publishArtifactBundle(input: {
    * was found. Ignored when an explicit `slug` is given (that's the "update" path).
    */
   forceUniqueSlug?: boolean;
+  /**
+   * React only: the sibling sources, by identifier, that the entry in `content` imports
+   * (reactPublishFiles). Uploaded with the entry as one multi-file app.
+   */
+  reactFiles?: Record<string, string> | null;
 }): Promise<PublishResult> {
   const content = (input.content ?? '').trim();
   if (!content) throw new Error('This artifact has no content to publish');
@@ -547,7 +588,12 @@ export async function publishArtifactBundle(input: {
   // self-contained inert HTML bundle at finalize (issue #21). Every other type renders to static
   // HTML here. The `artifactType` signal on `source` tells finalize which path to take.
   const isReact = input.type === 'react';
-  const indexHtml = isReact ? input.content : buildArtifactIndexHtml(input.type, input.content, input.title);
+  const reactSiblings = isReact && input.reactFiles ? Object.keys(input.reactFiles) : [];
+  const indexHtml = !isReact
+    ? buildArtifactIndexHtml(input.type, input.content, input.title)
+    : reactSiblings.length && input.reactFiles
+      ? encodeReactPublishUpload({ entry: input.content, files: input.reactFiles })
+      : input.content;
   const size = new TextEncoder().encode(indexHtml).length;
   let slug = input.slug ?? (await deriveArtifactPublishSlug(input.title, input.artifactId));
   // "Publish as new" must land a SEPARATE page. finalize upserts on tier+scopeId+slug, so a
@@ -570,7 +616,12 @@ export async function publishArtifactBundle(input: {
       visibility: input.visibility ?? DEFAULT_SHARE_VISIBILITY,
       ...(input.commentPolicy ? { commentPolicy: input.commentPolicy } : {}),
       ...(input.description ? { description: input.description } : {}),
-      source: { kind: 'bundle', artifactId: input.artifactId, ...(isReact ? { artifactType: 'react' as const } : {}) },
+      source: {
+        kind: 'bundle',
+        artifactId: input.artifactId,
+        ...(isReact ? { artifactType: 'react' as const } : {}),
+        ...(reactSiblings.length ? { reactSiblings } : {}),
+      },
       files: [{ path: 'index.html', size, mimeType: 'text/html' }],
     });
   let draft: UploadUrlResponse;
@@ -634,6 +685,8 @@ export function artifactBundlePublisher(input: {
   userId: string;
   /** The caller's active org, when in a "Team" account context. Undefined for personal scope. */
   orgId?: string;
+  /** React only: the sibling sources a multi-file entry imports (reactPublishFiles). */
+  reactFiles?: Record<string, string> | null;
 }): (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult> {
   const { orgId, ...bundle } = input;
   return (visibility, opts) =>
@@ -680,6 +733,8 @@ export function buildArtifactPublishWiring(input: {
   userId: string;
   /** The caller's active org, when in a "Team" account context. Enables org-scoped publishing. */
   orgId?: string;
+  /** React only: the sibling sources a multi-file entry imports (reactPublishFiles). */
+  reactFiles?: Record<string, string> | null;
 }): {
   resolveExisting: () => Promise<ManagedArtifact | null>;
   publish: (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult>;
@@ -847,6 +902,12 @@ export async function createAdditionalShareToken(publicId: string): Promise<Mint
  */
 export async function revokeShareToken(publicId: string): Promise<void> {
   await api.delete(`/api/publish/${publicId}/share-token`);
+}
+
+/** True when a revoke was refused because it would leave a non-public item's access gate with no
+ *  link to enforce it. Mirrors the `code` share-token.ts returns. */
+export function isRevokeOrphanGateRefusal(err: unknown): boolean {
+  return isAxiosError<{ code?: string }>(err) && err.response?.data?.code === 'REVOKE_WOULD_ORPHAN_GATE';
 }
 
 /**

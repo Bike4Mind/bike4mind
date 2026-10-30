@@ -200,7 +200,7 @@ const WRAPPERS_WITH_POSITIONAL = new Set(['timeout', 'chroot', 'flock']);
  * - As a pipeline sink for fetch-and-execute (`curl ... | sh`).
  * - As `-c`/`-e` wrappers whose code argument must be recursively classified.
  */
-const INTERPRETERS = new Set([
+export const INTERPRETERS = new Set([
   'sh',
   'bash',
   'zsh',
@@ -242,7 +242,7 @@ const FETCH_SINK_PROGRAMS = new Set([...INTERPRETERS, ...SOURCE_BUILTINS]);
 const ESCALATORS_WITH_COMMAND_FLAG = new Set(['su', 'runuser']);
 
 /** Programs that fetch content over the network (the source half of fetch-and-execute). */
-const NETWORK_FETCHERS = new Set(['curl', 'wget', 'fetch', 'aria2c', 'lwp-download']);
+export const NETWORK_FETCHERS = new Set(['curl', 'wget', 'fetch', 'aria2c', 'lwp-download']);
 
 /**
  * Programs that are destructive regardless of their arguments (raw disk / filesystem

@@ -1,7 +1,7 @@
 import { IFileTagWithFileCount, ISessionTag, TagType } from '@bike4mind/common';
 import { colorPalettes, emojis, shades } from '@client/app/constants/tools';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Casino } from '@mui/icons-material';
+import Casino from '@mui/icons-material/Casino';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import ColorLensIcon from '@mui/icons-material/ColorLens';
 import EmojiEmotionsIcon from '@mui/icons-material/EmojiEmotions';

@@ -15,9 +15,13 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 const mockFindOneAndUpdate = vi.fn();
+const mockStored = vi.fn();
+const mockAudit = vi.fn();
+vi.mock('@bike4mind/database', () => ({ withTransaction: (fn: () => Promise<unknown>) => fn() }));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a) }));
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: {
-    findOne: vi.fn(),
+    findOne: () => ({ lean: () => mockStored() }),
     syncIndexes: vi.fn(),
     findOneAndUpdate: (...a: unknown[]) => mockFindOneAndUpdate(...a),
   },
@@ -40,6 +44,8 @@ describe('PUT /api/admin/llm-models/configurations - source: namespace', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindOneAndUpdate.mockResolvedValue({});
+    mockStored.mockResolvedValue(null);
+    mockAudit.mockResolvedValue(null);
   });
 
   it('refuses a self-assignable source: tag in allowedUserTags', async () => {
@@ -55,5 +61,53 @@ describe('PUT /api/admin/llm-models/configurations - source: namespace', () => {
   it('saves ordinary tags and entitlements', async () => {
     await put({ allowedUserTags: ['vip'], allowedEntitlements: ['acme:pro'] });
     expect(mockFindOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PUT /api/admin/llm-models/configurations - admin audit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindOneAndUpdate.mockResolvedValue({});
+    mockStored.mockResolvedValue(null);
+    mockAudit.mockResolvedValue(null);
+  });
+
+  it('records a strict llmModelConfigurations entry with the stored and saved lists', async () => {
+    const previous = [{ id: 'model-a', enabled: false, allowedUserTags: [] }];
+    mockStored.mockResolvedValue({ settingValue: previous });
+
+    await put({});
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.admin_settings.updated',
+      target: { kind: 'settings', id: 'llmModelConfigurations' },
+      changes: [
+        {
+          field: 'llmModelConfigurations',
+          before: previous,
+          after: [{ id: 'model-a', enabled: true, allowedUserTags: [] }],
+        },
+      ],
+    });
+    expect(mockFindOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('records before as null when nothing was stored', async () => {
+    await put({});
+    expect(mockAudit.mock.calls[0][1].changes[0].before).toBeNull();
+  });
+
+  it('does not report success when the audit write rejects', async () => {
+    mockAudit.mockRejectedValue(new Error('audit down'));
+    const res = { json: vi.fn() };
+    const req = {
+      user: { isAdmin: true },
+      ability: {},
+      body: { configurations: [{ id: 'model-a', enabled: true, allowedUserTags: [] }] },
+    };
+
+    await expect(captured.put!(req, res)).rejects.toThrow(/audit down/);
+    expect(res.json).not.toHaveBeenCalled();
   });
 });

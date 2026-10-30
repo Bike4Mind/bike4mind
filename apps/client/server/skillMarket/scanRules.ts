@@ -1,3 +1,4 @@
+import { splitAllowedTools } from '@bike4mind/common/utils/skillMd';
 import {
   b4mLLMTools,
   type ISkillScanFinding,
@@ -53,6 +54,7 @@ const LOCAL_RISKY_TOOLS = [
 const toolKey = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const KNOWN_TOOL_KEYS = new Set<string>(b4mLLMTools.options.map(toolKey));
+const PROSE_EXTENSIONS = new Set(['md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'csv']);
 
 export type ScanOptions = {
   /** Tools that force human review, ADDED to DEFAULT_HIGH_RISK_TOOLS (admin setting). */
@@ -471,6 +473,10 @@ function scanMarkdownImages(text: string, allowlist: string[]): ISkillScanFindin
   return undefined;
 }
 
+// Claude Code tools that only read or plan. Everything else a SKILL.md declares (Bash, Write, Edit,
+// WebFetch, Task, an MCP tool, an unknown name) acts outside the conversation, so it is high-risk.
+const CLAUDE_CODE_READ_ONLY_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'TodoWrite']);
+
 function scanTools(
   snapshot: ISkillSnapshot,
   text: string,
@@ -491,6 +497,21 @@ function scanTools(
   if (riskyTools.length > 0) {
     findings.push(
       finding('high_risk_tools', 'high', 'Declares tools that act outside the conversation', riskyTools.join(', '))
+    );
+  }
+
+  // `Bash(git add:*)` restricts Bash to a command prefix, but it is still Bash.
+  const riskyClaudeCodeTools = splitAllowedTools(snapshot.claudeCodeAllowedTools).filter(
+    tool => !CLAUDE_CODE_READ_ONLY_TOOLS.has(tool.split('(')[0].trim())
+  );
+  if (riskyClaudeCodeTools.length > 0) {
+    findings.push(
+      finding(
+        'high_risk_tools',
+        'high',
+        'Declares Claude Code tools that act outside the conversation',
+        riskyClaudeCodeTools.slice(0, 5).join(', ')
+      )
     );
   }
 
@@ -518,7 +539,46 @@ function scanTools(
 }
 
 export function runDeterministicScan(snapshot: ISkillSnapshot, options: ScanOptions): ISkillScanFinding[] {
-  const raw = scannableText(snapshot);
+  const allowlist = (options.urlAllowlist ?? []).map(h => h.toLowerCase());
+  const { findings, text, folded } = scanText(scannableText(snapshot), allowlist);
+
+  // The admin setting ADDS to the built-in list: a custom tool must never silently drop web_fetch
+  // and the other defaults out of the review gate.
+  const highRiskTools = [...DEFAULT_HIGH_RISK_TOOLS, ...(options.highRiskTools ?? [])];
+  scanTools(snapshot, text, folded, highRiskTools).forEach(f => findings.push(f));
+
+  // Supporting files get the same text rules as the body. A script runs on the importer's machine
+  // outside the model's view, so any script needs a human reviewer even when no rule fires.
+  for (const file of snapshot.files ?? []) {
+    const scanned = scanText(file.content, allowlist);
+    // Only the tool-mention half of scanTools: the declared-tools finding is about the body's frontmatter.
+    const mentions = snapshot.allowedTools?.length
+      ? []
+      : scanTools(snapshot, scanned.text, scanned.folded, highRiskTools);
+    for (const f of [...scanned.findings, ...mentions]) {
+      findings.push({ ...f, message: `${file.path}: ${f.message}`, file: file.path });
+    }
+    const isScript = file.path.startsWith('scripts/');
+    const extension = /\.([^./]+)$/.exec(file.path)?.[1].toLowerCase() ?? '';
+    if (isScript || !PROSE_EXTENSIONS.has(extension) || file.content.startsWith('#!')) {
+      findings.push({
+        ...finding(
+          'script_present',
+          'medium',
+          isScript
+            ? `${file.path}: Ships a script that runs on the importer's machine`
+            : `${file.path}: Ships a file that could run on the importer's machine`
+        ),
+        file: file.path,
+      });
+    }
+  }
+
+  return findings;
+}
+
+/** The text rules shared by a skill's SKILL.md fields and each supporting file. */
+function scanText(raw: string, allowlist: string[]) {
   const findings: ISkillScanFinding[] = [];
 
   const hidden = raw.match(HIDDEN_CHARS);
@@ -551,7 +611,6 @@ export function runDeterministicScan(snapshot: ISkillSnapshot, options: ScanOpti
     );
   }
 
-  const allowlist = (options.urlAllowlist ?? []).map(h => h.toLowerCase());
   const image = scanMarkdownImages(text, allowlist);
   if (image) add(image);
 
@@ -587,13 +646,7 @@ export function runDeterministicScan(snapshot: ISkillSnapshot, options: ScanOpti
     add(finding('external_url', 'medium', 'References URLs outside the allowlist', outside.slice(0, 5).join(', ')));
   }
 
-  // The admin setting ADDS to the built-in list: a custom tool must never silently drop web_fetch
-  // and the other defaults out of the review gate.
-  scanTools(snapshot, text, folded, [...DEFAULT_HIGH_RISK_TOOLS, ...(options.highRiskTools ?? [])]).forEach(f =>
-    findings.push(f)
-  );
-
-  return findings;
+  return { findings, text, folded };
 }
 
 /**
@@ -637,11 +690,10 @@ export function computeTier(
 }
 
 /**
- * clean -> live at any visibility; review -> live for org/unlisted (with an "auto-checked" note),
- * held for Public; high -> held at every visibility.
+ * Only `clean` goes live without a human, at every visibility; `review` and `high` are held as
+ * `pending`. `_visibility` is deliberately unused: the tier x visibility test pins the mapping, and
+ * a future per-visibility split stays a one-function edit.
  */
-export function reviewStatusFor(tier: SkillRiskTier, visibility: SkillListingVisibility): SkillReviewStatus {
-  if (tier === 'clean') return 'auto_approved';
-  if (tier === 'review') return visibility === 'public' ? 'pending' : 'auto_approved';
-  return 'pending';
+export function reviewStatusFor(tier: SkillRiskTier, _visibility: SkillListingVisibility): SkillReviewStatus {
+  return tier === 'clean' ? 'auto_approved' : 'pending';
 }

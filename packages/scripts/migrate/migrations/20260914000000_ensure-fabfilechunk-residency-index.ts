@@ -10,8 +10,8 @@ import { type MigrationFile } from './index';
  * (`vector` included) per file in the candidate set before the residency split even applies.
  *
  * Declared on the schema too, but a request-path index on the largest collection in the system
- * belongs in a migration rather than autoIndex: prod runs DocumentDB, where the build takes a
- * foreground lock, and autoIndex would take it lazily on a cold boot of whichever Lambda touches
+ * belongs in a migration rather than autoIndex: autoIndex builds are fire-and-forget (a
+ * failure is silent) and would start lazily on a cold boot of whichever Lambda touches
  * the collection first. Same rationale as 20260728000000_ensure-fabfilechunk-keyset-index and
  * 20260907000000_ensure-fabfile-tagname-filename-index.
  *

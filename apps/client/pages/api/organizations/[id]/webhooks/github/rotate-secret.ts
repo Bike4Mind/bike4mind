@@ -17,7 +17,7 @@ import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
 import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
 import { generateWebhookSecret } from '@server/integrations/github/webhookUtils';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { NotFoundError, TooManyRequestsError } from '@bike4mind/utils';
 import { cacheRepository } from '@bike4mind/database';

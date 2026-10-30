@@ -1,4 +1,5 @@
 import {
+  ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
   ChatModels,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
@@ -109,16 +110,8 @@ export function resolveAnthropicEffort(input: {
   );
 }
 
-/**
- * max_tokens floor for adaptive reasoning models (Claude 4.7+/Opus 5). These
- * models self-manage extended thinking *within* max_tokens, which is a ceiling
- * (they stop at end_turn), not a target - so a larger floor costs nothing on
- * short replies but keeps reasoning from consuming the whole budget and leaving
- * no room for the visible answer. Both paths that size an adaptive model's output
- * budget read it from here: buildThinkingParams (thinking explicitly enabled) and
- * resolveOutputMaxTokens (the default when a caller names no budget).
- */
-export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
+// Lives in common so the settings UI can warn against the same number this module sizes with.
+export { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR };
 
 /**
  * Room reserved for the visible answer above a legacy thinking budget. The API rejects a
@@ -153,6 +146,8 @@ export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
  *
  * Direct Kimi K3 always reasons and spends it inside `max_completion_tokens` (see the
  * empty-turn guard in kimiBackend), but its row carries no dispatch profile to say so.
+ * Direct K2.7-code (thinking cannot be turned off) and K2.6 and K2.5 (think unless told otherwise,
+ * see kimiParams) are the same shape.
  */
 const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.KIMI_K2_THINKING_BEDROCK,
@@ -161,6 +156,10 @@ const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.DEEPSEEK_FLASH,
   ChatModels.DEEPSEEK_V4_PRO,
   ChatModels.KIMI_K3,
+  ChatModels.KIMI_K2_7_CODE,
+  ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
+  ChatModels.KIMI_K2_6,
+  ChatModels.KIMI_K2_5,
 ]);
 
 /**
@@ -183,6 +182,35 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
   if (REASONING_SUPPORTED_MODELS.has(modelInfo.id)) return true;
   if (REASONS_WITHIN_OUTPUT_BUDGET_IDS.has(modelInfo.id)) return true;
   return modelInfo.dispatchProfile?.maxTokensParam === 'max_completion_tokens' && modelInfo.can_think === true;
+}
+
+// Headroom for thinking tokens, which count against Gemini's maxOutputTokens.
+export const GEMINI_THINKING_RESERVE_TOKENS = 16_000;
+
+/**
+ * True when geminiBackend sizes this model's output cap with geminiThinkingOutputCap instead of
+ * sending the requested maxTokens as-is.
+ */
+export function usesGeminiThinkingOutputCap(modelInfo: ModelInfo): boolean {
+  const servedByGemini = modelInfo.adapterFamily
+    ? modelInfo.adapterFamily === 'gemini'
+    : modelInfo.backend === ModelBackend.Gemini;
+  return servedByGemini && modelInfo.can_think === true;
+}
+
+/**
+ * The maxOutputTokens geminiBackend sends for a thinking model: the caller's cap plus thinking
+ * headroom, clamped to the declared cap. callerCapBinds is false when the declared cap is the
+ * tighter bound. completionMeter holds this same number, so both must call this one function.
+ */
+export function geminiThinkingOutputCap(
+  modelInfo: ModelInfo,
+  callerCap: number
+): { maxOutputTokens: number; callerCapBinds: boolean } {
+  const wanted = callerCap + GEMINI_THINKING_RESERVE_TOKENS;
+  // Assumes no live can_think row has max_tokens below the reserve: it would get its catalog cap and no thinking bound.
+  const ceiling = (modelInfo.maxOutputTokensDerived ? undefined : usableTokenCount(modelInfo.max_tokens)) ?? Infinity;
+  return { maxOutputTokens: Math.min(ceiling, wanted), callerCapBinds: wanted < ceiling };
 }
 
 /**
@@ -253,6 +281,22 @@ export function resolveOutputMaxTokens({
     return Math.min(preferred, derivedOutputCeiling(modelInfo, cap));
   }
   return Math.min(preferred, cap);
+}
+
+/**
+ * The reasoning floor an explicit budget falls below, or undefined when it does not. Telemetry
+ * only: resolveOutputMaxTokens still honors the budget, so callers log it (through
+ * sentBelowReasoningFloor in modelSizing.ts, which also accounts for thinking) to trace a reply that
+ * ends empty at max_tokens back to a low setting. The floor is what an unstated budget resolves to
+ * on this model, so a budget at a model cap below ADAPTIVE_THINKING_MAX_TOKENS_FLOOR is not reported.
+ */
+export function belowReasoningFloor(
+  args: Parameters<typeof resolveOutputMaxTokens>[0]
+): { requested: number; floor: number } | undefined {
+  const requested = usableTokenCount(args.requested);
+  if (requested === undefined || !reasonsWithinOutputBudget(args.modelInfo)) return undefined;
+  const floor = resolveOutputMaxTokens({ ...args, requested: undefined });
+  return requested < floor ? { requested, floor } : undefined;
 }
 
 /**

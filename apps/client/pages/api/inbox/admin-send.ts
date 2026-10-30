@@ -9,6 +9,7 @@ import * as z from 'zod';
 import { logEvent } from '@server/utils/analyticsLog';
 import { InboxEvents } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
@@ -31,6 +32,7 @@ const handler = baseApi().post(
       .parse(req.body);
 
     const { receiverId, title, message, type } = validatedBody;
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     const receiverUser = await User.findById(receiverId);
     if (!receiverUser?.id) {
@@ -61,6 +63,14 @@ const handler = baseApi().post(
       },
       { ability: req.ability }
     );
+
+    await recordAdminActionFromRequest(req, {
+      action: 'support.inbox.message_sent',
+      target: { kind: 'user', id: receiverUser.id, displayName: receiverUser.username },
+      summary: `sent inbox message to ${receiverUser.username}`,
+      reason,
+      details: { inboxMessageId: newInbox.id, type, titleLength: title.length },
+    });
 
     return res.status(200).json(newInbox);
   })

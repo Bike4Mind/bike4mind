@@ -7,7 +7,7 @@ import {
   listFolderChildren,
   isValidDriveFolderId,
   withDriveReconnectOnAuthError,
-} from '@server/integrations/google/drive/driveClient';
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 
 /**
  * List the immediate children of a Google Drive folder, server-side, using the current user's

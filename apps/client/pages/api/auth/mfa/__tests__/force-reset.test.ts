@@ -38,7 +38,13 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
   denySelfAdminAction: (...a: unknown[]) => mockDeny(...a),
 }));
 
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  redactUserSecretsForSelf: (user: unknown) => user,
+}));
+
 import { ForbiddenError } from '@bike4mind/common';
+import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 import handler from '../force-reset';
 
 const REASON = 'Lost authenticator, identity verified by phone';
@@ -114,6 +120,16 @@ describe('POST /api/auth/mfa/force-reset', () => {
     expect(mockForceResetMFA).not.toHaveBeenCalled();
     expect(mockRemovePasskeys).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('strips secrets and undeclared fields from the user in the response', async () => {
+    mockForceResetMFA.mockResolvedValue({ success: true, user: { id: 'target1', ...secretUserFields() } });
+    const { res, run } = post({ userId: 'target1', reason: REASON });
+    await run();
+
+    const body = res._getJSONData();
+    expect(body.success).toBe(true);
+    expectSelfUserStripped(body.user, body, 'target1');
   });
 
   it('resets inside the transaction and records user.mfa.reset with the reason and counts', async () => {

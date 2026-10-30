@@ -139,7 +139,7 @@ export interface PromptResult {
   id: string;
   prompt: string;
   response: string;
-  /** Token-stream latency only (start -> stop-generation button gone), excluding image/artifact render. */
+  /** Token-stream latency only (send -> stop-generation button gone), excluding image/artifact render. */
   responseTimeMs: number;
   responseTimeSec: number;
   responseRateCharsPerSec: number;
@@ -147,16 +147,40 @@ export interface PromptResult {
   renderTimeMs: number;
   renderTimeSec: number;
   /**
-   * True for image/artifact prompts. Even measured stream-only their window runs for minutes, so
-   * they are excluded from the gated latency average, which must stay a text-streaming signal that
-   * still catches a real text regression. Absent (falsy) for text prompts.
+   * True when the stream window timed a deliverable: declared up front (image/artifact prompt) or
+   * detected afterwards (see unexpectedArtifact). Even measured stream-only their window runs for
+   * minutes, so they are excluded from the gated latency median, which must stay a text-streaming
+   * signal that still catches a real text regression. Absent (falsy) for chat replies.
    */
   measuresDeliverable?: boolean;
   /**
+   * A prompt NOT flagged generatesArtifact answered with an artifact card instead of a chat reply.
+   * Its stream window then times artifact generation, not chat streaming, so the result is also
+   * marked measuresDeliverable (out of the gated median) and surfaced in the summary and the
+   * workflow table rather than dropped silently. Absent (falsy) otherwise.
+   */
+  unexpectedArtifact?: boolean;
+  /**
    * The prompt never finished: responseTimeSec is the elapsed time when it was abandoned, a FLOOR
    * on the real latency rather than a measurement of it. Recorded so a timed-out prompt still
-   * counts against the gated average - dropping it removed the slowest prompt in the cell from the
-   * mean precisely because it was the slowest. Absent (falsy) for prompts that completed.
+   * counts in the gated median, and fails the cell outright unless a later attempt completed (see
+   * latencyBreach). Absent (falsy) for prompts that completed.
    */
   incomplete?: boolean;
+  /**
+   * Playwright retry index of the attempt that produced this row (0 = first run). Absent on rows
+   * written before it was recorded, which read as 0.
+   */
+  attempt?: number;
+  /**
+   * A later attempt of the same prompt exists. The row stays in the results and the gated median
+   * as a real observation; only the latest attempt decides whether the prompt "never finished".
+   */
+  retried?: boolean;
+  /**
+   * Send (Enter) -> first answer text in the reply's markdown, at the 250ms poll granularity.
+   * Absent when no answer text was seen (image-only replies, or abandoned before the first token).
+   */
+  firstTokenMs?: number;
+  firstTokenSec?: number;
 }

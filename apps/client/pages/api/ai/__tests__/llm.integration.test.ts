@@ -17,6 +17,7 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
 const {
+  mockCheckFreeTierDailySpendCap,
   mockValidate,
   mockUserFindById,
   mockUserUpdate,
@@ -28,7 +29,9 @@ const {
   mockLoadIdentityPrompts,
   mockOrgFindAccessibleById,
   mockOrgFindById,
+  mockResolveUserRateLimitPerMin,
 } = vi.hoisted(() => ({
+  mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
   mockUserUpdate: vi.fn(),
@@ -40,6 +43,7 @@ const {
   mockLoadIdentityPrompts: vi.fn(),
   mockOrgFindAccessibleById: vi.fn(),
   mockOrgFindById: vi.fn(),
+  mockResolveUserRateLimitPerMin: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -51,11 +55,24 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
+}));
+
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockApiKeyRateLimit(...a),
+}));
+vi.mock('@server/utils/userRateTier', () => ({
+  resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
@@ -153,8 +170,19 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
+const { mockAdmitRequestCompletion, mockQuotaRelease } = vi.hoisted(() => {
+  const mockQuotaRelease = vi.fn(async () => {});
+  return {
+    mockQuotaRelease,
+    mockAdmitRequestCompletion: vi.fn(async (..._a: unknown[]) => ({ release: mockQuotaRelease })),
+  };
+});
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: (...a: unknown[]) => mockAdmitRequestCompletion(...a),
+}));
+
 import handler from '../llm';
-import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 const OWN_ORG = '650000000000000000000abc';
@@ -201,6 +229,7 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
     mockApiKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockResolveUserRateLimitPerMin.mockResolvedValue(10);
     mockUserUpdate.mockResolvedValue(undefined);
     mockWillInjectAuthoredPrompt.mockResolvedValue(false);
     mockLoadIdentityPrompts.mockResolvedValue([]);
@@ -210,6 +239,27 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       session: { id: 'sess-1', name: 'Test Session' },
     });
     mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
+  });
+
+  it('returns the daily cap response before creating a session or dispatching a quest', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: 'daily_free_limit_reached',
+        retryAfter: 3600,
+      })
+    );
+    const { req, res } = fire({ body: { sessionId: undefined, sessionName: 'New notebook' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'daily_free_limit_reached' });
+    expect(res.getHeader('Retry-After')).toBe('3600');
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ user: req.user, req, billingOrganizationId: null })
+    );
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 
   it('rejects a key lacking ai:chat (403) before dispatching any billed completion', async () => {
@@ -241,6 +291,28 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ quest: { id: 'quest-1' } });
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, VALID_KEY])('withholds server-only quest fields from a %j caller', async apiKey => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockInvoke.mockResolvedValue({
+      id: 'quest-1',
+      status: 'pending',
+      prompt: 'Hello there',
+      signupActivity: { userId: 'private-user', turnId: 'private-turn', startedAt: new Date() },
+      callback: { url: 'https://private.example.test', apiKeyId: 'private-key' },
+      embedding: [0.1, 0.2],
+      slackNotification: { channel: 'private-channel' },
+    });
+    const { req, res } = fire({ apiKey });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body.quest).toMatchObject({ id: 'quest-1', status: 'pending', prompt: 'Hello there' });
+    for (const field of ['signupActivity', 'callback', 'embedding', 'slackNotification']) {
+      expect(body.quest).not.toHaveProperty(field);
+    }
+    expect(JSON.stringify(body)).not.toContain('private-');
   });
 
   describe('data-lake write tools vs the key scopes', () => {
@@ -401,6 +473,53 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(invoked().authOrigin).toBe('session');
       expect(invoked().apiKeyId).toBeUndefined();
     });
+
+    it.each([
+      ['withholds', [ApiKeyScope.AI_CHAT], true],
+      ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], false],
+    ] as const)('%s the admin role on the queued quest for a key with scopes %j', async (_, scopes, withheld) => {
+      validateWithScopes([...scopes]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
+    });
+  });
+
+  describe('per-user tier rate limit', () => {
+    it('blocks a caller whose tier limit is 0 (429) with no bucket write, session, or completion', async () => {
+      mockResolveUserRateLimitPerMin.mockResolvedValue(0);
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('still serves a caller at the Free default of 10 and counts against that limit', async () => {
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockTryIncrement).toHaveBeenCalledWith(expect.any(String), 10, 60_000);
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    it('429s an over-limit caller once the bucket is full', async () => {
+      mockTryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) });
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('skips enforcement for an unlimited (admin/developer) caller', async () => {
+      mockResolveUserRateLimitPerMin.mockResolvedValue(Infinity);
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
@@ -467,6 +586,10 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(mockInvoke.mock.calls[0][0].body.organizationId).toBe(KEY_ORG);
       expect(mockOrgFindAccessibleById).not.toHaveBeenCalled();
+      expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+        expect.objectContaining({ user: req.user, req, billingOrganizationId: KEY_ORG })
+      );
+      expect(mockCheckFreeTierDailySpendCap.mock.calls[0][0].req).toBe(req);
     });
 
     it("accepts the key's own org in the body", async () => {
@@ -579,5 +702,39 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke.mock.calls[0][0].body.systemPrompt).toBe(atCap);
+  });
+});
+
+describe('POST /api/ai/llm (integration - untrusted owner quotas)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
+    mockApiKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+    mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockWillInjectAuthoredPrompt.mockResolvedValue(false);
+    mockLoadIdentityPrompts.mockResolvedValue([]);
+    mockGetOrCreateSession.mockResolvedValue({ sessionId: 'sess-1', asyncPromises: [], session: { id: 'sess-1' } });
+    mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
+    mockAdmitRequestCompletion.mockResolvedValue({ release: mockQuotaRelease });
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+  });
+
+  it('checks the token quota for the queued turn without holding a concurrency slot', async () => {
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(req, { holdSlot: false });
+  });
+
+  it('refuses an over-quota turn with a 429 and its errorCode before creating a session', async () => {
+    mockAdmitRequestCompletion.mockRejectedValue(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 5 })
+    );
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'token_rate_limit_exceeded' });
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 });

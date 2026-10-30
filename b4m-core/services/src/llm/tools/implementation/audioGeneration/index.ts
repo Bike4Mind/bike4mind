@@ -1,5 +1,8 @@
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
 import {
   ApiKeyType,
+  DEFAULT_SOUND_MODEL_ID,
+  TTS_DEFAULT_MODEL,
   AudioGenerationToolCall,
   extensionFromMimeType,
   type GeneratedAssetMetadata,
@@ -14,6 +17,7 @@ import { aiSoundService, aiVoiceService } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
+import { ProviderBusyError, runElevenLabsWithCapacity } from '../../../../providerCapacity';
 import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 import { ToolContext, ToolDefinition } from '../../base/types';
 
@@ -61,9 +65,9 @@ const audioArgsSchema = z.object({
  */
 export const audioGenerationTool: ToolDefinition = {
   name: 'audio_generation',
-  implementation: (context, config: AudioGenerationToolCall) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async val => {
-      const audioConfig = config ?? {};
+      const audioConfig = (config ?? {}) as AudioGenerationToolCall;
       const parsedArgs = audioArgsSchema.safeParse(val);
       if (!parsedArgs.success) {
         return 'Error: audio_generation received invalid arguments.';
@@ -77,6 +81,8 @@ export const audioGenerationTool: ToolDefinition = {
       // Anything that is not explicitly a sound effect is speech (the common case),
       // so a caller that omits `kind` still gets a sensible result.
       const isSoundEffect = kind === 'sound_effect';
+
+      const admission = await createToolModelAdmission(context);
 
       if (isSoundEffect) {
         // Reject over-length input before any paid provider call, matching the bound the
@@ -100,6 +106,8 @@ export const audioGenerationTool: ToolDefinition = {
           return 'Error: sound effects require an ElevenLabs API key; speech (kind="speech") is available.';
         }
 
+        await admission.assert(DEFAULT_SOUND_MODEL_ID);
+
         const durationSeconds = toolDurationSeconds ?? audioConfig.durationSeconds ?? undefined;
 
         // Affordability gate only (onStart): the host throws insufficient_credits here before
@@ -116,16 +124,25 @@ export const audioGenerationTool: ToolDefinition = {
         let audio: Buffer;
         let contentType: string;
         try {
-          ({ audio, contentType } = await aiSoundService(SFX_PROVIDER, apiKey, context.logger).generate(text, {
-            durationSeconds,
-            promptInfluence: audioConfig.promptInfluence,
-          }));
+          ({ audio, contentType } = await runElevenLabsWithCapacity(
+            { operation: 'sound', apiKey, db: context.db, logger: context.logger },
+            ({ timeoutMs }) =>
+              aiSoundService(SFX_PROVIDER, apiKey, context.logger, { timeoutMs }).generate(text, {
+                durationSeconds,
+                promptInfluence: audioConfig.promptInfluence,
+              })
+          ));
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          context.logger.error(`[audio_generation] sound-effect generation failed: ${message}`);
+          if (error instanceof ProviderBusyError) {
+            context.logger.warn('[audio_generation] sound-effect provider at capacity', { reason: error.reason });
+            return `Error: the ${SFX_PROVIDER} sound-effects service is busy right now. Try again in about ${error.retryAfterSeconds} seconds.`;
+          }
+          context.logger.error('[audio_generation] sound-effect generation failed', {
+            errorType: error instanceof Error ? error.name : typeof error,
+          });
           // Return a generic message, not the raw vendor error: provider strings can echo
           // API-key hints or upstream URLs into the assistant context. Matches the direct
-          // /api/ai/sound-effects sanitization; the detail stays in the log above.
+          // /api/ai/sound-effects sanitization.
           return `Error: sound-effect request rejected by the ${SFX_PROVIDER} provider.`;
         }
 
@@ -134,6 +151,12 @@ export const audioGenerationTool: ToolDefinition = {
           provider: SFX_PROVIDER,
           prompt: text,
           ...(durationSeconds !== undefined && { durationSeconds }),
+          request: {
+            provider: SFX_PROVIDER,
+            text,
+            ...(durationSeconds !== undefined && { durationSeconds }),
+            ...(audioConfig.promptInfluence !== undefined && { promptInfluence: audioConfig.promptInfluence }),
+          },
         });
 
         await context.onFinish?.('audio_generation', {
@@ -183,6 +206,8 @@ export const audioGenerationTool: ToolDefinition = {
         apiKey = fallbackKey;
       }
 
+      await admission.assert(TTS_DEFAULT_MODEL[provider]);
+
       // Reject over-length input before the paid call, per the resolved provider's cap.
       if (text.length > TTS_MAX_INPUT_CHARS[provider]) {
         return `Error: text too long for ${provider} speech (max ${TTS_MAX_INPUT_CHARS[provider]} characters).`;
@@ -216,8 +241,9 @@ export const audioGenerationTool: ToolDefinition = {
           language: provider === 'elevenlabs' && audioConfig.languageCode ? audioConfig.languageCode : undefined,
         }));
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        context.logger.error(`[audio_generation] speech generation failed: ${message}`);
+        context.logger.error('[audio_generation] speech generation failed', {
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
         // Generic message, not the raw vendor error - see the sound-effect branch above.
         return `Error: TTS request rejected by the ${provider} provider.`;
       }
@@ -227,6 +253,14 @@ export const audioGenerationTool: ToolDefinition = {
         provider,
         modelId: resolvedModel,
         prompt: text,
+        request: {
+          provider,
+          text,
+          model: resolvedModel,
+          ...(voice && { voice }),
+          ...(format && { format }),
+          ...(provider === 'elevenlabs' && audioConfig.languageCode && { languageCode: audioConfig.languageCode }),
+        },
       });
 
       // Settle on the ACTUAL billed model + character count so the tool charge matches

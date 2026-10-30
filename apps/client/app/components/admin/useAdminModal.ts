@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { AdminTab } from './adminSidebarConfig';
 
+type AdminTabValue = AdminTab | string | null;
+type TabChangeGuard = (tab: AdminTabValue) => boolean;
+
 /**
  * Open/active-tab state for the admin drawer.
  *
@@ -16,9 +19,17 @@ export const useAdminModal = create<{
   activeTab: AdminTab | string | null;
   setOpen: (open: boolean | ((open: boolean) => boolean)) => void;
   setActiveTab: (activeTab: AdminTab | string | null) => void;
+  tabChangeGuard: TabChangeGuard | null;
+  setTabChangeGuard: (guard: TabChangeGuard | null) => void;
 }>((set, get) => ({
   open: true, // open by default
   activeTab: AdminTab.Dashboard,
   setOpen: open => set({ open: typeof open === 'function' ? open(get().open) : open }),
-  setActiveTab: (activeTab: AdminTab | string | null) => set({ activeTab }),
+  tabChangeGuard: null,
+  setTabChangeGuard: tabChangeGuard => set({ tabChangeGuard }),
+  setActiveTab: activeTab => {
+    const state = get();
+    if (activeTab === state.activeTab || (state.tabChangeGuard && !state.tabChangeGuard(activeTab))) return;
+    set({ activeTab });
+  },
 }));

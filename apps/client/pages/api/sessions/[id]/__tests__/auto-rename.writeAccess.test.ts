@@ -3,12 +3,20 @@
  * surfaces as NotFoundError. The route's catch-all remaps errors to a 500; this one must pass through.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: h.quotaAdmission,
+}));
 import { createMocks } from 'node-mocks-http';
 import { InternalServerError, NotFoundError } from '@bike4mind/utils';
 
 type RouteHandler = (req: unknown, res: unknown) => unknown;
 
-const h = vi.hoisted(() => ({ postHandler: null as null | RouteHandler, autoName: vi.fn() }));
+const h = vi.hoisted(() => ({
+  postHandler: null as null | RouteHandler,
+  autoName: vi.fn(),
+  quotaAdmission: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
@@ -19,8 +27,8 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
   return { baseApi: () => chain };
 });
-vi.mock('@server/utils/sessionAccess', () => ({ assertSessionAccess: vi.fn() }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionAccess', () => ({ assertSessionAccess: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn(async () => ({ modelId: 'm', llm: {} })) },
 }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { autoName: h.autoName } }));
@@ -37,6 +45,16 @@ const call = () => {
 
 describe('POST /api/sessions/[id]/auto-rename write-time re-check', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('propagates a quota refusal before starting the rename', async () => {
+    const error = new Error('completion quota exhausted');
+    h.quotaAdmission.mockRejectedValueOnce(error);
+    await expect(call().run()).rejects.toBe(error);
+    expect(h.autoName).not.toHaveBeenCalled();
+    expect(h.quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: expect.any(Object) }), {
+      holdSlot: true,
+    });
+  });
 
   it('passes the caller to autoName so its write is gated on them', async () => {
     h.autoName.mockResolvedValue({ id: 'session-1', name: 'New' });

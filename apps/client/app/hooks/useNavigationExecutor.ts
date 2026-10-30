@@ -1,6 +1,5 @@
 import { useCallback } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { adminTabToSlug } from '@client/app/components/admin/adminTabSlugs';
 import { useOptiNavigation } from './useOptiNavigation';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
@@ -14,12 +13,11 @@ const optiRouteExists = premiumRoutes.some(route => route.path.startsWith('/opti
 /**
  * Hook that dispatches navigation based on a NavigationIntent's navigationType.
  * - route  -> Tanstack Router navigate
- * - tab    -> Admin modal setActiveTab + navigate to /admin
+ * - tab    -> navigate to /admin; URL sync selects the tab after navigation is allowed
  * - action -> Opti family selection via Zustand pub/sub
  */
 export function useNavigationExecutor() {
   const navigate = useNavigate();
-  const setActiveTab = useAdminModal(state => state.setActiveTab);
   const requestFamily = useOptiNavigation(state => state.requestFamily);
   const hostHandlesFamilyInPlace = useOptiNavigation(state => state.hostHandlesFamilyInPlace);
   const setFileBrowserOpen = useFileBrowser(state => state.setOpen);
@@ -32,11 +30,8 @@ export function useNavigationExecutor() {
           break;
 
         case 'tab': {
-          // Admin tab: set the active tab then navigate to /admin
+          // Navigate first so the settings leave-page guard can preserve unsaved drafts.
           const tabIndex = parseInt(intent.target, 10);
-          if (!isNaN(tabIndex)) {
-            setActiveTab(tabIndex);
-          }
           // Carry the slug so an already-mounted admin page doesn't lose ?tab= to a bare /admin
           navigate({ to: '/admin', search: { tab: adminTabToSlug(tabIndex) } });
           break;
@@ -72,7 +67,7 @@ export function useNavigationExecutor() {
         }
       }
     },
-    [navigate, setActiveTab, requestFamily, setFileBrowserOpen, hostHandlesFamilyInPlace]
+    [navigate, requestFamily, setFileBrowserOpen, hostHandlesFamilyInPlace]
   );
 
   return execute;

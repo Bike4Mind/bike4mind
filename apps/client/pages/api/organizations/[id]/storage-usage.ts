@@ -1,8 +1,8 @@
 import { fabFileRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { verifyOrgAdminRead } from '@server/utils/orgAccess';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { verifyOrgAdminRead } from '@bike4mind/server-utils/utils/orgAccess';
 
 // One `$group` over the org's rows; the cap only matters for an org with a very large file count,
 // where a slow answer is worse than a failed one the UI can retry.

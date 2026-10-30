@@ -33,7 +33,7 @@ const EXPECTED_GATES: Record<string, string> = {
   'bulk-delete.ts': 'FILES_WRITE_SCOPES',
   'chunk.ts': 'FILES_WRITE_SCOPES',
   'copy-generated-image.ts': 'FILES_WRITE_SCOPES',
-  'createFabFile.ts': 'FILES_WRITE_SCOPES',
+  'createFabFile.ts': 'FILES_WRITE_OR_RELEASE_NOTES_SCOPES',
   'createFabFileURL.ts': 'FILES_WRITE_SCOPES',
   'generate-presigned-url.ts': 'FILES_WRITE_OR_GENERATE_SCOPES',
   'generate-presigned-urls-batch.ts': 'FILES_WRITE_SCOPES',

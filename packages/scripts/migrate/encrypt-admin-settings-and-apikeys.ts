@@ -29,7 +29,9 @@
  *
  * Coverage (rotation caveat): --reencrypt / --decrypt only touch `adminsettings` and
  *   `apikeys`. Other at-rest ciphertext stores - UserModel accessToken/refreshToken,
- *   OverwatchSocialConnectionModel, SRE per-repo secrets - are NOT covered here, so
+ *   OverwatchSocialConnectionModel, SRE per-repo secrets - are NOT covered here, nor are
+ *   contributed admin settings (definitions registered by extension packages at runtime;
+ *   SENSITIVE_SETTING_KEYS is built from the core settingsMap only), so
  *   SECRET_ENCRYPTION_KEY_PREVIOUS must remain configured after any rotation; dropping it
  *   silently blanks those uncovered stores on read.
  *
@@ -43,9 +45,16 @@
  *   pnpm --filter scripts migrate:encrypt-admin-secrets -- --decrypt
  */
 
+import { pathToFileURL } from 'node:url';
 import { connectDB } from '@bike4mind/database';
 import { settingsMap, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
-import { decryptSecret, encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/utils/security';
+import {
+  apiKeySecretContext,
+  decryptSecret,
+  encryptSecret,
+  isEncrypted,
+  isValidEncryptionKey,
+} from '@bike4mind/utils/security';
 import { Resource } from 'sst';
 import mongoose from 'mongoose';
 
@@ -100,17 +109,23 @@ const SENSITIVE_SETTING_KEYS = new Set(
  *   already-plaintext -> null.
  * Returns 'error' when a ciphertext value cannot be recovered with the available key(s).
  */
-function transformIfNeeded(value: unknown, newKey: string, oldKey?: string): string | null | 'error' {
+export function transformIfNeeded(
+  value: unknown,
+  newKey: string,
+  oldKey?: string,
+  context?: string,
+  mode: 'encrypt' | 'reencrypt' | 'decrypt' = DECRYPT ? 'decrypt' : REENCRYPT ? 'reencrypt' : 'encrypt'
+): string | null | 'error' {
   if (typeof value !== 'string' || value.length === 0) return null;
   // A masked display value is never a real secret - never persist it.
   if (value.startsWith(SENSITIVE_SETTING_MASK)) return null;
 
-  if (DECRYPT) {
+  if (mode === 'decrypt') {
     if (!isEncrypted(value)) return null; // already plaintext
     for (const key of [newKey, oldKey]) {
       if (!key) continue;
       try {
-        return decryptSecret(value, key);
+        return decryptSecret(value, key, context);
       } catch {
         /* try the next key (rotation) before giving up */
       }
@@ -119,16 +134,16 @@ function transformIfNeeded(value: unknown, newKey: string, oldKey?: string): str
     return 'error';
   }
 
-  if (REENCRYPT && oldKey) {
+  if (mode === 'reencrypt' && oldKey) {
     if (!isEncrypted(value)) return null;
     try {
-      decryptSecret(value, newKey);
+      decryptSecret(value, newKey, context);
       return null; // already under the new key
     } catch {
       /* not the new key - fall through to rotate */
     }
     try {
-      return encryptSecret(decryptSecret(value, oldKey), newKey);
+      return encryptSecret(decryptSecret(value, oldKey, context), newKey, context);
     } catch (err) {
       console.error(
         '    ERROR: value could not be decrypted with either key:',
@@ -139,7 +154,7 @@ function transformIfNeeded(value: unknown, newKey: string, oldKey?: string): str
   }
 
   if (isEncrypted(value)) return null; // already encrypted
-  return encryptSecret(value, newKey);
+  return encryptSecret(value, newKey, context);
 }
 
 async function migrateAdminSettings(db: mongoose.mongo.Db, key: string, oldKey?: string): Promise<MigrationStats> {
@@ -182,7 +197,7 @@ async function migrateApiKeys(db: mongoose.mongo.Db, key: string, oldKey?: strin
   const cursor = collection.find({ apiKey: { $exists: true, $ne: '' } });
   for await (const doc of cursor) {
     stats.scanned++;
-    const next = transformIfNeeded(doc.apiKey, key, oldKey);
+    const next = transformIfNeeded(doc.apiKey, key, oldKey, apiKeySecretContext(doc.userId, String(doc._id)));
     if (next === 'error') {
       console.error(`  ERROR ApiKey ${doc._id}: failed to decrypt`);
       stats.errors++;
@@ -262,7 +277,9 @@ async function run() {
   process.exit(totalErrors > 0 ? 1 : 0);
 }
 
-run().catch(err => {
-  console.error('Migration failed:', err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run().catch(err => {
+    console.error('Migration failed:', err);
+    process.exit(1);
+  });
+}

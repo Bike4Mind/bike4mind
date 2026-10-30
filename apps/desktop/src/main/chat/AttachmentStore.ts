@@ -114,6 +114,25 @@ export class AttachmentStore {
     }
   }
 
+  /**
+   * The stored file's path, or null for a malformed id or a file that is gone. Anything else -
+   * a permission or I/O error - is rethrown, as `read` does, so it is not reported as "gone".
+   */
+  async locate(sessionId: string, attachmentId: string): Promise<string | null> {
+    let path: string;
+    try {
+      path = this.filePath(sessionId, attachmentId);
+    } catch {
+      return null;
+    }
+    try {
+      return (await stat(path)).isFile() ? path : null;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
   async discard(sessionId: string, attachmentId: string): Promise<void> {
     await rm(this.filePath(sessionId, attachmentId), { force: true });
   }

@@ -1,5 +1,5 @@
 import { FC, useCallback, useMemo, useState, useRef } from 'react';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import { alpha } from '@mui/system';
 import SearchIcon from '@mui/icons-material/Search';
 import UploadFileIcon from '@mui/icons-material/UploadFile';

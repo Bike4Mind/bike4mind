@@ -4,7 +4,12 @@ import { buildOpenApiDocument, toPythonLiteral } from './document';
 import { registerContracts } from './operations';
 import { assertUniqueOperations } from './assertUniqueOperations';
 import { assertContractConventions } from '../api-contract/assertContractConventions';
-import { API_KEY_RATE_LIMIT_DEFAULTS, ApiKeyScope } from '../types/entities/UserApiKeyTypes';
+import {
+  API_KEY_RATE_LIMIT_DEFAULTS,
+  ApiKeyScope,
+  PUBLIC_DOC_API_KEY_SCOPES,
+  UNDOCUMENTED_API_KEY_SCOPES,
+} from '../types/entities/UserApiKeyTypes';
 import { CONTRACTS, chatContract, synthesizeSpeechContract } from '../api-contract';
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
@@ -77,6 +82,11 @@ describe('buildOpenApiDocument', () => {
     expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('executeToolResponse500'));
   });
 
+  it('publishes the completions message minimum from the shared request schema', () => {
+    const requestSchema = doc.components.schemas.createCompletionRequest;
+    expect(requestSchema.properties.messages.minItems).toBe(1);
+  });
+
   it('provides request AND response examples for both operations', () => {
     expect(doc.components.schemas.createCompletionRequest.example).toBeDefined();
     expect(doc.components.schemas.createCompletionResponse200.example).toBeDefined();
@@ -130,7 +140,9 @@ describe('buildOpenApiDocument', () => {
     const json = (status: string) => completions.responses[status].content['application/json'].schema;
     expect(json('400')).toEqual(ref('createCompletionResponse400'));
     expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual([
+      'invalid_request',
       'unknown_model',
+      'assistant_prefill_unsupported',
       'tool_search_unsupported',
       'all_tools_deferred',
       'deferred_tool_cache_control',
@@ -245,8 +257,27 @@ describe('buildOpenApiDocument', () => {
   it('publishes the real ApiKeyScope vocabulary in info.description', () => {
     expect(doc.info.description).toContain(ApiKeyScope.AI_CHAT);
     expect(doc.info.description).toContain(ApiKeyScope.READ_FILES);
+    const section = doc.info.description.split('\n## Scopes\n')[1].split('\n## ')[0];
+    const listed = section
+      .split('\n')
+      .filter((line: string) => line.startsWith('- '))
+      .map((line: string) => line.slice(3, -1));
+    expect(listed).toEqual([...PUBLIC_DOC_API_KEY_SCOPES]);
+    for (const scope of UNDOCUMENTED_API_KEY_SCOPES) expect(doc.info.description).not.toContain(`\`${scope}\``);
     // The aspirational vocab from the issue must NOT leak in (Decision 2).
     expect(doc.info.description).not.toContain('ai.completions:write');
+  });
+
+  it('publishes every scope any operation requires', () => {
+    const required = new Set<string>();
+    for (const item of Object.values(doc.paths)) {
+      for (const op of Object.values(item)) {
+        for (const scope of op?.['x-required-scopes'] ?? []) required.add(scope);
+      }
+    }
+    expect(required.size).toBeGreaterThan(0);
+    const published = new Set<string>(PUBLIC_DOC_API_KEY_SCOPES);
+    expect([...required].filter(scope => !published.has(scope))).toEqual([]);
   });
 
   it('quotes the enforced rate-limit defaults and every published rate-limit header in info.description', () => {

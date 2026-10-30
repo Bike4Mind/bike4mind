@@ -19,6 +19,7 @@ describe('tagService - remove', () => {
   let mockDataLakeRepo: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
   let adapters: {
     db: {
+      memoryLedger: { markSourceShredded: ReturnType<typeof vi.fn> };
       tags: Pick<ITagRepository, 'findByIdAndUserId' | 'delete'>;
       fabFiles: typeof mockFabFileRepo;
       dataLakes: typeof mockDataLakeRepo;
@@ -63,6 +64,7 @@ describe('tagService - remove', () => {
     };
     adapters = {
       db: {
+        memoryLedger: { markSourceShredded: vi.fn().mockResolvedValue(0) },
         tags: mockTagRepo,
         fabFiles: mockFabFileRepo,
         dataLakes: mockDataLakeRepo,

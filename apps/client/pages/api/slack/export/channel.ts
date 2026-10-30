@@ -1,16 +1,17 @@
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import pLimit from 'p-limit';
+import { escapeCsvField } from '@bike4mind/server-utils/integrations/slack/slackExportCsv';
 import {
   isSlackUserValidationError,
   isSlackUserValidationErrorByMessage,
   createSlackExportError,
-} from '@server/integrations/slack/slackExportErrors';
+} from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
 
 /**
  * Slack Channel Export API
@@ -81,12 +82,6 @@ interface ExportResult {
     suggestion: string;
   };
 }
-
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
 
 /**
  * Translate Slack API error codes to user-friendly messages with suggestions
@@ -385,23 +380,6 @@ async function fetchThreadReplies(channelId: string, threadTs: string, slackBotT
 }
 
 /**
- * Escape CSV field to prevent formula injection and parsing issues
- */
-function escapeCsvField(field: string): string {
-  if (!field) return '';
-
-  // Prevent CSV formula injection (security vulnerability)
-  if (field.startsWith('=') || field.startsWith('+') || field.startsWith('-') || field.startsWith('@')) {
-    field = "'" + field; // Prefix with single quote to neutralize formula
-  }
-
-  // Escape quotes and newlines for proper CSV parsing
-  field = field.replace(/"/g, '""').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-
-  return field;
-}
-
-/**
  * Sanitize filename to prevent path traversal and invalid characters
  */
 function sanitizeFilename(name: string): string {
@@ -466,9 +444,7 @@ function formatAsMarkdown(exportData: ExportResult): string {
   return parts.join('');
 }
 
-const handler = baseApi().post(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(async (req, res) => {
   const result = ExportRequestSchema.safeParse(req.body);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');

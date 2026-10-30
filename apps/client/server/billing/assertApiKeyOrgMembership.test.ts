@@ -6,6 +6,7 @@ vi.mock('@bike4mind/services', async () => ({
 }));
 
 import { assertApiKeyOrgMembership } from './assertApiKeyOrgMembership';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 
 const org = (users: string[]) =>
   ({ id: 'org1', userId: 'owner', users: users.map(userId => ({ userId })) }) as unknown as IOrganizationDocument;
@@ -15,6 +16,7 @@ describe('assertApiKeyOrgMembership', () => {
   it.each([
     ['a member using an org-billed key', org(['u1']), member, true],
     ['a platform admin off the roster', org([]), { id: 'u1', isAdmin: true }, true],
+    ['a platform admin whose key lacks the admin scope', org([]), withholdAdminRole({ id: 'u1', isAdmin: true }), true],
     ['a JWT caller off the roster', org([]), member, false],
     ['a user-billed key (no billing org)', null, member, true],
   ])('admits %s', (_label, billingOrg, billingUser, isApiKeyCaller) => {

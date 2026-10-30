@@ -23,7 +23,7 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 
 const mockIntentsRetrieve = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     paymentIntents: { retrieve: (...args: unknown[]) => mockIntentsRetrieve(...args) },
   },

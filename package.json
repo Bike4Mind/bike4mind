@@ -30,8 +30,9 @@
     "turbo:test": "turbo test",
     "turbo:openapi:generate": "turbo openapi:generate --filter @bike4mind/common && pnpm --filter @bike4mind/sdk generate",
     "import-polaris-data": "pnpm --filter scripts import-polaris-data",
-    "lint": "eslint .",
-    "lint:check": "eslint . --quiet --cache --cache-location node_modules/.cache/eslint/",
+    "lint": "NODE_OPTIONS='--max-old-space-size=8192' eslint .",
+    "lint:check": "NODE_OPTIONS='--max-old-space-size=8192' eslint . --quiet --cache --cache-location node_modules/.cache/eslint/",
+    "lint:ci": "NODE_OPTIONS='--max-old-space-size=8192' eslint . --quiet",
     "lint:md": "markdownlint '**/*.md' '**/*.mdx' --ignore node_modules",
     "lint:md:fix": "markdownlint '**/*.md' '**/*.mdx' --ignore node_modules --fix",
     "lockfile:restore": "bash scripts/restore-tracked-lockfile.sh",
@@ -92,7 +93,7 @@
     "turbo": "^2.10.13",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.63.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "sst": "4.17.1"

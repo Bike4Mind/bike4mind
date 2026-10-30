@@ -4,7 +4,7 @@ import passport from 'passport';
 import { AuthStrategy, type IUserDocument } from '@bike4mind/common';
 import ability from '@server/auth/ability';
 import { User } from '@bike4mind/database';
-import { verifyCallback } from '@server/utils/auth/verifyCallback';
+import { selfServeVerifyCallback, verifyCallback } from '@server/utils/auth/verifyCallback';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
 import { Request, RequestHandler, Response } from 'express';
@@ -18,12 +18,9 @@ import {
 } from '@node-saml/passport-saml';
 import nc from 'next-connect';
 import { Logger } from '@bike4mind/observability';
-import { secretRotationRepository } from '@bike4mind/database/infra';
-import { decryptAtRest } from '@bike4mind/utils/security';
-import { authTokenGenerator } from './tokenGenerator';
-import { isRotatedSecretWithinGraceWindow } from './secretRotationGrace';
+import { jwtSecretOrKeyProvider } from './jwtSecretOrKeyProvider';
 import { verifyJwtPayload } from './verifyJwtPayload';
-import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from './mfaEnforcement';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { createGitHubStrategy } from './githubStrategy';
 import { isPolicyConsentRequired, type ConsentGateUser } from '@bike4mind/server-utils/auth/consentGate';
@@ -34,36 +31,7 @@ passport.use(
   new JwtStrategy(
     {
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKeyProvider: async (req, token, done) => {
-        // Try current secret
-        try {
-          authTokenGenerator.verifyToken(token);
-          done(null, Config.JWT_SECRET);
-        } catch (err) {
-          // If verification fails, try previous secret if available
-          const jwtSecretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
-          let prevSecret = undefined;
-
-          // Grace period: accept the previous key only within the shared rotation window.
-          // `previousKey` is stored encrypted at rest (see secret-rotations/renewed.ts);
-          // decrypt before verifying. Legacy plaintext rows pass through unchanged.
-          if (isRotatedSecretWithinGraceWindow(jwtSecretRotation?.rotatedAt) && jwtSecretRotation?.previousKey) {
-            prevSecret = decryptAtRest(jwtSecretRotation.previousKey) || undefined;
-          }
-
-          if (prevSecret) {
-            try {
-              authTokenGenerator.verifyToken(token, prevSecret);
-
-              done(null, prevSecret);
-            } catch (prevErr) {
-              done(err);
-            }
-          } else {
-            done(err);
-          }
-        }
-      },
+      secretOrKeyProvider: jwtSecretOrKeyProvider,
     },
     verifyJwtPayload
   )
@@ -220,8 +188,9 @@ if (Config.GOOGLE_CLIENT_ID && Config.GOOGLE_CLIENT_ID !== 'not-configured') {
         clientSecret: Config.GOOGLE_CLIENT_SECRET,
         callbackURL: process.env.APP_URL + '/api/auth/google/callback',
         store: googleOAuthStateStore,
+        passReqToCallback: true,
       },
-      verifyCallback(AuthStrategy.Google)
+      selfServeVerifyCallback(AuthStrategy.Google)
     )
   );
 } else {
@@ -261,8 +230,9 @@ if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
         // it, SSO logins resolve with email=null and fall into the
         // account-create path instead of matching the existing account by email.
         scope: ['user:email'],
+        passReqToCallback: true,
       },
-      verifyCallback(AuthStrategy.Github)
+      selfServeVerifyCallback(AuthStrategy.Github)
     )
   );
 } else {

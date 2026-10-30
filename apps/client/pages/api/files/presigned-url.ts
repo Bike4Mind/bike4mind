@@ -9,9 +9,11 @@ import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLake
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
+const MAX_PRESIGNED_URL_EXPIRY_SECONDS = 3600;
+
 const GetPresignedUrlRequestInput = z.object({
   filePaths: z.array(z.string()),
-  expiresIn: z.number().prefault(3600), // Default to 1 hour
+  expiresIn: z.number().int().positive().max(MAX_PRESIGNED_URL_EXPIRY_SECONDS).prefault(3600), // Default to 1 hour
   // `server` exists for the in-process RLM `getArticle` loopback (see server/tavern/rlm/tools.ts),
   // whose container may not reach the browser origin. It only picks the signing client: the
   // moderation/ACL/lake gates all run before signing, and the SigV4 signature is host-bound.

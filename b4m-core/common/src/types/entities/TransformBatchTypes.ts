@@ -1,5 +1,8 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
+import type { PersistedCreditHold } from './CreditHolderTypes';
+import type { CompletionSource } from '../analytics';
+import type { ModelInfo } from '../../models';
 
 /**
  * Lifecycle of a submitted Anthropic Message Batch, tracked locally so the
@@ -13,6 +16,8 @@ export type TransformBatchStatus = 'in_progress' | 'completed';
 export interface ITransformBatchCustomIdMapping {
   customId: string;
   clientRef: string;
+  /** The request's model, so the poll can price its usage. Absent on rows from before metering. */
+  model?: string;
 }
 
 /**
@@ -53,6 +58,8 @@ export interface ITransformBatch extends IMongoDocument {
   succeededCount: number;
   erroredCount: number;
   customIdMap: ITransformBatchCustomIdMapping[];
+  /** Submit-time pricing, stored once per model so catalog changes cannot alter pending charges. */
+  billingModels?: Record<string, ModelInfo>;
   /**
    * Per-request results, cached once the batch ends so subsequent polls don't
    * re-stream the JSONL from Anthropic. Note: holds full replies - fine at our
@@ -60,8 +67,36 @@ export interface ITransformBatch extends IMongoDocument {
    * 16MB doc cap; revisit (e.g. offload to S3) if batch sizes grow.
    */
   results?: ITransformBatchResultItem[];
+  /** Credits reserved at submit, settled once on the first poll that sees the batch end. */
+  creditHold?: PersistedCreditHold | null;
+  /**
+   * Stamped in the write that clears the hold after settlement. A completed row that still has a hold
+   * and no creditSettledAt needs settlement recovery when its hold has a durable pendingHoldId.
+   * Legacy holds without that receipt cannot safely be retried.
+   */
+  creditSettledAt?: Date;
+  /** The API key that submitted the batch, for the settlement ledger row. */
+  apiKeyId?: string;
+  /** Ledger `source` resolved from the submit request; absent for web (JWT) submits. */
+  usageSource?: CompletionSource;
 }
 
 export interface ITransformBatchRepository extends IBaseRepository<ITransformBatch> {
   findByAnthropicBatchId: (anthropicBatchId: ITransformBatch['anthropicBatchId']) => Promise<ITransformBatch | null>;
+  /**
+   * Atomically mark an in-progress batch completed, leaving its credit hold on the row. Returns the
+   * row as it was before the update to exactly one caller; null to the rest. Durable pending holds
+   * may be retried later without claiming completion again.
+   */
+  claimCompletion: (
+    id: string,
+    update: Pick<ITransformBatch, 'succeededCount' | 'erroredCount'>
+  ) => Promise<ITransformBatch | null>;
+  /**
+   * Clear the settled hold and stamp creditSettledAt; false when another caller already stamped it.
+   * Legacy adapters may return void, which callers treat as a successful stamp.
+   */
+  markCreditSettled: (id: string) => Promise<boolean | void>;
+  /** Cache the per-request results; kept out of the claim so an oversized payload cannot block it. */
+  saveResults: (id: string, results: NonNullable<ITransformBatch['results']>) => Promise<void>;
 }

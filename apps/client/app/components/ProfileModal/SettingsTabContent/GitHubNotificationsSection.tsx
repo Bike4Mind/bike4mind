@@ -36,7 +36,7 @@ const GitHubNotificationsSection = ({ githubLogin, isSlackLinked }: GitHubNotifi
   const isEnabled = ghPrefs?.enabled ?? false;
   const isDirty = useRef(false);
 
-  const [githubUsername, setGithubUsername] = useState(ghPrefs?.githubUsername ?? githubLogin ?? '');
+  const githubUsername = githubLogin ?? '';
   const [eventPrefs, setEventPrefs] = useState<Record<string, boolean>>({
     prOpened: ghPrefs?.prOpened ?? true,
     prReviewRequested: ghPrefs?.prReviewRequested ?? true,
@@ -50,18 +50,10 @@ const GitHubNotificationsSection = ({ githubLogin, isSlackLinked }: GitHubNotifi
   const [defaultChannel, setDefaultChannel] = useState(ghPrefs?.channels?.default ?? '');
   const [ciAlertsChannel, setCiAlertsChannel] = useState(ghPrefs?.channels?.ciAlerts ?? '');
 
-  // Auto-fill GitHub username from OAuth login if not already set
-  useEffect(() => {
-    if (githubLogin && !githubUsername && !ghPrefs?.githubUsername) {
-      setGithubUsername(githubLogin);
-    }
-  }, [githubLogin]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Sync state when server data updates (skip if user has unsaved local changes)
   useEffect(() => {
     const prefs = (currentUser?.slackSettings as SlackSettings | undefined)?.githubNotifications;
     if (prefs && !isDirty.current) {
-      setGithubUsername(prefs.githubUsername ?? githubLogin ?? '');
       setEventPrefs({
         prOpened: prefs.prOpened ?? true,
         prReviewRequested: prefs.prReviewRequested ?? true,
@@ -97,7 +89,6 @@ const GitHubNotificationsSection = ({ githubLogin, isSlackLinked }: GitHubNotifi
   const handleSave = () => {
     const ghNotifications: GitHubNotifications = {
       enabled: true,
-      githubUsername: githubUsername || undefined,
       ...eventPrefs,
       channels: {
         default: defaultChannel || undefined,
@@ -165,10 +156,7 @@ const GitHubNotificationsSection = ({ githubLogin, isSlackLinked }: GitHubNotifi
               <Input
                 placeholder="octocat"
                 value={githubUsername}
-                onChange={e => {
-                  isDirty.current = true;
-                  setGithubUsername(e.target.value);
-                }}
+                readOnly
                 data-testid="github-username-input"
                 sx={{
                   backgroundColor: theme => theme.palette.loginRegister.inputFieldBg,
@@ -181,7 +169,7 @@ const GitHubNotificationsSection = ({ githubLogin, isSlackLinked }: GitHubNotifi
                 }}
               />
               <Typography level="body-xs" sx={{ mt: 0.5, color: 'primary.500' }}>
-                Must match your GitHub login exactly (case-insensitive)
+                Verified by your connected GitHub account
               </Typography>
             </FormControl>
 

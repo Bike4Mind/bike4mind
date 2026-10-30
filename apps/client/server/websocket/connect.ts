@@ -1,10 +1,11 @@
 import { Connection, User, wsConnectTicketRepository } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyScopeValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { verifyApiKey } from '@server/cli/auth';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { withWebSocketContext } from '@server/websocket/utils';
 import { gatewayCapExpiry, assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
@@ -90,7 +91,7 @@ async function resolveWebTicket(
 async function resolveIdentity(
   token: string,
   logger: Logger
-): Promise<{ userId: string; scopes?: ApiKeyScope[] } & ConnectionAuth> {
+): Promise<{ userId: string; scopes?: ApiKeyScopeValue[] } & ConnectionAuth> {
   let jwtErr: unknown;
   try {
     const decoded = authTokenGenerator.verifyToken(token) as jwt.JwtPayload;
@@ -109,6 +110,9 @@ async function resolveIdentity(
     }
     if (decoded?.mfaPending) {
       throw new UnauthorizedError('MFA verification required');
+    }
+    if (decoded?.impersonatedBy) {
+      throw new UnauthorizedError('Impersonated sessions cannot use realtime credentials');
     }
     // JWT connections are always version-gated. A legacy token issued before
     // this field existed carries no version and normalizes to 0, mirroring the
@@ -144,6 +148,8 @@ async function resolveIdentity(
       authExpiresAt: gatewayCapExpiry(),
     };
   } catch (apiKeyErr) {
+    // The key check itself failed (database unreachable): a retryable 5xx, not a bad token.
+    if (isAuthInfraFailure(apiKeyErr)) throw apiKeyErr;
     logger.warn('[WS_CONNECT] both JWT and API-key auth failed', {
       jwtError: jwtErr instanceof Error ? jwtErr.message : String(jwtErr ?? 'n/a'),
       apiKeyError: apiKeyErr instanceof Error ? apiKeyErr.message : String(apiKeyErr),
@@ -159,7 +165,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
     const ticketIdentity = await resolveWebTicket(event);
     let userId: string;
     let source: ConnectionSource;
-    let scopes: ApiKeyScope[] | undefined = undefined;
+    let scopes: ApiKeyScopeValue[] | undefined = undefined;
     let auth: ConnectionAuth;
     if (ticketIdentity) {
       const { userId: ticketUserId, source: ticketSource, ...ticketAuth } = ticketIdentity;

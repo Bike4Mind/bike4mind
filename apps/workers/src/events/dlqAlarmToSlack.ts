@@ -3,46 +3,41 @@
  *
  * Subscribes to the shared alarm SNS topic (originally DLQ-only, now also carries
  * non-DLQ operational alarms such as feedbackDeliveryFailures - see infra/alarms.ts)
- * and posts a formatted message to the error-reporting Slack channel whenever a
- * subscribed alarm transitions to ALARM state.
+ * and posts a plain-English message to Slack when a subscribed alarm changes state.
  *
- * Only ALARM transitions are reported; OK (resolved) transitions are
- * suppressed to avoid channel noise.
+ * ALARM transitions get the full explanation; OK (resolved) transitions are posted
+ * as a short resolved line. INSUFFICIENT_DATA is skipped.
+ * Alarms go to SLACK_ALARMS_WEBHOOK_URL when set, otherwise the error-reporting channel.
+ * Production page-level alarms carry the mention token from the per-stage SSM parameter.
  */
 
 import type { SNSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
 
-import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
+import {
+  appUrlFromEnv,
+  formatAlarmSlackMessage,
+  isCloudWatchAlarm,
+  postAlarmToSlack,
+  resolveAlarmWebhookUrl,
+} from './alarmSlackMessage';
+import { readAlarmMention } from './alarmSlackMention';
 
 export const handler = async (event: SNSEvent): Promise<void> => {
+  const options = { appUrl: appUrlFromEnv(), mention: await readAlarmMention() };
   for (const record of event.Records) {
-    let alarm: CloudWatchAlarmPayload;
+    let payload: unknown;
     try {
-      alarm = JSON.parse(record.Sns.Message) as CloudWatchAlarmPayload;
+      payload = JSON.parse(record.Sns.Message);
     } catch {
       // Not a CloudWatch alarm payload, skip silently
       continue;
     }
+    if (!isCloudWatchAlarm(payload)) continue;
 
-    // Only notify on ALARM state; suppress OK (resolved) to reduce noise
-    if (alarm.NewStateValue !== 'ALARM') continue;
+    const message = formatAlarmSlackMessage(payload, Resource.App.stage, options);
+    if (!message) continue;
 
-    const text = [
-      `🚨 *Alarm - ${alarm.AlarmName}*`,
-      alarm.AlarmDescription ?? '',
-      `Reason: ${alarm.NewStateReason}`,
-      `Time: ${alarm.StateChangeTime}`,
-      `Stage: ${Resource.App.stage}`,
-    ].join('\n');
-
-    const resp = await fetch(Resource.SLACK_ERROR_REPORTING_WEBHOOK_URL.value, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    if (!resp.ok) {
-      throw new Error(`Slack webhook failed: ${resp.status} ${resp.statusText}`);
-    }
+    await postAlarmToSlack(resolveAlarmWebhookUrl(Resource), message);
   }
 };

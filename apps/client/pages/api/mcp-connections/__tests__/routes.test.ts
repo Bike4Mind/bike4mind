@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { EventEmitter } from 'events';
+import { Types } from 'mongoose';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 import {
@@ -52,7 +53,7 @@ vi.mock('@server/middlewares/baseApi', async () => {
   };
 });
 
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: { limit: number; windowMs: number; bucket?: string }) => {
     h.rateLimitOptions.push(options);
     return (req: { user: { id: string } }, _res: unknown, next: (error?: unknown) => void) => {
@@ -90,11 +91,11 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerRejection: vi.fn(async () => undefined),
   recordCircuitBreakerTransition: vi.fn(async () => undefined),
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (value: string | null | undefined) => (value ? `enc:${Buffer.from(value).toString('base64')}` : null),
   decryptToken: (value: string | null | undefined) => value,
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: (context: { action: string }) => ({
       success: () => h.audits.push({ action: context.action, outcome: 'success' }),
@@ -480,6 +481,22 @@ describe('POST /api/mcp-connections', () => {
     expect(repo.createWithinUserCap).toHaveBeenLastCalledWith(expect.anything(), 1);
     // Another user is counted separately.
     expect((await createConnection({}, OTHER)).status).toBe(201);
+  });
+
+  it('stamps the selected org when the user is a member, even though req.user holds it as an ObjectId', async () => {
+    const orgId = new Types.ObjectId();
+    h.context = context({ organizationIds: [String(orgId)] });
+    expect((await createConnection({}, { id: 'user-1', organizationId: orgId })).status).toBe(201);
+    expect(repo.createWithinUserCap).toHaveBeenLastCalledWith(
+      expect.objectContaining({ organizationId: String(orgId) }),
+      20
+    );
+  });
+
+  it('leaves the org off when the selected org is not one of the user memberships', async () => {
+    h.context = context({ organizationIds: [String(new Types.ObjectId())] });
+    expect((await createConnection({}, { id: 'user-1', organizationId: new Types.ObjectId() })).status).toBe(201);
+    expect(repo.createWithinUserCap.mock.lastCall?.[0]).not.toHaveProperty('organizationId');
   });
 
   it('holds creates to 10 an hour per user', async () => {

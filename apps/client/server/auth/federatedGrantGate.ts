@@ -11,17 +11,18 @@ interface GrantGateLogger {
 }
 
 /**
- * Grant gate (SECURITY) for the federated user-pays surfaces - the AI-token exchange
- * (pages/api/oauth/ai-token.ts) and the identified embed session mint
- * (pages/api/embed/session.ts). Shared so both surfaces enforce one rule.
+ * Grant gate (SECURITY) for the federated surfaces - the AI-token exchange
+ * (pages/api/oauth/ai-token.ts), the identified embed session mint
+ * (pages/api/embed/session.ts) and the admin-status check (pages/api/oauth/federated-admin.ts).
+ * Shared so every surface enforces one rule.
  *
  * Relying-party clients only. Requires the durable (user, client) authorization grant
- * recorded by the authorize flow (code.ts), AND that the grant covers every scope being
- * minted. Closes two holes:
+ * recorded by the authorize flow (code.ts), AND that the grant covers every scope the
+ * caller acts under (minted, or checked as federated-admin does). Closes two holes:
  *   (a) a pool-signed token - including a forged identities[] entry from a compromised pool -
  *       for a user who never authorized this client. The pool cannot forge a B4M grant.
  *   (b) a grant that covers only identity scopes (openid/email/profile) being treated as
- *       authorization for a spend-authorizing scope.
+ *       authorization for a non-identity scope (a spend scope, federated:admin-status).
  *
  * A first-party / pre-existing federated client is trusted (B4M controls the pool) and never
  * went through code.ts's consent flow, so it has no grant row and is exempt.
@@ -31,7 +32,7 @@ interface GrantGateLogger {
  * through deploy-contract.json + infra/web.ts). A surface with no pre-grant tokens to
  * migrate passes `enforce: true` to skip grace entirely.
  *
- * @returns null when the mint may proceed, else the rejection to send.
+ * @returns null when the request may proceed, else the rejection to send.
  */
 export async function checkFederatedGrant(args: {
   client: { clientType?: string };

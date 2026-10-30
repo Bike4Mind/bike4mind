@@ -1,24 +1,15 @@
 import React from 'react';
 import { Box, Chip, CircularProgress, Sheet, Stack, Typography, useTheme } from '@mui/joy';
-import { Key, Warning } from '@mui/icons-material';
+import Key from '@mui/icons-material/Key';
+import Warning from '@mui/icons-material/Warning';
 import { useGetApiUsage } from '@client/app/hooks/data/admin';
 import type { ApiKeyUsageItem } from '@client/app/hooks/data/admin';
-
-/** Short "3h 12m" / "45m" / "30s" until an epoch-seconds reset; empty if absent or already past. */
-const formatReset = (resetAtSeconds?: number): string => {
-  if (!resetAtSeconds) return '';
-  const remainingSeconds = resetAtSeconds - Math.floor(Date.now() / 1000);
-  if (remainingSeconds <= 0) return '';
-  const hours = Math.floor(remainingSeconds / 3600);
-  const minutes = Math.floor((remainingSeconds % 3600) / 60);
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m`;
-  return `${remainingSeconds}s`;
-};
+import { formatRateLimitReset } from '@client/app/utils/formatRateLimitReset';
 
 const ApiKeyStatusTab: React.FC = () => {
   const theme = useTheme();
-  const apiUsage = useGetApiUsage();
+  // The minute window lives at most 60s, so a fetch-time snapshot goes stale within seconds.
+  const apiUsage = useGetApiUsage({ refetchInterval: 15_000 });
 
   const keys: ApiKeyUsageItem[] = apiUsage.data ?? [];
   const keysWithAlerts = keys.filter(k => k.alerts && k.alerts.length > 0);
@@ -73,6 +64,10 @@ const ApiKeyStatusTab: React.FC = () => {
                 ? 'good'
                 : 'neutral';
             const securityTokenColor: 'good' | 'high' | 'critical' = hasAlerts ? 'high' : 'good';
+            // Formatted once per window: two calls could straddle a second boundary and leave
+            // "resets in " with no duration.
+            const minuteReset = formatRateLimitReset(key.liveUsage.minuteResetAt);
+            const dayReset = formatRateLimitReset(key.liveUsage.dayResetAt);
             return (
               <Sheet
                 key={key.id}
@@ -106,11 +101,22 @@ const ApiKeyStatusTab: React.FC = () => {
                     {key.lastUsedAt ? `Last used: ${new Date(key.lastUsedAt).toLocaleDateString()}` : 'Never used'}
                   </Typography>
                 </Stack>
-                <Typography level="body-xs" sx={{ mt: 0.5, color: theme.palette.text.secondary }}>
+                <Typography
+                  level="body-xs"
+                  data-testid={`api-key-usage-minute-${idx}`}
+                  sx={{ mt: 0.5, color: theme.palette.text.secondary }}
+                >
+                  This minute: {key.liveUsage.minute.toLocaleString()} /{' '}
+                  {key.rateLimit.requestsPerMinute.toLocaleString()} requests
+                  {key.liveUsage.minute > 0 && minuteReset ? ` · resets in ${minuteReset}` : ''}
+                </Typography>
+                <Typography
+                  level="body-xs"
+                  data-testid={`api-key-usage-day-${idx}`}
+                  sx={{ color: theme.palette.text.secondary }}
+                >
                   Today: {key.liveUsage.day.toLocaleString()} / {key.rateLimit.requestsPerDay.toLocaleString()} requests
-                  {key.liveUsage.day > 0 && formatReset(key.liveUsage.dayResetAt)
-                    ? ` · resets in ${formatReset(key.liveUsage.dayResetAt)}`
-                    : ''}
+                  {key.liveUsage.day > 0 && dayReset ? ` · resets in ${dayReset}` : ''}
                 </Typography>
                 {hasAlerts && (
                   <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>

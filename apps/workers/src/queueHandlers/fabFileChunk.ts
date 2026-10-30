@@ -24,7 +24,13 @@ import {
   deferFailureIfRetryable,
 } from '@server/dataLakes/dataLakeBatchProgress';
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
-import { isChunkClaimLostError, isSupportedEmbeddingModel, provenancePayloadShape } from '@bike4mind/common';
+import {
+  isChunkClaimLostError,
+  isMediaOnlyMimeType,
+  isSupportedEmbeddingModel,
+  isSupportedFabFileMimeType,
+  provenancePayloadShape,
+} from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { CHUNK_CLAIM_STALE_MS } from '@workers/s3/chunkScan';
 import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
@@ -53,6 +59,16 @@ const ChunkFabFilePayload = z.object({
  * error from elsewhere is never wiped by a successful re-enqueue.
  */
 const VECTORIZE_ENQUEUE_ERROR_PREFIX = 'Could not hand off for vector indexing';
+
+const UNSUPPORTED_FORMAT_ERROR =
+  'This file format is not supported, so the file was not indexed. Save it as PDF, DOCX, XLSX or PPTX and upload it again.';
+
+/** A type chunkFabfile has no reader for. Keep in sync with its `default:` branch (b4m-core/fab-pipeline/src/chunk.ts). */
+const isUnreadableFormat = (mimeType: string | null | undefined): boolean =>
+  !!mimeType &&
+  !isSupportedFabFileMimeType(mimeType) &&
+  !mimeType.startsWith('text/') &&
+  !isMediaOnlyMimeType(mimeType);
 
 /**
  * How many chunks per vectorize message is the operator's dataLakeVectorizeChunkBatchSize
@@ -139,17 +155,30 @@ async function accountFileFailure(params: {
   action: string;
   errorMessage: string;
   supersedes?: boolean;
+  /** A deterministic verdict a retry cannot change: account it on this delivery instead of deferring. */
+  terminal?: boolean;
 }): Promise<void> {
-  const { event, logger, fabFileId, batchId, userId, action, errorMessage, supersedes = false } = params;
+  const {
+    event,
+    logger,
+    fabFileId,
+    batchId,
+    userId,
+    action,
+    errorMessage,
+    supersedes = false,
+    terminal = false,
+  } = params;
 
   if (
-    await deferFailureIfRetryable(event, FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
+    !terminal &&
+    (await deferFailureIfRetryable(event, FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
       fabFileId,
       batchId,
       action,
       errorMessage,
       logger,
-    })
+    }))
   ) {
     return;
   }
@@ -1095,9 +1124,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // The stamp doubles as the chunk-scan exclusion marker (see buildFabFileChunkScanFilter), so
       // the rescue sweep never re-enqueues a file that deterministically chunks to zero. Its own
       // field rather than prose in `notes` (#2016), which is the owner's text.
-      await FabFile.updateOne({ _id: fabFileId }, { $set: { noExtractableTextAt: new Date() } }).catch(err =>
-        logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`)
-      );
+      const stampNoExtractableText = () =>
+        FabFile.updateOne({ _id: fabFileId }, { $set: { noExtractableTextAt: new Date() } }).catch(err =>
+          logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`)
+        );
+      // No reader for this format: tell the user rather than completing it silently, and count it as
+      // failed so the batch shows why. Stamped only once the failure is recorded, since the stamp
+      // makes a redelivery skip the file.
+      if (isUnreadableFormat(fabFile.mimeType)) {
+        logger.warn(`fabFile ${fabFileId} has an unsupported format: ${fabFile.mimeType}`);
+        await accountFileFailure({
+          event,
+          logger,
+          fabFileId,
+          batchId: fabFile.batchId,
+          userId,
+          action: 'Chunking',
+          errorMessage: UNSUPPORTED_FORMAT_ERROR,
+          terminal: true,
+        });
+        await stampNoExtractableText();
+        return;
+      }
+      await stampNoExtractableText();
       // A zero-chunk file (empty / unparseable) produces no vectorize message, so it
       // would never reach a terminal batch counter and the batch would hang until the
       // reconciler. Account for it as complete here so batch math closes immediately.

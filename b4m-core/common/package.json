@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/common",
-  "version": "19.0.0",
+  "version": "21.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -91,7 +91,7 @@
     "tsdown": "^0.22.3",
     "tsx": "4.23.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@bike4mind/hearth": "workspace:*",

@@ -21,7 +21,7 @@ vi.mock('@bike4mind/database', async orig => ({
 vi.mock('@server/integrations/google/drive/common', () => ({
   getValidUserDriveAccessToken: (...a: unknown[]) => mockGetToken(...a),
 }));
-vi.mock('@server/integrations/google/drive/driveClient', async orig => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   listFolderChildren: (...a: unknown[]) => mockList(...a),
 }));

@@ -13,7 +13,7 @@ vi.mock('@bike4mind/slack', () => ({
 }));
 
 import handler from '@pages/api/slack/oauth/authorize';
-import { readStateNonceHash, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const call = async (isAdmin: boolean, query: Record<string, string | string[]> = { workspaceId: 'ws-1' }) => {
   const { req, res } = createMocks({ method: 'GET', query });

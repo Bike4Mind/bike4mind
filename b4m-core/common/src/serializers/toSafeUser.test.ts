@@ -48,7 +48,7 @@ const fullUser = {
     excludedPageIds: ['ex1', 'ex2'],
     connectedAt: new Date(),
   },
-  slackSettings: { slackUserId: 'U1', slackUserToken: 'SLACK-TOKEN', defaultNotebookId: 'n1' },
+  slackSettings: { slackUserId: 'U1', slackTeamId: 'T1', slackUserToken: 'SLACK-TOKEN', defaultNotebookId: 'n1' },
   blogIntegration: { apiKey: 'BLOG-KEY', baseUrl: 'https://blog', defaultAuthor: 'Jane' },
   totpLastStep: 56789,
   resetPasswordToken: 'RESET-TOKEN',
@@ -152,6 +152,25 @@ describe('toSafeUser', () => {
 });
 
 describe('redactUserSecretsForSelf', () => {
+  it('withholds private grant assessments from self and public views', () => {
+    const user = {
+      ...fullUser,
+      signupGrantAssessment: {
+        band: 'review',
+        credits: 0,
+        score: 8,
+        reasons: ['datacenter'],
+        missing: [],
+        policyVersion: 'private',
+        status: 'evaluated',
+      },
+    } as IUser;
+    expect(redactUserSecretsForSelf(user)).not.toHaveProperty('signupGrantAssessment');
+    expect(toSafeUser(user)).not.toHaveProperty('signupGrantAssessment');
+    expect(redactUserSecretsForSelf(user, { keepAdminOnly: ['signupGrantAssessment'] })).toHaveProperty(
+      'signupGrantAssessment'
+    );
+  });
   it('drops pure-secret fields entirely', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     // `authProviders` is NOT here: it moved to USER_SUBFIELD_REDACTED_FIELDS, since the
@@ -208,6 +227,7 @@ describe('redactUserSecretsForSelf', () => {
 
     const slack = self.slackSettings as Record<string, unknown>;
     expect(slack.slackUserId).toBe('U1');
+    expect(slack.slackTeamId).toBe('T1');
     expect('slackUserToken' in slack).toBe(false);
 
     const blog = self.blogIntegration as Record<string, unknown>;
@@ -221,7 +241,8 @@ describe('redactUserSecretsForSelf', () => {
 
   it('re-includes fields listed in the keep option (for tightly-scoped callers)', () => {
     const kept = redactUserSecretsForSelf(fullUser, { keep: ['securityQuestions'] })!;
-    expect(kept.securityQuestions).toBeDefined();
+    expect(kept.securityQuestions).toEqual([{ question: 'q', answer: '' }]);
+    expect(JSON.stringify(kept)).not.toContain('ANSWER-SECRET');
     // credentials are still stripped even with a keep list
     expect('password' in kept).toBe(false);
     expect('resetPasswordToken' in kept).toBe(false);
@@ -270,6 +291,17 @@ describe('redactUserSecretsForSelf', () => {
     for (const f of USER_SUBFIELD_REDACTED_FIELDS) {
       expect(secrets.has(f)).toBe(true);
     }
+  });
+
+  // The signals and reasons say how the score is built, so the scored user must never see them.
+  it('never shows a user their own risk score, in any view', () => {
+    const scored = {
+      ...fullUser,
+      riskScore: { score: 70, signals: [], computedAt: new Date(), reviewState: 'pending' },
+    } as unknown as IUser;
+
+    expect('riskScore' in redactUserSecretsForSelf(scored)!).toBe(false);
+    expect('riskScore' in toSafeUser(scored, 'self')!).toBe(false);
   });
 
   it('drops every non-rebuilt USER_SECRET_FIELDS entry present on the input', () => {
@@ -369,6 +401,7 @@ describe('redactUserSecretsForSelf - authProviders', () => {
 describe('redactUserSecretsForSelf - slackSettings', () => {
   const slackSettings = {
     slackUserId: 'U1',
+    slackTeamId: 'T1',
     slackUserToken: 'slack-secret-token',
     slackUserScopes: ['identity.basic', 'reminders:write'],
     defaultNotebookId: 'nb-1',
@@ -389,6 +422,7 @@ describe('redactUserSecretsForSelf - slackSettings', () => {
     const slack = out?.slackSettings as Record<string, unknown>;
 
     expect(slack.slackUserId).toBe('U1');
+    expect(slack.slackTeamId).toBe('T1');
     expect(slack.defaultNotebookId).toBe('nb-1');
     expect(slack.autoCreateNotebook).toBe(true);
     expect(slack.notebookNamePrefix).toBe('daily-');
@@ -416,6 +450,7 @@ describe('redactUserSecretsForSelf - slackSettings', () => {
 
     expect(out?.slackSettings).toEqual({
       slackUserId: 'U1',
+      slackTeamId: 'T1',
       defaultNotebookId: 'nb-1',
       autoCreateNotebook: true,
       notebookNamePrefix: 'daily-',
@@ -515,6 +550,7 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
       field: 'slackSettings',
       input: {
         slackUserId: 'U1',
+        slackTeamId: 'T1',
         defaultNotebookId: 'nb-1',
         autoCreateNotebook: true,
         notebookNamePrefix: 'daily-',
@@ -530,6 +566,7 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
       },
       allowed: [
         'slackUserId',
+        'slackTeamId',
         'defaultNotebookId',
         'autoCreateNotebook',
         'notebookNamePrefix',
@@ -595,7 +632,13 @@ describe('redactUserSecretsForSelf <-> selfUserResponseSchema contract', () => {
   });
 
   it('the profile schema still never admits loginRecords', () => {
-    expect(selfUserProfileResponseSchema.parse(fullUser)).not.toHaveProperty('loginRecords');
+    expect(selfUserProfileResponseSchema.parse(redactUserSecretsForSelf(fullUser))).not.toHaveProperty('loginRecords');
+  });
+
+  it('the profile schema rejects stored security answers', () => {
+    expect(
+      selfUserProfileResponseSchema.safeParse({ securityQuestions: [{ question: 'Pet?', answer: 'secret' }] }).success
+    ).toBe(false);
   });
 
   it('keeps toJSON() identity and timestamp keys, drops __v', () => {

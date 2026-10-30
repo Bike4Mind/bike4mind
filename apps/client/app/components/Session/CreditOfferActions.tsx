@@ -4,7 +4,7 @@ import { useSelectedAccount } from '@client/app/components/Credits/AccountSelect
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
-import { isCancellableSubscriptionStatus } from '@client/lib/subscriptions/types';
+import { isCancellableSubscriptionStatus } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { getBrandName } from '@client/config/general';
 import { SubscribeButton, SessionCreditsButton, SECONDARY_CREDIT_BUTTON_PROPS } from './SessionCreditsButtons';
 
@@ -81,16 +81,16 @@ export function CreditOfferActionsView({ moment, account }: CreditOfferActionsPr
   if (account.kind === 'subscriber') {
     return (
       <Box data-testid="credit-offer-actions" sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        <SessionCreditsButton secondary={moment === 'low'} />
+        <SessionCreditsButton label="Top up" secondary={moment === 'low'} />
       </Box>
     );
   }
 
   return (
     <Box data-testid="credit-offer-actions" sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-      {moment === 'low' && <SubscribeButton />}
-      <SessionCreditsButton secondary />
-      {moment === 'out' && <SubscribeButton />}
+      {moment === 'low' && <SubscribeButton label="Get Pro" />}
+      <SessionCreditsButton label="Top up" secondary />
+      {moment === 'out' && <SubscribeButton label="Get Pro" />}
     </Box>
   );
 }

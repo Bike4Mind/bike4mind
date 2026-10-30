@@ -38,6 +38,82 @@ function withMove(calls: ChatToolCall[]): string {
 }
 
 describe('ToolCallList', () => {
+  describe('approval attribution', () => {
+    const decidedAt = '2026-10-22T00:00:00.000Z';
+    const attribution = (html: string) =>
+      [...html.matchAll(/data-testid="tool-call-approval-attribution"[^>]*>([^<]*)</g)].map(match => match[1]);
+
+    it.each([
+      [{ kind: 'rule', rule: 'Bash(rm:*)' } as const, 'Denied by rule Bash(rm:*)'],
+      [{ kind: 'chat-allowance' } as const, 'Denied in this chat'],
+      [{ kind: 'mode', mode: 'auto' } as const, 'Denied by the approval mode'],
+      [{ kind: 'user', answer: 'deny' } as const, 'Declined by you'],
+      [{ kind: 'user', answer: 'redirect', option: 'Start a session' } as const, 'Redirected by you - Start a session'],
+      [{ kind: 'system', reason: 'stopped' } as const, 'Not run - reply stopped before approval'],
+      [{ kind: 'system', reason: 'app-quit' } as const, 'Not run - app quit before approval'],
+      [{ kind: 'system', reason: 'error', detail: 'outside every folder' } as const, 'Blocked - outside every folder'],
+    ])('reads %o as "%s"', (decidedBy, text) => {
+      const html = markup([
+        bash({ status: 'denied', approval: { outcome: 'denied', decidedBy, asked: false, decidedAt } }),
+      ]);
+      expect(attribution(html)).toEqual([text]);
+    });
+
+    it('reads a redirect recorded as done by its outcome, not its status', () => {
+      const decidedBy = { kind: 'user', answer: 'redirect', option: 'Start a session' } as const;
+      const html = markup([
+        bash({ status: 'done', approval: { outcome: 'denied', decidedBy, asked: true, decidedAt } }),
+      ]);
+      expect(attribution(html)).toEqual(['Redirected by you - Start a session']);
+    });
+
+    it.each([
+      [{ kind: 'mode', mode: 'auto' } as const],
+      [{ kind: 'rule', rule: 'Bash(git commit:*)', source: 'Claude Code settings' } as const],
+      [{ kind: 'chat-allowance' } as const],
+      [{ kind: 'user', answer: 'once' } as const],
+      [{ kind: 'user', answer: 'always', everywhere: true } as const],
+    ])('draws nothing for a call %o let through', decidedBy => {
+      const html = markup([
+        bash({ status: 'done', approval: { outcome: 'allowed', decidedBy, asked: false, decidedAt } }),
+      ]);
+      expect(html).not.toContain('tool-call-approval-attribution');
+      expect(html).not.toContain('Claude Code settings');
+    });
+
+    it('says it once for a group stopped the same way, and nothing for an ungated call', () => {
+      const stopped = {
+        outcome: 'denied',
+        decidedBy: { kind: 'system', reason: 'stopped' },
+        asked: true,
+        decidedAt,
+      } as const;
+      const html = markup([
+        bash({ id: 'a', status: 'denied', approval: stopped }),
+        bash({ id: 'b', status: 'denied', approval: stopped }),
+        bash({ id: 'c', status: 'done' }),
+      ]);
+      expect(attribution(html)).toEqual(['Not run - reply stopped before approval']);
+      expect(attribution(markup([bash({ status: 'done' })]))).toEqual([]);
+    });
+
+    it('keeps only what did not run in a group that mixes it with allowed calls', () => {
+      const allowed = (decidedBy: NonNullable<ChatToolCall['approval']>['decidedBy']) =>
+        ({ outcome: 'allowed', decidedBy, asked: false, decidedAt }) as const;
+      const html = markup([
+        bash({ id: 'a', status: 'done', approval: allowed({ kind: 'mode', mode: 'auto' }) }),
+        bash({ id: 'b', status: 'done', approval: allowed({ kind: 'user', answer: 'once' }) }),
+        bash({ id: 'c', status: 'done', approval: allowed({ kind: 'chat-allowance' }) }),
+        bash({
+          id: 'd',
+          status: 'denied',
+          approval: { outcome: 'denied', decidedBy: { kind: 'user', answer: 'deny' }, asked: true, decidedAt },
+        }),
+      ]);
+      expect(attribution(html)).toEqual(['Declined by you']);
+    });
+  });
+
   it('shows a failed permission save outside the collapsed tool result', () => {
     const html = markup([
       bash({
@@ -64,7 +140,7 @@ describe('ToolCallList', () => {
    * The button says the action and nothing else. It used to carry the whole granted scope, so a
    * command touching two directories gave the broadest choice on the card the widest button.
    */
-  it('keeps the always-allow button to a fixed label and puts the scope beside it', () => {
+  it('keeps the allow-in-this-chat button to a fixed label and puts the scope beside it', () => {
     const html = markup([
       awaiting({
         approvalAlways: '`ls *`, `head *`, ~/Javascript/*, ./*',
@@ -72,7 +148,7 @@ describe('ToolCallList', () => {
       }),
     ]);
     const button = html.slice(html.indexOf('data-testid="chat-tool-approve-always"'));
-    expect(button.slice(0, button.indexOf('</button>'))).toContain('Always allow');
+    expect(button.slice(0, button.indexOf('</button>'))).toContain('Allow in this chat');
     expect(button.slice(0, button.indexOf('</button>'))).not.toContain('~/Javascript');
 
     expect(html).toContain('data-testid="chat-tool-approval-scope"');
@@ -90,17 +166,26 @@ describe('ToolCallList', () => {
     expect(html).toContain('applies for the rest of this conversation');
   });
 
-  it('offers "Always, in every session" only when main derived a rule, and names the rule', () => {
+  it('offers the saving "Always allow" only when main derived a rule, and names the rule', () => {
     expect(markup([awaiting()])).not.toContain('data-testid="chat-tool-approve-everywhere"');
 
     const html = markup([awaiting({ approvalRules: ['Bash(gh pr create:*)'] })]);
-    expect(html).toContain('data-testid="chat-tool-approve-everywhere"');
-    expect(html).toContain('Always, in every session');
+    const button = html.slice(html.indexOf('data-testid="chat-tool-approve-everywhere"'));
+    expect(button.slice(0, button.indexOf('</button>'))).toContain('Always allow');
     expect(html).toContain('data-testid="chat-tool-approval-rules"');
-    expect(html).toContain('saves Bash(gh pr create:*) to Settings &gt; Permissions');
+    expect(html).toContain('saves Bash(gh pr create:*) to Settings &gt; Permissions, so no session asks again');
   });
 
-  it('never offers "Always, in every session" on a call that cannot be undone', () => {
+  it('says a bare rule covers every site or every call', () => {
+    const fetch = markup([awaiting({ name: 'web_fetch', approvalAlways: 'every site', approvalRules: ['WebFetch'] })]);
+    expect(fetch).toContain('&quot;Allow in this chat&quot; covers every site for the rest of this conversation');
+    expect(fetch).toContain('saves WebFetch (every site) to Settings');
+    expect(markup([awaiting({ name: 'session_send', approvalRules: ['session_send'] })])).toContain(
+      'saves session_send (every call) to Settings'
+    );
+  });
+
+  it('never offers the saving "Always allow" on a call that cannot be undone', () => {
     const html = markup([awaiting({ approvalIrreversible: true, approvalRules: ['session_delete'] })]);
     expect(html).not.toContain('data-testid="chat-tool-approve-everywhere"');
   });

@@ -22,7 +22,9 @@ const verifyResponseSchema = z.object({
   user: selfUserResponseSchema,
 });
 
-const handler = baseApi() // Now requires authentication
+// jwtOnly: a passed challenge mints a full session, so an API key must never reach it (the mfaPending
+// JWT still does). Same as passkey/authenticate.ts; see sessionGrantRoutesRejectApiKeys.test.ts.
+const handler = baseApi({ auth: 'jwtOnly' })
   // No rate limiting - using 3-strike abort for stronger security
   .post(
     asyncHandler(async (req, res) => {

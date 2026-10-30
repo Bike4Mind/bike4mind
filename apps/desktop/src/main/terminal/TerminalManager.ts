@@ -90,11 +90,15 @@ interface Live {
   timer: ReturnType<typeof setTimeout> | null;
   receivers: Map<number, TerminalReceiver>;
   size: { cols: number; rows: number };
-  exited: Promise<void>;
-  markExited: () => void;
   /** Bumped by every `end`; a start that sees it change while it awaited does not spawn. */
   epoch: number;
 }
+
+type TrackedShell = {
+  sessionId: string;
+  pty: PtyProcess;
+  exited: Promise<void>;
+};
 
 /**
  * The shell a terminal starts: the user's login shell, so their profile, prompt and PATH are
@@ -161,6 +165,8 @@ export class TerminalManager {
   private readonly starting = new Map<string, number>();
   /** Bumped per session by `killSession`, so a create in flight knows its session went. */
   private readonly sessionEpochs = new Map<string, number>();
+  private readonly cleanupSessions = new Set<string>();
+  private readonly shells = new Map<PtyProcess, TrackedShell>();
   private spawnFn: PtySpawn | null = null;
 
   constructor(private readonly deps: TerminalManagerDeps) {}
@@ -170,6 +176,7 @@ export class TerminalManager {
   }
 
   async create(sessionId: string, cols: unknown, rows: unknown): Promise<TerminalCreateResult> {
+    if (this.cleanupSessions.has(sessionId)) return { ok: false, error: 'The conversation terminals are closing.' };
     const inFlight = this.starting.get(sessionId) ?? 0;
     if (this.list(sessionId).length + inFlight >= MAX_TERMINALS_PER_SESSION) {
       return { ok: false, error: `A conversation can have at most ${MAX_TERMINALS_PER_SESSION} terminals open.` };
@@ -188,8 +195,6 @@ export class TerminalManager {
       timer: null,
       receivers: new Map(),
       size,
-      exited: Promise.resolve(),
-      markExited: () => undefined,
       epoch: 0,
     };
     this.starting.set(sessionId, inFlight + 1);
@@ -255,7 +260,7 @@ export class TerminalManager {
 
   async restart(terminalId: string): Promise<TerminalInfo | null> {
     const live = this.terminals.get(terminalId);
-    if (!live) return null;
+    if (!live || this.cleanupSessions.has(live.info.sessionId)) return null;
     this.end(live);
     // A view showing the old shell remounts on the new generation and attaches again; keeping
     // its registration would push it output that the new attach's replay also carries.
@@ -282,7 +287,7 @@ export class TerminalManager {
 
   close(terminalId: string): void {
     const live = this.terminals.get(terminalId);
-    if (!live) return;
+    if (!live || this.cleanupSessions.has(live.info.sessionId)) return;
     this.end(live);
     this.terminals.delete(terminalId);
     this.announce(live.info.sessionId);
@@ -290,6 +295,7 @@ export class TerminalManager {
 
   /** Every terminal of a conversation that was archived or deleted. */
   killSession(sessionId: string): void {
+    if (this.cleanupSessions.has(sessionId)) return;
     this.sessionEpochs.set(sessionId, (this.sessionEpochs.get(sessionId) ?? 0) + 1);
     const owned = [...this.terminals.values()].filter(live => live.info.sessionId === sessionId);
     if (owned.length === 0) return;
@@ -300,8 +306,39 @@ export class TerminalManager {
     this.announce(sessionId);
   }
 
+  /** Hold terminal creation closed until destructive workspace cleanup completes. */
+  async acquireSessionCleanup(sessionId: string): Promise<() => void> {
+    if (this.cleanupSessions.has(sessionId)) throw new Error('The conversation terminals are already closing.');
+    this.cleanupSessions.add(sessionId);
+    try {
+      if (this.starting.get(sessionId)) throw new Error('A terminal is still starting. Try deleting again.');
+      this.sessionEpochs.set(sessionId, (this.sessionEpochs.get(sessionId) ?? 0) + 1);
+      const owned = [...this.terminals.values()].filter(live => live.info.sessionId === sessionId);
+      for (const live of owned) live.epoch++;
+      const running = [...this.shells.values()].filter(shell => shell.sessionId === sessionId);
+      for (const shell of running) this.signalPty(shell.pty, 'SIGHUP');
+      await this.waitForExits(running);
+      for (const shell of running) if (this.shells.has(shell.pty)) this.signalPty(shell.pty, 'SIGKILL');
+      await this.waitForExits(running);
+      if (running.some(shell => this.shells.has(shell.pty))) {
+        throw new Error('A terminal did not exit. Its worktree was kept.');
+      }
+      for (const live of owned) {
+        this.end(live);
+        this.terminals.delete(live.info.id);
+      }
+      this.announce(sessionId);
+      return () => {
+        this.cleanupSessions.delete(sessionId);
+      };
+    } catch (err) {
+      this.cleanupSessions.delete(sessionId);
+      throw err;
+    }
+  }
+
   runningCount(): number {
-    return [...this.terminals.values()].filter(live => live.pty).length;
+    return this.shells.size;
   }
 
   /**
@@ -309,13 +346,22 @@ export class TerminalManager {
    * The quit path's graceful pass; see main/index.ts.
    */
   async shutdown(): Promise<void> {
-    const running = [...this.terminals.values()].filter(live => live.pty);
-    for (const live of running) this.signal(live, 'SIGHUP');
+    const running = [...this.shells.values()];
+    for (const shell of running) this.signalPty(shell.pty, 'SIGHUP');
+    await this.waitForExits(running);
+    for (const shell of running) if (this.shells.has(shell.pty)) this.signalPty(shell.pty, 'SIGKILL');
+  }
+
+  private async waitForExits(running: readonly TrackedShell[]): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const grace = new Promise<void>(resolve => (timer = setTimeout(resolve, SHUTDOWN_GRACE_MS)));
-    await Promise.race([Promise.all(running.map(live => live.exited)), grace]);
-    clearTimeout(timer);
-    for (const live of running) if (live.pty) this.signal(live, 'SIGKILL');
+    const grace = new Promise<void>(resolve => {
+      timer = setTimeout(resolve, SHUTDOWN_GRACE_MS);
+    });
+    try {
+      await Promise.race([Promise.all(running.map(shell => shell.exited)), grace]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -324,7 +370,7 @@ export class TerminalManager {
    * on the foreground job regardless.
    */
   shutdownSync(): void {
-    for (const live of this.terminals.values()) if (live.pty) this.signal(live, 'SIGHUP');
+    for (const shell of this.shells.values()) this.signalPty(shell.pty, 'SIGHUP');
   }
 
   /** Throws when superseded: `end` ran (a restart, a close) while this was awaiting. */
@@ -347,7 +393,7 @@ export class TerminalManager {
     });
     live.pty = pty;
     live.info = { ...live.info, cwd };
-    live.exited = new Promise(resolve => (live.markExited = resolve));
+    this.trackShell(live.info.sessionId, pty);
     live.listeners = [
       pty.onData(data => this.record(live, data)),
       pty.onExit(({ exitCode, signal }) => {
@@ -356,7 +402,6 @@ export class TerminalManager {
         live.pty = null;
         this.dispose(live);
         live.info = { ...live.info, exit: { code: exitCode, signal: signal || null } };
-        live.markExited();
         if (this.terminals.has(live.info.id)) this.announce(live.info.sessionId);
       }),
     ];
@@ -409,7 +454,6 @@ export class TerminalManager {
     this.dispose(live);
     if (pty) this.signalPty(pty, 'SIGHUP');
     live.epoch++;
-    live.markExited();
   }
 
   private dispose(live: Live): void {
@@ -417,8 +461,19 @@ export class TerminalManager {
     live.listeners = [];
   }
 
-  private signal(live: Live, signal: 'SIGHUP' | 'SIGKILL'): void {
-    if (live.pty) this.signalPty(live.pty, signal);
+  /** Closed tabs can leave a shell alive; only the PTY exit event releases this handle. */
+  private trackShell(sessionId: string, pty: PtyProcess): void {
+    let markExited = () => {};
+    const exited = new Promise<void>(resolve => {
+      markExited = resolve;
+    });
+    this.shells.set(pty, { sessionId, pty, exited });
+    const listener = pty.onExit(() => {
+      this.shells.delete(pty);
+      markExited();
+      // Subscription implementations may report an already-exited shell synchronously.
+      queueMicrotask(() => listener.dispose());
+    });
   }
 
   private signalPty(pty: PtyProcess, signal: 'SIGHUP' | 'SIGKILL'): void {

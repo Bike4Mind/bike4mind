@@ -2,6 +2,7 @@ import { Permission } from '@bike4mind/common';
 import { Session } from '@bike4mind/database/auth';
 import { NotFoundError } from '@bike4mind/utils';
 import { accessibleBy } from '@casl/mongoose';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
 import { SessionEvents } from '@server/utils/eventBus';
@@ -20,12 +21,12 @@ const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(as
     : null;
   if (!session) throw new NotFoundError('Cannot update session');
 
+  assertAiAccessAllowed(req.user);
+
   // Queueing the summary IS the spend, so a refusal is the answer to this request (#1852).
-  // Billed to the session owner, who the Summarize handler resolves - not necessarily the
-  // requester, who may only hold update permission on a shared session.
+  // Billed to whoever asked (payerId below), never the owner on a sharee's behalf.
   await assertSessionOperationalCredits({
-    userId: session.userId,
-    requesterId: req.user?.id,
+    userId: req.user!.id,
     operationCount: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
     operation: 'session summarization',
     logger: req.logger,
@@ -38,6 +39,7 @@ const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(as
     callTagging: true,
     trigger: 'manual',
     requesterId,
+    payerId: req.user!.id,
   });
 
   return res.json({ message: 'Summarization job queued', requestId });

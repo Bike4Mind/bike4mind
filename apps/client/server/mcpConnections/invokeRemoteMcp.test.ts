@@ -76,14 +76,14 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryIncrementWithinLimitFixedWindow: tryIncrement },
 }));
 vi.mock('sst', () => ({ Resource: state.resource }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => (value ? value.replace(/^enc:/, '') : null),
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerRejection: vi.fn(async () => undefined),
   recordCircuitBreakerTransition: vi.fn(async () => undefined),
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: (context: Record<string, unknown>) => ({
       success: (extra?: unknown) => state.audits.push({ context, outcome: 'success', extra }),

@@ -26,16 +26,14 @@ export interface EmbeddingRateLimitSnapshot {
 }
 
 // Accept native Headers or a plain record, matching parseRateLimitHeaders' tolerance.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type HeadersLike = any;
-
-function getHeader(headers: HeadersLike, name: string): string | null {
+function getHeader(headers: unknown, name: string): string | null {
   if (!headers || typeof headers !== 'object') return null;
-  if (typeof headers.get === 'function') {
-    const value = headers.get(name);
+  const h = headers as { get?: (name: string) => unknown; [key: string]: unknown };
+  if (typeof h.get === 'function') {
+    const value = h.get(name);
     return typeof value === 'string' ? value : null;
   }
-  const value = headers[name] ?? headers[name.toLowerCase()];
+  const value = h[name] ?? h[name.toLowerCase()];
   return typeof value === 'string' ? value : null;
 }
 
@@ -81,7 +79,7 @@ export function parseDurationMs(value: string | null | undefined): number | null
 }
 
 /** Read both rate-limit dimensions off a provider response. */
-export function parseEmbeddingRateLimitHeaders(headers: HeadersLike): EmbeddingRateLimitSnapshot {
+export function parseEmbeddingRateLimitHeaders(headers: unknown): EmbeddingRateLimitSnapshot {
   return {
     limitTokens: parseCount(getHeader(headers, 'x-ratelimit-limit-tokens')),
     limitRequests: parseCount(getHeader(headers, 'x-ratelimit-limit-requests')),

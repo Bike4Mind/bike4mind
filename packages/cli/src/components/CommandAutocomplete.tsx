@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { CommandDefinition } from '../config/commands.js';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 interface CommandAutocompleteProps {
   commands: CommandDefinition[];
@@ -60,8 +61,8 @@ export function CommandAutocomplete({ commands, selectedIndex }: CommandAutocomp
           <Box key={cmd.name} marginLeft={1}>
             <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
               {isSelected ? '▸ ' : '  '}
-              {sourceIcon}/{cmd.name}
-              {args} - {cmd.description}
+              {sourceIcon}/{sanitizeTerminalText(cmd.name)}
+              {sanitizeTerminalText(args)} - {sanitizeTerminalText(cmd.description)}
             </Text>
           </Box>
         );

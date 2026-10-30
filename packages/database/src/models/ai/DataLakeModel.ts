@@ -210,7 +210,7 @@ DataLakeSchema.index({ status: 1, lastHealthCheckedAt: 1, _id: 1 });
 // that sort.
 DataLakeSchema.index({ status: 1, lastInconsistencyScanAt: 1, _id: 1 });
 
-export const DataLakeModel =
+export const DataLakeModel: mongoose.Model<IDataLakeDocument> =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
   mongoose.model<IDataLakeDocument>('DataLake', DataLakeSchema);
 
@@ -1586,6 +1586,17 @@ const DataLakeBatchSchema = new mongoose.Schema(
     // Background AI-tagging phase - orthogonal to `status` (see TaxonomyStatus's doc
     // comment for why it isn't layered onto the ingest status instead).
     wantsTaxonomy: { type: Boolean, default: false },
+    taxonomyBilling: {
+      type: new mongoose.Schema(
+        {
+          organizationId: { type: String, default: null },
+          apiKeyId: { type: String },
+          source: { type: String, enum: ['api', 'cli', 'desktop'] },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     taxonomyStatus: {
       type: String,
       enum: ['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed', 'dismissed'],
@@ -1621,7 +1632,7 @@ DataLakeBatchSchema.index({ taxonomyStatus: 1, taxonomyStartedAt: 1 });
 // Exported like its sibling `DataLakeModel` above: app code goes through
 // `dataLakeBatchRepository`, but the operator scripts under packages/scripts/migrate read models
 // directly (see check-datalake-prefix-whitespace.ts, which reads stored taxonomy suffixes).
-export const DataLakeBatchModel =
+export const DataLakeBatchModel: mongoose.Model<IDataLakeBatchDocument> =
   (mongoose.models['DataLakeBatch'] as unknown as mongoose.Model<IDataLakeBatchDocument>) ||
   mongoose.model<IDataLakeBatchDocument>('DataLakeBatch', DataLakeBatchSchema);
 

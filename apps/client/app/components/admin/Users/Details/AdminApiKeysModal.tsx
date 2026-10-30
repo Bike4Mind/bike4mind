@@ -20,6 +20,7 @@ import {
 } from '@mui/joy';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
 import { revocationTooltip } from '@client/app/utils/apiKeyRevocation';
+import { formatRateLimitReset } from '@client/app/utils/formatRateLimitReset';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
@@ -41,7 +42,10 @@ const STATUS_CHIP: Record<ApiKeyStatus, { color: 'success' | 'neutral' | 'warnin
 };
 
 export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysModalProps) {
-  const { data, isLoading, error, refetch } = useAdminGetUserApiKeys(open ? user.id : undefined);
+  // The minute window lives at most 60s, so a fetch-time snapshot goes stale within seconds.
+  const { data, isLoading, error, refetch } = useAdminGetUserApiKeys(open ? user.id : undefined, {
+    refetchInterval: 15_000,
+  });
   const resetMutation = useAdminResetApiKeyRateLimit();
   const confirm = useConfirmation();
   const [resettingKeyId, setResettingKeyId] = useState<string | null>(null);
@@ -154,6 +158,8 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
               {data.apiKeys.map(key => {
                 const usage = usageFor(key);
                 const chip = statusChip(key);
+                const minuteReset = formatRateLimitReset(usage.minuteResetAt);
+                const dayReset = formatRateLimitReset(usage.dayResetAt);
                 return (
                   <tr key={key.id} data-testid={`admin-api-key-row-${key.id}`}>
                     <td>{key.name}</td>
@@ -171,11 +177,13 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
                       </Tooltip>
                     </td>
                     <td data-testid={`admin-api-key-usage-${key.id}`}>
-                      <Typography level="body-xs">
+                      <Typography level="body-xs" data-testid={`admin-api-key-usage-minute-${key.id}`}>
                         {usage.minute}/{key.rateLimit.requestsPerMinute} per min
+                        {usage.minute > 0 && minuteReset ? ` · resets in ${minuteReset}` : ''}
                       </Typography>
-                      <Typography level="body-xs">
+                      <Typography level="body-xs" data-testid={`admin-api-key-usage-day-${key.id}`}>
                         {usage.day}/{key.rateLimit.requestsPerDay} per day
+                        {usage.day > 0 && dayReset ? ` · resets in ${dayReset}` : ''}
                       </Typography>
                     </td>
                     <td>{key.lastUsedAt ? dayjs(key.lastUsedAt).fromNow() : 'Never'}</td>

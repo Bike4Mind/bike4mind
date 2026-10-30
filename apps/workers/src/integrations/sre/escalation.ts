@@ -24,7 +24,7 @@ import { Logger } from '@bike4mind/observability';
 import { SreSourceType, type SreRepoConfig } from '@bike4mind/common';
 import { sreErrorPatternRepository } from '@bike4mind/database';
 import { GitHubService } from '@server/services/githubService';
-import { postSreRecurrenceDetectedMessage } from '@server/integrations/slack/sreSlackApproval';
+import { postSreRecurrenceDetectedMessage } from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 
 function serializeError(err: unknown): Record<string, unknown> {
   if (err instanceof Error) {

@@ -153,3 +153,64 @@ describe('refreshPublishedFromSource', () => {
     expect(mockPost.mock.calls.some(c => String(c[0]).endsWith('/finalize'))).toBe(false);
   });
 });
+
+describe('refreshPublishedFromSource - multi-file react', () => {
+  const ENTRY = `import Stopwatch from './Stopwatch';\nexport default () => <Stopwatch />;`;
+  const multiRow = () =>
+    row({
+      source: { kind: 'bundle', artifactId: 'entry-1', reactSiblings: ['Stopwatch'] } as ManagedArtifact['source'],
+    });
+
+  function wireMultiFile(siblings: Record<string, { id: string; content: string } | null>, sessionId = 'sess-1') {
+    wirePipeline();
+    mockGet.mockImplementation((url: string, config?: { params?: Record<string, unknown> }) => {
+      if (url === '/api/artifacts') {
+        const hit = siblings[String(config?.params?.identifier)];
+        return Promise.resolve({ data: { artifacts: hit ? [{ id: hit.id }] : [] } });
+      }
+      const sibling = Object.values(siblings).find(s => s && url.startsWith(`/api/artifacts/${s.id}?`));
+      if (sibling)
+        return Promise.resolve({ data: { artifact: { type: 'react' }, content: { content: sibling.content } } });
+      return Promise.resolve({
+        data: { artifact: { type: 'react', title: 'App', sessionId }, content: { content: ENTRY } },
+      });
+    });
+  }
+
+  it("re-reads each sibling's newest source by identifier in the entry's session and uploads them together", async () => {
+    wireMultiFile({ Stopwatch: { id: 'sw-2', content: 'export default () => <b>v2</b>;' } });
+    await refreshPublishedFromSource(multiRow());
+
+    const lookup = mockGet.mock.calls.find(c => c[0] === '/api/artifacts');
+    expect(lookup![1].params).toEqual({
+      sessionId: 'sess-1',
+      type: 'react',
+      identifier: 'Stopwatch',
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+      limit: 1,
+    });
+    expect(uploadUrlBody().source).toEqual({
+      kind: 'bundle',
+      artifactId: 'entry-1',
+      artifactType: 'react',
+      reactSiblings: ['Stopwatch'],
+    });
+    const put = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as { body: string };
+    expect(JSON.parse(put.body)).toEqual({ entry: ENTRY, files: { Stopwatch: 'export default () => <b>v2</b>;' } });
+  });
+
+  it('fails with a clear error, publishing nothing, when a sibling can no longer be found', async () => {
+    wireMultiFile({ Stopwatch: null });
+    await expect(refreshPublishedFromSource(multiRow())).rejects.toThrow(
+      'The file "Stopwatch" this app imports can no longer be found in its chat'
+    );
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('fails when the entry is no longer linked to a chat session', async () => {
+    wireMultiFile({ Stopwatch: { id: 'sw-2', content: 'x' } }, '');
+    await expect(refreshPublishedFromSource(multiRow())).rejects.toThrow('no longer linked to a chat');
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+});

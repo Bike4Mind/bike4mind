@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
+import { getTrustedHeaderClientIp } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
@@ -16,8 +18,8 @@ import { loadLiveOwner } from '@server/services/publish/loadLiveOwner';
  *
  * Anonymous by design (the whole point is viewers without accounts). Brute force
  * is bounded on two axes: the per-IP rate limit below throttles one client
- * across ALL gated artifacts (429), and the per-artifact lockout (passphraseLockout)
- * locks a single artifact after too many wrong attempts (423). Responses are
+ * across ALL gated artifacts (429), and the per-artifact/viewer lockout (passphraseLockout)
+ * locks that viewer after too many wrong attempts (423). Responses are
  * deliberately terse (404 unknown/ungated, 403 wrong passphrase, 423 locked) so
  * the endpoint confirms nothing an anonymous caller couldn't learn from the URL.
  */
@@ -74,9 +76,18 @@ const handler = baseApi({ auth: false })
       return res.status(404).json({ error: 'Not found' });
     }
 
-    // Locked gates reject BEFORE bcrypt so a locked artifact stays locked even
+    // Locked viewers reject BEFORE bcrypt so they stay locked even
     // for a correct passphrase until the window closes.
-    const lock = await checkLock(artifact.publicId);
+    const viewerIp =
+      getTrustedHeaderClientIp(name => {
+        const value = req.headers[name];
+        return typeof value === 'string' ? value : undefined;
+      }) ??
+      req.socket?.remoteAddress ??
+      req.ip ??
+      'unknown';
+    const viewerId = createHash('sha256').update(viewerIp).digest('hex');
+    const lock = await checkLock(artifact.publicId, viewerId);
     if (lock.locked) {
       res.setHeader('Retry-After', Math.ceil(lock.retryAfterMs / 1000));
       return res.status(423).json({ error: 'Too many attempts' });
@@ -84,14 +95,14 @@ const handler = baseApi({ auth: false })
 
     const ok = await bcrypt.compare(parsed.data.passphrase, artifact.accessGate.passphraseHash);
     if (!ok) {
-      const failed = await recordFailure(artifact.publicId);
+      const failed = await recordFailure(artifact.publicId, viewerId);
       if (failed.locked) {
         res.setHeader('Retry-After', Math.ceil(failed.retryAfterMs / 1000));
         return res.status(423).json({ error: 'Too many attempts' });
       }
       return res.status(403).json({ error: 'Incorrect passphrase' });
     }
-    await clear(artifact.publicId);
+    await clear(artifact.publicId, viewerId);
     if (!setGateProofCookie(res, artifact.publicId)) {
       // publicId failed the cookie-name safety check - treat as unservable.
       return res.status(500).json({ error: 'Unable to grant access' });

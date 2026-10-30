@@ -72,7 +72,9 @@ interface LifecycleStatus {
   expiringOrExpired: ExpiringRow[];
   expired: ExpiringRow[];
   queue: QueueItem[];
-  staleReferences: StaleReference[];
+  /** null when the server could not build the report; staleReferencesError says why. */
+  staleReferences: StaleReference[] | null;
+  staleReferencesError?: string;
   /** Per-MTok rates in force, by model id, for pricing a proposed successor. */
   perMTokRates?: Record<string, PerMTokRate>;
 }
@@ -404,8 +406,13 @@ export const ModelLifecycleTab: React.FC = () => {
 
           <Sheet variant="plain">
             <Typography level="title-sm" sx={{ mb: 0.5 }}>
-              Stale references ({status?.staleReferences.length ?? 0})
+              Stale references ({status?.staleReferences?.length ?? 0})
             </Typography>
+            {status?.staleReferences === null && (
+              <Typography level="body-sm" color="danger" data-testid="model-lifecycle-stale-error">
+                {status.staleReferencesError ?? 'Stale reference report is unavailable'}
+              </Typography>
+            )}
             <Table size="sm" data-testid="model-lifecycle-stale-table">
               <thead>
                 <tr>
@@ -416,7 +423,7 @@ export const ModelLifecycleTab: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {status?.staleReferences.map(ref => (
+                {status?.staleReferences?.map(ref => (
                   <tr
                     key={`${ref.surface}|${ref.key}|${ref.referencedId}`}
                     data-testid={`model-lifecycle-stale-row-${ref.surface}-${ref.referencedId}`}

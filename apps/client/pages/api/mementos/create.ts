@@ -7,9 +7,10 @@ import {
   calculateHotMementoSize,
 } from '../../../services/MementoGroomingService';
 import { CreateMementoSchema } from '@server/validators/mementoValidators';
+import { describeMementoValidationError } from '@server/validators/mementoModelValidation';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
+import { MEMENTO_EMBEDDING_ID, isZodError } from '@bike4mind/common';
 import { generateMementoSummaryEmbedding } from '@bike4mind/server-utils/utils/mementoEmbedding';
 
 const handler = baseApi().post(async (req: Request, res: Response) => {
@@ -134,6 +135,12 @@ const handler = baseApi().post(async (req: Request, res: Response) => {
 
     return res.status(201).json(memento);
   } catch (error) {
+    if (isZodError(error)) throw error;
+    const invalidMemento = describeMementoValidationError(error);
+    if (invalidMemento) {
+      req.logger.warn('Rejected memento that failed model validation:', error);
+      return res.status(400).json({ error: invalidMemento });
+    }
     req.logger.error('Error creating memento:', error);
     return res.status(500).json({ error: 'Failed to create memento' });
   }

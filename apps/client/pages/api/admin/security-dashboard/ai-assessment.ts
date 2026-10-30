@@ -1,10 +1,9 @@
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository, cacheRepository } from '@bike4mind/database';
 import { z } from 'zod';
 import crypto from 'crypto';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { Logger } from '@bike4mind/observability';
@@ -264,11 +263,10 @@ Respond ONLY with the JSON object, no prose, no backticks.
   };
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const stage = Resource.App.stage;
 
   // Cache is keyed by a hash of (counts + timestamps + enabled flags).

@@ -78,6 +78,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
               slotProps={{
                 textarea: {
                   maxLength: MAX_SYSTEM_PROMPT_LENGTH,
+                  'data-testid': 'organization-settings-system-prompt-input',
                 },
               }}
               sx={{
@@ -99,6 +100,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
               onClick={handleSaveSystemPrompt}
               loading={updateOrganization.isPending}
               disabled={!hasChanges}
+              data-testid="organization-settings-system-prompt-save-btn"
             >
               Save System Prompt
             </Button>

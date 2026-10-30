@@ -10,7 +10,7 @@ import { MCP_TOOL_PREFIX } from '../mcp/names';
  *
  * `session_send` is deliberately NOT here, though the turn it starts does cost credits. The
  * cycle it could run away with is already bounded in code - MAX_MESSAGE_HOPS on the chain and
- * MAX_SENDS_PER_TURN on the fan, so a user turn caps out at 14 relayed turns whatever the
+ * MAX_SENDS_PER_TURN on the fan, so a user turn caps out at 62 relayed turns whatever the
  * agents do - and a per-send click on top of that bound only stops the autonomy the feature
  * exists for: a session that has finished its work sits waiting for a human purely to hand its
  * summary back. It rides the approval mode like any other tool instead, so 'ask' still asks
@@ -38,6 +38,10 @@ export function spendsCredits(toolName: string): boolean {
  * file or a decoded payload slips past any check on the text, so a command is judged on what it
  * can do (see shellScan) rather than on what it printed.
  *
+ * `screen_capture` is here because a window can show anything - a web page, an email, a chat -
+ * and text in an image steers a model as well as text does. A `file_read` of an image is not:
+ * it is a file in a folder the user shared, judged like the text files beside it.
+ *
  * `browser_*` and every server tool are matched by prefix, so a new one is covered as it ships.
  */
 const READS_UNTRUSTED: ReadonlySet<string> = new Set([
@@ -45,6 +49,7 @@ const READS_UNTRUSTED: ReadonlySet<string> = new Set([
   WEB_SEARCH_TOOL_NAME,
   'skill',
   'session_read',
+  'screen_capture',
 ]);
 
 export function readsUntrusted(toolName: string): boolean {
@@ -67,4 +72,16 @@ const SENDS_OUT: ReadonlySet<string> = new Set([
 
 export function sendsOut(toolName: string): boolean {
   return SENDS_OUT.has(toolName) || toolName.startsWith(MCP_TOOL_PREFIX);
+}
+
+/**
+ * Tools whose "Allow in this chat" covers them over a tainted reply too, as an allow
+ * rule does. Taint makes web_fetch ask because an injected page could pick the URL; a user who
+ * answered "always" for every site has already accepted any URL, so asking per site in a
+ * tainted reply only stacks a card for each parallel fetch.
+ */
+const ALWAYS_OVERRIDES_TAINT: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME]);
+
+export function alwaysOverridesTaint(toolName: string): boolean {
+  return ALWAYS_OVERRIDES_TAINT.has(toolName);
 }

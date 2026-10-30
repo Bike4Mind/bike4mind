@@ -14,7 +14,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockFindPublishedBetween = vi.fn();
 vi.mock('@bike4mind/database', () => ({
@@ -26,14 +26,16 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockLoadConfig = vi.fn();
-vi.mock('@server/releaseNotes/adminReleaseNotes', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/releaseNotes/adminReleaseNotes')>();
+vi.mock('@bike4mind/server-utils/releaseNotes/adminReleaseNotes', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/releaseNotes/adminReleaseNotes')>();
   return { ...actual, loadReleaseNotesConfig: (...a: unknown[]) => mockLoadConfig(...a) };
 });
 
 const mockSendToQueue = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => mockSendToQueue(...a) }));
-vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' } } }));
+vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' }, whatsNewHighlightsQueue: { url: 'https://queue' } } }));
+const mockAudit = vi.fn();
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a) }));
 
 import handler from '../generate-highlights';
 import { HIGHLIGHTS_NOTE_LIMIT } from '@server/whatsNew/releaseNoteHighlights';
@@ -63,6 +65,7 @@ describe('POST /api/admin/generate-highlights dry run', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockLoadConfig.mockResolvedValue({ config: { enabled: true, denylist: ['secret'] }, malformed: false });
+    mockAudit.mockResolvedValue(null);
   });
 
   it('previews the published release notes in the range, without the denylisted ones, and dispatches nothing', async () => {
@@ -101,5 +104,50 @@ describe('POST /api/admin/generate-highlights dry run', () => {
     expect(body.message).toContain(`more than ${HIGHLIGHTS_NOTE_LIMIT}`);
     // One of the newest notes is denylisted, so the previewed count is below the limit the message states.
     expect(body.modalCount).toBe(HIGHLIGHTS_NOTE_LIMIT - 1);
+  });
+});
+
+describe('POST /api/admin/generate-highlights admin audit', () => {
+  const dispatch = async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: { startDate: '2026-09-28', endDate: '2026-10-04' },
+    });
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true }, logger });
+    await (handler as unknown as (q: unknown, s: unknown) => Promise<void>)(req, res);
+    return { req, res };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAudit.mockResolvedValue(null);
+  });
+
+  it('records settings.whats_new.generation_triggered with the highlights job details after dispatch', async () => {
+    const { req, res } = await dispatch();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSendToQueue).toHaveBeenCalledTimes(1);
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][0]).toBe(req);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.whats_new.generation_triggered',
+      target: { kind: 'settings', id: 'whatsNewHighlightsConfig' },
+      details: {
+        job: 'highlights',
+        correlationId: expect.any(String),
+        startDate: '2026-09-28',
+        endDate: '2026-10-04',
+      },
+    });
+    expect(mockSendToQueue.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('records nothing for a dry run, which dispatches nothing', async () => {
+    mockFindPublishedBetween.mockResolvedValue([]);
+
+    await dryRun();
+
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

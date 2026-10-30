@@ -23,17 +23,15 @@ import Editor from 'react-simple-code-editor';
 import { getEditorTokenSx, CODE_FONT_STACK } from '@client/app/components/Session/markdown/syntaxTheme';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-python';
-import {
-  PlayArrow as RunIcon,
-  Stop as StopIcon,
-  Code as CodeIcon,
-  Save as SaveIcon,
-  Undo as UndoIcon,
-  Lock as LockIcon,
-  LockOpen as UnlockIcon,
-  Warning as WarningIcon,
-  Terminal as OutputIcon,
-} from '@mui/icons-material';
+import RunIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
+import CodeIcon from '@mui/icons-material/Code';
+import SaveIcon from '@mui/icons-material/Save';
+import UndoIcon from '@mui/icons-material/Undo';
+import LockIcon from '@mui/icons-material/Lock';
+import UnlockIcon from '@mui/icons-material/LockOpen';
+import WarningIcon from '@mui/icons-material/Warning';
+import OutputIcon from '@mui/icons-material/Terminal';
 import { ArtifactVersionDropdown } from '@client/app/components/artifacts';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';

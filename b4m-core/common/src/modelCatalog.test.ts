@@ -48,6 +48,7 @@ describe('toModelInfo', () => {
       private: false,
       disabled: false,
       disabledReason: undefined,
+      isSuperseded: undefined,
       deprecationDate: undefined,
       trainingCutoff: undefined,
       releaseDate: undefined,
@@ -107,6 +108,17 @@ describe('toModelInfo', () => {
     // Deprecated is still callable: the date, once past, is what hides it.
     expect(toModelInfo({ ...minimal, lifecycle: { status: 'deprecated' } }).disabled).toBe(false);
   });
+
+  it.each([true, false])(
+    'round-trips the explicit superseded marker (%s) without disabling the model',
+    isSuperseded => {
+      const record = { ...minimal, lifecycle: { status: 'active' as const, isSuperseded } };
+      const info = toModelInfo(record);
+      expect(info).toMatchObject({ isSuperseded, disabled: false });
+      expect(info.deprecationDate).toBeUndefined();
+      expect(toModelRecord(info).lifecycle).toEqual(record.lifecycle);
+    }
+  );
 
   it('passes lifecycle deprecation through and infers nothing else', () => {
     expect(

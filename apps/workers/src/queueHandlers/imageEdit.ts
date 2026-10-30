@@ -1,5 +1,5 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
+import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 import { getImageEdit } from '@server/imageGenerations/imageEdit';
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {

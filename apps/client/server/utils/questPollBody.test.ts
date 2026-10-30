@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { formatChoicesBlock, type IChatHistoryItemDocument } from '@bike4mind/common';
+import {
+  QuestPollResponseSchema,
+  formatChoicesBlock,
+  type IChatHistoryItemDocument,
+  type ITurnTiming,
+} from '@bike4mind/common';
 import { toQuestPollBody } from './questPollBody';
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
@@ -110,5 +115,45 @@ describe('toQuestPollBody reply', () => {
 
   it('is null when the quest has no content at all', async () => {
     expect((await body({})).reply).toBeNull();
+  });
+});
+
+describe('toQuestPollBody turnTiming', () => {
+  const timing: ITurnTiming = {
+    queueMs: 120,
+    contextBuildMs: 2400,
+    semaphoreWaitMs: 3000,
+    totalMs: 415_000,
+    retries: [
+      {
+        reason: 'stream_idle_timeout',
+        status: 529,
+        requestId: 'req_1',
+        delayMs: 3500,
+        model: 'claude-opus-5-5',
+        at: new Date('2026-10-21T02:21:46.000Z'),
+      },
+    ],
+    fallbackHops: 1,
+  };
+
+  it('passes the turn timing through, retries included', async () => {
+    const body = await toQuestPollBody(quest({ turnTiming: timing }), { isOwner: true });
+
+    expect(body.turnTiming).toEqual(timing);
+  });
+
+  it('is absent when the quest has none', async () => {
+    const body = await toQuestPollBody(quest({}), { isOwner: true });
+
+    expect(body.turnTiming).toBeUndefined();
+  });
+
+  it('serializes to the shape the public poll schema documents, with `at` as an ISO string', async () => {
+    const body = await toQuestPollBody(quest({ type: 'message', turnTiming: timing }), { isOwner: true });
+
+    const parsed = QuestPollResponseSchema.parse(JSON.parse(JSON.stringify(body)));
+
+    expect(parsed.turnTiming?.retries[0].at).toBe('2026-10-21T02:21:46.000Z');
   });
 });

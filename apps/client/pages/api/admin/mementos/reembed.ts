@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ApiKeyScope, MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import { Memento } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { reembedMementosForUser } from '@server/memory/reembedMementos';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * Admin-only, dry-run-by-default repair for V1 mementos left in a pre-pin embedding space (see
@@ -68,11 +68,10 @@ const staleWithVectorFilter = {
   summary: { $regex: `[^${JS_TRIM_WHITESPACE}]` },
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
@@ -164,6 +163,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   // A fully-stuck page stops the loop here instead, with failedUsers naming who needs a credential
   // fixed and failed/failedMementos showing how many mementos failed and a sample of which.
   const pageMadeProgress = execute ? totals.reembedded > 0 : true;
+
+  if (execute) {
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.mementos.reembedded',
+      target: { kind: 'system', id: 'mementos-reembed', displayName: 'Memento re-embed' },
+      summary: `re-embedded ${totals.reembedded} mementos for ${processedUsers} users`,
+      details: { ...totals, processedUsers, failedUsers: failedUsers.length },
+    });
+  }
 
   return res.json({
     // What this request actually walked, which is below page.length when the provider-call ceiling

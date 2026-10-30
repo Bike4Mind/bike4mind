@@ -4,7 +4,7 @@ import { MEMENTO_MIN_SIMILARITY } from '@bike4mind/common';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { createUserMementoMemoryStore } from '@bike4mind/server-utils/memory/userMementoMemoryStore';
-import { isMementosV2Enabled } from './mementoLedgerMirror';
+import { isMementosV2Enabled } from '@bike4mind/server-utils/memory/mementoLedgerMirror';
 import { embedMementoQuery } from '@bike4mind/server-utils/memory/mementoQueryEmbedding';
 
 /**

@@ -27,11 +27,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => h.requireFeatureEnabled(flag),
 }));
-vi.mock('@server/auth/oauthFlowCookie', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/auth/oauthFlowCookie')>();
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/auth/oauthFlowCookie')>();
   return { ...actual, readStateNonceHash: h.readStateNonceHash, clearStateNonce: h.clearStateNonce };
 });
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
@@ -44,7 +44,7 @@ vi.mock('@server/integrations/github/dataLake/githubLakeAuthGrant', () => ({
 }));
 
 import handler from '../github-callback';
-import { NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 // Captured at module load time, before beforeEach clears mock call history.
 const flagGateCallsAtLoad = h.requireFeatureEnabled.mock.calls.map(call => call[0]);

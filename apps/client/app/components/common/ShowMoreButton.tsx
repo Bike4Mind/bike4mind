@@ -1,6 +1,7 @@
 import React from 'react';
 import { Typography } from '@mui/joy';
-import { ExpandMoreOutlined as ExpandMoreIcon, ExpandLessOutlined as ExpandLessIcon } from '@mui/icons-material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMoreOutlined';
+import ExpandLessIcon from '@mui/icons-material/ExpandLessOutlined';
 
 /**
  * The control under a bounded artifact body that reveals the rest of it.

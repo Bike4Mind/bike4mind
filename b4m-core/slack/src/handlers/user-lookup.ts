@@ -1,4 +1,6 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER, type IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import type { Block, KnownBlock } from '@slack/web-api';
 import { getSlackDb } from '../di/registry';
 
 /**
@@ -6,12 +8,13 @@ import { getSlackDb } from '../di/registry';
  * @param slackUserId - The Slack user ID to search for
  * @returns User document if found, null otherwise
  */
-export async function findUserBySlackId(slackUserId: string) {
+export async function findUserBySlackId(slackUserId: string): Promise<IUserDocument | null> {
   try {
     const { User } = getSlackDb();
     const user = await (User as any)
       .findOne({
         'slackSettings.slackUserId': slackUserId,
+        ...VERIFIED_SLACK_IDENTITY_FILTER,
       })
       .maxTimeMS(5000); // 5 second timeout instead of default 10 seconds
 
@@ -54,8 +57,8 @@ export async function handleUnlinkedUser(
     text: string,
     slackBotToken?: string,
     threadTs?: string,
-    blocks?: any[]
-  ) => Promise<any>
+    blocks?: (KnownBlock | Block)[]
+  ) => Promise<unknown>
 ) {
   // Log as warning (not error) since this is an expected scenario for unlinked accounts
   Logger.warn(`⚠️ Slack account not linked - Slack ID: ${slackUserId}`, {
@@ -74,8 +77,6 @@ export async function handleUnlinkedUser(
       '1. Go to your profile settings in the B4M Web App',
       '2. Navigate to the Slack Integration section',
       '3. Click "Connect with Slack" to link your Slack account and start using the B4M Slack Integration',
-      "4. If you're having trouble, you may enter your Slack Member ID manually: Find your Slack Member ID: Click your profile → More → Copy member ID",
-      "5. Enter your Member ID and hit the 'Save Member ID' button",
       '',
       "✅ Once linked, you can chat with me and I'll save our conversations to your notebooks!",
     ].join('\n');

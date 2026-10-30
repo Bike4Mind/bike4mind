@@ -1,22 +1,29 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
   synthesizeSpeechContract,
   TTS_MAX_INPUT_CHARS,
+  TTS_DEFAULT_MODEL,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
-  estimateTtsCreditCost,
-  TTS_DEFAULT_MODEL,
   DEFAULT_TTS_PROVIDER,
   shouldPersistGeneratedAudio,
   type ApiErrorCode,
+  type VoiceGenerationVendor,
 } from '@bike4mind/common';
-import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
+import { hasTtsProviderKey, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
-import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { ttsCandidates, estimateTtsHoldCredits } from '@server/utils/ttsCandidates';
+import {
+  holdPreflightCredits,
+  InsufficientCreditsPreflightError,
+  type PreflightCreditHold,
+} from '@server/utils/creditPreflight';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).
@@ -36,6 +43,7 @@ import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
  * typed body.
  */
 const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const {
     text,
     provider,
@@ -72,15 +80,43 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     );
   }
 
-  // Pre-flight credit gate: reject before incurring provider cost. Omitted keeps the historical
-  // personal default; a key bills its own account (resolveAudioBillingOrgId 403s any other target).
+  // Hold the estimate before incurring provider cost, so concurrent calls cannot overdraw the balance.
+  // Omitted keeps the historical personal default; a key bills its own account
+  // (resolveAudioBillingOrgId 403s any other target).
   const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
   const userId = req.user?.id;
-  if (userId) {
+  const admission = await createModelAdmission(req.user!);
+  await admission.assert(model ?? TTS_DEFAULT_MODEL[vendor]);
+  const candidateAvailability = await Promise.all(
+    ttsCandidates(vendor, text.length).map(async candidate => ({
+      vendor: candidate,
+      available:
+        candidate === vendor ||
+        (userId !== undefined &&
+          (await hasTtsProviderKey(candidate, userId).catch(error => {
+            req.logger.warn('TTS fallback key lookup failed', {
+              vendor: candidate,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return false;
+          }))),
+    }))
+  );
+  const candidates: VoiceGenerationVendor[] = [];
+  for (const candidate of candidateAvailability) {
+    if (
+      candidate.available &&
+      (candidate.vendor === vendor || (await admission.admits(TTS_DEFAULT_MODEL[candidate.vendor])))
+    ) {
+      candidates.push(candidate.vendor);
+    }
+  }
+  let hold: PreflightCreditHold | undefined;
+  if (userId && req.user) {
     try {
-      await assertPreflightCredits({
-        userId,
-        estimatedCredits: estimateTtsCreditCost(vendor, model ?? TTS_DEFAULT_MODEL[vendor], text.length),
+      hold = await holdPreflightCredits({
+        req: { user: req.user, apiKeyInfo: req.apiKeyInfo, logger: req.logger },
+        requiredCredits: estimateTtsHoldCredits(vendor, model, text.length, candidates),
         featureLabel: 'text-to-speech',
         billingOrganizationId,
       });
@@ -103,6 +139,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   try {
     const synthesized = await synthesizeTts({
       provider: vendor,
+      candidates,
       text,
       userId,
       requestedVoice: voice,
@@ -129,13 +166,15 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
 
     // Charge for the successful synthesis before delivery: the provider cost is
     // already incurred however the bytes end up being returned.
-    if (userId) {
+    if (hold) {
+      const settling = hold;
+      hold = undefined;
       await deductTtsCredits({
+        hold: settling,
         userId,
         vendor: usedVendor,
         model: result.model,
         characters: result.characters,
-        billingOrganizationId,
         logger: req.logger,
       });
     }
@@ -158,6 +197,16 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
                 // A voice names a voice of the requested provider, so it is meaningless once another stood in.
                 ...(voice && !fallbackFrom && { voice }),
                 ...(languageCode && { languageCode }),
+                request: {
+                  provider: vendor,
+                  text,
+                  ...(model !== undefined && { model }),
+                  ...(voice !== undefined && { voice }),
+                  ...(format !== undefined && { format }),
+                  ...(stability !== undefined && { stability }),
+                  ...(similarityBoost !== undefined && { similarityBoost }),
+                  ...(languageCode !== undefined && { languageCode }),
+                },
               },
             },
             req.logger
@@ -174,6 +223,9 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
       logger: req.logger,
     });
   } catch (error) {
+    // Still set only when synthesis failed before settlement: no provider cost was incurred.
+    await hold?.release();
+
     // No provider is usable (the requested one and every alternate lack a key).
     // errorCode lets the client separate this from a configured-but-rejected
     // key, which needs different advice.

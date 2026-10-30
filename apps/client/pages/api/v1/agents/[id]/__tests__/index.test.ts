@@ -19,6 +19,9 @@ const { mockFindById, mockUpdate, mockDelete, mockClaimCredits, mockUpdateMany, 
     mockSubtractCredits: vi.fn(),
   }));
 
+const { mockGetCallerModelList } = vi.hoisted(() => ({ mockGetCallerModelList: vi.fn() }));
+vi.mock('@server/utils/callerModelList', () => ({ getCallerModelList: mockGetCallerModelList }));
+
 vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
     res.status(405).end(),
@@ -48,7 +51,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
@@ -116,6 +119,7 @@ async function errorOf(method: 'GET' | 'PATCH' | 'DELETE', id: string, body?: ob
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetCallerModelList.mockResolvedValue({ models: [{ id: 'catalog-model', type: 'text' }], supersededModels: [] });
   mockFindById.mockImplementation(async (id: string) => AGENTS[id] ?? null);
   mockUpdate.mockImplementation(
     async ({ id, ...changes }: Record<string, unknown>, options: { unset?: string[] } = {}) => {
@@ -157,6 +161,26 @@ describe('GET /api/v1/agents/{id}', () => {
 });
 
 describe('PATCH /api/v1/agents/{id}', () => {
+  it('accepts a catalog-only preferred_model and forwards the caller and logger to the lookup', async () => {
+    const res = await call('PATCH', AGENT_ID, { preferred_model: 'catalog-model' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdate).toHaveBeenCalledWith({ id: AGENT_ID, preferredModel: 'catalog-model' }, { new: true });
+    expect(mockGetCallerModelList).toHaveBeenCalledWith(USER, logger);
+  });
+
+  it.each([
+    [503, 'an empty catalog', () => mockGetCallerModelList.mockResolvedValueOnce({ models: [], supersededModels: [] })],
+    [500, 'a failing catalog', () => mockGetCallerModelList.mockRejectedValueOnce(new Error('catalog down'))],
+  ])('answers %i, not 422, and writes nothing when the model lookup hits %s', async (expected, _, arrange) => {
+    arrange();
+
+    const error = await errorOf('PATCH', AGENT_ID, { preferred_model: 'gpt-9-nope' });
+
+    expect(error.statusCode ?? 500).toBe(expected);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
   it('writes only the fields that were sent, renamed to the stored spelling', async () => {
     const res = await call('PATCH', AGENT_ID, { temperature: 0.9, trigger_words: ['@sources'] });
 

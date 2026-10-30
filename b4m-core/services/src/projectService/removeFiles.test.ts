@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { InviteType, IUserDocument, Permission } from '@bike4mind/common';
+import { ForbiddenError, InviteType, IUserDocument, Permission } from '@bike4mind/common';
 import { removeFiles } from './removeFiles';
 
 /**
@@ -110,6 +110,14 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     await expect(removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [UNREACHABLE_ID] }, { db })).rejects.toThrow(
       'Some files are not accessible'
     );
+  });
+
+  it('rejects with a ForbiddenError when a non-owner removes a file they do not own', async () => {
+    project.userId = 'someone-else';
+    file.userId = 'someone-else';
+
+    await expect(call()).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.fabFiles.update).not.toHaveBeenCalled();
   });
 
   it('drops a user whose only access to the file came from this project', async () => {

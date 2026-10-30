@@ -10,8 +10,9 @@ import pLimit from 'p-limit';
 import {
   isSlackUserValidationError,
   isSlackUserValidationErrorByMessage,
-} from '@server/integrations/slack/slackExportErrors';
-import { decryptToken } from '@server/security/tokenEncryption';
+} from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { escapeCsvField } from '@bike4mind/server-utils/integrations/slack/slackExportCsv';
 
 const PayloadSchema = z.object({
   jobId: z.string(),
@@ -145,21 +146,6 @@ function getSlackErrorMessage(errorCode: string | undefined): string {
   };
 
   return (errorCode && errorMessages[errorCode]) || `Slack API error: ${errorCode}`;
-}
-
-/**
- * Escape CSV field to prevent formula injection
- */
-function escapeCsvField(field: string): string {
-  if (!field) return '';
-
-  if (field.startsWith('=') || field.startsWith('+') || field.startsWith('-') || field.startsWith('@')) {
-    field = "'" + field;
-  }
-
-  field = field.replace(/"/g, '""').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-
-  return field;
 }
 
 /**

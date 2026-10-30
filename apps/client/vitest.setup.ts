@@ -1,6 +1,14 @@
+/// <reference types="@testing-library/jest-dom" />
 import { vi } from 'vitest';
-import '@testing-library/jest-dom';
 import { webcrypto } from 'node:crypto';
+
+// DOM matchers only where there is a DOM. This file serves both projects, and loading jest-dom
+// cost every node-project file ~80ms for matchers it cannot use. Keyed on `window` rather than on
+// the project because a file can switch environment with a `@vitest-environment` docblock. The
+// reference above keeps the matcher types global, as the static import used to.
+if (typeof window !== 'undefined') {
+  await import('@testing-library/jest-dom/vitest');
+}
 
 // Stripe price IDs are account-tied and sourced from NEXT_PUBLIC_* env vars with no
 // brand fallback (issue #9306). Seed real-format dummy ids here so the staged
@@ -126,4 +134,19 @@ vi.mock('@/app/contexts/WebsocketContext', () => ({
     send: vi.fn(),
     isConnected: false,
   }),
+}));
+
+// The paid-only API key switch (apiKeyAccessGate.ts) reads admin settings and subscriptions, and
+// defaults to paid on hosted, so every test that authenticates a key or CLI session would need a
+// seeded subscription. Allow by default; suites that exercise the gate mock or unmock it per file.
+// The real module is not spread in: it imports the Subscription model, which suites that stub
+// @bike4mind/database cannot load.
+vi.mock('@server/utils/apiKeyAccessGate', () => ({
+  API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
+  CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',
+  SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
+  isApiKeyAccessAllowed: async () => true,
+  describeApiKeyAccess: async () => ({ mode: 'all', allowed: true, basis: 'open_to_all' }),
+  assertApiKeyAccessAllowed: async () => undefined,
+  assertCliSessionAllowed: async () => undefined,
 }));

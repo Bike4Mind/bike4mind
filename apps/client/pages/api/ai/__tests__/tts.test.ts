@@ -1,3 +1,11 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: vi.fn(async () => ({
+    assert: vi.fn(async (_modelId: string) => {}),
+    admits: vi.fn(async (_modelId: string) => true),
+  })),
+}));
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CreditHolderType } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
@@ -13,8 +21,10 @@ const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError,
       UnprocessableEntityError,
       mocks: {
         synthesizeTts: vi.fn(),
+        hasTtsProviderKey: vi.fn(),
         estimateTtsCreditCost: vi.fn(),
-        assertPreflightCredits: vi.fn(),
+        holdPreflightCredits: vi.fn(),
+        releaseHold: vi.fn(),
         deductTtsCredits: vi.fn(),
         saveGeneratedAssetToFiles: vi.fn(),
         upload: vi.fn(),
@@ -53,6 +63,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 
 vi.mock('@server/utils/resolveTtsProvider', () => ({
   TtsProviderNotConfiguredError,
+  hasTtsProviderKey: (...args: unknown[]) => mocks.hasTtsProviderKey(...args),
 }));
 // The provider-selection + fallback loop is covered in synthesizeTts.test.ts;
 // here it is a seam so the route's own branching is what's under test.
@@ -79,13 +90,13 @@ vi.mock('@server/utils/deductTtsCredits', () => ({
   deductTtsCredits: (...a: unknown[]) => mocks.deductTtsCredits(...a),
 }));
 vi.mock('@server/utils/creditPreflight', () => ({
-  assertPreflightCredits: (...a: unknown[]) => mocks.assertPreflightCredits(...a),
+  holdPreflightCredits: (...a: unknown[]) => mocks.holdPreflightCredits(...a),
   InsufficientCreditsPreflightError,
 }));
 // Mock the persistence helper so this route test doesn't pull in the real
 // FabFile/services/database stack (which references @bike4mind/common exports
 // not provided by the partial mock above).
-vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 
@@ -97,12 +108,15 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   }),
 }));
 
+import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { GENERATED_AUDIO_TOO_LARGE_MESSAGE } from '@server/utils/generatedAudioDelivery';
 import handler from '../tts';
 
 const run = (
   body: Record<string, unknown>,
-  user: { id?: string; organizationId?: string | null; isAdmin?: boolean } | undefined = { id: 'u1' },
+  user: { id?: string; organizationId?: string | null; isAdmin?: boolean; isModerated?: boolean } | undefined = {
+    id: 'u1',
+  },
   apiKeyInfo?: unknown
 ) => {
   const { req, res } = createMocks({ method: 'POST', body });
@@ -125,12 +139,16 @@ const synthesisResult = () => ({
   characters: 5,
 });
 
+const heldCredits = { settle: vi.fn(), release: (...a: unknown[]) => mocks.releaseHold(...a) };
+
 const okSynthesis = (vendor = 'openai', fallbackFrom?: string) =>
   mocks.synthesizeTts.mockResolvedValue({ vendor, result: synthesisResult(), fallbackFrom });
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
-  mocks.assertPreflightCredits.mockResolvedValue(undefined);
+  mocks.holdPreflightCredits.mockResolvedValue(heldCredits);
+  mocks.hasTtsProviderKey.mockResolvedValue(true);
+  mocks.releaseHold.mockResolvedValue(undefined);
   mocks.estimateTtsCreditCost.mockImplementation((_v: string, _m: string, chars: number) => chars * 10);
   mocks.deductTtsCredits.mockResolvedValue(undefined);
   mocks.upload.mockResolvedValue(undefined);
@@ -154,6 +172,36 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/tts', () => {
+  it('refuses an unlisted voice model before the hold and synthesis', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const { promise } = run({ text: 'hi', model: 'tts-1-hd' });
+    await expect(promise).rejects.toBe(refusal);
+    expect(assertAdmission).toHaveBeenCalledWith('tts-1-hd');
+    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  });
+
+  it('excludes a paid-only fallback while allowing the primary voice', async () => {
+    mocks.hasTtsProviderKey.mockResolvedValue(true);
+    const admits = vi.fn(async (_modelId: string) => false);
+    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: async () => {}, admits });
+    const { promise } = run({ text: 'hi', provider: 'openai' });
+    await promise;
+    expect(admits).toHaveBeenCalledWith('eleven_multilingual_v2');
+    expect(mocks.synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ candidates: ['openai'] }));
+  });
+
+  it('rejects a moderated user with 403 before reserving credits or calling a provider', async () => {
+    const { promise } = run({ text: 'hi' }, { id: 'u1', isModerated: true });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403, message: AI_ACCESS_REVOKED_MESSAGE });
+    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  });
+
   it('rejects an unsupported (vendor, format) pair with 422 before any provider cost', async () => {
     const { promise } = run({ text: 'hi', provider: 'elevenlabs', format: 'wav' });
     await expect(promise).rejects.toBeInstanceOf(UnprocessableEntityError);
@@ -173,7 +221,7 @@ describe('POST /api/ai/tts', () => {
   // ordinary validation failure, so a caller that matched on the status alone
   // would treat "out of credits" as "bad request".
   it('returns a classified 422 and never calls the provider when credits are exhausted', async () => {
-    mocks.assertPreflightCredits.mockRejectedValue(new InsufficientCreditsPreflightError('broke'));
+    mocks.holdPreflightCredits.mockRejectedValue(new InsufficientCreditsPreflightError('broke'));
     const { res, promise } = run({ text: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(422);
@@ -187,7 +235,7 @@ describe('POST /api/ai/tts', () => {
 
   it('rethrows a preflight failure that is not a credit refusal, before any provider cost', async () => {
     const boom = new Error('settings down');
-    mocks.assertPreflightCredits.mockRejectedValue(boom);
+    mocks.holdPreflightCredits.mockRejectedValue(boom);
     const { promise } = run({ text: 'hi' });
     await expect(promise).rejects.toBe(boom);
     expect(mocks.synthesizeTts).not.toHaveBeenCalled();
@@ -197,13 +245,54 @@ describe('POST /api/ai/tts', () => {
     const { promise } = run({ text: 'hello' });
     await promise;
     expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1', 5);
-    expect(mocks.assertPreflightCredits).toHaveBeenCalledWith({
-      userId: 'u1',
-      estimatedCredits: 50,
-      featureLabel: 'text-to-speech',
-      // Omitted keeps this endpoint's historical personal default.
-      billingOrganizationId: null,
+    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredCredits: 50, featureLabel: 'text-to-speech' })
+    );
+    // Omitted keeps this endpoint's historical personal default.
+    expect(mocks.holdPreflightCredits.mock.calls[0][0]).toMatchObject({ billingOrganizationId: null });
+  });
+
+  it('holds the pricier fallback quote before synthesis, using its default model', async () => {
+    mocks.estimateTtsCreditCost.mockImplementation((vendor: string) => (vendor === 'openai' ? 15 : 100));
+    okSynthesis('elevenlabs', 'openai');
+
+    const { promise } = run({ text: 'hello', provider: 'openai', model: 'tts-1-hd' });
+    await promise;
+
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1-hd', 5);
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('elevenlabs', 'eleven_multilingual_v2', 5);
+    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(expect.objectContaining({ requiredCredits: 100 }));
+    expect(mocks.deductTtsCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ vendor: 'elevenlabs', hold: heldCredits })
+    );
+  });
+
+  it('holds the estimate before synthesis and settles that same hold', async () => {
+    mocks.synthesizeTts.mockImplementation(async () => {
+      expect(mocks.holdPreflightCredits).toHaveBeenCalledTimes(1);
+      return { vendor: 'openai', result: synthesisResult() };
     });
+    const { promise } = run({ text: 'hello', encoding: 'base64' });
+    await promise;
+    expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ hold: heldCredits }));
+    expect(mocks.releaseHold).not.toHaveBeenCalled();
+  });
+
+  it('returns the hold when synthesis fails, and bills nothing', async () => {
+    mocks.synthesizeTts.mockRejectedValue(new Error('network blip'));
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(502);
+    expect(mocks.releaseHold).toHaveBeenCalledTimes(1);
+    expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
+  });
+
+  it('keeps a settled hold when delivery fails after billing', async () => {
+    mocks.saveGeneratedAssetToFiles.mockRejectedValue(new Error('s3 down'));
+    const { promise } = run({ text: 'hello', encoding: 'base64' });
+    await promise.catch(() => undefined);
+    expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseHold).not.toHaveBeenCalled();
   });
 
   it('prices an ElevenLabs request at the elevenlabs default model', async () => {
@@ -224,12 +313,10 @@ describe('POST /api/ai/tts', () => {
       await promise;
 
       expect(res._getStatusCode()).toBe(200);
-      expect(mocks.assertPreflightCredits).toHaveBeenCalledWith(
+      expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(
         expect.objectContaining({ billingOrganizationId: 'teamOrg' })
       );
-      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(
-        expect.objectContaining({ billingOrganizationId: 'teamOrg' })
-      );
+      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ hold: heldCredits }));
     });
 
     it('bills personal credits when the switcher is on Personal, even for an org member', async () => {
@@ -239,7 +326,7 @@ describe('POST /api/ai/tts', () => {
 
       expect(res._getStatusCode()).toBe(200);
       expect(mocks.orgFindAccessibleById).not.toHaveBeenCalled();
-      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: null }));
+      expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: null }));
     });
 
     it('refuses (403) an organization the caller does not belong to, before synthesis', async () => {
@@ -261,10 +348,10 @@ describe('POST /api/ai/tts', () => {
       await promise;
 
       expect(res._getStatusCode()).toBe(200);
-      expect(mocks.assertPreflightCredits).toHaveBeenCalledWith(
+      expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(
         expect.objectContaining({ billingOrganizationId: 'keyOrg' })
       );
-      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: 'keyOrg' }));
+      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ hold: heldCredits }));
     });
 
     it('refuses (403) an org-billed API key that names another organization', async () => {
@@ -289,7 +376,7 @@ describe('POST /api/ai/tts', () => {
       await promise;
 
       expect(res._getStatusCode()).toBe(200);
-      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(
+      expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(
         expect.objectContaining({ billingOrganizationId: undefined })
       );
     });
@@ -444,7 +531,7 @@ describe('POST /api/ai/tts', () => {
   it('does not bill a caller without a resolved user id', async () => {
     const { promise } = run({ text: 'hi' }, {});
     await promise.catch(() => undefined);
-    expect(mocks.assertPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
     expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
   });
 
@@ -457,7 +544,14 @@ describe('POST /api/ai/tts', () => {
         userId: 'u1',
         bytes: expect.any(Buffer),
         contentType: 'audio/mpeg',
-        generation: { generator: 'speech', provider: 'openai', modelId: 'tts-1', prompt: 'hello', format: 'mp3' },
+        generation: {
+          generator: 'speech',
+          provider: 'openai',
+          modelId: 'tts-1',
+          prompt: 'hello',
+          format: 'mp3',
+          request: expect.objectContaining({ provider: 'openai', text: 'hello' }),
+        },
       },
       expect.anything()
     );
@@ -502,5 +596,47 @@ describe('POST /api/ai/tts', () => {
     const { promise } = run({ text: 'hi' }, { id: 'u1', preferences: { saveGeneratedAudio: false } } as never);
     await promise;
     expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('configured fallback holds', () => {
+  it.each([false, true])('prices only configured alternates (%s)', async available => {
+    mocks.hasTtsProviderKey.mockResolvedValue(available);
+    mocks.estimateTtsCreditCost.mockImplementation((vendor: string) => (vendor === 'openai' ? 123 : 820));
+    okSynthesis();
+    const { promise } = run({ text: 'hello', provider: 'openai' });
+    await promise;
+    expect(mocks.hasTtsProviderKey).toHaveBeenCalledWith('elevenlabs', 'u1');
+    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredCredits: available ? 820 : 123 })
+    );
+    expect(mocks.synthesizeTts).toHaveBeenCalledWith(
+      expect.objectContaining({ candidates: available ? ['openai', 'elevenlabs'] : ['openai'] })
+    );
+  });
+
+  it('keeps a keyed alternate when the requested provider is unconfigured', async () => {
+    mocks.hasTtsProviderKey.mockResolvedValue(true);
+    okSynthesis('elevenlabs', 'openai');
+    const { promise, res } = run({ text: 'hello', provider: 'openai' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ candidates: ['openai', 'elevenlabs'] }));
+  });
+
+  it('drops an alternate whose key lookup fails and still holds and synthesizes', async () => {
+    mocks.hasTtsProviderKey.mockRejectedValue(new Error('key lookup unavailable'));
+    mocks.estimateTtsCreditCost.mockImplementation((vendor: string) => (vendor === 'openai' ? 123 : 820));
+    const { res, logger, promise } = run({ text: 'hello' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(logger.warn).toHaveBeenCalledWith('TTS fallback key lookup failed', {
+      vendor: 'elevenlabs',
+      error: 'key lookup unavailable',
+    });
+    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(expect.objectContaining({ requiredCredits: 123 }));
+    expect(mocks.estimateTtsCreditCost).not.toHaveBeenCalledWith('elevenlabs', expect.anything(), expect.anything());
+    expect(mocks.synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ candidates: ['openai'] }));
+    expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ hold: heldCredits }));
   });
 });

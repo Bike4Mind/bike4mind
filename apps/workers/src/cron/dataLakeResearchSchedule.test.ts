@@ -27,7 +27,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingByName: h.getSettingByName }));
 vi.mock('@bike4mind/observability', () => ({ Logger: vi.fn() }));
-vi.mock('@server/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
+vi.mock('@bike4mind/server-utils/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: h.resource }));
 

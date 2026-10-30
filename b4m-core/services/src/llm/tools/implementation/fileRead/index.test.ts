@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { fileReadTool } from './index';
+import { fileReadTool, validateFileReadResult } from './index';
 import { mkdtemp, writeFile, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -171,5 +171,51 @@ describe('fileReadTool', () => {
       expect(result).toContain('Line 1');
       expect(result).toContain('Line 10');
     });
+  });
+});
+
+describe('validateFileReadResult', () => {
+  let testDir: string;
+  let originalCwd: string;
+  const read = (params: Record<string, unknown>) =>
+    fileReadTool
+      .implementation({ logger: { info: () => {}, error: () => {} } } as never, {})
+      .toolFn(params) as Promise<string>;
+
+  beforeAll(async () => {
+    originalCwd = process.cwd();
+    testDir = await mkdtemp(join(tmpdir(), 'file-read-validate-'));
+    process.chdir(testDir);
+    await writeFile(join(testDir, 'empty.txt'), '');
+    await writeFile(join(testDir, 'blank-tail.txt'), 'Line 1\n\n\n');
+    await writeFile(join(testDir, 'real.txt'), 'Line 1\nLine 2');
+  });
+
+  afterAll(async () => {
+    process.chdir(originalCwd);
+    await rm(testDir, { recursive: true, force: true });
+  });
+
+  it('scores a failed read as a failure', async () => {
+    const result = await read({ path: 'missing.txt' });
+
+    expect(validateFileReadResult(result)).toEqual({ confidence: 0.1, source: 'deterministic' });
+  });
+
+  it.each([
+    ['an empty file', { path: 'empty.txt' }],
+    ['an empty file read with a limit', { path: 'empty.txt', limit: 10 }],
+    ['an offset past the end', { path: 'real.txt', offset: 5 }],
+    ['a page of blank lines', { path: 'blank-tail.txt', offset: 1, limit: 2 }],
+  ])('scores %s as empty', async (_label, params) => {
+    const result = await read(params);
+
+    expect(validateFileReadResult(result)).toEqual({ confidence: 0.3, source: 'deterministic' });
+  });
+
+  it('has no opinion on a read that returned text', async () => {
+    const result = await read({ path: 'real.txt', offset: 1, limit: 1 });
+
+    expect(validateFileReadResult(result)).toBeUndefined();
   });
 });

@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { decryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 
 /**
  * Minimal logger shape this handler needs. Compatible with the `Logger` on
@@ -31,7 +31,7 @@ interface RevokeLogger {
  * https://docs.github.com/en/rest/apps/oauth-applications#delete-an-app-authorization
  */
 async function revokeGithubGrant(
-  deletedServer: { envVariables?: { key: string; value: string }[] } | null,
+  deletedServer: { id: string; userId: string; name: string; envVariables?: { key: string; value: string }[] } | null,
   logger: RevokeLogger
 ): Promise<void> {
   // Wrap the whole body: getSettings (DB call) and decryptEnvVariables (corrupt /
@@ -40,9 +40,10 @@ async function revokeGithubGrant(
   // succeeded - breaking the "never blocks local disconnect" guarantee.
   try {
     const encryptedVars = deletedServer?.envVariables;
-    const accessToken = encryptedVars
-      ? decryptEnvVariables(encryptedVars).find(v => v.key === 'GITHUB_ACCESS_TOKEN')?.value
-      : undefined;
+    const accessToken =
+      encryptedVars && deletedServer
+        ? decryptEnvVariables(encryptedVars, deletedServer).find(v => v.key === 'GITHUB_ACCESS_TOKEN')?.value
+        : undefined;
 
     if (!accessToken) {
       logger.info('Skipping GitHub OAuth grant revocation — no access token on record');

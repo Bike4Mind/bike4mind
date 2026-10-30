@@ -60,6 +60,44 @@ export const personalEmailProviders = [
   'runbox.com',
 ];
 
+/**
+ * Regional and alias mailbox providers on top of personalEmailProviders. A sibling list so
+ * isPersonalEmail's organization label stays unchanged; signup protection exempts both.
+ */
+export const regionalPersonalEmailProviders = [
+  'yahoo.co.jp',
+  'yahoo.co.uk',
+  'yahoo.fr',
+  'yahoo.de',
+  'yahoo.com.br',
+  'yahoo.com.au',
+  'hotmail.co.uk',
+  'hotmail.fr',
+  'hotmail.de',
+  'outlook.jp',
+  'outlook.fr',
+  'outlook.de',
+  'qq.com',
+  '163.com',
+  '126.com',
+  'naver.com',
+  'daum.net',
+  'hanmail.net',
+  'web.de',
+  'gmx.de',
+  'orange.fr',
+  'wanadoo.fr',
+  'laposte.net',
+  'tuta.com',
+  'tuta.io',
+  'mail.ru',
+  'bk.ru',
+  'inbox.ru',
+  'list.ru',
+  'pm.me',
+  'duck.com',
+];
+
 export const isPersonalEmail = (email: string | undefined): boolean => {
   if (!email) return false;
   const domain = email.split('@')[1];

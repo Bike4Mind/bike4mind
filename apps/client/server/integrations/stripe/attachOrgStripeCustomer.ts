@@ -1,6 +1,6 @@
 import { Organization, organizationRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { createCustomer, CustomerType } from './stripe';
+import { createCustomer, CustomerType } from '@bike4mind/server-utils/integrations/stripe/stripe';
 
 /** The slice of an organization document this needs; the caller passes a full IOrganizationDocument. */
 type OrgStripeCustomerTarget = {

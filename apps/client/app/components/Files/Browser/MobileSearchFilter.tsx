@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
 import { Box, Stack, Input, Typography, Select, Option, Radio } from '@mui/joy';
-import {
-  Search as SearchIcon,
-  FilterAlt as FilterAltIcon,
-  KeyboardArrowDown as KeyboardArrowDownIcon,
-  SwapVert as SwapVertIcon,
-} from '@mui/icons-material';
+import SearchIcon from '@mui/icons-material/Search';
+import FilterAltIcon from '@mui/icons-material/FilterAlt';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import SwapVertIcon from '@mui/icons-material/SwapVert';
 import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { FILE_TYPE_OPTIONS } from './constants';
 import GeneratedFilterToggle from './GeneratedFilterToggle';

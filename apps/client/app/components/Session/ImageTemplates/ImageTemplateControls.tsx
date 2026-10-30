@@ -1,6 +1,6 @@
 import { FC, useMemo } from 'react';
 import { Box, Chip } from '@mui/joy';
-import { Bookmarks as TemplateIcon } from '@mui/icons-material';
+import TemplateIcon from '@mui/icons-material/Bookmarks';
 import { useImageTemplates } from '../../../hooks/data/imageTemplates';
 import { useAdvancedAISettings } from '../AISettings/useAdvancedAISettingsStore';
 import { CostPreviewChip } from './CostPreviewChip';

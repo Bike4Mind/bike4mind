@@ -30,6 +30,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import FeedbackIcon from '@mui/icons-material/Feedback';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import Papa from 'papaparse';
+import { CSV_FORMULA_PREFIX } from '@client/app/utils/csv';
 import PaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 
@@ -138,7 +139,7 @@ const FeedbackTab: React.FC = () => {
       UpdatedAt: feedbackItem.updatedAt,
     }));
 
-    const csv = Papa.unparse(csvData);
+    const csv = Papa.unparse(csvData, { escapeFormulae: CSV_FORMULA_PREFIX });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

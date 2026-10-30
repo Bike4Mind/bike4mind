@@ -289,6 +289,17 @@ describe('SmallLLMService', () => {
       await expect(service.completeJSON('score', schema, { retries: 0 })).rejects.toThrow();
     });
 
+    it('does not put the raw model response in the logs when it is not JSON', async () => {
+      // The response is model output over user content; a debug log of it persists that content
+      // in CloudWatch. Only its shape may be logged.
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const service = new SmallLLMService(createMockAdapters('patient record canary'), logger);
+
+      await expect(service.completeJSON('extract', z.object({ ok: z.boolean() }), { retries: 0 })).rejects.toThrow();
+
+      expect(JSON.stringify(logger.debug.mock.calls)).not.toContain('patient record canary');
+    });
+
     it('uses temperature 0 by default for JSON tasks', async () => {
       const adapters = createMockAdapters('{"ok": true}');
       const service = new SmallLLMService(adapters);

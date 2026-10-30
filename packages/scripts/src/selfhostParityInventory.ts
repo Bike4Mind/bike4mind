@@ -123,6 +123,7 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'aws.cloudwatch.MetricAlarm', reason: 'Alarm only; delivery is inventoried at the topic subscription.' },
   { shape: 'aws.cloudwatch.Dashboard', reason: 'Observability view, no compute.' },
   { shape: 'aws.cloudwatch.LogMetricFilter', reason: 'Metric extraction feeding alarms, no compute.' },
+  { shape: 'aws.ssm.Parameter', reason: 'Secret storage for ECS task secrets, no compute.' },
   { shape: 'aws.cloudwatch.LogGroup', reason: 'Log storage, no compute.' },
   { shape: 'aws.lambda.Permission', reason: 'IAM grant for an inventoried trigger.' },
   { shape: 'aws.sqs.QueuePolicy', reason: 'IAM grant for an inventoried queue.' },
@@ -130,6 +131,8 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'aws.lambda.Invocation', reason: 'Deploy-time one-shot invoke; the invoked Function is inventoried.' },
   { shape: 'aws.ses.ReceiptRuleSet', reason: 'Container for the inventoried aws.ses.ReceiptRule.' },
   { shape: 'aws.ses.ActiveReceiptRuleSet', reason: 'Activation of the inventoried receipt rule set.' },
+  { shape: 'aws.ses.ConfigurationSet', reason: 'Outbound mail metric configuration, no compute.' },
+  { shape: 'aws.ses.EventDestination', reason: 'Outbound mail metrics sent to CloudWatch, no compute.' },
   { shape: 'aws.s3.BucketLifecycleConfigurationV2', reason: 'Storage retention policy, not a compute trigger.' },
   { shape: 'sst.aws.Vpc', reason: 'Network plumbing.' },
   { shape: 'sst.aws.Cluster', reason: 'Container host for inventoried sst.aws.Service declarations.' },
@@ -141,6 +144,25 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'aws.wafv2.IpSet', reason: 'Hosted edge protection, no compute.' },
   { shape: 'aws.wafv2.WebAclLoggingConfiguration', reason: 'Hosted edge protection logging, no compute.' },
   { shape: 'premium overlay contributeInfra()', reason: 'Declared in private overlay repos, absent here.' },
+];
+
+/**
+ * Queue constructors named from package data instead of a literal, keyed by file and the name
+ * argument's text. Their names are unknown until a package declares one, so there is no self-host
+ * registration to match. An entry must match exactly one constructor: none fails discovery as
+ * stale, and more fails it so a second queue cannot borrow the exemption.
+ */
+export const DATA_NAMED_QUEUES: readonly { file: string; name: string; reason: string }[] = [
+  {
+    file: 'infra/queues.ts',
+    name: 'pair.dlqName',
+    reason: 'DLQ of a b4mContributions.infraResources queue pair; self-host does not provision contributed queues.',
+  },
+  {
+    file: 'infra/queues.ts',
+    name: 'pair.name',
+    reason: 'Source queue of a b4mContributions.infraResources pair; self-host does not provision contributed queues.',
+  },
 ];
 
 const HOSTED_CONSTRUCTOR = /^(?:sst\.aws\.\w+|aws\.\w+\.\w+)$/;
@@ -452,6 +474,7 @@ function discoverConstructorDeclarations(index: InfraIndex): {
   const byNode = new Map<ts.NewExpression, RawDeclaration>();
   const functions: { file: string; node: ts.NewExpression }[] = [];
   const eventTargets: { file: string; node: ts.NewExpression }[] = [];
+  const matchedDataNamed = new Map<(typeof DATA_NAMED_QUEUES)[number], number>();
   for (const source of index.parsed) {
     const file = source.fileName;
     walk(source, node => {
@@ -462,12 +485,32 @@ function discoverConstructorDeclarations(index: InfraIndex): {
       if (type === 'Function') functions.push({ file, node });
       const kind = type && type !== 'Function' ? DECLARATION_KINDS[type] : undefined;
       if (!kind) return;
+      const first = node.arguments?.[0];
+      const dataNamed =
+        kind === 'queue' && first && !ts.isStringLiteralLike(first)
+          ? DATA_NAMED_QUEUES.find(entry => entry.file === file && entry.name === first.getText())
+          : undefined;
+      if (dataNamed) {
+        matchedDataNamed.set(dataNamed, (matchedDataNamed.get(dataNamed) ?? 0) + 1);
+        return;
+      }
       const name = declarationName(node, file, kind);
       constructorOptions(node, file, name);
       const raw: RawDeclaration = { file, kind, name, nodes: [node], subscribers: [] };
       declarations.push(raw);
       byNode.set(node, raw);
     });
+  }
+  const parsedFiles = new Set(index.parsed.map(source => source.fileName));
+  for (const entry of DATA_NAMED_QUEUES) {
+    const matches = matchedDataNamed.get(entry) ?? 0;
+    if (parsedFiles.has(entry.file) && matches === 0) {
+      throw new Error(`${entry.file}: stale DATA_NAMED_QUEUES entry ${entry.name}; no queue is named by it`);
+    }
+    // One reviewed constructor per entry, so a second queue named the same way is not exempted.
+    if (matches > 1) {
+      throw new Error(`${entry.file}: DATA_NAMED_QUEUES entry ${entry.name} names ${matches} queues; it may name one`);
+    }
   }
   return { declarations, byNode, functions, eventTargets };
 }

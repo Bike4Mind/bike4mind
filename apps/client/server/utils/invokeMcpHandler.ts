@@ -1,18 +1,18 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { Buffer } from 'node:buffer';
-import { handler as localMcpHandler } from '@server/utils/mcpCall';
+import { handler as localMcpHandler } from '@bike4mind/server-utils/utils/mcpCall';
 import { isMcpServerAvailable } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
 import {
   getBreaker,
   classifyOperation,
   CircuitBreakerError,
   flushBreakerMetrics,
-} from '@server/services/mcpCircuitBreakers';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+} from '@bike4mind/server-utils/services/mcpCircuitBreakers';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import type { IntegrationAuditIntegrationName } from '@bike4mind/database';
 import { INTEGRATION_AUDIT_INTEGRATION_NAMES } from '@bike4mind/database';
 import { recordCircuitBreakerRejection } from '@bike4mind/server-utils/utils/cloudwatch';
-import { persistRateLimitEvents, throttleIfNearRateLimit } from '@server/utils/mcpRateLimitSnapshots';
+import { persistRateLimitEvents, throttleIfNearRateLimit } from '@bike4mind/server-utils/utils/mcpRateLimitSnapshots';
 import { resolveMcpTenantKey, UNATTRIBUTED_MCP_TENANT } from '@bike4mind/server-utils/utils/mcpTenantKey';
 import { randomUUID } from 'crypto';
 import { Resource } from 'sst';

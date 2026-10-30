@@ -33,7 +33,7 @@ describe('buildToolPrompt web-search freshness section', () => {
   }
 
   async function build(overrides: { hasWebSearch: boolean; webSearchGuidance?: string }) {
-    return makeBuilder().buildToolPrompt({
+    const { guidance } = await makeBuilder().buildToolPrompt({
       hasContentTransform: false,
       hasChessEngine: false,
       hasCurrentDateTime: false,
@@ -45,6 +45,7 @@ describe('buildToolPrompt web-search freshness section', () => {
       processStartTime: Date.now(),
       ...overrides,
     });
+    return guidance;
   }
 
   it('injects the guidance when web_search is enabled', async () => {

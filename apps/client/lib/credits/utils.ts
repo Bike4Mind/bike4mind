@@ -19,7 +19,10 @@ export async function handlePerCreditTransaction(
   { credits }: z.infer<typeof perCreditSchema>,
   { userId, logger }: { userId: string; logger: Pick<Logger, 'error'> }
 ): Promise<PaymentDetails> {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['pricePerCredit'], skipCache: true }
+  );
   const pricePerCredit = getSettingsValue('pricePerCredit', settings);
 
   if (pricePerCredit === undefined) {

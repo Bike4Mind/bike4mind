@@ -24,6 +24,9 @@ const IV_LENGTH = 16; // 128 bits
 const AUTH_TAG_LENGTH = 16; // 128 bits
 const KEY_LENGTH = 32; // 256 bits
 
+/** Marks a ciphertext whose AES-GCM associated data binds it to its owner, record and field. */
+export const ciphertextVersionPrefix = 'v2:';
+
 /**
  * Encrypts a plaintext secret using AES-256-GCM.
  *
@@ -31,7 +34,7 @@ const KEY_LENGTH = 32; // 256 bits
  * @param key - 32-byte hex-encoded encryption key
  * @returns Encrypted string in format: iv:authTag:ciphertext (all hex-encoded)
  */
-export function encryptSecret(plaintext: string, key: string): string {
+export function encryptSecret(plaintext: string, key: string, context?: string): string {
   if (!plaintext) {
     throw new Error('Cannot encrypt empty plaintext');
   }
@@ -43,12 +46,14 @@ export function encryptSecret(plaintext: string, key: string): string {
   const iv = crypto.randomBytes(IV_LENGTH);
   const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(key, 'hex'), iv);
 
+  if (context !== undefined) cipher.setAAD(Buffer.from(context, 'utf8'));
+
   let encrypted = cipher.update(plaintext, 'utf8', 'hex');
   encrypted += cipher.final('hex');
   const authTag = cipher.getAuthTag();
 
   // Format: iv:authTag:encrypted (all hex-encoded)
-  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+  return `${context === undefined ? '' : ciphertextVersionPrefix}${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
 }
 
 /**
@@ -59,7 +64,7 @@ export function encryptSecret(plaintext: string, key: string): string {
  * @returns Decrypted plaintext
  * @throws Error if decryption fails (invalid format, wrong key, or tampered data)
  */
-export function decryptSecret(encrypted: string, key: string): string {
+export function decryptSecret(encrypted: string, key: string, context?: string): string {
   if (!encrypted) {
     throw new Error('Cannot decrypt empty ciphertext');
   }
@@ -68,7 +73,9 @@ export function decryptSecret(encrypted: string, key: string): string {
     throw new Error(`Encryption key must be ${KEY_LENGTH * 2} hex characters (${KEY_LENGTH} bytes)`);
   }
 
-  const parts = encrypted.split(':');
+  const bound = encrypted.startsWith(ciphertextVersionPrefix);
+  if (bound && context === undefined) throw new Error('Encrypted secret requires its owning context');
+  const parts = (bound ? encrypted.slice(ciphertextVersionPrefix.length) : encrypted).split(':');
   if (parts.length !== 3) {
     throw new Error('Invalid encrypted format. Expected iv:authTag:ciphertext');
   }
@@ -84,6 +91,7 @@ export function decryptSecret(encrypted: string, key: string): string {
   }
 
   const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(key, 'hex'), Buffer.from(ivHex, 'hex'));
+  if (bound) decipher.setAAD(Buffer.from(context!, 'utf8'));
   decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
 
   let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
@@ -91,6 +99,9 @@ export function decryptSecret(encrypted: string, key: string): string {
 
   return decrypted;
 }
+
+/** Regex source (case-insensitive) matching the at-rest ciphertext format. */
+export const ciphertextPatternSource = `^(?:${ciphertextVersionPrefix})?[a-f0-9]{32}:[a-f0-9]{32}:[a-f0-9]+$`;
 
 /**
  * Checks if a string appears to be in encrypted format.
@@ -104,7 +115,7 @@ export function isEncrypted(value: string): boolean {
   }
 
   // Check if value matches encrypted format: iv(32 hex):authTag(32 hex):data(hex)
-  const pattern = /^[a-f0-9]{32}:[a-f0-9]{32}:[a-f0-9]+$/i;
+  const pattern = new RegExp(ciphertextPatternSource, 'i');
   return pattern.test(value);
 }
 

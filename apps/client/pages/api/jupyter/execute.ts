@@ -41,7 +41,7 @@ const ExecuteNotebookBody = z.object({
   timeoutPerCell: z.number().optional().default(30000),
 });
 
-const handler = baseApi({ auth: true }).post(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const parsed = ExecuteNotebookBody.safeParse(req.body);
 
   if (!parsed.success) {

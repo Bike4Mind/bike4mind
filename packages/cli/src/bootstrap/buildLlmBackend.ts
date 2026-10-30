@@ -1,8 +1,10 @@
 import type { ModelInfo } from '@bike4mind/common';
 import { OllamaBackend } from '@bike4mind/llm-adapters';
+import { extractErrorMessage } from '@bike4mind/utils';
 import type { CliConfig } from '../storage';
 import type { ApiClient } from '../auth/ApiClient';
 import { logger } from '../utils/Logger';
+import { withDefaultOllamaPort } from '../utils/ollamaHost.js';
 import { ServerLlmBackend } from '../llm/ServerLlmBackend';
 import { WebSocketLlmBackend } from '../llm/WebSocketLlmBackend';
 import { MultiLlmBackend } from '../llm/MultiLlmBackend.js';
@@ -20,9 +22,13 @@ export interface BuildLlmBackendInput {
   tokenGetter: () => Promise<string | null>;
   /** Startup log collected for the two-column banner; pushed into, not owned. */
   startupLog: string[];
-  /** Ollama endpoint; defaults to process.env.B4M_OLLAMA_HOST. Injectable for tests. */
+  /** Ollama endpoint; defaults to process.env.B4M_OLLAMA_HOST, then config.ollamaHost. Injectable for tests. */
   ollamaHost?: string;
+  /** Deadline for listing a saved Ollama host's models (ms); defaults to `SAVED_OLLAMA_LISTING_TIMEOUT_MS`. */
+  ollamaListingTimeoutMs?: number;
 }
+
+export const SAVED_OLLAMA_LISTING_TIMEOUT_MS = 5_000;
 
 export interface BuildLlmBackendResult {
   llm: CliLlmBackend;
@@ -147,6 +153,112 @@ export function resolveModelInfo(models: ModelInfo[], defaultModel: string): Mod
 }
 
 /**
+ * Model choice for headless (`-p`) runs, which have no banner to show a fallback in. A missing default that is
+ * plausibly local (Ollama did not list its models, or `b4m models use` chose it) is an error rather than a silent
+ * switch to a hosted model; with Ollama configured any other fallback comes with a warning to print.
+ */
+export function resolveHeadlessModel(
+  models: ModelInfo[],
+  config: Pick<CliConfig, 'defaultModel' | 'localDefaultModel'>,
+  ollama: Pick<OllamaAttachment, 'ollamaHost' | 'ollamaListingFailed'>
+): { modelInfo: ModelInfo; warning: string | null } {
+  const { defaultModel } = config;
+  const modelInfo = resolveModelInfo(models, defaultModel);
+  if (modelInfo.id === defaultModel || !ollama.ollamaHost) return { modelInfo, warning: null };
+  if (ollama.ollamaListingFailed || defaultModel === config.localDefaultModel) {
+    throw new Error(
+      `Model "${defaultModel}" is not available from the server or from Ollama at ${ollama.ollamaHost}. ` +
+        'Start Ollama, or pick another model with: b4m models use <name>'
+    );
+  }
+  return { modelInfo, warning: `Model "${defaultModel}" is not available; using "${modelInfo.id}".` };
+}
+
+export interface OllamaAttachment {
+  llm: CliLlmBackend;
+  models: ModelInfo[];
+  /** The Ollama host in use, or null when none is configured. */
+  ollamaHost: string | null;
+  ollamaModelCount: number;
+  /** Ollama's model listing failed or timed out, so its models are unknown. */
+  ollamaListingFailed: boolean;
+  warnings: string[];
+}
+
+/**
+ * Wraps the server backend with Ollama when a host is given, set in B4M_OLLAMA_HOST, or saved by `b4m models`,
+ * and lists the models of both. Shared by interactive and headless (`-p`) startup.
+ */
+export async function attachOllama(
+  llm: CliLlmBackend,
+  config: CliConfig,
+  opts: { ollamaHost?: string; listingTimeoutMs?: number },
+  deps: Pick<BuildLlmBackendDeps, 'createOllamaBackend' | 'createMultiBackend'>
+): Promise<OllamaAttachment> {
+  const explicit = opts.ollamaHost ?? (process.env.B4M_OLLAMA_HOST || undefined);
+  const rawHost = explicit ?? config.ollamaHost;
+  if (!rawHost) {
+    const models = await llm.getModelInfo();
+    if (models.length === 0) throw new Error('No models available from server.');
+    return { llm, models, ollamaHost: null, ollamaModelCount: 0, ollamaListingFailed: false, warnings: [] };
+  }
+
+  const ollamaHost = withDefaultOllamaPort(rawHost);
+  const ollamaBackend = deps.createOllamaBackend(ollamaHost);
+  // A down Ollama must not block startup on the server models. A saved host may be a machine that is
+  // gone, so its listing also gets a deadline; a host passed for this run is waited on.
+  const listing = ollamaBackend.getModelInfo();
+  const deadlineMs = explicit ? undefined : (opts.listingTimeoutMs ?? SAVED_OLLAMA_LISTING_TIMEOUT_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bounded =
+    deadlineMs === undefined
+      ? listing
+      : Promise.race([
+          listing,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`no answer within ${deadlineMs / 1000}s`)), deadlineMs);
+            timer.unref?.();
+          }),
+        ]);
+  const ollamaListing = bounded.then(
+    (listed): { models: ModelInfo[]; error?: string } => ({ models: listed }),
+    (error: unknown) => {
+      const message = extractErrorMessage(error);
+      logger.warn(`Error fetching model info from Ollama: ${message}`);
+      return { models: [] as ModelInfo[], error: message };
+    }
+  );
+  const [serverModels, ollama] = await Promise.all([llm.getModelInfo(), ollamaListing]).finally(() =>
+    clearTimeout(timer)
+  );
+  const ollamaModels = ollama.models;
+
+  if (serverModels.length === 0 && ollamaModels.length === 0) {
+    throw new Error(
+      ollama.error !== undefined
+        ? `No models available from server, and Ollama at ${ollamaHost} is unreachable: ${ollama.error}`
+        : `No models available from server or Ollama at ${ollamaHost}.\n` + `Pull a model: ollama pull qwen3.5`
+    );
+  }
+  const warnings: string[] = [];
+  if (ollama.error !== undefined) {
+    warnings.push(`\u26a0\ufe0f  Ollama at ${ollamaHost} is unreachable: ${ollama.error}`);
+  } else if (ollamaModels.length === 0) {
+    warnings.push(`\u26a0\ufe0f  No models found in Ollama at ${ollamaHost}. Pull one with: ollama pull qwen3.5`);
+  }
+
+  const multi = deps.createMultiBackend(llm, ollamaBackend, serverModels, ollamaModels, config.defaultModel);
+  return {
+    llm: multi,
+    models: await multi.getModelInfo(),
+    ollamaHost,
+    ollamaModelCount: ollamaModels.length,
+    ollamaListingFailed: ollama.error !== undefined,
+    warnings,
+  };
+}
+
+/**
  * Build the LLM backend: HTTP+SSE transport (ServerLlmBackend), optional Ollama
  * multiplexing. Resolves the default model and pins it on the backend.
  *
@@ -168,39 +280,21 @@ export async function buildLlmBackend(
     { apiClient, model: config.defaultModel },
     { createServerBackend: deps.createServerBackend, clearWebSocketToolExecutor: deps.clearWebSocketToolExecutor }
   );
-  let llm: CliLlmBackend = sse.llm;
-
   const wsManager = await connectFeatureEventSocket(config, sse.serverConfig.websocketUrl, deps, {
     tokenGetter,
     verifySession: () => apiClient.checkSessionValid(),
   });
 
-  // Optionally wrap with Ollama backend if --ollama-host was provided
-  const ollamaHost = input.ollamaHost ?? process.env.B4M_OLLAMA_HOST;
-  let models: ModelInfo[];
-
-  if (ollamaHost) {
-    const ollamaBackend = deps.createOllamaBackend(ollamaHost);
-    const [serverModels, ollamaModels] = await Promise.all([llm.getModelInfo(), ollamaBackend.getModelInfo()]);
-
-    if (serverModels.length === 0 && ollamaModels.length === 0) {
-      throw new Error(
-        `No models available from server or Ollama at ${ollamaHost}.\n` + `Pull a model: ollama pull qwen3.5`
-      );
-    }
-    if (ollamaModels.length === 0) {
-      startupLog.push(`⚠️  No models found in Ollama at ${ollamaHost}. Pull one with: ollama pull qwen3.5`);
-    }
-
-    const serverBackend = llm;
-    llm = deps.createMultiBackend(serverBackend, ollamaBackend, serverModels, ollamaModels, config.defaultModel);
-    models = await llm.getModelInfo();
-    startupLog.push(`🦙 Self-hosted Ollama: ${ollamaModels.length} model(s) added to picker`);
-  } else {
-    models = await llm.getModelInfo();
-    if (models.length === 0) {
-      throw new Error('No models available from server.');
-    }
+  const attached = await attachOllama(
+    sse.llm,
+    config,
+    { ollamaHost: input.ollamaHost, listingTimeoutMs: input.ollamaListingTimeoutMs },
+    deps
+  );
+  const { llm, models } = attached;
+  startupLog.push(...attached.warnings);
+  if (attached.ollamaHost) {
+    startupLog.push(`\u{1f999} Self-hosted Ollama: ${attached.ollamaModelCount} model(s) added to picker`);
   }
 
   logger.debug(`📋 Available models: ${models.map(m => m.id).join(', ')}`);

@@ -1,17 +1,18 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { telemetryDryRunResultRepository, adminSettingsRepository, Quest } from '@bike4mind/database';
 import { z } from 'zod';
 import { ApiKeyScope, ContextTelemetryAlertsSchema, type ContextTelemetry, ALERT_THRESHOLDS } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import {
   generateTelemetryFingerprint,
   generateSemanticTelemetryFingerprint,
   getSeverityEmoji,
   formatPrimaryAnomaly,
-} from '@server/services/telemetryFingerprint';
+} from '@bike4mind/server-utils/services/telemetryFingerprint';
 import { checkFingerprintDedup } from '@bike4mind/server-utils/services/issueDedup';
 import { GitHubService } from '@server/services/githubService';
 import {
@@ -163,12 +164,11 @@ function generateSampleTelemetry(severity: 'critical' | 'high' | 'medium' | 'low
  * Triggers a test of the telemetry alert configuration.
  * Simulates what would happen without actually creating issues or sending alerts.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const logger = new Logger({ metadata: { service: 'TelemetryTestConfig' } });
 
     // Parse request body
@@ -178,7 +178,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     let telemetry: ContextTelemetry;
 
     if (body.telemetryEntryId) {
-      // No org scoping needed: admin-only endpoint (isAdmin check above) and
+      // No org scoping needed: admin-only endpoint (adminApi gate) and
       // telemetry data is anonymized (no PII or org-specific content).
       const quest = await Quest.findById(body.telemetryEntryId).select(TELEMETRY_SAFE_PROJECTION).lean();
 
@@ -305,6 +305,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       },
       fingerprint,
       semanticFingerprint,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.context_telemetry.test_run',
+      target: { kind: 'system', id: 'context-telemetry-test-config', displayName: 'Context telemetry alert test' },
+      summary: 'ran context telemetry alert config test',
+      details: {
+        source: body.telemetryEntryId ? 'entry' : 'sample',
+        telemetryEntryId: body.telemetryEntryId,
+        sampleType: body.telemetryEntryId ? undefined : (body.sampleType ?? 'high'),
+        wouldCreateIssue,
+        wouldSendSlackAlert,
+      },
     });
 
     // Transform to response format

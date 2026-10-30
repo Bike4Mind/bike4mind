@@ -14,7 +14,7 @@ test.describe('Image Generation', () => {
     test.setTimeout(TIMEOUTS.IMAGE_GENERATION + TIMEOUTS.AI_RESPONSE + TIMEOUTS.TEST);
 
     await navigationPage.navigateToNewChat();
-    await modelSelector.selectImageModel('GPT-Image-1');
+    await modelSelector.selectImageModel('GPT-Image-2.5 Flare');
 
     await chatPage.sendImageMessageAndWaitForResponse('Give me an image of a dog?', TIMEOUTS.AI_RESPONSE);
 

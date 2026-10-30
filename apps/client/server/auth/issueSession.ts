@@ -5,6 +5,7 @@ import { Logger } from '@bike4mind/observability';
 import type { Response } from 'express';
 import { authTokenGenerator } from './tokenGenerator';
 import { buildSessionDevice } from './sessionDevice';
+import { recordLoginEvent } from './networkMeta';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 
 interface RequestLike {
@@ -14,11 +15,16 @@ interface RequestLike {
   logger?: Logger;
 }
 
+// Sessions that are not the user signing in: an admin acting as them, a legacy token swapped
+// on refresh, or enrolling MFA from an existing session. They mint a session but log no login AuthEvent.
+const NOT_A_LOGIN: ReadonlySet<AuthSessionCreatedVia> = new Set(['impersonation', 'legacy-migration', 'mfa-setup']);
+
 /**
  * Server-side convenience wrapper over authSessionService.issueSession: binds the AuthSession
  * repository, the JWT access-token signer, request-derived device metadata, and the request
- * logger, so each login/mint endpoint is a one-liner. Returns the access JWT + opaque refresh
- * token (and the sid, if a caller needs it, e.g. to keep the current device on a revoke-others).
+ * logger, so each login/mint endpoint is a one-liner. Also logs the login AuthEvent. Returns the
+ * access JWT + opaque refresh token (and the sid, if a caller needs it, e.g. to keep the current
+ * device on a revoke-others).
  */
 export async function issueSessionForRequest(
   req: RequestLike,
@@ -27,16 +33,18 @@ export async function issueSessionForRequest(
     createdVia: AuthSessionCreatedVia;
     tokenVersion: number;
     impersonatedBy?: string | null;
+    impersonationExpiresAt?: Date;
     clientId?: string | null;
     device?: IAuthSessionDevice;
   }
 ): Promise<{ accessToken: string; refreshToken: string; sid: string }> {
-  return authSessionService.issueSession(
+  const session = await authSessionService.issueSession(
     userId,
     {
       createdVia: params.createdVia,
       tokenVersion: params.tokenVersion,
       impersonatedBy: params.impersonatedBy,
+      impersonationExpiresAt: params.impersonationExpiresAt,
       clientId: params.clientId,
       device: params.device ?? buildSessionDevice(req),
     },
@@ -46,6 +54,10 @@ export async function issueSessionForRequest(
       logger: req.logger,
     }
   );
+  if (!NOT_A_LOGIN.has(params.createdVia)) {
+    await recordLoginEvent({ req, userId, method: params.createdVia });
+  }
+  return session;
 }
 
 /**

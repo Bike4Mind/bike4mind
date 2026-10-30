@@ -6,7 +6,7 @@ import { type HtmlArtifact } from '@bike4mind/common';
 import { validateArtifactContent } from '@client/app/utils/artifactParser';
 import { sanitizeHtmlForIframe, absolutizeBlessedScripts } from '@client/app/utils/htmlSanitizer';
 import { whiteAlpha } from '@client/app/utils/themes/colors';
-import { Warning as WarningIcon } from '@mui/icons-material';
+import WarningIcon from '@mui/icons-material/Warning';
 
 interface HtmlArtifactViewerProps {
   artifact: HtmlArtifact;

@@ -1,4 +1,4 @@
-import { FC, useCallback, useEffect, useRef } from 'react';
+import { FC, useEffect, useRef } from 'react';
 
 import { Box } from '@mui/joy';
 
@@ -11,7 +11,6 @@ import { useShallow } from 'zustand/react/shallow';
 import { useModelInfo } from '../../hooks/data/useModelInfo';
 import InspectableSettingsButton from './AISettings/InspectableSettingsButton';
 import { AdvancedAIModal } from './AISettings/AdvancedAIModal';
-import { useHydrateModelFromSession } from './AISettings/useHydrateModelFromSession';
 import { isImageModel } from '@client/app/utils/commands';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import ToolsButton from './AISettings/ToolsButton';
@@ -85,12 +84,6 @@ const AISettings: FC<AISettingsProps> = ({
   }, [composerCompact, onCompactChange]);
   const { data: modelInfoRepo } = useModelInfo();
   const modelInfo = modelInfoRepo?.find(m => m.id === model);
-
-  // Adopt the session's pinned model once per session. Must NOT re-run on every
-  // `currentSession` identity change -- see useHydrateModelFromSession for why that
-  // silently reverted the user's model selection on send.
-  const applyModelFromSession = useCallback((nextModel: string) => setLLM({ model: nextModel }), [setLLM]);
-  useHydrateModelFromSession(currentSession, applyModelFromSession);
 
   // Reset QuestMaster to disabled when model changes
   useEffect(() => {

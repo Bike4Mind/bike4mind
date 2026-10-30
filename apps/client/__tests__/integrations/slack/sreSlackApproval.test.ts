@@ -9,7 +9,8 @@ import {
   postSreFixFailureMessage,
   postSreAlreadyFixedMessage,
   postSreFixLoopMessage,
-} from '../../../server/integrations/slack/sreSlackApproval';
+  postSreScopeBlockedMessage,
+} from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 
 const mockGetSettingsValue = vi.fn();
 const mockFindFullById = vi.fn();
@@ -543,5 +544,28 @@ describe('postSreFixLoopMessage — block building', () => {
     const actionsBlock = blocks.find(b => b.type === 'actions');
     expect(actionsBlock).toBeDefined();
     expect(actionsBlock?.elements?.[0]?.url).toContain('/issues/777');
+  });
+});
+
+describe('postSreScopeBlockedMessage - block building', () => {
+  beforeEach(() => {
+    mockFindByIdWithToken.mockResolvedValue({ slackBotToken: 'xoxb-test', _id: 'ws-1' });
+    mockPostMessage.mockClear();
+  });
+
+  it('escapes blocked file paths inside their code spans', async () => {
+    await postSreScopeBlockedMessage(
+      'tracking-1',
+      { rootCause: 'bad config', confidence: 90 },
+      'Error',
+      'fp-abc123',
+      ['src/a.ts` <!channel> `x', 'src/b.ts'],
+      { workspaceId: 'ws-1', channelId: 'C123' }
+    );
+
+    const blocks = mockPostMessage.mock.calls[0][0].blocks as Array<{ type: string; text?: { text: string } }>;
+    const filesBlock = blocks.find(b => b.type === 'section' && b.text?.text.includes('*Blocked Files:*'));
+    expect(filesBlock?.text?.text).toContain('`src/a.ts\u02CB &lt;!channel&gt; \u02CBx`');
+    expect(filesBlock?.text?.text).not.toContain('<!channel>');
   });
 });

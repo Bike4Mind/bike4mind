@@ -1,11 +1,20 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { ApiKeyScope, CreditHolderType, SettingKeySchema, SettingScopeLevel, settingsMap } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  SettingKeySchema,
+  SettingScopeLevel,
+  settingsMap,
+  type SettingKey,
+} from '@bike4mind/common';
+import { withTransaction } from '@bike4mind/database';
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
+import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 
 /**
  * Admin write surface for the scoped-settings overlay - the org/owner/lake OVERRIDES read by
@@ -16,8 +25,7 @@ import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured
  * is the platform operator rather than a lake manager.
  *
  * Session/admin route, not a public API-key endpoint, so it carries no api-contract definition.
- * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key before req.user
- * exists, so `ensureAdmin` still has to run per method for the session path.
+ * adminApi gates the permission per method; requiredScopes gates the API-key path.
  */
 
 // The override altitudes only. Rejecting `platform` structurally (rather than with a hand-written
@@ -78,9 +86,24 @@ const runWrite = async (write: () => Promise<void>): Promise<void> => {
   }
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+type ScopeLevel = z.infer<typeof ScopeLevelSchema>;
+
+const readOverrideValue = async (settingName: SettingKey, scopeLevel: ScopeLevel, scopeId: string) => {
+  const [existing] = await scopedSettingsRepository.findOverrides([{ scopeLevel, scopeId }], [settingName]);
+  return existing?.settingValue ?? null;
+};
+
+// One target per override address, so the Audit Log groups an override's history apart from the platform value.
+const scopedTarget = (settingName: SettingKey, scopeLevel: ScopeLevel, scopeId: string) => ({
+  id: `${settingName}@${scopeLevel}:${scopeId}`,
+  displayName: `${settingName} (${scopeLevel} ${scopeId})`,
+});
+
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
     // The whole collection in one read. It is small by design - a row exists only where an operator
     // actually set an override - and both questions the admin UI asks ("which rungs override setting
     // X" and "what is overridden at scope Y") are answered from the same inventory. The soft-delete
@@ -88,7 +111,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json(await scopedSettingsRepository.find({}));
   })
   .put(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
     const { settingName, scopeLevel, scopeId, ownerType, value, confirmAboveMeasuredFloor } = parseOrBadRequest(
       PutBodySchema,
       req.body
@@ -112,30 +134,53 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     await runWrite(() =>
-      scopedSettingsService.writeScopedOverride(
-        settingName,
-        { scopeLevel, scopeId, ownerType },
-        settingValue,
-        { scopedSettings: scopedSettingsRepository },
-        { logger: req.logger }
-      )
+      withTransaction(async () => {
+        const before = await readOverrideValue(settingName, scopeLevel, scopeId);
+        await scopedSettingsService.writeScopedOverride(
+          settingName,
+          { scopeLevel, scopeId, ownerType },
+          settingValue,
+          { scopedSettings: scopedSettingsRepository },
+          { logger: req.logger }
+        );
+        await recordAdminSettingChange(req, {
+          settingName,
+          before,
+          after: settingValue,
+          summary: `set the ${settingName} override at ${scopeLevel} ${scopeId}`,
+          target: scopedTarget(settingName, scopeLevel, scopeId),
+          details: { scopeLevel, scopeId, ownerType },
+        });
+      })
     );
 
     return res.json({ settingName, scopeLevel, scopeId, ownerType, settingValue });
   })
   .delete(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
     // Address comes from the query, not a body: a DELETE body is awkward to send through axios and
     // next-connect.
     const { settingName, scopeLevel, scopeId } = parseOrBadRequest(ScopeAddressSchema, req.query);
 
     await runWrite(() =>
-      scopedSettingsService.clearScopedOverride(
-        settingName,
-        { scopeLevel, scopeId },
-        { scopedSettings: scopedSettingsRepository },
-        { logger: req.logger }
-      )
+      withTransaction(async () => {
+        const before = await readOverrideValue(settingName, scopeLevel, scopeId);
+        await scopedSettingsService.clearScopedOverride(
+          settingName,
+          { scopeLevel, scopeId },
+          { scopedSettings: scopedSettingsRepository },
+          { logger: req.logger }
+        );
+        // Clearing an address that holds no override changes nothing, so it is not an admin change.
+        if (before === null) return;
+        await recordAdminSettingChange(req, {
+          settingName,
+          before,
+          after: null,
+          summary: `cleared the ${settingName} override at ${scopeLevel} ${scopeId}`,
+          target: scopedTarget(settingName, scopeLevel, scopeId),
+          details: { scopeLevel, scopeId },
+        });
+      })
     );
 
     return res.json({ cleared: true });

@@ -227,12 +227,32 @@ describe('removeFileFromLake', () => {
     };
 
     await removeFileFromLake(owner, lake(), 'f1', adapters);
+    expect(adapters.db.memoryLedger.markSourceShredded).toHaveBeenCalledWith('lake', 'datalake:lake', 'owner', 'f1');
 
     expect(adapters.db.fabFiles.setOwnerOrganizationIfUnchanged).toHaveBeenCalledWith(
       'f1',
       expect.anything(),
       undefined
     );
+  });
+
+  it('shreds the beliefs a file contributed when it is no longer a member', async () => {
+    // A stale caller still asking to remove a file the lake no longer holds must not leave behind
+    // beliefs distilled from it: the refusal below is the last place that can shred them.
+    const adapters = {
+      db: withStorageOwnerFakes({
+        fabFiles: {
+          findById: vi
+            .fn()
+            .mockResolvedValue({ id: 'f1', userId: 'owner', tags: [{ name: 'unrelated', strength: 0 }] }),
+          pullTagsByFabFileId: vi.fn(),
+        },
+      }),
+    };
+
+    await expect(removeFileFromLake(owner, lake(), 'f1', adapters)).rejects.toThrow('File not found in this data lake');
+
+    expect(adapters.db.memoryLedger.markSourceShredded).toHaveBeenCalledWith('lake', 'datalake:lake', 'owner', 'f1');
   });
 
   it('restamps a file no longer in the lake before refusing it, so a retry repairs a failed transfer', async () => {

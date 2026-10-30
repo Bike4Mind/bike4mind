@@ -1,4 +1,4 @@
-import type { UserModerationStatus } from '@bike4mind/common';
+import type { ISignupRiskScore, UserModerationStatus } from '@bike4mind/common';
 
 /** The conditions that make an account unusable. The order below is precedence. */
 export type AccountBlockReason = 'banned' | 'disputePending' | 'suspended';
@@ -37,4 +37,31 @@ export function accountBlockReasons(user: AccountStateFields): AccountBlockReaso
 export function entersBlockedState(previous: AccountStateFields, next: AccountStateFields): boolean {
   const before = accountBlockReasons(previous);
   return accountBlockReasons(next).some(reason => !before.includes(reason));
+}
+
+export const AI_ACCESS_REVOKED_MESSAGE =
+  'AI features are disabled on your account by an administrator. Please contact support.';
+
+export const AI_ACCESS_PENDING_REVIEW_MESSAGE =
+  'AI features are temporarily unavailable while your account awaits review. You can still sign in and access your data. Please contact support to request a review.';
+
+export type AiAccessStateFields = {
+  isModerated?: boolean | null;
+  riskScore?: Pick<ISignupRiskScore, 'reviewState'> | null;
+};
+
+/** Review holds are separate from manual restrictions, so approval cannot undo an admin restriction. */
+export function aiAccessDeniedMessage(user: AiAccessStateFields): string | null {
+  if (isAiAccessRevoked(user)) return AI_ACCESS_REVOKED_MESSAGE;
+  if (user.riskScore?.reviewState === 'pending') return AI_ACCESS_PENDING_REVIEW_MESSAGE;
+  return null;
+}
+
+/**
+ * True when the admin "Moderate" action has revoked the user's AI access. Unlike
+ * `accountBlockReasons`, this does not block sign-in or data access - only AI features. It is
+ * independent of `moderation.status`: escalation never writes `isModerated` (see `setModerationStatus`).
+ */
+export function isAiAccessRevoked(user: { isModerated?: boolean | null }): boolean {
+  return user.isModerated === true;
 }

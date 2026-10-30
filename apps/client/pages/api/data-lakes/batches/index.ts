@@ -17,6 +17,8 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { recordReconcilerForcedTerminal } from '@bike4mind/server-utils/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatchProgress';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { resolveRequestBillingOrgId } from '@server/billing/resolveRequestBillingOrgId';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -139,6 +141,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         appliedTags: data.appliedTags || [],
         startedAt: new Date(),
         wantsTaxonomy: data.wantsTaxonomy ?? false,
+        taxonomyBilling: {
+          organizationId: resolveRequestBillingOrgId(req) ?? null,
+          apiKeyId: req.apiKeyInfo?.keyId,
+          source: req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined,
+        },
         taxonomyStatus: 'none',
         uploaderManageRung,
       });

@@ -3,7 +3,7 @@
  *
  * The syntax is Claude Code's (`Bash(git status:*)`, `Read(~/notes/**)`, `WebFetch(domain:x)`,
  * `mcp__server__tool`), so a rule can be copied between the two. Rules are only ever written by
- * the user, from Settings or an approval card's "Always, in every session"; no tool the model can
+ * the user, from Settings or an approval card's "Always allow"; no tool the model can
  * call reaches them. See main/chat/permissions for how they are matched.
  */
 

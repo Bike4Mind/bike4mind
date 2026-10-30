@@ -114,7 +114,7 @@ export async function createInstallProvider(
     clientSecret,
     stateStore: createStateStore(binding),
     stateVerification: true,
-    // Required in @slack/oauth v3 for a custom stateStore; browser binding is our nonce hash in the signed state (apps/client/server/auth/oauthFlowCookie.ts).
+    // Required in @slack/oauth v3 for a custom stateStore; browser binding is our nonce hash in the signed state (packages/server-utils/src/auth/oauthFlowCookie.ts).
     legacyStateVerification: true,
     installationStore: {
       // Store installation in database

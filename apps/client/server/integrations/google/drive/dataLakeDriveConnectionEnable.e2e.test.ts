@@ -13,7 +13,7 @@ import {
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: 'test-client-id', GOOGLE_CLIENT_SECRET: 'test-client-secret' },
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (v?: string | null) => (v ? `enc(${v})` : null),
   decryptToken: (v?: string | null) => {
     if (!v) return null;

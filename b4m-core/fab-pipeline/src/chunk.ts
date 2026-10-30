@@ -24,6 +24,7 @@ import {
   parsePdfInfoDate,
   type ExtractedDocumentDate,
 } from './documentDate';
+import { parseLenientJson, stripBom } from './lenientJson';
 import type { Tiktoken } from 'tiktoken';
 import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
@@ -652,7 +653,14 @@ export class SmartChunker {
     // Fingerprint the raw JSON source, not chunkObject's `JSON.stringify({ path: value })` envelopes
     // whose keys and `[i]` sub-indices are a function of chunkTokenLimit.
     this.lastExtractedText = jsonString;
-    const json = JSON.parse(jsonString);
+    let json: unknown;
+    try {
+      json = parseLenientJson(jsonString);
+    } catch (error) {
+      // A file that is not JSON even leniently is deterministic: throwing would only retry it into the DLQ.
+      this.logger.warn(`Could not parse JSON, chunking it as text: ${(error as Error).message}`);
+      return this.chunkText(stripBom(jsonString));
+    }
     return this.chunkObject(json);
   }
 

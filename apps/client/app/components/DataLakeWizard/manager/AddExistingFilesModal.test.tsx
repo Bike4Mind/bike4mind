@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import AddExistingFilesModal, { partitionLakeAddCandidates } from './AddExistingFilesModal';
@@ -11,9 +11,8 @@ import type { ManagerLake } from './shared';
 
 // The component's own debounced search survives unmount unless cancelled; wrapping the real
 // debounce lets the regression test below inspect (and assert on) the instance it creates.
-vi.mock('lodash', async importOriginal => ({
-  ...(await importOriginal<typeof import('lodash')>()),
-  debounce: vi.fn((await importOriginal<typeof import('lodash')>()).debounce),
+vi.mock('lodash/debounce', async importOriginal => ({
+  default: vi.fn((await importOriginal<typeof import('lodash/debounce')>()).default),
 }));
 
 // A row's click reaches GenericAddItemsModal's toggle wrapper, so these tests drive the real

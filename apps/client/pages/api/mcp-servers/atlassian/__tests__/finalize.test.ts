@@ -2,16 +2,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindById, mockUserUpdate, mockServerFindOne, mockServerUpdate, mockServerCreate, mockInvoke } = vi.hoisted(
-  () => ({
+const { mockFindById, mockUserUpdate, mockServerFindOne, mockServerUpdate, mockServerCreate, mockInvoke, mockEncrypt } =
+  vi.hoisted(() => ({
     mockFindById: vi.fn(),
     mockUserUpdate: vi.fn(),
     mockServerFindOne: vi.fn(),
     mockServerUpdate: vi.fn(),
     mockServerCreate: vi.fn(),
     mockInvoke: vi.fn(),
-  })
-);
+    mockEncrypt: vi.fn((vars: unknown) => vars),
+  }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -40,9 +40,9 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({ BadRequestError: class extends Error {} }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (t: unknown) => t,
-  encryptEnvVariables: (v: unknown) => v,
+  encryptEnvVariables: mockEncrypt,
 }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: (...a: unknown[]) => mockInvoke(...a) }));
 
@@ -93,5 +93,25 @@ describe('POST /api/mcp-servers/atlassian/finalize - reconnect', () => {
       2,
       expect.objectContaining({ id: SERVER_ID, tools: [], toolSchemas: [], toolSchemasFetchedAt: expect.any(Date) })
     );
+  });
+
+  it('binds a reconnect to the existing row id', async () => {
+    await run();
+
+    const [, owner] = mockEncrypt.mock.calls[0] as [unknown, { id: string }];
+    expect(owner.id).toBe(SERVER_ID);
+  });
+});
+
+describe('POST /api/mcp-servers/atlassian/finalize - first connect', () => {
+  it('binds the stored ciphertext to the row id it persists', async () => {
+    mockServerFindOne.mockResolvedValue(null);
+    mockServerCreate.mockImplementation(async (data: Record<string, unknown>) => data);
+
+    await run();
+
+    const [, owner] = mockEncrypt.mock.calls[0] as [unknown, { id: string }];
+    expect(mockServerCreate.mock.calls[0][0]).toMatchObject({ _id: owner.id });
+    expect(owner).toEqual({ userId: USER_ID, name: 'atlassian', id: expect.any(String) });
   });
 });

@@ -11,6 +11,14 @@ const mockRefs = vi.hoisted(() => ({
   handler: null as null | ((req: any, res: any) => unknown),
 }));
 
+// The pinned client forwards to global fetch so these cases can stub the upstream.
+vi.mock('@bike4mind/fab-pipeline/ssrf', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline/ssrf')>()),
+  createPinnedFetch: () =>
+    Object.assign((input: string | URL, init?: RequestInit) => globalThis.fetch(input, init), {
+      close: async () => undefined,
+    }),
+}));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: any = {
@@ -24,7 +32,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: vi.fn((v: string) => `decrypted:${v}`) }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+  decryptToken: vi.fn((v: string) => `decrypted:${v}`),
+}));
 
 // The SSRF gate resolves DNS; stub it so blog.example.com is public and *.nip.io is loopback.
 vi.mock('dns', () => {

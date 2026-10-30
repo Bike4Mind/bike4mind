@@ -137,6 +137,26 @@ const NotServingLakesSchema = subSchema({
   reason: { type: String, required: true },
 });
 
+// ITurnTiming. No enum on `reason`, per the file header's rule: TURN_RETRY_REASONS is the contract.
+const TurnRetrySchema = subSchema({
+  reason: { type: String, required: true },
+  status: { type: Number, required: false },
+  retryAfterMs: { type: Number, required: false },
+  requestId: { type: String, required: false },
+  delayMs: { type: Number, required: true },
+  model: { type: String, required: true },
+  at: { type: Date, required: true },
+});
+
+const TurnTimingSchema = subSchema({
+  queueMs: { type: Number, required: true },
+  contextBuildMs: { type: Number, required: false },
+  semaphoreWaitMs: { type: Number, required: true },
+  totalMs: { type: Number, required: false },
+  retries: { type: [TurnRetrySchema], required: true },
+  fallbackHops: { type: Number, required: true },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -302,7 +322,7 @@ const NarratedToolCallSchema = subSchema({
   toolNames: { type: [String], required: false, default: undefined },
 });
 
-export const PromptMetaSchema = new Schema<PromptMeta>(
+export const PromptMetaSchema: Schema<PromptMeta> = new Schema<PromptMeta>(
   {
     model: {
       name: { type: String, required: false },
@@ -539,9 +559,14 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
   { _id: false }
 );
 
-export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
+export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schema<IChatHistoryItemDocument>(
   {
     sessionId: { type: String, required: true },
+    signupActivity: {
+      type: new Schema({ userId: String, turnId: String, startedAt: Date }, { _id: false }),
+      default: undefined,
+      select: false,
+    },
     conversationItemId: { type: String, required: false },
     openaiMessageId: { type: String, required: false },
     claudeMessageId: { type: String, required: false },
@@ -828,6 +853,8 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
       required: false,
       _id: false,
     },
+    // Same projection requirement as attachmentNotices.
+    turnTiming: { type: TurnTimingSchema, required: false },
     // Generalized UI side-effects extracted from tool __uiSideEffect sentinels
     uiSideEffects: {
       type: [
@@ -1022,7 +1049,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model
       .find({ sessionId, deletedAt: null })
       .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery suggestedChoices pinned'
+        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery turnTiming suggestedChoices pinned'
       )
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
@@ -1325,6 +1352,17 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return result.modifiedCount === 1;
   }
 
+  /**
+   * Refuses once the voice turn is stopped; the counter doubles as the marker the voice retry guard reads.
+   */
+  async claimVoiceVideoStart(questId: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: convertId(questId), status: { $ne: 'stopped' } },
+      { $inc: { agentVideoClipsClaimed: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
   /** Give back a slot from claimAgentGenerationSlot whose call started no new job. */
   async releaseAgentGenerationSlot(questId: string, kind: GenerationJobKind): Promise<void> {
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
@@ -1348,6 +1386,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     if (!image) return [];
     const docs = await this.model.find({ images: image }, { sessionId: 1 }).setOptions({ includeDeleted: true });
     return [...new Set(docs.map(d => d.sessionId))];
+  }
+
+  // Every organization a user's quests were recorded under, soft-deleted ones included: a DSAR
+  // export or deletion has to reach rows the user can no longer see, and telemetry hashes are keyed
+  // by that organization. One full scan of the user's quests, which is why it is not on a read path.
+  async findOrganizationIdsForUser(userId: string): Promise<string[]> {
+    const orgIds: unknown[] = await this.model
+      .distinct('promptMeta.session.organizationId', { 'promptMeta.session.userId': userId })
+      .setOptions({ includeDeleted: true });
+    return orgIds.filter(Boolean).map(String);
   }
 
   // The subset of `keys` that some quest in this session references as generated media (`images`
@@ -1632,6 +1680,16 @@ function initializeQuestModel() {
 
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
+    // Built in production by migration 20260921235966_ensure-quest-signup-activity-index; keep the
+    // name and key in sync with it. Partial so the build and its entries cover only turns carrying
+    // provenance, not every quest; the activity aggregate's equality on userId implies the filter.
+    ChatHistoryItemSchema.index(
+      { 'signupActivity.userId': 1, status: 1, 'signupActivity.startedAt': 1 },
+      {
+        name: 'signupActivity_user_status_startedAt',
+        partialFilterExpression: { 'signupActivity.userId': { $exists: true } },
+      }
+    );
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });
@@ -1643,6 +1701,10 @@ function initializeQuestModel() {
 
     // Index for deletedAt and timestamp queries
     ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1 }, { name: 'deletedAt_timestamp_desc' });
+
+    // Model Logs pages need an _id tie-break when timestamps match. Keep the full sort in the
+    // index so even the first page does not fetch and sort every log in the selected date range.
+    ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1, _id: -1 }, { name: 'deletedAt_timestamp_id_desc' });
 
     // Index for finding messages without embeddings (for Zen Garden grooming)
     ChatHistoryItemSchema.index(
@@ -1693,13 +1755,13 @@ function initializeQuestModel() {
     // this the sweep collection-scans the largest collection every 5 minutes.
     // Dense on purpose: both fields exist on every quest. Pre-built by
     // 20260826000000_ensure-quest-status-updatedat-index rather than left to
-    // autoIndex, because prod runs DocumentDB where the build takes a foreground
-    // collection lock and would otherwise land on a request path.
+    // autoIndex, whose build is fire-and-forget (a failure is silent) and would
+    // otherwise start on whichever request path cold-boots onto quests first.
     ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });
 
     // Serves findUndispatchedCallbacks (questTimeoutSweep backstop). Partial, so it holds only
     // the handful of quests whose callback is armed but not yet claimed. Pre-built by
-    // 20260921235900_ensure-quest-callback-pending-index for the same DocumentDB reason as above.
+    // 20260921235900_ensure-quest-callback-pending-index for the same reason as above.
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, updatedAt: 1 },
       { name: 'callbackState_updatedAt', partialFilterExpression: { 'callback.state': 'pending' } }
@@ -1710,6 +1772,14 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, 'callback.dispatchedAt': 1 },
       { name: 'callbackState_dispatchedAt', partialFilterExpression: { 'callback.state': 'dispatched' } }
+    );
+
+    // Serves the telemetry opt-out delete (telemetryDeletion.ts) and the user/admin telemetry
+    // exports, which match a user's regenerated per-day hashes with $in. Sparse, so only quests
+    // that carry context telemetry are indexed. Pre-built by 20260921235969_ensure-advisor-indexes.
+    ChatHistoryItemSchema.index(
+      { 'promptMeta.contextTelemetry.anonymousSessionId.hash': 1 },
+      { name: 'contextTelemetry_anonymousSessionHash', sparse: true }
     );
   } catch (error) {
     // Plugin already applied, ignore error

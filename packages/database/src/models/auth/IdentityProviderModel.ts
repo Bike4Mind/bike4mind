@@ -1,6 +1,7 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
+import type { IdentityProviderSecretPresence } from '@bike4mind/common';
 
 export interface IIdentityProviderDocument extends Document {
   id: string;
@@ -54,7 +55,7 @@ export interface IIdentityProviderDocument extends Document {
  * whether one is stored. See findAllWithSecretPresence.
  */
 export type IdentityProviderWithSecretPresence = IIdentityProviderDocument & {
-  hasSecrets: { decryptionPvk: boolean; privateCert: boolean; clientSecret: boolean };
+  hasSecrets: IdentityProviderSecretPresence;
 };
 
 export interface IIdentityProviderRepository {
@@ -258,7 +259,7 @@ class IdentityProviderRepository
     if (data.emailDomain) {
       data.emailDomain = data.emailDomain.toLowerCase();
     }
-    const result = await this.model.create(mapSecrets(data, encryptAtRest));
+    const result = await this.model.create(mapSecrets(data, value => encryptAtRest(value)));
     return stripSecrets(result.toJSON() as unknown as IIdentityProviderDocument);
   }
 
@@ -276,20 +277,19 @@ class IdentityProviderRepository
     // when no configured key can read a value, so carrying the decrypted form would let a
     // single admin edit under a mis-rotated SECRET_ENCRYPTION_KEY overwrite recoverable
     // ciphertext with '' - turning a fixable key problem into a destroyed credential.
-    // encryptAtRest passes an already-encrypted value through untouched, so re-storing
-    // the ciphertext is a no-op.
-    let next = data;
+    // Encrypt submitted fields before carrying trusted stored ciphertext forward.
+    let next = mapSecrets(data, value => encryptAtRest(value)) as Partial<IIdentityProviderDocument>;
     if (data.samlConfig || data.oktaConfig) {
       const stored = await this.model.findById(id).select(SECRET_SELECT);
       const current = stored ? (stored.toJSON() as unknown as IIdentityProviderDocument) : null;
       next = {
-        ...data,
+        ...next,
         ...(data.samlConfig
           ? {
               samlConfig: {
                 ...data.samlConfig,
-                decryptionPvk: data.samlConfig.decryptionPvk || current?.samlConfig?.decryptionPvk,
-                privateCert: data.samlConfig.privateCert || current?.samlConfig?.privateCert,
+                decryptionPvk: next.samlConfig?.decryptionPvk || current?.samlConfig?.decryptionPvk,
+                privateCert: next.samlConfig?.privateCert || current?.samlConfig?.privateCert,
               },
             }
           : {}),
@@ -299,14 +299,14 @@ class IdentityProviderRepository
                 ...data.oktaConfig,
                 // '' only when there is no secret on either side, which is the same
                 // "not configured" the truthiness checks downstream already handle.
-                clientSecret: data.oktaConfig.clientSecret || current?.oktaConfig?.clientSecret || '',
+                clientSecret: next.oktaConfig?.clientSecret || current?.oktaConfig?.clientSecret || '',
               },
             }
           : {}),
       };
     }
 
-    const result = await this.model.findByIdAndUpdate(id, mapSecrets(next, encryptAtRest), { new: true });
+    const result = await this.model.findByIdAndUpdate(id, next, { new: true });
     return result ? stripSecrets(result.toJSON() as unknown as IIdentityProviderDocument) : null;
   }
 

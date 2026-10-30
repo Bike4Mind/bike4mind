@@ -3,6 +3,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { BranchCheckout } from '@shared/chat';
+import { hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
 
 const execFileAsync = promisify(execFile);
 
@@ -43,9 +44,18 @@ export function readableGitMessage(stderr: string): string {
     .trim();
 }
 
-export async function git(directory: string, args: readonly string[]): Promise<string> {
+export function git(directory: string, args: readonly string[]): Promise<string> {
+  return runGit(directory, args, hostGitArgs(args));
+}
+
+/** For calls that reach a remote, which can run configured credential, ssh and askpass commands. */
+function gitNetwork(directory: string, args: readonly string[]): Promise<string> {
+  return hostNetworkGitArgs(args, directory).then(full => runGit(directory, args, full));
+}
+
+async function runGit(directory: string, args: readonly string[], fullArgs: readonly string[]): Promise<string> {
   try {
-    const { stdout } = await execFileAsync('git', [...args], {
+    const { stdout } = await execFileAsync('git', [...fullArgs], {
       cwd: directory,
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: MAX_GIT_OUTPUT_BYTES,
@@ -350,15 +360,41 @@ export async function defaultBaseBranch(directory: string): Promise<string> {
   return checkedOut && (await branchExists(directory, checkedOut)) ? checkedOut : '';
 }
 
-/** Best-effort freshening so a new branch forks from an up-to-date base, as the shell helper does. */
-export async function fetchRemoteFor(directory: string, baseRef: string): Promise<void> {
-  const remote = baseRef.includes('/') ? baseRef.split('/')[0] : null;
-  if (!remote) return;
-  try {
-    await git(directory, ['fetch', '--quiet', remote]);
-  } catch {
-    // Offline, or no such remote. Branching from the stale ref beats refusing to start.
-  }
+/** How long one fetch of a base serves every branch cut from it; see fetchRemoteFor. */
+const FETCH_FRESH_MS = 2 * 60_000;
+
+const recentFetches = new Map<string, { at: number; done: Promise<void>; verified: Promise<void> }>();
+
+/**
+ * Best-effort freshening so a new branch forks from an up-to-date base, as the shell helper does.
+ *
+ * Only that one branch, and no tags: against a remote over SSH each round trip costs seconds,
+ * which made the fetch most of what starting a worktree session waited on. A fetch of the same
+ * ref begun within FETCH_FRESH_MS is shared rather than repeated, which is what lets the one
+ * prefetchBase starts while a card is read or a first message typed be the one the cut uses.
+ */
+export function fetchRemoteFor(directory: string, baseRef: string, requireFresh = false): Promise<void> {
+  const slash = baseRef.indexOf('/');
+  if (slash <= 0) return Promise.resolve();
+  const key = `${directory}\u0000${baseRef}`;
+  const recent = recentFetches.get(key);
+  if (recent && Date.now() - recent.at < FETCH_FRESH_MS) return requireFresh ? recent.verified : recent.done;
+  const verified = gitNetwork(directory, [
+    'fetch',
+    '--quiet',
+    '--no-tags',
+    baseRef.slice(0, slash),
+    `+refs/heads/${baseRef.slice(slash + 1)}:refs/remotes/${baseRef}`,
+  ]).then(
+    () => undefined,
+    error => {
+      if (recentFetches.get(key)?.verified === verified) recentFetches.delete(key);
+      throw error;
+    }
+  );
+  const done = verified.catch(() => undefined);
+  recentFetches.set(key, { at: Date.now(), done, verified });
+  return requireFresh ? verified : done;
 }
 
 /**

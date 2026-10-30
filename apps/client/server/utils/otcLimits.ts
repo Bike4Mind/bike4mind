@@ -1,12 +1,26 @@
 import { createHash } from 'crypto';
-import { cacheRepository } from '@bike4mind/database';
-import { TooManyRequestsError } from '@bike4mind/utils';
+import { adminSettingsRepository, cacheRepository, userRepository } from '@bike4mind/database';
+import { personalEmailProviders, type SettingKey } from '@bike4mind/common';
+import { TooManyRequestsError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import type { RequestHandler } from 'express';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { ipBucket as otcIpBucket } from '@bike4mind/server-utils/utils/ipBucket';
+import { deliveryMailbox } from './deliveryMailbox';
+
+export { otcIpBucket };
 
 const MINUTE_MS = 60_000;
-const DAY_MS = 24 * 60 * MINUTE_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+interface OtcWindow {
+  limit: number;
+  windowMs: number;
+  /** The admin setting that may lower `limit` (see otcLimitOf). */
+  setting: SettingKey;
+}
 
 /**
  * Every one-time-code limit lives here.
@@ -27,45 +41,51 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
  * The per-IP caps only bound a single source, so they are sized for a shared office or campus NAT
  * where many distinct people sign in from one address: the short window counts distinct emails per
  * IP and the blunt total plus daily caps keep one IP bounded no matter what.
+ *
+ * The per-domain caps stop one abuser registering accounts on fresh aliases or subdomains of a
+ * catch-all burner domain from many sources. They count new accounts, charged only after the code
+ * is proven, never sends or sign-ins: a stranger cannot spend a domain's budget without controlling
+ * one of its inboxes, so it is no lever against anyone else, and a refusal tells only an inbox owner
+ * anything. Personal mail providers and established domains (see isEstablishedOtcDomain) are exempt.
+ *
+ * Each window's limit can be lowered, never raised, by its admin setting during an incident. Every
+ * setting's `max` in settingsMap (b4m-core/common/src/schemas/settings.ts) must equal the limit here.
  */
 export const OTC_LIMITS = {
   send: {
     cooldownMs: 30 * 1000,
-    perEmailPerIp: { limit: 5, windowMs: 15 * MINUTE_MS },
-    perEmailPerIpDaily: { limit: 15, windowMs: DAY_MS },
-    perEmail: { limit: 15, windowMs: 15 * MINUTE_MS },
-    perIpDistinctEmails: { limit: 15, windowMs: 15 * MINUTE_MS },
-    perIpTotal: { limit: 40, windowMs: 15 * MINUTE_MS },
-    perIpDaily: { limit: 200, windowMs: DAY_MS },
+    perEmailPerIp: { limit: 5, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerEmailPerIp' },
+    perEmailPerIpDaily: { limit: 15, windowMs: DAY_MS, setting: 'otcLimitSendPerEmailPerIpDaily' },
+    perEmail: { limit: 15, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerEmail' },
+    perIpDistinctEmails: { limit: 15, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerIpDistinctEmails' },
+    perIpTotal: { limit: 40, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerIpTotal' },
+    perIpDaily: { limit: 200, windowMs: DAY_MS, setting: 'otcLimitSendPerIpDaily' },
   },
   verify: {
-    perEmailPerIp: { limit: 10, windowMs: 15 * MINUTE_MS },
-    perIp: { limit: 60, windowMs: 15 * MINUTE_MS },
+    perEmailPerIp: { limit: 10, windowMs: 15 * MINUTE_MS, setting: 'otcLimitVerifyPerEmailPerIp' },
+    perIp: { limit: 60, windowMs: 15 * MINUTE_MS, setting: 'otcLimitVerifyPerIp' },
   },
-} as const;
+  register: {
+    perDomainHourly: { limit: 5, windowMs: HOUR_MS, setting: 'otcLimitRegisterPerDomainHourly' },
+    perDomainDaily: { limit: 20, windowMs: DAY_MS, setting: 'otcLimitRegisterPerDomainDaily' },
+  },
+} as const satisfies {
+  send: Record<string, OtcWindow | number>;
+  verify: Record<string, OtcWindow>;
+  register: Record<string, OtcWindow>;
+};
+
+/** The window's limit as an admin has lowered it, else the built-in. A setting can never raise it. */
+export async function otcLimitOf({ limit, setting }: OtcWindow): Promise<number> {
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  const lowered = getSettingsValue(setting, settings);
+  return typeof lowered === 'number' && lowered > 0 ? Math.min(limit, lowered) : limit;
+}
 
 export function normalizeOtcEmail(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const email = value.toLowerCase().trim();
   return email || undefined;
-}
-
-/**
- * The inbox an address delivers to, for limit keys only (never for account identity): a bomber can
- * otherwise rotate plus-tags, Gmail dots, or compatibility-form characters to get a fresh per-email
- * budget for the same inbox. Folding more than strictly needed only makes a limit stricter.
- */
-export function otcLimitMailbox(email: string): string {
-  const folded = email.normalize('NFKC').toLowerCase();
-  const at = folded.lastIndexOf('@');
-  if (at <= 0) return folded;
-  let local = folded.slice(0, at);
-  let domain = folded.slice(at + 1).replace(/\.+$/, '');
-  if (domain === 'googlemail.com') domain = 'gmail.com';
-  const plus = local.indexOf('+');
-  if (plus > 0) local = local.slice(0, plus);
-  if (domain === 'gmail.com') local = local.replace(/\./g, '');
-  return `${local}@${domain}`;
 }
 
 /** Hashed so cache keys never carry a raw email address. */
@@ -80,24 +100,24 @@ function retryAfterSeconds(expiresAt: Date, windowMs: number): number {
 
 interface CounterOptions {
   bucket: string;
-  limit: number;
-  windowMs: number;
+  window: OtcWindow;
   /** Counter subject for this request; undefined skips the check. */
   subject: (req: Parameters<RequestHandler>[0]) => string | undefined;
 }
 
 /** Fixed-window counter keyed on a request-derived subject that answers 429 with Retry-After. */
 export const otcCounterLimit =
-  ({ bucket, limit, windowMs, subject }: CounterOptions): RequestHandler =>
+  ({ bucket, window, subject }: CounterOptions): RequestHandler =>
   async (req, res, next) => {
     // isE2EEnabled is hard-false on production; CI draws every send from one shared IP and address.
     if (isE2EEnabled()) return next();
     const resolved = subject(req);
     if (!resolved) return next();
 
+    const { windowMs } = window;
     const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
       `otc-limit:${bucket}:${resolved}`,
-      limit,
+      await otcLimitOf(window),
       windowMs
     );
     if (success) return next();
@@ -109,41 +129,32 @@ export const otcCounterLimit =
 
 export const ipSubject = (req: Parameters<RequestHandler>[0]): string => otcIpBucket(getClientIp(req));
 
-/**
- * The per-IP limit subject. IPv6 is bucketed by /64, the smallest prefix a single subscriber is
- * usually assigned, so one holder cannot rotate through addresses for a fresh budget. IPv4 and
- * IPv4-mapped IPv6 are keyed on the full address. Anything unparseable is returned unchanged.
- */
-export function otcIpBucket(ip: string): string {
-  if (!ip.includes(':')) return ip;
-  const address = ip.split('%')[0];
-  const mappedV4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
-  if (mappedV4) return mappedV4[1];
-
-  const halves = address.split('::');
-  if (halves.length > 2) return ip;
-  const left = halves[0] ? halves[0].split(':') : [];
-  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
-  const missing = 8 - left.length - right.length;
-  if (missing < 0 || (halves.length === 1 && missing !== 0)) return ip;
-  const groups = [...left, ...Array<string>(missing).fill('0'), ...right];
-  if (!groups.every(g => /^[0-9a-f]{1,4}$/i.test(g))) return ip;
-  return `${groups
-    .slice(0, 4)
-    .map(g => parseInt(g, 16).toString(16))
-    .join(':')}::/64`;
-}
-
 interface OtcEmailBudget {
   bucket: string;
-  limit: number;
-  windowMs: number;
-  /** What the budget is keyed on, given the request email and its IP bucket; hashed into the key. */
-  subject: (email: string, ip: string) => string;
+  window: OtcWindow;
+  /**
+   * What the budget is keyed on, given the request email and its IP bucket; hashed into the key.
+   * Undefined exempts the request from this budget.
+   */
+  subject: (email: string, ip: string) => string | undefined;
 }
 
-const inbox = (email: string) => otcLimitMailbox(email);
-const inboxFromSource = (email: string, ip: string) => `${otcLimitMailbox(email)}|${ip}`;
+const inbox = (email: string) => deliveryMailbox(email);
+const inboxFromSource = (email: string, ip: string) => `${deliveryMailbox(email)}|${ip}`;
+
+const PERSONAL_EMAIL_PROVIDERS: ReadonlySet<string> = new Set(personalEmailProviders);
+
+/**
+ * The registrable domain (eTLD+1) a domain budget is keyed on, so rotating subdomains of one burner
+ * domain shares a single budget. Undefined (exempt) for a personal mail provider or an unparseable
+ * domain.
+ */
+export function otcLimitDomain(email: string): string | undefined {
+  const mailbox = deliveryMailbox(email);
+  const domain = registrableDomain(mailbox.slice(mailbox.lastIndexOf('@') + 1));
+  if (!domain || PERSONAL_EMAIL_PROVIDERS.has(domain)) return undefined;
+  return domain;
+}
 
 /**
  * Per-email budgets are charged by the handlers, not by middleware, so only real events spend them:
@@ -152,9 +163,14 @@ const inboxFromSource = (email: string, ip: string) => `${otcLimitMailbox(email)
  * per-IP caps bound instead. See OTC_LIMITS for why the send budgets are keyed per source.
  */
 export const OTC_SEND_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
-  { bucket: 'send-email-ip', ...OTC_LIMITS.send.perEmailPerIp, subject: inboxFromSource },
-  { bucket: 'send-email-ip-daily', ...OTC_LIMITS.send.perEmailPerIpDaily, subject: inboxFromSource },
-  { bucket: 'send-email', ...OTC_LIMITS.send.perEmail, subject: inbox },
+  { bucket: 'send-email-ip', window: OTC_LIMITS.send.perEmailPerIp, subject: inboxFromSource },
+  { bucket: 'send-email-ip-daily', window: OTC_LIMITS.send.perEmailPerIpDaily, subject: inboxFromSource },
+  { bucket: 'send-email', window: OTC_LIMITS.send.perEmail, subject: inbox },
+];
+/** New accounts per email domain; see reserveOtcRegistrationDomainBudget. */
+export const OTC_REGISTER_DOMAIN_BUDGETS: readonly OtcEmailBudget[] = [
+  { bucket: 'register-domain-hourly', window: OTC_LIMITS.register.perDomainHourly, subject: otcLimitDomain },
+  { bucket: 'register-domain-daily', window: OTC_LIMITS.register.perDomainDaily, subject: otcLimitDomain },
 ];
 // Keyed on the exact token address plus the verifying source, not the folded inbox: each alias has
 // its own nonce and account, so folding adds no brute-force protection, and a guess from one source
@@ -163,11 +179,14 @@ export const OTC_SEND_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
 // userRepository.findByEmail's strength-2 collation would match to another account (zero-width or
 // fullwidth variants); a looser validator would give each such variant its own verify budget.
 export const OTC_VERIFY_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
-  { bucket: 'verify-email-ip', ...OTC_LIMITS.verify.perEmailPerIp, subject: (email, ip) => `${email}|${ip}` },
+  { bucket: 'verify-email-ip', window: OTC_LIMITS.verify.perEmailPerIp, subject: (email, ip) => `${email}|${ip}` },
 ];
 
-const budgetKey = ({ bucket, subject }: OtcEmailBudget, email: string, ip: string) =>
-  `otc-limit:${bucket}:${otcEmailKey(subject(email, ip))}`;
+/** The budget's counter key for this request, or undefined when the request is exempt from it. */
+function budgetKey({ bucket, subject }: OtcEmailBudget, email: string, ip: string): string | undefined {
+  const resolved = subject(email, ip);
+  return resolved === undefined ? undefined : `otc-limit:${bucket}:${otcEmailKey(resolved)}`;
+}
 
 /**
  * Retry-After seconds when any of the email's budgets is spent, else undefined. Spends nothing.
@@ -180,13 +199,11 @@ export async function otcEmailBudgetRetryAfter(
 ): Promise<number | undefined> {
   if (isE2EEnabled()) return undefined;
   for (const budget of budgets) {
-    const { limit, windowMs } = budget;
-    const { count, expiresAt } = await cacheRepository.tryAddWithinLimitFixedWindow(
-      budgetKey(budget, email, ip),
-      0,
-      limit,
-      windowMs
-    );
+    const key = budgetKey(budget, email, ip);
+    if (!key) continue;
+    const { windowMs } = budget.window;
+    const limit = await otcLimitOf(budget.window);
+    const { count, expiresAt } = await cacheRepository.tryAddWithinLimitFixedWindow(key, 0, limit, windowMs);
     if (count >= limit) return retryAfterSeconds(expiresAt, windowMs);
   }
   return undefined;
@@ -200,10 +217,12 @@ export async function chargeOtcEmailBudget(
 ): Promise<void> {
   if (isE2EEnabled()) return;
   for (const budget of budgets) {
+    const key = budgetKey(budget, email, ip);
+    if (!key) continue;
     await cacheRepository.tryIncrementWithinLimitFixedWindow(
-      budgetKey(budget, email, ip),
-      budget.limit,
-      budget.windowMs
+      key,
+      await otcLimitOf(budget.window),
+      budget.window.windowMs
     );
   }
 }
@@ -229,14 +248,16 @@ export async function reserveOtcEmailBudget(
   if (isE2EEnabled()) return { refund };
   for (const budget of budgets) {
     const key = budgetKey(budget, email, ip);
+    if (!key) continue;
+    const { windowMs } = budget.window;
     const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
       key,
-      budget.limit,
-      budget.windowMs
+      await otcLimitOf(budget.window),
+      windowMs
     );
     if (!success) {
       await refund();
-      return { retryAfter: retryAfterSeconds(expiresAt, budget.windowMs) };
+      return { retryAfter: retryAfterSeconds(expiresAt, windowMs) };
     }
     taken.push({ key, expiresAt });
   }
@@ -253,9 +274,10 @@ export const otcDistinctEmailsPerIpLimit = (): RequestHandler => async (req, res
   const email = normalizeOtcEmail(req.body?.email);
   if (!email) return next();
 
-  const { limit, windowMs } = OTC_LIMITS.send.perIpDistinctEmails;
+  const { windowMs } = OTC_LIMITS.send.perIpDistinctEmails;
+  const limit = await otcLimitOf(OTC_LIMITS.send.perIpDistinctEmails);
   const ip = otcIpBucket(getClientIp(req));
-  const pairKey = `otc-limit:ip-email-seen:${ip}:${otcEmailKey(otcLimitMailbox(email))}`;
+  const pairKey = `otc-limit:ip-email-seen:${ip}:${otcEmailKey(deliveryMailbox(email))}`;
 
   // Slot before marker: a marker only ever follows a granted slot, so a concurrent duplicate of a
   // refused pair cannot ride its marker past the cap. Racing first sightings may both take a slot.
@@ -272,3 +294,46 @@ export const otcDistinctEmailsPerIpLimit = (): RequestHandler => async (req, res
   res.setHeader('Retry-After', seconds);
   return next(new TooManyRequestsError(`Rate limit exceeded. Try again in ${seconds} seconds.`));
 };
+
+/** How long an account on a domain must have held a verified email before the domain is established. */
+export const OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS = 7 * DAY_MS;
+const ESTABLISHED_DOMAIN_CACHE_MS = DAY_MS;
+const UNESTABLISHED_DOMAIN_CACHE_MS = HOUR_MS;
+
+/**
+ * Whether a live, unbanned account on `domain` verified its email at least
+ * OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS ago. The age keeps an abuser from lifting their own domain's
+ * budget by verifying one alias: they would have to hold it for a week first. Cached both ways
+ * because the lookup is an unindexed scan.
+ */
+export async function isEstablishedOtcDomain(domain: string): Promise<boolean> {
+  const key = `otc-domain-established:${otcEmailKey(domain)}`;
+  const cached = await cacheRepository.findByKey(key);
+  if (typeof cached?.result === 'boolean') return cached.result;
+
+  const now = Date.now();
+  const established = await userRepository.existsVerifiedUserOnEmailDomain(
+    domain,
+    new Date(now - OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS)
+  );
+  const ttlMs = established ? ESTABLISHED_DOMAIN_CACHE_MS : UNESTABLISHED_DOMAIN_CACHE_MS;
+  await cacheRepository.createOrUpdate({ key, result: established, expiresAt: new Date(now + ttlMs) });
+  return established;
+}
+
+const noRefund = async () => undefined;
+
+/**
+ * Spends one new-account unit of the email's domain budgets, for a registration whose code is
+ * already proven. An established domain is never refused; it is looked up only once the budget
+ * would refuse, so ordinary signups never scan users. Returns the Retry-After seconds when refused,
+ * else a refund for a registration that then fails.
+ */
+export async function reserveOtcRegistrationDomainBudget(
+  email: string
+): Promise<{ retryAfter: number } | { refund: () => Promise<void> }> {
+  const reservation = await reserveOtcEmailBudget(email, '', OTC_REGISTER_DOMAIN_BUDGETS);
+  if ('refund' in reservation) return reservation;
+  const domain = otcLimitDomain(email);
+  return domain && (await isEstablishedOtcDomain(domain)) ? { refund: noRefund } : reservation;
+}

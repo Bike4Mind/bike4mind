@@ -38,7 +38,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: () => h.route
 vi.mock('@server/middlewares/csrfProtection', () => ({
   csrfProtection: () => (_req: unknown, _res: unknown, next: Next) => next(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: Next) => {
     h.rateLimitSpy();
     next();

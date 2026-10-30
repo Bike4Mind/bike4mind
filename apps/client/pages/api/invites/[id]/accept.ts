@@ -20,6 +20,7 @@ import { sendToClient } from '@server/websocket/utils';
 import { foldTagName, InviteType, ProjectEvents } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 import { Resource } from 'sst';
+import { unlockSignupGrantFromOrgInvite } from '@server/credits/orgInviteUnlock';
 
 /**
  * Transfers tags from a specific file to the user
@@ -94,6 +95,15 @@ const handler = baseApi().post(async (req, res) => {
       }
     )
   );
+
+  // Unlocks are JWT-only; an API-key acceptance can recover later through the eligibility check.
+  if (invite.type === InviteType.Organization && !req.apiKeyInfo) {
+    try {
+      await unlockSignupGrantFromOrgInvite(req.user.id, invite.id);
+    } catch (error) {
+      req.logger.error('Organization invite signup grant remains pending', error);
+    }
+  }
 
   // Log PROJECT_JOINED event for project invites
   if (invite.type === InviteType.Project) {

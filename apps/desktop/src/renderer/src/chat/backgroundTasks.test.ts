@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { runningTasksLabel, splitTasks, taskElapsedMs, taskTitle } from './backgroundTasks';
+import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import {
+  isSpawnedRunning,
+  runningTasksLabel,
+  spawnedSessions,
+  splitTasks,
+  taskElapsedMs,
+  taskTitle,
+} from './backgroundTasks';
 import { formatElapsed } from './statusLine';
 
 describe('runningTasksLabel', () => {
@@ -58,5 +66,38 @@ describe('splitTasks', () => {
     const { running, finished } = splitTasks(tasks);
     expect(running.map(entry => entry.id)).toEqual(['a', 'e']);
     expect(finished.map(entry => entry.id)).toEqual(['b', 'c', 'd']);
+  });
+});
+
+describe('spawnedSessions', () => {
+  const summary = (id: string, createdAt: string, parentSessionId?: string): ChatSessionSummary =>
+    ({
+      id,
+      title: `Session ${id}`,
+      createdAt,
+      ...(parentSessionId ? { origin: { parentSessionId, depth: 1, seedPrompt: 'go' } } : {}),
+    }) as ChatSessionSummary;
+
+  const sessions = [
+    summary('parent', '2026-10-01T00:00:00Z'),
+    summary('older-child', '2026-10-01T01:00:00Z', 'parent'),
+    summary('newer-child', '2026-10-01T02:00:00Z', 'parent'),
+    summary('grandchild', '2026-10-01T03:00:00Z', 'newer-child'),
+    summary('unrelated', '2026-10-01T04:00:00Z'),
+  ];
+
+  it('lists only the direct children, newest first, with main status for each', () => {
+    const statuses = new Map<string, ChatSessionStatus>([['newer-child', 'processing']]);
+    const children = spawnedSessions(sessions, statuses, 'parent');
+    expect(children.map(entry => entry.id)).toEqual(['newer-child', 'older-child']);
+    expect(children.map(entry => entry.status)).toEqual(['processing', undefined]);
+    expect(isSpawnedRunning(children[0])).toBe(true);
+    expect(isSpawnedRunning(children[1])).toBe(false);
+  });
+
+  it('counts a session at the approval gate as running, and lists nothing without a parent', () => {
+    const [child] = spawnedSessions(sessions, new Map([['grandchild', 'needs-action']]), 'newer-child');
+    expect(isSpawnedRunning(child)).toBe(true);
+    expect(spawnedSessions(sessions, new Map(), null)).toEqual([]);
   });
 });

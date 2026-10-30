@@ -10,6 +10,52 @@ function run(facet: Record<string, unknown>) {
   return getCounterTotalsForLast24Hours({ date: '2026-06-01' }, { db: { counterLogs }, logger });
 }
 
+describe('getCounterTotalsForLast24Hours - report window passed to metricsByDate', () => {
+  function metricsByDateFor(parameters: { date: string; endDate?: string }) {
+    const metricsByDate = vi.fn().mockResolvedValue([{ topUsers: [] }]);
+    const counterLogs = { metricsByDate } as unknown as ICounterLogRepository;
+    return { metricsByDate, run: () => getCounterTotalsForLast24Hours(parameters, { db: { counterLogs }, logger }) };
+  }
+
+  it('passes the whole Monday-Sunday range for a weekly report, not just its last day', async () => {
+    const { metricsByDate, run } = metricsByDateFor({ date: '2026-06-01', endDate: '2026-06-07' });
+
+    await run();
+
+    expect(metricsByDate).toHaveBeenCalledWith('2026-06-07', '2026-06-01');
+  });
+
+  it('passes only the report date for a daily report', async () => {
+    const { metricsByDate, run } = metricsByDateFor({ date: '2026-06-03' });
+
+    await run();
+
+    expect(metricsByDate).toHaveBeenCalledWith('2026-06-03', undefined);
+  });
+
+  it('derives the 4-week average from the 4-week baseline total', async () => {
+    const counterLogs = {
+      metricsByDate: vi.fn().mockResolvedValue([
+        {
+          thisWeek: [{ _id: 'Model Started', count: 6 }],
+          lastWeek: [{ _id: 'Model Started', count: 4 }],
+          thisMonth: [{ _id: 'Model Started', count: 8 }],
+          topUsers: [],
+        },
+      ]),
+    } as unknown as ICounterLogRepository;
+
+    const result = await getCounterTotalsForLast24Hours(
+      { date: '2026-06-01', endDate: '2026-06-07' },
+      { db: { counterLogs }, logger }
+    );
+
+    expect(result.metrics['Model Started']).toEqual(
+      expect.objectContaining({ weeklyTotal: 6, lastWeekTotal: 4, fourWeekAverage: 2, last24h: 0 })
+    );
+  });
+});
+
 describe('getCounterTotalsForLast24Hours - DAU/WAU inputs', () => {
   const topUsers = Array.from({ length: 20 }, (_, i) => ({
     _id: `u${i}`,
@@ -40,5 +86,21 @@ describe('getCounterTotalsForLast24Hours - DAU/WAU inputs', () => {
 
     expect(empty.userActivity.weeklyActiveUsers).toBe(0);
     expect(absent.userActivity.weeklyActiveUsers).toBe(0);
+  });
+
+  it('passes leaderboard spend and the new-account flag through', async () => {
+    const result = await run({
+      topUsers: [{ _id: 'u1', email: 'u1@example.com', interactions: 3, creditsSpent: 420, isNew: true }],
+    });
+
+    expect(result.userActivity.topUsers[0]).toEqual(
+      expect.objectContaining({ _id: 'u1', interactions: 3, creditsSpent: 420, isNew: true })
+    );
+  });
+
+  it('defaults spend and the new-account flag when the weekly facet omits them', async () => {
+    const result = await run({ topUsers: [{ _id: 'u1', email: 'u1@example.com', interactions: 3 }] });
+
+    expect(result.userActivity.topUsers[0]).toEqual(expect.objectContaining({ creditsSpent: 0, isNew: false }));
   });
 });

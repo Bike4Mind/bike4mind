@@ -26,6 +26,7 @@ import {
   IScopedSettingsRepository,
 } from '@bike4mind/common';
 import { b4mTools, generateTools } from '../llm/tools';
+import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
 
 /**
  * This host builds the whole tool registry but injects no `ToolContext.decide` runner, so `decide`
@@ -40,6 +41,7 @@ interface GenerateAndSendProactiveMessageAdapters {
   agent: IAgentDocument;
   session: ISessionDocument;
   user: IUserDocument;
+  getEntitlements: () => Promise<string[]>;
   logger: Logger;
   recentMessages?: IChatHistoryItem[];
   db: {
@@ -90,6 +92,8 @@ interface GenerateAndSendProactiveMessageAdapters {
    * emits fails verification and renders "Image unavailable" rather than an insecure fallback.
    */
   imageUrlSigningSecret?: string;
+  /** Admits and bills the message's LLM calls to the config owner; refusal throws before any provider call. */
+  meter?: CompletionMeter;
 }
 
 /**
@@ -101,6 +105,7 @@ export async function generateAndSendProactiveMessage({
   agent,
   session,
   user,
+  getEntitlements,
   logger,
   recentMessages = [],
   db,
@@ -108,6 +113,7 @@ export async function generateAndSendProactiveMessage({
   storage,
   imageGenerateStorage,
   imageUrlSigningSecret,
+  meter,
 }: GenerateAndSendProactiveMessageAdapters): Promise<void> {
   try {
     logger.info(`Generating proactive message for agent ${agent.name} in session ${session.id}`);
@@ -125,15 +131,16 @@ export async function generateAndSendProactiveMessage({
     const models = await getAvailableModels(apiKeyTable);
     const modelInfo = models.find(m => m.id === model);
 
-    const llm = getLlmByModel(apiKeyTable, {
+    const backend = getLlmByModel(apiKeyTable, {
       modelInfo,
       logger,
       endUserId: user.id,
     });
 
-    if (!llm || !modelInfo) {
+    if (!backend || !modelInfo) {
       throw new Error(`Invalid LLM backend for model: ${model}`);
     }
+    const llm = meter ? meterCompletionBackend(backend, meter, modelInfo, models) : backend;
 
     const toolDefinitions = generateTools(
       user.id,
@@ -158,6 +165,7 @@ export async function generateAndSendProactiveMessage({
         },
         // The agent speaks first, on a schedule - no user request authenticated this turn.
         authOrigin: 'internal',
+        getEntitlements,
       },
       storage,
       imageGenerateStorage,
@@ -166,7 +174,8 @@ export async function generateAndSendProactiveMessage({
       },
       async () => {},
       async () => {},
-      llm,
+      // Unmetered: tool-internal calls record their own operational usage (recordToolOperationalUsage).
+      backend,
       { web_search: { imageUrlSigningSecret } },
       model,
       undefined, // imageProcessorLambdaName

@@ -2,6 +2,8 @@ import { dayjs } from '@bike4mind/common';
 
 /** Hours a rotated-out ("previous") secret stays valid after a rotation. */
 export const SECRET_ROTATION_GRACE_HOURS = 24;
+/** The same window in milliseconds, for callers that compare timestamps. */
+export const SECRET_ROTATION_GRACE_MS = SECRET_ROTATION_GRACE_HOURS * 60 * 60 * 1000;
 
 /**
  * Single source of truth for the JWT-secret rotation grace window: whether a
@@ -19,5 +21,6 @@ export const SECRET_ROTATION_GRACE_HOURS = 24;
  */
 export function isRotatedSecretWithinGraceWindow(rotatedAt?: Date | string | null): boolean {
   if (!rotatedAt) return false;
-  return dayjs(rotatedAt).isAfter(dayjs().subtract(SECRET_ROTATION_GRACE_HOURS, 'hours'));
+  const rotation = dayjs(rotatedAt);
+  return !rotation.isAfter(dayjs()) && rotation.isAfter(dayjs().subtract(SECRET_ROTATION_GRACE_HOURS, 'hours'));
 }

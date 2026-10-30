@@ -92,6 +92,7 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
     data: [
       { id: 'gpt-4o', name: 'GPT-4o', supportsTools: true },
       { id: 'gpt-image-1', name: 'GPT Image 1', supportsTools: true },
+      { id: 'gpt-image-2', name: 'GPT Image 2', supportsTools: true },
     ],
   }),
 }));
@@ -105,7 +106,10 @@ vi.mock('./DeepResearchConfigModal', () => ({ default: () => null }));
 vi.mock('./ImageGenerationModelSelectionModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 
+import { ImageModels, type ModelInfo } from '@bike4mind/common';
+import { estimateImageCredits } from '@bike4mind/services/imageCost';
 import ToolsSection, { MISSING_KEY_TOOLTIPS } from './ToolsSection';
+import { formatImageToolPrice } from './useImageToolPrice';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -133,6 +137,9 @@ beforeEach(() => {
   mocks.state.disableAutoRouteForThisSession = false;
   mocks.state.skipAutoOffers = false;
   mocks.state.model = 'gpt-4o';
+  mocks.state.imageModel = undefined;
+  mocks.state.quality = undefined;
+  mocks.state.size = undefined;
   mocks.experimentalAgentMode.value = true;
   mocks.agentModeFeatureFlag.value = false;
   mocks.agentModeDefault.value = 'off';
@@ -231,6 +238,38 @@ describe('ToolsSection video generation row', () => {
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
     expect(container.querySelector('.tool-item-video-generation')).toBeTruthy();
     expect(gated(container, 'tool-item-video-generation')).toBeTruthy();
+  });
+});
+
+describe('ToolsSection image generation price', () => {
+  const priceText = (container: HTMLElement) =>
+    container.querySelector('[data-testid="image-generation-model-price"]')?.textContent;
+
+  it('names the image model and the credits settlement charges for one image at the saved settings', () => {
+    mocks.state.imageModel = ImageModels.GPT_IMAGE_2;
+    mocks.state.quality = 'high';
+    mocks.state.size = '1536x1024';
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    const { requiredCredits } = estimateImageCredits({ id: ImageModels.GPT_IMAGE_2 } as ModelInfo, 1, {
+      model: ImageModels.GPT_IMAGE_2,
+      quality: 'high',
+      size: '1536x1024',
+    });
+    expect(priceText(container)).toBe(`GPT Image 2 \u00b7 ${formatImageToolPrice(requiredCredits)}`);
+  });
+
+  // The tool upgrades gpt-image-1 before it runs and bills, so the row names what is charged.
+  it('names gpt-image-2 when gpt-image-1 is selected', () => {
+    mocks.state.imageModel = ImageModels.GPT_IMAGE_1;
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(priceText(container)).toMatch(/^GPT Image 2 /);
+  });
+
+  it('shows no price for a model it cannot price', () => {
+    mocks.state.imageModel = 'gpt-4o';
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(container.querySelector('.tool-item-image-generation')).toBeTruthy();
+    expect(priceText(container)).toBeUndefined();
   });
 });
 
@@ -576,5 +615,13 @@ describe('ToolsSection Decisions picker', () => {
     const { queryByTestId } = render(<ToolsSection disabledTools={['decide']} />, { wrapper: Wrapper });
 
     expect(queryByTestId('tool-row-decide')).toBeNull();
+  });
+});
+
+describe('formatImageToolPrice', () => {
+  it('labels a free model Free and pluralizes the credit unit', () => {
+    expect(formatImageToolPrice(0)).toBe('Free');
+    expect(formatImageToolPrice(1)).toBe('~1 credit/image');
+    expect(formatImageToolPrice(1234)).toBe('~1,234 credits/image');
   });
 });

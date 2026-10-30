@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => {
     },
   };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     mockRefs.rateLimitOptions = options;
     return vi.fn();

@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 
 const mockLogEvent = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: mockLogEvent }) }));
@@ -20,10 +21,13 @@ type MfaHookOptions = {
 const mocks = vi.hoisted(() => ({
   setCurrentUser: vi.fn(),
   setAccessToken: vi.fn(),
+  setVerifiedSession: vi.fn(),
   sendOTC: vi.fn(),
   verifyOTC: vi.fn(),
+  startOAuthSignIn: vi.fn(),
   mutateAsync: vi.fn(),
   navigate: vi.fn(),
+  allowOpenRegistration: true,
   trackSignupConversion: vi.fn(),
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), dismiss: vi.fn() },
   mfa: { options: null as MfaHookOptions | null, begin: vi.fn() },
@@ -32,6 +36,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/auth', () => ({
   useSendOTC: () => ({ mutateAsync: mocks.sendOTC, isPending: false }),
   useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
+  useStartOAuthSignIn: () => mocks.startOAuthSignIn,
 }));
 vi.mock('@client/app/hooks/useMfaChallenge', () => ({
   useMfaChallenge: (options: MfaHookOptions) => {
@@ -54,7 +59,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: Object.assign(() => ({ setAccessToken: mocks.setAccessToken }), {
-    getState: () => ({ setVerifiedSession: vi.fn() }),
+    getState: () => ({ setVerifiedSession: mocks.setVerifiedSession }),
   }),
 }));
 vi.mock('@tanstack/react-router', () => ({
@@ -65,6 +70,7 @@ vi.mock('@client/app/utils/authRedirect', () => ({
   applyRedirect: vi.fn(),
   appendRedirectTo: (url: string) => url,
 }));
+vi.mock('@client/app/utils/sessionBootstrap', () => ({ resetSessionBootstrap: vi.fn() }));
 vi.mock('@client/app/utils/refreshCoordinator', () => ({ resetRefreshCoordinator: vi.fn() }));
 vi.mock('@client/app/utils/signupConversion', () => ({ trackSignupConversion: mocks.trackSignupConversion }));
 vi.mock('@client/app/hooks/useCommonStyles', () => ({
@@ -73,7 +79,7 @@ vi.mock('@client/app/hooks/useCommonStyles', () => ({
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useBrandingSettings: () => ({}),
-  usePublicConfig: () => ({ data: { allowOpenRegistration: true }, isLoading: false }),
+  usePublicConfig: () => ({ data: { allowOpenRegistration: mocks.allowOpenRegistration }, isLoading: false }),
 }));
 vi.mock('./common/MFAModal', () => ({ default: () => null }));
 vi.mock('next/image', () => ({ default: () => null }));
@@ -94,6 +100,30 @@ const renderRegister = () =>
   );
 
 describe('Register', () => {
+  beforeEach(() => {
+    mocks.allowOpenRegistration = true;
+  });
+
+  it.each([
+    ['register-google-btn', '/api/auth/google'],
+    ['register-github-btn', '/api/auth/github'],
+    ['register-okta-btn', '/api/auth/okta'],
+  ])('starts the provider sign-up through the challenge-aware hook from %s', async (testId, startUrl) => {
+    mocks.startOAuthSignIn.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderRegister();
+    await user.click(screen.getByTestId(testId));
+    expect(mocks.startOAuthSignIn).toHaveBeenCalledWith(startUrl);
+  });
+
+  it('shows the challenge error and stays on the page when the sign-up cannot start', async () => {
+    mocks.startOAuthSignIn.mockRejectedValue(new Error('Could not complete the verification check.'));
+    const user = userEvent.setup();
+    renderRegister();
+    await user.click(screen.getByTestId('register-google-btn'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Could not complete the verification check.'));
+  });
+
   // Regression guard for #59: the ToS/AUP/Privacy links in the acceptance-checkbox label must
   // point at the right policy pages and open in a new tab. (The underlying bug - clicks landing
   // on the checkbox's transparent input overlay instead of the anchor - is a visual stacking-order
@@ -184,7 +214,105 @@ describe('Register - second-factor handoff', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     mocks.mfa.options = null;
+    mocks.allowOpenRegistration = true;
+  });
+
+  it('allows invite-only email signup and preserves the invite across code retries', async () => {
+    mocks.allowOpenRegistration = false;
+    mocks.verifyOTC
+      .mockRejectedValueOnce({ message: 'Try again', pendingToken: 'ptok-retry' })
+      .mockResolvedValueOnce({ user: { id: 'invited-user' }, accessToken: 'full' });
+    const user = userEvent.setup();
+    renderRegister();
+
+    expect(screen.getByTestId('register-form')).toBeInTheDocument();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(screen.getByText('Google')).not.toBeVisible();
+    await user.type(within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' INVITE123 ');
+    await submitCode(user);
+    await waitFor(() => expect(mocks.verifyOTC).toHaveBeenCalledTimes(1));
+    expect(mocks.verifyOTC).toHaveBeenLastCalledWith(expect.objectContaining({ inviteCode: 'INVITE123' }));
+    await user.click(screen.getByTestId('register-verify-btn'));
+    await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalledWith({ id: 'invited-user' }));
+    expect(mocks.verifyOTC).toHaveBeenLastCalledWith(
+      expect.objectContaining({ inviteCode: 'INVITE123', pendingToken: 'ptok-retry' })
+    );
+  });
+
+  it('ignores a second Resend click while a resend is still in flight', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let finishResend: (value: { pendingToken: string }) => void = () => {};
+      mocks.sendOTC
+        .mockResolvedValueOnce({ pendingToken: 'ptok-1' })
+        .mockReturnValueOnce(new Promise(resolve => (finishResend = resolve)));
+      renderRegister();
+      await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+      await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+      await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
+      await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
+      await user.click(screen.getByTestId('register-submit-btn'));
+      await screen.findByTestId('register-resend-btn');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31000);
+      });
+      await user.dblClick(screen.getByTestId('register-resend-btn'));
+      expect(mocks.sendOTC).toHaveBeenCalledTimes(2);
+      await act(async () => finishResend({ pendingToken: 'ptok-2' }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('requires an invite before sending a code on an invite-only instance', async () => {
+    mocks.allowOpenRegistration = false;
+    renderRegister();
+    const user = userEvent.setup();
+    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
+    await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
+    expect(screen.getByTestId('register-submit-btn')).toBeDisabled();
+    expect(mocks.sendOTC).not.toHaveBeenCalled();
+  });
+
+  it('sends an invite-less visitor to the waitlist with the email they typed', async () => {
+    mocks.allowOpenRegistration = false;
+    renderRegister();
+    const user = userEvent.setup();
+    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await user.click(screen.getByTestId('register-join-waitlist-link'));
+
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: '/subscribe', search: { source: 'register_signup_closed' } })
+    );
+    const { state } = mocks.navigate.mock.calls.at(-1)[0];
+    expect(state({})).toEqual({ waitlistEmail: 'new@test.com' });
+  });
+
+  it('hides the waitlist link when registration is open', () => {
+    renderRegister();
+    expect(screen.queryByTestId('register-join-waitlist-link')).not.toBeInTheDocument();
+  });
+
+  it('marks a freshly registered account first session before entering the app', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({ user: { id: 'new-user' }, accessToken: 'full' });
+    renderRegister();
+    await submitCode(userEvent.setup());
+    await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalledWith({ id: 'new-user' }));
+    expect(JSON.parse(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY) as string).userId).toBe('new-user');
+    expect(mocks.setVerifiedSession).toHaveBeenCalledWith('full');
+  });
+
+  it('does not mark an existing account login as a first session', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({ id: 'existing-user', accessToken: 'full' });
+    renderRegister();
+    await submitCode(userEvent.setup());
+    await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalled());
+    expect(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY)).toBeNull();
   });
 
   it('begins a verify challenge when the account already exists and demands MFA', async () => {

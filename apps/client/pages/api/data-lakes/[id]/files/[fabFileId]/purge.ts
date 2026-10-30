@@ -24,10 +24,10 @@ import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageC
 import { storageOwnerOf } from '@bike4mind/common';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
-import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
+import { recomputeStatsForLakeTags } from '@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags';
+import { shredMemoryForLakeTags } from '@bike4mind/server-utils/dataLakes/shredMemoryForLakeTags';
 import type { DataLakeDocumentPurgeReceipt } from '@bike4mind/common';
 
 /**

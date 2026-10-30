@@ -95,6 +95,7 @@ export interface ReplyContainerProps {
   attachmentNotices?: IChatHistoryItem['attachmentNotices'];
   /** Requested-vs-delivered counts for the same turn; heads the notices banner */
   attachmentDelivery?: IChatHistoryItem['attachmentDelivery'];
+  turnTiming?: IChatHistoryItem['turnTiming'];
   /** Generalized UI side-effects from tool results */
   uiSideEffects?: IChatHistoryItem['uiSideEffects'];
   /** Session the reply belongs to; scopes its side-effect replay (see claimReplayDispatch) */

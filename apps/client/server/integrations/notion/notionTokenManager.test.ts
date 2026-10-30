@@ -33,7 +33,7 @@ vi.mock('@bike4mind/common', async importOriginal => {
 });
 
 // Mock token encryption
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: vi.fn((token: string) => (token ? `decrypted-${token}` : null)),
   encryptEnvVariables: vi.fn((vars: Array<{ key: string; value: string }>) =>
     vars.map(v => ({ key: v.key, value: `encrypted-${v.value}` }))
@@ -56,6 +56,7 @@ const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 import { NotionTokenManager, NotionReconnectRequiredError } from './notionTokenManager';
+import { encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 
 describe('NotionTokenManager', () => {
   beforeEach(() => {
@@ -289,6 +290,7 @@ describe('NotionTokenManager', () => {
       await NotionTokenManager.syncMcpServer('user-123', 'access-token', 'ws-123');
 
       expect(mockCreate).toHaveBeenCalledWith({
+        _id: expect.stringMatching(/^[a-f0-9]{24}$/),
         userId: 'user-123',
         name: 'notion',
         envVariables: expect.arrayContaining([
@@ -297,6 +299,11 @@ describe('NotionTokenManager', () => {
         ]),
         enabled: true,
         tools: [],
+      });
+      expect(encryptEnvVariables).toHaveBeenCalledWith(expect.any(Array), {
+        userId: 'user-123',
+        name: 'notion',
+        id: mockCreate.mock.calls[0][0]._id,
       });
     });
 

@@ -1,5 +1,5 @@
 import { ImageGenerationVendor } from '@bike4mind/common';
-import { ImageModerationBlockedError, OpenAIImageService } from './OpenAIImageService';
+import { OpenAIImageService } from './OpenAIImageService';
 import { TestImageService } from './TestImageService';
 import { BFLImageService } from './BFLImageService';
 import { XAIImageService } from './XAIImageService';
@@ -7,9 +7,17 @@ import { GeminiImageService } from './GeminiImageService';
 import { LocalImageService } from './LocalImageService';
 import { Logger } from '@bike4mind/observability';
 
+export {
+  ExpectedImageGenerationError,
+  ImageModerationBlockedError,
+  ImageProviderUnavailableError,
+  ImageInputRejectedError,
+  logImageGenerationFailure,
+} from './imageGenerationErrors';
+export type { ExpectedImageFailureKind } from './imageGenerationErrors';
+
 // Export the individual classes
 export {
-  ImageModerationBlockedError,
   OpenAIImageService,
   TestImageService,
   BFLImageService,

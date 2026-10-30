@@ -1,33 +1,31 @@
-import {
-  Schedule as DateTimeIcon,
-  Casino as DiceIcon,
-  Image as ImageIcon,
-  MusicNote as MusicIcon,
-  GraphicEq as AudioIcon,
-  Videocam as VideoIcon,
-  Calculate as MathIcon,
-  Schema as MermaidIcon,
-  Search as SearchIcon,
-  Language as WebFetchIcon,
-  Science as ScienceIcon,
-  WbSunny as WeatherIcon,
-  AutoFixHigh as PromptEnhancementIcon,
-  BarChart as RechartsIcon,
-  History as HistoryIcon,
-  NightsStay as MoonIcon,
-  WbTwilight as SunriseIcon,
-  Satellite as SatelliteIcon,
-  FolderOpen as KnowledgeBaseIcon,
-  Extension as ChessIcon,
-  Hub as HubIcon,
-  Functions as WolframIcon,
-  DataObject as JupyterIcon,
-  TableChart as TableChartIcon,
-  ShowChart as FinanceIcon,
-  Groups as BobPanelIcon,
-  SaveAlt as SaveToDataLakeIcon,
-  Balance as DecideIcon,
-} from '@mui/icons-material';
+import DateTimeIcon from '@mui/icons-material/Schedule';
+import DiceIcon from '@mui/icons-material/Casino';
+import ImageIcon from '@mui/icons-material/Image';
+import MusicIcon from '@mui/icons-material/MusicNote';
+import AudioIcon from '@mui/icons-material/GraphicEq';
+import VideoIcon from '@mui/icons-material/Videocam';
+import MathIcon from '@mui/icons-material/Calculate';
+import MermaidIcon from '@mui/icons-material/Schema';
+import SearchIcon from '@mui/icons-material/Search';
+import WebFetchIcon from '@mui/icons-material/Language';
+import ScienceIcon from '@mui/icons-material/Science';
+import WeatherIcon from '@mui/icons-material/WbSunny';
+import PromptEnhancementIcon from '@mui/icons-material/AutoFixHigh';
+import RechartsIcon from '@mui/icons-material/BarChart';
+import HistoryIcon from '@mui/icons-material/History';
+import MoonIcon from '@mui/icons-material/NightsStay';
+import SunriseIcon from '@mui/icons-material/WbTwilight';
+import SatelliteIcon from '@mui/icons-material/Satellite';
+import KnowledgeBaseIcon from '@mui/icons-material/FolderOpen';
+import ChessIcon from '@mui/icons-material/Extension';
+import HubIcon from '@mui/icons-material/Hub';
+import WolframIcon from '@mui/icons-material/Functions';
+import JupyterIcon from '@mui/icons-material/DataObject';
+import TableChartIcon from '@mui/icons-material/TableChart';
+import FinanceIcon from '@mui/icons-material/ShowChart';
+import BobPanelIcon from '@mui/icons-material/Groups';
+import SaveToDataLakeIcon from '@mui/icons-material/SaveAlt';
+import DecideIcon from '@mui/icons-material/Balance';
 import { B4MLLMTools, B4MLLMToolsList } from '@bike4mind/common';
 import type { SlackLlmTools } from '@bike4mind/services/llm';
 import type { ToolAvailability } from '@pages/api/settings/serverConfig';
@@ -61,6 +59,8 @@ export type PublicTools = Exclude<
   | 'describe_knowledge_base'
   | 'list_my_data_lakes'
   | 'create_data_lake'
+  // Offered server-side on every tool-capable turn; there is nothing to toggle.
+  | 'current_model_details'
   | SlackLlmTools
 >;
 

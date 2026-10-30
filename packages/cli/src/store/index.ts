@@ -8,6 +8,20 @@ import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/t
 import type { HeartbeatLogEntry } from '../features/tavern/types.js';
 import type { ReviewGateResponse } from '../tools/reviewGateTool.js';
 
+/**
+ * How input submitted mid-turn is delivered: a steer joins the running turn at
+ * its next model request; a follow-up waits and runs as the next turn.
+ */
+export type QueuedMessageKind = 'steer' | 'followUp';
+
+export type QueuedMessage = {
+  /** What is sent: the input with any `@file` references already expanded. */
+  text: string;
+  kind: QueuedMessageKind;
+  /** What the user typed, when it differs from `text`; shown in the queue and restored on cancel. */
+  typed?: string;
+};
+
 /** Active job statuses (jobs still in progress) */
 const ACTIVE_STATUSES: ReadonlySet<BackgroundAgentStatus> = new Set(['running', 'queued']);
 
@@ -43,6 +57,7 @@ interface PermissionPromptState {
   args: unknown;
   preview?: string;
   canBeTrusted: boolean;
+  sessionScope?: string[] | null;
   kind?: PermissionPromptKind;
   resolve: (response: { action: PermissionResponse }) => void;
 }
@@ -88,15 +103,23 @@ interface CliStore {
   clearPendingMessages: () => void;
   completePendingMessage: (index: number, finalMessage: Message) => void;
 
-  // User-message queue: when the user submits while the agent is already
-  // processing, the new message is enqueued here and drained by the
-  // handleMessage finally block. All queued messages are collated into a
-  // single combined prompt on drain (see dequeueAllMessages). Mirrors the
-  // permissionQueue shape.
-  messageQueue: string[];
-  enqueueMessage: (message: string) => void;
+  // User-message queue: input submitted while a turn is in flight. Steers are
+  // injected into the running turn's next model request (session/steering.ts);
+  // whatever is still queued when the turn settles - follow-ups plus steers
+  // that never reached a request boundary - runs as one combined next turn
+  // (session/turnController.ts). Entries keep submission order across kinds.
+  messageQueue: QueuedMessage[];
+  enqueueMessage: (text: string, kind?: QueuedMessageKind, typed?: string) => void;
+  /** Remove and return the queued steers, in submission order. */
+  takeSteerMessages: () => string[];
+  /** Remove and return every queued entry's text, in submission order. */
   dequeueAllMessages: () => string[];
+  /** Move the queue back into the input (queue first, then any draft) so a cancel never loses it. */
+  restoreQueueToInput: () => void;
   clearMessageQueue: () => void;
+  /** True from the start of runTurn until its last queued follow-up settles, including after an eager ESC. */
+  turnInFlight: boolean;
+  setTurnInFlight: (inFlight: boolean) => void;
 
   // Operations that read the session, await, then write it back from that snapshot (agent turns,
   // custom commands, background completion, compaction; handoff holds across its LLM call). Anything else that appends to the session waits for
@@ -288,17 +311,41 @@ export const useCliStore = create<CliStore>(set => ({
 
   // User-message queue
   messageQueue: [],
-  enqueueMessage: message => set(state => ({ messageQueue: [...state.messageQueue, message] })),
+  enqueueMessage: (text, kind = 'steer', typed) =>
+    set(state => ({
+      messageQueue: [
+        ...state.messageQueue,
+        { text, kind, ...(typed !== undefined && typed !== text ? { typed } : {}) },
+      ],
+    })),
+  takeSteerMessages: () => {
+    let steers: string[] = [];
+    set(state => {
+      steers = state.messageQueue.filter(entry => entry.kind === 'steer').map(entry => entry.text);
+      if (steers.length === 0) return state;
+      return { messageQueue: state.messageQueue.filter(entry => entry.kind !== 'steer') };
+    });
+    return steers;
+  },
   dequeueAllMessages: () => {
     let all: string[] = [];
     set(state => {
       if (state.messageQueue.length === 0) return state;
-      all = state.messageQueue;
+      all = state.messageQueue.map(entry => entry.text);
       return { messageQueue: [] };
     });
     return all;
   },
+  restoreQueueToInput: () =>
+    set(state => {
+      if (state.messageQueue.length === 0) return state;
+      const restored = state.messageQueue.map(entry => entry.typed ?? entry.text);
+      if (state.inputValue) restored.push(state.inputValue);
+      return { messageQueue: [], inputValue: restored.join('\n') };
+    }),
   clearMessageQueue: () => set({ messageQueue: [] }),
+  turnInFlight: false,
+  setTurnInFlight: inFlight => set({ turnInFlight: inFlight }),
 
   // UI state
   isThinking: false,

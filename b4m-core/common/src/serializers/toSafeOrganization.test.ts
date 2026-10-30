@@ -12,6 +12,7 @@ const fullOrg = {
   systemPrompt: 'internal enterprise context',
   billingContact: 'billing@acme.com',
   stripeCustomerId: 'cus_SECRET',
+  signupGrantUnlockCount: 3,
   userDetails: [{ id: 'owner1', email: 'owner@acme.com', name: 'Owner', usedCredits: 10, lastCreditUsedAt: null }],
 } as unknown as IOrganization;
 
@@ -23,6 +24,7 @@ describe('toSafeOrganization', () => {
       { userId: 'stranger', isAdmin: false },
     ]) {
       expect('stripeCustomerId' in toSafeOrganization(fullOrg, viewer)!).toBe(false);
+      expect('signupGrantUnlockCount' in toSafeOrganization(fullOrg, viewer)!).toBe(false);
     }
   });
 

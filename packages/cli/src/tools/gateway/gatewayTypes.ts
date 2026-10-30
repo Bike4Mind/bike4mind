@@ -20,11 +20,21 @@ export type ToolArgs = Record<string, unknown>;
  */
 export type PermissionPromptKind = 'tool' | 'directory-grant' | 'sandbox-escalation';
 
+export type PermissionPromptOptions = {
+  /**
+   * What "allow for this session" would remember: undefined trusts the whole tool, null means
+   * nothing would be remembered so the option is not offered. Computed from the call's own args,
+   * since the args shown may be the sandbox-wrapped command.
+   */
+  sessionScope?: string[] | null;
+};
+
 export type ShowPermissionPrompt = (
   toolName: string,
   args: unknown,
   preview?: string,
-  kind?: PermissionPromptKind
+  kind?: PermissionPromptKind,
+  options?: PermissionPromptOptions
 ) => Promise<{ action: PermissionResponse }>;
 
 /** The same callback under its kind-aware name; kept so call sites read at the point of use. */

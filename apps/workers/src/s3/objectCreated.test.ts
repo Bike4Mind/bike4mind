@@ -58,7 +58,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: h.admit }));
+vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload: h.admit }));
 vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: h.recordRejectedUploadBatch }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({

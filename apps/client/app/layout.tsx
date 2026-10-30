@@ -1,7 +1,7 @@
 import '@/app/globals.css';
 import Script from 'next/script';
 import { ReactNode } from 'react';
-import { Source_Serif_4, Libre_Franklin, JetBrains_Mono } from 'next/font/google';
+import { Source_Serif_4, Libre_Franklin, JetBrains_Mono, Inter } from 'next/font/google';
 import { AppRouterCacheProvider } from '@mui/material-nextjs/v16-appRouter';
 import { ClientProviders } from './providers';
 import { ColorSchemeScript } from './ColorSchemeScript';
@@ -62,6 +62,15 @@ const jetbrainsMono = JetBrains_Mono({
   variable: '--font-reading-mono',
 });
 
+// The admin's face (components/admin/DESIGN_GUIDE.md, "Type"), read by the admin skin through
+// the variable. Not preloaded: only admins ever see it.
+const adminSans = Inter({
+  subsets: ['latin'],
+  display: 'swap',
+  preload: false,
+  variable: '--font-admin-sans',
+});
+
 export const viewport = {
   width: 'device-width',
   initialScale: 1,
@@ -79,7 +88,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html
       lang="en"
-      className={`${uiSans.className} ${sourceSerif.variable} ${uiSans.variable} ${jetbrainsMono.variable}`}
+      className={`${uiSans.className} ${sourceSerif.variable} ${uiSans.variable} ${jetbrainsMono.variable} ${adminSans.variable}`}
       suppressHydrationWarning
     >
       <body>

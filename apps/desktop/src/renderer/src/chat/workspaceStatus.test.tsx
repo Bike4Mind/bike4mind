@@ -81,7 +81,7 @@ describe('the worktree status on a first turn', () => {
   function send(text: string): Promise<void> {
     let sent!: Promise<void>;
     act(() => {
-      sent = latest?.send(text) ?? Promise.resolve();
+      sent = (latest?.send(text) ?? Promise.resolve()).then(() => undefined);
     });
     return sent;
   }

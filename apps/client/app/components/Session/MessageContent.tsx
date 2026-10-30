@@ -38,7 +38,7 @@ import { useForkSession, useGetSession, useSnipSession } from '@client/app/hooks
 import { getWorkspaceSurface, type WorkspaceSurface } from '@bike4mind/common';
 import { surfaceRouteExists, useWorkspacePresenter, useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
 import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
-import { Refresh } from '@mui/icons-material';
+import Refresh from '@mui/icons-material/Refresh';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import CodeIcon from '@mui/icons-material/Code';
 import ForkRightIcon from '@mui/icons-material/ForkRight';
@@ -55,18 +55,21 @@ import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { feedbackSessionQueryKey, useGetFeedbackBySessionId } from '@client/app/hooks/data/feedback';
 import { isOptimisticId, SendMessageOptions } from '@client/app/utils/llm';
-import { Save as SaveIcon, Add as AddIcon } from '@mui/icons-material';
+import SaveIcon from '@mui/icons-material/Save';
+import AddIcon from '@mui/icons-material/Add';
 import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { usePromptMetaInspector } from '@client/app/components/Session/PromptMetaInspector';
 import { AnswerFeedbackPrompt } from '@client/app/components/Session/AnswerFeedbackPrompt';
 import HiveIcon from '@mui/icons-material/Hive';
+import FingerprintIcon from '@mui/icons-material/Fingerprint';
+import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 import ContextBreakdownModal from '@client/app/components/Session/ContextBreakdownModal';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import DonutSmallIcon from '@mui/icons-material/DonutSmall';
 import ContentPreviewModal from '@client/app/components/ProfileModal/ContentPreviewModal';
-import { Article as ArticleIcon } from '@mui/icons-material';
+import ArticleIcon from '@mui/icons-material/Article';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import EditIcon from '@mui/icons-material/Edit';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
@@ -428,6 +431,7 @@ const MessageContent: React.FC<ContentProps> = memo(
           ...fetchedQuest.promptMeta,
           createdAt: fetchedQuest.createdAt,
           updatedAt: fetchedQuest.updatedAt,
+          turnTiming: fetchedQuest.turnTiming,
         };
         openPromptMetaInspector(promptMetaWithTimestamps, fetchedQuest.replies || null);
         return;
@@ -455,6 +459,7 @@ const MessageContent: React.FC<ContentProps> = memo(
           creditsUsed: fetchedQuest.creditsUsed,
           createdAt: fetchedQuest.createdAt,
           updatedAt: fetchedQuest.updatedAt,
+          turnTiming: fetchedQuest.turnTiming,
         };
         openPromptMetaInspector(questPromptMeta, fetchedQuest.replies || null);
       }
@@ -490,6 +495,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             ...fetchedQuest.promptMeta,
             createdAt: fetchedQuest.createdAt,
             updatedAt: fetchedQuest.updatedAt,
+            turnTiming: fetchedQuest.turnTiming,
           };
           openPromptMetaInspector(promptMetaWithTimestamps, fetchedQuest.replies || null);
         } else {
@@ -508,6 +514,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             creditsUsed: fetchedQuest.creditsUsed,
             createdAt: fetchedQuest.createdAt,
             updatedAt: fetchedQuest.updatedAt,
+            turnTiming: fetchedQuest.turnTiming,
           };
           openPromptMetaInspector(questPromptMeta, fetchedQuest.replies || null);
         }
@@ -751,6 +758,18 @@ const MessageContent: React.FC<ContentProps> = memo(
           </ListItemDecorator>
           {ANSWER_DIAGNOSIS_TITLE}
         </MenuItem>
+        {/* An optimistic id names no quest, so there is nothing for support to look up. */}
+        {messageData.id && isPersistedMessage && (
+          <MenuItem
+            data-testid="message-copy-turn-id-btn"
+            onClick={() => messageData.id && copyTextWithToast(messageData.id, 'Turn ID copied')}
+          >
+            <ListItemDecorator>
+              <FingerprintIcon />
+            </ListItemDecorator>
+            Copy turn ID
+          </MenuItem>
+        )}
         {contextBreakdownAvailable && (
           <MenuItem data-testid="message-context-breakdown-btn" onClick={() => setShowContextBreakdown(true)}>
             <ListItemDecorator>

@@ -13,6 +13,7 @@ const MESSAGES: Record<VideoGenerationApiErrorCode, string> = {
   unsupported_mode: 'This model does not support that mode.',
   missing_input_image: 'Choose an image to animate.',
   unexpected_input_image: 'Remove the image, or switch to image to video.',
+  unsupported_input_role: 'This model does not take that kind of image, or not that many. Remove one.',
   unsupported_audio_option: 'This model does not let you turn audio on or off.',
   invalid_request: 'The request was not valid. Check the form and try again.',
   model_disabled: 'This model has been turned off. Pick another model.',

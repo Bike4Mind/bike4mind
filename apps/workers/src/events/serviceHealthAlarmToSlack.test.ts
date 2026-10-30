@@ -1,13 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SNSEvent } from 'aws-lambda';
-import { handler } from './serviceHealthAlarmToSlack';
 
-vi.mock('sst', () => ({
-  Resource: {
-    SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: 'https://hooks.slack.example/webhook' },
-    App: { stage: 'production' },
-  },
+const resource = vi.hoisted(() => ({
+  SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: 'https://hooks.slack.example/webhook' },
+  SLACK_ALARMS_WEBHOOK_URL: undefined as { value: string } | undefined,
+  App: { stage: 'production' },
 }));
+
+vi.mock('sst', () => ({ Resource: resource }));
+
+import { handler } from './serviceHealthAlarmToSlack';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -18,9 +20,11 @@ function makeEvent(...payloads: unknown[]): SNSEvent {
   } as unknown as SNSEvent;
 }
 
+/** Fallback text plus the serialized blocks and attachments, so assertions cover everything posted. */
 function postedText(callIndex = 0): string {
   const [, init] = mockFetch.mock.calls[callIndex];
-  return JSON.parse(init.body as string).text;
+  const body = JSON.parse(init.body as string);
+  return `${body.text}\n${JSON.stringify(body.blocks)}\n${JSON.stringify(body.attachments)}`;
 }
 
 const noTasksAlarm = {
@@ -30,7 +34,7 @@ const noTasksAlarm = {
   NewStateValue: 'ALARM',
   NewStateReason: 'Insufficient Data: 2 datapoints were missing',
   StateChangeTime: '2026-07-31T17:15:00.000Z',
-  Region: 'US East (Ohio)',
+  Region: 'us-east-2',
 };
 
 // Shaped after the real event that fired every ~13 minutes while the fanout was down.
@@ -55,6 +59,13 @@ describe('serviceHealthAlarmToSlack handler', () => {
   beforeEach(() => {
     mockFetch.mockReset();
     mockFetch.mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
+    resource.SLACK_ALARMS_WEBHOOK_URL = undefined;
+  });
+
+  it('posts to the alarms channel when SLACK_ALARMS_WEBHOOK_URL is set', async () => {
+    resource.SLACK_ALARMS_WEBHOOK_URL = { value: 'https://hooks.slack.example/alarms' };
+    await handler(makeEvent(noTasksAlarm));
+    expect(mockFetch.mock.calls[0][0]).toBe('https://hooks.slack.example/alarms');
   });
 
   it('reports a no-tasks alarm with the service name and stage', async () => {
@@ -66,11 +77,14 @@ describe('serviceHealthAlarmToSlack handler', () => {
     expect(init.method).toBe('POST');
     const text = postedText();
     expect(text).toContain('bike4mind-production-ecs-subscriber-fanout-no-tasks');
-    expect(text).toContain('Stage: production');
+    expect(text).toContain('production');
   });
 
-  it('suppresses OK and INSUFFICIENT_DATA transitions', async () => {
+  it('posts a resolved message for OK and skips INSUFFICIENT_DATA', async () => {
     await handler(makeEvent({ ...noTasksAlarm, NewStateValue: 'OK' }));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body as string).text).toContain('Resolved');
+    mockFetch.mockClear();
     await handler(makeEvent({ ...noTasksAlarm, NewStateValue: 'INSUFFICIENT_DATA' }));
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -83,9 +97,16 @@ describe('serviceHealthAlarmToSlack handler', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const text = postedText();
     expect(text).toContain('service:subscriberFanoutV2');
-    expect(text).toContain('Failed To Start');
+    expect(text).toContain('failed to start');
     expect(text).toContain('CannotPullContainerError');
     expect(text).not.toContain('Task failed to start');
+  });
+
+  it('renders the service name literally in the header and escaped in the fallback text', async () => {
+    await handler(makeEvent({ ...taskFailedToStart, detail: { ...taskFailedToStart.detail, group: 'svc<a&b>' } }));
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.blocks[0].text.text).toContain('svc<a&b>');
+    expect(body.text).toContain('svc&lt;a&amp;b&gt;');
   });
 
   it('falls back to stoppedReason when no container reported one', async () => {
@@ -121,10 +142,10 @@ describe('serviceHealthAlarmToSlack handler', () => {
   });
 
   it('reports every actionable record in a batched delivery', async () => {
-    await handler(makeEvent(noTasksAlarm, { ...noTasksAlarm, NewStateValue: 'OK' }, taskFailedToStart));
+    await handler(makeEvent(noTasksAlarm, { ...noTasksAlarm, NewStateValue: 'INSUFFICIENT_DATA' }, taskFailedToStart));
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(postedText(0)).toContain('no-tasks');
-    expect(postedText(1)).toContain('Failed To Start');
+    expect(postedText(1)).toContain('failed to start');
   });
 
   it('throws when Slack rejects the post so the subscription redrives', async () => {

@@ -1,4 +1,12 @@
-import { IUser, IUserRepository, UserLevelType } from '@bike4mind/common';
+import {
+  isReservedUsername,
+  resolveUserStorageLimit,
+  IUser,
+  IUserRepository,
+  RESERVED_USERNAME_MESSAGE,
+  UserLevelType,
+} from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 import bcrypt from 'bcryptjs';
 
 export async function hashPassword(password: string): Promise<string> {
@@ -12,6 +20,9 @@ export async function hashPassword(password: string): Promise<string> {
 // `email` may be omitted to create an emailless account - the same shape an OAuth
 // signup with no provider-verified email produces (see verifyCallback's create path).
 // Such an account cannot receive a login one-time code until it adds an address.
+//
+// A reserved username (isReservedUsername) is refused unless the caller passes
+// `allowReservedUsername: true`, which only admin-gated and test-only paths do - never from request input.
 export async function createUser(
   params: {
     username: string;
@@ -23,6 +34,7 @@ export async function createUser(
     isAdmin?: boolean;
     initialCredits?: number;
     emailVerified?: boolean;
+    allowReservedUsername?: boolean;
   },
   adapters: {
     db: {
@@ -30,8 +42,13 @@ export async function createUser(
     };
   }
 ): Promise<IUser> {
-  const { username, name, email, record, tags, level, isAdmin, initialCredits, emailVerified } = params;
+  const { username, name, email, record, tags, level, isAdmin, initialCredits, emailVerified, allowReservedUsername } =
+    params;
   const { db } = adapters;
+
+  if (!allowReservedUsername && isReservedUsername(username)) {
+    throw new BadRequestError(RESERVED_USERNAME_MESSAGE);
+  }
 
   // Pass raw username/email - `findByUsernameOrEmail` owns the exact-match
   // escaping + anchoring. Pre-escaping here would be double-escaped by that
@@ -46,13 +63,16 @@ export async function createUser(
   const plaintextPassword = record?.password ?? null;
   const password = plaintextPassword && (await hashPassword(plaintextPassword));
 
+  const storage = resolveUserStorageLimit(record ?? {});
   const userRecord: Omit<IUser, 'id'> = {
     name: name ?? username,
     groups: [],
     mementos: [],
     ...record,
     isAdmin: isAdmin ?? false,
-    storageLimit: 1000,
+    storageLimit: storage.limitMb,
+    storageLimitOverride: record?.storageLimitOverride ?? (storage.source === 'override' ? storage.limitMb : null),
+    planStorageLimit: record?.planStorageLimit ?? null,
     currentStorageSize: 0,
     currentCredits: initialCredits ?? 0,
     level: level ? level : 'DemoUser',

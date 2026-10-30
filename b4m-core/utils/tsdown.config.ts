@@ -44,6 +44,8 @@ export default defineConfig({
     'src/musicProviders/index.ts',
     // Decision provider interface, registry, retry policy and adapters. Same isolation as videoProviders.
     'src/decisionProviders/index.ts',
+    // Batch-first embedding provider interface, registry and adapters. Same isolation as videoProviders.
+    'src/embeddingProviders/index.ts',
   ],
   format: ['esm', 'cjs'],
   dts: true,

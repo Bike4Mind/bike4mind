@@ -337,6 +337,37 @@ describe('retry', () => {
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
+    it('reports each scheduled retry to onRetry with its attempt, delay and error', async () => {
+      const first = createAxiosError(429);
+      const second = createAxiosError(503);
+      const fn = vi.fn().mockRejectedValueOnce(first).mockRejectedValueOnce(second).mockResolvedValue('success');
+      const onRetry = vi.fn();
+
+      await withRetry(fn, { ...shortDelay, onRetry });
+
+      expect(onRetry).toHaveBeenCalledTimes(2);
+      expect(onRetry).toHaveBeenNthCalledWith(1, { attempt: 1, delayMs: 5, error: first });
+      expect(onRetry).toHaveBeenNthCalledWith(2, { attempt: 2, delayMs: 10, error: second });
+    });
+
+    it('does not call onRetry for an error it will not retry', async () => {
+      const onRetry = vi.fn();
+
+      await expect(withRetry(vi.fn().mockRejectedValue(createAxiosError(400)), { onRetry })).rejects.toThrow();
+
+      expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it('keeps retrying when onRetry throws', async () => {
+      const fn = vi.fn().mockRejectedValueOnce(createAxiosError(429)).mockResolvedValue('success');
+      const onRetry = vi.fn(() => {
+        throw new Error('telemetry broke');
+      });
+
+      await expect(withRetry(fn, { ...shortDelay, onRetry })).resolves.toMatchObject({ result: 'success' });
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
     it('should call logger on retry', async () => {
       const logger = {
         info: vi.fn(),

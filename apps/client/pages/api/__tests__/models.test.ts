@@ -25,7 +25,20 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: (...a: unknown[]) => mockGetEffectiveLLMApiKeys(...a) },
 }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
+// Credits off, so every listed model reaches the parity rows; the unpriced-text filter is
+// covered in server/utils/callerModelList.test.ts.
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsByNames: vi.fn(),
+  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsValue: vi.fn(() => false),
+}));
+
+// The free-tier gate is off here (no admin setting), so entitlements are never read; the mock only
+// keeps the Mongoose model chain out. The gate itself is covered in server/utils/callerModelList.test.ts.
+vi.mock('@server/entitlements', () => ({
+  getUserEntitlements: vi.fn(async () => []),
+  toEntitlementUser: (user: unknown) => user,
+}));
 
 // Strip the middleware chain (DB connect, auth, logging) so the test exercises
 // the route body, matching the other pages/api suites.
@@ -232,15 +245,17 @@ describe('/api/models cache identity', () => {
   it('caches an authenticated caller under its own user id', async () => {
     await callRoute('user-1');
 
-    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:user-1' });
-    expect(mockCacheCreateOrUpdate).toHaveBeenCalledWith(expect.objectContaining({ key: 'model-list:user-1' }));
+    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:user-1:credits-off' });
+    expect(mockCacheCreateOrUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'model-list:user-1:credits-off' })
+    );
   });
 
   it('passes null down for an unauthenticated caller and keys it away from "system"', async () => {
     await callRoute();
 
     expect(mockGetEffectiveLLMApiKeys).toHaveBeenCalledWith(null, expect.anything());
-    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:anonymous' });
+    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:anonymous:credits-off' });
     expect(mockCacheCreateOrUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ key: 'model-list:system' }));
   });
 

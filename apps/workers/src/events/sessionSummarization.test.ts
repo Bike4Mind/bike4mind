@@ -98,7 +98,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
       modelId: 'test-model',
@@ -547,7 +547,45 @@ describe('sessionSummarization requester write-time re-check', () => {
       expect.objectContaining({ id: SESSION_ID, summary: 'A summary of the session.', summaryTrigger: 'manual' }),
       { includeGlobalWrite: true }
     );
-    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE });
+    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE, payerId: undefined });
+  });
+
+  it.each([OWNER, SHAREE, 'user-payer'])(
+    'skips queued AI work when %s is pending review at execution',
+    async heldId => {
+      h.userFindById.mockImplementation(async id => ({
+        id,
+        isAdmin: false,
+        ...(id === heldId ? { riskScore: { reviewState: 'pending' as const } } : {}),
+      }));
+      const requesterId = heldId === OWNER ? undefined : SHAREE;
+      await run({ requesterId, payerId: 'user-payer', callTagging: true });
+      expect(h.modelMessages).not.toHaveBeenCalled();
+      expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+      expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+      expect(h.publishTag).not.toHaveBeenCalled();
+    }
+  );
+
+  it('bills the sharee who asked, not the owner', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });
+
+    await run({ requesterId: SHAREE });
+
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: SHAREE }) })
+    );
+  });
+
+  it('bills the named payer and forwards it to the tag job it queues', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });
+
+    await run({ payerId: 'user-admin', callTagging: true });
+
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'user-admin' }) })
+    );
+    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: undefined, payerId: 'user-admin' });
   });
 
   it('stops before the FabFile, upload and tag job when the requester lost access mid-run', async () => {

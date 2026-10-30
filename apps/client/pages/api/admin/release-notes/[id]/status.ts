@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { releaseNoteRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -9,7 +10,7 @@ import {
   loadDenylistOrThrow,
   noteOrThrow,
   toAdminReleaseNote,
-} from '@server/releaseNotes/adminReleaseNotes';
+} from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
 
 const ActionSchema = z.object({ action: z.enum(['hide', 'unhide', 'publishNow']) }).strict();
 
@@ -39,7 +40,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       : action === 'unhide'
         ? await releaseNoteRepository.unhide(id)
         : await releaseNoteRepository.publishNow(id);
-  return res.json(toAdminReleaseNote(noteOrThrow(result)));
+  const note = noteOrThrow(result);
+  await recordAdminActionFromRequest(req, {
+    action: 'settings.release_note.status_changed',
+    target: { kind: 'settings', id, displayName: `release note ${note.releaseTag}` },
+    summary: `${action} release note ${note.releaseTag}`,
+    details: { releaseTag: note.releaseTag, action },
+  });
+  return res.json(toAdminReleaseNote(note));
 });
 
 export const config = {

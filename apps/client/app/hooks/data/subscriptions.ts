@@ -3,10 +3,10 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { resolveConsent } from '@client/app/utils/consentRegion';
 import { checkoutSurfaceParam, trackBeginCheckout, type UpsellSurface } from '@client/app/utils/funnelEvents';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
-import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionPlanSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
-import { type OrgSubscriptionSubscribeRequest } from '@client/lib/subscriptions/schema';
+import { type OrgSubscriptionSubscribeRequest } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { z } from 'zod';
@@ -116,69 +116,6 @@ export const useGetSubscriptions = (
     queryKey: ['subscriptions'],
     queryFn: async () => {
       const response = await api.get<IUserSubscription[]>(`/api/subscriptions/own`);
-      return response.data;
-    },
-    enabled,
-  });
-};
-
-/**
- * Hook for admin users to get all subscriptions across the platform
- */
-export const useGetAllSubscriptions = (
-  options: {
-    enabled?: boolean;
-    search?: string;
-    page?: number;
-    limit?: number;
-  } = {}
-) => {
-  const { enabled = true, search, page = 1, limit = 10 } = options;
-
-  return useQuery({
-    queryKey: ['admin', 'subscriptions', search, page, limit],
-    queryFn: async () => {
-      const params = {
-        ...(search ? { search } : {}),
-        page,
-        limit,
-      };
-      const response = await api.get<{
-        subscriptions: Array<
-          IUserSubscription & { owner: { username: string; email: string; name: string; _id: string } }
-        >;
-        pagination: {
-          total: number;
-          page: number;
-          limit: number;
-          totalPages: number;
-        };
-      }>('/api/subscriptions', { params });
-      return response.data;
-    },
-    enabled,
-  });
-};
-
-/**
- * Hook for admin users to get subscription statistics
- */
-export const useGetSubscriptionStats = (
-  options: {
-    enabled?: boolean;
-  } = {}
-) => {
-  const { enabled = true } = options;
-
-  return useQuery({
-    queryKey: ['admin', 'subscription-stats'],
-    queryFn: async () => {
-      const response = await api.get<{
-        total: number;
-        active: number;
-        expiringThisMonth: number;
-        canceled: number;
-      }>('/api/subscriptions/stats');
       return response.data;
     },
     enabled,
@@ -372,11 +309,19 @@ export const useRemoveSubscription = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ userId, subscriptionId }: { userId: string; subscriptionId: string }) => {
+    mutationFn: async ({
+      userId,
+      subscriptionId,
+      reason,
+    }: {
+      userId: string;
+      subscriptionId: string;
+      reason: string;
+    }) => {
       const { data } = await api.delete<{
         success: boolean;
         message: string;
-      }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/remove`);
+      }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/remove`, { data: { reason } });
       return data;
     },
     onSuccess: (data, variables) => {
@@ -403,10 +348,12 @@ export const useUpdateSubscriptionCredits = () => {
       userId,
       subscriptionId,
       creditsPerCycle,
+      reason,
     }: {
       userId: string;
       subscriptionId: string;
       creditsPerCycle: number;
+      reason: string;
     }) => {
       const { data } = await api.put<{
         success: boolean;
@@ -414,6 +361,7 @@ export const useUpdateSubscriptionCredits = () => {
         creditsPerCycle: number;
       }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/credits`, {
         creditsPerCycle,
+        reason,
       });
       return data;
     },

@@ -33,9 +33,27 @@ export function getSubscriptionPlanByPriceId(priceId: string) {
  */
 export function getEntitlingPlanByPriceId(
   priceId: string
-): Pick<SubscriptionPlanDetail, 'priceId' | 'name' | 'interval' | 'tier'> | undefined {
+): (Pick<SubscriptionPlanDetail, 'priceId' | 'name' | 'interval' | 'tier'> & { credits?: number }) | undefined {
   if (!priceId) return undefined;
-  return SUBSCRIPTION_PLANS_MAP[priceId] ?? (priceId === TEAM_PLAN.priceId ? TEAM_PLAN : undefined);
+  if (Object.hasOwn(SUBSCRIPTION_PLANS_MAP, priceId)) return SUBSCRIPTION_PLANS_MAP[priceId];
+  return priceId === TEAM_PLAN.priceId ? TEAM_PLAN : undefined;
+}
+
+/**
+ * The highest ladder tier across active subscription rows, or undefined when none is on the ladder.
+ * Plans with no `tier` (standalone single-product plans sold off the main ladder) confer none.
+ */
+export function getHighestLadderTier(
+  activeSubscriptions: readonly { priceId: string }[]
+): UserSubscriptionTier | undefined {
+  let highestTier: UserSubscriptionTier | undefined;
+  for (const subscription of activeSubscriptions) {
+    const planTier = getEntitlingPlanByPriceId(subscription.priceId)?.tier;
+    if (planTier !== undefined && (highestTier === undefined || planTier > highestTier)) {
+      highestTier = planTier;
+    }
+  }
+  return highestTier;
 }
 
 /**

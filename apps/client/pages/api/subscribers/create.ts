@@ -1,3 +1,4 @@
+import { SUBSCRIBER_SOURCES, escapeSlackLine } from '@bike4mind/common';
 import { Subscriber } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
@@ -13,6 +14,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       firstName: z.string().min(1).max(50),
       lastName: z.string().min(1).max(50),
       email: z.string().email(),
+      source: z.enum(SUBSCRIBER_SOURCES).default('subscribe_page'),
     })
     .parse(req.body);
 
@@ -29,10 +31,14 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
   try {
     const brand = process.env.APP_NAME || '';
+    const blockedSignupNote =
+      validatedBody.source === 'subscribe_page'
+        ? ''
+        : `\nThey tried to sign up while registration was closed (source: \`${validatedBody.source}\`).\n`;
     const slackMessage = `🎯 **New Subscriber Alert!**
 
-📧 **${validatedBody.firstName} ${validatedBody.lastName}** (${validatedBody.email}) just requested an invite code!
-
+📧 **${escapeSlackLine(validatedBody.firstName)} ${escapeSlackLine(validatedBody.lastName)}** (${escapeSlackLine(validatedBody.email)}) just requested an invite code!
+${blockedSignupNote}
 👋 They're waiting at the door and ready to join${brand ? ` ${brand}` : ''}. Time to roll out the red carpet!
 
 🎟️ An admin can generate their invite code with custom credits and storage in the admin panel.

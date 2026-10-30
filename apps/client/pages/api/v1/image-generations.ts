@@ -14,13 +14,16 @@ import { generateImageContract, GenerateImageIvokeParams, redactSessionForClient
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
-import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@server/utils/orgAccess';
+import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';
 import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(generateImageContract).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const body = req.validated;
 
   req.logger.updateMetadata({
@@ -43,7 +46,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     promptResolution: body.prompt_resolution ?? 'auto',
   });
 
-  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
+  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds, 'generate');
 
   // Loud rejection before any session or billing work: the schemas strip unknown keys, so a
   // billing-org-shaped stray would otherwise vanish and bill the caller's home org.
@@ -139,6 +142,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     const startTime = performance.now();
 
     const quest = await getImageGeneration().invoke({
+      adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       userId: req.user.id,
       body: enhancedBody,
     });

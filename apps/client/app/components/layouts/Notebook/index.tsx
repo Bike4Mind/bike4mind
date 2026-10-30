@@ -12,6 +12,7 @@ import { useTheme as useJoyTheme } from '@mui/joy';
 import KnowledgeModal from '../../Knowledge/KnowledgeModal';
 import { HelpPanel, HelpSuggestionBanner } from '../../help';
 import DataLakeUploadIndicator from '../../DataLakeWizard/DataLakeUploadIndicator';
+import GearsDiscovery from '@client/app/components/gears/GearsDiscoveryModal';
 import { useHelpKeyboardShortcut } from '@client/app/hooks/useHelpKeyboardShortcut';
 import { useCommandPaletteShortcut } from '@client/app/hooks/useCommandPaletteShortcut';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -25,6 +26,7 @@ import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.gener
 import { edgeToEdgePaths, isEdgeToEdgePath } from '@client/app/utils/premiumEdgeToEdge';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { routeHeading } from './routeHeading';
+import { useSignupGrantHeartbeat } from '@client/app/hooks/useSignupGrantHeartbeat';
 
 // Empty in the open-core build, where premiumRoutes is empty.
 const EDGE_TO_EDGE_PATHS = edgeToEdgePaths(premiumRoutes);
@@ -84,6 +86,7 @@ const pulseBorder = keyframes`
 `;
 
 const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }) => {
+  useSignupGrantHeartbeat();
   const openSideNav = useNotebookLayout(s => s.openSideNav);
   const isMobile = useIsMobile();
   const isImpersonating = useAccessToken(s => s.impersonating);
@@ -193,6 +196,7 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
       <HelpPanel />
       <HelpSuggestionBanner />
       <DataLakeUploadIndicator />
+      <GearsDiscovery />
     </Grid>
   );
 };

@@ -218,6 +218,8 @@ async function seed(overrides: SeedOverrides = {}) {
   await AdminSettings.create([
     { settingName: 'defaultEmbeddingModel', settingValue: 'text-embedding-3-small' },
     { settingName: 'openaiDemoKey', settingValue: 'demo-openai-key' },
+    // The fixture caller has no paid plan and test-model is not on the free-tier allowlist.
+    { settingName: 'freeTierModelGateEnabled', settingValue: 'false' },
   ]);
 
   const inScopeA = await FabFile.create({

@@ -3,6 +3,7 @@ import type { VideoModel } from '@bike4mind/common';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
 import { parseVideoModels } from './media/videoModels';
 import { supportsReasoningEffort } from './reasoningEffort';
+import { currentLocalContext, OllamaLocal } from './OllamaLocal';
 
 /**
  * The model list is per-DEPLOYMENT and per-ACCOUNT, never a constant in this client.
@@ -38,6 +39,7 @@ interface WireModel {
   name?: unknown;
   type?: unknown;
   backend?: unknown;
+  releaseDate?: unknown;
   contextWindow?: unknown;
   max_tokens?: unknown;
   supportsTools?: unknown;
@@ -68,20 +70,30 @@ export interface ModelCatalogDeps {
 export class ModelCatalog {
   private cache: { environmentUrl: string; models: ChatModelOption[]; expiresAt: number } | null = null;
 
+  private localCache: { models: ChatModelOption[]; expiresAt: number } | null = null;
+
   /** Separate from `cache` because the two views are read on different paths; see listImageModels. */
   private imageCache: { environmentUrl: string; models: string[]; expiresAt: number } | null = null;
 
   private videoCache: { environmentUrl: string; models: VideoModel[]; expiresAt: number } | null = null;
 
-  constructor(private readonly deps: ModelCatalogDeps) {}
+  constructor(
+    private readonly deps: ModelCatalogDeps,
+    private readonly local: Pick<OllamaLocal, 'models'> = new OllamaLocal()
+  ) {}
 
   /** Cached models for the current environment, without a round trip. Null when nothing is cached. */
   cached(): ChatModelOption[] | null {
     const entry = this.cache;
+    if (!this.deps.getApiClient()) {
+      return this.localCache && Date.now() < this.localCache.expiresAt
+        ? withCurrentContexts(this.localCache.models)
+        : null;
+    }
     if (!entry) return null;
     if (entry.environmentUrl !== this.deps.getEnvironmentUrl()) return null;
     if (Date.now() >= entry.expiresAt) return null;
-    return entry.models;
+    return this.mergeLocal(entry.models);
   }
 
   /** Retain a known thinking preference through a failed refresh, without offering stale models. */
@@ -92,28 +104,38 @@ export class ModelCatalog {
   }
 
   async list(force = false): Promise<ChatModelCatalog> {
-    if (!force) {
-      const hit = this.cached();
-      if (hit) return { models: hit };
-    }
-
     const api = this.deps.getApiClient();
-    if (!api) return { models: [], error: 'Sign in to see the models this server offers.' };
+    const entry = this.cache;
+    const hostedHit =
+      !force && api && entry?.environmentUrl === this.deps.getEnvironmentUrl() && Date.now() < entry.expiresAt
+        ? entry.models
+        : null;
+    // The device and the server are asked at the same time; neither waits on the other.
+    const [local, hosted] = await Promise.all([
+      this.listLocal(force),
+      api && !hostedHit
+        ? api.get<{ models?: WireModel[] }>(MODELS_PATH).then(
+            response => ({ ok: true as const, models: selectUsableModels(response?.models) }),
+            (err: unknown) => ({ ok: false as const, err })
+          )
+        : null,
+    ]);
+    if (hostedHit) return { models: this.mergeLocal(hostedHit) };
+    if (!api || !hosted) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
 
-    let models: ChatModelOption[];
-    try {
-      const response = await api.get<{ models?: WireModel[] }>(MODELS_PATH);
-      models = selectUsableModels(response?.models);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    if (!hosted.ok) {
+      const message = hosted.err instanceof Error ? hosted.err.message : String(hosted.err);
       this.deps.logger.warn(`CHAT: model list lookup failed: ${message}`);
-      return { models: [], error: 'Could not load the model list from this server.' };
+      return local.length
+        ? { models: local }
+        : { models: [], error: 'Could not load the model list from this server.' };
     }
+    const models = hosted.models;
 
     if (models.length === 0) {
       this.cache = null;
       this.deps.logger.warn('CHAT: server returned no tool-capable text models');
-      return { models: [] };
+      return { models: local };
     }
 
     this.cache = {
@@ -122,7 +144,33 @@ export class ModelCatalog {
       expiresAt: Date.now() + CACHE_TTL_MS,
     };
     this.deps.logger.debug(`CHAT: ${models.length} model(s) available`);
-    return { models };
+    return { models: this.mergeLocal(models) };
+  }
+
+  /** Device discovery never depends on the configured server or account. */
+  async listLocal(force = false): Promise<ChatModelOption[]> {
+    if (force || !this.localCache || Date.now() >= this.localCache.expiresAt) {
+      this.localCache = { models: await this.local.models(), expiresAt: Date.now() + 5_000 };
+    }
+    return withCurrentContexts(this.localCache.models);
+  }
+
+  /** The last local list however old, without a round trip; null before the first list or after forgetLocal. */
+  lastLocal(): ChatModelOption[] | null {
+    return this.localCache ? withCurrentContexts(this.localCache.models) : null;
+  }
+
+  /** After the local context setting changes or a model turns out removed, so the next list reads Ollama again. */
+  forgetLocal(): void {
+    this.localCache = null;
+  }
+
+  private mergeLocal(hosted: ChatModelOption[]): ChatModelOption[] {
+    const local = this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : [];
+    return [
+      ...hosted.filter(model => !local.some(candidate => candidate.id === model.id)),
+      ...withCurrentContexts(local),
+    ];
   }
 
   /**
@@ -186,6 +234,14 @@ export class ModelCatalog {
 
 const VIDEO_MODELS_PATH = '/api/v1/video-models';
 
+/** A context that grew or fell back since the list was cached replaces the one it advertised. */
+function withCurrentContexts(models: ChatModelOption[]): ChatModelOption[] {
+  return models.map(model => {
+    const tokens = currentLocalContext(model.id);
+    return tokens === undefined || tokens === model.contextWindow ? model : { ...model, contextWindow: tokens };
+  });
+}
+
 /** Image-generation model ids from the server's catalog, in the order it listed them. */
 export function selectImageModels(wire: unknown): string[] {
   if (!Array.isArray(wire)) return [];
@@ -213,6 +269,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       id: model.id as string,
       name: typeof model.name === 'string' && model.name ? model.name : (model.id as string),
       ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
+      ...(typeof model.releaseDate === 'string' && model.releaseDate ? { releaseDate: model.releaseDate } : {}),
       ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
       ...(typeof model.max_tokens === 'number' && model.max_tokens > 0 ? { maxOutputTokens: model.max_tokens } : {}),
       // Carried through only when the server stated it. Absent is "not said", which the
@@ -221,6 +278,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       // Decided here rather than read off the wire: the catalog does not report it, and the
       // renderer has to disable the effort picker on a model that would ignore the field.
       supportsReasoningEffort: supportsReasoningEffort(model.id as string),
+      supportsTools: true,
       ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
     }));
 }

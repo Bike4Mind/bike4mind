@@ -6,7 +6,11 @@
 // assembled inline script (and the lucide wrapper) with minimal React/ReactDOM/lucide stubs and
 // assert real DOM, so a runtime break in the shim fails the suite.
 import { describe, it, expect, beforeEach } from 'vitest';
-import { buildReactArtifactBundle } from './transpileReactArtifact';
+import {
+  assembleReactBundleHtml,
+  buildReactArtifactBundle,
+  transpileReactModuleProgram,
+} from './transpileReactArtifact';
 import { LUCIDE_WRAPPER_FN } from '@client/app/utils/reactArtifactDeps';
 
 const COUNTER = `import { useState } from 'react';
@@ -114,6 +118,81 @@ export default function C() {
   });
 });
 
+describe('a relative path mentioned only in a comment or string', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    installReactStub();
+  });
+
+  it('publishes and mounts as a single file, keeping the mention as text', async () => {
+    const source = `import { useState } from 'react';
+
+// ============================================================
+// Counter.jsx  (kept here since artifacts can't have sibling files -
+// relative imports like \`import Counter from "./Counter"\` are blocked
+// by the sandbox. This section is written exactly as it would be.
+// ============================================================
+function Counter() {
+  const [count] = useState(5);
+  return <span>{count}</span>;
+}
+
+const NOTE = 'import Other from "./Other"';
+
+function App() {
+  return <main><Counter /><em>{NOTE}</em></main>;
+}
+
+export default App;`;
+    const { indexHtml } = await buildReactArtifactBundle({ source, title: 'App' });
+
+    new Function(extractBootstrap(indexHtml))();
+
+    const root = document.getElementById('root')!;
+    expect(root.textContent).not.toContain('Error:');
+    expect(root.querySelector('span')?.textContent).toBe('5');
+    expect(root.querySelector('em')?.textContent).toBe('import Other from "./Other"');
+  });
+});
+
+describe('package and side-effect import text in a comment or string', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    installReactStub();
+  });
+
+  it('publishes and mounts without inlining the mentioned package', async () => {
+    const source = `import { useState } from 'react';
+/*
+import 'lodash';
+import { LineChart } from 'recharts';
+*/
+// import x from 'lodash-es'
+const NOTES = \`setup:
+import 'polyfill';
+import Chart from 'recharts';
+\`;
+
+export default function App() {
+  const [n] = useState(2);
+  return <main><span>{n}</span><pre>{NOTES}</pre><em>import y from "lodash-es"</em></main>;
+}`;
+    const { indexHtml } = await buildReactArtifactBundle({ source, title: 'App' });
+    expect(indexHtml).not.toContain('recharts@');
+    expect(indexHtml).not.toContain('lodash@');
+
+    new Function(extractBootstrap(indexHtml))();
+
+    const root = document.getElementById('root')!;
+    expect(root.textContent).not.toContain('Error:');
+    expect(root.querySelector('span')?.textContent).toBe('2');
+    // The text-based import rewrite (shared shape with the preview's) still edits import-shaped text
+    // inside strings and JSX text, so only that the text renders is pinned here.
+    expect(root.querySelector('pre')?.textContent).toContain('setup:');
+    expect(root.querySelector('em')?.textContent).toContain('lodash-es');
+  });
+});
+
 describe('LUCIDE_WRAPPER_FN executes (the icon logic that previously shipped invisible icons)', () => {
   it('builds a real SVG from a lucide node array and passes through props', () => {
     installReactStub(); // provides window.React for the wrapper's React.createElement calls
@@ -146,5 +225,127 @@ describe('LUCIDE_WRAPPER_FN executes (the icon logic that previously shipped inv
 
     const el = (window as any).LucideReactWrapper.ChevronDown({});
     expect(el.querySelector('path')!.getAttribute('d')).toBe('M6 9l6 6 6-6');
+  });
+});
+
+describe('multi-file published bundle executes in a DOM', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    installReactStub();
+  });
+
+  const run = (indexHtml: string): HTMLElement => {
+    new Function(extractBootstrap(indexHtml))();
+    return document.getElementById('root')!;
+  };
+
+  it('renders an entry that imports a sibling default export', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      title: 'App',
+      source: `import Stopwatch from './Stopwatch';
+export default function App() { return <main><Stopwatch label="lap" /></main>; }`,
+      files: {
+        Stopwatch: `import { useState } from 'react';
+export default function Stopwatch({ label }: { label: string }) {
+  const [ms] = useState(0);
+  return <span>{label}:{ms}</span>;
+}`,
+      },
+    });
+    const root = run(indexHtml);
+    expect(root.textContent).not.toContain('Error:');
+    expect(root.innerHTML).toBe('<main><span>lap:0</span></main>');
+  });
+
+  it('renders an entry whose default export is `export { X as default }`', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      title: 'App',
+      source: `import Tag from './Tag';
+function App() { return <main><Tag /></main>; }
+export { App as default };`,
+      files: { Tag: `export default function Tag() { return <i>tag</i>; }` },
+    });
+    expect(run(indexHtml).innerHTML).toBe('<main><i>tag</i></main>');
+  });
+
+  it('runs a relative side-effect import before the entry reads what it set', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      title: 'App',
+      source: `import './Setup';
+export default function App() { return <p>{(window as any).__fromSetup}</p>; }`,
+      files: { Setup: `(window as any).__fromSetup = 'ready';` },
+    });
+    expect(run(indexHtml).innerHTML).toBe('<p>ready</p>');
+  });
+
+  it('resolves sibling-to-sibling imports, named exports and npm deps used only by a sibling', async () => {
+    (window as any)._ = { capitalize: (s: string) => s.toUpperCase() };
+    const { indexHtml } = await buildReactArtifactBundle({
+      title: 'App',
+      source: `import Panel from './components/Panel.tsx';
+export default function App() { return <Panel />; }`,
+      files: {
+        Panel: `import { Title, SUFFIX } from '../ui/title';
+export default function Panel() { return <section><Title text={'hi' + SUFFIX} /></section>; }`,
+        title: `import { capitalize } from 'lodash';
+export const SUFFIX = '!';
+export function Title({ text }) { return <h1>{capitalize(text)}</h1>; }`,
+      },
+    });
+    expect(indexHtml).toContain('lodash@4.x.js');
+    const root = run(indexHtml);
+    expect(root.innerHTML).toBe('<section><h1>HI!</h1></section>');
+  });
+
+  it('hands a cycle its partial exports, as Node does', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      title: 'App',
+      source: `import { a } from './A';
+export default function App() { return <p>{a()}</p>; }`,
+      files: {
+        A: `import { b, seenA } from './B';
+export const a = () => 'a' + b() + seenA;`,
+        B: `import * as A from './A';
+export const seenA = typeof A.a;
+export function b() { return 'b'; }`,
+      },
+    });
+    const root = run(indexHtml);
+    // B loads while A is still loading, so A's const export is not assigned yet when B reads it.
+    expect(root.innerHTML).toBe('<p>abundefined</p>');
+  });
+
+  it('shows the runtime missing-file error when an import names no file', async () => {
+    const transpiledCode = await transpileReactModuleProgram(
+      `import Gone from './Gone';\nexport default function App() { return <Gone />; }`,
+      { Other: 'export default function Other() { return null; }' }
+    );
+    const root = run(assembleReactBundleHtml({ title: 'App', transpiledCode }));
+    expect(root.textContent).toBe(
+      'Error: Cannot resolve "./Gone": no artifact file is named "gone". Available files: Other.'
+    );
+  });
+
+  it('shows the runtime ambiguity error when an import matches several files', async () => {
+    const transpiledCode = await transpileReactModuleProgram(
+      `import Card from './card';\nexport default function App() { return <Card />; }`,
+      {
+        Card: 'export default function Card() { return null; }',
+        'card.jsx': 'export default function Card() { return null; }',
+      }
+    );
+    const root = run(assembleReactBundleHtml({ title: 'App', transpiledCode }));
+    expect(root.textContent).toBe(
+      'Error: Cannot resolve "./card": files Card, card.jsx all match "card". Give each file a unique name (case and extension are ignored).'
+    );
+  });
+
+  it('names the failing sibling when it throws while loading', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({
+      title: 'App',
+      source: `import Boom from './Boom';\nexport default function App() { return <Boom />; }`,
+      files: { Boom: `throw new Error('kaput');\nexport default function Boom() { return null; }` },
+    });
+    expect(run(indexHtml).textContent).toBe('Error: Boom: kaput');
   });
 });

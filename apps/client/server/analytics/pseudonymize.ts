@@ -1,14 +1,3 @@
-import crypto from 'crypto';
-import { Config } from '@bike4mind/server-utils/utils/config';
-
-// Pure helper: accepts explicit salt for testability.
-// Production callers use pseudonymizeUserId() which reads the configured salt.
-export function pseudonymize(userId: string, salt: string): string {
-  return crypto.createHmac('sha256', salt).update(userId).digest('hex');
-}
-
-// NEVER rotate OVERWATCH_PSEUDONYM_SALT - rotating re-pseudonymizes all users,
-// breaks OverwatchUserDay dedup, and resets retention history.
-export function pseudonymizeUserId(userId: string): string {
-  return pseudonymize(userId, Config.OVERWATCH_PSEUDONYM_SALT ?? '');
-}
+// Kept for the premium overlays, which still import this path; remove once they import
+// @bike4mind/server-utils/analytics/pseudonymize directly.
+export * from '@bike4mind/server-utils/analytics/pseudonymize';

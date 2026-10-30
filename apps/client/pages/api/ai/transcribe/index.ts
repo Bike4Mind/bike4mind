@@ -15,7 +15,14 @@ const handler = baseApi().post(
     if (!parsed.success) {
       throw new BadRequestError(`Invalid request: ${parsed.error.issues.map(i => i.message).join('; ')}`);
     }
-    return res.json(await transcribeUpload({ userId: req.user.id, fileKey: parsed.data.fileKey, logger: req.logger }));
+    return res.json(
+      await transcribeUpload({
+        user: req.user,
+        fileKey: parsed.data.fileKey,
+        receivedAt: req.receivedAt,
+        logger: req.logger,
+      })
+    );
   })
 );
 

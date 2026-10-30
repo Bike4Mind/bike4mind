@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { AgentStep } from '@bike4mind/agents';
-import { windowLiveTrace, measureTraceRows } from './liveStepWindow';
+import { windowLiveTrace, measureTraceRows, truncateValue } from './liveStepWindow';
 
 const thought = (content: string): AgentStep => ({
   type: 'thought',
@@ -144,4 +144,25 @@ describe('windowLiveTrace height bound', () => {
       });
     }
   }
+});
+
+describe('truncateValue', () => {
+  it('returns short values whole and caps long ones', () => {
+    expect(truncateValue('short', 10)).toBe('short');
+    expect(truncateValue('x'.repeat(20), 10)).toBe(`${'x'.repeat(10)}...`);
+    expect(truncateValue({ a: 1 }, 10)).toBe('{"a":1}');
+  });
+
+  it('does not count stripped escape bytes toward the limit', () => {
+    expect(truncateValue(`\x1b[31m${'x'.repeat(10)}\x1b[0m`, 10)).toBe('x'.repeat(10));
+  });
+
+  it('marks a value cut by the scan window as truncated even when it sanitizes short', () => {
+    const value = `${'\x1b[2K'.repeat(20)}tail${'y'.repeat(1000)}`;
+    expect(truncateValue(value, 10)).toBe('...');
+  });
+
+  it('keeps the result bounded for very large values', () => {
+    expect(truncateValue('z'.repeat(1_000_000), 10)).toBe(`${'z'.repeat(10)}...`);
+  });
 });

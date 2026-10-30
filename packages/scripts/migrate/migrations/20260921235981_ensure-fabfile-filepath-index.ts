@@ -8,7 +8,7 @@ import { type MigrationFile } from './index';
  * a deletedAt equality prefix. Without this index that lookup scans the collection.
  *
  * Migration rather than autoIndex, for the same reason as 20260907000000_ensure-fabfile-tagname-filename-index:
- * prod runs DocumentDB, where an index build takes a foreground collection lock, and left to autoIndex
+ * autoIndex builds are fire-and-forget (a failure is silent), and left to autoIndex
  * it would build on whichever Lambda's cold boot touches fabfiles first after deploy.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist. It builds every index the

@@ -187,19 +187,27 @@ export const revokeFromProject = async (
   let fileIds = project.fileIds;
   let sessionIds = project.sessionIds;
 
+  // Everyone else holding a grant this project minted on the leaver's documents. The owner is never in
+  // project.users, but addFiles/addSessions grant the owner every document a member contributes.
+  const othersInProject = Array.from(
+    new Set([project.userId, ...project.users.map(u => u.userId)].filter(id => id !== userIdToRevoke))
+  );
+  // One row the cascade cannot reach must not keep the others: same NotFoundError tolerance as below.
+  const revokeFromOthers = async (id: string, type: 'files' | 'sessions') => {
+    for (const userId of othersInProject) {
+      try {
+        await revoke(userId, { id, type, userId, projectId: project.id }, adapters);
+      } catch (e) {
+        if (!(e instanceof NotFoundError)) throw e;
+      }
+    }
+  };
+
   for (const file of files) {
     try {
-      // If the file is owned by the user being revoked,
-      // we need to revoke the sharing for all other users in the project
+      // The leaver's own file leaves the project, so everyone else loses this project's grant on it.
       if (file.userId === userIdToRevoke) {
-        const usersToBeRevoked = project.users.filter(u => u.userId !== userIdToRevoke);
-        for (const user of usersToBeRevoked) {
-          await revoke(
-            user.userId,
-            { id: file.id, type: 'files', userId: user.userId, projectId: project.id },
-            adapters
-          );
-        }
+        await revokeFromOthers(file.id, 'files');
 
         fileIds = fileIds.filter(id => id !== file.id);
       } else {
@@ -220,17 +228,9 @@ export const revokeFromProject = async (
 
   for (const session of sessions) {
     try {
-      // If the session is owned by the user being revoked,
-      // we need to revoke the sharing for all other users in the project
+      // The leaver's own session leaves the project, so everyone else loses this project's grant on it.
       if (session.userId === userIdToRevoke) {
-        const usersToBeRevoked = project.users.filter(u => u.userId !== userIdToRevoke);
-        for (const user of usersToBeRevoked) {
-          await revoke(
-            user.userId,
-            { id: session.id, type: 'sessions', userId: user.userId, projectId: project.id },
-            adapters
-          );
-        }
+        await revokeFromOthers(session.id, 'sessions');
 
         sessionIds = sessionIds.filter(id => id !== session.id);
       } else {

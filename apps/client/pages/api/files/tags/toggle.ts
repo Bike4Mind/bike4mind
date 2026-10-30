@@ -1,5 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
+import { toggledFabFileListResponseSchema } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
@@ -16,7 +18,8 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
-import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
+import { requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -63,6 +66,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       fabFilesService.toggleTags(req.user.id, req.body, {
         db: {
           ...storageOwnerTransferDb,
+          users: requesterScopedUsers(req, storageOwnerTransferDb.users),
           fileTags: fileTagRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
           ...lakeConfigAuditDb,
@@ -84,7 +88,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       })
     );
 
-    return res.json(result);
+    return respond(res, toggledFabFileListResponseSchema, result);
   })
 );
 

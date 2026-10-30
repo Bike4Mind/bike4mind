@@ -55,6 +55,7 @@ import {
   resolveSlackWebhookUrl,
   resolveFeedbackSlackRoute,
   postMessageToSlack,
+  postMessageToSlackWithOutcome,
   postFeedbackToSlack,
   postEmailMirrorToSlack,
   EMAIL_MIRROR_TIMEOUT_MS,
@@ -212,6 +213,7 @@ describe('postMessageToSlack', () => {
     mocks.config.SLACK_WEBHOOK_URL = '';
     mocks.post.mockReset();
     vi.mocked(Logger.error).mockClear();
+    vi.mocked(Logger.warn).mockClear();
   });
 
   it('returns false when no webhook is configured', async () => {
@@ -238,7 +240,56 @@ describe('postMessageToSlack', () => {
     expect(mocks.post).toHaveBeenCalledWith(
       liveopsUrl,
       { text: 'ops alert' },
-      { headers: { 'Content-Type': 'application/json' } }
+      { headers: { 'Content-Type': 'application/json' }, timeout: 10_000 }
+    );
+  });
+  it('does not route security samples to a default webhook when security alerts are disabled', async () => {
+    mocks.config.SLACK_WEBHOOK_URL = SECRET_FALLBACK;
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackSecurityAlertsWebhookUrl: '   ',
+      SlackDefaultWebhookUrl: 'https://hooks.slack.com/services/general',
+    });
+    await expect(postMessageToSlack('signup sample addresses', 'SlackSecurityAlertsWebhookUrl')).resolves.toBe(false);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('warns once instead of erroring when security alerts are turned off', async () => {
+    // Fresh module state for the once-per-process flag; the re-imported Logger mock is the one it uses.
+    vi.resetModules();
+    const slack = await import('./slack');
+    const { Logger: freshLogger } = await import('@bike4mind/observability');
+    mocks.getSettingsMap.mockResolvedValue({ SlackSecurityAlertsWebhookUrl: '' });
+
+    await expect(slack.postMessageToSlackWithOutcome('held', 'SlackSecurityAlertsWebhookUrl')).resolves.toBe(
+      'unconfigured'
+    );
+    await expect(slack.postMessageToSlackWithOutcome('held', 'SlackSecurityAlertsWebhookUrl')).resolves.toBe(
+      'unconfigured'
+    );
+    expect(freshLogger.warn).toHaveBeenCalledTimes(1);
+    expect(freshLogger.error).not.toHaveBeenCalled();
+  });
+
+  it('reports a rejected post as failed, distinct from unconfigured', async () => {
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackSecurityAlertsWebhookUrl: 'https://hooks.slack.com/services/security',
+    });
+    mocks.post.mockRejectedValue(new Error('slack down'));
+
+    await expect(postMessageToSlackWithOutcome('held', 'SlackSecurityAlertsWebhookUrl')).resolves.toBe('failed');
+  });
+
+  it('bounds a security notification and reports a timed out delivery', async () => {
+    const securityUrl = 'https://hooks.slack.com/services/security';
+    mocks.getSettingsMap.mockResolvedValue({ SlackSecurityAlertsWebhookUrl: securityUrl });
+    mocks.post.mockRejectedValue(new Error('timeout of 3000ms exceeded'));
+    await expect(postMessageToSlack('domain held', 'SlackSecurityAlertsWebhookUrl', { timeoutMs: 3000 })).resolves.toBe(
+      false
+    );
+    expect(mocks.post).toHaveBeenCalledWith(
+      securityUrl,
+      { text: 'domain held' },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 3000 }
     );
   });
 });
@@ -439,5 +490,18 @@ describe('postEmailMirrorToSlack', () => {
     mocks.post.mockRejectedValue(Object.assign(new Error('timeout of 5000ms exceeded'), { code: 'ECONNABORTED' }));
     await expect(postEmailMirrorToSlack(payload)).resolves.toBeUndefined();
     expect(Logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays silent when only a general webhook is configured', async () => {
+    // The mirror carries private email content, so it must never fall back to the default or
+    // feedback channel: an audit webhook that is not set means no mirror at all.
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackDefaultWebhookUrl: 'https://hooks.slack.com/services/general',
+      SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback',
+    });
+
+    await postEmailMirrorToSlack(payload);
+
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 });

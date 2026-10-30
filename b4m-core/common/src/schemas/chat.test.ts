@@ -5,6 +5,7 @@ import {
   ChatAckSchema,
   ChatQuestPollResultSchema,
   ChatWaitResponseSchema,
+  MIN_OUTPUT_TOKENS,
 } from './chat';
 import { chatContract } from '../api-contract/contracts/chat.contract';
 import { CHAT_HISTORY_ITEM_TYPES } from '../types/entities/SessionTypes';
@@ -113,6 +114,22 @@ describe('SimplifiedChatRequestSchema fail-loud defaults', () => {
 
   it('requires a message', () => {
     expect(SimplifiedChatRequestSchema.safeParse({}).success).toBe(false);
+  });
+
+  describe.each(['max_tokens', 'maxTokens', 'maxOutputTokens'])('%s output-budget minimum', field => {
+    it.each([1, 8, MIN_OUTPUT_TOKENS - 1, 16.5])('rejects %s below the provider minimum or fractional', invalid => {
+      expect(parse({ [field]: invalid }).success).toBe(false);
+    });
+
+    it('accepts the minimum and larger integers', () => {
+      expect(parse({ [field]: MIN_OUTPUT_TOKENS }).success).toBe(true);
+      expect(parse({ [field]: 4096 }).success).toBe(true);
+    });
+
+    it('accepts an omitted budget', () => {
+      expect((parse({}).data as Record<string, unknown>)[field]).toBeUndefined();
+      expect(parse({}).success).toBe(true);
+    });
   });
 
   it('accepts an optional organizationId billing target and leaves it undefined when omitted', () => {

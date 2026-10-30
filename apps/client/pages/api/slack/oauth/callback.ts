@@ -6,9 +6,9 @@ import { Logger } from '@bike4mind/observability';
 import { createInstallProvider } from '@bike4mind/slack';
 import type { InstallationMetadata } from '@bike4mind/slack';
 import { CallbackOptions } from '@slack/oauth';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { randomUUID } from 'crypto';
-import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 /**
  * Slack OAuth Callback Endpoint

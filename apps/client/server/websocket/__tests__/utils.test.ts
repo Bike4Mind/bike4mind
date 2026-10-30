@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/common';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { JsonWebTokenError, NotBeforeError, TokenExpiredError } from 'jsonwebtoken';
 import type { Context } from 'aws-lambda';
@@ -133,6 +135,64 @@ describe('withWebSocketContext - auth-error detection', () => {
 
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Internal server error' });
+  });
+
+  it('returns 503 with the fixed message when the API-key check lost the database', async () => {
+    const networkError = Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' });
+    const handler = withWebSocketContext(
+      async () => {
+        throw toApiKeyAuthError(networkError);
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(503);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Authentication temporarily unavailable' });
+    expect(result.body).not.toContain('ECONNREFUSED');
+    expect(result.body).not.toContain('10.0.0.1');
+  });
+
+  it('returns 500 when the API-key check failed for another infra reason', async () => {
+    const handler = withWebSocketContext(
+      async () => {
+        throw new InternalServerError('Authentication failed');
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(500);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Authentication failed' });
+  });
+
+  it('refuses with 503 when the database connection is lost outside the API-key check', async () => {
+    const handler = withWebSocketContext(
+      async () => {
+        throw Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' });
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(503);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Service temporarily unavailable' });
+  });
+
+  it('still answers 200 for a plain Error', async () => {
+    const handler = withWebSocketContext(
+      async () => {
+        throw new Error('x');
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(200);
   });
 
   it('passes through the handler result unchanged on success', async () => {

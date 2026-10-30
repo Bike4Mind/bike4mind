@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ReleaseNote } from '@bike4mind/database/content';
 import { decodeTimeIdCursor, encodeCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 
 const { mockListPublished, mockGetSettings, mockFeedUrl, mockFetchUpstream, rateLimitOptions } = vi.hoisted(() => ({
@@ -42,7 +43,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) =>
     res.status(405).json({ error: 'Method not allowed' }),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     rateLimitOptions.push(options);
     return (_req: unknown, _res: unknown, next: () => void) => next();
@@ -53,6 +54,7 @@ vi.mock('@bike4mind/database', () => ({
   releaseNoteRepository: { listPublished: mockListPublished },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: mockGetSettings }));
+vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'files-bucket' } } }));
 vi.mock('@server/releaseNotes/upstreamFeed', () => ({
   getWhatsNewFeedUrl: mockFeedUrl,
   fetchUpstreamFeed: mockFetchUpstream,
@@ -120,6 +122,7 @@ async function errorOf(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
   mockGetSettings.mockResolvedValue({ releaseNotesConfig: JSON.stringify({ enabled: true }) });
   mockFeedUrl.mockReturnValue(undefined);
   mockListPublished.mockImplementation(async ({ after, limit }: { after?: Keyset; limit: number }) => {
@@ -148,6 +151,90 @@ describe('GET /api/v1/whats-new', () => {
       expect(serialized).not.toContain(leaked);
     }
     expect(res.getHeader('Cache-Control')).toBe('public, s-maxage=300, stale-while-revalidate=600');
+  });
+
+  it('includes the video when the note has one and omits the key otherwise', async () => {
+    const video = {
+      landscapeUrl: 'https://d111.cloudfront.net/wide.mp4',
+      landscapePosterUrl: null,
+      portraitUrl: null,
+      portraitPosterUrl: null,
+      _internal: 'x',
+    };
+    mockListPublished.mockResolvedValueOnce({ items: [{ ...NOTES[0], video }, NOTES[1]], hasMore: false });
+    const body = (await run())._getJSONData();
+    expect(body.data[0].video).toEqual({
+      landscape_url: 'https://d111.cloudfront.net/wide.mp4',
+      landscape_poster_url: null,
+      portrait_url: null,
+      portrait_poster_url: null,
+    });
+    expect('video' in body.data[1]).toBe(false);
+  });
+
+  it('serves an uploaded video file as an absolute URL to the media route', async () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+    const video = {
+      landscapeUrl: 'https://files-bucket.s3.us-east-2.amazonaws.com/modals/wide.mp4',
+      landscapePosterUrl: null,
+      portraitUrl: null,
+      portraitPosterUrl: null,
+    };
+    mockListPublished.mockResolvedValueOnce({ items: [{ ...NOTES[0], video }], hasMore: false });
+    const body = (await run())._getJSONData();
+    expect(body.data[0].video.landscape_url).toBe(
+      `https://app.example.com/api/v1/whats-new/media/${NOTES[0].id}/landscape`
+    );
+  });
+
+  it('includes the image when the note has one and omits the key otherwise', async () => {
+    const image = {
+      landscapeUrl: 'https://d111.cloudfront.net/wide.png',
+      portraitUrl: 'https://d111.cloudfront.net/tall.png',
+    };
+    mockListPublished.mockResolvedValueOnce({ items: [{ ...NOTES[0], image }, NOTES[1]], hasMore: false });
+    const body = (await run())._getJSONData();
+    expect(body.data[0].image).toEqual({
+      landscape_url: 'https://d111.cloudfront.net/wide.png',
+      portrait_url: 'https://d111.cloudfront.net/tall.png',
+    });
+    expect('image' in body.data[1]).toBe(false);
+  });
+
+  it('serves an uploaded image file as an absolute URL to the media route', async () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+    const image = {
+      landscapeUrl: null,
+      portraitUrl: 'https://files-bucket.s3.us-east-2.amazonaws.com/modals/still-9x16.png',
+    };
+    mockListPublished.mockResolvedValueOnce({ items: [{ ...NOTES[0], image }], hasMore: false });
+    const body = (await run())._getJSONData();
+    expect(body.data[0].image.portrait_url).toBe(
+      `https://app.example.com/api/v1/whats-new/media/${NOTES[0].id}/image-portrait`
+    );
+  });
+
+  it('serves media URLs from a hydrated release note with real Mongoose subdocuments', async () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+    const note = ReleaseNote.hydrate({
+      ...NOTES[0],
+      _id: NOTES[0].id,
+      video: { landscapeUrl: 'https://files-bucket.s3.us-east-2.amazonaws.com/modals/wide.mp4' },
+      image: { portraitUrl: 'https://files-bucket.s3.us-east-2.amazonaws.com/modals/still.png' },
+    });
+    mockListPublished.mockResolvedValueOnce({ items: [note], hasMore: false });
+
+    const body = (await run())._getJSONData();
+    expect(body.data[0].video).toEqual({
+      landscape_url: `https://app.example.com/api/v1/whats-new/media/${note.id}/landscape`,
+      landscape_poster_url: null,
+      portrait_url: null,
+      portrait_poster_url: null,
+    });
+    expect(body.data[0].image).toEqual({
+      landscape_url: null,
+      portrait_url: `https://app.example.com/api/v1/whats-new/media/${note.id}/image-portrait`,
+    });
   });
 
   it('passes the request time to listPublished so embargoed notes stay out', async () => {

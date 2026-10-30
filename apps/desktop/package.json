@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/desktop",
-  "version": "0.1.10",
+  "version": "0.1.12",
   "private": true,
   "description": "Bike4Mind Electron desktop client",
   "author": "Bike4Mind",
@@ -24,6 +24,7 @@
     "typecheck:fast": "pnpm typecheck:native || pnpm typecheck",
     "test": "node --test scripts/test_package_local.cjs && vitest run",
     "test:watch": "vitest",
+    "check:curated": "vitest run --config vitest.curated.config.ts",
     "lint": "eslint .",
     "clean": "rm -rf node_modules out"
   },
@@ -36,11 +37,13 @@
     "eventsource-parser": "^3.1.0",
     "gray-matter": "^4.0.3",
     "node-pty": "1.2.0-beta.15",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/cli": "workspace:*",
+    "@bike4mind/local-models": "workspace:*",
     "@bike4mind/typescript-config": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@mui/joy": "^5.0.0-beta.52",
@@ -69,7 +72,7 @@
     "tree-sitter-bash": "0.25.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.12",
     "web-tree-sitter": "0.25.10"
   }
 }

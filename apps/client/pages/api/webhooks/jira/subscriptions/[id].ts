@@ -1,3 +1,8 @@
+import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { Logger } from '@bike4mind/observability';
+import { resolveNotificationDestination } from '@bike4mind/slack';
+initializeSlackPackage();
+
 /**
  * Jira Webhook Subscription API - Individual Subscription
  *
@@ -9,10 +14,15 @@
  */
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { respond } from '@server/utils/respond';
 import { baseApi } from '@server/middlewares/baseApi';
 import { jiraWebhookConfigRepository, jiraWebhookSubscriptionRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
-import { IJiraWebhookSubscriptionRequest, IJiraWebhookSubscriptionResponse } from '@bike4mind/common';
+import {
+  IJiraWebhookSubscriptionRequest,
+  IJiraWebhookSubscriptionResponse,
+  jiraWebhookSubscriptionResponseSchema,
+} from '@bike4mind/common';
 import { validateFilters } from '@server/integrations/jira/types';
 
 const handler = baseApi()
@@ -59,7 +69,7 @@ const handler = baseApi()
         atlassianSiteName: config?.atlassianSiteUrl,
       };
 
-      return res.status(200).json(response);
+      return respond(res, jiraWebhookSubscriptionResponseSchema, response);
     })
   )
   // PUT - Update subscription
@@ -97,6 +107,16 @@ const handler = baseApi()
           } else {
             throw new BadRequestError('slackTarget.type must be "channel" or "dm"');
           }
+          try {
+            await resolveNotificationDestination(
+              subscription.userId,
+              slackTarget.type === 'channel' ? slackTarget.channelId : undefined
+            );
+          } catch (error) {
+            Logger.warn('Jira Slack destination verification failed', { userId: user.id, error });
+            throw new BadRequestError('Choose a destination you belong to in your linked Slack workspace');
+          }
+
           updates.slackTarget = slackTarget;
         }
 
@@ -182,7 +202,7 @@ const handler = baseApi()
           atlassianSiteName: config?.atlassianSiteUrl,
         };
 
-        return res.status(200).json(response);
+        return respond(res, jiraWebhookSubscriptionResponseSchema, response);
       }
     )
   )

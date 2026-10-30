@@ -1,16 +1,24 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, act } from '@testing-library/react';
 
-const { apiPost } = vi.hoisted(() => ({ apiPost: vi.fn() }));
+const { apiPost, apiGet, userState } = vi.hoisted(() => ({
+  apiPost: vi.fn(),
+  apiGet: vi.fn(),
+  userState: { currentUser: { emailVerified: false } },
+}));
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: vi.fn(), post: apiPost },
+  api: { get: apiGet, post: apiPost },
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (state: typeof userState) => unknown) => selector(userState),
 }));
 
 import {
   invalidateGearsStatusWhileLocked,
   useClaimGear,
+  useGearsStatus,
   type GearKey,
   type GearStatus,
   type GearsStatusResponse,
@@ -35,6 +43,88 @@ const seed = (queryClient: QueryClient, gears: GearStatus[]) => {
   };
   queryClient.setQueryData(['gears', 'status'], response);
 };
+
+describe('useGearsStatus trust changes', () => {
+  let queryClient: QueryClient;
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    apiGet.mockReset();
+    userState.currentUser.emailVerified = false;
+  });
+
+  afterEach(() => {
+    queryClient.clear();
+    vi.useRealTimers();
+  });
+
+  it('refreshes an age-held reward while mounted and stops polling once eligible', async () => {
+    seed(queryClient, [{ ...gear('projects', true), rewardPending: true, pendingReason: 'too_new' }]);
+    apiGet.mockResolvedValue({ data: { gears: [{ ...gear('projects', true), claimable: true }], totalUnlocked: 1 } });
+    const { result } = renderHook(() => useGearsStatus(), { wrapper });
+    expect(result.current.data?.gears[0].pendingReason).toBe('too_new');
+    expect(apiGet).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_001);
+    });
+    expect(apiGet).toHaveBeenCalledExactlyOnceWith('/api/gears/status');
+    expect(result.current.data?.gears[0].claimable).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(apiGet).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['unverified', 'reward_check'] as const)('does not poll a %s hold', async pendingReason => {
+    seed(queryClient, [{ ...gear('projects', true), rewardPending: true, pendingReason }]);
+    renderHook(() => useGearsStatus(), { wrapper });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(apiGet).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('refreshes when pushed email verification changes to %s', async emailVerified => {
+    userState.currentUser.emailVerified = !emailVerified;
+    seed(queryClient, [{ ...gear('projects', true), rewardPending: true, pendingReason: 'unverified' }]);
+    apiGet.mockResolvedValue({
+      data: { gears: [{ ...gear('projects', true), claimable: emailVerified }], totalUnlocked: 1 },
+    });
+    const { result, rerender } = renderHook(() => useGearsStatus(), { wrapper });
+    expect(apiGet).not.toHaveBeenCalled();
+
+    await act(async () => {
+      userState.currentUser.emailVerified = emailVerified;
+      rerender();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(apiGet).toHaveBeenCalledExactlyOnceWith('/api/gears/status');
+    expect(result.current.data?.gears[0].claimable).toBe(emailVerified);
+  });
+
+  it('shares one verification refresh across multiple mounted observers', async () => {
+    seed(queryClient, [{ ...gear('projects', true), rewardPending: true, pendingReason: 'unverified' }]);
+    const response = Promise.withResolvers<{ data: GearsStatusResponse }>();
+    apiGet.mockReturnValue(response.promise);
+    const { rerender } = renderHook(() => [useGearsStatus(), useGearsStatus()], { wrapper });
+
+    await act(async () => {
+      userState.currentUser.emailVerified = true;
+      rerender();
+    });
+    expect(apiGet).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      response.resolve({ data: { gears: [{ ...gear('projects', true), claimable: true }], totalUnlocked: 1 } });
+    });
+  });
+});
 
 describe('invalidateGearsStatusWhileLocked', () => {
   let queryClient: QueryClient;

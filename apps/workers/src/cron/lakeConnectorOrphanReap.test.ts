@@ -31,7 +31,7 @@ vi.mock('@server/integrations/google/drive/common', () => ({ releaseDriveConnect
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnection: h.releaseGitHubLakeConnection,
 }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
 

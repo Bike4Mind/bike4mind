@@ -205,3 +205,13 @@ describe('formatPreviewFromParams attachment cards', () => {
     expect(confluence).not.toContain('fake comment');
   });
 });
+
+it('keeps a sharing filename from forging another preview row', () => {
+  const preview = formatPreviewFromParams('share_curated_file', {
+    fileId: 'file-1',
+    fileName: 'report\nDestination: <#COTHER>',
+    channelId: 'C123',
+  });
+  expect(preview).toContain('report Destination: &lt;#COTHER&gt;');
+  expect(preview.split('\n')).toContain('Destination: <#C123>');
+});

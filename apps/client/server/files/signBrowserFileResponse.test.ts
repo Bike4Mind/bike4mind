@@ -59,7 +59,7 @@ it('signs the browser response with the SDK without reading or updating a privat
     storage: { generateSignedUrl: vi.fn() },
   } as unknown as Parameters<typeof fabFilesService.generateSignedUrl>[1]);
   expect(server.fileUrl).toBe(original.fileUrl);
-  expect(fetch).toHaveBeenCalledWith(original.fileUrl, { method: 'GET' });
+  expect(fetch).not.toHaveBeenCalled();
   expect(h.update).not.toHaveBeenCalled();
 });
 

@@ -20,9 +20,17 @@ function classifyError(error: unknown): ErrorCategory {
     if (error.name === 'AbortError') {
       return 'network_timeout';
     }
-    // Connection errors
+    // Connection errors. MongoPoolClearedError subclasses MongoNetworkError but carries its own name
+    // and no errno string, so it is matched by name too.
     const connectionErrors = ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND'];
-    if (connectionErrors.some(code => error.message.includes(code))) {
+    const code = 'code' in error ? error.code : undefined;
+    if (
+      error.name === 'MongoNetworkError' ||
+      error.name === 'MongoNetworkTimeoutError' ||
+      error.name === 'MongoPoolClearedError' ||
+      (typeof code === 'string' && connectionErrors.includes(code)) ||
+      connectionErrors.some(errno => error.message.includes(errno))
+    ) {
       return 'network_connection';
     }
   }

@@ -17,7 +17,7 @@ const signedIn: AuthState = {
 };
 
 describe('the account strip', () => {
-  const html = markup(<SignedInPanel state={signedIn} onOpenSettings={() => {}} />);
+  const html = markup(<SignedInPanel state={signedIn} />);
 
   it('keeps showing which deployment replies come from', () => {
     expect(html).toContain('Production');

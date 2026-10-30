@@ -1,4 +1,4 @@
-import { ApiKeyScope, IApiKeyScopePreflight, IApiKeyScopePreflightRow } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyScopeValue, IApiKeyScopePreflight, IApiKeyScopePreflightRow } from '@bike4mind/common';
 import { apiKeyUsageLogRepository, userApiKeyRepository } from '@bike4mind/database/auth';
 import { BadRequestError } from '@bike4mind/utils';
 import mongoose from 'mongoose';
@@ -6,6 +6,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 
 /** ApiKeyUsageLog's TTL is 90 days, so a longer window would silently return less. */
 const MAX_WINDOW_DAYS = 90;
@@ -29,7 +30,7 @@ const MAX_ROWS = 500;
  */
 const UNLOGGED_ENDPOINT_PREFIXES = ['/api/ai/v1', '/api/embed'] as const;
 
-const ALL_SCOPES: ReadonlySet<string> = new Set<string>(Object.values(ApiKeyScope));
+const ALL_SCOPES: ReadonlySet<string> = ALL_KNOWN_API_KEY_SCOPE_VALUES;
 
 /** Outcome ordering: the operator wants the keys that break at the top. */
 const OUTCOME_RANK: Record<IApiKeyScopePreflightRow['outcome'], number> = {
@@ -140,7 +141,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     if (unknown.length > 0) {
       throw new BadRequestError(`Unknown scope(s): ${unknown.join(', ')}`);
     }
-    const requiredScopes = requestedScopes as ApiKeyScope[];
+    const requiredScopes: ApiKeyScopeValue[] = requestedScopes;
 
     const rawDays = readSingle(query.days);
     const parsedDays = rawDays === undefined ? DEFAULT_WINDOW_DAYS : Number(rawDays);
@@ -172,7 +173,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     // schema's `toObject` has no strip transform (only `toJSON` deletes it).
     // Nothing leaks, but a credential hash has no business in this request.
     const keyDocs = lookupIds.length ? await userApiKeyRepository.find({ _id: { $in: lookupIds } }, { scopes: 1 }) : [];
-    const scopesByKeyId = new Map<string, ApiKeyScope[]>(keyDocs.map(doc => [String(doc.id), doc.scopes ?? []]));
+    const scopesByKeyId = new Map<string, ApiKeyScopeValue[]>(keyDocs.map(doc => [String(doc.id), doc.scopes ?? []]));
 
     const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
 

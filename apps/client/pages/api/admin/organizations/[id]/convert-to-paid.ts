@@ -4,15 +4,15 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
 import { z } from 'zod';
@@ -35,6 +35,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     if (!id) throw new BadRequestError('Organization id required');
 
     const { callbackUrl } = ConvertSchema.parse(req.body);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     if (!isAllowedCallbackOrigin(callbackUrl)) {
       throw new BadRequestError('callbackUrl must point to the deployed application origin');
@@ -122,6 +123,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       action: 'org.conversion.initiated',
       target: { kind: 'organization', id: organization.id, displayName: organization.name },
       summary: 'initiated conversion to a paid subscription',
+      reason,
       details: {
         seats: organization.seats,
         stripeCustomerId: organization.stripeCustomerId,

@@ -1,9 +1,11 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
-import { isSlackUserValidationError } from '@server/integrations/slack/slackExportErrors';
+import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
+import { withTransaction } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * POST /api/admin/slack-app/create
@@ -95,16 +97,10 @@ const CreateSlackAppSchema = z.object({
   enableWorkflowSteps: z.boolean().optional().default(true),
 });
 
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
-
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  req.logger.info(req.user?.isAdmin, 'isAdmin');
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const result = CreateSlackAppSchema.safeParse(req.body);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');
@@ -151,24 +147,46 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   const credentials = slackData.credentials as Record<string, string>;
 
-  const workspace = await slackDevWorkspaceRepository.createOrUpdateWithCredentials({
-    slackBotName: manifest.features.bot_user?.display_name,
-    slackAppId: slackData.app_id as string,
-    slackClientId: credentials.client_id,
-    slackClientSecret: credentials.client_secret,
-    slackOAuthSigningSecret: credentials.signing_secret,
-    slackOAuthRedirectUri: manifest.oauth_config.redirect_urls[0],
-    slackVerificationToken: credentials.verification_token,
-    enableWorkflowSteps,
-  });
+  const appName = manifest.display_information.name;
 
-  // Store the config token for future manifest management
-  await slackDevWorkspaceRepository.storeConfigToken(workspace.id, configToken);
+  // A failed audit rolls back the local save; the app already created on Slack is left in place.
+  let workspace;
+  try {
+    workspace = await withTransaction(async () => {
+      const saved = await slackDevWorkspaceRepository.createOrUpdateWithCredentials({
+        slackBotName: manifest.features.bot_user?.display_name,
+        slackAppId: slackData.app_id as string,
+        slackClientId: credentials.client_id,
+        slackClientSecret: credentials.client_secret,
+        slackOAuthSigningSecret: credentials.signing_secret,
+        slackOAuthRedirectUri: manifest.oauth_config.redirect_urls[0],
+        slackVerificationToken: credentials.verification_token,
+        enableWorkflowSteps,
+      });
+
+      // Store the config token for future manifest management
+      await slackDevWorkspaceRepository.storeConfigToken(saved.id, configToken);
+
+      await recordAdminActionFromRequest(req, {
+        action: 'integration.slack_app.created',
+        target: { kind: 'settings', id: saved.id, displayName: appName },
+        summary: `created slack app ${appName}`,
+        details: { appId: slackData.app_id },
+      });
+      return saved;
+    });
+  } catch (error) {
+    req.logger.error('Slack app was created but saving it locally failed; delete the app manually on Slack', {
+      appId: slackData.app_id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 
   req.logger.info('✨ [Admin] Created Slack app from manifest and saved credentials', {
     appId: slackData.app_id,
     workspaceId: workspace.id,
-    appName: manifest.display_information.name,
+    appName,
     adminUserId: req.user?.id,
   });
 

@@ -175,6 +175,7 @@ describe('credentialExecutionFields', () => {
       credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_READ] })
     ).toEqual({
       scopeDeniedTools: ['create_data_lake', 'save_content_to_data_lake'],
+      adminRoleWithheld: true,
       authOrigin: 'apiKey',
       apiKeyId: 'key-1',
     });
@@ -182,9 +183,16 @@ describe('credentialExecutionFields', () => {
 
   it('omits the denials but keeps the key id for a key holding datalake:write', () => {
     expect(credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] })).toEqual({
+      adminRoleWithheld: true,
       authOrigin: 'apiKey',
       apiKeyId: 'key-1',
     });
+  });
+
+  it('does not withhold the admin role from a key holding admin:*', () => {
+    expect(
+      credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.ADMIN, ApiKeyScope.DATALAKE_WRITE] })
+    ).toEqual({ authOrigin: 'apiKey', apiKeyId: 'key-1' });
   });
 
   it('refuses a credential with no key id rather than recording a session run', () => {

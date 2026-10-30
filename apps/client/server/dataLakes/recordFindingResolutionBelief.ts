@@ -9,7 +9,7 @@ import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { createLedgerAppendSession } from '@server/memory/mementoLedgerMirror';
+import { createLedgerAppendSession } from '@bike4mind/server-utils/memory/mementoLedgerMirror';
 import { createMementoEmbedder, type MementoEmbedder } from '@bike4mind/server-utils/memory/mementoEmbedder';
 
 /**

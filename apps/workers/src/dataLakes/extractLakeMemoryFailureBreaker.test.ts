@@ -14,6 +14,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const sourceFileMock = vi.fn();
+const sourceShredMock = vi.fn();
 const findByIdMock = vi.fn();
 const findLakeMemoryExtractionMembersMock = vi.fn();
 const findTextsByFabFileIdMock = vi.fn();
@@ -27,6 +29,7 @@ const setLakeMemoryCursorIfFenceUnmovedMock = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
   apiKeyRepository: {},
+  userRepository: { findById: async (id: string) => ({ id }) },
   dataLakeRepository: {
     findById: (...a: unknown[]) => findByIdMock(...a),
     claimLakeMemoryExtraction: (...a: unknown[]) => claimLakeMemoryExtractionMock(...a),
@@ -36,7 +39,9 @@ vi.mock('@bike4mind/database', () => ({
     getLakeMemoryFence: async () => ({ exists: true, purgedAt: null }),
   },
   fabFileChunkRepository: { findTextsByFabFileId: (...a: unknown[]) => findTextsByFabFileIdMock(...a) },
+  memoryLedgerRepository: { markSourceShredded: (...args: unknown[]) => sourceShredMock(...args) },
   fabFileRepository: {
+    findById: (...args: unknown[]) => sourceFileMock(...args),
     findLakeMemoryExtractionMembers: (...a: unknown[]) => findLakeMemoryExtractionMembersMock(...a),
   },
 }));
@@ -44,10 +49,14 @@ vi.mock('@bike4mind/common', () => ({
   MEMENTO_EMBEDDING_MODEL: 'text-embedding-3-small',
   toMementoVector: (v: number[]) => v,
   LAKE_MEMORY_EXTRACTION_LEASE_MS: 15 * 60_000,
+  isTerminalCreditRefusal: (e: { additionalInfo?: { errorCode?: string } }) =>
+    e?.additionalInfo?.errorCode === 'insufficient_credits' ||
+    e?.additionalInfo?.errorCode === 'daily_free_limit_reached',
 }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => vi.fn() }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
-  dataLakeService: { lakeMembershipScope: () => 'datalake:test' },
+  dataLakeService: { lakeMembershipScope: () => 'datalake:test', lakeMembershipSignals: () => ({ inLake: true }) },
 }));
 vi.mock('@bike4mind/services/llm', () => ({
   LakeMemoryExtractionService: class {
@@ -60,7 +69,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   resolveEmbeddingConfig: () => ({ config: undefined, missing: true }),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@server/memory/mementoLedgerMirror', () => ({
+vi.mock('@bike4mind/server-utils/memory/mementoLedgerMirror', () => ({
   createLedgerAppendSession: async () => ({ append: (...a: unknown[]) => appendMock(...a) }),
 }));
 
@@ -102,6 +111,8 @@ const READABLE = 'some durable reference text';
 describe('extractLakeMemoryForBatch consecutive-failure breaker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sourceFileMock.mockResolvedValue({ id: 'source-file' });
+    sourceShredMock.mockResolvedValue(1);
     claimLakeMemoryExtractionMock.mockResolvedValue(true);
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);
@@ -198,6 +209,88 @@ describe('extractLakeMemoryForBatch consecutive-failure breaker', () => {
 
     expect(findTextsByFabFileIdMock).toHaveBeenCalledTimes(12);
     expect(logger.error).not.toHaveBeenCalled();
+    expect(result.hasMore).toBe(false);
+  });
+
+  it('stops at the first out-of-credits refusal without counting it as a failed document', async () => {
+    seedLake(20);
+    seedChunks(() => READABLE);
+    evaluateMock
+      .mockResolvedValueOnce([{ fact: 'the X-200 ships with 36 units' }])
+      .mockRejectedValue({ statusCode: 422, additionalInfo: { errorCode: 'insufficient_credits' } });
+    const logger = makeLogger();
+
+    const result = await extractLakeMemoryForBatch(
+      { dataLakeId: 'lake-1', getRemainingTimeInMillis: () => 10 * 60_000 },
+      logger as never
+    );
+
+    expect(evaluateMock).toHaveBeenCalledTimes(2);
+    expect(evaluateMock.mock.calls[0][0]).toMatchObject({ meter: expect.any(Function) });
+    expect(setLakeMemoryCursorIfFenceUnmovedMock.mock.calls[0][1]).toBe(docId(0));
+    expect(result.hasMore).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('cannot be billed'));
+  });
+
+  it('stops at the first free-tier daily cap refusal without counting it as a failed document', async () => {
+    seedLake(20);
+    seedChunks(() => READABLE);
+    evaluateMock.mockResolvedValueOnce([{ fact: 'the X-200 ships with 36 units' }]).mockRejectedValue({
+      statusCode: 429,
+      additionalInfo: { errorCode: 'daily_free_limit_reached', retryAfter: 3600 },
+    });
+    const logger = makeLogger();
+
+    const result = await extractLakeMemoryForBatch(
+      { dataLakeId: 'lake-1', getRemainingTimeInMillis: () => 10 * 60_000 },
+      logger as never
+    );
+
+    expect(evaluateMock).toHaveBeenCalledTimes(2);
+    expect(setLakeMemoryCursorIfFenceUnmovedMock.mock.calls[0][1]).toBe(docId(0));
+    expect(result.hasMore).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('cannot be billed'));
+  });
+
+  it('records a successful extraction without facts before a later credit refusal', async () => {
+    seedLake(2);
+    seedChunks(() => READABLE);
+    evaluateMock
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce({ additionalInfo: { errorCode: 'insufficient_credits' } });
+
+    const result = await extractLakeMemoryForBatch({ dataLakeId: 'lake-1' }, makeLogger() as never);
+
+    expect(evaluateMock).toHaveBeenCalledTimes(2);
+    expect(appendMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).toHaveBeenCalledExactlyOnceWith('lake-1', docId(0), null);
+    expect(result.hasMore).toBe(false);
+  });
+
+  it('leaves a failed extraction uncovered before a later credit refusal', async () => {
+    seedLake(2);
+    seedChunks(() => READABLE);
+    evaluateMock
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce({ additionalInfo: { errorCode: 'insufficient_credits' } });
+
+    const result = await extractLakeMemoryForBatch({ dataLakeId: 'lake-1' }, makeLogger() as never);
+
+    expect(evaluateMock).toHaveBeenCalledTimes(2);
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).not.toHaveBeenCalled();
+    expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+    expect(result.hasMore).toBe(false);
+  });
+
+  it('trips the failure breaker when the extractor returns null after a covered prefix', async () => {
+    seedLake(20);
+    seedChunks(() => READABLE);
+    evaluateMock.mockResolvedValue(null).mockResolvedValueOnce([]);
+
+    const result = await extractLakeMemoryForBatch({ dataLakeId: 'lake-1' }, makeLogger() as never);
+
+    expect(evaluateMock).toHaveBeenCalledTimes(6);
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).toHaveBeenCalledExactlyOnceWith('lake-1', docId(0), null);
     expect(result.hasMore).toBe(false);
   });
 });

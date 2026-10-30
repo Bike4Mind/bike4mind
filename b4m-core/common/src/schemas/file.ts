@@ -68,6 +68,8 @@ export const CreateFabFileRequestInput = z.object({
   public: z.boolean().optional(),
   /** The prefix to use for the file path */
   prefix: z.string().optional(),
+  /** Admin What's New media: the server stores it under its modal prefix and admits mp4 */
+  purpose: z.literal('modal-media').optional(),
 });
 
 export type CreateFabFileRequestInputType = z.infer<typeof CreateFabFileRequestInput>;

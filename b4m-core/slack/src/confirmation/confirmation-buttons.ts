@@ -355,6 +355,10 @@ export type SlackBlockKitElement =
  */
 export function formatPreviewFromParams(tool: string, params: Record<string, unknown>): string {
   switch (tool) {
+    case 'share_curated_file': {
+      const fileName = toSlackInline(String(params.fileName ?? ''));
+      return `Share curated file: ${fileName}\nFile ID: ${params.fileId}\nDestination: <#${params.channelId}>\n\nClick Confirm to publish a download link in this conversation, or Cancel.`;
+    }
     case TOOL_CREATE_ISSUE: {
       // GitHub issue - repo name prominently at top
       const repoDisplay = `${params.owner}/${params.repo}`;

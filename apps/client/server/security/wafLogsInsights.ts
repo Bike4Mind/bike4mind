@@ -13,7 +13,7 @@ import {
   resolveRouterDistributionId,
   resolveTimeWindow,
   type WafRangeInput,
-} from './wafSharedHelpers';
+} from '@bike4mind/server-utils/security/wafSharedHelpers';
 import { maskWafRequestHeaders } from './wafHeaderRedaction';
 import { WAF_CACHE_TTL, wafQueryCache } from './wafQueryCache';
 

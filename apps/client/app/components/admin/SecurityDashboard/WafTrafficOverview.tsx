@@ -7,7 +7,7 @@ import {
   type WafTrafficRange,
   type WafRangeInput,
 } from '@/app/hooks/data/admin';
-import { isCustomRange } from '@/server/security/wafSharedHelpers';
+import { isCustomRange } from '@bike4mind/server-utils/security/wafSharedHelpers';
 import { WafTopRulesChart } from './WafTopRulesChart';
 import { WafTrafficGauge } from './WafTrafficGauge';
 import { WafLogsInsightsSection } from './WafLogsInsightsSection';
@@ -245,6 +245,8 @@ export const WafTrafficOverview = ({ isActive = true }: { isActive?: boolean }) 
           blockedRequestsLoading={blockedRequestsQuery.isLoading}
           blockedRequestsError={blockedRequestsQuery.isError}
           blockedRequestsErrorDetail={blockedRequestsQuery.error}
+          onRetry={() => void logsInsightsQuery.refetch()}
+          onRetryBlockedRequests={() => void blockedRequestsQuery.refetch()}
         />
       )}
 

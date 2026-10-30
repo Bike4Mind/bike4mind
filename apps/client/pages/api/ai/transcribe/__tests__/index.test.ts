@@ -46,12 +46,53 @@ vi.mock('@aws-sdk/client-s3', () => ({
     constructor(public input: unknown) {}
   },
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: (...a: unknown[]) => mocks.getOperationsModel(...a) },
   getEffectiveApiKeyByBackend: (...a: unknown[]) => mocks.getEffectiveApiKeyByBackend(...a),
 }));
+// Stands in for the real reservation: settle writes the ledger row through subtractCredits and, like
+// the real one, logs rather than throws when that write fails, and writes no row for a 0 charge
+// (settleCreditHold in creditHold.ts, chargeDirectly in creditPreflight.ts).
+const { fakeHold } = vi.hoisted(() => ({
+  fakeHold: (
+    subtract: (...a: unknown[]) => unknown,
+    args: { userId: string; logger: { error: (...a: unknown[]) => void } }
+  ) => ({
+    settle: async (credits: number, entry: Record<string, unknown>) => {
+      if (credits === 0) return 0;
+      try {
+        await subtract({ ...entry, ownerId: args.userId, credits }, {});
+      } catch (err) {
+        args.logger.error('settlement failed', { err });
+      }
+      return credits;
+    },
+    release: async () => undefined,
+  }),
+}));
+
 vi.mock('@server/utils/creditPreflight', () => ({
   assertPreflightCredits: (...a: unknown[]) => mocks.assertPreflightCredits(...a),
+  holdPreflightCredits: async ({
+    req,
+    requiredCredits,
+    featureLabel,
+    billingOrganizationId,
+  }: {
+    req: { user: { id: string }; logger: Parameters<typeof fakeHold>[1]['logger'] };
+    requiredCredits: number;
+    featureLabel: string;
+    billingOrganizationId?: string | null;
+  }) => {
+    const args = {
+      userId: req.user.id,
+      estimatedCredits: requiredCredits,
+      featureLabel,
+      billingOrganizationId,
+    };
+    await mocks.assertPreflightCredits(args);
+    return fakeHold(mocks.subtractCredits, { ...args, logger: req.logger });
+  },
   InsufficientCreditsPreflightError,
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -79,9 +120,10 @@ import handler from '../index';
 const FILE_KEY = 'transcribe-uploads/u1/abc.mp3';
 const SIZE = 2 * 1024 * 1024;
 
-const run = (body: Record<string, unknown> = { fileKey: FILE_KEY }) => {
+const run = (body: Record<string, unknown> = { fileKey: FILE_KEY }, receivedAt = new Date()) => {
   const { req, res } = createMocks({ method: 'POST', body });
   (req as Record<string, unknown>).user = { id: 'u1' };
+  (req as Record<string, unknown>).receivedAt = receivedAt;
   (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const promise = (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return { res, promise };
@@ -103,6 +145,13 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/transcribe', () => {
+  it('rejects an expired request with 504 before taking credits or calling the provider', async () => {
+    const { promise } = run({ fileKey: FILE_KEY }, new Date(Date.now() - 60_000));
+    await expect(promise).rejects.toMatchObject({ statusCode: 504, additionalInfo: { errorCode: 'request_timeout' } });
+    expect(mocks.assertPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.transcribeOpenAIFromS3).not.toHaveBeenCalled();
+  });
+
   it.each(['openai', 'aws'])(
     'gates on the S3-size estimate at the %s backend rate, then transcribes',
     async backend => {
@@ -115,6 +164,7 @@ describe('POST /api/ai/transcribe', () => {
         userId: 'u1',
         estimatedCredits: expected,
         featureLabel: 'transcription',
+        billingOrganizationId: null,
       });
       expect(res._getJSONData()).toEqual({ text: 'hi' });
       // The debit prices the same backend-rate USD the gate admitted on, settled stochastically

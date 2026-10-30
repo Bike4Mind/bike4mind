@@ -60,7 +60,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 vi.mock('@bike4mind/services', () => ({ counterService: {} }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn() },
   getEffectiveApiKeyByBackend: vi.fn(),
 }));
@@ -234,6 +234,21 @@ describe('GET /api/users/counterLogs - user activity paging', () => {
 
     expect(stageValue('$skip')).toBe(20);
     expect(stageValue('$limit')).toBe(10);
+  });
+
+  it('keeps a separate cache entry per exclusion setting', async () => {
+    const settings = [
+      {},
+      { excludeNoOrg: 'true' },
+      { excludeStaff: 'true' },
+      { excludeNoOrg: 'true', excludeStaff: 'true' },
+    ];
+    for (const setting of settings) {
+      const { req, res } = mocks({ ...DATES, ...setting });
+      await mockRefs.getHandler!(req, res);
+    }
+
+    expect(new Set(mockRefs.cacheKeys).size).toBe(settings.length);
   });
 
   it('keeps two filter sets apart when a search term contains the key delimiter', async () => {

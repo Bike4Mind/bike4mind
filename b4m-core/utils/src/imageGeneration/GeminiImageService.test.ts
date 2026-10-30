@@ -10,6 +10,7 @@ vi.mock('@google/genai', () => ({
 }));
 
 import { GeminiImageService } from './GeminiImageService';
+import { ImageModerationBlockedError } from './imageGenerationErrors';
 
 function makeService(generateContent: ReturnType<typeof vi.fn>) {
   const svc = new GeminiImageService('test-key', new Logger());
@@ -127,5 +128,73 @@ describe('GeminiImageService.buildGenerationConfig (enhancePrompt/seed omission)
   it('still forwards output_format/aspect_ratio, which Gemini does accept', () => {
     const config = buildConfig({ output_format: 'jpeg', aspect_ratio: '16:9' });
     expect(config).toMatchObject({ outputMimeType: 'image/jpeg', aspectRatio: '16:9' });
+  });
+});
+
+describe('GeminiImageService - policy blocks', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('maps promptFeedback.blockReason to ImageModerationBlockedError instead of "No content parts"', async () => {
+    const generateContent = vi.fn().mockResolvedValue({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } });
+    const svc = makeService(generateContent);
+
+    const thrown = await svc
+      .edit('data:image/png;base64,SOURCE', 'edit it', { model: ImageModels.GEMINI_2_5_FLASH_IMAGE })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageModerationBlockedError);
+    expect((thrown as Error).message).toMatch(/blocked by Google Gemini's safety filters \(PROHIBITED_CONTENT\)/);
+  });
+
+  it('maps an IMAGE_SAFETY finish reason on an empty candidate to ImageModerationBlockedError', async () => {
+    const generateContent = vi
+      .fn()
+      .mockResolvedValue({ responseId: 'resp-1', candidates: [{ finishReason: 'IMAGE_SAFETY' }] });
+    const svc = makeService(generateContent);
+
+    const thrown = await svc
+      .edit('data:image/png;base64,SOURCE', 'edit it', { model: ImageModels.GEMINI_2_5_FLASH_IMAGE })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageModerationBlockedError);
+    expect((thrown as ImageModerationBlockedError).logContext).toEqual({
+      provider: 'gemini',
+      requestId: 'resp-1',
+      reason: 'IMAGE_SAFETY',
+    });
+  });
+
+  it('reports a safety block rather than a clarification when the blocked candidate carries text', async () => {
+    const generateContent = vi.fn().mockResolvedValue({
+      candidates: [{ finishReason: 'SAFETY', content: { parts: [{ text: 'I cannot help with that.' }] } }],
+    });
+    const svc = makeService(generateContent);
+
+    await expect(
+      svc.edit('data:image/png;base64,SOURCE', 'edit it', { model: ImageModels.GEMINI_2_5_FLASH_IMAGE })
+    ).rejects.toBeInstanceOf(ImageModerationBlockedError);
+  });
+
+  it('applies the same check on the generateContent generation path', async () => {
+    const generateContent = vi.fn().mockResolvedValue({ promptFeedback: { blockReason: 'SAFETY' } });
+    const svc = makeService(generateContent);
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (svc as any).generateImageViaContent('a prompt', ImageModels.GEMINI_2_5_FLASH_IMAGE)
+    ).rejects.toBeInstanceOf(ImageModerationBlockedError);
+  });
+
+  it('leaves a normal STOP response with text as a clarification', async () => {
+    const generateContent = vi.fn().mockResolvedValue({
+      candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Which part should change?' }] } }],
+    });
+    const svc = makeService(generateContent);
+
+    const result = await svc.edit('data:image/png;base64,SOURCE', 'edit it', {
+      model: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+    });
+
+    expect(result.type).toBe('clarification');
   });
 });

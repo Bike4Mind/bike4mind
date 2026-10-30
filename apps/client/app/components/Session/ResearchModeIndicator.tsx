@@ -1,6 +1,6 @@
 import { FC } from 'react';
 import { Chip, Tooltip } from '@mui/joy';
-import { Compare as CompareIcon } from '@mui/icons-material';
+import CompareIcon from '@mui/icons-material/Compare';
 import { useLLM } from '@client/app/contexts/LLMContext';
 
 export const ResearchModeIndicator: FC = () => {

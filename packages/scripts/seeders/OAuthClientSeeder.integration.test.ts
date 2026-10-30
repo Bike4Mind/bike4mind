@@ -130,7 +130,7 @@ describe('OAuthClientSeeder (real DB)', () => {
         isActive: true,
         allowedScopes:
           clientId === PREVIEW_FEDERATED_CLIENT_ID
-            ? ['openid', 'email', 'profile', 'ai:generate']
+            ? ['openid', 'email', 'profile', 'ai:generate', 'federated:admin-status']
             : ['openid', 'email', 'profile'],
       });
       if (clientId === PREVIEW_FEDERATED_CLIENT_ID) {

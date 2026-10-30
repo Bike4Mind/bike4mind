@@ -124,6 +124,8 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
 
     // Additional permissions for specific resources:
     allow('export', Session, ownDocumentPermission);
+    // Mirrors the HTTP builder's FabFile export rule (apps/client/server/auth/ability.ts).
+    allow('export', FabFile, ownDocumentPermission);
     allow('clone', Session, ownDocumentPermission);
 
     // Accept and refuse invites

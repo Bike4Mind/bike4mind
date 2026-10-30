@@ -1,5 +1,7 @@
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { CliToolRequestAction } from '@bike4mind/common';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 import { validateToolRequest, executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { withWebSocketContext, sendToConnection } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
@@ -49,18 +51,31 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       endpoint: 'ws/cli_tool_request',
       method: 'WS',
     });
-  } catch {
-    try {
-      const user = await verifyJwtToken(accessToken);
-      userId = user.id;
-      userEmail = user.email ?? undefined;
-      await checkRateLimit(userId, undefined, { bucket: 'ws' });
-    } catch {
+  } catch (apiKeyError) {
+    // The key check itself failed (database unreachable): report that, not a JWT verdict.
+    if (isAuthInfraFailure(apiKeyError)) {
       await sendToConnection(connectionId, endpoint, {
         action: 'cli_tool_response' as const,
         requestId,
         success: false,
-        error: 'Authentication failed. Provide a valid API key or JWT token.',
+        error: apiKeyError.message,
+      });
+      return { statusCode: 200 };
+    }
+    try {
+      const user = await verifyJwtToken(accessToken, { requireApiAccess: true });
+      userId = user.id;
+      userEmail = user.email ?? undefined;
+      await checkRateLimit(userId, undefined, { bucket: 'ws' });
+    } catch (error) {
+      await sendToConnection(connectionId, endpoint, {
+        action: 'cli_tool_response' as const,
+        requestId,
+        success: false,
+        error:
+          error instanceof ForbiddenError || isAuthInfraFailure(error)
+            ? error.message
+            : 'Authentication failed. Provide a valid API key or JWT token.',
       });
       return { statusCode: 200 };
     }

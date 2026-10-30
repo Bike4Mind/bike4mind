@@ -1,5 +1,5 @@
 import { useCancelSubscription, useChangeSubscription, useSubscribePlan } from '@client/app/hooks/data/subscriptions';
-import { pickSubscriptionByPrice } from '@client/lib/subscriptions/types';
+import { pickSubscriptionByPrice } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { Button } from '@mui/joy';
 import dayjs from 'dayjs';

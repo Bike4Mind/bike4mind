@@ -1,7 +1,7 @@
 /**
  * Shared constants and types for Okta OAuth authentication.
  */
-import { BaseStatePayload } from '@server/auth/jwtStateStore';
+import { BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 
 /**
  * Audience claim for Okta OAuth state JWT tokens.

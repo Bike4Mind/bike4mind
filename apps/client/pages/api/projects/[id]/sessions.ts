@@ -7,6 +7,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -15,7 +16,8 @@ import {
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents, redactSessionsForClient } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { ProjectEvents, projectResponseSchema, redactSessionsForClient } from '@bike4mind/common';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { z } from 'zod';
 import { SessionEvents } from '@server/utils/eventBus';
@@ -99,11 +101,14 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       // this fan-out is already best-effort (Promise.allSettled). So a refusal skips the queueing
       // rather than failing the attach - the client types this response as ISessionDocument[],
       // leaving the warning log as where a skipped summary surfaces (#1852).
-      const summarizableSessionIds = await filterSessionIdsByOperationalCredits(sessions, {
-        operationsPerSession: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
-        operation: 'session summarization',
-        logger: req.logger,
-      });
+      const summarizableSessionIds = aiAccessDeniedMessage(req.user)
+        ? new Set<string>()
+        : await filterSessionIdsByOperationalCredits(sessions, {
+            payerId: req.user.id,
+            operationsPerSession: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
+            operation: 'session summarization',
+            logger: req.logger,
+          });
 
       await Promise.allSettled(
         sessions.map(async session => {
@@ -121,7 +126,12 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
             { ability: req.ability }
           );
           if (!summarizableSessionIds.has(session.id)) return;
-          await SessionEvents.Summarize.publish({ sessionId: session.id, callTagging: true, trigger: 'project' });
+          await SessionEvents.Summarize.publish({
+            sessionId: session.id,
+            callTagging: true,
+            trigger: 'project',
+            payerId: req.user.id,
+          });
         })
       );
 
@@ -175,7 +185,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         )
       );
 
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   );
 

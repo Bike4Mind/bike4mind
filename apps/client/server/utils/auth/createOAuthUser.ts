@@ -1,5 +1,6 @@
-import { PENDING_FREE_CREDITS_TAG, sanitizeUsername, USERNAME_MAX_LENGTH } from '@bike4mind/common';
-import { User } from '@bike4mind/database';
+import { newSignupGrant, PENDING_FREE_CREDITS_TAG, sanitizeUsername, USERNAME_MAX_LENGTH } from '@bike4mind/common';
+import type { ISignupMeta } from '@bike4mind/common';
+import { adminSettingsRepository, User } from '@bike4mind/database';
 import { randomUUID } from 'crypto';
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
@@ -74,6 +75,7 @@ export async function createUniqueOAuthUser(params: {
    * backfillPendingFreeCredits script rescues.
    */
   pendingFreeCredits?: boolean;
+  signupMeta?: ISignupMeta;
 }) {
   const { name, baseUsername, email, oauthCredentials, pendingFreeCredits = false } = params;
   // `name` is a required field. Providers that send neither a displayName/name
@@ -82,6 +84,7 @@ export async function createUniqueOAuthUser(params: {
   // retried and fails the whole sign-in - the same class of opaque OAuth-create
   // lockout this helper exists to prevent. baseUsername is guaranteed non-empty.
   const safeName = name || baseUsername;
+  const signupGrant = pendingFreeCredits ? await newSignupGrant(adminSettingsRepository) : undefined;
   const buildDoc = (username: string) => ({
     name: safeName,
     username,
@@ -93,6 +96,8 @@ export async function createUniqueOAuthUser(params: {
     // Both callers pass a non-null email only when the provider asserted it verified.
     ...(email ? { email, emailVerified: true, emailVerifiedAt: new Date() } : {}),
     ...(pendingFreeCredits ? { tags: [PENDING_FREE_CREDITS_TAG] } : {}),
+    ...(signupGrant ? { signupGrant } : {}),
+    ...(params.signupMeta ? { signupMeta: params.signupMeta } : {}),
   });
 
   let candidate = baseUsername;

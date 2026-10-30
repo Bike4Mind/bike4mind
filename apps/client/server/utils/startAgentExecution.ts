@@ -8,9 +8,10 @@
  * (AgentExecution + the dispatch-time prompt Quest) before dispatching the executor.
  * Duplicating that across two transports is how the two drift; it lives here instead.
  *
- * The function never throws for a rejected request and never speaks HTTP or WebSocket:
+ * The function returns guard refusals and never speaks HTTP or WebSocket:
  * it returns a discriminated {@link StartAgentExecutionResult} and each caller maps the
  * `reason` onto its own wire (an `agent_error` frame, or an HTTP status).
+ * Operational quota errors throw so each transport can preserve their retry metadata.
  */
 
 import {
@@ -27,6 +28,7 @@ import type { Logger } from '@bike4mind/observability';
 import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import type { ApiKeyInfo } from '@server/cli/auth';
 import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import {
   dispatchAgentExecution,
@@ -36,7 +38,8 @@ import {
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
-import { pinnableMessageFileIds } from '@server/managers/pinnableMessageFileIds';
+import { admitApiKeyCompletion } from '@server/utils/untrustedCompletionQuota';
+import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
@@ -117,7 +120,8 @@ export type StartAgentExecutionInput = {
    * `scopeDeniedTools` and `apiKeyId` are all derived from it here so a door cannot forward one
    * without the others.
    */
-  apiKeyInfo: (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId'>) | undefined;
+  apiKeyInfo:
+    (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted'>) | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
   /**
@@ -145,6 +149,11 @@ export type StartAgentExecutionInput = {
    * system message, carried in the server-only checkpoint so continuations keep it.
    */
   systemContext?: string;
+  /**
+   * Scripted per-iteration gate confidences (see `IAgentExecution.confidenceOverrides`).
+   * Admin-only: any other caller is refused with `confidence_overrides_forbidden`.
+   */
+  confidenceOverrides?: number[];
 };
 
 /** Why a start was refused. Callers map these onto their own transport's errors. */
@@ -153,6 +162,7 @@ export type StartAgentExecutionFailureReason =
   | 'organization_not_found'
   | 'billing_organization_mismatch'
   | 'billing_key_stale'
+  | 'confidence_overrides_forbidden'
   | 'concurrent_limit'
   | 'dispatch_failed';
 
@@ -178,6 +188,16 @@ export async function startAgentExecution(
 ): Promise<StartAgentExecutionResult> {
   const { userId } = input;
 
+  // A key without the admin scope does not carry its owner's admin role (see withholdAdminRole).
+  if (input.confidenceOverrides && (adminRoleWithheldFor(input.apiKeyInfo) || !(await isAdminUser(userId)))) {
+    logger.warn('[Start] Non-admin caller sent confidenceOverrides', { userId });
+    return {
+      ok: false,
+      reason: 'confidence_overrides_forbidden',
+      message: 'Only an admin can set confidence overrides',
+    };
+  }
+
   // Validate session ownership before creating anything.
   const session = await sessionRepository.findById(input.sessionId);
   if (!session || session.userId !== userId) {
@@ -188,6 +208,17 @@ export async function startAgentExecution(
   const billing = await resolveRunBillingOrg(input, logger);
   if (!billing.ok) return billing;
   const { organizationId } = billing;
+
+  // Queued work does not occupy a synchronous completion slot. Both transports must
+  // still refuse starts while the verified personal-key owner's token window is full.
+  if (input.apiKeyInfo) {
+    await admitApiKeyCompletion({
+      owner: userId,
+      ownerUntrusted: input.apiKeyInfo.ownerUntrusted,
+      billingOwnerType: input.apiKeyInfo.billingOwnerType,
+      holdSlot: false,
+    });
+  }
 
   // Sweep stale active executions before counting - `pending` / `running` /
   // `continuing` / `awaiting_permission` / `paused` that the executor never
@@ -328,6 +359,7 @@ export async function startAgentExecution(
     enableArtifacts: input.enableArtifacts,
     imageConfig: input.imageConfig,
     audioConfig: input.audioConfig,
+    confidenceOverrides: input.confidenceOverrides,
   });
 
   const executionId = execution.id;
@@ -472,6 +504,11 @@ export async function startAgentExecution(
 
   logger.info('[Start] Executor dispatched', { executionId });
   return { ok: true, executionId, questId: persistedQuestId };
+}
+
+async function isAdminUser(userId: string): Promise<boolean> {
+  const user = await userRepository.findById(userId);
+  return user?.isAdmin === true;
 }
 
 type RunBillingOrg =

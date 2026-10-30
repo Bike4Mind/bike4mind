@@ -14,6 +14,7 @@ import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } fr
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
+  BadRequestError,
   ChatModels,
   estimateStreamedOutputTokens,
   ImageModels,
@@ -40,13 +41,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
-import { usableTokenCount } from './thinkingParams';
+import { geminiThinkingOutputCap } from './thinkingParams';
 import { withAbortListener } from './withAbortListener';
+import { retryTransportErrors } from './transportRetry';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
-
-// Headroom for thinking tokens, which count against maxOutputTokens.
-const GEMINI_THINKING_RESERVE_TOKENS = 16_000;
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 
 // Matches gemini-3-pro-preview, gemini-3.1-pro-preview, gemini-3.5-flash, but not a future gemini-30 family.
 const isGemini3 = (modelId: string) => /^gemini-3(\D|$)/.test(modelId);
@@ -666,10 +666,18 @@ export class GeminiBackend implements ICompletionBackend {
     const bestEffortFormat = isBestEffortJsonSchema(options.responseFormat);
 
     const systemMessages = messagesWithFormat.filter(message => message.role === 'system');
-    const systemInstruction = systemMessages.map(message => message.content).join('\n');
+    const callerSystemText = systemMessages.map(message => message.content).join('\n');
+    // Without the identity tool, the line tells the model which model it is.
+    // Empty text plus no reminder still leaves `systemInstruction: undefined` below.
+    const systemInstruction = shouldOmitIdentityReminder(options)
+      ? callerSystemText
+      : appendIdentityReminder(callerSystemText, buildIdentityReminder(modelName, options.modelDisplayName));
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
     const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
+    if (contents.length === 0) {
+      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
+    }
     const generationConfig = this.getGenerationConfig(modelInfo, options);
 
     // Zero or one tools; if one, then all the functionDefinitions are there, up to the
@@ -739,10 +747,14 @@ export class GeminiBackend implements ICompletionBackend {
       try {
         // @google/genai ignores a signal that is already aborted, so the request would still go out.
         if (options.abortSignal?.aborted) throw new Error('Request aborted');
-        const result = await this._api.models.generateContentStream({
-          ...request,
-          config: { ...request.config, abortSignal: options.abortSignal },
-        });
+        const result = await retryTransportErrors(
+          () =>
+            this._api.models.generateContentStream({
+              ...request,
+              config: { ...request.config, abortSignal: options.abortSignal },
+            }),
+          { logger: this.logger, label: 'GeminiBackend', abortSignal: options.abortSignal }
+        );
 
         let lastChunk: any = null;
         for await (const chunk of result) {
@@ -806,7 +818,6 @@ export class GeminiBackend implements ICompletionBackend {
             finishReason: lastChunk.candidates?.[0]?.finishReason,
             finishMessage: lastChunk.candidates?.[0]?.finishMessage,
             usageMetadata: lastChunk.usageMetadata,
-            fullChunk: JSON.stringify(lastChunk, null, 2),
           });
 
           // Check final chunk for function calls (they might only appear here)
@@ -1096,7 +1107,11 @@ export class GeminiBackend implements ICompletionBackend {
         // request throws - removing it only on the success path leaked one
         // listener per failed call on a reused signal.
         const result = await withAbortListener(options.abortSignal, abortListener, () =>
-          this._api.models.generateContent(request)
+          retryTransportErrors(() => this._api.models.generateContent(request), {
+            logger: this.logger,
+            label: 'GeminiBackend',
+            abortSignal: options.abortSignal,
+          })
         );
         const r = result;
 
@@ -1380,6 +1395,7 @@ export class GeminiBackend implements ICompletionBackend {
         };
 
         if (typeof message.content === 'string') {
+          if (!message.content.trim()) return null;
           return {
             role: mapRole(message.role),
             parts: [{ text: message.content }],
@@ -1395,9 +1411,11 @@ export class GeminiBackend implements ICompletionBackend {
         const hasToolUse = Array.isArray(message.content) && message.content.some(item => item.type === 'tool_use');
 
         if (!hasToolUse && message.content?.[0].type === 'text') {
+          const text = (message.content[0] as MessageContentText).text;
+          if (!text.trim()) return null;
           return {
             role: mapRole(message.role),
-            parts: [{ text: (message.content?.[0] as MessageContentText).text }],
+            parts: [{ text }],
           };
         }
 
@@ -1641,11 +1659,8 @@ export class GeminiBackend implements ICompletionBackend {
       };
     }
     // Temperature stays at Google's default 1.0; Gemini 3 loops or degrades below it.
-    const wanted = callerCap + GEMINI_THINKING_RESERVE_TOKENS;
-    // Assumes no live can_think row has max_tokens below the reserve: it would get its catalog cap and no thinking bound.
-    const ceiling = (model.maxOutputTokensDerived ? undefined : usableTokenCount(model.max_tokens)) ?? Infinity;
-    const maxOutputTokens = Math.min(ceiling, wanted);
-    if (wanted >= ceiling) return { maxOutputTokens };
+    const { maxOutputTokens, callerCapBinds } = geminiThinkingOutputCap(model, callerCap);
+    if (!callerCapBinds) return { maxOutputTokens };
     // Bound thinking only when the caller's cap binds; otherwise keep Google's default.
     // Only 3.x and 4.x take thinkingLevel; the -latest aliases track Google's newest 3.x Flash / Flash-Lite.
     // Other ids get the cap alone.

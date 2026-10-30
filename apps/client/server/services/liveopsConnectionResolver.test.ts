@@ -31,7 +31,7 @@ vi.mock('@bike4mind/database', () => ({
 
 // Tokens pass through decryption verbatim so assertions can trace which
 // connection a token came from.
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => value ?? null,
 }));
 

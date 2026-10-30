@@ -11,7 +11,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 const mockVerifyEmbedApiKey = vi.fn();
 vi.mock('@server/cli/auth', () => ({
@@ -22,6 +22,8 @@ vi.mock('@server/cli/auth', () => ({
 // launcher must sanitize identically to the widget page, so exercise the actual
 // shared helpers, not stubs.
 import handler from '../branding';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const VALID_INFO = {
   keyId: 'key-1',
@@ -99,6 +101,30 @@ describe('GET /api/embed/branding - launcher branding bootstrap', () => {
     const res = await run({ k: 'b4m_live_revoked' });
     expect(res._getStatusCode()).toBe(404);
     expect(String(res.getHeader('Cache-Control'))).toBe('no-store');
+  });
+
+  it('answers 503 temporarily_unavailable (no-store, Retry-After) when the database is unreachable', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+    const res = await run({ k: 'b4m_live_good' });
+    expect(res._getStatusCode()).toBe(503);
+    expect(res._getJSONData()).toMatchObject({ error: 'temporarily_unavailable' });
+    expect(String(res.getHeader('Retry-After'))).toBe('5');
+    expect(String(res.getHeader('Cache-Control'))).toBe('no-store');
+    expect(res._getData()).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+  });
+
+  it('answers 500 for an unexpected key-check failure, not a 404', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(toApiKeyAuthError(new Error('boom')));
+    const res = await run({ k: 'b4m_live_good' });
+    expect(res._getStatusCode()).toBe(500);
+  });
+
+  it('keeps the uniform 404 for an unknown key', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(new UnauthorizedError('Invalid or expired API key'));
+    const res = await run({ k: 'b4m_live_unknown' });
+    expect(res._getStatusCode()).toBe(404);
   });
 
   it('returns the identical 404 body for a wrong-scope key (no enumeration signal)', async () => {

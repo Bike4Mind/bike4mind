@@ -1,10 +1,14 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PhaseTimer } from '../PhaseTimer';
+import * as projectGit from './git';
 import {
+  branchExists,
   containerDirectory,
   currentBranch,
+  fetchRemoteFor,
   git,
   isGitRepository,
   listBranches,
@@ -12,7 +16,7 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './git';
-import { appWorktreeRoot, resolveWorkspace, worktreeFolderName } from './workspace';
+import { appWorktreeRoot, resolveWorkspace, SpareWorktrees, worktreeFolderName } from './workspace';
 
 /**
  * Real git repositories in a temp directory rather than a mocked child_process: the whole
@@ -366,17 +370,32 @@ describe('resolveWorkspace choosing what to fork from', () => {
     );
   });
 
-  it('keeps local commits the remote has not seen', async () => {
+  it('retries a failed prefetch immediately instead of marking it fresh', async () => {
+    const { repo, origin } = await clonedRepository();
+    await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+    await fetchRemoteFor(repo, 'origin/main');
+    await git(repo, ['remote', 'set-url', 'origin', origin]);
+    const first = fetchRemoteFor(repo, 'origin/main');
+    expect(fetchRemoteFor(repo, 'origin/main')).toBe(first);
+    await first;
+    expect(fetchRemoteFor(repo, 'origin/main')).toBe(first);
+    expect((await git(repo, ['rev-parse', 'origin/main'])).trim()).toBe(
+      (await git(repo, ['rev-parse', 'HEAD'])).trim()
+    );
+  });
+
+  it('forks from upstream main without changing unpushed local main commits', async () => {
     const { repo } = await clonedRepository();
+    const upstream = (await git(repo, ['rev-parse', 'origin/main'])).trim();
     await writeFile(join(repo, 'unpushed.txt'), 'mine\n', 'utf8');
     await git(repo, ['add', '.']);
     await git(repo, ['commit', '--quiet', '-m', 'unpushed']);
 
     const resolved = await resolveWorkspace(repo, { base: 'main' });
 
-    expect((await git(resolved.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(
-      (await git(repo, ['rev-parse', 'main'])).trim()
-    );
+    expect((await git(resolved.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(upstream);
+    expect((await git(repo, ['rev-parse', 'main'])).trim()).not.toBe(upstream);
   });
 
   async function commitOn(repo: string, file: string): Promise<string> {
@@ -387,6 +406,67 @@ describe('resolveWorkspace choosing what to fork from', () => {
   }
 
   const headOf = async (directory: string) => (await git(directory, ['rev-parse', 'HEAD'])).trim();
+
+  it('forks from upstream when local main has diverged, leaving local main intact', async () => {
+    const { repo, origin } = await clonedRepository();
+    const initial = await headOf(repo);
+    const upstream = await commitOn(repo, 'upstream.txt');
+    await git(repo, ['push', '--quiet', 'origin', 'main']);
+    await git(repo, ['reset', '--quiet', '--hard', initial]);
+    const local = await commitOn(repo, 'local.txt');
+    await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+
+    const resolved = await resolveWorkspace(repo, { base: 'main', branch: 'agent/clean' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(upstream);
+    expect(await headOf(repo)).toBe(local);
+    expect((await git(origin, ['rev-parse', 'main'])).trim()).toBe(upstream);
+  });
+
+  it.each(['main', 'origin/main', ''])('refuses a stale %s base when upstream fetch fails', async base => {
+    const { repo } = await clonedRepository();
+    const local = await commitOn(repo, 'local.txt');
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+    await fetchRemoteFor(repo, 'origin/main');
+
+    await expect(resolveWorkspace(repo, { base, branch: 'agent/refused' })).rejects.toThrow(
+      /Could not update origin\/main.*pick another base branch/s
+    );
+
+    expect(await headOf(repo)).toBe(local);
+    expect(await branchExists(repo, 'agent/refused')).toBe(false);
+  });
+
+  it('uses local main when the repository has no origin', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['remote', 'remove', 'origin']);
+    const local = await commitOn(repo, 'local.txt');
+
+    const resolved = await resolveWorkspace(repo, { base: 'main' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(local);
+  });
+
+  it('does not default to local main when its tracking ref is missing and origin is offline', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+
+    await expect(resolveWorkspace(repo, { branch: 'agent/refused' })).rejects.toThrow(/Could not update origin\/main/);
+
+    expect(await branchExists(repo, 'agent/refused')).toBe(false);
+  });
+
+  it('keeps an explicit feature base usable while origin is offline', async () => {
+    const { repo } = await clonedRepository();
+    await git(repo, ['switch', '--quiet', '-c', 'feat/local']);
+    const local = await commitOn(repo, 'feature.txt');
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+
+    const resolved = await resolveWorkspace(repo, { base: 'feat/local', branch: 'agent/feature' });
+
+    expect(await headOf(resolved.workingDirectory)).toBe(local);
+  });
 
   // A spawned session names its branch AND its base: the branch the user approved, cut from the
   // branch its parent is on.
@@ -496,5 +576,180 @@ describe('resolveWorkspace in an ordinary clone', () => {
     expect(await readFile(join(repo, '.b4m', '.gitignore'), 'utf8')).toBe('*\n');
     expect((await git(repo, ['status', '--porcelain'])).trim()).toBe('');
     await expect(stat(join(repo, '.gitignore'))).rejects.toThrow();
+  });
+});
+
+describe('SpareWorktrees', () => {
+  const spareAt = (container: string) => join(container, '.b4m', 'spare');
+
+  async function spareReady(main: string, container: string): Promise<void> {
+    await vi.waitUntil(
+      async () => {
+        try {
+          if (!(await listWorktrees(main)).some(entry => entry.path === spareAt(container))) return false;
+          const directory = (await git(spareAt(container), ['rev-parse', '--absolute-git-dir'])).trim();
+          return (await readFile(join(directory, 'b4m-spare'), 'utf8')).startsWith('bike4mind-spare:');
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 10000, interval: 20 }
+    );
+  }
+
+  it.each([false, true])('preserves an unowned detached worktree (dirty: %s)', async dirty => {
+    const { container, main } = await bareLayoutRepository();
+    await mkdir(join(container, '.b4m'), { recursive: true });
+    await git(main, ['worktree', 'add', '--quiet', '--detach', spareAt(container), 'HEAD']);
+    if (dirty) await writeFile(join(spareAt(container), 'mine.txt'), 'keep\n');
+    const spares = new SpareWorktrees(0);
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'b4m/preserve', spares });
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } finally {
+      await spares.dispose();
+    }
+    expect(await readFile(join(spareAt(container), 'README.md'), 'utf8')).toBe('hello\n');
+    if (dirty) expect(await readFile(join(spareAt(container), 'mine.txt'), 'utf8')).toBe('keep\n');
+  });
+
+  it('does not delete edits made in its own spare on cleanup', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    await resolveWorkspace(main, { base: 'main', branch: 'b4m/dirty-spare', spares });
+    await spareReady(main, container);
+    await writeFile(join(spareAt(container), 'mine.txt'), 'keep\n');
+    await spares.dispose();
+    expect(await readFile(join(spareAt(container), 'mine.txt'), 'utf8')).toBe('keep\n');
+  });
+
+  it('preserves a clean spare whose detached HEAD someone committed on', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    await resolveWorkspace(main, { base: 'main', branch: 'b4m/committed-spare', spares });
+    await spareReady(main, container);
+    const path = spareAt(container);
+    await writeFile(join(path, 'mine.txt'), 'keep\n');
+    await git(path, ['add', 'mine.txt']);
+    await git(path, ['commit', '--quiet', '-m', 'keep detached work']);
+    await spares.dispose();
+    expect(await readFile(join(path, 'mine.txt'), 'utf8')).toBe('keep\n');
+    expect((await git(path, ['status', '--porcelain'])).trim()).toBe('');
+  });
+
+  it('preserves ignored files in its spare on cleanup', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    await resolveWorkspace(main, { base: 'main', branch: 'b4m/ignored-spare', spares });
+    await spareReady(main, container);
+    await git(main, ['config', 'core.excludesFile', join(container, 'ignore')]);
+    await writeFile(join(container, 'ignore'), 'mine.txt\n');
+    await writeFile(join(spareAt(container), 'mine.txt'), 'keep\n');
+    await spares.dispose();
+    expect(await readFile(join(spareAt(container), 'mine.txt'), 'utf8')).toBe('keep\n');
+  });
+
+  it('cancels a scheduled refill when the project is forgotten', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(100);
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'b4m/forgotten', spares });
+      await spares.forget(main);
+      await new Promise(resolve => setTimeout(resolve, 300));
+      expect((await listWorktrees(main)).some(entry => entry.path === spareAt(container))).toBe(false);
+    } finally {
+      await spares.dispose();
+    }
+  });
+
+  it.each(['forget', 'dispose'] as const)('cancels an in-flight refill on %s', async action => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    const originalGit = projectGit.git;
+    let releaseCheckout!: () => void;
+    const paused = new Promise<void>(resolve => {
+      releaseCheckout = resolve;
+    });
+    let announceCheckout!: () => void;
+    const started = new Promise<void>(resolve => {
+      announceCheckout = resolve;
+    });
+    const spy = vi.spyOn(projectGit, 'git').mockImplementation(async (directory, args) => {
+      if (args.includes('--detach') && args.includes(spareAt(container))) {
+        announceCheckout();
+        await paused;
+      }
+      return originalGit(directory, args);
+    });
+    try {
+      spares.refill(main, container, 'HEAD');
+      await started;
+      const stopped = action === 'forget' ? spares.forget(main) : spares.dispose();
+      releaseCheckout();
+      await stopped;
+      expect((await listWorktrees(main)).some(entry => entry.path === spareAt(container))).toBe(false);
+    } finally {
+      releaseCheckout();
+      await spares.dispose();
+      spy.mockRestore();
+    }
+  });
+
+  it('makes a spare only after a cut, then hands it to the next session on its own branch', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'b4m/first', spares });
+      await spareReady(main, container);
+      const upstream = (await git(main, ['rev-parse', 'origin/main'])).trim();
+      await writeFile(join(main, 'later.txt'), 'later\n', 'utf8');
+      await git(main, ['add', 'later.txt']);
+      await git(main, ['commit', '--quiet', '-m', 'later']);
+      const tip = (await git(main, ['rev-parse', 'HEAD'])).trim();
+
+      const timer = new PhaseTimer();
+      const second = await resolveWorkspace(main, { base: 'main', branch: 'b4m/second', spares, timer });
+
+      expect(timer.summary()).toContain('spareSwitch=');
+      expect(second.workingDirectory).toBe(join(appWorktreeRoot(container), 'b4m+second'));
+      expect((await git(second.workingDirectory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()).toBe('b4m/second');
+      expect((await git(second.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(upstream);
+      expect((await git(main, ['rev-parse', 'HEAD'])).trim()).toBe(tip);
+      await expect(stat(join(second.workingDirectory, 'later.txt'))).rejects.toThrow();
+      // Taken, then made again for the session after this one.
+      await spareReady(main, container);
+    } finally {
+      await spares.dispose();
+    }
+    expect((await listWorktrees(main)).some(entry => entry.path === spareAt(container))).toBe(false);
+  });
+
+  it('makes none for a repository nothing was cut in, and none after dispose', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    await spares.dispose();
+
+    await resolveWorkspace(main, { base: 'main', branch: 'b4m/late', spares });
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    expect((await listWorktrees(main)).some(entry => entry.path === spareAt(container))).toBe(false);
+  });
+
+  it('leaves a folder it did not make where the spare would go', async () => {
+    const { container, main } = await bareLayoutRepository();
+    await mkdir(spareAt(container), { recursive: true });
+    await writeFile(join(spareAt(container), 'mine.txt'), 'keep\n', 'utf8');
+    const spares = new SpareWorktrees(0);
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'b4m/one', spares });
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const timer = new PhaseTimer();
+      await resolveWorkspace(main, { base: 'main', branch: 'b4m/two', spares, timer });
+
+      expect(timer.summary()).toContain('worktreeAdd=');
+      expect(await readFile(join(spareAt(container), 'mine.txt'), 'utf8')).toBe('keep\n');
+    } finally {
+      await spares.dispose();
+    }
   });
 });

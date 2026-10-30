@@ -51,6 +51,12 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
   // checkApiKeyRateLimit is stubbed.
@@ -103,7 +109,7 @@ vi.mock('@bike4mind/database', async orig => {
 const mockGetGenerationCallbackQueueUrl = vi.fn(
   () => 'https://sqs.example.com/generationCallbackQueue' as string | undefined
 );
-vi.mock('@server/generationCallback/dispatchQuestCallback', async orig => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   getGenerationCallbackQueueUrl: () => mockGetGenerationCallbackQueueUrl(),
 }));
@@ -116,7 +122,7 @@ vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async orig => ({
 vi.mock('@server/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
-vi.mock('@server/utils/orgAccess', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   resolveBillingOrgId: (...a: unknown[]) => mockResolveBillingOrgId(...a),
 }));
@@ -218,6 +224,7 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     expect(res._getJSONData()).toMatchObject({ id: 'quest-1' });
     expect(ImageQuestSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls[0][0].adminRoleWithheld).toBe(true);
   });
 
   describe('referenceImageFabFileIds', () => {
@@ -334,8 +341,9 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
       // gate stubbed, so this pins the status the route actually returns, not a mocked rejection.
       // Unlike llm.integration.test.ts, orgAccess stays mocked file-wide because the forwarding
       // case below needs mockResolveBillingOrgId to return a fixed org.
-      const { resolveBillingOrgId: realResolveBillingOrgId } =
-        await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+      const { resolveBillingOrgId: realResolveBillingOrgId } = await vi.importActual<
+        typeof import('@bike4mind/server-utils/utils/orgAccess')
+      >('@bike4mind/server-utils/utils/orgAccess');
       mockResolveBillingOrgId.mockImplementation(realResolveBillingOrgId);
       mockOrgFindAccessibleById.mockResolvedValueOnce(null);
       const { req, res } = fire({ apiKey: null, body: { organizationId: 'foreign-org' } });

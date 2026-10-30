@@ -9,7 +9,7 @@ import {
   handleUserSubscriptionInvoice,
   resolveSeatChangeFromInvoice,
 } from './serverUtils';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { Logger } from '@bike4mind/observability';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 
@@ -94,17 +94,40 @@ const buildSubscription = (): Stripe.Subscription =>
   ({
     id: 'sub_stripe_xyz',
     status: 'active',
+    customer: 'cus_test',
+    currency: 'usd',
+    cancel_at_period_end: false,
+    cancel_at: null,
+    trial_end: null,
     items: {
       data: [
         {
           quantity: 4,
-          price: { id: 'price_org' },
+          price: {
+            id: 'price_org',
+            unit_amount: 1500,
+            currency: 'usd',
+            recurring: { interval: 'month', interval_count: 1 },
+          },
           current_period_start: 1700000000,
           current_period_end: 1702592000,
         },
       ],
     },
   }) as unknown as Stripe.Subscription;
+
+// The mirror fields buildSubscription projects to (stripeMirrorFields).
+const orgMirror = {
+  unitAmount: 1500,
+  currency: 'usd',
+  interval: 'month',
+  intervalCount: 1,
+  cancelAtPeriodEnd: false,
+  cancelAt: null,
+  trialEndsAt: null,
+  stripeCustomerId: 'cus_test',
+  lastSyncedAt: expect.any(Date),
+};
 
 describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
   beforeEach(() => {
@@ -153,6 +176,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
         priceId: 'price_org',
         status: 'active',
         quantity: 4,
+        ...orgMirror,
       })
     );
     expect(subscriptionRepository.create).not.toHaveBeenCalled();
@@ -212,6 +236,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
         subscriptionId: 'sub_stripe_xyz',
         source: SubscriptionSource.Stripe,
         quantity: 4,
+        ...orgMirror,
       })
     );
     expect(subscriptionRepository.update).not.toHaveBeenCalled();
@@ -604,10 +629,20 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
     ({
       id: 'sub_user_xyz',
       status: 'active',
+      customer: 'cus_user',
+      currency: 'usd',
+      cancel_at_period_end: false,
+      cancel_at: null,
+      trial_end: 1700604800,
       items: {
         data: [
           {
-            price: { id: priceId },
+            price: {
+              id: priceId,
+              unit_amount: 2000,
+              currency: 'usd',
+              recurring: { interval: 'year', interval_count: 1 },
+            },
             current_period_start: 1700000000,
             current_period_end: 1702592000,
           },
@@ -619,6 +654,84 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
     vi.clearAllMocks();
     (userRepository.findByStripeCustomerId as any).mockResolvedValue({ id: 'u1', email: 'owner@acme.com' });
     (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(null);
+    vi.mocked(creditTransactionRepository.findByPaymentIntentId).mockResolvedValue(null);
+  });
+
+  it.each(['subscription_cycle', 'subscription_update'] as const)(
+    'honors the persisted custom grant on %s',
+    async billingReason => {
+      vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+        customCreditsPerCycle: 75000,
+      } as unknown as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+
+      await handleUserSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason: billingReason } as Stripe.Invoice,
+        buildUserSubscription('price_test_professional'),
+        metadata,
+        logger
+      );
+
+      expect(subscriptionRepository.findByStripeSubscriptionId).toHaveBeenCalledWith('sub_user_xyz');
+      expect(creditService.addCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'u1', credits: 75000 }),
+        expect.anything()
+      );
+    }
+  );
+
+  it('uses default credits when the persisted row has no override', async () => {
+    await handleUserSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildUserSubscription('price_test_professional'),
+      metadata,
+      logger
+    );
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ credits: 50000 }),
+      expect.anything()
+    );
+  });
+
+  it('propagates an override lookup failure without issuing a default grant', async () => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockRejectedValueOnce(new Error('lookup failed'));
+    await expect(
+      handleUserSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+        buildUserSubscription('price_test_professional'),
+        metadata,
+        logger
+      )
+    ).rejects.toThrow('lookup failed');
+    expect(creditService.addCredits).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -1, NaN, Infinity])('rejects invalid persisted credits %s without granting', async credits => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+      customCreditsPerCycle: credits,
+    } as unknown as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+    await expect(
+      handleUserSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+        buildUserSubscription('price_test_professional'),
+        metadata,
+        logger
+      )
+    ).rejects.toThrow('Invalid cycle credits for subscription sub_user_xyz');
+    expect(creditService.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('skips duplicate invoices before the override lookup or another grant', async () => {
+    vi.mocked(creditTransactionRepository.findByPaymentIntentId).mockResolvedValue({
+      id: 'already-granted',
+    } as unknown as NonNullable<Awaited<ReturnType<typeof creditTransactionRepository.findByPaymentIntentId>>>);
+    await handleUserSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildUserSubscription('price_test_professional'),
+      metadata,
+      logger
+    );
+    expect(subscriptionRepository.findByStripeSubscriptionId).not.toHaveBeenCalled();
+    expect(creditService.addCredits).not.toHaveBeenCalled();
   });
 
   it('errors loudly and emits EntitlementSkipped when the price matches no plan — never a silent no-op', async () => {
@@ -652,6 +765,15 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
         subscriptionId: 'sub_user_xyz',
         priceId: 'price_test_professional',
         source: SubscriptionSource.Stripe,
+        unitAmount: 2000,
+        currency: 'usd',
+        interval: 'year',
+        intervalCount: 1,
+        cancelAtPeriodEnd: false,
+        cancelAt: null,
+        trialEndsAt: new Date(1700604800 * 1000),
+        stripeCustomerId: 'cus_user',
+        lastSyncedAt: expect.any(Date),
       })
     );
     expect(creditService.addCredits).toHaveBeenCalledWith(

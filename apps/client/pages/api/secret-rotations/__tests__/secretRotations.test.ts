@@ -34,13 +34,17 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockUpdate = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 's1' }));
+const mockFindWithSecret = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const mockFindById = vi.hoisted(() => vi.fn());
 const mockFindActive = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockCreate = vi.hoisted(() => vi.fn());
+const mockExpirePreviousKey = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/database/infra', () => ({
   SecretRotation: {},
   secretRotationRepository: {
     update: (...a: unknown[]) => mockUpdate(...a),
+    findByKeyNameWithSecret: (...a: unknown[]) => mockFindWithSecret(...a),
+    expirePreviousKey: (...a: unknown[]) => mockExpirePreviousKey(...a),
     findById: (...a: unknown[]) => mockFindById(...a),
     findActiveKeys: (...a: unknown[]) => mockFindActive(...a),
     create: (...a: unknown[]) => mockCreate(...a),
@@ -115,8 +119,18 @@ describe('PUT /api/secret-rotations/:id', () => {
 
 describe('POST /api/secret-rotations/renewed', () => {
   beforeEach(() => {
+    mockFindWithSecret.mockResolvedValue(null);
     mockUpdate.mockClear();
     mockUpdate.mockResolvedValue({ id: 's1' });
+    mockExpirePreviousKey.mockClear();
+  });
+
+  it('retires an expired previousKey on renewal, since no cron runs on every stage', async () => {
+    mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
+    const { req, res } = request({ id: 's1' });
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockExpirePreviousKey).toHaveBeenCalledWith('JWT_SECRET', 24 * 60 * 60 * 1000);
   });
 
   it('captures a previousKey for JWT_SECRET', async () => {
@@ -150,21 +164,33 @@ describe('POST /api/secret-rotations/renewed', () => {
     }
   });
 
-  it('re-captures on every renew, so the grace window advances rather than extending a stale key', async () => {
+  it('refuses to renew when the captured signing key has not changed, even after expiry cleanup', async () => {
     mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
     const first = request({ id: 's1' });
     await mockRefs.postHandler!(first.req, first.res);
-    const firstRotatedAt = mockUpdate.mock.calls[0][0].rotatedAt;
-
+    const fingerprint = mockUpdate.mock.calls[0][0].capturedKeyFingerprint;
+    mockFindWithSecret.mockResolvedValue({ capturedKeyFingerprint: fingerprint });
     const second = request({ id: 's1' });
-    await mockRefs.postHandler!(second.req, second.res);
-    const secondCall = mockUpdate.mock.calls[1][0];
+    await expect(mockRefs.postHandler!(second.req, second.res)).rejects.toThrow('has not changed');
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    mockFindWithSecret.mockResolvedValue(null);
+  });
 
-    // Shape only (see the note above): each renew captures a previousKey; the
-    // encrypted round-trip is proven in its own test.
-    expect(secondCall.previousKey).toEqual(expect.any(String));
-    expect(secondCall.previousKey.length).toBeGreaterThan(0);
-    expect(secondCall.rotatedAt.getTime()).toBeGreaterThanOrEqual(firstRotatedAt.getTime());
+  it('refuses to renew against a pre-fingerprint row still holding the current secret', async () => {
+    // Rows captured before fingerprints existed have only the (encrypted) outgoing value, so
+    // equality with the running secret is the only evidence available that nothing changed.
+    const { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } = await import('@bike4mind/utils/security');
+    configureSecretsAtRest(generateEncryptionKey());
+    try {
+      mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
+      mockFindWithSecret.mockResolvedValue({ previousKey: encryptAtRest('server-held-jwt-secret') });
+      const { req, res } = request({ id: 's1' });
+
+      await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('has not changed');
+      expect(mockUpdate).not.toHaveBeenCalled();
+    } finally {
+      configureSecretsAtRest(undefined);
+    }
   });
 
   it('stores previousKey encrypted at rest, recoverable by the grace-window verifiers', async () => {

@@ -39,7 +39,7 @@ vi.mock('@bike4mind/slack', () => ({
 }));
 
 import handler from '@pages/api/slack/oauth/callback';
-import { readStateNonceHash, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const NONCE_COOKIE = 'b4m_oauth_nonce_slack-app-install=cookie-value';
 const COOKIE_HASH = readStateNonceHash({ headers: { cookie: NONCE_COOKIE } }, NONCE_SLOT.slackAppInstall);

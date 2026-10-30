@@ -17,15 +17,15 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getOktaConfigWithFallback, exchangeCodeForTokens, fetchUserInfo } from '@server/auth/oktaOidcClient';
-import { verifyStateToken } from '@server/auth/jwtStateStore';
+import { verifyStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
 import {
   readStateNonceHash,
   clearStateNonce,
   readPkceVerifierCookie,
   clearPkceVerifierCookie,
-} from '@server/auth/oauthFlowCookie';
+} from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
 import { issueBrowserSession } from '@server/auth/issueSession';
@@ -54,6 +54,8 @@ import {
   emitSignupFunnelEvents,
   recordSignupAcquisition,
 } from '@server/analytics/funnel';
+import { recordSignupNetwork } from '@server/auth/networkMeta';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -95,8 +97,11 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
     // Handle OAuth errors from Okta
     if (error) {
-      // Log full error details for debugging, but show sanitized message to user
-      Logger.error('[Okta Callback] OAuth error from Okta:', { error, errorDescription });
+      // Log full error details for debugging, but show sanitized message to user. access_denied is
+      // the IdP refusing this user (policy, cancelled consent), an expected outcome, so it does not
+      // log at error, the level the alert channel pages on.
+      const logOktaError = error === 'access_denied' ? Logger.warn : Logger.error;
+      logOktaError('[Okta Callback] OAuth error from Okta:', { error, errorDescription });
       await authFailLogRepository.create({
         strategy: 'okta',
         ip,
@@ -496,6 +501,9 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     user.password = null;
 
     if (isNewUser) {
+      await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.Okta });
+      // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+      await refreshSignupRiskScore(user.id, Logger.globalInstance);
       const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
       await emitSignupFunnelEvents({
         user: { id: user.id, ...signupFunnel },
@@ -520,6 +528,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // /auth/success applies sanitizeRedirectTo before navigating, so it is
     // passed through as an opaque, URL-encoded query value.
     const successQuery = authSuccessRedirectQuery(redirectTo);
+    const signupFragment = isNewUser ? '&firstSignupSession=1' : '';
 
     // An Okta IdP record is bound to its org's email domain (checked above), so that IdP owns
     // MFA. The unbound SST-secret fallback has no such binding and is challenged like a
@@ -534,7 +543,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         mode: secondFactor.kind === 'challenge' ? 'verify' : 'setup',
         passkeyAvailable: secondFactor.kind === 'challenge' && secondFactor.passkeyAvailable,
       });
-      return res.redirect(`/auth/success${successQuery}${handoff}`);
+      return res.redirect(`/auth/success${successQuery}${handoff}${signupFragment}`);
     }
 
     // Generate our session tokens (distinct from the Okta IdP accessToken/refreshToken above).
@@ -566,7 +575,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // Redirect to the application with tokens in URL fragment (not query string)
     // Using fragments prevents tokens from being logged in server access logs,
     // sent in Referer headers, or stored in browser history as query params
-    const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}`;
+    const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
     return res.redirect(redirectUrl);
   } catch (error) {
     Logger.error('[Okta Callback] Processing error:', error);

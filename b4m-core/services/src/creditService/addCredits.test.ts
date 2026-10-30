@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { addCredits, AddCreditsAdapters, AddCreditsParameters } from './addCredits';
+import {
+  addCredits,
+  addCreditsWithLedgerRow,
+  AddCreditsAdapters,
+  AddCreditsParameters,
+  DuplicateCreditTransactionError,
+} from './addCredits';
 import { ICreditHolder, ICreditHolderMethods, CreditHolderType, CreditPurchaseStatus } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { createMockCreditTransactionRepository } from '../__tests__/utils/testUtils';
@@ -29,6 +35,8 @@ describe('creditService - addCredits', () => {
       incrementCredits: vi.fn(),
     });
     mockCreditTransactionRepo = createMockCreditTransactionRepository();
+    // The repo returns the created row (null only for an idempotent duplicate).
+    mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-default' } as never);
 
     mockAdapters = {
       db: {
@@ -410,6 +418,25 @@ describe('creditService - addCredits', () => {
       expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalledWith('user1', 100, expect.anything());
     });
 
+    it('raises instead of re-reading the holder when the caller asked duplicates to fail', async () => {
+      // An in-transaction caller cannot absorb the net-zero increment: the duplicate write already
+      // aborted the session, so any further operation there is a transient retry loop.
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue(null);
+
+      const parameters: AddCreditsParameters = {
+        type: 'generic_add',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 100,
+        transactionId: 'reservation-refund:run-1',
+      };
+
+      await expect(addCredits(parameters, { ...mockAdapters, duplicateTransactionId: 'throw' })).rejects.toBeInstanceOf(
+        DuplicateCreditTransactionError
+      );
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
+    });
+
     it('does NOT increment when a non-transactionId E11000 is rethrown (e.g. stripePaymentIntentId)', async () => {
       mockCreditTransactionRepo.createTransaction.mockRejectedValue(
         Object.assign(new Error('E11000 duplicate key'), {
@@ -448,6 +475,41 @@ describe('creditService - addCredits', () => {
       await expect(addCredits(parameters, mockAdapters)).rejects.toThrow(BadRequestError);
       // Only the net-zero fetch was attempted; the real credit amount was never applied.
       expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalledWith('ghost', 100, expect.anything());
+    });
+  });
+
+  describe('addCreditsWithLedgerRow', () => {
+    const parameters: AddCreditsParameters = {
+      type: 'generic_add',
+      ownerId: 'user1',
+      ownerType: CreditHolderType.User,
+      credits: 100,
+      description: 'Admin grant',
+    };
+
+    it('returns the holder and the id of the ledger row it wrote', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-abc' } as never);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const result = await addCreditsWithLedgerRow(parameters, mockAdapters);
+
+      expect(result).toEqual({ creditHolder: mockUser, creditTransactionId: 'tx-abc' });
+    });
+
+    it('returns an undefined row id on the idempotent duplicate path', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue(null);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const result = await addCreditsWithLedgerRow({ ...parameters, transactionId: 'dup-1' }, mockAdapters);
+
+      expect(result).toEqual({ creditHolder: mockUser, creditTransactionId: undefined });
+    });
+
+    it('addCredits still returns just the holder', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-abc' } as never);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await expect(addCredits(parameters, mockAdapters)).resolves.toBe(mockUser);
     });
   });
 

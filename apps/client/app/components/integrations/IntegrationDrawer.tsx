@@ -288,13 +288,6 @@ const IntegrationDrawer = ({
             onClick={() => openInNewTab(CLI_DOCS_URL)}
           />
         );
-      case 'google-calendar':
-        return (
-          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            Briefings are booked on a shared Bike4Mind calendar that an admin sets up. Nothing on your own calendar is
-            read or changed, so there is nothing to connect here.
-          </Typography>
-        );
       default:
         return null;
     }

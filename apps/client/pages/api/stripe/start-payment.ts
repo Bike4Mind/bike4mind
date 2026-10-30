@@ -7,7 +7,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import type Stripe from 'stripe';
 

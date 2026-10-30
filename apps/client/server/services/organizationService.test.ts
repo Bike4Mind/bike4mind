@@ -8,7 +8,7 @@ import {
   resolveSubscriptionSource,
   reconcileOrgSeatsFromSubscription,
 } from './organizationService';
-import { SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@bike4mind/server-utils/lib/subscriptions/constants';
 
 // Vitest hoists vi.mock() calls above imports, so the mocked modules win

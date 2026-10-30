@@ -6,6 +6,7 @@ export const DEFAULT_MANIFEST = {
   // --- secret ---
   // Integration secrets are optional: unset disables that integration. Only the
   // core boot secrets (JWT/session/encryption/Mongo) are hard-required.
+  ANTHROPIC_ADMIN_API_KEY: { kind: 'secret', optional: true },
   ANTHROPIC_API_KEY: { kind: 'secret', optional: true },
   B4M_ANALYTICS_ENABLED: { kind: 'secret', optional: true },
   // Shared-secret bearer for the frontend -> ChatCompletion /process dispatch. Required:
@@ -39,6 +40,7 @@ export const DEFAULT_MANIFEST = {
   OKTA_CLIENT_ID: { kind: 'secret', optional: true },
   OKTA_CLIENT_SECRET: { kind: 'secret', optional: true },
   OKTA_USE_ORG_AUTH_SERVER: { kind: 'secret', optional: true },
+  OPENAI_ADMIN_API_KEY: { kind: 'secret', optional: true },
   OPENAI_API_KEY: { kind: 'secret', optional: true },
   OVERWATCH_INGEST_ENABLED: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_KEY: { kind: 'secret', optional: true }, // transient: removed after product extraction
@@ -60,15 +62,19 @@ export const DEFAULT_MANIFEST = {
   SECOPS_ZAP_DISPATCH_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ZAP_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY: { kind: 'secret' },
+  // Optional here so dev/local/self-host can run keyless; the key provider refuses to MINT a DEK on
+  // a deployed stage without it (packages/server-utils/src/memory/factCipher.ts).
+  MEMORY_KEY_SECRET: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY_PREVIOUS: { kind: 'secret', optional: true },
   SESSION_SECRET: { kind: 'secret' },
+  SLACK_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_WEBHOOK_URL: { kind: 'secret', optional: true },
   STRIPE_PUBLISHABLE_KEY: { kind: 'secret', optional: true },
   STRIPE_SECRET_KEY: { kind: 'secret', optional: true },
   STRIPE_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   SUPPORT_EMAIL: { kind: 'secret', optional: true },
-  WHATS_NEW_DISTRIBUTION_URL: { kind: 'secret', optional: true },
+  TURNSTILE_SECRET_KEY: { kind: 'secret', optional: true },
   XAI_API_KEY: { kind: 'secret', optional: true },
   // --- bucket ---
   appFilesBucket: { kind: 'bucket' },
@@ -154,7 +160,6 @@ export const DEFAULT_MANIFEST = {
   HistoryUploadCompleteFunction: { kind: 'function' },
   ImageProcessor: { kind: 'function' },
   NotebookImportCompleteFunction: { kind: 'function' },
-  SlackEventBus: { kind: 'function' },
   mcpHandler: { kind: 'function', optional: true },
   // --- service ---
   // Always-on chatCompletion HTTP service the frontend dispatches quests to

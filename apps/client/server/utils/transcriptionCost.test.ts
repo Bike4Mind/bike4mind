@@ -2,18 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mocks, InsufficientCreditsPreflightError } = vi.hoisted(() => ({
   InsufficientCreditsPreflightError: class extends Error {},
-  mocks: { assertPreflightCredits: vi.fn() },
+  mocks: { assertPreflightCredits: vi.fn(), holdPreflightCredits: vi.fn() },
 }));
 
 vi.mock('@bike4mind/utils', () => ({ usdToCredits: (usd: number) => Math.ceil(usd * 100) }));
 vi.mock('@server/utils/creditPreflight', () => ({
   assertPreflightCredits: (...a: unknown[]) => mocks.assertPreflightCredits(...a),
+  holdPreflightCredits: (...a: unknown[]) => mocks.holdPreflightCredits(...a),
   InsufficientCreditsPreflightError,
 }));
 
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   assertTranscriptionCredits,
+  holdTranscriptionCredits,
   estimateTranscriptionCost,
   MIN_TRANSCRIPTION_USD_PER_MINUTE,
   transcriptionUsdPerMinute,
@@ -24,6 +26,7 @@ const ONE_BILLED_MINUTE_BYTES = (16000 * 2 * 60) / 5;
 
 beforeEach(() => {
   mocks.assertPreflightCredits.mockReset();
+  mocks.holdPreflightCredits.mockReset();
 });
 
 describe('estimateTranscriptionCost', () => {
@@ -64,5 +67,34 @@ describe('assertTranscriptionCredits', () => {
     const boom = new Error('db down');
     mocks.assertPreflightCredits.mockRejectedValue(boom);
     await expect(assertTranscriptionCredits('u1', 7)).rejects.toBe(boom);
+  });
+});
+
+describe('holdTranscriptionCredits', () => {
+  const user = { id: 'u1', organizationId: 'homeOrg' } as Parameters<typeof holdTranscriptionCredits>[0];
+  const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
+
+  it('reserves personal credits even when the caller has an organization seat', async () => {
+    const hold = { ownerId: 'u1', settle: vi.fn(), release: vi.fn() };
+    mocks.holdPreflightCredits.mockResolvedValue(hold);
+
+    await expect(holdTranscriptionCredits(user, 7, logger)).resolves.toBe(hold);
+    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith({
+      req: { user, logger },
+      requiredCredits: 7,
+      featureLabel: 'transcription',
+      billingOrganizationId: null,
+    });
+  });
+
+  it('maps an insufficient-credit refusal to the established 400', async () => {
+    mocks.holdPreflightCredits.mockRejectedValue(new InsufficientCreditsPreflightError('broke'));
+    await expect(holdTranscriptionCredits(user, 7, logger)).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it('preserves an infrastructure failure instead of reporting an insufficient balance', async () => {
+    const failure = new Error('database unavailable');
+    mocks.holdPreflightCredits.mockRejectedValue(failure);
+    await expect(holdTranscriptionCredits(user, 7, logger)).rejects.toBe(failure);
   });
 });

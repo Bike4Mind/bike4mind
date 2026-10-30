@@ -65,6 +65,8 @@ export interface StorageReconciliationOptions {
   ceilingMinDriftBytes: number;
   timeBudgetMs?: number;
   now?: () => number;
+  /** Off for callers with no CloudWatch (the self-host worker); on by default. */
+  emitMetrics?: boolean;
 }
 
 type RepairPolicy = boolean | ((check: { counter: number; truth: number }) => boolean);
@@ -186,9 +188,10 @@ export async function runStorageReconciliation(
   const state = await loadState(startedAt);
   if (state.passCompletedAt) {
     logger.log(`[StorageReconciliation] Pass from ${state.passStartedAt} already complete; waiting for the next`);
-    await emitMetrics(CLOUDWATCH_NAMESPACE, [
-      { name: 'StorageReconciliationRuns', value: 1, dimensions: { Stage: stage }, unit: StandardUnit.Count },
-    ]);
+    if (options.emitMetrics !== false)
+      await emitMetrics(CLOUDWATCH_NAMESPACE, [
+        { name: 'StorageReconciliationRuns', value: 1, dimensions: { Stage: stage }, unit: StandardUnit.Count },
+      ]);
     return { ...result, skipped: true };
   }
 
@@ -335,17 +338,18 @@ export async function runStorageReconciliation(
   }
 
   const dimensions = { Stage: stage };
-  await emitMetrics(CLOUDWATCH_NAMESPACE, [
-    { name: 'StorageReconciliationRuns', value: 1, dimensions, unit: StandardUnit.Count },
-    { name: 'StorageUsersChecked', value: result.checked, dimensions, unit: StandardUnit.Count },
-    { name: 'StorageUsersDrifted', value: result.drifted, dimensions, unit: StandardUnit.Count },
-    { name: 'StorageOrgsChecked', value: result.orgsChecked, dimensions, unit: StandardUnit.Count },
-    { name: 'StorageOrgsDrifted', value: result.orgsDrifted, dimensions, unit: StandardUnit.Count },
-    { name: 'StorageDriftOverThreshold', value: result.overThreshold.length, dimensions, unit: StandardUnit.Count },
-    { name: 'StorageCountersRepaired', value: result.repaired, dimensions, unit: StandardUnit.Count },
-    { name: 'StorageRepairConflicts', value: result.conflicts, dimensions, unit: StandardUnit.Count },
-    { name: 'StorageReconciliationFailures', value: result.failed, dimensions, unit: StandardUnit.Count },
-  ]);
+  if (options.emitMetrics !== false)
+    await emitMetrics(CLOUDWATCH_NAMESPACE, [
+      { name: 'StorageReconciliationRuns', value: 1, dimensions, unit: StandardUnit.Count },
+      { name: 'StorageUsersChecked', value: result.checked, dimensions, unit: StandardUnit.Count },
+      { name: 'StorageUsersDrifted', value: result.drifted, dimensions, unit: StandardUnit.Count },
+      { name: 'StorageOrgsChecked', value: result.orgsChecked, dimensions, unit: StandardUnit.Count },
+      { name: 'StorageOrgsDrifted', value: result.orgsDrifted, dimensions, unit: StandardUnit.Count },
+      { name: 'StorageDriftOverThreshold', value: result.overThreshold.length, dimensions, unit: StandardUnit.Count },
+      { name: 'StorageCountersRepaired', value: result.repaired, dimensions, unit: StandardUnit.Count },
+      { name: 'StorageRepairConflicts', value: result.conflicts, dimensions, unit: StandardUnit.Count },
+      { name: 'StorageReconciliationFailures', value: result.failed, dimensions, unit: StandardUnit.Count },
+    ]);
 
   logger.log(
     `[StorageReconciliation] Checked ${result.checked} user(s) (${result.drifted} drifted) and ` +

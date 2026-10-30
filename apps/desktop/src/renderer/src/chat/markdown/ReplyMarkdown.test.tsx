@@ -55,6 +55,13 @@ describe('ReplyMarkdown', () => {
       expect(render('```\nplain\n```')).toContain('data-language="text"');
     });
 
+    it('draws an empty fence as an empty block, not the word undefined', () => {
+      const html = render('```\n```\n\n```ts\n```');
+      expect(html.match(/data-testid="chat-markdown-code-block"/g)).toHaveLength(2);
+      expect(html).toContain('data-language="ts"');
+      expect(html).not.toContain('undefined');
+    });
+
     it('keeps inline code inline', () => {
       const html = render('Run `pnpm test` first.');
       expect(html).toContain('data-testid="chat-markdown-inline-code"');
@@ -136,6 +143,12 @@ describe('ReplyMarkdown', () => {
 
     it('renders an http link as a link', () => {
       const html = render('[docs](https://example.com/a)');
+      expect(html).toContain('data-testid="chat-markdown-link"');
+      expect(html).toContain('href="https://example.com/a"');
+    });
+
+    it('renders a bare url as a link, without the punctuation after it', () => {
+      const html = render('Read https://example.com/a. Then go.');
       expect(html).toContain('data-testid="chat-markdown-link"');
       expect(html).toContain('href="https://example.com/a"');
     });

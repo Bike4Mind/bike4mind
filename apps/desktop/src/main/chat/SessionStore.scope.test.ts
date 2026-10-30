@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SessionStore } from './SessionStore';
-import { sessionScopeKey, type SessionScope } from './sessionScope';
+import { sessionScopeKey, sessionScopeForChat, type SessionScope } from './sessionScope';
+import type { AuthState } from '@shared/auth';
 
 const MODEL = 'test-model';
 
@@ -49,6 +50,49 @@ describe('SessionStore scoping', () => {
     expect(await readdir(join(root, sessionScopeKey(scope(LOCAL, ALICE))))).toEqual([`${id}.json`]);
   });
 
+  it('refuses a folder removal queued under a different account', async () => {
+    at(scope(LOCAL, ALICE));
+    const created = await store.create();
+    await store.addGrantedDirectory(created.id, '/alice/private');
+    const expectedScope = store.scopeKey();
+    at(scope(LOCAL, BOB));
+    expect(await store.removeContextDirectory(created.id, '/alice/private', expectedScope)).toBeNull();
+    at(scope(LOCAL, ALICE));
+    expect((await store.get(created.id))?.grantedDirectories).toEqual(['/alice/private']);
+  });
+
+  it.each(['chat', 'code'] as const)('refuses a %s folder grant queued under another account', async mode => {
+    at(scope(LOCAL, ALICE));
+    const created = await store.create(undefined, {
+      mode,
+      ...(mode === 'code'
+        ? {
+            project: {
+              directory: '/project',
+              name: 'project',
+              workingDirectory: '/project',
+              branch: 'main',
+              workspace: false,
+              contextDirectories: [],
+            },
+          }
+        : {}),
+    });
+    const original = await store.get(created.id);
+    const expectedScope = store.scopeKey();
+    at(scope(LOCAL, BOB));
+    await store.create();
+    await writeFile(join(root, sessionScopeKey(scope(LOCAL, BOB)), `${created.id}.json`), JSON.stringify(original));
+    const grant =
+      mode === 'code'
+        ? store.addContextDirectory(created.id, '/alice/private', expectedScope)
+        : store.addGrantedDirectory(created.id, '/alice/private', expectedScope);
+    expect(await grant).toBeNull();
+    const unchanged = await store.get(created.id);
+    expect(unchanged?.grantedDirectories).toBeUndefined();
+    expect(unchanged?.project?.contextDirectories ?? []).toEqual([]);
+  });
+
   it('shows the other environment nothing, and gives it all back on the way home', async () => {
     at(scope(LOCAL, ALICE));
     const local = await store.create();
@@ -79,6 +123,23 @@ describe('SessionStore scoping', () => {
     at(scope(LOCAL, BOB));
     expect(await store.list()).toEqual([]);
     expect(await store.get(hers.id)).toBeNull();
+  });
+
+  it('does not apply queued history consent to a recurring id in another account', async () => {
+    at(scope(LOCAL, ALICE));
+    const session = await store.create();
+    const original = await store.get(session.id);
+    const expectedScope = store.scopeKey();
+    at(scope(LOCAL, BOB));
+    await store.create();
+    await writeFile(join(root, sessionScopeKey(scope(LOCAL, BOB)), `${session.id}.json`), JSON.stringify(original));
+    at(scope(LOCAL, ALICE));
+    const pendingRename = store.rename(session.id, 'Renamed in Alice');
+    const consent = store.setHistoryEnabled(session.id, true, expectedScope);
+    at(scope(LOCAL, BOB));
+    await pendingRename;
+    expect(await consent).toBeNull();
+    expect((await store.get(session.id))?.historyEnabled).toBeUndefined();
   });
 
   it('lists nothing while nobody is signed in', async () => {
@@ -169,7 +230,9 @@ describe('SessionStore migration of unscoped conversations', () => {
     expect(session?.messages[0]?.content).toBe('still here');
     // Moved, not copied: the loose file is gone and the scope holds the only one.
     expect((await readdir(root)).filter(name => name.endsWith('.json'))).toEqual([]);
-    expect(await readdir(join(root, sessionScopeKey(scope(LOCAL, ALICE))))).toEqual(['legacy-one.json']);
+    expect(
+      (await readdir(join(root, sessionScopeKey(scope(LOCAL, ALICE))))).filter(name => name.endsWith('.json'))
+    ).toEqual(['legacy-one.json']);
   });
 
   it('migrates the whole directory, byte for byte', async () => {
@@ -223,5 +286,46 @@ describe('SessionStore migration of unscoped conversations', () => {
     at(null);
     expect(await store.list()).toEqual([]);
     expect(await readdir(root)).toEqual(['legacy-one.json']);
+  });
+});
+
+describe('SessionStore device-local conversations', () => {
+  const signedOut: AuthState = {
+    status: 'signed-out',
+    environment: { preset: 'hosted', url: HOSTED, label: 'Hosted' },
+    hostedAvailable: true,
+    storage: 'available',
+    busy: 'idle',
+  };
+
+  it('creates and lists fresh signed-out chats, with account and device storage isolated across switches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b4m-device-local-'));
+    let auth = signedOut;
+    const store = new SessionStore(root, MODEL, 'launch', () => sessionScopeForChat(auth));
+    const local = await store.create('local:llama');
+    expect((await store.list()).map(session => session.id)).toEqual([local.id]);
+    expect(await readdir(root)).toEqual(['device-local']);
+    auth = { ...signedOut, status: 'signed-in', user: { id: ALICE } };
+    expect(await store.list()).toEqual([]);
+    expect(await store.get(local.id)).toBeNull();
+    const hosted = await store.create();
+    auth = signedOut;
+    expect((await store.list()).map(session => session.id)).toEqual([local.id]);
+    expect(await store.get(hosted.id)).toBeNull();
+    const relaunched = new SessionStore(root, MODEL, 'new-launch', () => sessionScopeForChat(auth));
+    expect((await relaunched.list()).map(session => session.id)).toEqual([local.id]);
+  });
+
+  it('never adopts loose legacy account transcripts into the signed-out device namespace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b4m-device-legacy-'));
+    await writeFile(join(root, 'legacy.json'), JSON.stringify({ id: 'legacy', title: 'private', messages: [] }));
+    let auth = signedOut;
+    const store = new SessionStore(root, MODEL, 'launch', () => sessionScopeForChat(auth));
+    expect(await store.list()).toEqual([]);
+    expect(await store.get('legacy')).toBeNull();
+    await store.create('local:llama');
+    expect(await readdir(root)).toContain('legacy.json');
+    auth = { ...signedOut, status: 'signed-in', user: { id: ALICE } };
+    expect((await store.list()).map(session => session.id)).toEqual(['legacy']);
   });
 });

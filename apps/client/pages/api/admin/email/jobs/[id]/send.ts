@@ -1,9 +1,10 @@
-import { emailJobRepository } from '@bike4mind/database';
-import { ApiKeyScope, EmailJobOverallStatus } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { emailJobRepository, withTransaction } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const RecipientFilterSchema = z
@@ -17,6 +18,11 @@ const RecipientFilterSchema = z
   })
   .optional();
 
+// The worker only enters test mode when the enqueued list is non-empty, so stored addresses must be merged in.
+const getTestRecipients = (requested?: string[], stored?: string[]) => [
+  ...new Set([...(requested || []), ...(stored || [])]),
+];
+
 /**
  * POST /api/admin/email/jobs/:id/send
  *
@@ -26,11 +32,10 @@ const RecipientFilterSchema = z
  * - Supports partial sends (specific users only)
  * - Supports test mode (redirect to test recipients)
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const { id } = req.query as { id: string };
   const { userIds, testMode, testRecipients, testSubjectIndicator } = req.body;
 
@@ -41,11 +46,48 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   }
   const recipientFilter = recipientFilterResult.data;
 
-  // Atomically claim the job for sending (prevents duplicate sends from concurrent requests)
-  const job = await emailJobRepository.claimForSending(id, {
-    lastSentAt: new Date(),
-    lastSentBy: req.user.id,
-    startedBy: req.user.id,
+  const actingUserId = req.user.id;
+
+  // Strict audit shares the claim transaction and runs before the enqueue, so a failed audit sends nothing.
+  // The test-mode check throws inside it so the claim rolls back with the transaction.
+  const job = await withTransaction(async () => {
+    // Atomically claim the job for sending (prevents duplicate sends from concurrent requests)
+    const claimed = await emailJobRepository.claimForSending(id, {
+      lastSentAt: new Date(),
+      lastSentBy: actingUserId,
+      startedBy: actingUserId,
+    });
+    if (!claimed) return null;
+
+    if (testMode) {
+      if (getTestRecipients(testRecipients, claimed.testEmailAddresses).length === 0) {
+        throw new BadRequestError('Test mode requires at least one test recipient email address.');
+      }
+    }
+
+    await recordAdminActionFromRequest(req, {
+      action: testMode ? 'email.job.test_sent' : 'email.job.sent',
+      target: { kind: 'settings', id, displayName: claimed.name },
+      summary: `${testMode ? 'sent test of' : 'sent'} email job ${claimed.name}`,
+      details: {
+        templateId: claimed.templateId,
+        testMode: Boolean(testMode),
+        recipientFilter: recipientFilter
+          ? {
+              all: recipientFilter.all ?? false,
+              allUsers: recipientFilter.allUsers ?? false,
+              allSubscribers: recipientFilter.allSubscribers ?? false,
+              userIdCount: recipientFilter.userIds?.length ?? 0,
+              subscriberIdCount: recipientFilter.subscriberIds?.length ?? 0,
+              specificEmailCount: recipientFilter.specificEmails?.length ?? 0,
+            }
+          : null,
+        userIdCount: Array.isArray(userIds) ? userIds.length : null,
+        testRecipientCount: testMode ? getTestRecipients(testRecipients, claimed.testEmailAddresses).length : 0,
+      },
+    });
+
+    return claimed;
   });
   if (!job) {
     // Either job doesn't exist or is already sending
@@ -56,16 +98,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     throw new BadRequestError('Job is currently being sent. Please wait for it to complete or cancel it first.');
   }
 
-  // If in test mode, require at least one test recipient
-  if (testMode) {
-    const allTestRecipients = [...(testRecipients || []), ...(job.testEmailAddresses || [])];
-    if (allTestRecipients.length === 0) {
-      // Roll back the status since we're not actually sending
-      await emailJobRepository.updateOverallStatus(id, EmailJobOverallStatus.DRAFT);
-      throw new BadRequestError('Test mode requires at least one test recipient email address.');
-    }
-  }
-
   // Queue the job for processing
   // The orchestrator will handle the actual sending
   await sendToQueue(getSourceQueueUrl('emailJobQueue'), {
@@ -73,7 +105,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     // Send options
     userIds,
     testMode: testMode || false,
-    testRecipients: testRecipients || [],
+    testRecipients: testMode ? getTestRecipients(testRecipients, job.testEmailAddresses) : testRecipients || [],
     testSubjectIndicator: testSubjectIndicator !== false, // Default to true
     triggeredBy: req.user.name || req.user.email,
     // Pass recipient filter from form to ensure we use current state, not stale job data

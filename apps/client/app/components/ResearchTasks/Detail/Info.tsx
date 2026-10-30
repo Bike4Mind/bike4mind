@@ -1,15 +1,13 @@
-import {
-  Check,
-  ContentCopy,
-  Launch,
-  Schedule,
-  CalendarToday,
-  Update,
-  Speed,
-  AccessTime,
-  Timeline,
-  Description,
-} from '@mui/icons-material';
+import Check from '@mui/icons-material/Check';
+import ContentCopy from '@mui/icons-material/ContentCopy';
+import Launch from '@mui/icons-material/Launch';
+import Schedule from '@mui/icons-material/Schedule';
+import CalendarToday from '@mui/icons-material/CalendarToday';
+import Update from '@mui/icons-material/Update';
+import Speed from '@mui/icons-material/Speed';
+import AccessTime from '@mui/icons-material/AccessTime';
+import Timeline from '@mui/icons-material/Timeline';
+import Description from '@mui/icons-material/Description';
 import {
   IResearchTask,
   ResearchTaskType,
@@ -18,7 +16,7 @@ import {
   IResearchTaskScrape,
 } from '@bike4mind/common';
 import { Avatar, Box, Card, CardContent, Chip, Typography, IconButton, Tooltip, LinearProgress, Stack } from '@mui/joy';
-import { Language } from '@mui/icons-material';
+import Language from '@mui/icons-material/Language';
 import { FC, useState } from 'react';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import BoltIcon from '@mui/icons-material/Bolt';

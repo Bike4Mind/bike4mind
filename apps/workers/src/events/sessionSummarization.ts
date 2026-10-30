@@ -13,7 +13,7 @@ import {
   organizationRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import {
   AiEvents,
   ChatModelName,
@@ -29,10 +29,11 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@server/utils/analyticsLog';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.Summarize.schema.parse(event.properties);
-  const { sessionId, userId, callTagging, trigger, requesterId } = body;
+  const { sessionId, userId, callTagging, trigger, requesterId, payerId } = body;
 
   logger.updateMetadata({
     sessionId,
@@ -79,6 +80,18 @@ export const handler = withEventContext(async (event, logger) => {
   }
   const writer = requester ? { id: requester.id, groups: requester.groups } : { id: session.userId, groups: [] };
   const writeOpts = requester ? { includeGlobalWrite: true } : undefined;
+  // Whoever asked pays (a sharee or an admin), not the owner on their behalf.
+  const payer = payerId ? await User.findById(payerId) : (requester ?? user);
+  if (!payer) {
+    logger.warn(`Payer ${payerId} not found, skipping summarization for session ${sessionId}`);
+    return;
+  }
+
+  const accessDenial = aiAccessDeniedMessage(requester ?? user) ?? aiAccessDeniedMessage(payer);
+  if (accessDenial) {
+    logger.warn(`Skipping summarization for session ${sessionId}: ${accessDenial}`);
+    return;
+  }
 
   // Before the LLM call, so a requester revoked while the job sat in the queue does not bill the
   // owner for a summary that the write below would refuse anyway.
@@ -187,7 +200,7 @@ export const handler = withEventContext(async (event, logger) => {
   });
 
   await recordSessionOperationalUsage({
-    user,
+    user: payer,
     sessionId,
     modelId,
     modelInfo,
@@ -405,7 +418,7 @@ export const handler = withEventContext(async (event, logger) => {
 
   // If requested, queue the tagging job now that the summary is generated
   if (callTagging) {
-    await SessionEvents.Tag.publish({ sessionId: session.id, requesterId });
+    await SessionEvents.Tag.publish({ sessionId: session.id, requesterId, payerId });
   }
 
   await logEvent({ userId: user.id, type: AiEvents.NOTEBOOK_SUMMARIZATION, metadata: { sessionId } });

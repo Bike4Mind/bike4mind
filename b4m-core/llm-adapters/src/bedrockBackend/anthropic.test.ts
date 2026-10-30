@@ -262,6 +262,26 @@ describe('translateStreamChunk', () => {
     expect(backend.translateStreamChunk('claude', { type: 'message_stop' }).done).toBe(true);
   });
 
+  it('message_delta carries the provider stop_reason onto the chunk', () => {
+    // base.ts reads exactly this field to set CompletionInfo.stopReason, which is what
+    // raises the truncation notice for a max_tokens cut-off.
+    const r = backend.translateStreamChunk('claude', {
+      type: 'message_delta',
+      delta: { stop_reason: 'max_tokens' },
+      usage: { output_tokens: 20 },
+    });
+    expect(r.chunk?.stopReason).toBe('max_tokens');
+  });
+
+  it('message_delta omits stopReason when the provider reports none', () => {
+    const r = backend.translateStreamChunk('claude', {
+      type: 'message_delta',
+      delta: {},
+      usage: { output_tokens: 20 },
+    });
+    expect(r.chunk?.stopReason).toBeUndefined();
+  });
+
   it('does not throw on null / primitive / unknown-type chunks', () => {
     expect(() => backend.translateStreamChunk('claude', null)).not.toThrow();
     expect(() => backend.translateStreamChunk('claude', 'garbage')).not.toThrow();
@@ -390,5 +410,36 @@ describe('AnthropicBedrockBackend safety-classifier refusal fallback', () => {
   it('does not throw for a refusal from a model outside the fallback set', () => {
     expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalDelta)).not.toThrow();
     expect(() => backend.translateChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalResponse)).not.toThrow();
+  });
+});
+
+describe('AnthropicBedrockBackend non-streaming stop_reason', () => {
+  const backend = new AnthropicBedrockBackend();
+
+  const response = (stop_reason?: string) => ({
+    id: 'msg_1',
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'text', text: 'answer' }],
+    model: 'x',
+    ...(stop_reason === undefined ? {} : { stop_reason }),
+    usage: { input_tokens: 1, output_tokens: 2 },
+  });
+
+  it('carries stop_reason onto the chunk', () => {
+    expect(backend.translateChunk('claude', response('max_tokens')).chunk?.stopReason).toBe('max_tokens');
+  });
+
+  it('passes a clean end_turn through unchanged', () => {
+    // Only max_tokens / degenerate_repetition raise the truncation notice, so an
+    // ordinary turn is truthful without being banner-eligible.
+    expect(backend.translateChunk('claude', response('end_turn')).chunk?.stopReason).toBe('end_turn');
+  });
+
+  it('does not invent a stop reason when the provider omits it', () => {
+    const result = backend.translateChunk('claude', response());
+
+    expect(result.chunk).toBeDefined();
+    expect(result.chunk).not.toHaveProperty('stopReason');
   });
 });

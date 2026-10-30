@@ -6,6 +6,7 @@ on:
       - main
       - test-main
       - integration
+      - 'gh-readonly-queue/**'
     paths:
       - 'b4m-core/**'
       - 'packages/cli/**'
@@ -18,6 +19,9 @@ on:
       # Forward-looking: the guard only reads router.tsx today, but re-run on route-component
       # changes too so the filter stays correct if the project ever moves to file-based routing.
       - 'apps/client/app/routes/**'
+
+permissions:
+  contents: read
 
 jobs:
   check-repository:
@@ -41,7 +45,7 @@ jobs:
   test:
     needs: check-repository
     if: ${{ needs.check-repository.outputs.should-run == 'true' }}
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     env:
       NODE_OPTIONS: --max-old-space-size=14336
 

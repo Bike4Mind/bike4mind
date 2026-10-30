@@ -18,7 +18,7 @@ import {
   PASSPHRASE_LOCKOUT_WINDOW_MS,
 } from './passphraseLockout';
 
-const KEY = 'publish-gate-pp-lock:pub1';
+const KEY = 'publish-gate-pp-lock:pub1:viewer1';
 
 beforeEach(() => {
   cache.findByKey.mockReset();
@@ -29,7 +29,7 @@ beforeEach(() => {
 describe('checkLock', () => {
   it('is unlocked when no counter exists', async () => {
     cache.findByKey.mockResolvedValue(null);
-    expect(await checkLock('pub1')).toEqual({ locked: false, retryAfterMs: 0 });
+    expect(await checkLock('pub1', 'viewer1')).toEqual({ locked: false, retryAfterMs: 0 });
     expect(cache.findByKey).toHaveBeenCalledWith(KEY);
   });
 
@@ -38,13 +38,13 @@ describe('checkLock', () => {
       result: { count: PASSPHRASE_LOCKOUT_MAX_ATTEMPTS - 1 },
       expiresAt: new Date(Date.now() + 60_000),
     });
-    expect(await checkLock('pub1')).toEqual({ locked: false, retryAfterMs: 0 });
+    expect(await checkLock('pub1', 'viewer1')).toEqual({ locked: false, retryAfterMs: 0 });
   });
 
   it('is locked at/over the cap with time remaining', async () => {
     const expiresAt = new Date(Date.now() + 120_000);
     cache.findByKey.mockResolvedValue({ result: { count: PASSPHRASE_LOCKOUT_MAX_ATTEMPTS }, expiresAt });
-    const state = await checkLock('pub1');
+    const state = await checkLock('pub1', 'viewer1');
     expect(state.locked).toBe(true);
     expect(state.retryAfterMs).toBeGreaterThan(0);
     expect(state.retryAfterMs).toBeLessThanOrEqual(120_000);
@@ -55,12 +55,12 @@ describe('checkLock', () => {
       result: { count: PASSPHRASE_LOCKOUT_MAX_ATTEMPTS + 3 },
       expiresAt: new Date(Date.now() - 1_000),
     });
-    expect(await checkLock('pub1')).toEqual({ locked: false, retryAfterMs: 0 });
+    expect(await checkLock('pub1', 'viewer1')).toEqual({ locked: false, retryAfterMs: 0 });
   });
 
   it('never mutates the counter (read-only peek)', async () => {
     cache.findByKey.mockResolvedValue(null);
-    await checkLock('pub1');
+    await checkLock('pub1', 'viewer1');
     expect(cache.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
     expect(cache.deleteByKey).not.toHaveBeenCalled();
   });
@@ -73,7 +73,7 @@ describe('recordFailure', () => {
       count: 1,
       expiresAt: new Date(Date.now() + PASSPHRASE_LOCKOUT_WINDOW_MS),
     });
-    expect(await recordFailure('pub1')).toEqual({ locked: false, retryAfterMs: 0 });
+    expect(await recordFailure('pub1', 'viewer1')).toEqual({ locked: false, retryAfterMs: 0 });
     expect(cache.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
       KEY,
       PASSPHRASE_LOCKOUT_MAX_ATTEMPTS,
@@ -88,7 +88,7 @@ describe('recordFailure', () => {
       count: PASSPHRASE_LOCKOUT_MAX_ATTEMPTS,
       expiresAt,
     });
-    const state = await recordFailure('pub1');
+    const state = await recordFailure('pub1', 'viewer1');
     expect(state.locked).toBe(true);
     expect(state.retryAfterMs).toBeGreaterThan(0);
   });
@@ -100,7 +100,7 @@ describe('recordFailure', () => {
       count: PASSPHRASE_LOCKOUT_MAX_ATTEMPTS,
       expiresAt,
     });
-    const state = await recordFailure('pub1');
+    const state = await recordFailure('pub1', 'viewer1');
     expect(state.locked).toBe(true);
     expect(state.retryAfterMs).toBeGreaterThan(0);
   });
@@ -108,7 +108,7 @@ describe('recordFailure', () => {
 
 describe('clear', () => {
   it('deletes the per-artifact counter', async () => {
-    await clear('pub1');
+    await clear('pub1', 'viewer1');
     expect(cache.deleteByKey).toHaveBeenCalledWith(KEY);
   });
 });
@@ -116,9 +116,19 @@ describe('clear', () => {
 describe('key isolation', () => {
   it('namespaces per artifact so one gate cannot lock another', async () => {
     cache.findByKey.mockResolvedValue(null);
-    await checkLock('pubA');
-    await checkLock('pubB');
-    expect(cache.findByKey).toHaveBeenNthCalledWith(1, 'publish-gate-pp-lock:pubA');
-    expect(cache.findByKey).toHaveBeenNthCalledWith(2, 'publish-gate-pp-lock:pubB');
+    await checkLock('pubA', 'viewer1');
+    await checkLock('pubB', 'viewer1');
+    expect(cache.findByKey).toHaveBeenNthCalledWith(1, 'publish-gate-pp-lock:pubA:viewer1');
+    expect(cache.findByKey).toHaveBeenNthCalledWith(2, 'publish-gate-pp-lock:pubB:viewer1');
   });
+});
+
+it('does not share failures or clearing between viewers of the same artifact', async () => {
+  cache.findByKey.mockImplementation(async (key: string) =>
+    key.endsWith(':viewer1') ? { result: { count: 5 }, expiresAt: new Date(Date.now() + 60000) } : null
+  );
+  expect((await checkLock('pub1', 'viewer1')).locked).toBe(true);
+  expect((await checkLock('pub1', 'viewer2')).locked).toBe(false);
+  await clear('pub1', 'viewer2');
+  expect(cache.deleteByKey).toHaveBeenCalledWith('publish-gate-pp-lock:pub1:viewer2');
 });

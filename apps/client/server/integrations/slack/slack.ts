@@ -13,7 +13,10 @@ import {
   buildEmailMirrorMessage,
   type EmailMirrorPayload,
 } from '@bike4mind/server-utils/integrations/slack/emailMirror';
-import { buildFeedbackSlackMessage, type FeedbackPromptMetaInput } from './feedbackMessage';
+import {
+  buildFeedbackSlackMessage,
+  type FeedbackPromptMetaInput,
+} from '@bike4mind/server-utils/integrations/slack/feedbackMessage';
 import type { FeedbackDeepLinks } from '@bike4mind/server-utils/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
@@ -23,11 +26,13 @@ import {
 
 /** Channel-specific Slack incoming-webhook settings (each maps to a dedicated Slack channel). */
 type SlackChannelSettingKey =
+  | 'SlackSecurityAlertsWebhookUrl'
   | 'SlackGeneralWebhookUrl'
   | 'SlackLiveopsWebhookUrl'
   | 'SlackUserActivityWebhookUrl'
   | 'SlackFeedbackWebhookUrl'
-  | 'SlackEmailAuditWebhookUrl';
+  | 'SlackEmailAuditWebhookUrl'
+  | 'SlackSubscriptionsWebhookUrl';
 
 // Trim a raw setting value and normalize an SST placeholder (e.g. 'not-configured', which is
 // truthy) to '' so callers' `if (!url)` guards detect the unconfigured state.
@@ -39,9 +44,11 @@ function normalizeWebhookUrl(raw: string | undefined): string {
 /**
  * Resolves the Slack incoming-webhook URL for a channel, falling back to the
  * admin-configurable default (`SlackDefaultWebhookUrl`) and finally the
- * `SLACK_WEBHOOK_URL` secret. Returns an empty string when none are configured.
+ * `SLACK_WEBHOOK_URL` secret. Security alerts use only their dedicated URL; empty disables them.
+ * Returns an empty string when no eligible webhook is configured.
  */
 export function resolveSlackWebhookUrl(channel: SlackChannelSettingKey, settings: Record<string, string>): string {
+  if (channel === 'SlackSecurityAlertsWebhookUrl') return normalizeWebhookUrl(getSettingsValue(channel, settings));
   // Trim each source before the `||` so a padded URL is usable and a whitespace-only value is treated
   // as empty, letting the fallback chain (channel -> SlackDefaultWebhookUrl -> SLACK_WEBHOOK_URL) continue.
   const resolved =
@@ -91,23 +98,39 @@ export function resolveFeedbackSlackRoute(
     : { kind: 'skip', stageClass, reason: 'nonprod_unconfigured' };
 }
 
+export type SlackPostOutcome = 'sent' | 'unconfigured' | 'failed';
+
+// An empty SlackSecurityAlertsWebhookUrl is the documented way to turn security alerts off, so it is
+// warned about once per process rather than logged as an error on every alert.
+let securityAlertsDisabledWarned = false;
+
+function logUnconfiguredWebhook(channel: SlackChannelSettingKey): void {
+  if (channel !== 'SlackSecurityAlertsWebhookUrl') {
+    Logger.error(`Error posting message to Slack: no eligible webhook configured for ${channel}`);
+    return;
+  }
+  if (securityAlertsDisabledWarned) return;
+  securityAlertsDisabledWarned = true;
+  Logger.warn('Slack security alerts are disabled: SlackSecurityAlertsWebhookUrl is not set');
+}
+
 /**
- * Posts to the LiveOps channel, swallowing errors as before, but reports whether a message was
- * actually delivered (true) or the post was unconfigured/failed (false). A caller that must not lose
- * the signal - e.g. deduping an alert as "sent" - needs to tell the two apart; everyone else ignores
- * the result.
+ * Posts to a Slack channel (LiveOps by default), swallowing errors, and reports whether the message
+ * was sent, skipped because no webhook is configured, or failed. Use this over postMessageToSlack
+ * when a caller treats "turned off" differently from "broken".
  */
-export async function postMessageToSlack(message: string): Promise<boolean> {
+export async function postMessageToSlackWithOutcome(
+  message: string,
+  channel: SlackChannelSettingKey = 'SlackLiveopsWebhookUrl',
+  options: { timeoutMs?: number } = {}
+): Promise<SlackPostOutcome> {
   try {
-    // Generic / operational notifications route to the LiveOps channel.
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const slackWebhookUrl = resolveSlackWebhookUrl('SlackLiveopsWebhookUrl', settings);
+    const slackWebhookUrl = resolveSlackWebhookUrl(channel, settings);
 
     if (!slackWebhookUrl) {
-      Logger.error(
-        'Error posting message to Slack: no SlackLiveopsWebhookUrl / SlackDefaultWebhookUrl set in admin settings or config'
-      );
-      return false;
+      logUnconfiguredWebhook(channel);
+      return 'unconfigured';
     }
 
     await axios.post(
@@ -115,13 +138,28 @@ export async function postMessageToSlack(message: string): Promise<boolean> {
       { text: message },
       {
         headers: { 'Content-Type': 'application/json' },
+        timeout: options.timeoutMs ?? 10_000,
       }
     );
-    return true;
+    return 'sent';
   } catch (error) {
     Logger.error('Error posting message to Slack:', error);
-    return false;
+    return 'failed';
   }
+}
+
+/**
+ * Posts to the LiveOps channel, swallowing errors as before, but reports whether a message was
+ * actually delivered (true) or the post was unconfigured/failed (false). A caller that must not lose
+ * the signal - e.g. deduping an alert as "sent" - needs to tell the two apart; everyone else ignores
+ * the result.
+ */
+export async function postMessageToSlack(
+  message: string,
+  channel: SlackChannelSettingKey = 'SlackLiveopsWebhookUrl',
+  options: { timeoutMs?: number } = {}
+): Promise<boolean> {
+  return (await postMessageToSlackWithOutcome(message, channel, options)) === 'sent';
 }
 
 /**
@@ -219,7 +257,7 @@ export const EMAIL_MIRROR_TIMEOUT_MS = 5_000;
 export async function postEmailMirrorToSlack(payload: EmailMirrorPayload): Promise<void> {
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const slackWebhookUrl = resolveSlackWebhookUrl('SlackEmailAuditWebhookUrl', settings);
+    const slackWebhookUrl = getSettingsValue('SlackEmailAuditWebhookUrl', settings);
 
     // Unconfigured is the expected default - stay silent (debug only) so we don't
     // spam error logs on every email when the mirror channel isn't set up yet.
@@ -237,65 +275,6 @@ export async function postEmailMirrorToSlack(payload: EmailMirrorPayload): Promi
     );
   } catch (error) {
     Logger.error('Error mirroring outbound email to Slack:', error);
-  }
-}
-
-/**
- * Announce a NEW paid subscription (first charge only) to Slack.
- *
- * Called from the invoice.payment_succeeded subscriber AFTER the subscription and
- * credits are recorded, so the message means "this actually completed", not "Stripe
- * said something".
- *
- * First charge only: the caller gates on Stripe's `billing_reason ===
- * 'subscription_create'`. Renewals (`subscription_cycle`) would otherwise post every
- * month per customer and drown the signal this exists to give.
- *
- * No enable flag: an unset webhook URL is the off switch, matching the convention
- * used for the analytics ids. Add a SettingKey gate if the channel is configured but
- * the announcements should be pausable separately.
- *
- * Never throws. Its caller is an event subscriber whose failure would be retried,
- * and a retry re-runs credit granting - so a Slack outage must not turn into
- * double-granted credits.
- */
-export async function postNewSubscriptionToSlack(payload: {
-  planName: string;
-  amount: number;
-  currency: string;
-  /** Stripe invoice id - the natural dedupe key if this is ever redelivered. */
-  invoiceId: string;
-  email?: string;
-  ownerType?: string;
-  organizationName?: string;
-}): Promise<void> {
-  try {
-    // A paid signup is a business event, not an operational alert -> general channel.
-    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const slackWebhookUrl = resolveSlackWebhookUrl('SlackGeneralWebhookUrl', settings);
-    if (!slackWebhookUrl) {
-      // Debug, not error: unconfigured is a valid state (the feature is simply off),
-      // unlike the low-credits alert where a missing URL loses an operational signal.
-      Logger.debug('Skipping new-subscription Slack post: no SlackGeneralWebhookUrl / SlackDefaultWebhookUrl set');
-      return;
-    }
-
-    const formattedAmount = new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: payload.currency.toUpperCase(),
-    }).format(payload.amount);
-
-    const lines = [
-      `:tada: *New paid subscription* - ${payload.planName} (${formattedAmount})`,
-      payload.email ? `*Customer:* ${payload.email}` : undefined,
-      payload.organizationName ? `*Organization:* ${payload.organizationName}` : undefined,
-      payload.ownerType ? `*Type:* ${payload.ownerType}` : undefined,
-      `*Invoice:* ${payload.invoiceId}`,
-    ].filter(Boolean);
-
-    await axios.post(slackWebhookUrl, { text: lines.join('\n') }, { headers: { 'Content-Type': 'application/json' } });
-  } catch (error) {
-    Logger.error('Error posting new subscription notification to Slack:', error);
   }
 }
 

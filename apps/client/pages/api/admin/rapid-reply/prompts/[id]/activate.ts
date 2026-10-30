@@ -1,14 +1,14 @@
 import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const { id } = req.query as { id: string };
 
   if (!id || typeof id !== 'string') {
@@ -45,6 +45,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       parentId: currentPrompt.parentId || currentPrompt.id,
       version: currentPrompt.version,
     },
+  });
+
+  // Targets the parent so every version's activation sits under the same entry as its edits.
+  await recordAdminActionFromRequest(req, {
+    action: 'settings.rapid_reply_prompt.activated',
+    target: {
+      kind: 'settings',
+      id: currentPrompt.parentId || currentPrompt.id,
+      displayName: `Rapid reply prompt ${currentPrompt.name}`,
+    },
+    summary: `activated rapid reply prompt ${currentPrompt.name} v${currentPrompt.version}`,
+    details: { promptId: id, version: currentPrompt.version },
   });
 
   return res.json({

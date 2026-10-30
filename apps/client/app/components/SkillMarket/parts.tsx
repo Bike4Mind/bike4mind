@@ -13,6 +13,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { diffLines } from 'diff';
 import type {
+  ISkillFile,
   ISkillHonestSummary,
   ISkillScanFinding,
   SkillListingVisibility,
@@ -302,3 +303,30 @@ export const BodyBlock: FC<{ body: string; testId?: string }> = ({ body, testId 
 
 export const formatCount = (n: number): string =>
   n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : String(n);
+
+/** A version's supporting files, each expandable to its full text so a reviewer reads what they approve. */
+export const SupportingFiles: FC<{ files?: ISkillFile[] }> = ({ files }) =>
+  files?.length ? (
+    <Box data-testid="market-supporting-files">
+      <Typography level="title-sm" sx={{ mb: 1 }}>
+        Supporting files ({files.length})
+      </Typography>
+      <Stack spacing={1}>
+        {files.map(f => (
+          <Box key={f.path} component="details" data-testid="market-supporting-file">
+            <Typography component="summary" level="body-sm" sx={{ cursor: 'pointer', fontFamily: 'code' }}>
+              {f.path}
+              {f.path.startsWith('scripts/') ? (
+                <Chip size="sm" variant="soft" color="warning" sx={{ ml: 1 }}>
+                  runs on the user&apos;s machine
+                </Chip>
+              ) : null}
+            </Typography>
+            <Box sx={{ mt: 1 }}>
+              <BodyBlock body={f.content} />
+            </Box>
+          </Box>
+        ))}
+      </Stack>
+    </Box>
+  ) : null;

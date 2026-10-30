@@ -1,8 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { readStateNonceHash, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
+import { readStateNonceHash, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { getGitHubLakeAppConfig } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import {
   listGitHubLakeRepositoryChoices,
   requireGitHubLakeAppConfig,

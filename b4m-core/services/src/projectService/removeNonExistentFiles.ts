@@ -1,4 +1,4 @@
-import { IFabFileRepository, IProjectRepository, IUserRepository } from '@bike4mind/common';
+import { ForbiddenError, IFabFileRepository, IProjectRepository, IUserRepository } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -40,7 +40,7 @@ export const removeNonExistentFiles = async (
   if (!project) throw new Error('Project not found');
 
   if (project.userId !== userId) {
-    throw new Error('You are not authorized to update this project');
+    throw new ForbiddenError('You are not authorized to update this project');
   }
 
   if (!project.fileIds || project.fileIds.length === 0) {

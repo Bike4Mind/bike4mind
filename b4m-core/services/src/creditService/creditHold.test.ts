@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BadRequestError, CreditHolderType } from '@bike4mind/common';
+import { BadRequestError, CreditHolderType, getMemberCreditPeriodStart, getQuestErrorCode } from '@bike4mind/common';
 import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { holdCredits, releaseCreditHold, settleCreditHold, type CreditHoldAdapters } from './creditHold';
@@ -73,6 +73,27 @@ describe('holdCredits', () => {
       holdCredits({ userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger }, adapters)
     ).rejects.toThrow(/do not have enough credits for video/);
     expect(state.user).toBe(10);
+  });
+
+  it('refuses a hold beyond the member cap before moving either balance', async () => {
+    const { adapters, state } = makeAdapters({ user: 100, org: 100 });
+    vi.mocked(adapters.organizations.findById).mockResolvedValueOnce({
+      id: 'o1',
+      currentCredits: 100,
+      maxCreditsPerMember: 50,
+      userDetails: [{ id: 'u1', usedCredits: 40, periodStart: getMemberCreditPeriodStart() }],
+    } as unknown as IOrganizationDocument);
+
+    const hold = holdCredits(
+      { userId: 'u1', organizationId: 'o1', requiredCredits: 20, featureLabel: 'image generation', logger },
+      adapters
+    );
+
+    await expect(hold).rejects.toThrow(/organization member credit limit/);
+    await expect(hold).rejects.toSatisfy((error: unknown) => getQuestErrorCode(error) === 'insufficient_credits');
+    expect(adapters.users.incrementCredits).not.toHaveBeenCalled();
+    expect(adapters.organizations.incrementCredits).not.toHaveBeenCalled();
+    expect(state).toEqual({ user: 100, org: 100 });
   });
 
   it('logs a failed overdraw rollback and still answers insufficient credits', async () => {
@@ -191,6 +212,36 @@ describe('settleCreditHold', () => {
     expect(await settleCreditHold(hold, 999, entry, { featureLabel: 'video', logger }, adapters)).toBe(30);
     expect(state.user).toBe(70);
   });
+
+  // Speech is quest-less but not special: it settles through the same org-aware ledger writer as
+  // everything else, so a member's speech spend reaches the same usage rollup.
+  it.each(['text_to_speech_usage', 'speech_to_text_usage'] as const)(
+    'settles %s through the shared refund policy and the org-aware ledger writer',
+    async type => {
+      const { adapters, state } = makeAdapters({ user: 100 });
+      const hold = await holdCredits(
+        { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'speech', logger },
+        adapters
+      );
+
+      const charged = await settleCreditHold(
+        hold,
+        20,
+        { type, model: 'speech-model', sessionId: 's1' },
+        { featureLabel: 'speech', logger },
+        adapters
+      );
+
+      expect(charged).toBe(20);
+      expect(state.user).toBe(80);
+      expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ type, credits: 20, model: 'speech-model', sessionId: 's1' }),
+        expect.anything(),
+        expect.objectContaining({ skipBalanceUpdate: true })
+      );
+      expect(adapters.users.incrementCredits).toHaveBeenCalledTimes(2);
+    }
+  );
 
   it('settles a hold that went through JSON, as a different process would', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });

@@ -1,8 +1,8 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getOktaConfigStatus } from '@server/auth/oktaOidcClient';
@@ -73,7 +73,10 @@ const inputSchema = z.object({
  * 2. The provider endpoint is reachable
  * 3. The configuration is valid (e.g., Okta audience URL is correct)
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .use(
     rateLimit({
       limit: 5,
@@ -81,10 +84,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const parseResult = inputSchema.safeParse(req.body);
     if (!parseResult.success) {
       throw new BadRequestError('Invalid provider. Must be one of: okta, google, github');

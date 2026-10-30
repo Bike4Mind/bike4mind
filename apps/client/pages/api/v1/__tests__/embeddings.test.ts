@@ -8,6 +8,7 @@ const {
   generateEmbeddingBatch,
   generateEmbedding,
   getSettingsValue,
+  getSettingsMap,
   recordUsage,
   reserve,
   refund,
@@ -19,6 +20,7 @@ const {
   generateEmbeddingBatch: vi.fn(),
   generateEmbedding: vi.fn(),
   getSettingsValue: vi.fn(),
+  getSettingsMap: vi.fn(async () => ({})),
   recordUsage: vi.fn(),
   reserve: vi.fn(),
   refund: vi.fn(),
@@ -102,7 +104,7 @@ vi.mock('@bike4mind/fab-pipeline', async importActual => {
 vi.mock('@bike4mind/utils', () => ({
   createTokenizer: () => ({ countTokens: (...a: unknown[]) => countTokens(...a) }),
   getSettingsByNames: vi.fn(),
-  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsMap,
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
 }));
 vi.mock('@server/billing/reserveRequestCredits', () => ({
@@ -110,6 +112,7 @@ vi.mock('@server/billing/reserveRequestCredits', () => ({
 }));
 
 import { EmbeddingAuthError } from '@bike4mind/fab-pipeline';
+import { adminSettingsRepository } from '@bike4mind/database';
 import handler from '../embeddings';
 
 type Handler = (req: unknown, res: unknown) => Promise<void>;
@@ -140,6 +143,15 @@ describe('POST /api/v1/embeddings', () => {
       refund,
       settle,
     });
+  });
+
+  it('reads fresh credit enforcement before reserving', async () => {
+    const { status } = await run({ model: 'text-embedding-3-small', input: 'hello' });
+    expect(status).toBe(200);
+    expect(getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: adminSettingsRepository },
+      { names: ['enforceCredits'], skipCache: true }
+    );
   });
 
   it('returns an OpenAI-shaped list, one vector per input in order', async () => {

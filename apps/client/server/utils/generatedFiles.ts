@@ -4,7 +4,7 @@ import {
   GENERATED_IMAGE_EXTENSION_RE,
   GENERATED_VIDEO_EXTENSION_RE,
 } from '@bike4mind/common';
-import { signGeneratedMediaUrls } from '@server/utils/generatedMediaUrls';
+import { signGeneratedMediaUrls } from '@bike4mind/server-utils/utils/generatedMediaUrls';
 
 /**
  * Map bare generated-file basenames (as stored on `quest.images`) to descriptors with ready-to-use,

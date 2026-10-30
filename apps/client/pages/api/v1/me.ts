@@ -22,7 +22,7 @@ const handler = nextRouteForContract(getMeContract, {
   // active subscriptions, org seats included (they resolve the priceId through
   // different tables - see resolveCallerPlan), rather than two reads that could race apart.
   const active = await getRequestActiveSubscriptions(req);
-  const { tier, subscription } = resolveCallerPlan(active);
+  const { tier, subscription, personalMonthlyCreditAllowance } = resolveCallerPlan(active);
   const entitlements = await getUserEntitlements(toEntitlementUser(user), active);
 
   // User-specific payload behind CloudFront - never cacheable, anywhere.
@@ -32,7 +32,7 @@ const handler = nextRouteForContract(getMeContract, {
     name: user.name,
     tier,
     subscription,
-    credits: { balance: user.currentCredits },
+    credits: { balance: user.currentCredits, monthly_allowance: personalMonthlyCreditAllowance },
     entitlements,
   });
 });

@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RemoteSkillSource } from '@bike4mind/cli/skills';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CustomCommandStore, RemoteSkillSource } from '@bike4mind/cli/skills';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { remoteSkillsKey } from './accountSkills';
 import { ProjectTrustStore } from './ProjectTrustStore';
 import { SkillCatalog, type RemoteSkills } from './SkillCatalog';
@@ -52,6 +52,15 @@ describe('SkillCatalog project trust', () => {
     expect(deploy).toMatchObject({ source: 'project', description: 'Ship it', argumentHint: '[env]' });
     expect(state.untrustedProject).toBeNull();
     expect(state.projectDirectory).toBe(project);
+  });
+
+  it('hands the model the same list until the catalog rescans, so its prompt is built once', async () => {
+    const store = catalog();
+    await store.setTrusted(project, true);
+    const first = await store.forModel(project);
+    expect(await store.forModel(project)).toBe(first);
+    await store.setTrusted(project, false);
+    expect(await store.forModel(project)).not.toBe(first);
   });
 
   it('remembers the decision across instances, so the user is asked once', async () => {
@@ -105,6 +114,25 @@ describe('SkillCatalog project trust', () => {
     expect((await store.forModel(project)).some(command => command.name === 'private-notes')).toBe(false);
   });
 
+  it('offers a skill folder once, never its supporting docs, to the picker and the skill tool alike', async () => {
+    const skillDir = join(project, '.claude', 'skills', 'deploy');
+    await mkdir(join(skillDir, 'references'), { recursive: true });
+    await mkdir(join(skillDir, 'scripts', 'nested'), { recursive: true });
+    await writeFile(join(skillDir, 'references', 'step-1-inspect.md'), '# Step 1', 'utf8');
+    await writeFile(join(skillDir, 'README.md'), '# Readme', 'utf8');
+    await writeFile(join(skillDir, 'scripts', 'nested', 'helper.md'), '# Helper', 'utf8');
+
+    const store = catalog();
+    await store.setTrusted(project, true);
+
+    const picker = (await store.state(project)).skills.filter(skill => skill.source === 'project');
+    const model = (await store.forModel(project)).filter(command => command.source === 'project');
+    expect(picker.map(skill => skill.name)).toEqual(['deploy']);
+    expect(model.map(command => command.name)).toEqual(['deploy']);
+    await expect(store.get(project, 'step-1-inspect')).resolves.toBeUndefined();
+    await expect(store.get(project, 'README')).resolves.toBeUndefined();
+  });
+
   it('moves its revision only when trust changes, so a snapshot keyed on it holds otherwise', async () => {
     const store = catalog();
     const before = store.revision;
@@ -125,6 +153,93 @@ describe('SkillCatalog project trust', () => {
     expect(state.skills.every(skill => skill.source === 'global')).toBe(true);
     expect(state.projectDirectory).toBeNull();
     expect(state.untrustedProject).toBeNull();
+  });
+});
+
+describe('SkillCatalog cache', () => {
+  let project: string;
+  let store: SkillCatalog;
+
+  async function writeSkill(name: string, description: string): Promise<void> {
+    const dir = join(project, '.claude', 'skills', name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, 'SKILL.md'),
+      ['---', `description: ${description}`, '---', '', 'Body.'].join('\n'),
+      'utf8'
+    );
+  }
+
+  beforeEach(async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-skill-cache-')));
+    project = join(base, 'repo');
+    await writeSkill('deploy', 'Ship it');
+    store = new SkillCatalog(new ProjectTrustStore(join(base, 'trust.json')));
+    await store.setTrusted(project, true);
+  });
+
+  // FSEvents starts a new watch asynchronously, so a write in the same few milliseconds can be
+  // missed. A user edits a skill long after the scan that set the watch up; the tests wait as well.
+  const watchSettled = () => new Promise(resolve => setTimeout(resolve, 500));
+
+  afterEach(() => {
+    store.dispose();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('answers a repeat read without touching the disk', async () => {
+    await store.state(project);
+    const scans = vi.spyOn(CustomCommandStore.prototype, 'loadCommands');
+
+    await store.state(project);
+    await store.forModel(project);
+    await store.get(project, 'deploy');
+
+    expect(scans).not.toHaveBeenCalled();
+  });
+
+  it('rescans once a skill file changes, without moving the revision', async () => {
+    await store.state(project);
+    const revision = store.revision;
+    await watchSettled();
+
+    await writeSkill('review', 'Look it over');
+
+    await vi.waitUntil(async () => (await store.state(project)).skills.some(skill => skill.name === 'review'), {
+      timeout: 5000,
+      interval: 50,
+    });
+    expect(store.revision).toBe(revision);
+  });
+
+  it("notices a project's first skill, written where no skill folder existed yet", async () => {
+    const fresh = join(project, '..', 'fresh-repo');
+    await mkdir(fresh, { recursive: true });
+    await store.setTrusted(fresh, true);
+    expect((await store.state(fresh)).skills.some(skill => skill.name === 'first')).toBe(false);
+    await watchSettled();
+
+    const dir = join(fresh, '.claude', 'skills', 'first');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'SKILL.md'), ['---', 'description: The first', '---', '', 'Body.'].join('\n'), 'utf8');
+
+    // Well inside the 60s TTL, so only the watch on the folder above can have caught it.
+    await vi.waitUntil(async () => (await store.state(fresh)).skills.some(skill => skill.name === 'first'), {
+      timeout: 5000,
+      interval: 50,
+    });
+  });
+
+  it('rescans past the safety TTL even when no change was seen', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await store.state(project);
+    const scans = vi.spyOn(CustomCommandStore.prototype, 'loadCommands');
+
+    vi.setSystemTime(Date.now() + 61_000);
+    await store.state(project);
+
+    expect(scans).toHaveBeenCalledTimes(1);
   });
 });
 

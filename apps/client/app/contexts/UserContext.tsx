@@ -153,11 +153,13 @@ type PersistedUserFields = Pick<
   | 'username'
   | 'photoUrl'
   | 'isAdmin'
+  | 'adminPermissions'
   | 'level'
   | 'organizationId'
   | 'emailVerified'
   | 'showCreditsUsed'
   | 'currentCredits'
+  | 'signupGrant'
   | 'preferences'
   | 'tags'
   // Persisted so first-run UX (e.g. suppressing "What's New" for brand-new accounts) survives a
@@ -180,11 +182,13 @@ const pickPersistedFields = (user: IUserDocument | null): PersistedUserFields | 
     username: user.username,
     photoUrl: user.photoUrl,
     isAdmin: user.isAdmin,
+    adminPermissions: user.adminPermissions,
     level: user.level,
     organizationId: user.organizationId,
     emailVerified: user.emailVerified,
     showCreditsUsed: user.showCreditsUsed,
     currentCredits: user.currentCredits,
+    signupGrant: user.signupGrant,
     preferences: user.preferences,
     tags: user.tags,
     createdAt: user.createdAt,

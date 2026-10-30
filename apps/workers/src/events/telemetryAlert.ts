@@ -7,15 +7,15 @@ import {
   type CheckAndAlertOptions,
 } from '@bike4mind/services';
 import {
-  Quest,
   slackDevWorkspaceRepository,
   cacheRepository,
   telemetryDryRunResultRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { SlackClient } from '@bike4mind/slack';
 import { GitHubService } from '@server/services/githubService';
+import { cacheTelemetryAnalysisOnQuest } from '@server/utils/telemetryAnalysisCache';
 import {
   ALERT_THRESHOLDS,
   ContextTelemetryAlerts,
@@ -28,7 +28,7 @@ import {
   generateSemanticTelemetryFingerprint,
   getSeverityEmoji,
   formatPrimaryAnomaly,
-} from '@server/services/telemetryFingerprint';
+} from '@bike4mind/server-utils/services/telemetryFingerprint';
 import { checkFingerprintDedup, type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
 import {
   computeHistoricalBaselines,
@@ -289,19 +289,12 @@ export const handler = withEventContext(async (event, logger) => {
           // acceptable since the manual analyze API uses ?force=true to bypass cache.
           if (analysisResult && requestId) {
             try {
-              await Quest.updateOne(
-                { requestId },
-                {
-                  $set: {
-                    'promptMeta.contextTelemetry.cachedAnalysis': {
-                      analysis: analysisResult,
-                      analysisSource: analysisSourceTag,
-                      historicalBaselines: baselines,
-                      cachedAt: new Date().toISOString(),
-                    },
-                  },
-                }
-              );
+              await cacheTelemetryAnalysisOnQuest(requestId, {
+                analysis: analysisResult,
+                analysisSource: analysisSourceTag,
+                historicalBaselines: baselines,
+                cachedAt: new Date().toISOString(),
+              });
             } catch (cacheErr) {
               logger.warn('Failed to cache analysis on Quest', {
                 error: cacheErr instanceof Error ? cacheErr.message : cacheErr,
@@ -390,7 +383,7 @@ export const handler = withEventContext(async (event, logger) => {
                 precomputedAnalysis: analysisResult
                   ? { analysis: analysisResult, source: analysisSourceTag!, baselines }
                   : undefined,
-                requestId,
+                questId: requestId,
                 logger,
               });
 
@@ -438,7 +431,7 @@ export const handler = withEventContext(async (event, logger) => {
                 precomputedAnalysis: analysisResult
                   ? { analysis: analysisResult, source: analysisSourceTag!, baselines }
                   : undefined,
-                requestId,
+                questId: requestId,
                 logger,
               });
 

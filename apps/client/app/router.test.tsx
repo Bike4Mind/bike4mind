@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import {
   createMemoryHistory,
@@ -11,6 +11,7 @@ import {
 } from '@tanstack/react-router';
 import {
   adminRoute,
+  adminUserProfileRoute,
   billingRoute,
   feedbackRollupRoute,
   dataLakesRoute,
@@ -23,6 +24,10 @@ import {
 } from './router';
 import { AuditLogFiltersSchema } from '@bike4mind/common';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
+
+// The consent guard bootstraps a session over the network; the redirect tests below are about what
+// adminRoute does after it, so it passes here.
+vi.mock('./utils/consentGuard', () => ({ enforceConsentRedirect: async () => undefined }));
 
 describe('adminRoute validateSearch', () => {
   const validate = (search: Record<string, unknown>) => adminRoute.options.validateSearch(search);
@@ -236,5 +241,48 @@ describe('integrationsRoute validateSearch', () => {
 
   it.each([{}, { source: 'newsletter' }, { source: 42 }, { source: ['profile_menu'] }])('drops %o', search => {
     expect(integrationsRoute.options.validateSearch?.(search)).toEqual({ source: undefined });
+  });
+});
+
+describe('admin layout', () => {
+  it('mounts the console and the user profile under one layout route', () => {
+    const consoleParent = adminRoute.options.getParentRoute();
+    expect(adminUserProfileRoute.options.getParentRoute()).toBe(consoleParent);
+    expect(consoleParent.id).toBe('/admin-layout');
+    expect(adminRoute.fullPath).toBe('/admin');
+    expect(adminUserProfileRoute.fullPath).toBe('/admin/users/$userId');
+  });
+});
+
+describe('admin user profile route', () => {
+  const USER_ID = '0123456789abcdef01234567';
+  const adminBeforeLoad = (search: Record<string, unknown>) =>
+    (adminRoute.options.beforeLoad as (ctx: unknown) => Promise<unknown>)({
+      location: { pathname: '/admin', searchStr: '', hash: '' },
+      search,
+    });
+
+  it('redirects an old /admin?userId= link to /admin/users/$userId', async () => {
+    const thrown: unknown = await adminBeforeLoad(adminRoute.options.validateSearch({ userId: USER_ID })).catch(
+      (error: unknown) => error
+    );
+    expect((thrown as { options: unknown }).options).toMatchObject({
+      to: '/admin/users/$userId',
+      params: { userId: USER_ID },
+      replace: true,
+    });
+  });
+
+  it('leaves /admin alone without a valid userId', async () => {
+    await expect(adminBeforeLoad(adminRoute.options.validateSearch({ tab: 'users' }))).resolves.toBeUndefined();
+    await expect(
+      adminBeforeLoad(adminRoute.options.validateSearch({ userId: '../organizations' }))
+    ).resolves.toBeUndefined();
+  });
+
+  it('deep-links a tab through ?tab=', () => {
+    const validate = (search: Record<string, unknown>) => adminUserProfileRoute.options.validateSearch(search);
+    expect(validate({ tab: 'admin' })).toEqual({ tab: 'admin' });
+    expect({ tab: 'nope', ...validate({ tab: 'nope' }) }.tab).toBeUndefined();
   });
 });

@@ -15,11 +15,11 @@
  * @see https://datatracker.ietf.org/doc/rfc7636/
  */
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getOktaConfigWithFallback, generatePkceParams, buildAuthorizationUrl } from '@server/auth/oktaOidcClient';
 import { clientIdFromAuthorizeRedirect } from '@bike4mind/common';
-import { createStateToken } from '@server/auth/jwtStateStore';
-import { issueStateNonce, setPkceVerifierCookie } from '@server/auth/oauthFlowCookie';
+import { createStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
+import { issueStateNonce, setPkceVerifierCookie } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { OKTA_STATE_AUDIENCE, LOG_URL_TRUNCATE_LENGTH, OktaStateInput } from '@server/auth/oktaConstants';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validateAppUrl } from '@server/utils/validators';

@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
+
 /**
  * Pins which files feed agent generation: the session's `knowledgeIds` and its messages' `fabFileIds`
  * are both client-written, and their contents go into the generated agent's prompt, so they must
@@ -28,7 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   questRepository: { findAllBySessionId: vi.fn().mockResolvedValue([{ fabFileIds: ['message-file'] }]) },
   agentOpsSettingsRepository: { getSettings: vi.fn().mockResolvedValue(null) },
   fabFileRepository: { findAccessibleInIds: h.findAccessibleInIds, findAllByIds: h.findAllByIds },
-  agentRepository: {},
+  agentRepository: { countByUserId: vi.fn().mockResolvedValue(0) },
   apiKeyRepository: {},
   adminSettingsRepository: {},
   projectRepository: {},
@@ -38,8 +42,9 @@ vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: h.createAttachmentLakeAccess,
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: vi.fn(), getLlmByModel: vi.fn() }));
-vi.mock('@bike4mind/services', () => ({ apiKeyService: {} }));
+vi.mock('@bike4mind/services', () => ({ apiKeyService: {}, meterCompletionBackend: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 
 await import('../create-from-context');
 

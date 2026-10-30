@@ -9,7 +9,7 @@ import { DEFAULT_USERS_PARAMS, useUsersParams, useUsersTab, useUsersTabUrlSync }
 const STORED = {
   ...DEFAULT_USERS_PARAMS,
   page: 3,
-  sortField: 'name',
+  sortField: 'name' as const,
   sortOrder: 'asc' as const,
   tags: ['Admin'],
   search: 'someone@example.com',
@@ -30,6 +30,16 @@ beforeEach(() => {
 });
 
 describe('Users tab URL precedence', () => {
+  it('reads an old last-hour link as Signed up and round-trips grouping through URL and persisted state', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, groupBy: 'emailDomain', recentSignups: 'hour' }));
+    const { result } = renderUsersTab();
+    expect(result.current[0]).toMatchObject({ groupBy: 'emailDomain', signedUp: 'hour' });
+    expect(useUsersTab.getState().params).toMatchObject({ groupBy: 'emailDomain', signedUp: 'hour' });
+    act(() => result.current[1]({ groupBy: undefined, signedUp: undefined }));
+    expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1 });
+    expect(result.current[0].groupBy).toBeUndefined();
+  });
+
   it('writes the stored view into a bare users URL, without the free-text search', () => {
     act(() => fakeAdminRouter.reset({ tab: 'users' }));
     const { result } = renderUsersTab();
@@ -62,11 +72,21 @@ describe('Users tab URL precedence', () => {
     expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
   });
 
-  it('falls back to the stored view when every URL view param is invalid', () => {
-    act(() => fakeAdminRouter.reset({ tab: 'users', page: 'abc', order: 'sideways' }));
-    renderUsersTab();
+  it('reads a URL whose view params are all invalid as the default view, not the stored one', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'users', limit: 7, sort: 'bogus' }));
+    const { result } = renderUsersTab();
 
-    expect(fakeAdminRouter.search).toMatchObject({ page: 3, sort: 'name', order: 'asc' });
+    const defaultView = {
+      page: 1,
+      limit: DEFAULT_USERS_PARAMS.limit,
+      sortField: DEFAULT_USERS_PARAMS.sortField,
+      sortOrder: DEFAULT_USERS_PARAMS.sortOrder,
+      orgSearch: DEFAULT_USERS_PARAMS.orgSearch,
+      tags: [],
+    };
+    expect(result.current[0]).toMatchObject(defaultView);
+    expect(useUsersTab.getState().params).toMatchObject({ ...defaultView, search: STORED.search });
+    expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1 });
   });
 
   it('leaves another tab URL alone', () => {
@@ -108,9 +128,9 @@ describe('Users tab URL precedence', () => {
 
     act(() => {
       result.current[1]({ sortOrder: 'asc', page: 1 });
-      result.current[1]({ limit: 20, page: 1 });
+      result.current[1]({ limit: 50, page: 1 });
     });
 
-    expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1, limit: 20, order: 'asc' });
+    expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1, limit: 50, order: 'asc' });
   });
 });

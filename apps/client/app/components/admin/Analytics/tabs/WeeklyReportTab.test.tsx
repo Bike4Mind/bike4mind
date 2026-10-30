@@ -4,10 +4,7 @@ import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-/**
- * useWeeklyReports never rejects - it catches per week and resolves with {error} entries - so
- * the tab's own `error` prop, not the hook's, is the only thing that can reach this branch.
- */
+/** The tab owns its query, so the error card shows that query's error and nothing else's. */
 const useWeeklyReports = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/hooks/useWeeklyReports', () => ({ useWeeklyReports }));
 
@@ -18,27 +15,34 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
+const renderTab = () =>
+  render(
+    <TestWrapper>
+      <WeeklyReportTab />
+    </TestWrapper>
+  );
+
 describe('WeeklyReportTab', () => {
   beforeEach(() => {
-    useWeeklyReports.mockReturnValue({ data: [], isLoading: false, refetch: vi.fn(), error: null });
+    useWeeklyReports.mockReturnValue({ data: [], isLoading: false, isFetching: false, refetch: vi.fn(), error: null });
   });
 
-  it('renders the error card when the error prop is set', () => {
-    render(
-      <TestWrapper>
-        <WeeklyReportTab error={new Error('boom')} onRefresh={vi.fn()} />
-      </TestWrapper>
-    );
+  it('renders the error card when its own query fails', () => {
+    useWeeklyReports.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      refetch: vi.fn(),
+      error: new Error('boom'),
+    });
+
+    renderTab();
 
     expect(screen.getByTestId('weekly-report-error')).toBeTruthy();
   });
 
-  it('does not render the error card without an error prop', () => {
-    render(
-      <TestWrapper>
-        <WeeklyReportTab onRefresh={vi.fn()} />
-      </TestWrapper>
-    );
+  it('does not render the error card when its query succeeded', () => {
+    renderTab();
 
     expect(screen.queryByTestId('weekly-report-error')).toBeNull();
   });

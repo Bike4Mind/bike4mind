@@ -1,6 +1,7 @@
 import { userRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
+  MAX_STORAGE_LIMIT_MB,
   AuthEvents,
   redactUserSecretsForSelf,
   sanitizeUsername,
@@ -17,13 +18,16 @@ import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-uti
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+
+const AUDITED_USER_ID_LIMIT = 100;
 
 const userImportSchema = z.object({
   email: z.email('Invalid email format'),
   first: z.string().optional(),
   last: z.string().optional(),
   startingCredits: z.number().int().min(0, 'Credits must be a positive number').optional(),
-  startingStorage: z.number().int().min(0, 'Storage must be a positive number').optional(),
+  startingStorage: z.number().int().min(0, 'Storage must be a positive number').max(MAX_STORAGE_LIMIT_MB).optional(),
   tags: z.array(z.string()).optional(),
 });
 
@@ -59,6 +63,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       throw new BadRequestError('Invalid input: users array is required and must not be empty');
     }
 
+    const createdUserIds: string[] = [];
+    const startingCreditsById = new Map<string, number>();
     const results = await Promise.all(
       users.map(async userData => {
         try {
@@ -78,6 +84,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
                 // presence stays a truthful signal. Users sign in via OTC.
                 password: null,
                 hasUsablePassword: false,
+                storageLimit: validatedData.startingStorage,
               },
             },
             {
@@ -87,6 +94,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             }
           );
 
+          createdUserIds.push(newUser.id);
+          startingCreditsById.set(newUser.id, validatedData.startingCredits ?? 0);
+
           const isSynthetic = await recordSyntheticIdentity(newUser);
           await emitSignupFunnelEvents({
             user: { id: newUser.id, isSynthetic },
@@ -95,16 +105,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             creditsGranted: newUser.currentCredits ?? validatedData.startingCredits ?? 0,
           });
 
-          // Apply storage limit if provided (createUser hardcodes storageLimit: 1000, so we override after)
-          if (validatedData.startingStorage !== undefined) {
-            newUser.storageLimit = validatedData.startingStorage;
-          }
-
           if (validatedData.tags && validatedData.tags.length > 0) {
             newUser.tags = validatedData.tags;
           }
 
-          await userRepository.update({ id: newUser.id, storageLimit: newUser.storageLimit, tags: newUser.tags });
+          await userRepository.update({ id: newUser.id, tags: newUser.tags });
 
           const brand = process.env.APP_NAME || '';
           const logoUrl = getLogoUrl();
@@ -177,6 +182,30 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         }
       })
     );
+
+    // Rows commit independently, even when later processing fails. One best-effort entry covers
+    // every created account so a failed audit write cannot 500 a created batch.
+    if (createdUserIds.length > 0) {
+      const auditedIds = createdUserIds.slice(0, AUDITED_USER_ID_LIMIT);
+      const startingCreditsTotal = [...startingCreditsById.values()].reduce((sum, credits) => sum + credits, 0);
+      try {
+        await recordAdminActionFromRequest(req, {
+          action: 'user.bulk_created',
+          target: { kind: 'system', id: 'bulk-create-users', displayName: 'Bulk user import' },
+          summary: `bulk created ${createdUserIds.length} user(s)`,
+          details: {
+            count: createdUserIds.length,
+            failedCount: results.filter(r => !r.success).length,
+            createdUserIds: auditedIds,
+            credits: startingCreditsTotal,
+            startingCreditsTotal,
+            startingCreditsByUserId: Object.fromEntries(auditedIds.map(id => [id, startingCreditsById.get(id) ?? 0])),
+          },
+        });
+      } catch (error) {
+        req.logger.error('[ADMIN_AUDIT_WRITE_FAILED]', { action: 'user.bulk_created', error });
+      }
+    }
 
     // Validates after users are created and invites sent: a bad success row would 500 a batch that
     // succeeded and a retry would hit duplicates, so keep the row schema permissive.

@@ -1,9 +1,11 @@
+import { findVerifiedGitHubAccounts } from './verifiedIdentity';
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 /**
  * GitHubSlackNotifier - core notification engine for GitHub -> Slack.
  *
  * Responsibilities:
  *   1. Determine target GitHub usernames from event data
- *   2. Look up users with matching githubUsername + enabled notifications
+ *   2. Look up users with matching verified GitHub identity + enabled notifications
  *   3. Filter by per-event preference
  *   4. Rate-limit (100 notifications/day per user, atomic $inc)
  *   5. Resolve channel (custom channel or DM via slackUserId)
@@ -15,7 +17,8 @@ import { extractErrorMessage } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { SlackClient } from '../SlackClient';
 import { KnownBlock } from '@slack/web-api';
-import { getSlackDb, getSlackDeps } from '../di/registry';
+import { resolveNotificationDestination } from '../notificationDestination';
+import { getSlackDb } from '../di/registry';
 
 const MAX_NOTIFICATIONS_PER_DAY = 100;
 
@@ -66,7 +69,10 @@ type NotifyUserOutcome = { kind: 'sent' } | { kind: 'skipped' } | { kind: 'faile
 export class GitHubSlackNotifier {
   private logger: Logger;
 
-  constructor(logger: Logger) {
+  constructor(
+    logger: Logger,
+    private readonly ownerUserId?: string
+  ) {
     this.logger = logger;
   }
 
@@ -106,15 +112,27 @@ export class GitHubSlackNotifier {
       };
     }
 
-    // Find users that have this GitHub username AND enabled notifications
+    // Only OAuth-bound accounts may receive events naming a GitHub identity.
     let users: Array<{ id: string; slackSettings?: unknown }>;
     try {
-      users = await (User as any)
+      if (!options?.orgId && !this.ownerUserId) {
+        throw new Error('A webhook owner or organization scope is required');
+      }
+      const accounts = await findVerifiedGitHubAccounts({
+        logins: usernames,
+        ...(!options?.orgId ? { userIds: this.ownerUserId ? [this.ownerUserId] : [] } : {}),
+      });
+      users = await (
+        User as {
+          find(filter: Record<string, unknown>): {
+            select(fields: string): Promise<Array<{ id: string; slackSettings?: unknown }>>;
+          };
+        }
+      )
         .find({
-          'slackSettings.githubNotifications.githubUsername': {
-            $in: usernames,
-          },
+          _id: { $in: accounts.map(account => account.userId) },
           'slackSettings.githubNotifications.enabled': true,
+          ...VERIFIED_SLACK_IDENTITY_FILTER,
         })
         .select('slackSettings.slackUserId slackSettings.githubNotifications');
     } catch (error) {
@@ -188,36 +206,12 @@ export class GitHubSlackNotifier {
       }
     }
 
-    // Get workspace bot token
-    let botToken: string | null;
-    try {
-      botToken = await this.getBotToken();
-    } catch (error) {
-      const message = extractErrorMessage(error);
-      this.logger.error('[GITHUB-NOTIFY] Failed to fetch Slack bot token', { eventType, error });
-      return {
-        notifiedUserIds: [],
-        failedNotifications: [],
-        dispatchError: `Bot token fetch failed: ${message}`,
-      };
-    }
-
-    if (!botToken) {
-      this.logger.warn('[GITHUB-NOTIFY] No active Slack workspace with bot token');
-      return {
-        notifiedUserIds: [],
-        failedNotifications: [],
-        dispatchError: 'No active Slack workspace with bot token',
-      };
-    }
-
-    const slackClient = new SlackClient(botToken, this.logger);
     const notifiedUserIds: string[] = [];
     const failedNotifications: Array<{ userId: string; error: string }> = [];
 
     for (const user of users) {
       try {
-        const outcome = await this.notifyUser(user as never, eventType, buildMessage, slackClient, options);
+        const outcome = await this.notifyUser(user as never, eventType, buildMessage, options);
         if (outcome.kind === 'sent') {
           notifiedUserIds.push(user.id);
         } else if (outcome.kind === 'failed') {
@@ -274,7 +268,6 @@ export class GitHubSlackNotifier {
     },
     eventType: GitHubNotificationEventType,
     buildMessage: (user: { slackUserId?: string }) => NotificationPayload,
-    slackClient: SlackClient,
     options?: { isCI?: boolean }
   ): Promise<NotifyUserOutcome> {
     const prefs = user.slackSettings?.githubNotifications;
@@ -312,6 +305,13 @@ export class GitHubSlackNotifier {
       });
       return { kind: 'skipped' };
     }
+
+    const destination = await resolveNotificationDestination(
+      user.id,
+      channel === user.slackSettings?.slackUserId ? undefined : channel
+    );
+    const slackClient = new SlackClient(destination.botToken, this.logger);
+    channel = destination.channel;
 
     const { text, blocks } = buildMessage({ slackUserId: user.slackSettings?.slackUserId });
 
@@ -410,26 +410,5 @@ export class GitHubSlackNotifier {
         }
       );
     }
-  }
-
-  /**
-   * Get bot token from first active Slack workspace.
-   */
-  private async getBotToken(): Promise<string | null> {
-    const { slackDevWorkspaceRepository } = getSlackDb();
-    const workspaces = await (slackDevWorkspaceRepository as any).findAllActiveWithCredentials();
-    if (workspaces.length === 0) return null;
-
-    const workspace = workspaces[0];
-    // findAllActiveWithCredentials includes +slackBotToken in some queries
-    // but we need to fetch it explicitly if not included
-    const { decryptToken } = getSlackDeps().tokenEncryption;
-    if (workspace.slackBotToken) {
-      return decryptToken(workspace.slackBotToken);
-    }
-
-    // Fetch with bot token explicitly
-    const workspaceWithToken = await (slackDevWorkspaceRepository as any).findByIdWithCredentials(workspace.id);
-    return decryptToken(workspaceWithToken?.slackBotToken) || null;
   }
 }

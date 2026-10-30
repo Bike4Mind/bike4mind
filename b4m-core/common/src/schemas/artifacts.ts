@@ -45,6 +45,9 @@ export const BaseArtifactSchema = z.object({
   sourceQuestId: z.string().optional(),
   sessionId: z.string().optional(),
   parentArtifactId: z.uuid().optional(),
+  // The reply's `<artifact identifier=...>`. A React artifact re-emitted under the same identifier
+  // in the same session becomes a new version of this row (app/utils/artifactPersistence.ts).
+  identifier: z.string().optional(),
 
   // Status
   status: ArtifactStatusSchema.prefault('draft'),

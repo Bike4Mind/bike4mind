@@ -51,6 +51,9 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   // The only server-side ownership signal for owner-less generated-image keys - see
   // userCanAccessGeneratedImage.
   findSessionIdsByImage: (image: string) => Promise<string[]>;
+  // Every organization a user's quests were recorded under, soft-deleted ones included. A DSAR
+  // export or deletion has to reach rows the user can no longer see.
+  findOrganizationIdsForUser: (userId: string) => Promise<string[]>;
   // The subset of `keys` referenced as generated media (`images`/`videos`) by a quest in this session.
   findGeneratedMediaKeysInSession: (sessionId: string, keys: string[]) => Promise<string[]>;
   // Atomic $addToSet onto `generationJobs`, so a chat's job card survives the chat process dying.

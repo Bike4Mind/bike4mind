@@ -46,8 +46,8 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getSettingByName: h.getSettingByName,
 }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/integrations/github/dataLake/lakeAppClient')>()),
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient')>()),
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
   getInstallationOctokit: h.getInstallationOctokit,
   getRepository: h.getRepository,

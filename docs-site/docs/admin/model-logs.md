@@ -15,11 +15,11 @@ The filter panel at the top of the tab provides three filter controls arranged i
 
 | Filter | Description |
 |--------|-------------|
-| **Date Range** | Start and end date pickers with quick-select preset buttons for common ranges (e.g., last 7 days, last 30 days). Defaults to the last 7 days. |
-| **Model** | Dropdown to filter by a specific model (for example, All Models, GPT-5.6 Sol, Claude Opus 5.5, Claude Sonnet 5.5) |
-| **Search** | Free-text search input to filter logs by content |
+| **Date Range** | Start and end date pickers with quick-select preset buttons for common ranges (e.g., last 7 days, last 30 days). Defaults to the last 7 days. Selected dates use UTC boundaries and include the entire end date. |
+| **Model** | Dropdown to filter by a listed model, or choose All Models |
+| **Search** | Case-insensitive text search across model names, saved prompts, and execution step names |
 
-A **Refresh** button in the header reloads the log data with the current filters applied.
+A **Refresh** button in the header reloads the current page and any expanded details with the current filters applied. Changing a filter or the page size returns you to the first page.
 
 ## Log Entry Fields
 
@@ -48,22 +48,34 @@ If the model response produced artifacts, they are listed below the secondary ro
 - Total artifact count
 - Each artifact's type and a preview of its content (first 100 characters)
 
+### Log Details
+
+Select **Show details** on a card to load that log's recorded metadata as formatted JSON. Details load only when you open them; the initial list contains card summaries. Select **Hide details** to collapse the JSON. Owner-only tool output, tool errors, and citation context are omitted from this view.
+
 ## Pagination
 
-The log list supports pagination with controls at the bottom:
+The list loads one page at a time from the server, with controls at the bottom:
 
 | Control | Description |
 |---------|-------------|
 | **Previous / Next** | Navigate between pages |
 | **Page indicator** | Shows current page number and total pages |
-| **Items per page** | Radio buttons to select 10, 25, or 50 items per page |
+| **Items per page** | Radio buttons to select 10, 25, or 50 items per page; defaults to 10 |
 | **Total Logs** | Displays the total number of logs matching the current filters |
 
-Logs are sorted by timestamp in descending order (newest first).
+Logs are sorted by timestamp in descending order (newest first). You can browse up to 10,000 pages. If more logs match, narrow your filters to see additional logs.
 
 ## Empty State
 
 When no logs match the current filter criteria, a message reads "No logs found for the selected filters."
+
+## Troubleshooting
+
+If the list displays "Could not load model logs.", select **Try again** to request the current page again. A failed request displays an error rather than the empty-state message.
+
+If an expanded card displays "Could not load log details.", select its **Try again** button to reload that log. The list remains available while you retry details.
+
+If no logs match, check the date range, model, and search filters. The date range uses UTC boundaries, while card timestamps use your browser's time zone.
 
 ## Best Practices
 

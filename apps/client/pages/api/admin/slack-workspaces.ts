@@ -1,9 +1,10 @@
-import { slackDevWorkspaceRepository } from '@bike4mind/database';
+import { slackDevWorkspaceRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * Admin API for managing Slack OAuth workspaces
@@ -17,16 +18,11 @@ const DeactivateWorkspaceSchema = z.object({
   action: z.literal('deactivate'),
 });
 
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
-
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: 'settings:manage', PATCH: 'settings:manage' },
+})
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const workspaces = await slackDevWorkspaceRepository.findAllActive();
 
     Logger.info('📋 [Admin] Fetched Slack workspaces', {
@@ -37,8 +33,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json({ workspaces });
   })
   .patch(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const result = DeactivateWorkspaceSchema.safeParse(req.body);
     if (!result.success) {
       throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');
@@ -47,11 +41,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const { workspaceId } = result.data;
     // action is validated by Zod schema to be 'deactivate'
 
-    const workspace = await slackDevWorkspaceRepository.deactivate(workspaceId);
+    const workspace = await withTransaction(async () => {
+      const deactivated = await slackDevWorkspaceRepository.deactivate(workspaceId);
 
-    if (!workspace) {
-      throw new NotFoundError('Workspace not found');
-    }
+      if (!deactivated) {
+        throw new NotFoundError('Workspace not found');
+      }
+
+      await recordAdminActionFromRequest(req, {
+        action: 'integration.slack_workspace.deactivated',
+        target: { kind: 'settings', id: deactivated.id, displayName: deactivated.name || deactivated.slackAppId },
+        summary: `deactivated slack workspace ${deactivated.name || deactivated.id}`,
+        details: { slackTeamId: deactivated.slackTeamId, appId: deactivated.slackAppId },
+      });
+      return deactivated;
+    });
 
     Logger.info('🗑️ [Admin] Deactivated Slack workspace', {
       workspaceId,

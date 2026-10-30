@@ -35,7 +35,7 @@ jobs:
   typecheck-tsc:
     needs: check-repository
     if: ${{ needs.check-repository.outputs.should-run == 'true' }}
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     permissions:
       contents: read
       issues: write

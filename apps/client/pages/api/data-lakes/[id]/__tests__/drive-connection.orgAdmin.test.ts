@@ -40,7 +40,7 @@ vi.mock('@bike4mind/server-utils/integrations/google/drive/drivePollSchedule', (
   DRIVE_LAKE_POLL_INTERVAL_MS: 6 * 60 * 60 * 1000,
   isDriveLakePollScheduled: async () => false,
 }));
-vi.mock('@server/integrations/google/drive/connectorOrphanFiles', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/connectorOrphanFiles', () => ({
   listDeletableDriveOrphans: async () => [],
 }));
 vi.mock('@bike4mind/database', async importOriginal => {

@@ -255,8 +255,8 @@ describe('sessionOperations', () => {
 
   describe('summarization triggers', () => {
     it('summarizeSession delegates to publishSummarizeSession', async () => {
-      await summarizeSession('s1', 'manual');
-      expect(publishSummarizeSession).toHaveBeenCalledWith('s1', 'manual');
+      await summarizeSession('s1', 'manual', 'sharee-1');
+      expect(publishSummarizeSession).toHaveBeenCalledWith('s1', 'manual', 'sharee-1');
     });
 
     it('contextSummarizeSession delegates to publishContextSummarizeSession', async () => {

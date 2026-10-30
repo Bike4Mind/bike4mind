@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { Box, Typography, Chip, IconButton, Tooltip } from '@mui/joy';
-import { AutoFixHigh, ExpandMore, ExpandLess, ChatBubbleOutline } from '@mui/icons-material';
+import AutoFixHigh from '@mui/icons-material/AutoFixHigh';
+import ExpandMore from '@mui/icons-material/ExpandMore';
+import ExpandLess from '@mui/icons-material/ExpandLess';
+import ChatBubbleOutline from '@mui/icons-material/ChatBubbleOutline';
 import type { PromptIntent } from '@bike4mind/common';
 
 interface PromptEnhancementBannerProps {

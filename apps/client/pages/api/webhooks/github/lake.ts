@@ -41,7 +41,7 @@ import {
   resolveRevokedConnectionIds,
 } from '@server/integrations/github/dataLake/githubLakeRevocation';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 
 const PushEventSchema = z.object({
   ref: z.string(),

@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
+  ChatApprovalDecidedBy,
+  ChatApprovalSystemReason,
   ChatApprovalMode,
   ChatApprovalOption,
   ChatArtifact,
@@ -11,6 +13,7 @@ import type {
   ChatDiff,
   ChatMedia,
   ChatMessage,
+  ChatApprovalAnswer,
   ChatMessageSkill,
   ChatModelCatalog,
   ChatModelOption,
@@ -24,12 +27,14 @@ import type {
   ChatStreamEvent,
   ChatRoundTiming,
   BranchCheckout,
+  ChatToolApproval,
   ChatToolCall,
   ChatToolDetail,
   ChatToolNotice,
   ChatUsage,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
+  CreationTool,
   ContextBoundaryResult,
   ReasoningEffortSetting,
   SendMessageResult,
@@ -37,11 +42,27 @@ import type {
   StartSpawnSuggestionRequest,
   UpdateProjectRequest,
   UpdateProjectResult,
+  WorkspacePreparation,
 } from '@shared/chat';
-import { awaitsWorktree, branchHolder, isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
-import { shouldAutoCompact } from '@shared/contextLimit';
+import {
+  awaitsWorktree,
+  branchHolder,
+  isLocalBackend,
+  isLocalModel,
+  isResumableStop,
+  isTurnBudgetStop,
+  localBackend,
+  messagesSinceBoundary,
+  NO_LOCAL_MODEL,
+  parseLocalModelId,
+  pickLocalModel,
+  SERVER_CREDENTIALS_STOP,
+  SESSION_EXPIRED_STOP,
+} from '@shared/chat';
+import { AUTO_COMPACT_PERCENT, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
+import type { AppWorktree } from '@shared/worktreeRemoval';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
 import {
   REQUEST_DIRECTORY_TOOL_NAME,
@@ -57,6 +78,8 @@ import {
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
+import type { CapabilityLedger } from './capabilities/CapabilityLedger';
+import { capabilityFor, capabilityScope } from './capabilities/approvalCapabilities';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName, suggestBranchName } from './project/branchName';
@@ -64,6 +87,7 @@ import {
   branchCheckouts,
   branchExists,
   checkoutBranch,
+  containerDirectory,
   currentBranch,
   defaultBaseBranch,
   isGitDirectory,
@@ -78,7 +102,18 @@ import type { DependencyInstaller } from './project/dependencyInstall';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
-import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
+import {
+  hasAppWorkspaceBranch,
+  inspectWorktreeRemoval,
+  listAppWorktrees,
+  removeOrphanWorktree,
+  removeSessionWorktree,
+  sweepSafeOrphans,
+  prefetchBase,
+  resolveWorkspace,
+  type SpareWorktrees,
+  type WorkspaceOutcome,
+} from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
@@ -93,10 +128,18 @@ import {
   supportsPromptCache,
   withCacheBreakpoints,
   type CompletionMessage,
+  type CompletionRequest,
 } from './completions';
 import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
+import type { CompletionStreamEvent } from './streamEvents';
+import { LocalModelRemovedError, OllamaLocal } from './OllamaLocal';
+import type { LocalChat } from './localChat';
+import { ServerCredentialsError } from '../modelServers/errors';
+import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
+import type { LocalHistory } from './LocalHistory';
+import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
@@ -105,13 +148,13 @@ import type { MediaStore } from './media/MediaStore';
 import type { VideoJobScheduler } from './media/VideoJobScheduler';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
+import { PhaseTimer } from './PhaseTimer';
 import type { ModelMemory } from './ModelPreference';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 import { readableThinking } from './thinkingBlocks';
 import { COMPACT_MAX_TOKENS, compactRequestMessages, renderForSummary, sanitizeSummary } from './compaction';
 import { pickTitleModel, sanitizeGeneratedTitle, TITLE_MAX_TOKENS, titleRequestMessages } from './sessionTitle';
 import {
-  isLocalModel,
   pickSuggestionModel,
   sanitizeSuggestion,
   SUGGESTION_MAX_TOKENS,
@@ -121,27 +164,36 @@ import {
 import type { SessionActivity } from './SessionActivity';
 import { deriveTitle, isValidSessionId, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
+import { resolveInlineSkills } from './skills/inline';
 import { SkillsPromptCache } from './skills/prompt';
 import { skillSource, type SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpServerLines } from './mcp/prompt';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
-import { QUESTION_CANCELLED, type ApprovalGate } from './tools/ApprovalGate';
+import { forgetSessionWrites } from './tools/sessionScripts';
+import {
+  QUESTION_CANCELLED,
+  type ApprovalGate,
+  type ApprovalSettledBy,
+  type ApprovalSettlement,
+} from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
+import { BackgroundWake } from './backgroundWake';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
-import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
+import { findTool, isOfferedEditTool, offeredMediaToolNames, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { webContextFor } from './tools/webTools';
-import { DoomLoopTracker } from './tools/doomLoop';
+import { DoomLoopTracker, THRESHOLD as LOOP_THRESHOLD } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
-import { spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
+import { alwaysOverridesTaint, spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
 import { MCP_TOOL_PREFIX } from './mcp/names';
 import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
+import { summarizeToolInput, type ApprovalLog } from './permissions/ApprovalLog';
 import { resolveSubject } from './permissions/resolveSubject';
-import type { PermissionRuleSet } from './permissions/rules';
+import type { CompiledRule, PermissionRuleSet } from './permissions/rules';
 import {
   capOutput,
   outputCapFor,
@@ -160,11 +212,20 @@ import {
   type SpawnSuggestionHost,
   type SuggestionOutcome,
   type SkillContext,
+  type ImageContext,
+  type ScreenCapturer,
+  type ScreenContext,
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
   type WebContext,
 } from './tools/types';
+import {
+  IMPORTED_TAINT_SOURCE,
+  importedHistoryNeedsCompaction,
+  importedTurnAsText,
+  isImportedToolTurn,
+} from '../claudeImport/continuation';
 
 /** The fields this client reads from `GET /api/settings/serverConfig`. */
 interface ServerTransportConfig {
@@ -218,10 +279,28 @@ const TURN_LIMITS: TurnLimits = {
   wallClockMs: 30 * 60 * 1000,
 };
 
+type SettledModel = { session: ChatSession; summary?: ChatSessionSummary; notice?: string } | { error: string };
+
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
-type TurnOutcome = 'completed' | 'aborted' | 'failed';
+type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
+
+/** Rides with a message typed while the turn ran, so the model answers it without dropping the task. */
+const MID_TURN_NOTE =
+  'The user sent this while you were still working. Answer or act on it now, then carry on with the task unless it changes what they want.';
+
+/** Something that reached a running turn between rounds; see takeArrivals. */
+interface MidTurnArrival {
+  message: ChatMessage;
+  /** The queue entry it came from, for the event that clears its row. Absent on a notice. */
+  queuedId?: string;
+}
+
+/** Stored on a turn the session expired under; the thread shows it as paused, not as an error. */
+const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished. Sign in again, then press Continue.';
 
 type SendOptions = {
+  /** Only launchSpawned may consume the initial-turn reservation. */
+  spawnSeed?: true;
   /** A taken queue entry must never fall back into the queue. */
   released?: ChatQueuedMessage;
   /** A spawned session inherits its parent's relay depth. */
@@ -241,7 +320,7 @@ type SendOptions = {
  *
  * Counts autonomous runs only. A user typing into a spawned session is not rationed.
  */
-const MAX_CONCURRENT_SPAWNED = 3;
+export const MAX_CONCURRENT_SPAWNED = 10;
 
 /**
  * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
@@ -283,6 +362,10 @@ const LOCAL_SUGGESTION_TIMEOUT_MS = 30_000;
  * limit. Abandoning it changes nothing - see compactContext.
  */
 const COMPACT_TIMEOUT_MS = 120_000;
+// A local summary reads most of the window, about 14k tokens on a 16k model: over two minutes of
+// CPU prefill. Stop cannot reach a compaction, so this stays the bound on the user's wait.
+const LOCAL_COMPACT_TIMEOUT_MS = 300_000;
+const SUMMARY_SHRINK_RETRIES = 2;
 
 /**
  * How far a message may travel from the turn the USER typed, in agent-to-agent hops.
@@ -303,16 +386,16 @@ const COMPACT_TIMEOUT_MS = 120_000;
  * MAX_CONCURRENT_SPAWNED draws: a person spending their own attention on each turn is not the
  * runaway this guards against.
  */
-const MAX_MESSAGE_HOPS = 3;
+const MAX_MESSAGE_HOPS = 5;
 
 /**
  * How many messages one turn may send, which bounds the FAN where the hop count bounds the
- * chain. Neither is sufficient alone: without this, each turn in a 3-hop chain could message
+ * chain. Neither is sufficient alone: without this, each turn in a 5-hop chain could message
  * every session in the project and the total would still be "finite".
  *
- * Together they cap one user turn at 2 + 4 + 8 = 14 relayed turns in the worst case. That
- * bound is structural and is the only one: session_send is not held at the approval gate in
- * every mode, so these two numbers are what keeps a chain finite. See riskAssessment.
+ * Together they cap one user turn at 2 + 4 + 8 + 16 + 32 = 62 relayed turns in the worst case.
+ * That bound is structural and is the only one: session_send is not held at the approval gate
+ * in every mode, so these two numbers are what keeps a chain finite. See riskAssessment.
  */
 const MAX_SENDS_PER_TURN = 2;
 
@@ -340,16 +423,23 @@ export interface ChatServiceDeps {
   approvals?: ApprovalGate;
   /**
    * Standing allow, ask and deny rules - the desktop's and Claude Code's. Read here, and written
-   * only by the approval card's "Always, in every session"; no tool can reach it.
+   * only by the approval card's "Always allow"; no tool can reach it.
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
     Partial<Pick<PermissionService, 'dispose'>>;
+  capabilities?: Pick<CapabilityLedger, 'grant' | 'revokeMatching'>;
+  /** Where each approval decision is appended, across sessions. Absent in tests that do not read it. */
+  approvalLog?: Pick<ApprovalLog, 'append'>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
   background?: BackgroundProcessRegistry;
+  /** How long exits are gathered into one notice before an idle conversation is woken; tests shorten it. */
+  backgroundWakeDelayMs?: number;
   /** Where a running command offers itself up for moving. Absent in tests, which never move one. */
   foreground?: ForegroundCommandRegistry;
   /** Installs a new worktree's dependencies. Absent in tests, which then never install. */
   dependencies?: DependencyInstaller;
+  /** A checkout kept ready per recently used project, so cutting a worktree is a switch. */
+  spareWorktrees?: SpareWorktrees;
   /** Where generated images and audio land. Absent in tests, which then have no generation tools. */
   media?: MediaStore;
   /**
@@ -364,6 +454,13 @@ export interface ChatServiceDeps {
   mcp?: McpManager;
   /** The agent's hidden browser. Absent in tests that do not exercise it; the tools are then not declared. */
   browser?: BrowserProvider;
+  /** Other apps' windows, for screen_capture. Absent in tests that do not exercise it; the tool is then not declared. */
+  screen?: ScreenCapturer;
+  /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
+  prepareImage?: ImageContext['prepare'];
+  history?: LocalHistory;
+  /** This computer's Ollama and the saved model servers; see modelServers/LocalModels. */
+  local?: LocalChat;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
@@ -403,11 +500,13 @@ export interface ChatServiceDeps {
   turnTiming?: boolean;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
   getApiClient(): AuthenticatedApiClient | null;
+  /** True in the device-local scope (signed out by choice); false for an account whose session expired. */
+  isDeviceLocal?(): boolean;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
   getEnvironmentUrl(): string;
   emit(event: ChatStreamEvent): void;
   /**
-   * A session's stored summary changed outside any reply - today only its generated title.
+   * A session's stored summary changed outside any reply, such as its title or worktree binding.
    *
    * Separate from `emit` because that union is per-reply progress: this lands after the turn it
    * belongs to has been accepted, can land after the reply has finished, and matters to a
@@ -421,6 +520,8 @@ export interface ChatServiceDeps {
    * them.
    */
   sessionClosed?(sessionId: string): void;
+  /** Hold terminal creation until cleanup ends; reject unless existing terminals have exited. */
+  releaseSessionTerminals?(sessionId: string): Promise<() => void>;
 }
 
 /** One model-requested tool call, as it arrives on the wire. */
@@ -477,8 +578,29 @@ export class ChatService {
    */
   private readonly compacting = new Set<string>();
 
-  /** Sessions cutting a worktree ahead of a first turn (ensureWorkspace); busy as `compacting` is. */
-  private readonly preparing = new Set<string>();
+  /**
+   * Sessions cutting a worktree ahead of a first turn (ensureWorkspace); busy as `compacting` is.
+   * The progress is kept so a window that opens one mid-cut can draw the same status line.
+   */
+  private readonly preparing = new Map<string, WorkspacePreparation>();
+
+  private readonly launching = new Set<string>();
+
+  /** Startup has failed; no new input may race its preservation or deletion. */
+  private readonly abandoning = new Set<string>();
+
+  private withWorkspaceBindings<T>(operation: () => Promise<T>): Promise<T> {
+    return this.deps.store.withWorkspaceBindings(operation);
+  }
+
+  private async workspaceBindingReason(directory: string): Promise<string | null> {
+    try {
+      if (!(await stat(directory)).isDirectory()) return `${directory} is not a directory.`;
+    } catch (error) {
+      return error instanceof Error ? error.message : `Cannot access ${directory}.`;
+    }
+    return unusableProjectReason(directory);
+  }
 
   /**
    * A queued message the user promoted past the live turn with "send now", held between the
@@ -548,6 +670,7 @@ export class ChatService {
    * before its next tool call instead of holding the set it started with. See `refreshScope`.
    */
   private readonly scopeVersions = new Map<string, number>();
+  private readonly historySettings = new Map<string, symbol>();
 
   /**
    * Sends being accepted, per session. A send awaits the store and the model catalog before its
@@ -579,7 +702,17 @@ export class ChatService {
   /** Resolved serverConfig fields, cached per environment URL (it is one round trip). */
   private serverConfigCache: { environmentUrl: string; config: ResolvedServerConfig } | null = null;
 
+  /** Background commands that ended on their own, waiting to be told to their conversation. */
+  private readonly wake?: BackgroundWake;
+
   constructor(private readonly deps: ChatServiceDeps) {
+    this.wake = deps.background
+      ? new BackgroundWake(
+          deps.background,
+          sessionId => void this.wakeForBackground(sessionId),
+          deps.backgroundWakeDelayMs
+        )
+      : undefined;
     this.projectContext = new ProjectContextCache(deps.userInstructionsRoot);
     this.skillsPrompt = deps.skills ? new SkillsPromptCache(deps.skills) : undefined;
   }
@@ -684,6 +817,47 @@ export class ChatService {
     return { ok: false, busy: false, error: result.error };
   }
 
+  private wakeIfIdle(sessionId: string): void {
+    if (this.wake?.has(sessionId) && !this.hasTurnInFlight(sessionId)) void this.wakeForBackground(sessionId);
+  }
+
+  /** A background command this conversation's agent started has ended on its own. */
+  backgroundExited(sessionId: string, processId: string): void {
+    this.wake?.exited(sessionId, processId);
+  }
+
+  /**
+   * Tell an IDLE conversation that its background commands finished, as an automatic turn.
+   *
+   * A busy one is left alone: its running turn takes the notice at its next round boundary
+   * (takeArrivals), and a turn that ends without another round comes back here from
+   * settleQueue. The same approval mode applies as to any turn - in 'ask' the model can read the
+   * notice and answer, and anything it then runs still stops at the card.
+   */
+  private async wakeForBackground(sessionId: string): Promise<void> {
+    const wake = this.wake;
+    if (!wake?.has(sessionId) || this.hasTurnInFlight(sessionId)) return;
+    const session = await this.deps.store.get(sessionId);
+    if (!session || session.archived) {
+      wake.forget(sessionId);
+      return;
+    }
+    // Re-read after the await. Whatever started in the gap will take the notice instead.
+    if (this.hasTurnInFlight(sessionId) || (this.deps.queue?.list(sessionId).length ?? 0) > 0) return;
+    const notice = wake.take(sessionId);
+    if (!notice) return;
+    if (!wake.claimWake(sessionId)) {
+      this.deps.logger.warn(`CHAT: not waking ${sessionId} for ${notice.summary}: too many wakes in a row`);
+      return;
+    }
+    const result = await this.startAutomaticTurn(sessionId, notice.text, {
+      kind: 'background-exit',
+      processIds: notice.processIds,
+      summary: notice.summary,
+    });
+    if (!result.ok) this.deps.logger.warn(`CHAT: could not wake ${sessionId}: ${result.error}`);
+  }
+
   async setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
     if (archived) this.archiveCleanup(sessionId);
     const updated = await this.deps.store.setArchived(sessionId, archived);
@@ -692,6 +866,7 @@ export class ChatService {
   }
 
   private archiveCleanup(sessionId: string): void {
+    this.wake?.forget(sessionId);
     // Stops polling only; opening the conversation again lists its cards, which resumes them.
     this.deps.videoJobs?.stopSession(sessionId);
     this.webSearches.forget(sessionId);
@@ -702,6 +877,64 @@ export class ChatService {
 
   listModels(force = false): Promise<ChatModelCatalog> {
     return this.deps.models?.list(force) ?? Promise.resolve({ models: [] });
+  }
+
+  async setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null> {
+    if (enabled && !this.deps.history) throw new Error('Local history is unavailable. Restart the app and try again.');
+    const historyScope = this.deps.history?.scopeKey() ?? null;
+    const storeScope = this.deps.store.scopeKey();
+    const historyRevision = this.deps.history?.revision();
+    const key = `${storeScope}:${sessionId}`;
+    const operation = Symbol();
+    this.historySettings.set(key, operation);
+    const isCurrentOperation = () => this.historySettings.get(key) === operation;
+    try {
+      const previous = enabled ? await this.deps.store.get(sessionId) : null;
+      const previouslyEnabled = previous?.historyEnabled === true;
+      const summary = await this.deps.store.setHistoryEnabled(sessionId, enabled, storeScope, isCurrentOperation);
+      if (!isCurrentOperation()) return null;
+      if (!enabled) this.deps.history?.removeSession(sessionId, historyScope);
+      const session = summary && enabled ? await this.deps.store.get(sessionId) : null;
+      if (!isCurrentOperation()) return null;
+      if (session) {
+        try {
+          this.deps.history?.captureSession(session, historyScope, historyRevision);
+        } catch (error) {
+          if (this.deps.history?.scopeKey() === historyScope && this.deps.history?.revision() === historyRevision) {
+            try {
+              await this.deps.store.setHistoryEnabled(sessionId, previouslyEnabled, storeScope, isCurrentOperation);
+            } catch (rollbackError) {
+              this.deps.logger.warn(`CHAT: could not restore history preference: ${String(rollbackError)}`);
+            }
+          }
+          throw error;
+        }
+      }
+      if (summary && isCurrentOperation()) this.deps.summaryChanged?.(summary);
+      return summary;
+    } finally {
+      if (isCurrentOperation()) this.historySettings.delete(key);
+    }
+  }
+
+  searchHistory(query: string): LocalHistoryResult[] {
+    if (!this.deps.history) throw new Error('Local history is unavailable. Restart the app and try again.');
+    return this.deps.history.search(query);
+  }
+
+  /**
+   * What a turn on `model` would be offered to generate with: the same conditions runReply reads
+   * for `media`, `video` and a model that takes no tools. Both lists come from the ModelCatalog's
+   * caches, so a blank chat asking for this costs no more than the next turn will.
+   */
+  async listCreationTools(model: string): Promise<CreationTool[]> {
+    if (!this.deps.media || !this.deps.getApiClient() || isLocalModel(model)) return [];
+    const [catalog, video] = await Promise.all([
+      this.deps.models?.list().catch(() => undefined),
+      this.deps.models?.listVideoModels().catch(() => []),
+    ]);
+    if (catalog?.models.find(option => option.id === model)?.supportsTools === false) return [];
+    return offeredMediaToolNames({ media: true, video: video ?? [] }).map(name => ({ name }));
   }
 
   /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */
@@ -719,12 +952,33 @@ export class ChatService {
    */
   async createSession(): Promise<ChatSessionSummary> {
     const catalog = await this.listModels();
-    return this.deps.store.create((await this.pickModel(catalog.models)) ?? undefined);
+    return this.deps.store.create(await this.startModel(catalog.models));
+  }
+
+  /** The model a new conversation would start on, for a session the Claude importer writes. */
+  async modelForNewSession(): Promise<string | undefined> {
+    const catalog = await this.listModels();
+    return this.startModel(catalog.models);
+  }
+
+  /** `pickModel`, except the device-local scope never starts on a hosted default it could not send to. */
+  private async startModel(models: readonly ChatModelOption[]): Promise<string | undefined> {
+    if (this.deviceLocal()) {
+      return pickLocalModel(models, await this.deps.modelMemory?.read()) ?? NO_LOCAL_MODEL;
+    }
+    return (await this.pickModel(models)) ?? undefined;
+  }
+
+  private deviceLocal(): boolean {
+    return !this.deps.getApiClient() && this.deps.isDeviceLocal?.() === true;
   }
 
   /**
    * The base a workspace session is cut from: the picked branch, else the repository's default.
    * Only a repository with nothing to base on is refused.
+   *
+   * The renderer asks the same question before it offers a worktree - see `canHoldWorktree` in
+   * renderer/src/chat/worktreeDefault.ts - so keep the two rules in sync.
    */
   private async resolveWorkspaceBase(
     directory: string,
@@ -745,25 +999,33 @@ export class ChatService {
    * that creating a session never depends on the user completing a native dialog - cancelling
    * one used to produce nothing at all.
    *
-   * The workspace is resolved BEFORE the session is written, so a worktree that cannot be
-   * created leaves nothing behind: there is no session whose tools would then fall back to
-   * some other folder.
+   * The project choice is stored now; the first accepted turn prepares its worktree before
+   * any tools can run there. See ensureWorkspace.
    */
   async createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> {
+    return this.withWorkspaceBindings(() => this.createCodeSessionWithWorkspaceLease(request));
+  }
+
+  private async createCodeSessionWithWorkspaceLease(
+    request: CreateCodeSessionRequest
+  ): Promise<CreateCodeSessionResult> {
+    const timer = new PhaseTimer();
     const catalog = await this.listModels();
-    const model = (await this.pickModel(catalog.models)) ?? undefined;
+    const model = await this.startModel(catalog.models);
+    timer.lap('model');
 
     if (!request.directory) {
       return { ok: true, session: await this.deps.store.create(model, { mode: 'code' }) };
     }
 
     const directory = resolve(request.directory);
-    const unusable = await unusableProjectReason(directory);
+    const unusable = await this.workspaceBindingReason(directory);
     if (unusable) return { ok: false, error: unusable };
     // Only the choice is recorded; see `ensureWorkspace` for when the worktree is actually cut.
     const base = await this.resolveWorkspaceBase(directory, (request.branch ?? '').trim(), request.workspace === true);
     if ('error' in base) return { ok: false, error: base.error };
     const branch = base.branch;
+    timer.lap('checks');
 
     const session = await this.deps.store.create(model, {
       project: {
@@ -775,6 +1037,9 @@ export class ChatService {
         contextDirectories: (request.contextDirectories ?? []).map(entry => resolve(entry)),
       },
     });
+    timer.lap('create');
+    this.deps.logger.debug(`CHAT: code session ${session.id} timing ${timer.summary()}`);
+    if (awaitsWorktree(session.project)) prefetchBase(directory, branch);
 
     return { ok: true, session };
   }
@@ -794,6 +1059,10 @@ export class ChatService {
    * switch git refuses leaves the session exactly as it was; see checkoutInPlace.
    */
   async updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult> {
+    return this.withWorkspaceBindings(() => this.updateProjectWithWorkspaceLease(request));
+  }
+
+  private async updateProjectWithWorkspaceLease(request: UpdateProjectRequest): Promise<UpdateProjectResult> {
     const session = await this.deps.store.get(request.sessionId);
     if (session?.mode !== 'code') return { ok: false, error: 'Only a Code session is grounded in a project.' };
 
@@ -817,7 +1086,7 @@ export class ChatService {
     if (!directory) return { ok: false, error: 'Choose a project folder for this conversation first.' };
     // Checked on every change, not only on a move: a session already bound to a container has
     // to be told why nothing it picks there can work, and re-picking the folder is the way out.
-    const unusable = await unusableProjectReason(directory);
+    const unusable = await this.workspaceBindingReason(directory);
     if (unusable) return { ok: false, error: unusable };
     // An unbound session is "moved" by its first binding, which is what drops the branch and
     // context folders it never had - the same rule that applies to moving between projects.
@@ -874,6 +1143,8 @@ export class ChatService {
       contextDirectories: movedProject ? [] : (current?.contextDirectories ?? []),
     });
     if (!updated) return { ok: false, error: 'This conversation is no longer available.' };
+    // The first message will cut the worktree; its fetch can start while that is being typed.
+    if (awaitsWorktree(updated.project)) prefetchBase(directory, branch);
     return { ok: true, session: updated };
   }
 
@@ -945,7 +1216,7 @@ export class ChatService {
     const ids = new Set([
       ...this.active.keys(),
       ...this.compacting,
-      ...this.preparing,
+      ...this.preparing.keys(),
       ...this.sending.keys(),
       ...(this.deps.background?.sessionsWithRunning() ?? []),
     ]);
@@ -977,24 +1248,42 @@ export class ChatService {
    * Idempotent, and free once done: a session already in its worktree is a field comparison
    * rather than a git call, which is what keeps this off the cost of every later turn.
    */
-  private async ensureWorkspace(session: ChatSession, name: string): Promise<{ error: string } | null> {
+  private async ensureWorkspace(
+    session: Pick<ChatSession, 'id' | 'project'>,
+    name: string,
+    timer?: PhaseTimer
+  ): Promise<{ error: string } | null> {
     const project = session.project;
     if (!project || !awaitsWorktree(project)) return null;
 
     const sessionId = session.id;
     const base = project.branch;
-    this.preparing.add(sessionId);
+    // Synchronous up to here, so a caller that does not await is already busy when it returns.
+    this.preparing.set(sessionId, { since: Date.now(), base });
     this.emit({ type: 'workspace', sessionId, running: true, base });
     try {
+      const unusable = await this.workspaceBindingReason(project.directory);
+      if (unusable) return { error: unusable };
       const resolved = await resolveWorkspace(project.directory, {
         base,
-        name,
-        onBranch: branch => this.emit({ type: 'workspace', sessionId, running: true, base, branch }),
+        // A branch already named - a spawn's, as the user approved it - is cut as named.
+        ...(project.workspaceBranch ? { branch: project.workspaceBranch } : { name }),
+        timer,
+        spares: this.deps.spareWorktrees,
+        onBranch: branch => {
+          this.preparing.set(sessionId, { since: this.preparing.get(sessionId)?.since ?? Date.now(), base, branch });
+          this.emit({ type: 'workspace', sessionId, running: true, base, branch });
+        },
       });
       const workspace = { workspaceBranch: resolved.branch, workingDirectory: resolved.workingDirectory };
-      await this.deps.store.updateProjectWorkspace(session.id, workspace);
-      // Re-read: a folder shared while the worktree was being cut lives in the store, not in `project`.
-      session.project = (await this.deps.store.get(session.id))?.project ?? { ...project, ...workspace };
+      const summary = await this.withWorkspaceBindings(() =>
+        this.deps.store.updateProjectWorkspace(session.id, workspace)
+      );
+      if (!summary) return { error: 'That conversation no longer exists.' };
+      // The sidebar row says "Preparing worktree..." off this project until it hears otherwise.
+      this.deps.summaryChanged?.(summary);
+      // A folder shared while the worktree was being cut lives in the store, not in `project`.
+      session.project = summary.project;
       this.startDependencyInstall(session.id, resolved.workingDirectory, resolved.outcome);
       return null;
     } catch (err) {
@@ -1056,6 +1345,13 @@ export class ChatService {
     const project = session.project;
     if (!project || !(await isGitDirectory(project.workingDirectory))) return project;
 
+    return this.withWorkspaceBindings(() => this.repairBareWorkingDirectoryWithWorkspaceLease(session, project));
+  }
+
+  private async repairBareWorkingDirectoryWithWorkspaceLease(
+    session: ChatSession,
+    project: ChatProject
+  ): Promise<ChatProject | undefined> {
     let workingDirectory = project.directory;
     if (project.workspace && project.branch) {
       try {
@@ -1148,10 +1444,34 @@ export class ChatService {
   }
 
   /** Also any time: the running turn drops the folder before its next tool call. */
-  async removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null> {
-    const updated = await this.deps.store.removeContextDirectory(sessionId, directory);
-    if (updated) this.bumpScope(sessionId);
+  async removeContextDirectory(
+    sessionId: string,
+    directory: string,
+    auditCapability = true,
+    expectedScope = this.deps.store.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    const scopeKey = this.deps.store.scopeKey() ?? 'local';
+    const normalizedDirectory = resolve(directory);
+    const updated = await this.deps.store.removeContextDirectory(sessionId, normalizedDirectory, expectedScope);
+    if (updated) {
+      this.bumpScope(sessionId);
+      if (auditCapability)
+        await this.deps.capabilities
+          ?.revokeMatching(
+            grant =>
+              grant.subject.kind === 'session' &&
+              grant.subject.sessionId === sessionId &&
+              grant.subject.scopeKey === scopeKey &&
+              grant.scope.kind === 'path' &&
+              grant.scope.value === normalizedDirectory
+          )
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit folder revocation: ${String(error)}`));
+    }
     return updated;
+  }
+
+  refreshAccessScopes(): void {
+    for (const sessionId of this.active.keys()) this.bumpScope(sessionId);
   }
 
   private scopeVersion(sessionId: string): number {
@@ -1188,6 +1508,27 @@ export class ChatService {
     const root = session?.project?.workingDirectory;
     if (!root) return this.listSkills(sessionId);
     await this.deps.skills.setTrusted(root, trusted);
+    if (this.deps.capabilities) {
+      if (trusted) {
+        await this.deps.capabilities
+          .grant({
+            subject: { kind: 'project', directory: resolve(root) },
+            capability: 'project-trust',
+            scope: { kind: 'project', value: root },
+            source: 'project-trust',
+          })
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project trust: ${String(error)}`));
+      } else {
+        await this.deps.capabilities
+          .revokeMatching(
+            grant =>
+              grant.capability === 'project-trust' &&
+              grant.scope.kind === 'project' &&
+              grant.scope.value === resolve(root)
+          )
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project revocation: ${String(error)}`));
+      }
+    }
     // Trust also decides whether the project's Claude Code files may allow anything.
     this.deps.permissions?.invalidate();
     return this.deps.skills.state(root);
@@ -1200,6 +1541,8 @@ export class ChatService {
    */
   async getSession(sessionId: string): Promise<ChatSession | null> {
     const session = await this.deps.store.get(sessionId);
+    const preparing = this.preparing.get(sessionId);
+    if (session && preparing) return { ...session, preparingWorkspace: { ...preparing } };
     const live = this.live.get(sessionId);
     if (!session || !live) return session;
     let messages = session.messages;
@@ -1257,13 +1600,158 @@ export class ChatService {
    * gone with the conversation, and the model can no longer name their handles. Nothing would
    * be left that could turn a forgotten dev server off.
    */
-  async deleteSession(sessionId: string): Promise<void> {
-    this.stop(sessionId);
+  async deleteImportedSession(sessionId: string, scopeKey: string): Promise<'removed' | 'forked' | 'missing'> {
+    const historyScope = this.deps.history?.scopeKey() ?? null;
+    const outcome = await this.deps.store.deleteImported(sessionId, scopeKey);
+    if (outcome === 'removed') await this.cleanupDeletedSession(sessionId, false, historyScope);
+    return outcome;
+  }
+
+  async inspectSessionWorktreeRemoval(sessionId: string) {
+    const session = await this.deps.store.get(sessionId);
+    // The scan parses every stored conversation; most deletes have no app worktree to inspect.
+    if (!hasAppWorkspaceBranch(session?.project)) return null;
+    const owners = await this.deps.store.workspaceOwnersExcept(sessionId);
+    const inspection = await inspectWorktreeRemoval(
+      session.project,
+      owners.map(owner => owner.project),
+      { owners }
+    );
+    if (inspection && this.hasTurnInFlight(sessionId)) {
+      return { ...inspection, safe: false, reason: 'Conversation is still running' };
+    }
+    return inspection;
+  }
+
+  /**
+   * Preparation stays active until its binding is persisted under the same lease as cleanup.
+   */
+  private orphanOptions(titles?: ReadonlyMap<ChatProject, string>) {
+    return {
+      ...(titles ? { titles } : {}),
+      hold: () => (this.preparing.size > 0 ? 'A workspace is being prepared' : null),
+    };
+  }
+
+  private async orphanContext() {
+    const owners = await this.deps.store.workspaceOwnersExcept('');
+    return {
+      projects: owners.map(owner => owner.project),
+      owners,
+      titles: new Map(owners.flatMap(owner => (owner.project ? [[owner.project, owner.title] as const] : []))),
+    };
+  }
+
+  /** A repository the user has already opened here, by project or recent folder; never an arbitrary path. */
+  async isKnownRepository(directory: string, recentFolders: readonly string[]): Promise<boolean> {
+    const containerOf = async (path: string) => {
+      try {
+        return await realpath(await containerDirectory(path));
+      } catch {
+        return null;
+      }
+    };
+    const wanted = await containerOf(directory);
+    if (!wanted) return false;
+    const matches = async (candidates: Iterable<string>) => {
+      for (const known of new Set(candidates)) {
+        if ((await containerOf(known)) === wanted) return true;
+      }
+      return false;
+    };
+    // Recent folders first: the Settings view lists exactly those, so the store is rarely read.
+    if (await matches(recentFolders)) return true;
+    const owners = await this.deps.store.workspaceOwnersExcept('');
+    return matches(owners.flatMap(owner => (owner.project ? [owner.project.directory] : [])));
+  }
+
+  async listWorktrees(directory: string): Promise<AppWorktree[]> {
+    const listed = await this.withWorkspaceBindings(async () => {
+      const { projects, titles, owners } = await this.orphanContext();
+      return listAppWorktrees(directory, projects, { ...this.orphanOptions(titles), owners });
+    });
+    // preservedRef is internal to the removal path.
+    return listed.map(({ preservedRef: _preservedRef, ...item }) => item);
+  }
+
+  /** Named paths, or every safe orphan when none are given; each is re-inspected as it is removed. */
+  removeWorktrees(directory: string, paths?: readonly string[]) {
+    return this.withWorkspaceBindings(async () => {
+      const { projects, titles, owners } = await this.orphanContext();
+      const options = { ...this.orphanOptions(titles), owners };
+      if (!paths) return sweepSafeOrphans(directory, projects, options);
+      const results = [];
+      for (const path of paths) results.push(await removeOrphanWorktree(directory, path, projects, options));
+      return results;
+    });
+  }
+
+  /** Only a path currently listed for this repository, so always under the app root, is handed to the file manager. */
+  async revealWorktree(directory: string, path: string, reveal: (path: string) => void): Promise<boolean> {
+    if (!(await this.listWorktrees(directory)).some(item => item.path === path)) return false;
+    reveal(path);
+    return true;
+  }
+
+  async deleteSession(sessionId: string, removeWorktree = false): Promise<void> {
+    if (!removeWorktree) {
+      await this.cleanupDeletedSession(sessionId, true);
+      return;
+    }
+    return this.withWorkspaceBindings(() => this.deleteSessionWithWorkspaceLease(sessionId));
+  }
+
+  private async deleteSessionWithWorkspaceLease(sessionId: string): Promise<void> {
+    if (this.abandoning.has(sessionId)) throw new Error('This conversation is already being deleted');
+    this.abandoning.add(sessionId);
+    let releaseTerminals: (() => void) | undefined;
+    try {
+      if (this.hasTurnInFlight(sessionId)) throw new Error('Stop the conversation before removing its worktree');
+      const session = await this.deps.store.get(sessionId);
+      if (!session?.project) throw new Error('This conversation has no worktree');
+      const inspection = await this.inspectSessionWorktreeRemoval(sessionId);
+      if (!inspection?.safe) throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
+      await this.deps.background?.killSession(sessionId);
+      releaseTerminals = await this.deps.releaseSessionTerminals?.(sessionId);
+      this.deps.sessionClosed?.(sessionId);
+      await this.deps.browser?.closeSession(sessionId);
+      const owners = await this.deps.store.workspaceOwnersExcept(sessionId);
+      await removeSessionWorktree(
+        session.project,
+        owners.map(owner => owner.project),
+        { owners }
+      );
+      await this.cleanupDeletedSession(sessionId, true);
+    } finally {
+      releaseTerminals?.();
+      this.abandoning.delete(sessionId);
+    }
+  }
+
+  private async cleanupDeletedSession(
+    sessionId: string,
+    deleteStoredSession: boolean,
+    historyScope = this.deps.history?.scopeKey() ?? null
+  ): Promise<void> {
+    // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
+    const scopeKey = this.deps.store.scopeKey() ?? 'local';
     this.deps.approvals?.forgetSession(sessionId);
+    this.deps.history?.removeSession(sessionId, historyScope);
+    this.stop(sessionId);
+    await this.deps.capabilities
+      ?.revokeMatching(
+        grant =>
+          grant.subject.kind === 'session' &&
+          grant.subject.sessionId === sessionId &&
+          grant.subject.scopeKey === scopeKey
+      )
+      .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit session deletion: ${String(error)}`));
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
     this.scopeVersions.delete(sessionId);
     await this.deps.background?.killSession(sessionId);
+    // Only on delete: an archived conversation can be unarchived, and its scripts must still ask.
+    await forgetSessionWrites(sessionId);
     this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
@@ -1272,7 +1760,10 @@ export class ChatService {
     // Video polling stops first, so a download landing afterwards cannot recreate the folder.
     this.deps.videoJobs?.forgetSession(sessionId);
     await this.deps.media?.forgetSession(sessionId);
-    await this.deps.store.delete(sessionId);
+    if (deleteStoredSession) await this.deps.store.delete(sessionId);
+    // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
+    // Once the serialized delete has finished, no later append can resurrect the session.
+    this.deps.history?.removeSession(sessionId, historyScope);
     this.deps.activity?.forget(sessionId);
     this.deps.queue?.forget(sessionId);
     await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {
@@ -1281,6 +1772,7 @@ export class ChatService {
       );
     });
     this.promoted.delete(sessionId);
+    this.wake?.forget(sessionId);
     // A deleted session is neither a child that can still report nor a parent that can still be
     // told. Dropping the watch here is also what gives its concurrency slot back, so deleting a
     // running spawned session does not leak one for the rest of the run.
@@ -1307,11 +1799,14 @@ export class ChatService {
     // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
     // way out: each abort settles a reply, and settleQueue would otherwise send it.
     this.promoted.clear();
+    this.wake?.dispose();
+    // Before the aborts, so an open card is recorded as closed by the quit rather than by a stop.
+    this.deps.approvals?.dispose();
     for (const controller of this.active.values()) controller.abort();
     this.active.clear();
-    this.deps.approvals?.dispose();
     this.deps.videoJobs?.dispose();
     this.deps.permissions?.dispose?.();
+    this.deps.skills?.dispose();
   }
 
   /**
@@ -1340,6 +1835,9 @@ export class ChatService {
       // send started a reply. A refused queued message is the exception: sendTaken hands it back
       // and the chain stops there.
       if (!(options.released && !result?.ok)) this.flushQueue(sessionId);
+      // An exit that came due while this send was being accepted was skipped as busy; a send
+      // that was then refused starts no turn that would deliver it.
+      this.wakeIfIdle(sessionId);
     }
   }
 
@@ -1349,6 +1847,7 @@ export class ChatService {
     attachments: readonly ChatAttachment[],
     options: SendOptions
   ): Promise<SendMessageResult> {
+    const historyScope = this.deps.history?.scopeKey() ?? null;
     const { released } = options;
     const prompt = text.trim();
     // An attachment is a message on its own: "look at this" with a screenshot needs no prose.
@@ -1405,6 +1904,17 @@ export class ChatService {
       return { ok: false, error: `No skill called /${invocation.name}. Type / to see what is available.` };
     }
 
+    // A skill named mid-message rides as a note telling the model to run it; see inline.ts.
+    // Resolved once, when the user sends: a released queue entry already carries the note, and
+    // the same relay/automatic exclusion as above applies for the same reason, and a spawn seed,
+    // which the model wrote.
+    let turnOptions = options;
+    if (this.deps.skills && !invocation && !released && options.seedHops === undefined) {
+      const inline = await resolveInlineSkills(prompt, this.deps.skills, existing.project?.workingDirectory ?? null);
+      if ('error' in inline) return { ok: false, error: inline.error };
+      if (inline.note) turnOptions = { ...options, notes: [...(options.notes ?? []), inline.note] };
+    }
+
     /**
      * Typing ahead. Decided HERE rather than in the renderer: a reply that finishes between a
      * renderer-side "is it streaming?" check and this call would otherwise queue a message
@@ -1415,7 +1925,10 @@ export class ChatService {
      * against the server's catalog at the moment the turn actually goes out. A queued message
      * refused then comes back to the composer - see flushQueue.
      */
-    if (this.isBusy(sessionId)) {
+    if (this.abandoning.has(sessionId)) {
+      return { ok: false, error: 'This conversation could not start. Wait for startup cleanup to finish.' };
+    }
+    if (this.isBusy(sessionId, options.spawnSeed === true)) {
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
       // A card the model is parked on would hold this message behind the turn forever; the new
       // message is the user moving on, so it closes the question rather than waiting on it.
@@ -1429,7 +1942,7 @@ export class ChatService {
       return {
         ok: true,
         queued: true,
-        message: this.deps.queue.enqueue(sessionId, prompt, attachments, options.notes),
+        message: this.deps.queue.enqueue(sessionId, prompt, attachments, turnOptions.notes),
       };
     }
 
@@ -1437,10 +1950,23 @@ export class ChatService {
     // awaits below (two session_sends in one round each flushing the queue) queues behind this
     // one instead of starting a reply of its own.
     this.accepting.add(sessionId);
+    // Held past startReply for the reason launchSpawned holds its own: no 'done' blink between.
+    const cutsWorktree = awaitsWorktree(existing.project);
+    if (cutsWorktree) this.deps.activity?.preparingStarted(sessionId);
     try {
-      return await this.startAcceptedTurn(sessionId, prompt, attachments, existing, invocation, skillCommand, options);
+      return await this.startAcceptedTurn(
+        sessionId,
+        prompt,
+        attachments,
+        existing,
+        invocation,
+        skillCommand,
+        turnOptions,
+        historyScope
+      );
     } finally {
       this.accepting.delete(sessionId);
+      if (cutsWorktree) this.deps.activity?.preparingEnded(sessionId);
     }
   }
 
@@ -1449,19 +1975,31 @@ export class ChatService {
     sessionId: string,
     prompt: string,
     attachments: readonly ChatAttachment[],
-    existing: ChatSession,
+    claimed: ChatSession,
     invocation: ReturnType<typeof parseSkillInvocation>,
     skillCommand: Awaited<ReturnType<SkillCatalog['get']>>,
-    options: SendOptions
+    options: SendOptions,
+    historyScope: string | null
   ): Promise<SendMessageResult> {
     const { released, seedHops } = options;
     const notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
-    if (!api) return { ok: false, error: 'Sign in to send a message.' };
+    if (!api && !isLocalModel(claimed.model) && !this.deviceLocal())
+      return { ok: false, error: 'Sign in to send a message.' };
+    const settled: SettledModel = this.deviceLocal()
+      ? await this.settleDeviceLocal(claimed, await this.localModelsFor(claimed.model))
+      : { session: claimed };
+    if ('error' in settled) return { ok: false, error: settled.error };
+    const existing = settled.session;
+    // First turns only: they are where a session start spends its time.
+    const timer = existing.messages.length === 0 ? new PhaseTimer() : undefined;
 
-    const { session: reconciled, notice } = await this.reconcileModel(existing);
+    const { session: reconciled, notice: reconcileNotice } = await this.reconcileModel(existing);
+    const notice = reconcileNotice ?? settled.notice;
+    timer?.lap('reconcileModel');
 
     const attached = await this.resolveAttachments(sessionId, attachments);
+    timer?.lap('attachments');
     const refusal = this.refuseUnreadableImages(reconciled.model, attached);
     if (refusal) return { ok: false, error: refusal };
 
@@ -1473,7 +2011,8 @@ export class ChatService {
     // still ahead of the prompt being stored, for the reason createCodeSession resolved before
     // writing the session: a worktree that cannot be made must refuse the turn rather than
     // leave a prompt in the thread with no reply coming.
-    const workspaceFailure = await this.ensureWorkspace(existing, prompt);
+    const workspaceFailure = await this.ensureWorkspace(existing, prompt, timer);
+    timer?.lap('workspace');
     if (workspaceFailure) return { ok: false, error: workspaceFailure.error };
 
     // The skill's body becomes the turn, and `skill` records which one so the thread can show
@@ -1491,12 +2030,14 @@ export class ChatService {
         ...(invocation.args ? { args: invocation.args } : {}),
         ...(skillCommand.untrusted ? { imported: true as const } : {}),
       };
+      timer?.lap('skill');
     }
 
     // Last before the prompt is stored, so the boundary lands above it and the summary covers
     // everything the prompt follows on from. Every refusal above has already had its say: a
     // turn that will not go out must not cost a summary.
     await this.autoCompact(reconciled);
+    timer?.lap('autoCompact');
 
     // A relay carries `role: 'user'` because that is the only role out-of-band text can reach a
     // stateless completions endpoint under - the same compromise the spawned-session report
@@ -1509,7 +2050,7 @@ export class ChatService {
       createdAt: new Date().toISOString(),
       ...(released?.relay ? { system: true, relay: released.relay } : {}),
       ...(released?.automatic
-        ? { system: true, automatic: released.automatic, display: `Auto-fix: ${released.automatic.summary}` }
+        ? { system: true, automatic: released.automatic, display: automaticDisplay(released.automatic) }
         : {}),
       ...(attached.length > 0 ? { attachments: attached } : {}),
       ...(skill ? { skill } : {}),
@@ -1525,6 +2066,7 @@ export class ChatService {
       !existing.titleLocked && !existing.messages.some(message => message.role === 'user' && !message.system);
 
     const session = await this.deps.store.appendMessage(sessionId, userMessage);
+    timer?.lap('append');
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
 
     // Now that the conversation's attachments are settled, anything on disk it does not
@@ -1535,12 +2077,14 @@ export class ChatService {
     // it: runReply emits 'start' the moment it is called.
     if (released || options.announce) this.deps.queue?.sent(sessionId, released?.id ?? userMessage.id, userMessage);
 
-    if (released?.automatic) this.autoFixTurns.add(sessionId);
+    if (released?.automatic?.kind === 'auto-fix') this.autoFixTurns.add(sessionId);
     else this.autoFixTurns.delete(sessionId);
-    // A relay, an auto-fix and a spawn's seed prompt all start a turn nobody typed here.
-    if (!released?.relay && !released?.automatic && seedHops === undefined) this.attendedTurns.add(sessionId);
-    else this.attendedTurns.delete(sessionId);
-    const replyId = this.startReply(session, api, undefined, released?.relay?.hops ?? seedHops ?? 0);
+    // A relay, an automatic turn and a spawn's seed prompt all start a turn nobody typed here.
+    if (!released?.relay && !released?.automatic && seedHops === undefined) {
+      this.attendedTurns.add(sessionId);
+      this.wake?.attended(sessionId);
+    } else this.attendedTurns.delete(sessionId);
+    const replyId = this.startReply(session, api, historyScope, undefined, released?.relay?.hops ?? seedHops ?? 0);
 
     // After the reply is in flight, and never awaited: a first answer that waited on a title
     // request would be a worse product than one with a truncated name. The row changes when
@@ -1551,6 +2095,8 @@ export class ChatService {
     // rephrase a list of files the user recognises as written.
     if (isFirstPrompt && prompt) void this.nameSession(session, api, prompt);
 
+    timer?.lap('startReply');
+    if (timer) this.deps.logger.debug(`CHAT: first turn ${sessionId} timing ${timer.summary()}`);
     return { ok: true, messageId: replyId, ...(notice ? { notice } : {}) };
   }
 
@@ -1571,22 +2117,23 @@ export class ChatService {
    * this can never be the thing that makes a finished conversation spend another turn.
    */
   async continueReply(sessionId: string): Promise<SendMessageResult> {
+    const historyScope = this.deps.history?.scopeKey() ?? null;
     if (this.isBusy(sessionId)) return { ok: false, error: 'This conversation is still replying.' };
 
     const api = this.deps.getApiClient();
-    if (!api) return { ok: false, error: 'Sign in to continue this reply.' };
-
     const session = await this.deps.store.get(sessionId);
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
 
+    if (!api && !isLocalModel(session.model)) return { ok: false, error: 'Sign in to continue this reply.' };
+
     const last = session.messages[session.messages.length - 1];
-    if (!last || last.role !== 'assistant' || !isTurnBudgetStop(last.stopReason)) {
+    if (!last || last.role !== 'assistant' || !isResumableStop(last.stopReason)) {
       return { ok: false, error: 'There is nothing to continue here.' };
     }
 
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
-    const replyId = this.startReply(session, api, {
+    const replyId = this.startReply(session, api, historyScope, {
       id: last.id,
       content: last.content,
       // A message stored before rounds were recorded resumes as one round holding everything it
@@ -1657,8 +2204,14 @@ export class ChatService {
    * message released from the queue, which has no caller to read a result, still reports it.
    */
   private async autoCompact(session: ChatSession): Promise<void> {
-    const window = this.deps.models?.cached()?.find(model => model.id === session.model)?.contextWindow;
-    if (!shouldAutoCompact(session.messages, window)) return;
+    let window = await this.contextWindowOf(session.model);
+    const local = isLocalModel(session.model);
+    const occupied = occupiedTokens(session.messages, true, true);
+    if (local && occupied !== null && shouldAutoCompact(session.messages, window, true)) {
+      // Under Auto a local model grows first, so the conversation sits under the threshold of the larger window.
+      window = (await this.growLocal(session.model, Math.ceil((occupied * 100) / AUTO_COMPACT_PERCENT))) ?? window;
+    }
+    if (!shouldAutoCompact(session.messages, window, local) && !importedHistoryNeedsCompaction(session)) return;
 
     const sessionId = session.id;
     this.compacting.add(sessionId);
@@ -1673,12 +2226,32 @@ export class ChatService {
     }
   }
 
-  private isBusy(sessionId: string): boolean {
+  /** The larger num_ctx Auto gave a local model so `tokens` fit; undefined under Fixed or when it cannot grow. */
+  private async growLocal(model: string, tokens: number): Promise<number | undefined> {
+    try {
+      return await (this.deps.local ?? new OllamaLocal()).growFor(model, tokens);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** For a local model, the num_ctx its requests are sent with (OllamaLocal.contextTokens). */
+  private async contextWindowOf(model: string): Promise<number | undefined> {
+    if (!isLocalModel(model)) return this.deps.models?.cached()?.find(option => option.id === model)?.contextWindow;
+    try {
+      return await (this.deps.local ?? new OllamaLocal()).contextTokens(model);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private isBusy(sessionId: string, spawnSeed = false): boolean {
     return (
       this.active.has(sessionId) ||
       this.accepting.has(sessionId) ||
       this.compacting.has(sessionId) ||
-      this.preparing.has(sessionId)
+      this.preparing.has(sessionId) ||
+      (!spawnSeed && this.launching.has(sessionId))
     );
   }
 
@@ -1695,36 +2268,55 @@ export class ChatService {
   private async compact(session: ChatSession, focus: string, automatic: boolean): Promise<ContextBoundaryResult> {
     const sessionId = session.id;
     const api = this.deps.getApiClient();
-    if (!api) return { ok: false, error: 'Sign in to compact this conversation.' };
+    if (!api && !isLocalModel(session.model)) return { ok: false, error: 'Sign in to compact this conversation.' };
 
     if (!hasClearableHistory(session.messages)) {
       return { ok: false, error: 'There is nothing in this conversation to compact yet.' };
     }
     const history = messagesSinceBoundary(session.messages);
+    const localWindow = isLocalModel(session.model) ? await this.contextWindowOf(session.model) : undefined;
+    let transcript = renderForSummary(
+      history,
+      localWindow === undefined ? undefined : localTranscriptChars(localWindow, COMPACT_MAX_TOKENS)
+    );
 
     const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
     let answer = '';
     try {
-      timer = setTimeout(() => controller.abort(), COMPACT_TIMEOUT_MS);
-      const { endpoint } = await this.resolveServerConfig(api);
-      await streamCompletion(
-        api.getAxiosInstance(),
-        endpoint,
-        {
-          // The session's own model, as asked: a summary of a long coding conversation is the
-          // kind of reading a small model does badly, and this one is the handoff everything
-          // after the boundary depends on.
-          model: session.model,
-          messages: compactRequestMessages(renderForSummary(history), focus),
-          tools: [],
-          maxTokens: COMPACT_MAX_TOKENS,
-        },
-        event => {
-          if (event.type === 'content') answer += event.text ?? '';
-        },
-        controller.signal
+      timer = setTimeout(
+        () => controller.abort(),
+        isLocalModel(session.model) ? LOCAL_COMPACT_TIMEOUT_MS : COMPACT_TIMEOUT_MS
       );
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await this.streamAuxiliary(
+            api,
+            {
+              // The session's own model, as asked: a summary of a long coding conversation is the
+              // kind of reading a small model does badly, and this one is the handoff everything
+              // after the boundary depends on.
+              model: session.model,
+              messages: compactRequestMessages(transcript, focus),
+              tools: [],
+              maxTokens: COMPACT_MAX_TOKENS,
+            },
+            event => {
+              if (event.type === 'content') answer += event.text ?? '';
+            },
+            controller.signal
+          );
+          break;
+        } catch (err) {
+          // One message cannot be trimmed by OllamaLocal, so the transcript shrinks by what Ollama
+          // measured: dense text such as CJK runs far fewer characters to a token than estimated.
+          if (!(err instanceof ContextOverflowError) || attempt === SUMMARY_SHRINK_RETRIES) throw err;
+          transcript = renderForSummary(
+            history,
+            shrunkTranscriptChars(transcript.length, err.tokens, err.limit, COMPACT_MAX_TOKENS)
+          );
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`CHAT: could not compact ${sessionId}: ${message}`);
@@ -1776,7 +2368,8 @@ export class ChatService {
    */
   private startReply(
     session: ChatSession,
-    api: AuthenticatedApiClient,
+    api: AuthenticatedApiClient | null,
+    historyScope: string | null,
     resume?: ResumedReply & { id: string },
     /**
      * How far down an agent-to-agent chain this turn is: 0 for one the user typed, and the
@@ -1792,7 +2385,7 @@ export class ChatService {
     this.deps.activity?.replyStarted(sessionId);
     if (hops !== undefined) this.turnRelay.set(sessionId, { hops, sends: 0 });
 
-    void this.runReply(session, replyId, api, controller, resume)
+    void this.runReply(session, replyId, api, controller, historyScope, resume)
       // runReply already catches, so this only covers a throw from its own bookkeeping. A turn
       // whose end cannot be classified is treated as failed, which HOLDS the queue rather than
       // firing it - the safe direction when the outcome is unknown.
@@ -1809,7 +2402,7 @@ export class ChatService {
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
         // that was mid-turn takes delivery of anything that finished while it was busy.
         // Reporting to the PARENT writes a different session's file, so it needs no ordering here.
-        void this.settleSpawnedTurn(sessionId);
+        void this.settleSpawnedTurn(sessionId, isLocalModel(session.model));
 
         // Awaited, and before the queue: both append to THIS session, and appendMessage is a
         // read-modify-write with no lock of its own - overlapping them would let the later
@@ -1838,6 +2431,8 @@ export class ChatService {
     const available = this.deps.models?.cached();
     if (!available || available.length === 0) return { session };
     if (available.some(model => model.id === session.model)) return { session };
+    // A device-local model is never swapped for a hosted one: that would send the conversation to the server.
+    if (isLocalModel(session.model)) return { session };
 
     const replacement = await this.pickModel(available);
     if (!replacement) return { session };
@@ -1849,6 +2444,51 @@ export class ChatService {
       session: { ...session, model: replacement },
       notice: `${session.model} is not available on this server. Switched this conversation to ${name}.`,
     };
+  }
+
+  /**
+   * Device-local scope only: a conversation whose model is not in the local list (placeholder,
+   * hosted, or since removed) moves to `pickLocalModel`. With no list, a turn on a real local id
+   * proceeds and anything else is refused, so nothing goes anywhere hosted.
+   */
+  private async settleDeviceLocal(session: ChatSession, models: readonly ChatModelOption[]): Promise<SettledModel> {
+    if (models.some(model => model.id === session.model)) return { session };
+    if (models.length === 0)
+      return parseLocalModelId(session.model)
+        ? { session }
+        : { error: 'No local model is available. Start Ollama, or install a model from the Models screen.' };
+    const replacement = pickLocalModel(models, await this.deps.modelMemory?.read());
+    if (!replacement) return { session };
+    const summary = await this.deps.store.setModel(session.id, replacement);
+    const name = models.find(model => model.id === replacement)?.name ?? replacement;
+    const was = parseLocalModelId(session.model)?.model ?? session.model;
+    return {
+      session: { ...session, model: replacement },
+      ...(summary ? { summary } : {}),
+      ...(session.model === NO_LOCAL_MODEL
+        ? {}
+        : { notice: `${was} is not available on this device. Switched this conversation to ${name}.` }),
+    };
+  }
+
+  /**
+   * The last local list when it still has `model`, so a turn costs Ollama no discovery; otherwise one forced
+   * read. A model removed outside the app since that list fails its turn, which forgets the list.
+   */
+  private async localModelsFor(model: string): Promise<ChatModelOption[]> {
+    const last = this.deps.models?.lastLocal?.();
+    if (last?.some(option => option.id === model)) return last;
+    return (await this.deps.models?.listLocal?.(true)) ?? [];
+  }
+
+  /** Saves the model a send would use, so the picker shows it before the user sends. Null when nothing changed. */
+  async settleSessionModel(sessionId: string): Promise<{ session: ChatSessionSummary; notice?: string } | null> {
+    if (!this.deviceLocal()) return null;
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return null;
+    const settled = await this.settleDeviceLocal(session, (await this.deps.models?.listLocal?.()) ?? []);
+    if ('error' in settled || !settled.summary) return null;
+    return { session: settled.summary, ...(settled.notice ? { notice: settled.notice } : {}) };
   }
 
   /**
@@ -1922,12 +2562,15 @@ export class ChatService {
    */
   private async runReply(
     session: ChatSession,
-    replyId: string,
-    api: AuthenticatedApiClient,
+    firstReplyId: string,
+    api: AuthenticatedApiClient | null,
     controller: AbortController,
+    historyScope: string | null,
     resume?: ResumedReply
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
+    // A new id from each mid-turn message on: see takeArrivals and the round loop below.
+    let replyId = firstReplyId;
     const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
     const turnStartedAt = Date.now();
     const deadline = turnStartedAt + limits.wallClockMs;
@@ -1945,28 +2588,33 @@ export class ChatService {
     let content = resume?.content ?? '';
     let stopReason: string | undefined;
     let usage: ChatUsage | undefined = resume?.usage;
-    const toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
+    let toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
     let thinking: unknown[] | undefined;
     let previousRound: string | null = null;
     let stalled = 0;
     let roundsSincePlanUpdate = 0;
     // Only this run's rounds: the resumed ones were parsed and cleaned when they were stored,
     // and putting them back through the artifact parser would mint their ids a second time.
-    const produced: RawRound[] = [];
+    let produced: RawRound[] = [];
 
     try {
       // Read before any await: a folder changed while the config loads must still reach the first refresh.
       let scopeVersion = this.scopeVersion(sessionId);
-      const serverConfig = await this.resolveServerConfig(api);
+      const localTurn = isLocalModel(session.model);
+      if (!api && !localTurn) throw new Error('Sign in to send a message.');
+      const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
       const ask = !session.origin || this.attendedTurns.has(sessionId);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
-      const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
+      const media = api && !localTurn ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
-      const web = webContextFor(api, {
-        searches: this.webSearches.turn(sessionId),
-        log: line => this.deps.logger.warn(line),
-      });
+      const web =
+        api && !localTurn
+          ? webContextFor(api, {
+              searches: this.webSearches.turn(sessionId),
+              log: line => this.deps.logger.warn(line),
+            })
+          : undefined;
       // Started now and awaited where the tool list is built, so it overlaps the reads below.
       // Asked every turn that can generate, from a short cache: a server with no video model gets
       // no generate_video at all rather than one that fails when called.
@@ -1984,7 +2632,10 @@ export class ChatService {
       // Re-read after a round that changed which servers are connected; see mcpToolsChanged.
       let mcpTools = this.deps.mcp?.tools() ?? [];
       let mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
-      const catalog = await this.deps.models?.list();
+      const catalog =
+        localTurn && this.deps.models?.listLocal
+          ? { models: await this.localModelsFor(session.model) }
+          : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const modelOption = catalog?.models.find(option => option.id === session.model);
       const maxTokens = modelOption?.maxOutputTokens;
@@ -1996,9 +2647,20 @@ export class ChatService {
       const effortField = effort ? { reasoningEffort: effort } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.
       const vision = catalog?.models.find(option => option.id === session.model)?.supportsVision !== false;
+      const images: ImageContext | undefined = this.deps.prepareImage
+        ? { vision, prepare: this.deps.prepareImage }
+        : undefined;
+      // A wrapper only: nothing is listed or captured until the model calls the tool.
+      const screenCapturer = this.deps.screen;
+      const screen: ScreenContext | undefined = screenCapturer
+        ? {
+            capturer: screenCapturer,
+            keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
+          }
+        : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
-        granted.length > 0 && offerExplore
+        api && !localTurn && granted.length > 0 && offerExplore
           ? buildExploreContext({
               axios: api.getAxiosInstance(),
               endpoint: serverConfig.endpoint,
@@ -2029,23 +2691,26 @@ export class ChatService {
         : undefined;
       const videoModels = await videoModelsRead;
       const toolsFor = (granted: readonly string[]) =>
-        toolsForRequest({
-          modelId: session.model,
-          roots: granted,
-          media: !!media,
-          video: videoModels,
-          host: !!host,
-          explore: !!explore,
-          browser: !!browser,
-          memory: !!memory,
-          skills: !!skills,
-          web: true,
-          // See ToolDefinition.interactive.
-          ask,
-          suggestions: !session.origin,
-          mcp: mcpTools.map(binding => binding.definition.schema),
-          mcpServers: !!this.deps.mcp,
-        });
+        modelOption?.supportsTools === false || (localTurn && !modelOption)
+          ? []
+          : toolsForRequest({
+              modelId: session.model,
+              roots: granted,
+              media: !!media,
+              video: videoModels,
+              host: !!host,
+              explore: !!explore,
+              browser: !!browser,
+              screen: !!screen,
+              memory: !!memory,
+              skills: !!skills,
+              web: !!web,
+              // See ToolDefinition.interactive.
+              ask,
+              suggestions: !session.origin,
+              mcp: mcpTools.map(binding => binding.definition.schema),
+              mcpServers: !!this.deps.mcp,
+            });
       let tools = toolsFor(roots);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
       // text it had already read is still in front of it: it starts out as tainted as the turn
@@ -2054,6 +2719,9 @@ export class ChatService {
         declined: [],
         granted: [],
         ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
+        // Text brought in from Claude was written outside this app, so a continued import is
+        // treated as having read untrusted content for as long as it lives.
+        ...(session.importOrigin ? { untrusted: IMPORTED_TAINT_SOURCE } : {}),
         // A `/name` import's body IS this reply's prompt, so the reply starts as having read it.
         // Read off the stored message rather than passed in, so a resumed reply re-taints too.
         ...(session.messages.findLast(message => message.role === 'user')?.skill?.imported
@@ -2072,23 +2740,25 @@ export class ChatService {
       );
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
+      const toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
       const systemMessage = () =>
         buildSystemMessage(
-          roots,
-          !!media,
-          !!host,
-          !!explore,
-          this.deps.mcp ? mcpServers : null,
+          toolsSupported ? roots : [],
+          toolsSupported && !!media,
+          toolsSupported && !!host,
+          toolsSupported && !!explore,
+          toolsSupported && this.deps.mcp ? mcpServers : null,
           session.project,
           this.deps.dependencies?.promptLines(session.id) ?? [],
           projectContext,
-          !!browser,
+          toolsSupported && !!browser,
           patchEdits,
-          !!memory,
-          skillsSection,
-          ask,
+          toolsSupported && !!memory,
+          toolsSupported ? skillsSection : '',
+          toolsSupported && ask,
           session.model,
-          true
+          toolsSupported && !!web,
+          toolsSupported && !!screen
         );
       wire.unshift(systemMessage());
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
@@ -2096,6 +2766,75 @@ export class ChatService {
       const carried = this.pendingPlanReminder.get(sessionId);
       this.pendingPlanReminder.delete(sessionId);
       if (carried && !resume) appendToLastUserTurn(wire, carried);
+
+      /**
+       * Store what the reply has produced so far as its own message and announce it finished:
+       * once at the end, and once for every mid-turn message, which has to land in the thread
+       * after the rounds it followed rather than after the whole turn.
+       */
+      const settleSegment = async (): Promise<void> => {
+        // Artifacts are resolved BEFORE the message is stored or announced, so the thread never
+        // shows raw <artifact> markup that is then replaced, and a reloaded conversation reads
+        // back exactly what the live one showed. An aborted reply is included on purpose: a
+        // complete artifact followed by a stop is still a complete artifact.
+        // Parsed per round rather than over the whole reply: an artifact is emitted inside one
+        // round's text and never spans two, and this is what keeps each round's prose and its own
+        // cards together once the markup is out.
+        const parsed = produced.map(round => ({ round, ...extractArtifacts(round.text) }));
+        const newArtifacts = parsed.flatMap(entry => entry.artifacts);
+        const published =
+          !localTurn && newArtifacts.length > 0 && this.deps.artifacts
+            ? await this.deps.artifacts.publish(newArtifacts, sessionId)
+            : newArtifacts;
+        // A resumed run only ever sees markup the rounds AFTER the interruption emitted - the
+        // seeded rounds were stripped before they were stored - so the earlier artifacts are
+        // carried across rather than parsed again, and none of them is published twice.
+        const artifacts = [...(resume?.artifacts ?? []), ...published];
+
+        const rounds = [
+          ...(resume?.rounds ?? []),
+          ...parsed
+            // Trimmed so the join below lands exactly one blank line between rounds, and so a
+            // round does not draw a gap under itself where the model happened to end on newlines.
+            .map(entry => ({
+              text: entry.content.trim(),
+              toolCallIds: entry.round.toolCallIds,
+              timing: entry.round.timing,
+              ...(entry.round.usage ? { usage: entry.round.usage } : {}),
+              ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
+            }))
+            // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
+            .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage),
+        ];
+        // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
+        const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
+        const finalContent = joinRounds(rounds.map(round => round.text));
+
+        const message: ChatMessage = {
+          id: replyId,
+          role: 'assistant',
+          content: finalContent,
+          createdAt: new Date().toISOString(),
+          stopReason,
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
+          ...(keepRounds ? { rounds } : {}),
+          ...(thinking ? { thinking } : {}),
+          ...(artifacts.length > 0 ? { artifacts } : {}),
+          ...(usage ? { usage } : {}),
+        };
+        await this.settleReply(sessionId, !!resume, historyScope, message);
+        this.emit({
+          type: 'done',
+          sessionId,
+          messageId: replyId,
+          content: finalContent,
+          stopReason,
+          usage,
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
+          ...(keepRounds ? { rounds } : {}),
+          ...(artifacts.length > 0 ? { artifacts } : {}),
+        });
+      };
 
       // Wire positions of the screenshot messages this turn added, oldest first; see pruneScreenshots.
       const screenshotTurns: number[] = [];
@@ -2130,48 +2869,67 @@ export class ChatService {
           this.emit({ type: 'phase', sessionId, messageId: replyId, phase })
         );
         setPhase(WAITING);
-        const failure = await streamRound(
-          api.getAxiosInstance(),
-          serverConfig.endpoint,
-          {
-            model: session.model,
-            messages: cacheable ? withCacheBreakpoints(wire) : wire,
-            tools,
-            thinking: askForThinking,
-            // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
-            sessionId,
-            ...effortField,
-            ...(maxTokens ? { maxTokens } : {}),
-          },
-          event => {
-            if (event.type === 'meta') probe?.frame('meta');
-            // `error` never reaches here (the transport throws on it); `meta` carries no reply.
-            if (event.type === 'error' || event.type === 'meta') return;
-            if (event.text || event.type === 'tool_use') timer.firstToken();
-            if (event.text) {
-              const split = splitThinking.push(event.text);
-              // An empty split is either a bare thinking marker or text the filter is holding
-              // back as a possible partial marker; only the first is a thinking frame.
-              const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
-              probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
-              if (split.text) setPhase(RESPONDING);
-              else if (split.reasoning || marker) setPhase(THINKING);
-              append(split);
-            }
-            if (event.toolStarted) {
-              probe?.frame('toolStart');
-              setPhase({ kind: 'writing-tool', name: event.toolStarted.name });
-            }
-            if (event.type === 'tool_use') {
-              probe?.frame('toolUse');
-              if (event.tools) requested.push(...event.tools);
-              if (event.thinking) turnThinking = event.thinking;
-            }
-            if (event.stopReason) stopReason = event.stopReason;
-            turnUsage = foldUsage(turnUsage, event);
-          },
-          controller.signal
-        );
+        const onCompletionEvent = (event: CompletionStreamEvent): void => {
+          // `error` never reaches here (the transport throws on it); `meta` carries no reply.
+          if (event.type === 'meta') probe?.frame('meta');
+          if (event.type === 'error' || event.type === 'meta') return;
+          if (event.text || event.type === 'tool_use') timer.firstToken();
+          if (event.text) {
+            const split = splitThinking.push(event.text);
+            // An empty split is either a bare thinking marker or text the filter is holding
+            // back as a possible partial marker; only the first is a thinking frame.
+            const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
+            probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
+            if (split.text) setPhase(RESPONDING);
+            else if (split.reasoning || marker) setPhase(THINKING);
+            append(split);
+          }
+          if (event.toolStarted) {
+            probe?.frame('toolStart');
+            setPhase({ kind: 'writing-tool', name: event.toolStarted.name });
+          }
+          if (event.type === 'tool_use') {
+            probe?.frame('toolUse');
+            if (event.tools) requested.push(...event.tools);
+            if (event.thinking) turnThinking = event.thinking;
+          }
+          if (event.stopReason) stopReason = event.stopReason;
+          turnUsage = foldUsage(turnUsage, event);
+        };
+        const failure = isLocalModel(session.model)
+          ? await streamLocalRound(
+              this.deps.local ?? new OllamaLocal(),
+              {
+                model: session.model,
+                messages: wire,
+                tools,
+                thinking: askForThinking,
+                // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
+                sessionId,
+                ...effortField,
+                ...(maxTokens ? { maxTokens } : {}),
+              },
+              onCompletionEvent,
+              controller.signal,
+              dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
+              message => this.emit({ type: 'context-notice', sessionId, message })
+            )
+          : await streamRound(
+              api!.getAxiosInstance(),
+              serverConfig.endpoint,
+              {
+                model: session.model,
+                messages: cacheable ? withCacheBreakpoints(wire) : wire,
+                tools,
+                thinking: askForThinking,
+                // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
+                sessionId,
+                ...effortField,
+                ...(maxTokens ? { maxTokens } : {}),
+              },
+              onCompletionEvent,
+              controller.signal
+            );
         append(splitThinking.flush());
         const timing = timer.end();
         if (probe) this.logRoundPhases(sessionId, session.model, roundIndex, probe.end());
@@ -2205,6 +2963,7 @@ export class ChatService {
         // - deliberately not one of them, because Continue would re-send the same oversized
         // conversation and fail identically.
         if (failure) {
+          if (failure instanceof LocalModelRemovedError) this.deps.models?.forgetLocal?.();
           if (!isContextOverflow(failure)) throw failure;
           this.deps.logger.warn(`CHAT: turn stopped, context exhausted: ${failure.message}`);
           stopReason = 'context_limit';
@@ -2272,6 +3031,8 @@ export class ChatService {
                 host,
                 explore,
                 browser,
+                screen,
+                images,
                 memory,
                 skills,
                 web,
@@ -2344,19 +3105,31 @@ export class ChatService {
           lastResult.content = [lastResult.content, '', 'The user changed the shared folders:', ...rootNote].join('\n');
         }
         wire.push({ role: 'user', content: results });
-        const shots = settled.flatMap(call => this.takeImages(call.id));
-        if (shots.length > 0 && vision) {
+        const { kept, dropped } = withinImageBudget(
+          settled.flatMap(call => this.takeImages(call.id).map(image => ({ call, image })))
+        );
+        if (kept.length > 0 && vision) {
+          const calls = new Set(kept.map(entry => entry.call.id)).size;
+          const from = [...new Set(kept.map(entry => entry.call.name))].join(', ');
+          const left =
+            dropped > 0
+              ? ` ${dropped} more were left out to keep the request under the provider's size limit; read or capture them in smaller batches.`
+              : '';
           // Its own user turn, not blocks beside the tool results: the OpenAI conversion keeps only
           // the tool_result blocks of such a turn and would drop the image silently.
           wire.push({
             role: 'user',
             content: [
-              { type: 'text', text: 'Screenshot from the browser_screenshot call above.' },
-              ...shots.map(shot => ({
+              {
+                type: 'text',
+                text: `${kept.length === 1 ? 'Image' : 'Images'} from the ${from} call${calls === 1 ? '' : 's'} above.${left}`,
+              },
+              ...kept.map(({ image }) => ({
                 type: 'image',
-                source: { type: 'base64', media_type: shot.mediaType, data: shot.data },
+                source: { type: 'base64', media_type: image.mediaType, data: image.data },
               })),
             ],
+            continuesTurn: true,
           });
           screenshotTurns.push(wire.length - 1);
           pruneScreenshots(wire, screenshotTurns);
@@ -2368,7 +3141,41 @@ export class ChatService {
           stopReason = 'turn_time_limit';
           break;
         }
-        if (roundIndex === limits.rounds - 1) stopReason = 'tool_turn_limit';
+        if (roundIndex === limits.rounds - 1) {
+          stopReason = 'tool_turn_limit';
+          break;
+        }
+
+        // Only where another request is certain to follow, so nothing taken here waits on a turn
+        // that is about to end; a turn that stops instead sends the queue as a turn of its own.
+        const arrivals = controller.signal.aborted ? [] : await this.takeArrivals(sessionId, session.model);
+        if (arrivals.length > 0) {
+          await settleSegment();
+          for (const arrival of arrivals) {
+            const updated = await this.deps.store.appendMessage(sessionId, arrival.message);
+            if (updated) session = updated;
+            if (arrival.queuedId) this.deps.queue?.sent(sessionId, arrival.queuedId, arrival.message);
+            else this.emit({ type: 'message', sessionId, message: arrival.message });
+          }
+          // The rest of the turn is a new reply under the new messages. The resumed message, if
+          // any, was just written back whole, so nothing more carries over from it.
+          resume = undefined;
+          replyId = randomUUID();
+          content = '';
+          toolCalls = [];
+          produced = [];
+          usage = undefined;
+          thinking = undefined;
+          stopReason = undefined;
+          // New input is new information: repeating the last round may be the right answer to it.
+          stalled = 0;
+          previousRound = null;
+          this.emit({ type: 'start', sessionId, messageId: replyId });
+          for (const arrival of arrivals) {
+            const turn = await this.arrivalWire(session, arrival.message);
+            if (turn) wire.push(turn);
+          }
+        }
       }
 
       if (controller.signal.aborted) stopReason = 'aborted';
@@ -2387,65 +3194,7 @@ export class ChatService {
         if (unfinished) this.pendingPlanReminder.set(sessionId, unfinished);
       }
 
-      // Artifacts are resolved BEFORE the message is stored or announced, so the thread never
-      // shows raw <artifact> markup that is then replaced, and a reloaded conversation reads
-      // back exactly what the live one showed. An aborted reply is included on purpose: a
-      // complete artifact followed by a stop is still a complete artifact.
-      // Parsed per round rather than over the whole reply: an artifact is emitted inside one
-      // round's text and never spans two, and this is what keeps each round's prose and its own
-      // cards together once the markup is out.
-      const parsed = produced.map(round => ({ round, ...extractArtifacts(round.text) }));
-      const newArtifacts = parsed.flatMap(entry => entry.artifacts);
-      const published =
-        newArtifacts.length > 0 && this.deps.artifacts
-          ? await this.deps.artifacts.publish(newArtifacts, sessionId)
-          : newArtifacts;
-      // A resumed run only ever sees markup the rounds AFTER the interruption emitted - the
-      // seeded rounds were stripped before they were stored - so the earlier artifacts are
-      // carried across rather than parsed again, and none of them is published twice.
-      const artifacts = [...(resume?.artifacts ?? []), ...published];
-
-      const rounds = [
-        ...(resume?.rounds ?? []),
-        ...parsed
-          // Trimmed so the join below lands exactly one blank line between rounds, and so a
-          // round does not draw a gap under itself where the model happened to end on newlines.
-          .map(entry => ({
-            text: entry.content.trim(),
-            toolCallIds: entry.round.toolCallIds,
-            timing: entry.round.timing,
-            ...(entry.round.usage ? { usage: entry.round.usage } : {}),
-            ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
-          }))
-          .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning),
-      ];
-      // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
-      const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
-      const finalContent = joinRounds(rounds.map(round => round.text));
-
-      await this.settleReply(sessionId, !!resume, {
-        id: replyId,
-        role: 'assistant',
-        content: finalContent,
-        createdAt: new Date().toISOString(),
-        stopReason,
-        ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        ...(keepRounds ? { rounds } : {}),
-        ...(thinking ? { thinking } : {}),
-        ...(artifacts.length > 0 ? { artifacts } : {}),
-        ...(usage ? { usage } : {}),
-      });
-      this.emit({
-        type: 'done',
-        sessionId,
-        messageId: replyId,
-        content: finalContent,
-        stopReason,
-        usage,
-        ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        ...(keepRounds ? { rounds } : {}),
-        ...(artifacts.length > 0 ? { artifacts } : {}),
-      });
+      await settleSegment();
       // A truncated reply ('max_tokens'), a budget stop and a context stop all count as
       // completed: the model said something and the user can read it. Only the user's own stop
       // is 'aborted'.
@@ -2457,22 +3206,31 @@ export class ChatService {
       // message the user has already typed behind a button they may never press.
       return controller.signal.aborted ? 'aborted' : 'completed';
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.deps.logger.warn(`CHAT: reply failed: ${message}`);
+      // The client already refreshed and retried; what is left is a session only signing in
+      // again can fix, and AuthService is showing the one notice that says so.
+      const expired = err instanceof SessionRevokedError || err instanceof NotAuthenticatedError;
+      const message = expired ? SESSION_PAUSED_MESSAGE : err instanceof Error ? err.message : String(err);
+      this.deps.logger.warn(expired ? 'CHAT: reply paused: the session expired' : `CHAT: reply failed: ${message}`);
+      const stop = expired
+        ? { stopReason: SESSION_EXPIRED_STOP }
+        : err instanceof ServerCredentialsError
+          ? { stopReason: SERVER_CREDENTIALS_STOP }
+          : {};
 
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
-      await this.settleReply(sessionId, !!resume, {
+      await this.settleReply(sessionId, !!resume, historyScope, {
         id: replyId,
         role: 'assistant',
         content,
         createdAt: new Date().toISOString(),
         error: message,
+        ...stop,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
       });
-      this.emit({ type: 'error', sessionId, messageId: replyId, message });
-      return 'failed';
+      this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
+      return expired ? 'expired' : 'failed';
     }
   }
 
@@ -2523,18 +3281,24 @@ export class ChatService {
    * short" chip stranded between them would describe the loop's bookkeeping rather than what
    * the model did.
    */
-  private async settleReply(sessionId: string, resumed: boolean, message: ChatMessage): Promise<void> {
+  private async settleReply(
+    sessionId: string,
+    resumed: boolean,
+    historyScope: string | null,
+    message: ChatMessage
+  ): Promise<void> {
     // Dropped before the write, never after: a read that saw both the stored reply and the live
     // one would fold the stream onto the finished text twice. A read in the gap sees neither,
     // and the 'done' that follows hands the reply over whole.
     this.live.delete(sessionId);
     if (!resumed) {
-      await this.deps.store.appendMessage(sessionId, message);
+      const updated = await this.deps.store.appendMessage(sessionId, message);
+      if (updated) this.captureSessionHistory(updated, historyScope);
       return;
     }
     // stopReason and error are set explicitly, undefined included: a resumed run that finishes
     // must clear the budget stop the previous one left behind, and `Partial` would keep it.
-    await this.deps.store.updateMessage(sessionId, message.id, {
+    const updated = await this.deps.store.updateMessage(sessionId, message.id, {
       content: message.content,
       stopReason: message.stopReason,
       error: message.error,
@@ -2544,6 +3308,15 @@ export class ChatService {
       artifacts: message.artifacts,
       usage: message.usage,
     });
+    if (updated) this.captureSessionHistory(updated, historyScope);
+  }
+
+  private captureSessionHistory(session: ChatSession, historyScope: string | null): void {
+    try {
+      this.deps.history?.captureSession(session, historyScope);
+    } catch (error) {
+      this.deps.logger.warn(`CHAT: could not index conversation history: ${String(error)}`);
+    }
   }
 
   /**
@@ -2571,10 +3344,108 @@ export class ChatService {
     }
     if (outcome === 'completed') {
       this.flushQueue(sessionId);
+      // Behind anything the user queued: their turn is started first and takes the notice itself.
+      this.wakeIfIdle(sessionId);
       return;
     }
-    const stranded = this.deps.queue?.releaseAll(sessionId, outcome === 'aborted' ? 'stopped' : 'failed') ?? [];
+    // A stopped or failed turn is not followed by an automatic one. Exits after this still wake.
+    this.wake?.discard(sessionId);
+    const reason = outcome === 'aborted' ? 'stopped' : outcome === 'expired' ? 'session-expired' : 'failed';
+    const stranded = this.deps.queue?.releaseAll(sessionId, reason) ?? [];
     void this.strandRelay(sessionId, stranded).catch(() => undefined);
+  }
+
+  /**
+   * What reached a running turn since its last request, taken for the next one: whatever the
+   * user typed ahead, and any background-exit notice. Two map lookups and nothing else when
+   * neither is waiting, which is every round of almost every turn.
+   *
+   * Only the user's own typed entries ride along. A relay stays a turn of its own: it is
+   * another agent's words, framed and hop-counted per turn, and folding it into this one would
+   * spend this turn's relay budget and blur whose turn it is. An auto-fix entry stays one too,
+   * because it switches on its own tool guard. A `/skill` invocation waits as well: its body is a
+   * new set of instructions, expanded when its turn starts. So does a message whose image the
+   * model cannot read, so it is refused and handed back exactly as before.
+   *
+   * The notice goes before the user's message, so their words are the last thing the model reads.
+   */
+  private async takeArrivals(sessionId: string, model: string): Promise<MidTurnArrival[]> {
+    const queue = this.deps.queue;
+    const queued = queue?.list(sessionId) ?? [];
+    // "Send now" already has it in hand and is about to interrupt this turn.
+    if (this.promoted.has(sessionId)) return [];
+    const typed = queued.filter(
+      entry =>
+        !entry.relay &&
+        !entry.automatic &&
+        !(this.deps.skills && parseSkillInvocation(entry.text.trim())) &&
+        !this.refuseUnreadableImages(model, entry.attachments ?? [])
+    );
+    if (typed.length === 0 && !this.wake?.has(sessionId)) return [];
+
+    // Taken before any await, so a cancel or a "send now" racing this finds nothing to act on.
+    const taken = queue ? typed.flatMap(entry => queue.take(sessionId, entry.id) ?? []) : [];
+    const notice = this.wake?.take(sessionId) ?? null;
+    const arrivals: MidTurnArrival[] = [];
+    const createdAt = new Date().toISOString();
+
+    if (notice) {
+      const automatic: ChatAutomaticOrigin = {
+        kind: 'background-exit',
+        processIds: notice.processIds,
+        summary: notice.summary,
+      };
+      arrivals.push({
+        message: {
+          id: randomUUID(),
+          role: 'user',
+          content: notice.text,
+          createdAt,
+          system: true,
+          automatic,
+          display: automaticDisplay(automatic),
+        },
+      });
+    }
+
+    if (taken.length > 0) {
+      const attachments = await this.resolveAttachments(
+        sessionId,
+        taken.flatMap(entry => entry.attachments ?? [])
+      );
+      const notes = [...taken.flatMap(entry => entry.notes ?? []), MID_TURN_NOTE];
+      arrivals.push({
+        queuedId: taken[0].id,
+        message: {
+          id: randomUUID(),
+          role: 'user',
+          content: taken
+            .map(entry => entry.text.trim())
+            .filter(Boolean)
+            .join('\n'),
+          createdAt,
+          ...(attachments.length > 0 ? { attachments } : {}),
+          notes,
+        },
+      });
+      this.wake?.attended(sessionId);
+    }
+    return arrivals;
+  }
+
+  /**
+   * One arrival as the next request carries it: built by the same code a replay uses, so this
+   * turn's wire and the next turn's rebuild agree. Text goes as a one-block array rather than a
+   * string, because the server's Anthropic path folds a string into an earlier user turn that
+   * already holds text (this round's screenshot turn) and drops it there.
+   */
+  private async arrivalWire(session: ChatSession, message: ChatMessage): Promise<CompletionMessage | null> {
+    const [turn] = await toCompletionMessages(
+      { ...session, messages: [message] },
+      (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
+    );
+    if (!turn) return null;
+    return typeof turn.content === 'string' ? { ...turn, content: [{ type: 'text', text: turn.content }] } : turn;
   }
 
   /**
@@ -2653,6 +3524,8 @@ export class ChatService {
       host: HostContext | undefined;
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
+      screen: ScreenContext | undefined;
+      images: ImageContext | undefined;
       memory: MemoryStore | undefined;
       skills: SkillContext | undefined;
       web: WebContext | undefined;
@@ -2671,7 +3544,21 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host, explore, browser, memory, skills, web, patchEdits, ask } = scope;
+    const {
+      roots,
+      workingDirectory,
+      media,
+      host,
+      explore,
+      browser,
+      screen,
+      images,
+      memory,
+      skills,
+      web,
+      patchEdits,
+      ask,
+    } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -2801,6 +3688,8 @@ export class ChatService {
           ...(host ? { host } : {}),
           ...(explore ? { explore } : {}),
           ...(browser ? { browser } : {}),
+          ...(screen ? { screen } : {}),
+          ...(images ? { images } : {}),
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
           ...(web ? { web } : {}),
@@ -2822,10 +3711,18 @@ export class ChatService {
           scope.directories,
           scope.permissions
         );
+        // Logged from the input the call settled with: an MCP config call's is masked by then.
+        if (gated.approval) {
+          // The mode the gate decided under, or - on a path no mode can answer - the one in force now.
+          const mode = gated.mode ?? (await this.currentApprovalMode(sessionId));
+          this.logApproval(sessionId, call.name, gated.settled?.input ?? gated.input, gated.approval, mode);
+        }
         if (gated.settled) return gated.settled;
         // The user's choice becomes part of the call, so every later reader of this row - the
         // transcript, the stored session, the model on its next turn - sees what actually ran.
         call.input = gated.input;
+        // Carried by every row built from `call` from here on, the settled one included.
+        if (gated.approval) call.approval = gated.approval;
 
         startedAt = Date.now();
         this.emit({ type: 'tool-start', sessionId, messageId, call });
@@ -2890,6 +3787,8 @@ export class ChatService {
   private buildHostContext(session: ChatSession): HostContext | undefined {
     const project = session.project;
     if (!project) return undefined;
+    const visibleTitle = (target: Pick<ChatSession, 'title' | 'model'>): string =>
+      !isLocalModel(session.model) && isLocalModel(target.model) ? 'Local conversation' : target.title;
 
     const addressable = async (sessionId: string): Promise<ChatSession | null> => {
       if (!isValidSessionId(sessionId)) return null;
@@ -2903,25 +3802,34 @@ export class ChatService {
     return {
       spawn: (prompt, title, placement) => this.spawnSession(session, prompt, title, placement),
 
-      spawnBase: () => spawnBaseFor(project),
+      // Asked for only to draw a spawn card, so the fetch a start would wait on begins here, while
+      // the user reads it.
+      spawnBase: async () => {
+        const base = await spawnBaseFor(project);
+        prefetchBase(project.directory, base);
+        return base;
+      },
 
       listSessions: async ({ includeArchived }) => {
         const all = await this.deps.store.list();
         return all
           .filter(entry => entry.project?.directory === project.directory)
           .filter(entry => includeArchived || !entry.archived)
-          .map(entry => this.toHostView(entry));
+          .map(entry => ({ ...this.toHostView(entry), title: visibleTitle(entry) }));
       },
 
       readSession: async sessionId => {
         const target = await addressable(sessionId);
+        if (target && isLocalModel(target.model) && !isLocalModel(session.model)) {
+          throw new Error('A hosted model cannot read a device-local conversation. Open it directly to read it.');
+        }
         return target ? renderTranscript(target) : null;
       },
 
       setArchived: async (sessionId, archived) => {
         if (!(await addressable(sessionId))) return null;
         const updated = await this.setSessionArchived(sessionId, archived);
-        return updated ? this.toHostView(updated) : null;
+        return updated ? { ...this.toHostView(updated), title: visibleTitle(updated) } : null;
       },
 
       deleteSession: async sessionId => {
@@ -2930,7 +3838,10 @@ export class ChatService {
         return true;
       },
 
-      describeSession: async sessionId => (await addressable(sessionId))?.title ?? null,
+      describeSession: async sessionId => {
+        const target = await addressable(sessionId);
+        return target ? visibleTitle(target) : null;
+      },
 
       sendTo: async (targetId, message) => this.relayMessage(session, await addressable(targetId), targetId, message),
 
@@ -2979,6 +3890,7 @@ export class ChatService {
           spawnBaseFor(project),
           isGitRepository(project.workingDirectory),
         ]);
+        if (repository) prefetchBase(project.directory, base);
         const suggestion: ChatSpawnSuggestion = {
           // Short because the model has to type it back to revise the card.
           id: randomUUID().slice(0, 8),
@@ -3034,6 +3946,10 @@ export class ChatService {
     const key = `${sessionId}:${suggestionId}`;
     if (this.startingSuggestions.has(key)) return { ok: false, error: 'It is already starting.' };
     this.startingSuggestions.add(key);
+    // A start that fails in the background waits for the card to be marked started below, so
+    // reopening it cannot be overwritten by the very write it is undoing.
+    let marked: () => void = () => undefined;
+    const markedStarted = new Promise<void>(resolve => (marked = resolve));
     try {
       const parent = await this.deps.store.get(sessionId);
       if (!parent) return { ok: false, error: 'That conversation no longer exists.' };
@@ -3051,7 +3967,10 @@ export class ChatService {
         request.placement === 'worktree' ? { kind: 'worktree', branch, base: suggestion.base } : { kind: 'local' };
 
       const named = suggestion.derivedTitle && title === suggestion.title ? undefined : title;
-      const outcome = await this.spawnSession(parent, prompt, named, placement);
+      const outcome = await this.spawnSession(parent, prompt, named, placement, async () => {
+        await markedStarted;
+        await this.reopenSuggestion(sessionId, suggestionId);
+      });
       if (!outcome.ok) return { ok: false, error: outcome.message };
 
       let started: ChatSpawnSuggestion | null = null;
@@ -3079,8 +3998,21 @@ export class ChatService {
       // The child runs either way; only the card is gone with a parent deleted mid-start.
       return started ? { ok: true, suggestion: started } : { ok: false, error: 'That conversation no longer exists.' };
     } finally {
+      marked();
       this.startingSuggestions.delete(key);
     }
+  }
+
+  /** Put a card whose session could not start back as it was, as the user edited it, to try again. */
+  private async reopenSuggestion(sessionId: string, suggestionId: string): Promise<void> {
+    const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
+      current.map(entry => {
+        if (entry.id !== suggestionId || entry.status !== 'started') return entry;
+        const { started: _started, unreported: _unreported, ...rest } = entry;
+        return { ...rest, status: 'pending' };
+      })
+    );
+    if (stored) this.emitSuggestions(sessionId, stored);
   }
 
   /** Reserve the suggestion before sending; its reminder travels with the task, even when queued. */
@@ -3195,11 +4127,28 @@ export class ChatService {
     if (!target) {
       return { ok: false, reason: 'no-target', message: 'No conversation with that id in this project.' };
     }
+    if (isLocalModel(from.model) && !isLocalModel(target.model)) {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        message:
+          'A device-local conversation cannot send messages to a hosted model. Choose a local conversation instead.',
+      };
+    }
+    const title = !isLocalModel(from.model) && isLocalModel(target.model) ? 'Local conversation' : target.title;
     if (target.archived === true) {
       return {
         ok: false,
         reason: 'archived',
-        message: `"${target.title}" is archived. Ask the user to restore it before sending to it.`,
+        message: `"${title}" is archived. Ask the user to restore it before sending to it.`,
+      };
+    }
+
+    if (this.abandoning.has(targetId)) {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        message: 'That conversation could not start and is being cleaned up.',
       };
     }
 
@@ -3249,7 +4198,7 @@ export class ChatService {
     this.flushQueue(targetId);
 
     this.deps.logger.debug(`CHAT: relayed a message from ${from.id} to ${targetId} at hop ${budget.hops + 1}`);
-    return { ok: true, sessionId: targetId, title: target.title, queued };
+    return { ok: true, sessionId: targetId, title, queued };
   }
 
   /**
@@ -3302,19 +4251,41 @@ export class ChatService {
    *
    * The child is created with the parent's model and the parent's project, and `placement` says
    * where its tools run: in the parent's own working directory, or in a worktree made for it on a
-   * branch of its own. Nothing here ever moves the PARENT's checkout. A failure after the
-   * reservation releases it; a success hands it to `spawnWatch`, which releases it when the
-   * seeded run ends.
+   * branch of its own. Nothing here ever moves the PARENT's checkout.
+   *
+   * Resolves as soon as the session exists. Its worktree and seed turn follow in the background
+   * (launchSpawned): cutting a worktree means a fetch and a checkout, seconds the row used to
+   * wait on. A failure removes an untouched session and calls `onFailed`; accepted queued input
+   * instead keeps its session for retry. The slot passes to `spawnWatch` before this returns,
+   * which releases it when the seeded run ends.
    */
   private async spawnSession(
     parent: ChatSession,
     prompt: string,
     title: string | undefined,
-    placement: SpawnPlacement
+    placement: SpawnPlacement,
+    onFailed?: (message: string) => Promise<void>
+  ): Promise<SpawnOutcome> {
+    return this.withWorkspaceBindings(() =>
+      this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, onFailed)
+    );
+  }
+
+  private async spawnSessionWithWorkspaceLease(
+    parent: ChatSession,
+    prompt: string,
+    title: string | undefined,
+    placement: SpawnPlacement,
+    onFailed?: (message: string) => Promise<void>
   ): Promise<SpawnOutcome> {
     const project = parent.project;
     if (!project) {
       return { ok: false, reason: 'no-project', message: 'Only a Code session, which has a project, can start one.' };
+    }
+
+    const unusable = await this.workspaceBindingReason(project.workingDirectory);
+    if (unusable || !(await this.deps.store.get(parent.id))) {
+      return { ok: false, reason: 'no-project', message: unusable ?? 'The parent conversation no longer exists.' };
     }
 
     const seed = prompt.trim();
@@ -3343,33 +4314,40 @@ export class ChatService {
       };
     }
     this.spawnReservations++;
+    const timer = new PhaseTimer();
 
     try {
-      // Resolved BEFORE the session is written, for the reason createCodeSession gives: a
-      // worktree that cannot be made must leave nothing behind, rather than a session whose
-      // tools then quietly run in the parent's checkout after the user asked for isolation.
-      let workspace: { branch: string; base: string; workingDirectory: string } | null = null;
+      // Checked before the session is written, so a name the user or the model can fix is
+      // refused while they can still answer with another, rather than after a row appeared.
+      let worktree: { branch: string; base: string } | null = null;
       if (placement.kind === 'worktree') {
-        const prepared = await this.prepareSpawnWorkspace(project, placement.branch, placement.base);
-        if (!prepared.ok) return prepared;
-        workspace = prepared;
+        const checked = await this.checkSpawnBranch(project, placement.branch);
+        if (!checked.ok) return checked;
+        worktree = { branch: checked.branch, base: placement.base };
       }
+      timer.lap('branchCheck');
 
+      const named = title?.trim();
       const child = await this.deps.store.create(parent.model, {
+        ...(named ? { title: named } : {}),
         // Copied field by field rather than spread, so a field added to ChatProject later has
         // to be considered here: this object IS the child access to the filesystem.
         project: {
           directory: project.directory,
           name: project.name,
-          branch: workspace?.branch ?? project.branch,
+          // With a worktree to cut this is its BASE, as a toggle session records one, and
+          // `workspaceBranch` is the branch the card showed: ensureWorkspace cuts that from this.
+          branch: worktree?.base ?? project.branch,
           // Local placement carries the parent's flag across unchanged: a child sharing a parent
           // that is itself in a worktree IS in a worktree, and the chip must not say otherwise.
-          workspace: workspace !== null || project.workspace,
+          workspace: worktree !== null || project.workspace,
           // Its own worktree branch, or the parent's when it shares the parent's checkout.
           // Without it a re-resolution would cut a second branch rather than find this one.
-          ...(workspace ? { workspaceBranch: workspace.branch } : {}),
-          ...(!workspace && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
-          workingDirectory: workspace?.workingDirectory ?? project.workingDirectory,
+          ...(worktree ? { workspaceBranch: worktree.branch } : {}),
+          ...(!worktree && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
+          // The repository folder until the worktree exists, which is what awaitsWorktree reads
+          // as pending - and a pending session starts no turn, so nothing runs here meanwhile.
+          workingDirectory: worktree ? project.directory : project.workingDirectory,
           contextDirectories: [...project.contextDirectories],
         },
         // Copied with the context directories, for the same reason: a child is the parent's work
@@ -3384,39 +4362,157 @@ export class ChatService {
         // deliberately no argument on session_spawn through which a mode could be named.
         approvalMode: parent.approvalMode === 'full' ? 'auto' : parent.approvalMode,
       });
+      timer.lap('create');
 
-      const named = title?.trim() ? await this.deps.store.rename(child.id, title.trim()) : null;
-
-      // A fresh worktree has no node_modules, and on this monorepo restoring them takes minutes.
-      // Started before the seed so the child's very first turn already carries the "dependencies
-      // are installing" line rather than discovering a broken command and guessing at why.
-      if (workspace) this.startDependencyInstall(child.id, workspace.workingDirectory, 'created');
-
-      // Registered before the seed is sent: `send` resolves once the turn is accepted, and the
-      // reply can finish - and look for its watch entry - before the await below returns.
+      // Registered before anything is sent: `send` resolves once the turn is accepted, and the
+      // reply can finish - and look for its watch entry - before launchSpawned sees it return.
       this.spawnWatch.set(child.id, { parentSessionId: parent.id });
-
-      const sent = await this.send(
-        child.id,
-        workspace ? `${worktreePreamble(project.directory, workspace)}\n\n${seed}` : seed,
-        [],
-        { seedHops: this.turnRelay.get(parent.id)?.hops ?? 0 }
-      );
-      if (!sent.ok) {
-        this.spawnWatch.delete(child.id);
-        await this.deleteSession(child.id);
-        return { ok: false, reason: 'no-project', message: `The new session could not start: ${sent.error}` };
-      }
-
-      this.deps.logger.debug(`CHAT: spawned ${child.id} from ${parent.id} at depth ${depth}`);
-      return { ok: true, session: named ?? child };
+      const seedHops = this.turnRelay.get(parent.id)?.hops ?? 0;
+      void this.launchSpawned(parent.id, project.directory, child, seed, worktree, { seedHops, timer, onFailed });
+      return { ok: true, session: child };
     } finally {
       this.spawnReservations--;
     }
   }
 
   /**
-   * A worktree of the parent's repository for a spawned session to run in, or why there is none.
+   * The half of a spawn that happens after its row is drawn: cut the worktree, then send the seed.
+   *
+   * The session is marked preparing BEFORE the first await, so it reads as busy - and its row as
+   * working - the moment spawnSession returns; anything sent to it meanwhile queues behind the
+   * seed. The mark is dropped only once `send` has started the reply, so the status goes from
+   * preparing to replying without a 'done' in between.
+   */
+  private async launchSpawned(
+    parentId: string,
+    projectDirectory: string,
+    child: ChatSessionSummary,
+    seed: string,
+    worktree: { branch: string; base: string } | null,
+    {
+      seedHops,
+      timer,
+      onFailed,
+    }: { seedHops: number; timer: PhaseTimer; onFailed?: (message: string) => Promise<void> }
+  ): Promise<void> {
+    this.launching.add(child.id);
+    this.deps.activity?.preparingStarted(child.id);
+    let failure: string | null = null;
+    try {
+      let text = seed;
+      if (worktree) {
+        const unprepared = await this.ensureWorkspace(child, seed, timer);
+        if (unprepared) failure = `The worktree could not be created: ${unprepared.error}`;
+        else if (child.project) {
+          const workingDirectory = child.project.workingDirectory;
+          text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
+        }
+      }
+      if (!failure) {
+        const sent = await this.send(child.id, text, [], { seedHops, spawnSeed: true });
+        timer.lap('send');
+        if (!sent.ok) failure = `The new session could not start: ${sent.error}`;
+      }
+    } catch (err) {
+      failure = `The new session could not start: ${err instanceof Error ? err.message : 'unknown error'}`;
+    }
+
+    try {
+      this.deps.logger.debug(`CHAT: spawn ${child.id} timing ${timer.summary()}`);
+      if (!failure) {
+        this.deps.logger.debug(`CHAT: spawned ${child.id} from ${parentId}`);
+        return;
+      }
+      await this.abandonSpawn(parentId, child, failure, onFailed).catch((err: unknown) => {
+        this.deps.logger.warn(`CHAT: could not clean up ${child.id}: ${err instanceof Error ? err.message : err}`);
+      });
+    } finally {
+      this.launching.delete(child.id);
+      this.deps.activity?.preparingEnded(child.id);
+      if (!failure) this.flushQueue(child.id);
+    }
+  }
+
+  /**
+   * Remove an empty failed spawn, or retain accepted input and its files for retry.
+   * Only a removed child reopens its suggestion: a retained child is the retry destination.
+   */
+  private async abandonSpawn(
+    parentId: string,
+    child: ChatSessionSummary,
+    reason: string,
+    onFailed?: (message: string) => Promise<void>
+  ): Promise<void> {
+    this.abandoning.add(child.id);
+    try {
+      this.spawnWatch.delete(child.id);
+      // Deleted by the user while it was preparing: that was their call, not a failure to report.
+      const stored = await this.deps.store.get(child.id);
+      if (!stored) return;
+      const pending = this.deps.queue?.list(child.id) ?? [];
+      const retained = pending.some(message => !message.automatic);
+      if (retained) {
+        // Accepted input belongs to the user. Keep its session and attachment bytes rather
+        // than treating an automatic startup failure as a deliberate conversation deletion.
+        const seed: ChatQueuedMessage[] = stored.messages.some(message => message.role === 'user' && !message.system)
+          ? []
+          : [
+              {
+                id: randomUUID(),
+                sessionId: child.id,
+                text: stored.origin?.seedPrompt ?? '',
+                queuedAt: new Date().toISOString(),
+              },
+            ];
+        // Queue return events only reach an open composer. Save an explicit unsent copy as
+        // well, so switching away before startup fails cannot lose the task or its files.
+        for (const message of [...seed, ...pending.filter(entry => !entry.relay && !entry.automatic)]) {
+          const recovery: ChatMessage = {
+            id: randomUUID(),
+            role: 'user',
+            system: true,
+            content: `Startup failed before this queued task could run. Unsent input saved for retry:\n\n${message.text}`,
+            display: `Unsent input saved after startup failed:\n\n${message.text}`,
+            createdAt: new Date().toISOString(),
+            ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+          };
+          const recovered = await this.deps.store.appendMessage(child.id, recovery);
+          if (!recovered) return; // A deliberate deletion during recovery wins.
+          this.emit({ type: 'message', sessionId: child.id, message: recovery });
+        }
+        await this.strandRelay(
+          child.id,
+          pending.filter(message => message.relay)
+        );
+        this.deps.queue?.giveBack(child.id, seed, 'failed', reason);
+      } else {
+        await this.deleteSession(child.id);
+      }
+      const outcome = retained ? 'was kept with its unsent input saved for retry' : 'was removed';
+      this.deps.logger.warn(`CHAT: ${child.id} could not start and ${outcome}: ${reason}`);
+      this.emit({
+        type: 'spawn-failed',
+        sessionId: parentId,
+        title: child.title,
+        message: `${reason} The conversation ${outcome}.`,
+      });
+      if (!retained) await onFailed?.(reason);
+      await this.deliverChildReport(parentId, {
+        localOnly: isLocalModel(child.model),
+        content:
+          `The session you started, "${child.title}" (${child.id}), could not start and ${outcome}: ${reason} ` +
+          (retained
+            ? 'Nothing is running for it. Retry in that conversation.'
+            : 'Nothing is running for it. Start it again, or do the work in this conversation.'),
+        display: `The session "${child.title}" could not start and ${outcome}. ${reason}`,
+      });
+    } finally {
+      this.abandoning.delete(child.id);
+    }
+  }
+
+  /**
+   * The branch a spawned session's worktree will be cut on, or why it cannot be.
    *
    * An EXISTING branch is refused rather than used, which is the opposite of what the sidebar's
    * worktree toggle does. The reason is the keying: `resolveWorkspace` hands back whatever
@@ -3425,14 +4521,13 @@ export class ChatService {
    * and the chip both claimed isolation. Refusing puts the collision in front of the user, who
    * can answer again with a different name; adopting would hide it.
    *
-   * The new branch is cut from `base`, the parent's branch as the card showed it (see
+   * Only reads: the cut itself happens in launchSpawned, from the base the card showed (see
    * spawnBaseFor), so the child starts on the parent's commits rather than on main.
    */
-  private async prepareSpawnWorkspace(
+  private async checkSpawnBranch(
     project: ChatProject,
-    branch: string,
-    base: string
-  ): Promise<({ ok: true } & { branch: string; base: string; workingDirectory: string }) | SpawnRejected> {
+    branch: string
+  ): Promise<{ ok: true; branch: string } | SpawnRejected> {
     const wanted = branch.trim();
     if (!isValidBranchName(wanted)) {
       return {
@@ -3456,21 +4551,18 @@ export class ChatService {
     }
 
     try {
-      const taken =
-        (await branchExists(project.directory, wanted)) ||
-        (await listWorktrees(project.directory)).some(entry => entry.branch === wanted);
-      if (taken) {
+      const [exists, worktrees] = await Promise.all([
+        branchExists(project.directory, wanted),
+        listWorktrees(project.directory),
+      ]);
+      if (exists || worktrees.some(entry => entry.branch === wanted)) {
         return {
           ok: false,
           reason: 'branch',
           message: `The branch ${wanted} already exists, so no worktree was made and no session started.`,
         };
       }
-
-      // Named exactly, not derived: the approval card showed this name to the user and the row
-      // reports it back, so the branch the child lands on has to be the one they approved.
-      const resolved = await resolveWorkspace(project.directory, { branch: wanted, base });
-      return { ok: true, branch: resolved.branch, base, workingDirectory: resolved.workingDirectory };
+      return { ok: true, branch: wanted };
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'unknown error';
       return { ok: false, reason: 'branch', message: `The worktree could not be created: ${detail}` };
@@ -3490,7 +4582,7 @@ export class ChatService {
    * is the unattended behaviour this task deliberately does not build. What lands instead is a
    * message the user reads and the model sees on the next turn either of them takes.
    */
-  private async settleSpawnedTurn(sessionId: string): Promise<void> {
+  private async settleSpawnedTurn(sessionId: string, localOnly: boolean): Promise<void> {
     const watch = this.spawnWatch.get(sessionId);
     if (!watch) return;
     this.spawnWatch.delete(sessionId);
@@ -3498,6 +4590,7 @@ export class ChatService {
     const child = await this.deps.store.get(sessionId);
     if (!child) return;
     await this.deliverChildReport(watch.parentSessionId, {
+      localOnly,
       content: describeChildOutcome(child),
       display: childOutcomeDisplay(child),
     });
@@ -3526,11 +4619,14 @@ export class ChatService {
     this.childReports.delete(sessionId);
 
     for (const report of queued) {
+      const parent = report.localOnly ? await this.deps.store.get(sessionId) : null;
+      const withheld = report.localOnly && !(parent && isLocalModel(parent.model));
+      const localNotice = 'A device-local child session finished. Open that conversation to read its report.';
       const message: ChatMessage = {
         id: randomUUID(),
         role: 'user',
-        content: report.content,
-        display: report.display,
+        content: withheld ? localNotice : report.content,
+        display: withheld ? localNotice : report.display,
         createdAt: new Date().toISOString(),
         system: true,
       };
@@ -3579,6 +4675,48 @@ export class ChatService {
     };
   }
 
+  /** The conversation's approval mode, or undefined (with a warning) when it cannot be read. */
+  private async currentApprovalMode(sessionId: string): Promise<ChatApprovalMode | undefined> {
+    if (!this.deps.approvalLog) return undefined;
+    try {
+      return await this.deps.store.approvalMode(sessionId);
+    } catch (error) {
+      this.deps.logger.warn(`PERMISSIONS: could not read the approval mode to log: ${String(error)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Append one decision to the approval log. Not awaited: the log never holds up the turn.
+   * `mode` is the one in force when the decision was made, never re-read here: it may have
+   * changed by the time the session is loaded for its title.
+   */
+  private logApproval(
+    sessionId: string,
+    tool: string,
+    input: Record<string, unknown>,
+    approval: ChatToolApproval,
+    mode: ChatApprovalMode | undefined
+  ): void {
+    const log = this.deps.approvalLog;
+    if (!log) return;
+    void (async () => {
+      const session = await this.deps.store.get(sessionId).catch((error: unknown) => {
+        this.deps.logger.warn(`PERMISSIONS: could not read the session title to log: ${String(error)}`);
+        return null;
+      });
+      await log.append({
+        ts: approval.decidedAt,
+        sessionId,
+        ...(session ? { sessionTitle: session.title } : {}),
+        ...(mode ? { mode } : {}),
+        tool,
+        input: summarizeToolInput(input),
+        approval,
+      });
+    })().catch((error: unknown) => this.deps.logger.warn(`PERMISSIONS: could not log an approval: ${String(error)}`));
+  }
+
   /**
    * Hold a tool at the approval gate, if it declares one.
    *
@@ -3601,16 +4739,25 @@ export class ChatService {
   ): Promise<ApprovalOutcome> {
     const gate = this.deps.approvals;
     if (!gate && !tool.interactive) return { input: call.input };
+    // Settles a call refused before any card was shown, recording what refused it.
+    const refuseUnasked = (
+      status: 'denied' | 'error',
+      error: string,
+      decidedBy: ChatApprovalDecidedBy
+    ): ApprovalOutcome => {
+      const approval = approvalRecord('denied', decidedBy);
+      const refused: ChatToolCall = { ...call, status, error, approval };
+      this.emit({ type: 'tool-start', sessionId, messageId, call });
+      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+      return { settled: refused, input: call.input, approval };
+    };
     let rules: PermissionRuleSet | undefined;
     try {
       rules = await this.deps.permissions?.rulesFor(permissionScope);
     } catch (error) {
       const message = `Cannot load permission rules: ${String(error)}`;
       this.deps.logger.warn(`PERMISSIONS: ${message}`);
-      const refused: ChatToolCall = { ...call, status: 'denied', error: message };
-      this.emit({ type: 'tool-start', sessionId, messageId, call });
-      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
-      return { settled: refused, input: call.input };
+      return refuseUnasked('denied', message, { kind: 'system', reason: 'error', detail: message });
     }
     if (!tool.interactive && !tool.approval && !rules?.size) return { input: call.input };
 
@@ -3626,14 +4773,11 @@ export class ChatService {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const refused: ChatToolCall = {
-        ...call,
-        status: err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error',
-        error: message,
-      };
-      this.emit({ type: 'tool-start', sessionId, messageId, call });
-      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
-      return { settled: refused, input: call.input };
+      return refuseUnasked(err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error', message, {
+        kind: 'system',
+        reason: 'error',
+        detail: message,
+      });
     }
 
     // The user's standing rules come before every mode, and a deny applies to a call no tool
@@ -3642,25 +4786,12 @@ export class ChatService {
     try {
       if (rules?.size) subject = await resolveSubject(subject);
     } catch (error) {
-      const refused: ChatToolCall = {
-        ...call,
-        status: 'denied',
-        error: `Cannot resolve permission paths: ${String(error)}`,
-      };
-      this.emit({ type: 'tool-start', sessionId, messageId, call });
-      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
-      return { settled: refused, input: call.input };
+      const message = `Cannot resolve permission paths: ${String(error)}`;
+      return refuseUnasked('denied', message, { kind: 'system', reason: 'error', detail: message });
     }
     const verdict = rules?.size ? rules.evaluate(subject) : { decision: null };
     if (verdict.decision === 'deny') {
-      const refused: ChatToolCall = {
-        ...call,
-        status: 'denied',
-        error: `Refused by the user's deny rule ${describeRule(verdict.rule)}. Do not try to run it again or work around it; tell the user what you wanted to do.`,
-      };
-      this.emit({ type: 'tool-start', sessionId, messageId, call });
-      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
-      return { settled: refused, input: call.input };
+      return refuseUnasked('denied', denyRuleMessage(verdict.rule), ruleDecider(verdict.rule));
     }
     // Interactive tools never reach the approval mode below, so no mode - "Approve for me" and
     // full access included - can answer a folder request on the user's behalf.
@@ -3697,31 +4828,56 @@ export class ChatService {
     // A matching allow rule runs the call in every mode, over a tainted reply as well: the user
     // wrote it knowing what the command does. A loop still stops, and the rule set itself keeps
     // the floors (irreversible, opaque commands, outside folders) - see PermissionRuleSet.
-    if (verdict.decision === 'allow' && !stuck) return { input: applyOption(call.input, runnable[0]) };
+    if (verdict.decision === 'allow' && !stuck) {
+      return {
+        input: applyOption(call.input, runnable[0]),
+        approval: approvalRecord('allowed', ruleDecider(verdict.rule)),
+        mode,
+      };
+    }
     if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    if (!prompt.irreversible && !stuck && !tainted && !askedByRule) {
+    const standingAnswer = (): ChatApprovalAnswer | null => {
+      if (prompt.irreversible || stuck || askedByRule) return null;
+      const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
         runnable.map(option => option.id)
       );
-      if (standing) return { input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value) };
-
+      // Over a tainted reply only an answer given knowing about the taint, or one for a tool
+      // whose "always" already accepted whatever the content could steer it to, still stands.
+      if (standing && (!currentlyTainted || standing.overTaint || alwaysOverridesTaint(call.name))) {
+        return {
+          decision: 'once',
+          ...(standing.optionId ? { optionId: standing.optionId } : {}),
+          ...(standing.value === undefined ? {} : { value: standing.value }),
+        };
+      }
       // A shell command whose every sub-command was allowed before, by prefix, runs - but not
-      // past a directory outside the project that the user has not allowed too.
+      // past a directory outside the project that the user has not allowed too. Over a tainted
+      // reply, only prefixes the user allowed on a card that already named the taint count.
       const always = prompt.always;
       if (
         always &&
         !prompt.askInAuto &&
-        gate.coversCommands(sessionId, always) &&
+        gate.coversCommands(sessionId, always, currentlyTainted) &&
         gate.uncoveredDirectories(sessionId, always.directories).length === 0
       ) {
-        return { input: call.input };
+        return { decision: 'once' };
       }
+      return null;
+    };
+    const standing = standingAnswer();
+    if (standing) {
+      return {
+        input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value),
+        approval: approvalRecord('allowed', { kind: 'chat-allowance' }),
+        mode,
+      };
     }
 
     // Consulted AFTER tool.approval() ran, so a call that is refused outright - a path outside
@@ -3729,11 +4885,28 @@ export class ChatService {
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
     if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
-      return { input: applyOption(call.input, runnable[0]) };
+      return {
+        input: applyOption(call.input, runnable[0]),
+        approval: approvalRecord('allowed', { kind: 'mode', mode }),
+        mode,
+      };
     }
 
+    // Only the reasons beyond the tool's own: an ask rule, untrusted content, a loop.
+    const askedBecause =
+      [askedByRule, tainted ? untrustedReason(tainted) : null, stuck ? LOOP_ASK_REASON : null]
+        .filter((reason): reason is string => !!reason)
+        .join(' ') || undefined;
+    let requestedAt: string | undefined;
+    // What answered this card when another card's "always" or a newly saved rule covered it.
+    let coveredBy: ChatApprovalDecidedBy | undefined;
+
     const choice = prompt.choice ? { options: prompt.choice.options.map(toWireOption) } : undefined;
-    const alwaysScope = prompt.always ? describeAlways(prompt.always, context.workingDirectory) : undefined;
+    const alwaysScope = prompt.always
+      ? describeAlways(prompt.always, context.workingDirectory)
+      : prompt.alwaysCovers
+        ? { shown: prompt.alwaysCovers, full: prompt.alwaysCovers }
+        : undefined;
     // An ask rule outranks any allow, so a rule saved from its card would never apply.
     const everywhere = this.deps.permissions && !askedByRule ? everySessionRules(subject, prompt) : [];
     const answer = await gate.request(
@@ -3741,6 +4914,7 @@ export class ChatService {
       prompt.key,
       signal,
       approvalId => {
+        requestedAt = new Date().toISOString();
         this.emit({
           type: 'tool-start',
           sessionId,
@@ -3766,6 +4940,34 @@ export class ChatService {
       },
       {
         remember: !prompt.irreversible,
+        tainted: !!tainted,
+        // Another card's "always", or a rule saved from it, may cover this one while it waits.
+        recheck: async () => {
+          try {
+            const fresh = await this.deps.permissions?.rulesFor(permissionScope);
+            // Rules may have appeared since this card opened, and a symlink may have changed.
+            const currentSubject = fresh?.size
+              ? await resolveSubject(permissionSubject(call, gatedPrompt, context))
+              : subject;
+            const freshVerdict = fresh?.size ? fresh.evaluate(currentSubject) : null;
+            const decision = freshVerdict?.decision ?? null;
+            if (freshVerdict?.decision === 'deny') {
+              coveredBy = ruleDecider(freshVerdict.rule);
+              return { decision: 'deny' };
+            }
+            if (prompt.irreversible || stuck || askedByRule || decision === 'ask') return null;
+            if (freshVerdict?.decision === 'allow') {
+              coveredBy = ruleDecider(freshVerdict.rule);
+              return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
+            }
+            const covering = standingAnswer();
+            if (covering) coveredBy = { kind: 'chat-allowance' };
+            return covering;
+          } catch (error) {
+            this.deps.logger.warn(`PERMISSIONS: could not recheck ${call.name}: ${String(error)}`);
+            return null;
+          }
+        },
         ...(prompt.always ? { always: prompt.always } : {}),
         // Only the options that RUN the call may become standing. The card offers no "always"
         // beside a redirect, and this is the second lock on that door: a redirect is an
@@ -3774,18 +4976,54 @@ export class ChatService {
       }
     );
 
+    // Whether "always" actually reached every session; a failed save leaves it this chat's only.
+    let savedEverywhere = false;
     // The rules saved are the ones main derived and showed; the renderer only says yes to them.
     if (answer.decision === 'always' && answer.everywhere && everywhere.length > 0) {
-      await this.deps.permissions?.rememberAllows(everywhere).catch(error => {
-        this.deps.logger.warn(`PERMISSIONS: could not save ${everywhere.join(', ')}: ${String(error)}`);
-        context.report?.notice({
-          kind: 'permissions-save-failed',
-          text: `The rule could not be saved for every session: ${String(error)}. This conversation's approval still applies. Retry in Settings > Permissions.`,
-        });
-      });
+      const saved = await this.deps.permissions?.rememberAllows(everywhere).then(
+        () => true,
+        error => {
+          this.deps.logger.warn(`PERMISSIONS: could not save ${everywhere.join(', ')}: ${String(error)}`);
+          context.report?.notice({
+            kind: 'permissions-save-failed',
+            text: `The rule could not be saved for every session: ${String(error)}. This conversation's approval still applies. Retry in Settings > Permissions.`,
+          });
+          return false;
+        }
+      );
+      savedEverywhere = saved === true;
+      await gate.settleCovered(saved ? undefined : sessionId);
+    } else if (answer.decision === 'always') {
+      await gate.settleCovered(sessionId);
+    }
+
+    if (answer.decision === 'always' && this.deps.capabilities) {
+      await this.deps.capabilities
+        .grant({
+          subject: { kind: 'session', sessionId, scopeKey: this.deps.store.scopeKey() ?? 'local' },
+          capability: capabilityFor(call.name, prompt.key),
+          scope: capabilityScope(call.name, prompt.key),
+          approvalKey: prompt.key,
+          source: 'approval',
+        })
+        .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit grant: ${String(error)}`));
+      if (savedEverywhere) {
+        for (const rule of everywhere) {
+          await this.deps.capabilities
+            .grant({
+              subject: { kind: 'desktop-user' },
+              capability: 'tool',
+              scope: { kind: 'permission-rule', value: rule },
+              source: 'permission-rule',
+            })
+            .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit permission grant: ${String(error)}`));
+        }
+      }
     }
 
     const picked = findOption(prompt, answer.optionId);
+    const card = shownCard(answer, requestedAt, askedBecause);
+    const decidedBy = cardDecider(answer.settledBy, { ...answer, everywhere: savedEverywhere }, picked, coveredBy);
 
     // Keyed on the OPTION rather than on the decision, so an answer naming this option can only
     // ever redirect - never run the tool because it arrived with some other decision on it.
@@ -3795,27 +5033,30 @@ export class ChatService {
     // model reads an instruction rather than a failure it should apologise for and back away
     // from - HOST_GUIDANCE trains precisely that reflex on a declined call.
     if (picked?.redirect) {
+      const approval = approvalRecord('denied', decidedBy, card);
       const redirected: ChatToolCall = {
         ...call,
         status: 'done',
         preview: picked.note,
         label: `${picked.label} - no session was started`,
+        approval,
       };
       this.emit({ type: 'tool-end', sessionId, messageId, call: redirected });
-      return { settled: redirected, input: call.input };
+      return { settled: redirected, input: call.input, approval, mode };
     }
 
     if (answer.decision === 'deny' || answer.decision === 'redirect') {
-      const denied: ChatToolCall = {
-        ...call,
-        status: 'denied',
-        error: 'The user declined to run this. Do not try to run it again; ask them what to do instead.',
-      };
+      const approval = approvalRecord('denied', decidedBy, card);
+      const denied: ChatToolCall = { ...call, status: 'denied', error: deniedMessage(decidedBy), approval };
       this.emit({ type: 'tool-end', sessionId, messageId, call: denied });
-      return { settled: denied, input: call.input };
+      return { settled: denied, input: call.input, approval, mode };
     }
 
-    return { input: applyOption(call.input, picked ?? runnable[0], answer.value) };
+    return {
+      input: applyOption(call.input, picked ?? runnable[0], answer.value),
+      approval: approvalRecord('allowed', decidedBy, card),
+      mode,
+    };
   }
 
   /**
@@ -3836,11 +5077,11 @@ export class ChatService {
     turn: DirectoryTurn
   ): Promise<ApprovalOutcome> {
     const { outcome: _ignored, ...rest } = call.input;
-    const settle = (status: 'denied' | 'error', error: string): ApprovalOutcome => {
-      const settled: ChatToolCall = { ...call, input: rest, status, error };
+    const settle = (status: 'denied' | 'error', error: string, approval: ChatToolApproval): ApprovalOutcome => {
+      const settled: ChatToolCall = { ...call, input: rest, status, error, approval };
       this.emit({ type: 'tool-start', sessionId, messageId, call: { ...call, input: rest } });
       this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
-      return { settled, input: rest };
+      return { settled, input: rest, approval };
     };
 
     const inspection = await inspectDirectoryRequest(rest, {
@@ -3849,18 +5090,23 @@ export class ChatService {
       ...(context.protectedPaths ? { protectedPaths: context.protectedPaths } : {}),
       declined: turn.declined,
     });
-    if (inspection.kind === 'refused') return settle('denied', inspection.message);
+    if (inspection.kind === 'refused') {
+      const decidedBy: ChatApprovalDecidedBy = { kind: 'system', reason: 'error', detail: inspection.message };
+      return settle('denied', inspection.message, approvalRecord('denied', decidedBy));
+    }
     const withOutcome = (outcome: DirectoryRequestOutcome) => ({ ...rest, path: inspection.path, outcome });
     if (inspection.kind === 'inside') return { input: withOutcome({ status: 'already' }) };
 
     const gate = this.deps.approvals;
     if (!gate) return { input: rest };
     const input = { ...rest, path: inspection.path, reason: inspection.reason };
+    let requestedAt: string | undefined;
     const answer = await gate.request(
       sessionId,
       `${REQUEST_DIRECTORY_TOOL_NAME}:${call.id}`,
       signal,
       approvalId => {
+        requestedAt = new Date().toISOString();
         this.emit({
           type: 'tool-start',
           sessionId,
@@ -3875,23 +5121,37 @@ export class ChatService {
           },
         });
       },
-      // Untimed like a question, so a new message closes it via cancelQuestions; never remembered,
-      // so no earlier click stands in for this one.
-      { remember: false, untimed: true }
+      // A question card, so a new message closes it via cancelQuestions; never remembered, so no
+      // earlier click stands in for this one.
+      { remember: false, question: true }
     );
+    const answered = (outcome: ChatToolApproval['outcome'], decidedBy: ChatApprovalDecidedBy) =>
+      approvalRecord(outcome, decidedBy, shownCard(answer, requestedAt));
 
     // Checked before the decision: a click racing a stop must not grant to a turn that has ended.
-    if (signal.aborted || answer.optionId === QUESTION_CANCELLED)
-      return { input: withOutcome({ status: 'cancelled' }) };
+    if (signal.aborted || answer.optionId === QUESTION_CANCELLED) {
+      return {
+        input: withOutcome({ status: 'cancelled' }),
+        approval: answered('denied', { kind: 'system', reason: closedBy(answer.settledBy, signal.aborted) }),
+      };
+    }
     if (answer.decision !== 'once') {
       turn.declined.push(inspection.path);
-      return { input: withOutcome({ status: 'declined' }) };
+      return {
+        input: withOutcome({ status: 'declined' }),
+        approval: answered('denied', cardDecider(answer.settledBy, answer, undefined, undefined)),
+      };
     }
+    const granted = answered('allowed', { kind: 'user', answer: 'once' });
     if (!(await this.grantSessionDirectory(sessionId, inspection.path)).ok) {
-      return settle('error', `${inspection.path} changed or disappeared before it could be added; it was not shared.`);
+      return settle(
+        'error',
+        `${inspection.path} changed or disappeared before it could be added; it was not shared.`,
+        granted
+      );
     }
     turn.granted.push(inspection.path);
-    return { input: withOutcome({ status: 'granted' }) };
+    return { input: withOutcome({ status: 'granted' }), approval: granted };
   }
 
   /**
@@ -3913,10 +5173,11 @@ export class ChatService {
     const plan = await planMcpServerRequest(call.name, call.input, this.deps.mcp);
     if (plan.kind === 'refused') {
       // Stored with no input at all: a refused call may be the one carrying values it should not.
-      const settled: ChatToolCall = { ...call, input: {}, status: 'denied', error: plan.message };
+      const approval = approvalRecord('denied', { kind: 'system', reason: 'error', detail: plan.message });
+      const settled: ChatToolCall = { ...call, input: {}, status: 'denied', error: plan.message, approval };
       this.emit({ type: 'tool-start', sessionId, messageId, call: { ...call, input: {} } });
       this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
-      return { settled, input: {} };
+      return { settled, input: {}, approval };
     }
 
     const gate = this.deps.approvals;
@@ -3925,15 +5186,16 @@ export class ChatService {
     // masked, since an update carries args the user may have typed a key into.
     const input: Record<string, unknown> = { ...plan.request };
     const stored = modelSafeRequest(plan.request, plan.flags);
-    const withOutcome = (outcome: McpServerRequestOutcome) => ({ input: { ...stored, outcome } });
     if (!gate || !mcp) return { input: stored };
 
     const warning = describeFlags(plan.flags);
+    let requestedAt: string | undefined;
     const answer = await gate.request(
       sessionId,
       `${call.name}:${call.id}`,
       signal,
       approvalId => {
+        requestedAt = new Date().toISOString();
         this.emit({
           type: 'tool-start',
           sessionId,
@@ -3948,15 +5210,31 @@ export class ChatService {
           },
         });
       },
-      // Never remembered, so no earlier click stands in for this one, and untimed like a question
-      // so a new message closes it rather than leaving a live button on an abandoned turn.
-      { remember: false, untimed: true }
+      // Never remembered, so no earlier click stands in for this one, and a question card so a
+      // new message closes it rather than leaving a live button on an abandoned turn.
+      { remember: false, question: true }
     );
+    const withOutcome = (
+      outcome: McpServerRequestOutcome,
+      decision: ChatToolApproval['outcome'],
+      decidedBy: ChatApprovalDecidedBy
+    ): ApprovalOutcome => ({
+      input: { ...stored, outcome },
+      approval: approvalRecord(decision, decidedBy, shownCard(answer, requestedAt)),
+    });
 
     // Checked before the decision: a click racing a stop must not start a program for a turn
     // that has ended.
-    if (signal.aborted || answer.optionId === QUESTION_CANCELLED) return withOutcome({ status: 'cancelled' });
-    if (answer.decision !== 'once' && answer.decision !== 'always') return withOutcome({ status: 'declined' });
+    if (signal.aborted || answer.optionId === QUESTION_CANCELLED) {
+      return withOutcome({ status: 'cancelled' }, 'denied', {
+        kind: 'system',
+        reason: closedBy(answer.settledBy, signal.aborted),
+      });
+    }
+    if (answer.decision !== 'once' && answer.decision !== 'always') {
+      return withOutcome({ status: 'declined' }, 'denied', cardDecider(answer.settledBy, answer, undefined, undefined));
+    }
+    const approvedBy: ChatApprovalDecidedBy = { kind: 'user', answer: 'once' };
 
     const secrets = {
       env: pickSecrets(answer.secrets?.env, plan.change.envKeys ?? []),
@@ -3982,13 +5260,20 @@ export class ChatService {
         serverId = plan.request.serverId ?? '';
         await mcp.updateFromAssistant(serverId, plan.change, secrets);
       }
-      return withOutcome({ status: 'saved', serverId });
+      return withOutcome({ status: 'saved', serverId }, 'allowed', approvedBy);
     } catch (err) {
       // The store's own messages ("another server is already called ...") never carry a value.
       const message = err instanceof Error ? err.message : String(err);
-      const settled: ChatToolCall = { ...call, input: stored, status: 'error', error: `Nothing was saved: ${message}` };
+      const approval = approvalRecord('allowed', approvedBy, shownCard(answer, requestedAt));
+      const settled: ChatToolCall = {
+        ...call,
+        input: stored,
+        status: 'error',
+        error: `Nothing was saved: ${message}`,
+        approval,
+      };
       this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
-      return { settled, input: stored };
+      return { settled, input: stored, approval };
     }
   }
 
@@ -4002,6 +5287,19 @@ export class ChatService {
     sessionId: string,
     directory: string
   ): Promise<{ ok: true; session: ChatSessionSummary } | { ok: false }> {
+    const expectedScope = this.deps.store.scopeKey();
+    return this.withWorkspaceBindings(() =>
+      this.grantSessionDirectoryWithWorkspaceLease(sessionId, directory, expectedScope)
+    );
+  }
+
+  private async grantSessionDirectoryWithWorkspaceLease(
+    sessionId: string,
+    directory: string,
+    expectedScope: string | null
+  ): Promise<{ ok: true; session: ChatSessionSummary } | { ok: false }> {
+    if (this.deps.store.scopeKey() !== expectedScope) return { ok: false };
+    const scopeKey = expectedScope ?? 'local';
     const real = await realpath(directory).catch(() => null);
     const kind = real ? await stat(real).catch(() => null) : null;
     if (real !== directory || !kind?.isDirectory()) return { ok: false };
@@ -4009,10 +5307,18 @@ export class ChatService {
     if (!session) return { ok: false };
     const updated =
       session.mode === 'code' && session.project
-        ? await this.deps.store.addContextDirectory(sessionId, directory)
-        : await this.deps.store.addGrantedDirectory(sessionId, directory);
+        ? await this.deps.store.addContextDirectory(sessionId, directory, expectedScope)
+        : await this.deps.store.addGrantedDirectory(sessionId, directory, expectedScope);
     if (!updated) return { ok: false };
     this.bumpScope(sessionId);
+    await this.deps.capabilities
+      ?.grant({
+        subject: { kind: 'session', sessionId, scopeKey },
+        capability: 'files',
+        scope: { kind: 'path', value: directory },
+        source: 'approval',
+      })
+      .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit folder grant: ${String(error)}`));
     return { ok: true, session: updated };
   }
 
@@ -4049,7 +5355,7 @@ export class ChatService {
           call: { ...call, input, status: 'awaiting-approval', approvalId },
         });
       },
-      { remember: false, untimed: true }
+      { remember: false, question: true }
     );
 
     let outcome: ChatQuestionOutcome;
@@ -4106,6 +5412,30 @@ export class ChatService {
     return resolveDefaultModel(models, [remembered, this.deps.preferredModel]);
   }
 
+  /** Auxiliary generations honor the same device-local boundary as the main reply. */
+  private async streamAuxiliary(
+    api: AuthenticatedApiClient | null,
+    request: CompletionRequest,
+    onEvent: (event: CompletionStreamEvent) => void,
+    signal: AbortSignal
+  ): Promise<void> {
+    if (isLocalModel(request.model)) {
+      const thinking = createThinkFilter();
+      await (this.deps.local ?? new OllamaLocal()).stream(
+        { ...request, thinking: false },
+        event =>
+          onEvent({ ...event, ...('text' in event && event.text ? { text: thinking.push(event.text).text } : {}) }),
+        signal
+      );
+      const tail = thinking.flush().text;
+      if (tail) onEvent({ type: 'content', text: tail });
+      return;
+    }
+    if (!api) throw new Error('Sign in to use a hosted model.');
+    const { endpoint } = await this.resolveServerConfig(api);
+    await streamCompletion(api.getAxiosInstance(), endpoint, request, onEvent, signal);
+  }
+
   /**
    * Give a new conversation a name of its own, replacing the truncated first prompt.
    *
@@ -4122,25 +5452,25 @@ export class ChatService {
    * row underneath it still has to say which of five conversations about that repo this is, and
    * a generated name does that better than the truncation it gets today.
    */
-  private async nameSession(session: ChatSession, api: AuthenticatedApiClient, prompt: string): Promise<void> {
+  private async nameSession(session: ChatSession, api: AuthenticatedApiClient | null, prompt: string): Promise<void> {
     const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
 
     // Everything is inside, including reading the catalog: this runs as a floating promise, so
     // a throw out of it would be an unhandled rejection in main rather than a missing title.
     try {
-      const model = pickTitleModel(this.deps.models?.cached() ?? [], session.model);
+      const model = isLocalModel(session.model)
+        ? session.model
+        : pickTitleModel(this.deps.models?.cached() ?? [], session.model);
       if (!model) return;
 
       // Bounded on its own rather than tied to the turn: a title is worth a few seconds and no
       // more, and the reply it runs beside can legitimately last half an hour.
       timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
 
-      const { endpoint } = await this.resolveServerConfig(api);
       let reply = '';
-      await streamCompletion(
-        api.getAxiosInstance(),
-        endpoint,
+      await this.streamAuxiliary(
+        api,
         { model, messages: titleRequestMessages(prompt), tools: [], maxTokens: TITLE_MAX_TOKENS },
         event => {
           if (event.type === 'content' || event.type === 'tool_use') reply += event.text ?? '';
@@ -4188,8 +5518,6 @@ export class ChatService {
     this.cancelSuggestion(sessionId);
 
     const api = this.deps.getApiClient();
-    if (!api) return null;
-
     const controller = new AbortController();
     this.suggesting.set(sessionId, controller);
     let timer: NodeJS.Timeout | undefined;
@@ -4210,20 +5538,26 @@ export class ChatService {
         .find(message => message.role === 'user' && !message.system && message.content.trim());
       if (!prompt) return null;
 
-      const available = this.deps.models?.cached() ?? (await this.listModels()).models;
-      const model = pickSuggestionModel(available, preferredModel);
+      const available = isLocalModel(session.model)
+        ? []
+        : (this.deps.models?.cached() ?? (await this.listModels()).models);
+      const model = isLocalModel(session.model)
+        ? {
+            id: session.model,
+            name: session.model,
+            backend: localBackend(parseLocalModelId(session.model)?.runtimeId ?? ''),
+          }
+        : pickSuggestionModel(available, preferredModel);
       if (!model) return null;
 
       timer = setTimeout(
         () => controller.abort(),
-        isLocalModel(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
+        isLocalBackend(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
       );
 
-      const { endpoint } = await this.resolveServerConfig(api);
       let answer = '';
-      await streamCompletion(
-        api.getAxiosInstance(),
-        endpoint,
+      await this.streamAuxiliary(
+        api,
         {
           model: model.id,
           messages: suggestionRequestMessages(prompt.content, reply.content),
@@ -4371,7 +5705,8 @@ export function buildSystemMessage(
   skillsSection = '',
   ask = false,
   modelId = '',
-  web = false
+  web = false,
+  screen = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -4396,6 +5731,7 @@ export function buildSystemMessage(
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
+        ...(screen ? SCREEN_GUIDANCE : []),
         ...(web ? WEB_GUIDANCE : []),
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
@@ -4472,7 +5808,8 @@ export function buildSystemMessage(
             'reading the file first.',
           ]),
       'file_read returns the whole file, up to 2000 lines; pass offset and limit only when you',
-      'already know which part you need or the file is too large to read at once.',
+      'already know which part you need or the file is too large to read at once. It shows you a',
+      'PNG, JPEG, GIF or WebP file as an image, so read a screenshot or image to look at it.',
       ...(explore
         ? [
             'For open-ended exploration across many files, call explore instead - a faster read-only',
@@ -4505,12 +5842,16 @@ export function buildSystemMessage(
       'bash_execute. Background processes belong to this conversation, are all killed when the app',
       'quits, and none survive a restart - so check bash_list rather than assuming one from an',
       'earlier session is still up, and stop what you no longer need with bash_kill.',
+      'When one you started exits on its own you are told in a message, even after your turn has',
+      'ended. To wait for a long build or test run, end your turn saying what you are waiting for;',
+      'never sleep or poll bash_output in a loop until it finishes.',
       'To test a running app, drive the app itself: take its URL from bash_list and bash_output or',
       'the user, read code only for the routes, request bodies and test credentials you need, then',
       'exercise it (curl with a cookie jar, or a short script) and report the responses you saw.',
       'Make the first request early and let the app correct your assumptions, rather than reading',
       'the whole feature first. Unit tests passing is not an end-to-end result.',
       ...(browser ? BROWSER_GUIDANCE : []),
+      ...(screen ? SCREEN_GUIDANCE : []),
       ...(web ? WEB_GUIDANCE : []),
       'Never invent a file name, size or contents, or the output of a command: if a tool did not',
       'return it, you do not know it.',
@@ -4573,15 +5914,33 @@ function pickSecrets(typed: unknown, keys: readonly string[]): Record<string, st
 /** Only the latest screenshots stay as pixels; each one is resent every round until the turn ends. */
 const KEPT_SCREENSHOTS = 2;
 
+/**
+ * What one round's image turn may carry. KEPT_SCREENSHOTS such turns are resent every round, and
+ * the providers refuse a request body over about 32 MB, base64 included.
+ */
+const MAX_ROUND_IMAGES = 8;
+const MAX_ROUND_IMAGE_CHARS = 10 * 1024 * 1024;
+
+/** The images that fit this round's budget, in call order; the rest are counted, not sent. */
+function withinImageBudget<T extends { image: { data: string } }>(shown: readonly T[]): { kept: T[]; dropped: number } {
+  const kept: T[] = [];
+  let chars = 0;
+  for (const entry of shown) {
+    if (kept.length >= MAX_ROUND_IMAGES || chars + entry.image.data.length > MAX_ROUND_IMAGE_CHARS) break;
+    kept.push(entry);
+    chars += entry.image.data.length;
+  }
+  return { kept, dropped: shown.length - kept.length };
+}
+
 function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
   while (turns.length > KEPT_SCREENSHOTS) {
     const index = turns.shift();
     if (index === undefined) break;
     wire[index] = {
       role: 'user',
-      content: [
-        { type: 'text', text: '[An earlier screenshot was here. Take a new one if you need to see the page.]' },
-      ],
+      content: [{ type: 'text', text: '[An earlier image was here. Capture or read it again if you need to see it.]' }],
+      continuesTurn: true,
     };
   }
 }
@@ -4602,6 +5961,14 @@ const BROWSER_GUIDANCE: readonly string[] = [
   'selects and closes them; browser_navigate with new_tab opens a page beside the current one.',
   'A link that opens a new tab opens it in the background and the step result says which tab;',
   'select it to use it. The user can switch tabs too, so check the list before relying on one.',
+];
+
+const SCREEN_GUIDANCE: readonly string[] = [
+  'screen_capture looks at other apps on this computer: without a target it lists the open',
+  'windows, and with a window title or id it captures that window as an image you and the user',
+  'see. To check a desktop app - an Electron dev build you started with bash_background, say -',
+  'wait for its window to open, then capture it by title instead of guessing how it looks. Each',
+  'capture asks the user first. For web pages use the browser tools.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [
@@ -4738,6 +6105,23 @@ async function streamRound(...args: Parameters<typeof streamCompletion>): Promis
   }
 }
 
+async function streamLocalRound(
+  local: LocalChat,
+  request: CompletionRequest,
+  onEvent: (event: CompletionStreamEvent) => void,
+  signal?: AbortSignal,
+  onTrimmed?: (dropped: number) => void,
+  onNotice?: (message: string) => void
+): Promise<Error | null> {
+  try {
+    await local.stream(request, onEvent, signal, onTrimmed, onNotice);
+    return null;
+  } catch (err) {
+    if (signal?.aborted) return null;
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
 /**
  * Whether a failure is the conversation having outgrown the model's context window.
  *
@@ -4870,10 +6254,11 @@ function renderTranscript(session: ChatSession): string {
  * childOutcomeDisplay. They are composed together and travel together so a report cannot reach
  * the transcript with only one of them.
  */
-interface ChildReport {
+type ChildReport = {
+  localOnly?: boolean;
   content: string;
   display: string;
-}
+};
 
 /**
  * What a finished spawned session tells its parent.
@@ -4980,6 +6365,95 @@ async function spawnBaseFor(project: ChatProject): Promise<string> {
 interface ApprovalOutcome {
   settled?: ChatToolCall;
   input: Record<string, unknown>;
+  /** The decision, when the call went through approval; already on `settled` when that is set. */
+  approval?: ChatToolApproval;
+  /** The approval mode the decision was made under, when the gate consulted one. */
+  mode?: ChatApprovalMode;
+}
+
+const LOOP_ASK_REASON = `Asked because the same call was repeated ${LOOP_THRESHOLD} times in a row.`;
+
+function approvalRecord(
+  outcome: ChatToolApproval['outcome'],
+  decidedBy: ChatApprovalDecidedBy,
+  card?: { requestedAt: string; askedBecause?: string }
+): ChatToolApproval {
+  return {
+    outcome,
+    decidedBy,
+    asked: card !== undefined,
+    ...(card?.askedBecause ? { askedBecause: card.askedBecause } : {}),
+    ...(card ? { requestedAt: card.requestedAt } : {}),
+    decidedAt: new Date().toISOString(),
+  };
+}
+
+/** The card part of a record, or undefined when the request closed before its card was shown. */
+function shownCard(
+  answer: ApprovalSettlement,
+  requestedAt: string | undefined,
+  askedBecause?: string
+): { requestedAt: string; askedBecause?: string } | undefined {
+  if (!answer.asked || !requestedAt) return undefined;
+  return { requestedAt, ...(askedBecause ? { askedBecause } : {}) };
+}
+
+function ruleDecider(rule: CompiledRule): ChatApprovalDecidedBy {
+  return { kind: 'rule', rule: rule.text, source: rule.source.label };
+}
+
+function denyRuleMessage(rule: CompiledRule): string {
+  return `Refused by the user's deny rule ${describeRule(rule)}. Do not try to run it again or work around it; tell the user what you wanted to do.`;
+}
+
+/**
+ * Who settled an approval card. Only a click is the user's; a card closed by a stop, a delete or
+ * the app quitting is recorded as that, so it never reads as a refusal nobody gave.
+ */
+function cardDecider(
+  settledBy: ApprovalSettledBy,
+  answer: ChatApprovalAnswer,
+  picked: ApprovalOption | undefined,
+  coveredBy: ChatApprovalDecidedBy | undefined
+): ChatApprovalDecidedBy {
+  if (settledBy === 'covered') return coveredBy ?? { kind: 'chat-allowance' };
+  if (settledBy !== 'user') return { kind: 'system', reason: settledBy };
+  const choice = picked ? { option: picked.label } : {};
+  if (picked?.redirect) return { kind: 'user', answer: 'redirect', ...choice };
+  if (answer.decision === 'deny' || answer.decision === 'redirect') return { kind: 'user', answer: 'deny' };
+  if (answer.decision === 'always') {
+    return { kind: 'user', answer: 'always', ...choice, ...(answer.everywhere ? { everywhere: true as const } : {}) };
+  }
+  return { kind: 'user', answer: 'once', ...choice };
+}
+
+/** Why a question-style card was closed unanswered; a racing click or recheck counts as the close. */
+function closedBy(settledBy: ApprovalSettledBy, aborted: boolean): ChatApprovalSystemReason {
+  if (settledBy === 'user' || settledBy === 'covered') return aborted ? 'stopped' : 'moved-on';
+  return settledBy;
+}
+
+/** What the model is told about a call that did not run. Only a user's own click is a refusal. */
+function deniedMessage(decidedBy: ChatApprovalDecidedBy): string {
+  if (decidedBy.kind === 'rule') {
+    const where = decidedBy.source ? ` in ${decidedBy.source}` : '';
+    return `Refused by the user's deny rule ${decidedBy.rule}${where}. Do not try to run it again or work around it; tell the user what you wanted to do.`;
+  }
+  if (decidedBy.kind !== 'system') {
+    return 'The user declined to run this. Do not try to run it again; ask them what to do instead.';
+  }
+  switch (decidedBy.reason) {
+    case 'stopped':
+      return 'Not run: the reply was stopped before this was approved.';
+    case 'conversation-deleted':
+      return 'Not run: the conversation was deleted before this was approved.';
+    case 'app-quit':
+      return 'Not run: the app quit before this was approved.';
+    case 'moved-on':
+      return 'Not run: the user moved on before this was approved.';
+    case 'error':
+      return `Not run: ${decidedBy.detail ?? 'the approval could not be completed'}.`;
+  }
 }
 
 /**
@@ -5015,7 +6489,9 @@ function untrustedReason(tool: string): string {
         ? 'a skill'
         : tool === 'session_read'
           ? 'another conversation'
-          : 'the web';
+          : tool === IMPORTED_TAINT_SOURCE
+            ? 'a conversation imported from Claude'
+            : 'the web';
   return `Asked because this reply read content from ${source} (${tool}).`;
 }
 
@@ -5091,6 +6567,12 @@ async function toCompletionMessages(
     // Artifact markup is stripped out of the stored text, so it has to go back in here: a model
     // that cannot see the artifact it just wrote cannot revise it.
     const text = withNotes(message, frameBoundary(message, frameRelay(message, restoreArtifactMarkup(message))));
+
+    if (isImportedToolTurn(message)) {
+      const flattened = importedTurnAsText(message, text);
+      if (flattened) wire.push({ role: 'assistant', content: flattened });
+      continue;
+    }
 
     if (calls.length === 0) {
       const attachments = message.attachments ?? [];
@@ -5210,6 +6692,13 @@ function frameRelay(message: ChatMessage, text: string): string {
     '',
     text,
   ].join('\n');
+}
+
+/** The thread's line for a turn the app started; see ChatMessage.display. */
+function automaticDisplay(automatic: ChatAutomaticOrigin): string {
+  return automatic.kind === 'background-exit'
+    ? `Background command finished: ${automatic.summary}`
+    : `Auto-fix: ${automatic.summary}`;
 }
 
 /** Reads one attachment's stored bytes, or null when the file is gone. */

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'crypto';
 import { addedLines, compileTerms, matches, run } from '../check-restricted-terms.mjs';
 
 // Invented placeholder terms; the real list lives only in the repository secret.
@@ -50,9 +51,46 @@ const merge = (message, sha, mergedIn = MAIN_TIP) => ({
   ...commit(message, sha),
   parents: [{ sha: 'p'.repeat(40) }, { sha: mergedIn }],
 });
-const mergeRoute = (sha, files, base = '9'.repeat(40)) => ({
-  [`/repos/acme/widgets/compare/${base}...${sha}`]: response({ files }),
-});
+const hashOf = value => createHash('sha1').update(JSON.stringify(value)).digest('hex');
+
+// Builds the git tree and blob routes for one version of the repository and
+// returns its root tree sha. `node` maps a name to file text or a nested node.
+function treeRoutes(routes, node) {
+  const tree = Object.entries(node).map(([name, child]) => {
+    if (typeof child !== 'string') return { path: name, type: 'tree', sha: treeRoutes(routes, child) };
+    const sha = hashOf(child);
+    routes[`/repos/acme/widgets/git/blobs/${sha}`] = response({
+      sha,
+      encoding: 'base64',
+      content: Buffer.from(child).toString('base64'),
+    });
+    return { path: name, type: 'blob', sha };
+  });
+  const sha = hashOf(tree);
+  routes[`/repos/acme/widgets/git/trees/${sha}`] = response({ sha, tree, truncated: false });
+  return sha;
+}
+
+/**
+ * Routes the trees of a merge commit and of each parent. `files` maps a path to
+ * its text in the merge, then in each parent in order; `undefined` is absent.
+ */
+function mergeRoutes(mergeCommit, files) {
+  const routes = {};
+  [mergeCommit.sha, ...mergeCommit.parents.map(parent => parent.sha)].forEach((commitSha, version) => {
+    const root = {};
+    for (const [path, texts] of Object.entries(files)) {
+      if (texts[version] === undefined) continue;
+      const parts = path.split('/');
+      let node = root;
+      for (const dir of parts.slice(0, -1)) node = node[dir] ??= {};
+      node[parts.at(-1)] = texts[version];
+    }
+    routes[`/repos/acme/widgets/git/trees/${commitSha}`] =
+      routes[`/repos/acme/widgets/git/trees/${treeRoutes(routes, root)}`];
+  });
+  return routes;
+}
 
 async function check({ event = PR_EVENT, eventName = 'pull_request_target', routes, terms = TERMS, token = 'token' }) {
   const lines = [];
@@ -337,15 +375,16 @@ describe('run', () => {
 
   it("checks each commit's own diff, so text added and later removed is caught", async () => {
     const [a, b, m] = ['a'.repeat(40), 'b'.repeat(40), 'e'.repeat(40)];
+    const mergeCommit = merge('merge main', m);
     const { code, output } = await check({
       routes: prRoutes({
         pull: pr({ commits: 3 }),
-        commits: [commit('add', a), commit('remove', b), merge('merge main', m)],
+        commits: [commit('add', a), commit('remove', b), mergeCommit],
         files: [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')],
         extra: {
           ...commitRoute(a, [file('src/a.ts', '@@ -0,0 +1,2 @@\n+ok\n+zorblax')]),
           ...commitRoute(b, [file('src/a.ts', '@@ -1,2 +1 @@\n ok\n-zorblax')]),
-          ...mergeRoute(m, []),
+          ...mergeRoutes(mergeCommit, { 'src/a.ts': ['ok', 'ok', undefined] }),
         },
       }),
     });
@@ -356,12 +395,13 @@ describe('run', () => {
 
   it('checks a merge resolution even when a later commit removes its added term', async () => {
     const [mergeSha, removal] = ['e'.repeat(40), 'b'.repeat(40)];
+    const mergeCommit = merge('merge', mergeSha);
     const { code, output } = await check({
       routes: prRoutes({
         pull: pr({ commits: 2 }),
-        commits: [merge('merge', mergeSha), commit('remove', removal)],
+        commits: [mergeCommit, commit('remove', removal)],
         extra: {
-          ...mergeRoute(mergeSha, [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')]),
+          ...mergeRoutes(mergeCommit, { 'src/a.ts': ['zorblax', 'ok', 'fine'] }),
           ...commitRoute(removal, [file('src/a.ts', '@@ -1 +0,0 @@\n-zorblax')]),
         },
       }),
@@ -371,31 +411,112 @@ describe('run', () => {
     expect(output).not.toContain('zorblax');
   });
 
-  it('fails closed when a merge changes more files than compare lists', async () => {
-    const m = 'e'.repeat(40);
-    const many = Array.from({ length: 300 }, (_, i) => file(`src/f${i}.ts`, '@@ -0,0 +1 @@\n+ok'));
+  it('checks only the lines a merge resolution adds beyond both parents', async () => {
+    const mergeSha = 'e'.repeat(40);
+    const mergeCommit = merge('merge main', mergeSha);
     const { code, output } = await check({
       routes: prRoutes({
         pull: pr({ commits: 2 }),
-        commits: [commit('feat'), merge('merge main', m)],
-        extra: { ...commitRoute('c'.repeat(40), []), ...mergeRoute(m, many) },
+        commits: [commit('feat'), mergeCommit],
+        extra: {
+          ...commitRoute('c'.repeat(40), []),
+          ...mergeRoutes(mergeCommit, {
+            // Line 2 comes from main and line 3 from the PR; only line 4 is new in the merge.
+            'src/deep/a.ts': [
+              'keep\nmain says zorblax\npr says flim-flam\nresolved with glorp9',
+              'keep\npr says flim-flam',
+              'keep\nmain says zorblax',
+            ],
+            'src/deep/b.ts': ['zorblax', 'zorblax', 'fine'],
+            'src/other.ts': ['fine', 'fine', 'fine'],
+          }),
+        },
       }),
     });
     expect(code).toBe(1);
-    expect(output).toContain(`Incomplete check: merge ${m.slice(0, 12)} changes 300+ files`);
+    expect(output).toContain(`Restricted term found in commit ${mergeSha.slice(0, 12)} file src/deep/a.ts line 4.`);
+    expect(output.match(/Restricted term found/g)).toHaveLength(1);
+    expect(output.toLowerCase()).not.toMatch(/zorblax|flim|glorp/);
+  });
+
+  it('reports a path only a merge introduces, and withholds an inherited one', async () => {
+    const mergeSha = 'e'.repeat(40);
+    const mergeCommit = merge('merge main', mergeSha);
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull: pr({ commits: 2 }),
+        commits: [commit('feat'), mergeCommit],
+        extra: {
+          ...commitRoute('c'.repeat(40), []),
+          ...mergeRoutes(mergeCommit, {
+            'src/zorblax.ts': ['fine', undefined, undefined],
+            'docs/glorp1.md': ['resolved', 'ours', 'theirs'],
+          }),
+        },
+      }),
+    });
+    expect(code).toBe(1);
+    expect(output).toMatch(/Restricted term found in commit e{12} merged file #\d \(path withheld\): the file path\./);
+    expect(output.match(/Restricted term found/g)).toHaveLength(1);
+    expect(output.toLowerCase()).not.toMatch(/zorblax|glorp/);
+  });
+
+  it('checks a merge in a PR with more files than compare lists, without charging either side', async () => {
+    const mergeSha = 'e'.repeat(40);
+    const mergeCommit = merge('merge main', mergeSha);
+    const files = {};
+    for (let i = 0; i < 400; i++) {
+      files[`src/pr/f${i}.ts`] = [`pr ${i}`, `pr ${i}`, undefined];
+      // Main's own content, terms included, is not the PR's to answer for.
+      files[`src/main/f${i}.ts`] = [`zorblax ${i}`, undefined, `zorblax ${i}`];
+    }
+    files['src/shared.ts'] = ['pr side\nmain side\nresolved flim-flam', 'pr side', 'main side'];
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull: pr({ commits: 2, changed_files: 401 }),
+        commits: [commit('feat'), mergeCommit],
+        extra: { ...commitRoute('c'.repeat(40), []), ...mergeRoutes(mergeCommit, files) },
+      }),
+    });
+    expect(output).not.toContain('Incomplete check');
+    expect(output).toContain(`Restricted term found in commit ${mergeSha.slice(0, 12)} file src/shared.ts line 3.`);
+    expect(output.match(/Restricted term found/g)).toHaveLength(1);
+    expect(code).toBe(1);
+  });
+
+  it('fails closed when a merged directory is too large to list', async () => {
+    const mergeSha = 'e'.repeat(40);
+    const mergeCommit = merge('merge main', mergeSha);
+    const routes = mergeRoutes(mergeCommit, { 'src/a.ts': ['resolved', 'ours', 'theirs'] });
+    const rootPath = `/repos/acme/widgets/git/trees/${mergeSha}`;
+    const root = await routes[rootPath].json();
+    routes[rootPath] = response({ ...root, truncated: true });
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull: pr({ commits: 2 }),
+        commits: [commit('feat'), mergeCommit],
+        extra: { ...commitRoute('c'.repeat(40), []), ...routes },
+      }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain(`Incomplete check: merge ${mergeSha.slice(0, 12)} has a directory too large to list.`);
   });
 
   it("does not charge a merge of the base branch with the base branch's own changes", async () => {
     const [a, m] = ['a'.repeat(40), 'e'.repeat(40)];
+    const mergeCommit = merge('merge main', m);
     const { code, output } = await check({
       routes: prRoutes({
         pull: pr({ commits: 2 }),
-        commits: [commit('feat', a), merge('merge main', m)],
+        commits: [commit('feat', a), mergeCommit],
         extra: {
           ...commitRoute(a, [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')]),
-          // The first-parent diff carries a term main added; the merge's own diff is clean.
+          // The first-parent diff carries a term main added; the merge itself adds nothing.
           ...commitRoute(m, [file('docs/main.md', '@@ -0,0 +1 @@\n+zorblax')]),
-          ...mergeRoute(m, [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')]),
+          ...mergeRoutes(mergeCommit, {
+            'src/a.ts': ['ok', 'ok', undefined],
+            'docs/main.md': ['zorblax', undefined, 'zorblax'],
+          }),
         },
       }),
     });
@@ -408,19 +529,18 @@ describe('run', () => {
     ['an octopus merge', ['p'.repeat(40), MAIN_TIP, 's'.repeat(40)]],
   ])('does not charge main content inherited before merging %s', async (_description, parents) => {
     const [feature, mergeSha] = ['a'.repeat(40), 'e'.repeat(40)];
-    const pull = pr({ commits: 2 });
+    const mergeCommit = { ...merge('merge side branch', mergeSha), parents: parents.map(sha => ({ sha })) };
     const { code, output } = await check({
       routes: prRoutes({
-        pull,
-        commits: [
-          commit('feature', feature),
-          { ...merge('merge side branch', mergeSha), parents: parents.map(sha => ({ sha })) },
-        ],
+        pull: pr({ commits: 2 }),
+        commits: [commit('feature', feature), mergeCommit],
         extra: {
           ...commitRoute(feature, []),
           // Main's term is inherited by the first parent, but absent from the older side branch.
-          ...mergeRoute(mergeSha, [file('docs/main.md', '@@ -0,0 +1 @@\n+zorblax')], parents.at(-1)),
-          ...mergeRoute(mergeSha, [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')], pull.base.sha),
+          ...mergeRoutes(mergeCommit, {
+            'docs/main.md': ['zorblax', 'zorblax', ...parents.slice(1).map(() => undefined)],
+            'src/a.ts': ['ok', undefined, ...parents.slice(1).map(() => 'ok')],
+          }),
         },
       }),
     });
@@ -431,15 +551,16 @@ describe('run', () => {
   it('checks a push merge resolution before a later commit removes it', async () => {
     const [before, mergeSha, removal] = ['1'.repeat(40), 'e'.repeat(40), '2'.repeat(40)];
     const event = { ref: 'refs/heads/main', before, after: removal };
+    const mergeCommit = merge('merge side branch', mergeSha, before);
     const { code, output } = await check({
       eventName: 'push',
       event,
       routes: {
         [`/repos/acme/widgets/compare/${before}...${removal}`]: response({
-          commits: [merge('merge side branch', mergeSha), commit('remove', removal)],
+          commits: [mergeCommit, commit('remove', removal)],
           files: [],
         }),
-        ...mergeRoute(mergeSha, [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')], before),
+        ...mergeRoutes(mergeCommit, { 'src/a.ts': ['zorblax', 'ok', 'fine'] }),
         ...commitRoute(removal, [file('src/a.ts', '@@ -1 +0,0 @@\n-zorblax')]),
       },
     });
@@ -451,16 +572,17 @@ describe('run', () => {
   it('does not charge a push merge with content already on the pushed branch', async () => {
     const [before, mergeSha, after] = ['1'.repeat(40), 'e'.repeat(40), '2'.repeat(40)];
     const event = { ref: 'refs/heads/main', before, after };
+    const mergeCommit = merge('merge side branch', mergeSha);
     const { code, output } = await check({
       eventName: 'push',
       event,
       routes: {
         [`/repos/acme/widgets/compare/${before}...${after}`]: response({
-          commits: [merge('merge side branch', mergeSha), commit('feature', after)],
+          commits: [mergeCommit, commit('feature', after)],
           files: [],
         }),
-        ...mergeRoute(mergeSha, [file('docs/main.md', '@@ -0,0 +1 @@\n+zorblax')], MAIN_TIP),
-        ...mergeRoute(mergeSha, [], before),
+        // The term is already on the merged-in branch, so the merge adds nothing.
+        ...mergeRoutes(mergeCommit, { 'docs/main.md': ['zorblax', undefined, 'zorblax'] }),
         ...commitRoute(after, []),
       },
     });
@@ -482,16 +604,15 @@ describe('run', () => {
     expect(output).not.toContain('zorblax');
   });
 
-  it.each([404, 500])('fails closed when the merge comparison returns HTTP %s', async status => {
+  it.each([404, 500])('fails closed when the merge tree returns HTTP %s', async status => {
     const mergeSha = 'e'.repeat(40);
-    const pull = pr({ commits: 2 });
     const { code, output } = await check({
       routes: prRoutes({
-        pull,
+        pull: pr({ commits: 2 }),
         commits: [commit('feature'), merge('merge main', mergeSha)],
         extra: {
           ...commitRoute('c'.repeat(40), []),
-          [`/repos/acme/widgets/compare/${pull.base.sha}...${mergeSha}`]: response({}, { status }),
+          [`/repos/acme/widgets/git/trees/${mergeSha}`]: response({}, { status }),
         },
       }),
     });

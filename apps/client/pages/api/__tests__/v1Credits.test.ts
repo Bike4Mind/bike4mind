@@ -33,6 +33,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
+// The dedicated limiter is covered by v1/__tests__/credits.rateLimit.test.ts.
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 const { default: handler } = await import('@pages/api/v1/credits');
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };

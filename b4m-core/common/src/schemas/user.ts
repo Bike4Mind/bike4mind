@@ -2,6 +2,7 @@ import * as z from 'zod';
 import type { IUserDocument } from '../types/entities/UserTypes';
 import type { USER_SECRET_FIELDS } from '../serializers/toSafeUser';
 import { passthroughField, passthroughShape } from './responseShape';
+import { SIGNUP_GRANT_UNLOCK_REASONS } from '../signupGrant';
 
 export const VALID_USER_TAGS = [
   '',
@@ -159,10 +160,16 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   hasUsablePassword: true,
   groups: true,
   isAdmin: true,
+  adminPermissions: true,
   storageLimit: true,
+  storageLimitOverride: true,
+  planStorageLimit: true,
   currentStorageSize: true,
   tags: true,
   pendingCreditGrant: true,
+  signupGrant: true,
+  signupGrantHeldReason: true,
+  signupGrantHeldAt: true,
   level: true,
   isBanned: true,
   isModerated: true,
@@ -193,6 +200,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   pendingEmailUsed: true,
   numReferralsAvailable: true,
   regInvites: true,
+  referredByUserId: true,
   organizationId: true,
   lastActiveAt: true,
   isOnline: true,
@@ -212,6 +220,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   firstValueAt: true,
   currentCredits: true,
   lastCreditsPurchasedAt: true,
+  apiKeyTrustApproved: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 
 /** A redacted integration object: only the named non-secret subfields survive. */
@@ -226,6 +235,37 @@ function redactedSubdocument<K extends string>(fields: readonly K[]) {
 // redactUserSecretsForSelf (b4m-core/common/src/serializers/toSafeUser.ts).
 export const selfUserResponseSchema = z.object({
   ...passthroughShape(SELF_VIEW_PASSTHROUGH_FIELDS),
+  signupGrant: z
+    .object({
+      stage: z.enum(['pending_email', 'signup', 'unlocked']),
+      signupCredits: z.number().int().nonnegative(),
+      unlockCredits: z.number().int().nonnegative(),
+      creditsReleased: z.number().int().nonnegative(),
+      nextCondition: z.enum(['email_verification', 'verification']).nullable(),
+      unlockedBy: z.enum(SIGNUP_GRANT_UNLOCK_REASONS).optional(),
+      unlockedOrgId: z.string().optional(),
+      dripCredits: z.number().int().nonnegative().optional(),
+      lastDripPeriod: z
+        .string()
+        .regex(/^preview:\d{1,4}:\d+$/)
+        .optional(),
+      lastDripDay: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional(),
+      activity: z
+        .object({
+          day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          ms: z.number().nonnegative(),
+          lastAt: z.coerce.date(),
+          period: z
+            .string()
+            .regex(/^preview:\d{1,4}:\d+$/)
+            .optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   // Not on IUserDocument, but toJSON() emits it and admin tables key rows by it.
   _id: passthroughField,
   mfa: redactedSubdocument(['totpEnabled', 'setupAt', 'lastUsedAt']),
@@ -253,6 +293,7 @@ export const selfUserResponseSchema = z.object({
   ]),
   slackSettings: redactedSubdocument([
     'slackUserId',
+    'slackTeamId',
     'defaultNotebookId',
     'autoCreateNotebook',
     'notebookNamePrefix',
@@ -272,11 +313,16 @@ export type SelfUser = z.infer<typeof selfUserResponseSchema>;
 
 /**
  * The self-view plus the opt-in fields of the profile endpoints (users/[id] and its
- * update), which pass `keep: ['securityQuestions']` and, for an admin viewer,
- * `keepAdminOnly: ['userNotes']`. The redactor still owns the viewer gate; this only
- * stops every OTHER self-view endpoint from being able to emit these at all.
+ * update), which return question text with blank answers and, for an admin viewer,
+ * `keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment']`. The redactor still owns
+ * the viewer gate; this only stops every OTHER self-view endpoint from being able to emit these at all.
  */
 export const selfUserProfileResponseSchema = selfUserResponseSchema.extend({
-  securityQuestions: passthroughField,
+  securityQuestions: z
+    .array(z.object({ question: z.string(), answer: z.literal('') }))
+    .nullable()
+    .optional(),
   userNotes: passthroughField,
+  signupMeta: passthroughField,
+  signupGrantAssessment: passthroughField,
 });

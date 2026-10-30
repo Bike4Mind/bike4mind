@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
+import { isAxiosError } from 'axios';
 import {
   Alert,
   Box,
@@ -32,7 +33,7 @@ import WarningIcon from '@mui/icons-material/Warning';
 import BusinessIcon from '@mui/icons-material/Business';
 import PersonIcon from '@mui/icons-material/Person';
 import { FieldTooltip } from '@client/app/components/help';
-import { WebhookAuditStatus, WebhookSourceType } from '@bike4mind/common';
+import { WebhookAuditStatus } from '@bike4mind/common';
 import {
   useWebhookAuditLogs,
   useWebhookAuditLog,
@@ -40,6 +41,16 @@ import {
   getDateRangePreset,
   WebhookAuditFiltersParams,
 } from '@client/app/hooks/data/webhookAuditLogs';
+import {
+  WEBHOOK_DATE_PRESET_LABELS,
+  WEBHOOK_DATE_PRESETS,
+  WEBHOOK_EVENT_OPTIONS,
+  WEBHOOK_SOURCE_LABELS,
+  WEBHOOK_SOURCE_TYPES,
+  WEBHOOK_STATUS_LABELS,
+  WEBHOOK_STATUSES,
+} from './webhookAuditLogsTabSearch';
+import { useWebhookAuditLogsSearch } from './useWebhookAuditLogsSearch';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 
 /**
@@ -130,18 +141,24 @@ const DetailDrawer: React.FC<{
   deliveryId: string | null;
   onClose: () => void;
 }> = ({ deliveryId, onClose }) => {
-  const { data: log, isLoading } = useWebhookAuditLog(deliveryId);
+  const { data: log, isLoading, error } = useWebhookAuditLog(deliveryId);
+  const isUnknownDelivery = isAxiosError(error) && error.response?.status === 404;
+
+  // A link to a delivery that has expired (TTL) or never existed closes rather than showing an empty drawer.
+  useEffect(() => {
+    if (isUnknownDelivery) onClose();
+  }, [isUnknownDelivery, onClose]);
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
   };
 
   return (
-    <Drawer anchor="right" open={!!deliveryId} onClose={onClose} size="lg">
+    <Drawer anchor="right" open={!!deliveryId} onClose={onClose} size="lg" data-testid="webhook-details-drawer">
       <Sheet sx={{ p: 3, height: '100%', overflow: 'auto' }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
           <Typography level="h4">Webhook Details</Typography>
-          <IconButton onClick={onClose} size="sm">
+          <IconButton onClick={onClose} size="sm" data-testid="webhook-details-close-btn">
             <CloseIcon />
           </IconButton>
         </Stack>
@@ -379,12 +396,15 @@ const DetailDrawer: React.FC<{
  */
 const WebhookAuditLogsTab: React.FC = () => {
   const isMobile = useIsMobile();
-  const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
-  const [datePreset, setDatePreset] = useState<'24h' | '7d' | '30d' | '90d'>('7d');
-  const [repoSearch, setRepoSearch] = useState('');
-  const [eventFilter, setEventFilter] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<WebhookAuditStatus | null>(null);
-  const [sourceTypeFilter, setSourceTypeFilter] = useState<WebhookSourceType | null>(null);
+  const { view, updateView, repoInput, setRepoInput, deliveryId, openDelivery, closeDelivery } =
+    useWebhookAuditLogsSearch();
+  const {
+    datePreset,
+    repository: repoSearch,
+    event: eventFilter,
+    status: statusFilter,
+    sourceType: sourceTypeFilter,
+  } = view;
 
   // Build filters
   const filters: WebhookAuditFiltersParams = useMemo(() => {
@@ -528,13 +548,14 @@ const WebhookAuditLogsTab: React.FC = () => {
               <FormLabel>Date Range</FormLabel>
               <Select
                 value={datePreset}
-                onChange={(_, value) => value && setDatePreset(value as typeof datePreset)}
+                onChange={(_, value) => value && updateView({ datePreset: value })}
                 data-testid="webhook-logs-date-range-select"
               >
-                <Option value="24h">Last 24 hours</Option>
-                <Option value="7d">Last 7 days</Option>
-                <Option value="30d">Last 30 days</Option>
-                <Option value="90d">Last 90 days</Option>
+                {WEBHOOK_DATE_PRESETS.map(preset => (
+                  <Option key={preset} value={preset}>
+                    {WEBHOOK_DATE_PRESET_LABELS[preset]}
+                  </Option>
+                ))}
               </Select>
             </FormControl>
 
@@ -542,13 +563,16 @@ const WebhookAuditLogsTab: React.FC = () => {
               <FormLabel>Source</FormLabel>
               <Select
                 value={sourceTypeFilter}
-                onChange={(_, value) => setSourceTypeFilter(value)}
+                onChange={(_, value) => updateView({ sourceType: value })}
                 placeholder="All sources"
                 data-testid="webhook-logs-source-select"
               >
                 <Option value={null}>All sources</Option>
-                <Option value="org">Org</Option>
-                <Option value="user">User</Option>
+                {WEBHOOK_SOURCE_TYPES.map(sourceType => (
+                  <Option key={sourceType} value={sourceType}>
+                    {WEBHOOK_SOURCE_LABELS[sourceType]}
+                  </Option>
+                ))}
               </Select>
             </FormControl>
           </Stack>
@@ -558,8 +582,8 @@ const WebhookAuditLogsTab: React.FC = () => {
             <FormLabel>Repository</FormLabel>
             <Input
               placeholder="Search repository..."
-              value={repoSearch}
-              onChange={e => setRepoSearch(e.target.value)}
+              value={repoInput}
+              onChange={e => setRepoInput(e.target.value)}
               startDecorator={<SearchIcon />}
               data-testid="webhook-logs-repository-input"
             />
@@ -571,21 +595,16 @@ const WebhookAuditLogsTab: React.FC = () => {
               <FormLabel>Event Type</FormLabel>
               <Select
                 value={eventFilter}
-                onChange={(_, value) => setEventFilter(value)}
+                onChange={(_, value) => updateView({ event: value })}
                 placeholder="All events"
                 data-testid="webhook-logs-event-type-select"
               >
                 <Option value={null}>All events</Option>
-                <Option value="ping">ping</Option>
-                <Option value="push">push</Option>
-                <Option value="pull_request">pull_request</Option>
-                <Option value="pull_request_review">pull_request_review</Option>
-                <Option value="pull_request_review_comment">pull_request_review_comment</Option>
-                <Option value="issues">issues</Option>
-                <Option value="issue_comment">issue_comment</Option>
-                <Option value="workflow_run">workflow_run</Option>
-                <Option value="check_run">check_run</Option>
-                <Option value="check_suite">check_suite</Option>
+                {WEBHOOK_EVENT_OPTIONS.map(event => (
+                  <Option key={event} value={event}>
+                    {event}
+                  </Option>
+                ))}
               </Select>
             </FormControl>
 
@@ -593,15 +612,16 @@ const WebhookAuditLogsTab: React.FC = () => {
               <FormLabel>Status</FormLabel>
               <Select
                 value={statusFilter}
-                onChange={(_, value) => setStatusFilter(value)}
+                onChange={(_, value) => updateView({ status: value })}
                 placeholder="All statuses"
                 data-testid="webhook-logs-status-select"
               >
                 <Option value={null}>All statuses</Option>
-                <Option value={WebhookAuditStatus.Completed}>Completed</Option>
-                <Option value={WebhookAuditStatus.Failed}>Failed</Option>
-                <Option value={WebhookAuditStatus.Processing}>Processing</Option>
-                <Option value={WebhookAuditStatus.Received}>Received</Option>
+                {WEBHOOK_STATUSES.map(status => (
+                  <Option key={status} value={status}>
+                    {WEBHOOK_STATUS_LABELS[status]}
+                  </Option>
+                ))}
               </Select>
             </FormControl>
 
@@ -631,7 +651,7 @@ const WebhookAuditLogsTab: React.FC = () => {
               variant="soft"
               color="primary"
               endDecorator={<CloseIcon fontSize="small" />}
-              onClick={() => setRepoSearch('')}
+              onClick={() => updateView({ repository: '' })}
             >
               Repo: {repoSearch}
             </Chip>
@@ -642,7 +662,7 @@ const WebhookAuditLogsTab: React.FC = () => {
               variant="soft"
               color="primary"
               endDecorator={<CloseIcon fontSize="small" />}
-              onClick={() => setEventFilter(null)}
+              onClick={() => updateView({ event: null })}
             >
               Event: {eventFilter}
             </Chip>
@@ -653,7 +673,7 @@ const WebhookAuditLogsTab: React.FC = () => {
               variant="soft"
               color="primary"
               endDecorator={<CloseIcon fontSize="small" />}
-              onClick={() => setStatusFilter(null)}
+              onClick={() => updateView({ status: null })}
             >
               Status: {statusFilter}
             </Chip>
@@ -664,9 +684,9 @@ const WebhookAuditLogsTab: React.FC = () => {
               variant="soft"
               color="primary"
               endDecorator={<CloseIcon fontSize="small" />}
-              onClick={() => setSourceTypeFilter(null)}
+              onClick={() => updateView({ sourceType: null })}
             >
-              Source: {sourceTypeFilter === 'org' ? 'Org' : 'User'}
+              Source: {WEBHOOK_SOURCE_LABELS[sourceTypeFilter]}
             </Chip>
           )}
           {[repoSearch, eventFilter, statusFilter, sourceTypeFilter].filter(Boolean).length > 1 && (
@@ -674,12 +694,7 @@ const WebhookAuditLogsTab: React.FC = () => {
               size="sm"
               variant="plain"
               color="neutral"
-              onClick={() => {
-                setRepoSearch('');
-                setEventFilter(null);
-                setStatusFilter(null);
-                setSourceTypeFilter(null);
-              }}
+              onClick={() => updateView({ repository: '', event: null, status: null, sourceType: null })}
             >
               Clear all
             </Button>
@@ -703,7 +718,7 @@ const WebhookAuditLogsTab: React.FC = () => {
               key={log.id}
               variant="outlined"
               sx={{ p: 1.5, cursor: 'pointer' }}
-              onClick={() => setSelectedDeliveryId(log.deliveryId)}
+              onClick={() => openDelivery(log.deliveryId)}
             >
               <Stack spacing={0.75}>
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
@@ -751,7 +766,7 @@ const WebhookAuditLogsTab: React.FC = () => {
             </thead>
             <tbody>
               {logs.map(log => (
-                <tr key={log.id} onClick={() => setSelectedDeliveryId(log.deliveryId)} style={{ cursor: 'pointer' }}>
+                <tr key={log.id} onClick={() => openDelivery(log.deliveryId)} style={{ cursor: 'pointer' }}>
                   <td>
                     <Typography level="body-sm">{relativeTimeFormat(new Date(log.receivedAt))}</Typography>
                   </td>
@@ -803,7 +818,7 @@ const WebhookAuditLogsTab: React.FC = () => {
       )}
 
       {/* Detail Drawer */}
-      <DetailDrawer deliveryId={selectedDeliveryId} onClose={() => setSelectedDeliveryId(null)} />
+      <DetailDrawer deliveryId={deliveryId ?? null} onClose={closeDelivery} />
     </Box>
   );
 };

@@ -38,7 +38,7 @@ import {
   postSreLowConfidenceMessage,
   postSreRateLimitedMessage,
   postSreAnalysisFailureMessage,
-} from '@server/integrations/slack/sreSlackApproval';
+} from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 import { escalateRecurrence } from '@workers/integrations/sre/escalation';
 import { buildWontFixCommentBody, WONT_FIX_COMMENT_MARKER } from '@workers/integrations/sre/wontFixComment';
 

@@ -4,19 +4,17 @@ import { createMocks } from 'node-mocks-http';
 const {
   mockUserFindById,
   mockUserUpdateOne,
-  mockAppFileFindOne,
-  mockAppFileFindOneAndDelete,
   mockStorageDelete,
   mockStorageGetSignedUrl,
   mockAppFileCtor,
+  mockFileSave,
 } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
   mockUserUpdateOne: vi.fn(),
-  mockAppFileFindOne: vi.fn(),
-  mockAppFileFindOneAndDelete: vi.fn(),
   mockStorageDelete: vi.fn(),
   mockStorageGetSignedUrl: vi.fn(),
   mockAppFileCtor: vi.fn(),
+  mockFileSave: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -42,17 +40,13 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   FileGeneratePresignedUrlRequestInput: { parse: () => ({ mimeType: 'image/png', fileSize: 123 }) },
 }));
 
-const withSession = (value: unknown) => ({ session: () => Promise.resolve(value) });
-
 vi.mock('@bike4mind/database/content', () => {
   class AppFile {
     id = 'new-file-id';
     constructor(public doc: Record<string, unknown>) {
       mockAppFileCtor(doc);
     }
-    save = vi.fn().mockResolvedValue(undefined);
-    static findOne = (...a: unknown[]) => withSession(mockAppFileFindOne(...a));
-    static findOneAndDelete = (...a: unknown[]) => withSession(mockAppFileFindOneAndDelete(...a));
+    save = mockFileSave;
   }
   return { AppFile };
 });
@@ -60,9 +54,8 @@ vi.mock('@bike4mind/database/content', () => {
 vi.mock('@bike4mind/database', () => ({
   User: {
     findById: (...a: unknown[]) => mockUserFindById(...a),
-    updateOne: (...a: unknown[]) => withSession(mockUserUpdateOne(...a)),
+    updateOne: (...a: unknown[]) => mockUserUpdateOne(...a),
   },
-  withTransaction: (fn: (session: unknown) => unknown) => fn({}),
 }));
 
 vi.mock('@bike4mind/fab-pipeline', () => ({
@@ -86,7 +79,7 @@ import handler from '../upload-photo';
 
 const OWN = 'u1';
 
-const run = (photoUrl: string | undefined, caller: { id: string; isAdmin: boolean } = { id: OWN, isAdmin: false }) => {
+const run = (caller: { id: string; isAdmin: boolean } = { id: OWN, isAdmin: false }) => {
   const { req, res } = createMocks({ method: 'POST', query: { id: OWN }, body: {} });
   (req as Record<string, unknown>).user = caller;
   (req as Record<string, unknown>).ability = {};
@@ -94,61 +87,51 @@ const run = (photoUrl: string | undefined, caller: { id: string; isAdmin: boolea
 };
 
 beforeEach(() => {
-  mockUserFindById.mockReset();
+  mockUserFindById.mockReset().mockResolvedValue({ id: OWN, name: 'A', photoUrl: 'profile-photos/u1/old.png' });
   mockUserUpdateOne.mockReset().mockResolvedValue(undefined);
-  mockAppFileFindOne.mockReset();
-  mockAppFileFindOneAndDelete.mockReset().mockResolvedValue(undefined);
   mockStorageDelete.mockReset().mockResolvedValue(undefined);
   mockStorageGetSignedUrl.mockReset().mockResolvedValue('https://signed');
   mockAppFileCtor.mockReset();
+  mockFileSave.mockReset().mockResolvedValue(undefined);
 });
 
-describe('POST /api/users/:id/upload-photo - stored photoUrl deref guard', () => {
-  it('does NOT delete the S3 object or AppFile when the existing photo file is not owned by the caller', async () => {
-    mockUserFindById.mockResolvedValue({ id: OWN, name: 'A', photoUrl: 'profile-photos/victim/secret.png' });
-    mockAppFileFindOne.mockReturnValue({ userId: 'someone-else' });
-
-    const { res, promise } = run('profile-photos/victim/secret.png');
+describe('POST /api/users/:id/upload-photo - presign only', () => {
+  it('creates a pending AppFile and returns the presigned URL without touching the profile or the old photo', async () => {
+    const { res, promise } = run();
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    // The destructive operations must be skipped for a foreign key.
+    expect(mockAppFileCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: OWN, status: 'pending', path: expect.stringMatching(/^profile-photos\/u1\//) })
+    );
+    expect(mockFileSave).toHaveBeenCalled();
+    // photoUrl stays on the old (existing) photo until confirm-photo runs, so no render can hit a missing key.
+    expect(mockUserUpdateOne).not.toHaveBeenCalled();
     expect(mockStorageDelete).not.toHaveBeenCalled();
-    expect(mockAppFileFindOneAndDelete).not.toHaveBeenCalled();
-    // The stale/foreign key is still cleared off the profile.
-    expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: OWN }, { $unset: { photoUrl: 1 } });
-    // The PUT is bound to the declared fileSize, so S3 refuses a larger photo.
+    // The PUT is bound to the declared fileSize and content type, so S3 refuses a larger photo or another type.
     expect(mockStorageGetSignedUrl).toHaveBeenCalledWith(expect.any(String), 'put', {
       expiresIn: 600,
+      ContentType: 'image/png',
       ContentLength: 123,
     });
+    expect(res._getJSONData()).toEqual(
+      expect.objectContaining({ url: 'https://signed', fileId: 'new-file-id', fileKey: expect.any(String) })
+    );
   });
 
-  it('deletes the previous photo file when an admin re-uploads for another user', async () => {
-    mockUserFindById.mockResolvedValue({ id: OWN, name: 'A', photoUrl: 'profile-photos/u1/own.png' });
-    mockAppFileFindOne.mockReturnValue({ userId: OWN });
-
-    const { res, promise } = run('profile-photos/u1/own.png', { id: 'admin-1', isAdmin: true });
+  it('attributes the AppFile to the profile owner when an admin uploads on their behalf', async () => {
+    const { res, promise } = run({ id: 'admin-1', isAdmin: true });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    // Ownership is the profile owner, not the uploader - otherwise an admin upload strands the
-    // old S3 object and AppFile row, since the $unset still clears the pointer to them.
-    expect(mockStorageDelete).toHaveBeenCalledWith('profile-photos/u1/own.png');
-    expect(mockAppFileFindOneAndDelete).toHaveBeenCalledWith({ path: 'profile-photos/u1/own.png' });
-    // And the replacement is attributed to the profile owner, so the next re-upload matches too.
     expect(mockAppFileCtor).toHaveBeenCalledWith(expect.objectContaining({ userId: OWN }));
   });
 
-  it('deletes the caller-owned previous photo file on re-upload', async () => {
-    mockUserFindById.mockResolvedValue({ id: OWN, name: 'A', photoUrl: 'profile-photos/u1/own.png' });
-    mockAppFileFindOne.mockReturnValue({ userId: OWN });
+  it('rejects a caller who is neither the owner nor an admin before looking the user up', async () => {
+    const { promise } = run({ id: 'intruder', isAdmin: false });
+    await expect(promise).rejects.toThrow();
 
-    const { res, promise } = run('profile-photos/u1/own.png');
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(mockStorageDelete).toHaveBeenCalledWith('profile-photos/u1/own.png');
-    expect(mockAppFileFindOneAndDelete).toHaveBeenCalledWith({ path: 'profile-photos/u1/own.png' });
+    expect(mockUserFindById).not.toHaveBeenCalled();
+    expect(mockFileSave).not.toHaveBeenCalled();
   });
 });

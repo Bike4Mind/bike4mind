@@ -1,6 +1,7 @@
 import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { organizationService } from '@bike4mind/services';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
 
 export const API_KEY_DEPARTED_HOLDER_MESSAGE =
   'This API key bills an organization you are no longer a member of. Re-mint the key to continue.';
@@ -20,7 +21,7 @@ export function isApiKeyOrgMembershipStale({
   return (
     !!billingOrg &&
     isApiKeyCaller &&
-    !billingUser.isAdmin &&
+    !persistedIsAdmin(billingUser) &&
     !organizationService.isCurrentOrgMember(billingOrg, billingUser.id)
   );
 }

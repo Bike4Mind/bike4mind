@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/server-utils/utils/sqsDelivery';
 import { GenerationCallbackMessageSchema } from '@bike4mind/server-utils/generationCallback/messages';
 import { toQuestPollBody } from '@server/utils/questPollBody';
-import { assertUrlAllowed, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
+import { assertUrlAllowed, fetchPinned, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@workers/webhooks/signedWebhook';
 
 /**
@@ -33,7 +33,7 @@ type AttemptResult =
 /**
  * Delivers one generation completion callback: a POST of the quest's poll body, signed with the
  * calling API key's secret (apps/workers/src/webhooks/signedWebhook.ts). Armed and enqueued by
- * server/generationCallback/dispatchQuestCallback.ts.
+ * packages/server-utils/src/generationCallback/dispatchQuestCallback.ts.
  *
  * Everything is re-read per attempt, so a retry signs with the key's current secret and a
  * key revoked mid-retry stops the delivery. A message whose eventId no longer matches the
@@ -136,15 +136,23 @@ async function attemptDelivery(
 
   let response: Response;
   try {
-    response = await fetch(callback.url, {
-      method: 'POST',
-      headers,
-      body,
-      // Not followed: the target was validated, a redirect hop was not.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(WEBHOOK_HTTP_TIMEOUT_MS),
-    });
+    response = await fetchPinned(
+      callback.url,
+      {
+        method: 'POST',
+        headers,
+        body,
+        // Not followed: the target was validated, a redirect hop was not.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(WEBHOOK_HTTP_TIMEOUT_MS),
+      },
+      { discardBody: true }
+    );
   } catch (error) {
+    if (error instanceof SsrfError) {
+      logger.warn('SECURITY: generation callback target blocked', { error: error.message });
+      return { kind: 'permanent', error: `Callback URL not allowed: ${error.message}` };
+    }
     const isTimeout = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
     return {
       kind: 'retryable',
@@ -152,6 +160,7 @@ async function attemptDelivery(
     };
   }
 
+  await response.body?.cancel().catch(() => undefined);
   if (response.ok) return { kind: 'delivered', statusCode: response.status };
   if (response.status >= 300 && response.status < 400) {
     return {

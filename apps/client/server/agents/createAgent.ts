@@ -5,11 +5,35 @@ import {
   IAgent,
   IAgentCapabilities,
   IAgentDocument,
+  IUserDocument,
   UserLevelType,
 } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
 import { BadRequestError } from '@bike4mind/utils';
 import { AgentValidationError, validateAgentUpdate } from '@server/utils/agentValidation';
+
+const AGENT_LIMITS: Record<UserLevelType, number> = {
+  DemoUser: 2,
+  PaidUser: 10,
+  VIPUser: 20,
+  ManagerUser: 50,
+  AdminUser: Infinity,
+};
+
+/**
+ * Per-tier agent count cap. Throws BadRequestError with `errorCode: agent_limit_reached` when the
+ * user already owns their tier's maximum. Every agent-creating path calls it before writing:
+ * createAgent below and POST /api/agents/create-from-context.
+ */
+export async function assertAgentLimit(user: { id: string; level?: UserLevelType | null }) {
+  const activeCount = await agentRepository.countByUserId(user.id);
+  const limit = AGENT_LIMITS[user.level ?? 'DemoUser'];
+  if (activeCount >= limit) {
+    throw new BadRequestError(`Agent limit reached for your tier (${limit} max)`, {
+      errorCode: AGENT_LIMIT_REACHED_ERROR_CODE,
+    });
+  }
+}
 
 /**
  * Validates and creates an agent owned by `userId`, enforcing the per-tier agent cap and, when
@@ -18,16 +42,23 @@ import { AgentValidationError, validateAgentUpdate } from '@server/utils/agentVa
  * Without `useOwnCredits` the agent always starts at 0, so a request can't create an unpaid balance.
  * Shared by POST /api/agents and POST /api/v1/agents. Throws BadRequestError on any rejection: an
  * AgentValidationError for an invalid body field, and the tier cap carries `errorCode: agent_limit_reached`.
- * `label` renames a field in an error message (see validateAgentUpdate).
+ * `label` renames a field in an error message and `logger` is the request logger for the model catalog lookup (see validateAgentUpdate).
  */
-export async function createAgent(agentData: Partial<IAgent>, userId: string, label?: (field: string) => string) {
+export async function createAgent(
+  agentData: Partial<IAgent>,
+  creator: IUserDocument,
+  label?: (field: string) => string,
+  logger?: Parameters<typeof validateAgentUpdate>[3]
+) {
+  const userId = creator.id;
+
   // Validate required fields
   if (!agentData.name) {
     throw new AgentValidationError('Agent name is required');
   }
 
   // Normalizes agentData in place, so the fields below read the validated values.
-  validateAgentUpdate(agentData, label);
+  await validateAgentUpdate(agentData, creator, label, logger);
 
   // Always use a default description if empty or undefined
   // This ensures the MongoDB schema validation passes
@@ -67,21 +98,7 @@ export async function createAgent(agentData: Partial<IAgent>, userId: string, la
       throw new BadRequestError('User not found');
     }
 
-    // Enforce per-tier agent count limit
-    const AGENT_LIMITS: Record<UserLevelType, number> = {
-      DemoUser: 2,
-      PaidUser: 10,
-      VIPUser: 20,
-      ManagerUser: 50,
-      AdminUser: Infinity,
-    };
-    const activeCount = await agentRepository.countByUserId(userId);
-    const limit = AGENT_LIMITS[user.level ?? 'DemoUser'];
-    if (activeCount >= limit) {
-      throw new BadRequestError(`Agent limit reached for your tier (${limit} max)`, {
-        errorCode: AGENT_LIMIT_REACHED_ERROR_CODE,
-      });
-    }
+    await assertAgentLimit({ id: userId, level: user.level });
 
     let updatedUserCredits = user.currentCredits || 0;
 

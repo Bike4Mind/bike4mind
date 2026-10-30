@@ -3,6 +3,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   IUserDocument,
   ApiKeyScope,
+  ApiKeyScopeValue,
   CreditHolderType,
   type ApiKeyBillingOwnerType,
   type CompletionSource,
@@ -12,10 +13,18 @@ import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database
 import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
-import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import {
+  API_KEY_ACCESS_DENIED_MESSAGE,
+  assertCliSessionAllowed,
+  isApiKeyAccessAllowed,
+} from '@server/utils/apiKeyAccessGate';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { resolveUntrustedKeyLimits } from '@server/utils/apiKeyTrust';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
 
 /** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */
 export type RateLimitErrorInfo = {
@@ -33,7 +42,7 @@ export interface VerifiedUser {
 export interface ApiKeyInfo {
   keyId: string;
   userId: string;
-  scopes: ApiKeyScope[];
+  scopes: ApiKeyScopeValue[];
   rateLimit: {
     requestsPerMinute: number;
     requestsPerDay: number;
@@ -54,13 +63,20 @@ export interface ApiKeyInfo {
   spendCap?: number;
   /** Cumulative settled spend in credits at validation time; embed keys only. */
   currentSpend?: number;
+  /** The owner's API key trust standing as judged at verification (see apiKeyTrust.ts). */
+  ownerUntrusted?: boolean;
+  /** The admin who provisioned the key for its owner; exempts it from the paid-only switch. */
+  createdByUserId?: string;
 }
 
 /**
  * Verify JWT token from Authorization header
  * @throws Error if token is invalid or expired
  */
-export async function verifyJwtToken(token: string | undefined): Promise<VerifiedUser> {
+export async function verifyJwtToken(
+  token: string | undefined,
+  options: { requireApiAccess?: boolean } = {}
+): Promise<VerifiedUser> {
   if (!token) {
     throw new Error('No authorization token provided');
   }
@@ -69,6 +85,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     // Pin HS256 to match the REST strategy / verifyRefreshToken (no algorithm-confusion surface).
     const decoded = jwt.verify(token, Config.JWT_SECRET, { algorithms: ['HS256'] }) as {
       id: string;
+      sid?: string;
       tokenVersion?: number;
       mfaPending?: boolean;
       typ?: string;
@@ -81,6 +98,9 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     // gate does not cover this path, so default-deny the OAuth kind here explicitly.
     if (decoded.kind === 'oauth') {
       throw new Error('OAuth access tokens are not accepted on this endpoint');
+    }
+    if (decoded.impersonatedBy) {
+      throw new ForbiddenError('Impersonated sessions cannot use CLI or completion credentials.');
     }
 
     // Reject a first-factor-only token: the mfaPending access token (issued pre-2FA, before the
@@ -136,6 +156,14 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       throw new ForbiddenError(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
     }
 
+    // Shared web surfaces identify device sessions from trusted server metadata;
+    // dedicated CLI/API surfaces apply the policy to every JWT.
+    try {
+      await assertCliSessionAllowed(user, decoded.sid, options);
+    } catch (error) {
+      throw toApiKeyAuthError(error);
+    }
+
     return {
       id: user.id,
       email: user.email,
@@ -156,7 +184,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
 export interface VerifyApiKeyOptions {
   /** At least one of these scopes must be present on the key. Defaults to
    *  AI_GENERATE / AI_CHAT to preserve the legacy completions behavior. */
-  requiredScopes?: ApiKeyScope[];
+  requiredScopes?: ApiKeyScopeValue[];
 }
 
 /**
@@ -177,7 +205,7 @@ const DEFAULT_COMPLETION_SCOPES: ApiKeyScope[] = [ApiKeyScope.AI_GENERATE, ApiKe
 function toApiKeyInfo(v: {
   keyId?: string;
   userId?: string;
-  scopes?: ApiKeyScope[];
+  scopes?: ApiKeyScopeValue[];
   rateLimit?: { requestsPerMinute: number; requestsPerDay: number };
   billingOwnerType?: ApiKeyBillingOwnerType;
   organizationId?: string;
@@ -187,6 +215,7 @@ function toApiKeyInfo(v: {
   branding?: IEmbedBranding;
   spendCap?: number;
   currentSpend?: number;
+  createdByUserId?: string;
 }): ApiKeyInfo {
   return {
     keyId: v.keyId!,
@@ -201,6 +230,7 @@ function toApiKeyInfo(v: {
     branding: v.branding,
     spendCap: v.spendCap,
     currentSpend: v.currentSpend,
+    createdByUserId: v.createdByUserId,
   };
 }
 
@@ -212,8 +242,8 @@ function toApiKeyInfo(v: {
  *
  * Exactly one copy of the gate: `apiKeyAuth` calls {@link assertAccountStateUsable} rather than
  * repeating these conditions. The thrown error class is the status contract: the Function-URL
- * adapter (defineLambdaRoute) answers a ForbiddenError with 403 and every other auth throw with
- * 401, and the apiKeyOrJwt resolver (resolveContractAuth) surfaces a key's ForbiddenError when
+ * adapter (defineLambdaRoute) answers a ForbiddenError with 403, a 5xx HTTPError (see
+ * toApiKeyAuthError) with that status, and every other auth throw with 401, and the apiKeyOrJwt resolver (resolveContractAuth) surfaces a key's ForbiddenError when
  * the JWT fallback also fails. No apiKeyOrJwt transport forwards it yet: its only caller, the
  * Fargate SSE route (sseRoute.ts), reports any auth throw as a generic failure.
  *
@@ -223,18 +253,33 @@ function toApiKeyInfo(v: {
  * suspension lands *after* the key exists and must take effect on the surfaces
  * that spend money.
  */
-async function assertOwnerAccountUsable(userId: string): Promise<void> {
-  const user = await User.findById(userId);
+async function assertOwnerAccountUsable(info: ApiKeyInfo) {
+  const user = await User.findById(info.userId);
   if (!user) {
     throw new UnauthorizedError('User not found or banned');
   }
   assertAccountStateUsable(user);
+  // The admin paid-only switch, mirroring apiKeyAuth so every key surface shares it.
+  const accessAllowed = await isApiKeyAccessAllowed(user, {
+    billingOwnerType: info.billingOwnerType,
+    organizationId: info.organizationId,
+    createdByUserId: info.createdByUserId,
+  });
+  if (!accessAllowed) {
+    Logger.globalInstance.warn('API key rejected: apiKeyAccess setting denies this owner', {
+      keyId: info.keyId,
+      userId: info.userId,
+    });
+    throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
+  }
+  return user;
 }
 
 /**
  * Verify API key from headers
- * @throws Error if API key is invalid, expired, missing required scope, or owned by
- * a banned/disputed/suspended account
+ * @throws UnauthorizedError/ForbiddenError if API key is invalid, expired, missing required scope, or
+ * owned by a banned/disputed/suspended account; a 5xx HTTPError (see toApiKeyAuthError) when the
+ * check itself fails, e.g. the database is unreachable
  */
 export async function verifyApiKey(
   headers: Record<string, string | undefined>,
@@ -243,7 +288,7 @@ export async function verifyApiKey(
   const apiKey = extractApiKeyFromHeaders(headers);
 
   if (!apiKey) {
-    throw new Error('No API key provided');
+    throw new UnauthorizedError('No API key provided');
   }
 
   try {
@@ -252,7 +297,9 @@ export async function verifyApiKey(
     });
 
     if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
-      throw new Error(validation.reason ? `Invalid API key: ${validation.reason}` : 'Invalid or expired API key');
+      throw new UnauthorizedError(
+        validation.reason ? `Invalid API key: ${validation.reason}` : 'Invalid or expired API key'
+      );
     }
 
     const requiredScopes = options?.requiredScopes ?? DEFAULT_COMPLETION_SCOPES;
@@ -265,14 +312,13 @@ export async function verifyApiKey(
       });
     }
 
-    await assertOwnerAccountUsable(validation.userId);
-
-    return toApiKeyInfo(validation);
+    const info = toApiKeyInfo(validation);
+    const owner = await assertOwnerAccountUsable(info);
+    // Apply the trust ceiling only after the access policy has accepted the owner; same ceiling apiKeyAuth applies.
+    const { rateLimit, ownerUntrusted } = await resolveUntrustedKeyLimits(owner, info);
+    return { ...info, rateLimit, ownerUntrusted };
   } catch (error) {
-    if (error instanceof Error) {
-      throw error;
-    }
-    throw new Error('Failed to verify API key');
+    throw toApiKeyAuthError(error);
   }
 }
 
@@ -295,10 +341,10 @@ export async function verifyBridgeApiKey(headers: Record<string, string | undefi
  */
 function assertEmbedCredential(info: ApiKeyInfo): void {
   if (info.billingOwnerType !== CreditHolderType.Organization || !info.organizationId) {
-    throw new Error('Embed keys must be organization-owned');
+    throw new UnauthorizedError('Embed keys must be organization-owned');
   }
   if (!info.agentId) {
-    throw new Error('Embed key is not bound to an agent');
+    throw new UnauthorizedError('Embed key is not bound to an agent');
   }
 }
 
@@ -306,7 +352,9 @@ function assertEmbedCredential(info: ApiKeyInfo): void {
  * Verify an API key that authorizes the public embed completion surface (the
  * raw-key path: X-API-Key / Authorization). Requires the EMBED_CHAT scope plus
  * the embed credential-class properties above.
- * @throws Error if the key lacks EMBED_CHAT, is not org-owned, or has no agent.
+ * @throws UnauthorizedError/ForbiddenError if the key lacks EMBED_CHAT, is not org-owned, or has no
+ * agent; a 5xx HTTPError (see toApiKeyAuthError) when the check itself fails, e.g. the database is
+ * unreachable
  */
 export async function verifyEmbedApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
   const info = await verifyApiKey(headers, { requiredScopes: [ApiKeyScope.EMBED_CHAT] });
@@ -320,27 +368,34 @@ export async function verifyEmbedApiKey(headers: Record<string, string | undefin
  * scope, and credential-class checks, so a session token cannot outlive a key
  * that was revoked/disabled within its short TTL - the revocation-safety the
  * token itself cannot provide.
- * @throws Error if the key is missing, not active, or not a valid embed key.
+ * @throws UnauthorizedError if the key is missing, not active, or not a valid embed key;
+ * a 5xx HTTPError (see toApiKeyAuthError) when the check itself fails.
  */
 export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
-  // Share the exact post-lookup gates (status, expiry, last-used, projection) with
-  // the raw-key path via validateUserApiKeyById, so a future gate added to key
-  // validation propagates to the session-token path automatically.
-  const validation = await userApiKeyService.validateUserApiKeyById(keyId, {
-    db: { userApiKeys: userApiKeyRepository },
-  });
+  try {
+    // Share the exact post-lookup gates (status, expiry, last-used, projection) with
+    // the raw-key path via validateUserApiKeyById, so a future gate added to key
+    // validation propagates to the session-token path automatically.
+    const validation = await userApiKeyService.validateUserApiKeyById(keyId, {
+      db: { userApiKeys: userApiKeyRepository },
+    });
 
-  if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
-    throw new Error(validation.reason ? `Invalid embed key: ${validation.reason}` : 'Invalid or expired embed key');
-  }
-  if (!validation.scopes.includes(ApiKeyScope.EMBED_CHAT)) {
-    throw new Error('API key does not have permission for this endpoint (requires embed:chat)');
-  }
+    if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
+      throw new UnauthorizedError(
+        validation.reason ? `Invalid embed key: ${validation.reason}` : 'Invalid or expired embed key'
+      );
+    }
+    if (!validation.scopes.includes(ApiKeyScope.EMBED_CHAT)) {
+      throw new UnauthorizedError('API key does not have permission for this endpoint (requires embed:chat)');
+    }
 
-  const info = toApiKeyInfo(validation);
-  assertEmbedCredential(info);
-  await assertOwnerAccountUsable(info.userId);
-  return info;
+    const info = toApiKeyInfo(validation);
+    assertEmbedCredential(info);
+    await assertOwnerAccountUsable(info);
+    return info;
+  } catch (error) {
+    throw toApiKeyAuthError(error);
+  }
 }
 
 /**

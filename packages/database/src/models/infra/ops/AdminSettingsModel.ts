@@ -1,11 +1,12 @@
-import mongoose, { Model, Schema } from 'mongoose';
+import mongoose, { Model, RootFilterQuery, Schema } from 'mongoose';
 import {
   AdminSettingDoc,
   IAdminSettings,
   IAdminSettingsRepository,
+  isEnforceCreditsLocked,
   redactSettingSecrets,
+  resolveSettingDefinition,
   SettingKey,
-  settingsMap,
   SettingValue,
 } from '@bike4mind/common';
 import { decryptAtRest } from '@bike4mind/utils/security';
@@ -16,19 +17,25 @@ import BaseRepository from '@bike4mind/db-core';
  * Sensitive setting values are stored encrypted at rest (see apps/client settings/update.ts
  * and the backfill migration). Decrypt on the way out so server consumers - apiKeyService,
  * getSettingsMap, the Slack/integration readers - transparently receive plaintext. Gated so
- * only an isSensitive key whose value is a ciphertext string is touched: sreAgentConfig (an
- * object, manages its own per-repo secrets) and any not-yet-migrated plaintext value pass
- * through unchanged. Mutates the passed plain object in place and returns it.
+ * only an isSensitive key whose value is a string is touched (sreAgentConfig, an object,
+ * manages its own per-repo secrets; not-yet-migrated plaintext passes through unchanged).
+ * An unknown name is treated as sensitive so a process that never registered contributed
+ * settings does not hand back ciphertext. Mutates the passed plain object in place and returns it.
  */
 function decryptSettingInPlace<T extends { settingName?: string; settingValue?: unknown }>(setting: T): T;
 function decryptSettingInPlace<T extends { settingName?: string; settingValue?: unknown }>(setting: T | null): T | null;
 function decryptSettingInPlace(setting: { settingName?: string; settingValue?: unknown } | null) {
   if (!setting || typeof setting.settingValue !== 'string') return setting;
-  const definition = settingsMap[setting.settingName as SettingKey] as { isSensitive?: boolean } | undefined;
-  if (definition?.isSensitive) {
+  if (typeof setting.settingName !== 'string') return setting;
+  const definition = resolveSettingDefinition(setting.settingName);
+  if (!definition || definition.isSensitive) {
     setting.settingValue = decryptAtRest(setting.settingValue);
   }
   return setting;
+}
+
+function isDuplicateKey(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
 }
 
 interface IAdminSettingsMethods {}
@@ -50,8 +57,8 @@ const AdminSettingsSchema = new Schema<IAdminSettings, IAdminSettingsModel, IAdm
       // Trusted reads that need plaintext must use .lean() + decryptSettingInPlace,
       // which bypasses this transform entirely. Does NOT decrypt -- decryption stays
       // in the repository layer where the key is available.
-      // Note: redactSettingSecrets is fail-closed -- setting names absent from settingsMap
-      // (e.g. llmModelConfigurations) are also masked. Routes returning a hydrated doc for
+      // Note: redactSettingSecrets is fail-closed -- setting names with no core or contributed
+      // definition (e.g. llmModelConfigurations) are also masked. Routes returning a hydrated doc for
       // non-sensitive unmapped settings should avoid res.json(hydratedDoc) and return a
       // plain value or { success: true } instead.
       transform: (_doc, ret) => redactSettingSecrets(ret as AdminSettingDoc),
@@ -107,15 +114,54 @@ class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements 
     return decryptSettingInPlace(result as (IAdminSettings & { settingName: string }) | null);
   }
 
-  async getSettingsValue<K extends SettingKey>(settingName: K): Promise<SettingValue<K> | undefined> {
-    const setting = await this.findOne({ settingName }); // findOne already decrypts via lean path
-    const value = settingsMap?.[settingName]?.schema?.safeParse(setting?.settingValue);
-
-    if (value.success) {
-      return value.data as SettingValue<K>;
-    } else {
-      return settingsMap?.[settingName]?.defaultValue as SettingValue<K> | undefined;
+  /**
+   * Insert-once marker row keyed by settingName: true only for the caller whose upsert created it.
+   * The name is outside settingsMap, so the settings readers mask the row like any unmapped one.
+   * With staleAfterMs, a claim older than that is taken over, so a holder that died before
+   * releasing it cannot block the slot forever; the conditional update keeps one winner.
+   */
+  async claimOnce(settingName: string, claimId: string, staleAfterMs?: number): Promise<boolean> {
+    // autoIndex builds lazily; the unique settingName index must exist before two upserts can race.
+    await this.model.init();
+    const now = new Date();
+    try {
+      const res = await this.model.updateOne(
+        { settingName } as RootFilterQuery<IAdminSettings>,
+        { $setOnInsert: { settingValue: { claimId, claimedAt: now } } },
+        { upsert: true }
+      );
+      if (res.upsertedCount === 1) return true;
+    } catch (err) {
+      if (!isDuplicateKey(err)) throw err;
     }
+    if (staleAfterMs === undefined) return false;
+    const takeover = await this.model.updateOne(
+      {
+        settingName,
+        'settingValue.claimedAt': { $lt: new Date(now.getTime() - staleAfterMs) },
+      } as RootFilterQuery<IAdminSettings>,
+      { $set: { settingValue: { claimId, claimedAt: now } } }
+    );
+    return takeover.modifiedCount === 1;
+  }
+
+  // Keyed by claimId so a caller can only release the claim it took.
+  async releaseClaim(settingName: string, claimId: string): Promise<boolean> {
+    const res = await this.model.deleteOne(
+      { settingName, 'settingValue.claimId': claimId } as RootFilterQuery<IAdminSettings>,
+      { hardDelete: true }
+    );
+    return (res?.deletedCount ?? 0) > 0;
+  }
+
+  async getSettingsValue<K extends SettingKey>(settingName: K): Promise<SettingValue<K> | undefined> {
+    if (settingName === 'enforceCredits' && isEnforceCreditsLocked()) return true as SettingValue<K>;
+    const setting = await this.findOne({ settingName }); // findOne already decrypts via lean path
+    const definition = resolveSettingDefinition(settingName);
+    if (!definition) return undefined;
+    const value = definition.schema.safeParse(setting?.settingValue);
+
+    return (value.success ? value.data : definition.defaultValue) as SettingValue<K> | undefined;
   }
 }
 

@@ -46,7 +46,12 @@ vi.mock('@client/lib/userSubscriptions/constants', () => ({
   TEAM_PLAN: { priceId: 'price_team', tier: 2 },
 }));
 
-import { resolveUserRateTier, resolveUserRateLimitPerMin } from './userRateTier';
+import {
+  __resetTierSettingsCache,
+  hasPaidSubscription,
+  resolveUserRateTier,
+  resolveUserRateLimitPerMin,
+} from './userRateTier';
 
 const TIER_LIMITS: Record<string, number> = {
   apiRateLimitFreePerMin: 10,
@@ -130,6 +135,18 @@ describe('resolveUserRateTier', () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_standalone' }]);
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('free');
   });
+
+  it.each(['membership', 'subscriptions'])('strict tier resolution propagates an org %s read failure', async leg => {
+    const error = new Error('org lookup unavailable');
+    if (leg === 'membership') {
+      findPlanHolderOrgIdsMock.mockRejectedValue(error);
+    } else {
+      findPlanHolderOrgIdsMock.mockResolvedValue(['org1']);
+      findActiveSubscriptionsByOwnersMock.mockRejectedValue(error);
+    }
+
+    await expect(resolveUserRateTier({ id: 'u1' }, undefined, { strict: true })).rejects.toBe(error);
+  });
 });
 
 describe('resolveUserRateLimitPerMin', () => {
@@ -143,6 +160,8 @@ describe('resolveUserRateLimitPerMin', () => {
     findPlanHolderOrgIdsMock.mockResolvedValue([]);
     getSettingsValueMock.mockReset();
     getSettingsValueMock.mockImplementation((key: string) => TIER_LIMITS[key]);
+    getSettingsMapMock.mockClear();
+    __resetTierSettingsCache();
   });
 
   it('returns Infinity (no enforcement) on the dev server without touching settings', async () => {
@@ -205,6 +224,30 @@ describe('resolveUserRateLimitPerMin', () => {
   it('reads the Free-tier setting for an unsubscribed user', async () => {
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(10);
     expect(getSettingsValueMock).toHaveBeenCalledWith('apiRateLimitFreePerMin', expect.anything());
+    expect(getSettingsMapMock).toHaveBeenCalledWith(expect.anything(), {
+      skipCache: true,
+      names: ['apiRateLimitFreePerMin'],
+    });
+  });
+
+  it('reuses the tier settings read within the TTL and re-reads after it expires', async () => {
+    vi.useFakeTimers();
+    try {
+      await resolveUserRateLimitPerMin({ id: 'u1' });
+      await resolveUserRateLimitPerMin({ id: 'u2' });
+      expect(getSettingsMapMock).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(15_001);
+      await resolveUserRateLimitPerMin({ id: 'u1' });
+      expect(getSettingsMapMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps an explicit 0 Free-tier limit instead of the fallback', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => (key === 'apiRateLimitFreePerMin' ? 0 : TIER_LIMITS[key]));
+    expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(0);
   });
 
   it('reads the Basic-tier setting for a Basic subscriber', async () => {
@@ -217,5 +260,21 @@ describe('resolveUserRateLimitPerMin', () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_pro' }]);
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(60);
     expect(getSettingsValueMock).toHaveBeenCalledWith('apiRateLimitProPerMin', expect.anything());
+  });
+});
+
+describe('hasPaidSubscription', () => {
+  it('counts a standalone (tier-less) paid plan as paid, unlike the rate tier', () => {
+    expect(hasPaidSubscription([{ priceId: 'price_standalone' }])).toBe(true);
+  });
+
+  it('counts ladder and Team plans as paid', () => {
+    expect(hasPaidSubscription([{ priceId: 'price_basic' }])).toBe(true);
+    expect(hasPaidSubscription([{ priceId: 'price_team' }])).toBe(true);
+  });
+
+  it('treats no rows, unknown and empty price ids as not paid', () => {
+    expect(hasPaidSubscription([])).toBe(false);
+    expect(hasPaidSubscription([{ priceId: 'price_unknown' }, { priceId: '' }])).toBe(false);
   });
 });

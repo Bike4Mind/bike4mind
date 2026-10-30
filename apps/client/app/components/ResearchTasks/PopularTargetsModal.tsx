@@ -21,21 +21,19 @@ import {
   whiteAlpha,
   blackAlpha,
 } from '../../utils/themes/colors';
-import {
-  TrendingUp,
-  Search,
-  Business,
-  AttachMoney,
-  Analytics,
-  Article,
-  SmartToy,
-  ShowChart,
-  Work,
-  Handshake,
-  AccountBalance,
-  RocketLaunch,
-  Newspaper,
-} from '@mui/icons-material';
+import TrendingUp from '@mui/icons-material/TrendingUp';
+import Search from '@mui/icons-material/Search';
+import Business from '@mui/icons-material/Business';
+import AttachMoney from '@mui/icons-material/AttachMoney';
+import Analytics from '@mui/icons-material/Analytics';
+import Article from '@mui/icons-material/Article';
+import SmartToy from '@mui/icons-material/SmartToy';
+import ShowChart from '@mui/icons-material/ShowChart';
+import Work from '@mui/icons-material/Work';
+import Handshake from '@mui/icons-material/Handshake';
+import AccountBalance from '@mui/icons-material/AccountBalance';
+import RocketLaunch from '@mui/icons-material/RocketLaunch';
+import Newspaper from '@mui/icons-material/Newspaper';
 import earningsData from './data/earnings-targets.json';
 import pressData from './data/press-targets.json';
 import aiData from './data/ai-targets.json';

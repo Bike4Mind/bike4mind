@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PathAccessDenied } from './paths';
 import type { ToolContext } from './types';
@@ -697,6 +697,90 @@ describe('write tools', () => {
       await writeFile(big, `${await readFile(big, 'utf8')}// edited elsewhere\n`, 'utf8');
 
       await expect(fileEdit.run(second, context)).rejects.toThrow(/changed on disk/);
+    });
+  });
+
+  // HOME is a temp folder of this run's own (vitest.setup.ts), never the real one.
+  describe('the Claude Code folder', () => {
+    let claude: string;
+    let project: string;
+
+    beforeEach(async () => {
+      claude = join(await realpath(homedir()), '.claude');
+      await mkdir(join(claude, 'skills', 'x'), { recursive: true });
+      await writeFile(join(claude, 'skills', 'x', 'SKILL.md'), 'old\n', 'utf8');
+      await writeFile(join(claude, 'settings.json'), '{}\n', 'utf8');
+      await writeFile(join(claude, '.credentials.json'), '{}\n', 'utf8');
+      await writeFile(join(claude, '..', '.claude.json'), '{}\n', 'utf8');
+      project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-write-project-')));
+    });
+
+    const shared = (...roots: string[]): ToolContext => ({ roots, signal: new AbortController().signal });
+
+    it('writes a skill when the skills folder is shared', async () => {
+      const target = join(claude, 'skills', 'x', 'SKILL.md');
+      await fileWrite.run({ path: target, content: 'new\n' }, shared(join(claude, 'skills')));
+      await expect(readFile(target, 'utf8')).resolves.toBe('new\n');
+    });
+
+    it('refuses a skill when the skills folder is not shared', async () => {
+      const input = { path: join(claude, 'skills', 'x', 'SKILL.md'), content: 'new\n' };
+      await expect(fileWrite.run(input, shared(project))).rejects.toThrow(/outside the folders shared/);
+    });
+
+    it('refuses settings and credentials even when the whole home folder is shared', async () => {
+      const home = dirname(claude);
+      for (const path of [
+        join(claude, 'settings.json'),
+        join(claude, 'settings.local.json'),
+        join(claude, '.credentials.json'),
+        join(home, '.claude.json'),
+        join(home, '.claude.json.backup'),
+        join(claude, 'hooks', 'run.sh'),
+        join(claude, 'projects', 'p', 'transcript.jsonl'),
+      ]) {
+        await expect(fileWrite.run({ path, content: 'x' }, shared(home)), path).rejects.toBeInstanceOf(
+          PathAccessDenied
+        );
+      }
+      await expect(readFile(join(claude, 'settings.json'), 'utf8')).resolves.toBe('{}\n');
+    });
+
+    it('says why a settings write is refused', async () => {
+      await expect(
+        fileWrite.run({ path: join(claude, 'settings.json'), content: '{}' }, shared(claude))
+      ).rejects.toThrow(/Permission and hook settings can only be changed by you/);
+    });
+
+    it('refuses a symlink in a shared folder that points at a protected file', async () => {
+      await symlink(join(claude, 'settings.json'), join(project, 'live.json'));
+      // Dangling: writing through it would create the file it names.
+      await symlink(join(claude, 'settings.local.json'), join(project, 'pending.json'));
+      const context = shared(project, claude);
+
+      await expect(fileWrite.run({ path: join(project, 'live.json'), content: 'x' }, context)).rejects.toThrow(
+        /can only be changed by you/
+      );
+      await expect(fileWrite.run({ path: join(project, 'pending.json'), content: 'x' }, context)).rejects.toThrow(
+        /can only be changed by you/
+      );
+      await expect(readFile(join(claude, 'settings.local.json'), 'utf8')).rejects.toThrow();
+    });
+
+    it("refuses a shared repo's own .claude settings but not its skills", async () => {
+      const context = shared(project);
+      for (const name of ['settings.json', 'settings.local.json']) {
+        await expect(fileWrite.run({ path: join(project, '.claude', name), content: '{}' }, context)).rejects.toThrow(
+          /can only be changed by you/
+        );
+      }
+      await mkdir(join(project, '.claude'), { recursive: true });
+      await expect(
+        fileWrite.run({ path: join(project, '.CLAUDE', 'Settings.local.json'), content: '{}' }, context)
+      ).rejects.toThrow(/can only be changed by you/);
+      const skill = join(project, '.claude', 'skills', 'y', 'SKILL.md');
+      await fileWrite.run({ path: skill, content: 'ok\n' }, context);
+      await expect(readFile(skill, 'utf8')).resolves.toBe('ok\n');
     });
   });
 });

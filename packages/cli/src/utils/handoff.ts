@@ -13,6 +13,7 @@ import type {
 import type { TodoItem } from '../tools/writeTodosTool.js';
 import { COMPACTION_SUMMARY_MARKER } from '../config/constants.js';
 import { renderWorkflowReminder } from './workflowReminder.js';
+import { sanitizeTerminalText } from './sanitizeTerminalText.js';
 
 /**
  * Sessions with fewer messages than this skip handoff generation.
@@ -279,7 +280,7 @@ function extractJsonObject(text: string): string | null {
  * timestamp so the user knows how fresh the context is.
  */
 export function formatHandoffOutput(handoff: SessionHandoff): string {
-  return formatHandoff(handoff, { includeTimestamp: true });
+  return sanitizeTerminalText(formatHandoff(handoff, { includeTimestamp: true }));
 }
 
 /**
@@ -468,7 +469,8 @@ export function buildLocalHandoff(
 
 /**
  * Render a full Markdown handoff document from session state. Includes
- * session metadata, all decisions and open blockers verbatim, the last
+ * session metadata, all decisions and open blockers verbatim (minus terminal
+ * control characters, see sanitizeTerminalText), the last
  * `LOCAL_HANDOFF_MESSAGE_TAIL` messages role-labeled and lightly truncated,
  * and a pointer to the on-disk session JSON for deeper context.
  *
@@ -582,7 +584,9 @@ export function renderLocalHandoffMarkdown(session: Session, sessionJsonPath?: s
     }
   }
 
-  return lines.join('\n');
+  // The artifact is read with `cat`/pagers, so free text (decisions, blockers, todos,
+  // messages) must not carry terminal escapes. Markdown inside fields is kept as intended.
+  return sanitizeTerminalText(lines.join('\n'));
 }
 
 function appendMarkdownSection(lines: string[], heading: string, items: string[]): void {

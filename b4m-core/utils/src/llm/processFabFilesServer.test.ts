@@ -548,6 +548,46 @@ describe('processFabFilesServer file notices', () => {
     ]);
   });
 
+  it.each([
+    { id: 'us.amazon.nova-pro-v1:0' },
+    { id: 'vendor.catalog-only-vision', adapterFamily: 'bedrock-converse' as const },
+  ])('delivers image attachments to Converse model $id', async dispatch => {
+    const imageBytes = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1kAAAAASUVORK5CYII=',
+      'base64'
+    );
+    const storage = {
+      download: vi.fn().mockResolvedValue(imageBytes),
+      getSignedUrl: vi.fn().mockResolvedValue('https://signed'),
+    };
+    const visionModel = { ...dispatch, supportsVision: true, backend: 'bedrock' } as ModelInfo;
+    const dependencies = deps();
+    const { userMessages, fileNotices, deliveredFileIds } = await processFabFilesServer(
+      embeddingFactory,
+      [{ ...imageFile('img'), filePath: 'uploads/img.png', fileSize: imageBytes.length } as IFabFileDocument],
+      'describe this image',
+      4000,
+      visionModel,
+      async () => {},
+      {
+        ...dependencies,
+        storage: storage as unknown as typeof dependencies.storage,
+        db: {
+          ...dependencies.db,
+          caches: { findByKey: vi.fn(), createOrUpdate: vi.fn() },
+        },
+      }
+    );
+
+    expect(storage.download).toHaveBeenCalledWith('uploads/img.png');
+    expect(deliveredFileIds).toEqual(['img']);
+    expect(fileNotices).toEqual([]);
+    expect(userMessages.flatMap(message => (Array.isArray(message.content) ? message.content : []))).toContainEqual({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: imageBytes.toString('base64') },
+    });
+  });
+
   it('leaves no input file both undelivered and unreported, whatever mix is attached', async () => {
     // The property the per-site pushes and the post-processing sweep exist to hold jointly. Asserted
     // over a mixed batch rather than per site, because the defect is a file falling between them.

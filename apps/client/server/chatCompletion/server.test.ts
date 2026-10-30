@@ -5,9 +5,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { questReplyText, spendCapExceededError } from '@bike4mind/common';
+import { CreditHolderType, TooManyRequestsError, questReplyText, spendCapExceededError } from '@bike4mind/common';
 import { InsufficientCreditsError } from '@bike4mind/services/llm';
 import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
+import { setModelCatalogProvider } from '@bike4mind/llm-adapters';
 
 // SST Resource - the internal shared-secret bearer /process checks, plus the WebSocket
 // management endpoint the ws-completions route streams through.
@@ -16,6 +17,9 @@ const mockResource = vi.hoisted(() => ({
   websocket: { managementEndpoint: 'https://ws.test', url: 'wss://ws.test' },
   App: { stage: 'test' },
 }));
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 
 // The quest-processing-failure metric's emit seam.
@@ -49,7 +53,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: { record: vi.fn() },
   // Pulled in by the completions route for org-billed API keys; unused by these
   // personal/JWT cases but must exist or the mocked-module export getter throws.
@@ -59,6 +63,10 @@ vi.mock('@bike4mind/database', () => ({
 // executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk
 // callback without a real model call.
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
+const mockLogApiKeyUsage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
+  ApiKeyUsageManager: { logUsage: mockLogApiKeyUsage },
+}));
 
 // Replace the production schema (25+ fields) with a minimal one so the test can drive the
 // 400 (invalid) vs 202 (valid) branches without constructing a full QuestStartBody.
@@ -99,6 +107,11 @@ const mockAuth = vi.hoisted(() => ({
   checkRateLimit: vi.fn(),
 }));
 vi.mock('@server/cli/auth', () => mockAuth);
+// The real quota module reaches the subscription models, which the @bike4mind/database mock lacks.
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: vi.fn().mockResolvedValue({ release: () => Promise.resolve() }),
+  NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
+}));
 
 vi.mock('@server/utils/logCompletionAnalytics', () => ({
   logCompletionAnalytics: vi.fn().mockResolvedValue(undefined),
@@ -112,6 +125,7 @@ vi.mock('@bike4mind/observability', () => ({
     debug = vi.fn();
     updateMetadata = vi.fn();
   },
+  describeErrorCause: () => undefined,
 }));
 
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -122,7 +136,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
 }));
 
-import { createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
+import { checkModelCatalogWired, createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
@@ -373,6 +387,25 @@ describe('ChatCompletion Dockerfile PID 1', () => {
   });
 });
 
+describe('checkModelCatalogWired', () => {
+  const logger = { error: vi.fn() };
+  afterEach(() => {
+    setModelCatalogProvider(null);
+    logger.error.mockClear();
+  });
+
+  it('logs an error when the llm-adapters instance completions read has no catalog provider', () => {
+    expect(checkModelCatalogWired(logger)).toBe(false);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes once the catalog provider is wired on that instance', () => {
+    setModelCatalogProvider(async () => []);
+    expect(checkModelCatalogWired(logger)).toBe(true);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+});
+
 describe('ChatCompletion /api/ai/v1/completions', () => {
   const VALID_COMPLETION = { model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] };
 
@@ -395,10 +428,22 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       request_id: res.headers.get('x-request-id'),
     });
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockLogApiKeyUsage).not.toHaveBeenCalled();
   });
 
-  it('returns 422 JSON on an invalid request body (no execution)', async () => {
-    const res = await postCompletion({ messages: [] }); // missing required `model`
+  it('returns 400 JSON for an empty conversation (no execution)', async () => {
+    const res = await postCompletion({ model: 'claude-test', messages: [] });
+    expect(res.status).toBe(400);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    const body = (await res.json()) as { error: string; request_id: string };
+    expect(body.error).toMatch(/^Validation error/);
+    expect(body.error).toContain('messages');
+    expect(body.request_id).toBe(res.headers.get('x-request-id'));
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 JSON on another invalid request body (no execution)', async () => {
+    const res = await postCompletion({ messages: [{ role: 'user', content: 'hi' }] }); // missing required `model`
     expect(res.status).toBe(422);
     expect(res.headers.get('content-type')).toContain('application/json');
     const body = (await res.json()) as { error: string; request_id: string };
@@ -433,6 +478,106 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(params.db.usageEvents).toBeDefined();
     expect(typeof params.requestId).toBe('string');
     expect(text).toContain('data: [DONE]');
+    await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalled());
+    // Let the socket close after finish; the row must still be written exactly once.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1);
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith({
+      keyId: 'key1',
+      userId: 'u1',
+      ipAddress: expect.any(String),
+      endpoint: '/api/ai/v1/completions',
+      method: 'POST',
+      responseTime: expect.any(Number),
+      statusCode: 200,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      logger: expect.any(Object),
+    });
+  });
+
+  it('counts an authenticated rate-limited request with its final status and billing owner', async () => {
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'org-key',
+      userId: 'owner',
+      scopes: [],
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockAuth.checkApiKeyRateLimitOrThrow.mockRejectedValueOnce(new TooManyRequestsError('At limit'));
+
+    const res = await postCompletion(VALID_COMPLETION, { 'x-api-key': 'b4m_test', 'user-agent': 'b4m-cli/1.0' });
+    await res.text();
+
+    expect(res.status).toBe(429);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1);
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keyId: 'org-key',
+        userId: 'owner',
+        statusCode: 429,
+        source: 'cli',
+        ownerType: CreditHolderType.Organization,
+      })
+    );
+  });
+
+  it('counts an API key stream once when the caller disconnects before execution ends', async () => {
+    const execution = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'key1',
+      userId: 'u1',
+      scopes: [],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockExecuteCompletion.mockImplementationOnce(async ({ onReady }) => {
+      await onReady();
+      await execution.promise;
+    });
+
+    try {
+      const res = await fetch(`${baseUrl}/api/ai/v1/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_test' },
+        body: JSON.stringify(VALID_COMPLETION),
+        signal: controller.signal,
+      });
+      await res.body?.getReader().read();
+      controller.abort();
+
+      await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1));
+      expect(mockLogApiKeyUsage).toHaveBeenCalledWith(expect.objectContaining({ keyId: 'key1', statusCode: 200 }));
+    } finally {
+      controller.abort();
+      execution.resolve();
+    }
+  });
+
+  it('counts a caller that disconnects before any response as 499', async () => {
+    const controller = new AbortController();
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'key1',
+      userId: 'u1',
+      scopes: [],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockAuth.checkApiKeyRateLimitOrThrow.mockImplementationOnce(() => new Promise(() => {}));
+
+    const request = fetch(`${baseUrl}/api/ai/v1/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_test' },
+      body: JSON.stringify(VALID_COMPLETION),
+      signal: controller.signal,
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(mockAuth.checkApiKeyRateLimitOrThrow).toHaveBeenCalled());
+    controller.abort();
+    await request;
+
+    await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1));
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith(expect.objectContaining({ keyId: 'key1', statusCode: 499 }));
   });
 
   it('falls back to JWT auth when no API key is present', async () => {
@@ -447,10 +592,11 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     const res = await postCompletion(VALID_COMPLETION, { authorization: 'Bearer jwt-token' });
     const text = await res.text();
 
-    expect(mockAuth.verifyJwtToken).toHaveBeenCalledWith('jwt-token');
+    expect(mockAuth.verifyJwtToken).toHaveBeenCalledWith('jwt-token', { requireApiAccess: true });
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
     expect(mockExecuteCompletion.mock.calls[0][0]).toMatchObject({ userId: 'u2' });
     expect(text).toContain('data: [DONE]');
+    expect(mockLogApiKeyUsage).not.toHaveBeenCalled();
   });
 
   // OpenAI-shape consumers send stream/tools/temperature/max_tokens at the top level (not

@@ -4,12 +4,15 @@ import dayjs from 'dayjs';
 import type { Response } from 'express';
 import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import { lakeConnectionOwnerOf, type LakeConnectionOwner } from '@bike4mind/common';
-import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
+import { encryptToken, decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { createStateToken } from '@server/auth/jwtStateStore';
-import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from '@server/integrations/google/drive/driveClient';
-import { isInvalidGrantError, isTerminalDriveGrantError } from '@server/integrations/google/drive/driveGrantErrors';
+import { createStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
+import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/integrations/google/drive/driveClient';
+import {
+  isInvalidGrantError,
+  isTerminalDriveGrantError,
+} from '@bike4mind/server-utils/integrations/google/drive/driveGrantErrors';
 
 export { isInvalidGrantError, isTerminalDriveGrantError };
 

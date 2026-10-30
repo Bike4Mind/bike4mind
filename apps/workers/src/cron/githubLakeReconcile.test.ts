@@ -34,8 +34,9 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue
 vi.mock('sst', () => ({
   Resource: { App: { stage: 'dev' }, githubLakeIngestQueue: { url: 'gh-ingest-queue-url' } },
 }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/integrations/github/dataLake/lakeAppClient')>();
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', async importOriginal => {
+  const actual =
+    await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient')>();
   return {
     gitHubErrorStatus: actual.gitHubErrorStatus,
     gitHubRateLimitDelaySeconds: actual.gitHubRateLimitDelaySeconds,

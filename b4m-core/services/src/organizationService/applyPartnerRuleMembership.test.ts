@@ -1,7 +1,7 @@
 import { applyPartnerRuleMembership } from './applyPartnerRuleMembership';
 import { Permission, ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { cloneDeep } from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
 
 describe('applyPartnerRuleMembership', () => {
   const verifiedUser = { id: 'user-id', name: 'Test User', email: 'test@partner.com', emailVerified: true };

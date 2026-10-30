@@ -11,7 +11,9 @@ const h = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   FabFile: { updateMany: h.updateMany, find: h.find },
 }));
-vi.mock('@server/s3/moderateImportedKnowledgeFiles', () => ({ moderateImportedKnowledgeFiles: h.moderate }));
+vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
+  moderateImportedKnowledgeFiles: h.moderate,
+}));
 vi.mock('@server/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: () => ({ marker: 'deps' }) }));
 
 import { runModerationRescueSweep } from './moderationRescueSweep';

@@ -24,6 +24,7 @@ import HighlanderFocus from '@client/app/components/HighlanderFocus';
 import VoiceDebugDrawer from '@client/app/components/Session/VoiceSessionModal/VoiceDebugDrawer';
 import { SessionBottomModals } from './SessionBottomModals';
 import { SessionFilePond } from './SessionFilePond';
+import { cancelComposerUpload } from './uploadComposerFile';
 import { SessionToolbar } from './SessionToolbar';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { MessageFileThumbnails } from '@client/app/components/Session/MessageFileThumbnails';
@@ -90,6 +91,9 @@ import ResearchModeIndicator from '@client/app/components/Session/AISettings/Res
 import { pickerAttachedAgents } from './resolveDispatchAgent';
 import { SlashCommandSuggestions } from '@client/app/components/common/CommandSuggestions';
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
+import { AffordableModelOffer } from '../AffordableModelOffer';
+import { useAffordableModelOffer } from '../useAffordableModelOffer';
+import { estimateNextInputTokens } from '@client/app/utils/creditEstimate';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 
@@ -184,6 +188,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // LLM state needed for rendering (send logic reads its own slice internally)
   const model = useLLM(s => s.model);
   const max_tokens = useLLM(s => s.max_tokens);
+  const thinking = useLLM(s => s.thinking);
+  const researchModeEnabled = useLLM(s => s.researchMode.enabled);
+  const agentModeEnabled = useLLM(s => s.agentMode.enabled);
   const sessionFilesOpen = useAdvancedAISettings(state => state.sessionFilesOpen);
   const setSessionFilesOpen = useAdvancedAISettings(state => state.setSessionFilesOpen);
   const [stream, setStream] = useState<boolean>(true);
@@ -220,6 +227,12 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // 30MB (`MaxFileSize`'s schema default), not the old unrelated 100MB.
   const maxFileSize = Number(useGetSettingsValue('MaxFileSize')) || 30;
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
+  const affordableOffer = useAffordableModelOffer({
+    enforceCredits: enforceCredits,
+    modelsLoaded: !!modelInfo,
+    selectedModelId: model,
+    sessionId: currentSessionId,
+  });
 
   // Out of credits replaces the message box outright (see CreditsWarning); the low-credits
   // notice sits above it without blocking typing.
@@ -433,13 +446,13 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const canAttachFiles = enableFileAttachments;
 
   const handlePaste = useChatPaste({
+    attachScopeMode,
     currentSession,
     currentSessionId,
+    addToNotebookContext,
     chatHistory,
     chatInputValue,
     setChatInputValue,
-    setWorkBenchFiles,
-    setCurrentSession,
     queryClient,
     lexicalInputRef,
   });
@@ -587,6 +600,25 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         ref={notesRef}
         sx={[aboveBoxSx, { display: 'flex', flexDirection: 'column', gap: '8px', '&:not(:empty)': { mb: '8px' } }]}
       >
+        {affordableOffer.show && (
+          <AffordableModelOffer
+            enabled={!researchModeEnabled && !agentModeEnabled && displayAgents.length === 0}
+            models={modelInfo ?? []}
+            accessibleModelIds={accessibleModels.map(candidate => candidate.id)}
+            selectedModelId={model}
+            credits={effectiveCredits}
+            inputTokens={estimateNextInputTokens(
+              contextUsage?.actualInputTokens,
+              chatInputValue,
+              model,
+              contextUsage?.inputModelId
+            )}
+            selectedMaxTokens={max_tokens}
+            thinking={thinking}
+            onSelect={affordableOffer.onSelect}
+            onDismiss={affordableOffer.onDismiss}
+          />
+        )}
         <LowCreditsWarning
           show={creditUi.lowCreditsNotice}
           currentCredits={effectiveCredits}
@@ -741,14 +773,22 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         <MessageFileThumbnails
                           files={pendingMessageFiles}
                           onRemove={fileId => {
+                            const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
                             setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
-                            setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
+                            setFiles(prevFiles =>
+                              prevFiles.filter(f => f.serverId !== fileId && f.file !== removed?.localFile)
+                            );
+
+                            // Not on the server yet (or never will be): cancel, nothing to strip or delete.
+                            if (fileId.startsWith('temp-')) {
+                              cancelComposerUpload(fileId);
+                              return;
+                            }
 
                             // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
                             // this failed, knowledgeIds would keep a dead id that every later hydration
                             // tries and fails to resolve. Keyed off the item's own frozen scope rather
                             // than the current control value, which the user may have changed since.
-                            const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
                             const stripped =
                               removed?.scope === 'notebook'
                                 ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})

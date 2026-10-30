@@ -26,7 +26,7 @@ import {
 } from '@bike4mind/database';
 import { z } from 'zod';
 import { getInviteTypeName, sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 // Creating a project invite emails every recipient, including addresses with no account, with the
 // inviter's name, the project name and their message. These bounds keep the route from being a
@@ -104,7 +104,6 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         projects: projectRepository,
         invites: inviteRepository,
       },
-      ability: req.ability,
     });
 
     // Same reason as the sibling document list: the token is a redeemable secret with no consumer

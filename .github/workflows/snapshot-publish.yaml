@@ -29,7 +29,7 @@ on:
 
 jobs:
   snapshot-publish:
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 20
     if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') && inputs.head-branch != 'main'
     permissions:
@@ -49,7 +49,7 @@ jobs:
         run: git fetch origin main:main 2>/dev/null || git fetch origin main
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
         with:
           run_install: false
 
@@ -316,13 +316,17 @@ jobs:
       - name: Comment published versions
         if: steps.pr.outputs.number
         uses: actions/github-script@v8
+        env:
+          PUBLISHED_PACKAGES: ${{ needs.snapshot-publish.outputs.published-packages }}
+          SANITIZED_TAG: ${{ needs.snapshot-publish.outputs.sanitized-tag }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         with:
           script: |
-            const publishedStr = '${{ needs.snapshot-publish.outputs.published-packages }}';
+            const publishedStr = process.env.PUBLISHED_PACKAGES;
             if (!publishedStr) return;
 
             const packages = publishedStr.split(',').map(pkg => `- **${pkg.trim()}**`);
-            const tag = '${{ needs.snapshot-publish.outputs.sanitized-tag }}';
+            const tag = process.env.SANITIZED_TAG;
             const marker = '<!-- snapshot-publish -->';
 
             const body = [
@@ -340,7 +344,7 @@ jobs:
 
             // Update existing comment if found, otherwise create new one
             const { data: comments } = await github.rest.issues.listComments({
-              issue_number: ${{ steps.pr.outputs.number }},
+              issue_number: Number(process.env.PR_NUMBER),
               owner: context.repo.owner,
               repo: context.repo.repo
             });
@@ -355,7 +359,7 @@ jobs:
               });
             } else {
               await github.rest.issues.createComment({
-                issue_number: ${{ steps.pr.outputs.number }},
+                issue_number: Number(process.env.PR_NUMBER),
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 body

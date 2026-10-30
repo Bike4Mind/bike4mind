@@ -185,6 +185,23 @@ describe('latency gate', () => {
     ).toBe('avg 2.00s, threshold 5s, 1 prompt(s) never finished');
   });
 
+  it('reads the median when the file carries one, and names it in the error', () => {
+    const json = { model: 'model-x', thresholdSec: 5, medianResponseTimeSec: 6.5, averageResponseTimeSec: 40 };
+    expect(latencyGateTest(file, json)?.error).toBe('median 6.50s, threshold 5s');
+    expect(latencyMetric(file, json)?.value).toBe(6.5);
+    expect(latencyGateTest(file, { ...json, medianResponseTimeSec: 4 })?.status).toBe('passed');
+  });
+
+  it('does not fail on an abandoned attempt that a retry superseded', () => {
+    const results = [
+      { id: 'a', incomplete: true, retried: true },
+      { id: 'a', attempt: 1 },
+    ];
+    expect(
+      latencyGateTest(file, { model: 'model-x', thresholdSec: 5, medianResponseTimeSec: 2, results })?.status
+    ).toBe('passed');
+  });
+
   it('treats no data as no verdict and a missing threshold as a breach, like the Aggregate step', () => {
     expect(latencyGateTest(file, { model: 'model-x', thresholdSec: 5, averageResponseTimeSec: 0 })).toBeNull();
     expect(latencyGateTest(file, { model: 'model-x', averageResponseTimeSec: 3 })?.error).toBe(

@@ -38,7 +38,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 const mockCreateCustomer = vi.fn();
 const mockPaymentIntentsCreate = vi.fn();
 const mockCustomersDel = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   createCustomer: (...args: unknown[]) => mockCreateCustomer(...args),
   CustomerType: { User: 'user' },
   stripe: {

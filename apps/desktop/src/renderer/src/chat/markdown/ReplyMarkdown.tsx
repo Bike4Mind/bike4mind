@@ -1,4 +1,4 @@
-import { memo, useMemo, type ComponentProps, type MouseEvent } from 'react';
+import { memo, useMemo, type ComponentProps } from 'react';
 import Box from '@mui/joy/Box';
 import { useTheme } from '@mui/joy/styles';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
@@ -6,6 +6,9 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
+import type { ChatImageRef } from '@shared/chat';
+import { ExternalLink } from '../ExternalLink';
+import { useImageMenu } from '../ImageContextMenu';
 import { fastRenderer } from './highlightElements';
 import { codeBlockSx, markdownSx } from './markdownSx';
 import { closeOpenFence } from './streamingMarkdown';
@@ -76,6 +79,20 @@ function isInline(node: ExtraProps['node']): boolean {
   return position.start.line === position.end.line && position.start.column !== position.end.column;
 }
 
+/**
+ * An image a reply links. The sanitizer keeps only http(s) sources and the CSP then refuses to
+ * load them, so nothing here is on disk: the menu offers its Markdown and no more. Focusable
+ * only when there is a menu to open from the keyboard.
+ */
+function MarkdownImage({ src, alt, ...props }: ComponentProps<'img'>) {
+  const url = typeof src === 'string' && /^https?:/i.test(src) ? src : null;
+  const imageRef = useMemo<ChatImageRef | null>(() => (url ? { source: 'remote', url } : null), [url]);
+  const menu = useImageMenu(imageRef);
+  return (
+    <img {...props} src={src} alt={alt} tabIndex={menu ? 0 : undefined} {...menu} data-testid="chat-markdown-image" />
+  );
+}
+
 function buildComponents(mode: 'light' | 'dark'): Components {
   return {
     // The fence draws its own container, so react-markdown's <pre> would only nest a second
@@ -91,29 +108,16 @@ function buildComponents(mode: 'light' | 'dark'): Components {
         );
       }
       const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? 'text';
-      return <CodeBlock code={String(children).replace(/\n$/, '')} language={language} mode={mode} />;
+      // An empty fence has no children at all.
+      return <CodeBlock code={String(children ?? '').replace(/\n$/, '')} language={language} mode={mode} />;
     },
 
-    /**
-     * A link leaves for the user's browser and never navigates this window.
-     *
-     * Following it in place would replace the app - and the bridge the renderer is holding -
-     * with whatever page the model named. `target="_blank"` is not the answer either: that
-     * still asks Electron to open a window, it just asks for a different one. The href stays
-     * on the anchor so the link reads and copies as a link; the click is what is redirected.
-     */
-    a: ({ href, children, ...props }) => (
-      <a
-        {...props}
-        href={href}
-        data-testid="chat-markdown-link"
-        onClick={(event: MouseEvent<HTMLAnchorElement>) => {
-          event.preventDefault();
-          if (href) void window.b4m.shell.openExternal(href);
-        }}
-      >
-        {children}
-      </a>
+    img: ({ node: _node, ...props }) => <MarkdownImage {...props} />,
+
+    // The same link a prompt draws, so the two open, and look, the same way. Bare urls arrive
+    // here as links too: remark-gfm's autolink literals turn them into ordinary `a` nodes.
+    a: ({ node: _node, ref: _ref, target: _target, ...props }) => (
+      <ExternalLink {...props} testId="chat-markdown-link" />
     ),
   };
 }

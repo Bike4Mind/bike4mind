@@ -10,6 +10,7 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { toolsForRequest } from './tools/registry';
+import { bashExecute } from './tools/shellTools';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -108,6 +109,7 @@ describe('ChatService approval modes', () => {
   afterEach(() => {
     service.dispose();
     for (const stream of streams) stream.end();
+    vi.restoreAllMocks();
   });
 
   async function startTurn(mode: ChatApprovalMode): Promise<ChatSessionSummary> {
@@ -264,14 +266,21 @@ describe('ChatService approval modes', () => {
 
   describe('always allow by prefix', () => {
     it('is remembered as a prefix pattern that covers a later sub-command', async () => {
+      // Prefix persistence must not wait for the host's Git configuration or executable.
+      const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('git status completed');
       const session = await startTurn('ask');
       streams[0].write(toolTurn('c1', 'bash_execute', { command: 'git status', cwd: root }));
       streams[0].write(frame('[DONE]'));
 
       const asked = await awaitStatus('awaiting-approval');
       expect(asked.approvalAlways).toContain('git status *');
+      expect(execute).not.toHaveBeenCalled();
       approvals.resolve(asked.approvalId as string, { decision: 'always' });
-      await vi.waitUntil(() => calls('error').length + calls('done').length === 1, { timeout: 5000, interval: 10 });
+      expect((await awaitStatus('done')).preview).toContain('git status completed');
+      expect(execute).toHaveBeenCalledExactlyOnceWith(
+        { command: 'git status', cwd: root },
+        expect.objectContaining({ roots: [root] })
+      );
 
       const covers = (text: string) =>
         approvals.coversCommands(session.id, {

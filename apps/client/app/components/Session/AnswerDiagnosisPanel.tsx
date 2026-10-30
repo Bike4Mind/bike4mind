@@ -15,13 +15,15 @@ import { diagnoseAnswer, type DiagnosisStatus, type PromptMeta } from '@bike4min
  * The fold itself lives in `@bike4mind/common` (answerDiagnosis.ts) so the same verdicts can be
  * counted across turns server-side; this file is only the rendering of it.
  *
- * RELATIONSHIP TO RetrievalCoverageBanner (mounted inline in PromptReplies): the two are kept
- * separate on purpose, and the overlap is one bucket wide. The banner is UNSOLICITED - it fires on
- * a partially-covered turn to stop a reader concluding "my library has nothing on this" from a
- * scan that never reached most of the library, and that conclusion is drawn by a reader who has no
- * reason to open a diagnosis panel. This panel is the on-demand half: it is opened only once
- * someone already suspects the answer, and it reports all four buckets, including the three the
- * banner cannot see. Folding the banner in here would move a warning from "shown" to "findable".
+ * RELATIONSHIP TO RetrievalCoverageBanner (mounted under the reply in PromptReplies): the two are
+ * kept separate on purpose, and the overlap is one bucket wide. The banner is UNSOLICITED - it
+ * fires on a partially-covered turn to stop a reader concluding "my library has nothing on this"
+ * from a scan that never reached most of the library, and that conclusion is drawn by a reader who
+ * has no reason to open a diagnosis panel. It shows one quiet line and keeps its reasons behind a
+ * closed disclosure, so the line stays visible without reading as an error. This panel is the
+ * on-demand half: it is opened only once someone already suspects the answer, and it reports all
+ * four buckets, including the three the banner cannot see. Folding the banner in here would move
+ * the line from "shown" to "findable".
  */
 
 const STATUS_COLOR: Record<DiagnosisStatus, 'success' | 'warning' | 'danger' | 'neutral'> = {
@@ -59,7 +61,7 @@ export function AnswerDiagnosisPanel({ promptMeta }: { promptMeta: PromptMeta })
       >
         <Typography level="title-sm">{verdict.headline}</Typography>
         {/* textColor inherit: body-sm's tertiary default drops below contrast minimums inside a
-            soft Alert (same reason RetrievalCoverageBanner sets it). */}
+            soft Alert. */}
         <Typography level="body-sm" textColor="inherit">
           {verdict.body}
         </Typography>

@@ -26,7 +26,7 @@ const mockAssertAccountStateUsable = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: { findById: (...args: unknown[]) => mockFindById(...args) },
 }));
-vi.mock('@server/auth/assertAccountStateUsable', () => ({
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
 }));
 
@@ -37,7 +37,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
-vi.mock('@server/auth/mfaEnforcement', () => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
@@ -175,10 +175,10 @@ describe('verifyWsAccessToken: enforceMFA for an existing session', () => {
     });
   });
 
-  it('passes the impersonation claim through to the enrollment gate', async () => {
+  it('refuses impersonation on the alternate realtime credential path', async () => {
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 0, typ: 'access', impersonatedBy: 'admin-1' });
-    await verifyWsAccessToken('token');
-    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.anything(), { impersonatedBy: 'admin-1' });
+    await expect(verifyWsAccessToken('token')).rejects.toThrow('Impersonated sessions cannot use realtime credentials');
+    expect(mockIsMfaEnrollmentOwed).not.toHaveBeenCalled();
   });
 
   it('fails closed when the enforcement read fails', async () => {

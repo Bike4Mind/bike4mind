@@ -6,20 +6,26 @@
  */
 import { DeleteObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { MIME_TO_EXTENSION, TRANSCRIBE_UPLOAD_PREFIX } from '@server/utils/transcribeConstants';
 import {
   assertTranscriptionCredits,
+  holdTranscriptionCredits,
   estimateTranscriptionCost,
   MIN_TRANSCRIPTION_USD_PER_MINUTE,
   transcriptionUsdPerMinute,
 } from '@server/utils/transcriptionCost';
-import { speechToTextService, creditService } from '@bike4mind/services';
+import { speechToTextService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import { type ILogger } from '@bike4mind/observability';
-import { CreditHolderType, usdToCreditsStochastic } from '@bike4mind/common';
-import { userRepository, creditTransactionRepository, usageEventRepository } from '@bike4mind/database';
+import { GatewayTimeoutError, usdToCreditsStochastic, type IUserDocument } from '@bike4mind/common';
+import { usageEventRepository } from '@bike4mind/database';
+import type { PreflightCreditHold } from '@server/utils/creditPreflight';
 import { v4 as uuidv4 } from 'uuid';
 
 export type TranscribeRejection =
@@ -35,14 +41,16 @@ export class TranscribeRequestError extends BadRequestError {
 }
 
 export const PRESIGNED_POST_EXPIRY_SECONDS = 300; // 5 minutes
+// infra/web.ts sets the hosted web Lambda timeout to 60s. Leave time to refund and clean up after cancelling the provider.
+const TRANSCRIPTION_REQUEST_TIMEOUT_MS = 45_000;
 
 const s3Client = new S3Client();
 const bucketName = Resource.appFilesBucket.name;
 
-// assertTranscriptionCredits throws BadRequestError only for a caller who cannot pay (or does not exist).
-async function assertCanPay(userId: string, estimatedCredits: number): Promise<void> {
+// The transcription credit helpers throw BadRequestError only for a caller who cannot pay (or does not exist).
+async function asInsufficientCredits<T>(check: () => Promise<T>): Promise<T> {
   try {
-    await assertTranscriptionCredits(userId, estimatedCredits);
+    return await check();
   } catch (err) {
     if (err instanceof BadRequestError) throw new TranscribeRequestError('insufficient_credits', err.message);
     throw err;
@@ -64,7 +72,9 @@ export async function createTranscribeUpload({
   // S3-attested size and the resolved backend - this is a fail-fast UX guard
   // on the client-declared size, priced at the cheapest backend so it never
   // refuses what that check admits.
-  await assertCanPay(userId, estimateTranscriptionCost(fileSize, MIN_TRANSCRIPTION_USD_PER_MINUTE).credits);
+  await asInsufficientCredits(() =>
+    assertTranscriptionCredits(userId, estimateTranscriptionCost(fileSize, MIN_TRANSCRIPTION_USD_PER_MINUTE).credits)
+  );
 
   const fileKey = `${TRANSCRIBE_UPLOAD_PREFIX}${userId}/${uuidv4()}.${MIME_TO_EXTENSION[mimeType]}`;
 
@@ -92,16 +102,20 @@ export async function createTranscribeUpload({
  * it that failure is rethrown as is.
  */
 export async function transcribeUpload({
-  userId,
+  user,
   fileKey,
+  receivedAt,
   logger,
   mapProviderError,
 }: {
-  userId: string;
+  user: IUserDocument;
   fileKey: string;
+  receivedAt: Date;
   logger: ILogger;
   mapProviderError?: (err: unknown) => unknown;
 }): Promise<speechToTextService.TranscriptionResult> {
+  assertAiAccessAllowed(user);
+  const userId = user.id;
   // Ownership check: the init endpoint mints keys under transcribe-uploads/{userId}/.
   // Reject anything else to prevent users from transcribing arbitrary bucket objects.
   const expectedPrefix = `${TRANSCRIBE_UPLOAD_PREFIX}${userId}/`;
@@ -109,17 +123,33 @@ export async function transcribeUpload({
     throw new TranscribeRequestError('invalid_key', 'Invalid file key');
   }
 
+  const controller = new AbortController();
+  const remainingMs = receivedAt.getTime() + TRANSCRIPTION_REQUEST_TIMEOUT_MS - Date.now();
+  const expire = () =>
+    controller.abort(
+      new GatewayTimeoutError('Transcription timed out. Please try a shorter recording.', {
+        errorCode: 'request_timeout',
+      })
+    );
+  const deadline = setTimeout(expire, Math.max(remainingMs, 0));
+  if (remainingMs <= 0) expire();
+  const { signal } = controller;
+
   try {
+    signal.throwIfAborted();
     // HEAD the object to get S3-attested metadata. We never trust
     // client-supplied size or mime - S3's content-length-range condition
     // already enforced size at upload, and this re-reads what S3 accepted.
     let contentType: string;
     let contentLength: number;
     try {
-      const head = await s3Client.send(new HeadObjectCommand({ Bucket: bucketName, Key: fileKey }));
+      const head = await s3Client.send(new HeadObjectCommand({ Bucket: bucketName, Key: fileKey }), {
+        abortSignal: signal,
+      });
       contentType = head.ContentType ?? '';
       contentLength = head.ContentLength ?? 0;
     } catch (err) {
+      signal.throwIfAborted();
       logger.warn('Transcribe HEAD failed', { fileKey, err });
       throw new TranscribeRequestError('not_found', 'Uploaded file not found or expired');
     }
@@ -134,6 +164,7 @@ export async function transcribeUpload({
     }
 
     const operationsModel = await OperationsModelService.getOperationsModel();
+    signal.throwIfAborted();
     const speechModelInfo = operationsModel.speechModelInfo;
     if (!speechModelInfo) {
       throw new TranscribeRequestError(
@@ -143,9 +174,9 @@ export async function transcribeUpload({
     }
 
     const cost = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(speechModelInfo.backend));
-    await assertCanPay(userId, cost.credits);
 
     const apiKey = await getEffectiveApiKeyByBackend(userId || 'system', speechModelInfo.backend);
+    signal.throwIfAborted();
     if (!apiKey && speechModelInfo.backend !== 'aws') {
       throw new TranscribeRequestError(
         'not_configured',
@@ -156,21 +187,30 @@ export async function transcribeUpload({
 
     const speechToText = new speechToTextService.speechService(bucketName);
 
+    // Held last, so no rejection above strands it; the actual cost is the same size-based figure.
+    const hold = await asInsufficientCredits(() => holdTranscriptionCredits(user, cost.credits, logger));
     let results: speechToTextService.TranscriptionResult;
     try {
+      // A slow hold write can finish after the deadline. It must still enter the refund boundary.
+      signal.throwIfAborted();
       if (speechModelInfo.backend === 'openai') {
-        results = await speechToText.transcribeOpenAIFromS3(fileKey, contentType, speechModelInfo, apiKey || '');
+        results = await speechToText.transcribeOpenAIFromS3(fileKey, contentType, speechModelInfo, apiKey || '', {
+          abortSignal: signal,
+        });
       } else if (speechModelInfo.backend === 'aws') {
-        results = await speechToText.transcribeAWSFromS3(fileKey, contentType);
+        results = await speechToText.transcribeAWSFromS3(fileKey, contentType, { abortSignal: signal });
       } else {
         throw new TranscribeRequestError('not_configured', `Unsupported speech backend: ${speechModelInfo.backend}`);
       }
     } catch (err) {
+      await hold.release();
+      signal.throwIfAborted();
       if (err instanceof TranscribeRequestError || !mapProviderError) throw err;
       throw mapProviderError(err);
     }
 
     await deductTranscriptionCredits({
+      hold,
       userId,
       backend: speechModelInfo.backend,
       contentLength,
@@ -179,6 +219,7 @@ export async function transcribeUpload({
 
     return results;
   } finally {
+    clearTimeout(deadline);
     // Always clean up the transient upload, even on transcription failure.
     // Lifecycle rule on transcribe-uploads/ is the backstop for orphans.
     await deleteSilently(fileKey, logger);
@@ -186,68 +227,51 @@ export async function transcribeUpload({
 }
 
 interface DeductArgs {
+  hold: PreflightCreditHold;
   userId: string;
   backend: string;
   contentLength: number;
   logger: ILogger;
 }
 
-async function deductTranscriptionCredits({ userId, backend, contentLength, logger }: DeductArgs): Promise<void> {
-  // The estimate's round-up credits only gate the call; the debit is the unbiased draw on its USD (may be 0).
+// Settles the hold; a billing failure is logged inside hold.settle, never surfaced (transcription succeeded).
+async function deductTranscriptionCredits({ hold, userId, backend, contentLength, logger }: DeductArgs): Promise<void> {
   const { durationMinutes, costUsd } = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(backend));
-  const credits = usdToCreditsStochastic(costUsd);
-
   const sessionId = `transcribe-${userId}-${Date.now()}`;
+  const credits = await hold.settle(usdToCreditsStochastic(costUsd), {
+    type: 'speech_to_text_usage',
+    model: backend,
+    sessionId,
+  });
 
-  try {
-    // A zero draw writes no ledger row; the usage event below still records the call.
-    if (credits > 0) {
-      await creditService.subtractCredits(
-        {
-          type: 'speech_to_text_usage',
-          ownerId: userId,
-          ownerType: CreditHolderType.User,
-          credits,
-          model: backend,
-          sessionId,
-        },
-        {
-          db: { creditTransactions: creditTransactionRepository },
-          creditHolderMethods: userRepository,
-        }
-      );
-    }
-
-    // Dual-write usage event: analytics only, never billing.
-    usageEventRepository
-      .record({
-        requestId: sessionId,
-        userId,
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
-        sessionId,
-        feature: 'transcription',
-        provider: backend,
-        model: backend,
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedInputTokens: 0,
-        cacheWriteTokens: 0,
-        units: durationMinutes,
-        costUsd,
-        creditsCharged: credits,
-        status: 'ok',
-      })
-      .catch(err => logger.warn('Failed to record usage event', { err }));
-  } catch (err) {
-    // Non-fatal: transcription succeeded; log billing miss for ops visibility.
-    logger.error('Transcription credit deduction failed - billing may be missed', { userId, credits, err });
-  }
+  // Dual-write usage event: analytics only, never billing.
+  usageEventRepository
+    .record({
+      requestId: sessionId,
+      userId,
+      ownerId: hold.ownerId,
+      ownerType: hold.ownerType,
+      sessionId,
+      feature: 'transcription',
+      provider: backend,
+      model: backend,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      units: durationMinutes,
+      costUsd,
+      creditsCharged: credits,
+      status: 'ok',
+    })
+    .catch(err => logger.warn('Failed to record usage event', { err }));
 }
 
 async function deleteSilently(key: string, logger: ILogger): Promise<void> {
   try {
-    await s3Client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }));
+    await s3Client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }), {
+      abortSignal: AbortSignal.timeout(2_000),
+    });
   } catch (err) {
     logger.warn('Failed to delete transcribe upload', { key, err });
   }

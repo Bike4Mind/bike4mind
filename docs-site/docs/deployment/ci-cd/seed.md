@@ -91,7 +91,6 @@ See [Secrets Reference](../secrets-reference.md) for the complete list.
 | Action | Trigger |
 |--------|---------|
 | Push to `main` | Deploys to dev stage |
-| Push to `prod` | Deploys to production stage |
 | PR created | Creates preview environment |
 | PR merged | Removes preview environment |
 

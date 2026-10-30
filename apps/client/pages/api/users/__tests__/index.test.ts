@@ -15,6 +15,7 @@ const mockRefs = vi.hoisted(() => ({
   facet: undefined as any,
   pipeline: undefined as any,
   findAccessibleById: null as any,
+  find: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -30,10 +31,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 vi.mock('@bike4mind/database', () => ({
   User: {
-    find: () => ({ getQuery: () => ({}) }),
+    find: (...args: any[]) => mockRefs.find(...args),
     populate: vi.fn().mockResolvedValue(undefined),
     hydrate: (u: any) => u,
-    aggregate: vi.fn().mockResolvedValue([]),
+    aggregate: vi.fn(() => Object.assign(Promise.resolve([]), { option: () => Promise.resolve([]) })),
   },
   Project: { findById: vi.fn() },
   projectRepository: { shareable: { findAccessibleById: (...args: any[]) => mockRefs.findAccessibleById(...args) } },
@@ -49,6 +50,7 @@ vi.mock('@server/users/sharedWorkspaceUserIds', () => ({
   findSharedWorkspaceUserIds: vi.fn().mockResolvedValue(new Set(['u1'])),
 }));
 vi.mock('@server/users/pendingProjectInviteeIds', () => ({ findPendingProjectInviteeIds: vi.fn() }));
+vi.mock('@server/users/signupAnomaly', () => ({ getDomainGroups: vi.fn(), SIGNUP_SCAN_LIMIT: 5000 }));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 vi.mock('@bike4mind/utils/escapeRegex', () => ({ escapeRegex: (s: string) => s }));
 
@@ -64,7 +66,80 @@ function mocks(user: unknown, query: Record<string, unknown>) {
 }
 
 describe('GET /api/users - publicView enumeration guards', () => {
+  it.each([{ groupBy: 'emailDomain' }, { recentSignups: 'hour' }, { createdFrom: '2026-01-01T00:00:00.000Z' }])(
+    'restricts signup review to admins: %j',
+    async query => {
+      const { req, res } = mocks({ id: 'u1', isAdmin: false }, { ...query, publicView: 'true', search: 'abc' });
+      await mockRefs.getHandler!(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    }
+  );
+
+  it('places the recent signup range before organization joins', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, { recentSignups: 'hour' });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.stringify(mockRefs.pipeline[0])).toContain('createdAt');
+    expect(mockRefs.pipeline[0]).toHaveProperty('$match');
+  });
+
+  it('filters on a created-at window with an exclusive end', async () => {
+    const { req, res } = mocks(
+      { id: 'admin1', isAdmin: true },
+      { createdFrom: '2026-01-01T00:00:00.000Z', createdTo: '2026-01-01T01:00:00.000Z' }
+    );
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.stringify(mockRefs.pipeline[0])).toContain(
+      JSON.stringify({
+        createdAt: { $gte: new Date('2026-01-01T00:00:00.000Z'), $lt: new Date('2026-01-01T01:00:00.000Z') },
+      })
+    );
+  });
+
+  it('scopes the domain-group candidate scan to the created window', async () => {
+    const createdFrom = '2026-01-01T00:00:00.000Z';
+    const createdTo = '2026-01-01T01:00:00.000Z';
+    const createdWindow = { createdAt: { $gte: new Date(createdFrom), $lt: new Date(createdTo) } };
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, { groupBy: 'emailDomain', createdFrom, createdTo });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefs.find).toHaveBeenLastCalledWith(createdWindow);
+  });
+
+  it('combines the recent-signup and created windows for the candidate scan', async () => {
+    const createdWindow = {
+      createdAt: { $gte: new Date('2026-01-01T00:00:00.000Z'), $lt: new Date('2026-01-01T01:00:00.000Z') },
+    };
+    const { req, res } = mocks(
+      { id: 'admin1', isAdmin: true },
+      {
+        groupBy: 'emailDomain',
+        recentSignups: 'hour',
+        createdFrom: '2026-01-01T00:00:00.000Z',
+        createdTo: '2026-01-01T01:00:00.000Z',
+      }
+    );
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    const filter = mockRefs.find.mock.lastCall![0];
+    expect(filter.$and).toHaveLength(2);
+    expect(filter.$and[1]).toEqual(createdWindow);
+    expect(filter.$and[0].createdAt).toHaveProperty('$gte');
+  });
+
+  it('rejects a created-at bound that is not an ISO instant', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, { createdFrom: 'yesterday' });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(400);
+  });
+
   beforeEach(() => {
+    mockRefs.find.mockImplementation(() => {
+      const chain: any = { getQuery: () => ({}), lean: () => Promise.resolve([]) };
+      for (const method of ['sort', 'hint', 'select', 'limit', 'maxTimeMS']) chain[method] = () => chain;
+      return chain;
+    });
     mockRefs.facet = undefined;
     mockRefs.pipeline = undefined;
     mockRefs.findAccessibleById = vi.fn().mockResolvedValue(null);

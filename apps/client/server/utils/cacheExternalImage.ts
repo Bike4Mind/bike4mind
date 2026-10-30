@@ -3,9 +3,10 @@ import { createS3Client } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import { withRetry, isRetryableError } from '@bike4mind/utils';
-import { validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
+import { fetchPinned, validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 const s3Client = createS3Client();
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 // Generate a deterministic key from the URL for caching
 function generateCacheKey(url: string): string {
@@ -30,7 +31,7 @@ export async function cacheExternalImage(url: string): Promise<string> {
     return url;
   }
 
-  // SSRF protection: block private/internal/metadata URLs (async resolves DNS to catch rebinding)
+  // SSRF protection: block private/internal/metadata URLs; the download re-checks the dialed address
   const ssrfCheck = await validateTargetUrl(url);
   if (!ssrfCheck.valid) {
     console.warn(`[SSRF] Blocked image fetch to unsafe URL: ${url} (${ssrfCheck.error})`);
@@ -76,13 +77,17 @@ export async function cacheExternalImage(url: string): Promise<string> {
           const timeoutId = setTimeout(() => controller.abort(), 10000);
           const brand = process.env.APP_NAME || '';
           try {
-            return await fetch(url, {
-              headers: {
-                'User-Agent': `Lumina5-ImageProxy/1.0${brand ? ` (${brand})` : ''}`,
-                Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            return await fetchPinned(
+              url,
+              {
+                headers: {
+                  'User-Agent': `Lumina5-ImageProxy/1.0${brand ? ` (${brand})` : ''}`,
+                  Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                },
+                signal: controller.signal,
               },
-              signal: controller.signal,
-            });
+              { allowHttp: true, maxBodyBytes: MAX_IMAGE_BYTES }
+            );
           } finally {
             clearTimeout(timeoutId);
           }

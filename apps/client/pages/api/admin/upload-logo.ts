@@ -11,6 +11,7 @@ import { AdminSettings } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
+import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
@@ -42,7 +43,10 @@ async function getLogoSettings(session?: any): Promise<LogoSettings> {
   };
 }
 
-async function updateLogoSettings(newSettings: Partial<LogoSettings>, session?: any): Promise<void> {
+async function updateLogoSettings(
+  newSettings: Partial<LogoSettings>,
+  session?: any
+): Promise<{ before: LogoSettings; after: LogoSettings }> {
   const currentSettings = await getLogoSettings(session);
   const updatedSettings = { ...currentSettings, ...newSettings };
 
@@ -57,6 +61,7 @@ async function updateLogoSettings(newSettings: Partial<LogoSettings>, session?: 
     },
     { upsert: true, session }
   );
+  return { before: currentSettings, after: updatedSettings };
 }
 
 /**
@@ -144,7 +149,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           updatedSettings.useBothLogos = data.useBothLogos;
         }
 
-        await updateLogoSettings(updatedSettings, session);
+        const { before, after } = await updateLogoSettings(updatedSettings, session);
+        await recordAdminSettingChange(req, {
+          settingName: 'logoSettings',
+          before,
+          after,
+          summary: `uploaded a custom ${logoType} logo`,
+        });
 
         return {
           // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.
@@ -195,7 +206,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           updatedSettings.customLogoUrl = '';
         }
 
-        await updateLogoSettings(updatedSettings, session);
+        const { before, after } = await updateLogoSettings(updatedSettings, session);
+        await recordAdminSettingChange(req, {
+          settingName: 'logoSettings',
+          before,
+          after,
+          summary: `removed the custom ${isDarkMode ? 'dark' : 'light'} logo`,
+        });
 
         return { success: true };
       });

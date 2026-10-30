@@ -35,6 +35,8 @@ import {
   type FormattedJiraIssueLinkType,
   type FormattedJiraIssueLink,
   type FormattedJiraIssueType,
+  type FormattedJiraWatchers,
+  type AdfNode,
 } from './format';
 import { AgileApi } from './agile/api';
 import { apiPath, assertSafeApiPath } from '../atlassian/apiPath';
@@ -62,7 +64,7 @@ export interface JiraIssue {
   self: string;
   fields: {
     summary: string;
-    description?: any;
+    description?: AdfNode | string | null;
     status: {
       name: string;
       id: string;
@@ -87,7 +89,9 @@ export interface JiraIssue {
     };
     created: string;
     updated: string;
-    [key: string]: any;
+    labels?: string[];
+    resolutiondate?: string | null;
+    [key: string]: unknown;
   };
 }
 
@@ -147,7 +151,7 @@ export interface JiraSearchResult {
 
 export interface JiraComment {
   id: string;
-  body: any;
+  body: AdfNode | string;
   author: {
     displayName: string;
     accountId: string;
@@ -563,7 +567,7 @@ export class JiraApi {
     assignee?: string;
     labels?: string[];
     parentKey?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   }): Promise<{ id: string; key: string; link: string }> {
     const { projectKey, summary, description, issueTypeName, assignee, labels, parentKey, ...customFields } = params;
 
@@ -620,7 +624,7 @@ export class JiraApi {
     summary?: string;
     description?: string;
     labels?: string[];
-    [key: string]: any;
+    [key: string]: unknown;
   }): Promise<void> {
     const { issueKey, summary, description, labels, ...customFields } = params;
 
@@ -1144,7 +1148,7 @@ export class JiraApi {
   /**
    * Get watchers for an issue
    */
-  async getWatchers(params: { issueKey: string }): Promise<any> {
+  async getWatchers(params: { issueKey: string }): Promise<FormattedJiraWatchers> {
     const { issueKey } = params;
     const result = await this.request<JiraWatchersResponse>('GET', apiPath`/issue/${issueKey}/watchers`);
     return formatWatchers(result);

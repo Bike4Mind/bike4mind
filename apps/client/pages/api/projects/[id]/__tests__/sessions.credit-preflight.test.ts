@@ -10,6 +10,7 @@
  * summaries.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { AiAccessStateFields } from '@bike4mind/services/userService/accountState';
 
 const {
   mockFilterCredits,
@@ -80,11 +81,11 @@ const RESOLVED_SESSIONS = [
   { id: 'session-unpayable', userId: 'owner-broke' },
 ];
 
-const run = async (sessionIds: string[]) => {
+const run = async (sessionIds: string[], accessState: AiAccessStateFields = {}) => {
   const res = { json: vi.fn(), status: vi.fn().mockReturnThis() };
   await postHandler(
     {
-      user: { id: REQUESTER_ID },
+      user: { id: REQUESTER_ID, ...accessState },
       query: { id: PROJECT_ID },
       body: { sessionIds },
       ability: {},
@@ -110,7 +111,7 @@ describe('POST /api/projects/[id]/sessions credit pre-flight', () => {
 
     expect(mockFilterCredits).toHaveBeenCalledWith(
       RESOLVED_SESSIONS,
-      expect.objectContaining({ operationsPerSession: 2, operation: 'session summarization' })
+      expect.objectContaining({ payerId: REQUESTER_ID, operationsPerSession: 2, operation: 'session summarization' })
     );
   });
 
@@ -123,7 +124,7 @@ describe('POST /api/projects/[id]/sessions credit pre-flight', () => {
     expect(mockPublishSummarize).toHaveBeenCalledTimes(2);
   });
 
-  it('queues a summary for every notebook whose owner can pay', async () => {
+  it('queues a summary for every notebook the requester can pay for, billed to the requester', async () => {
     await run(['session-payable', 'session-unpayable']);
 
     expect(mockPublishSummarize).toHaveBeenCalledTimes(2);
@@ -132,12 +133,13 @@ describe('POST /api/projects/[id]/sessions credit pre-flight', () => {
         sessionId: session.id,
         callTagging: true,
         trigger: 'project',
+        payerId: REQUESTER_ID,
       });
     }
   });
 
   // The whole reason this call site takes a verdict instead of throwing one.
-  it('still attaches, logs and responds when an owner cannot pay for their summary', async () => {
+  it('still attaches, logs and responds when a summary is refused', async () => {
     mockFilterCredits.mockResolvedValue(new Set(['session-payable']));
 
     const res = await run(['session-payable', 'session-unpayable']);
@@ -153,7 +155,7 @@ describe('POST /api/projects/[id]/sessions credit pre-flight', () => {
     expect(res.json).toHaveBeenCalled();
   });
 
-  it('publishes nothing when no owner can pay, and still succeeds', async () => {
+  it('publishes nothing when the requester cannot pay, and still succeeds', async () => {
     mockFilterCredits.mockResolvedValue(new Set<string>());
 
     const res = await run(['session-payable', 'session-unpayable']);
@@ -161,4 +163,15 @@ describe('POST /api/projects/[id]/sessions credit pre-flight', () => {
     expect(mockPublishSummarize).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalled();
   });
+
+  it.each([{ isModerated: true }, { riskScore: { reviewState: 'pending' as const } }])(
+    'attaches without generating summaries when AI access is held: %j',
+    async accessState => {
+      const res = await run(['session-payable'], accessState);
+      expect(mockFilterCredits).not.toHaveBeenCalled();
+      expect(mockPublishSummarize).not.toHaveBeenCalled();
+      expect(mockAddSessions).toHaveBeenCalledTimes(1);
+      expect(res.json).toHaveBeenCalled();
+    }
+  );
 });

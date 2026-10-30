@@ -7,7 +7,7 @@ Run the open core of Bike4Mind on your own hardware - a laptop, a server, or you
 1. Clone the repo and copy the env template.
 2. Generate the three security secrets and set your LLM provider key(s).
 3. `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`
-4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The first account becomes the admin.
+4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin (if it is unset, the first account to register with the emailed code does).
 5. Create an API key in the app and make your first API call with `curl`.
 
 ## Prerequisites
@@ -51,9 +51,15 @@ openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 
 **Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the three secrets above.
 
+**Choose the admin account** - set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email address you will sign in with, before you start the stack for the first time. That account becomes the admin on first sign-in. Sign in with the emailed one-time code the first time, not OAuth (for example GitHub): the bootstrap applies only to the email-code sign-in. If you leave it unset, the first account to register with the emailed code becomes the admin.
+
+```bash
+B4M_BOOTSTRAP_ADMIN_EMAIL=you@example.com
+```
+
 > **Serving on anything other than `http://localhost:3000`?** Set `APP_URL` to the origin your browser actually hits - a remapped `APP_HOST_PORT`, a LAN hostname, a tailnet name, or the public `https` origin of a reverse proxy in front of the app. `APP_URL` is the CSRF origin allow-list, and it fails closed: every state-changing request (saving settings, generating an API key, uploading) returns a 403, with a different message per cause. Unset, it is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected <your APP_URL>).` Reads keep working either way, which makes both look like a permissions bug rather than a config one.
 
-**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Settings > API Keys.
+**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Profile menu -> More -> API Keys.
 
 ```bash
 ANTHROPIC_API_KEY=      # Claude
@@ -184,7 +190,7 @@ Bike4Mind signs you in with a one-time code sent by email. In the self-host stac
 2. Open Mailpit at **`http://localhost:8025`** and read the code from the sign-in email.
 3. Enter the code and pick a username.
 
-**The first account created on a fresh install automatically becomes the admin** (no invite code needed). After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
+**On a fresh install, the account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin** (no invite code needed). Set it before the first start. If it is unset, the first account to register with the emailed code becomes the admin instead. After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
 
 For production use, point the `MAIL_*` variables at a real SMTP provider instead of Mailpit.
 
@@ -192,7 +198,7 @@ For production use, point the `MAIL_*` variables at a real SMTP provider instead
 
 Everything you can do in the UI is also available over the HTTP API, authenticated with a scoped API key.
 
-1. **Create an API key**: in the app, open **Settings > API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
+1. **Create an API key**: in the app, open **Profile menu -> More -> API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
 
 2. **Send a chat message**:
 
@@ -205,7 +211,7 @@ curl -X POST http://localhost:3000/api/chat \
 
 `wait: true` processes the message synchronously and returns the reply in the response; omit it to get a `sessionId`/`questId` back immediately and let processing continue in the background. The model defaults to the admin `DefaultAPIModel` setting; pass `"model": "..."` to pick any model from `/api/models` (only providers you configured a key for are available).
 
-The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
+The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Profile menu -> More -> API Keys.
 
 ### Structured tool output (`toolPayloads`)
 
@@ -493,7 +499,7 @@ There are two independent paths to an image, and they support different things:
 | The `/image` chat command (`POST /api/ai/generate-image`, `POST /api/ai/edit-image`) | queued to the `worker` service | provider models only                                             |
 
 The queued path needs a provider key set in **Admin > Settings** (or the user's own key under
-**Settings > API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
+**Profile menu -> More -> API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
 
 **Image edit is limited to Gemini and BFL here.** OpenAI's edit and image-to-image endpoints
 require the input image be re-encoded to PNG under a size cap, which the hosted stack does with
@@ -594,7 +600,7 @@ Notes:
 Prefer a hosted embedder over the local one? Set a real key in `.env.selfhost` and it takes priority over the local Ollama default:
 
 - `OPENAI_API_KEY` - enables OpenAI embeddings (`text-embedding-3-small` by default).
-- `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Settings -> API Keys**.
+- `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Profile menu -> More -> API Keys**.
 
 Then pick the cloud model under **Settings -> AI -> Default Embedding Model** and re-upload (or reprocess via **/api/files/reprocess**) so files embed with it.
 
@@ -644,7 +650,7 @@ Re-run it whenever you edit the shipped docs. The failure is quieter than it sou
 
 Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQUIRED=false` to downgrade that to a logged skip, which is what a build pipeline that does not care about semantic help search wants.
 
-**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Settings -> API Keys**) as well as at build time.
+**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
 
 This is also the one place OpenAI specifically is required: help vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
 
@@ -684,7 +690,7 @@ B4M_DISCOVERY_DRIVER=true
 
 The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
 
-Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Profile menu -> More -> API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
 
 ### Amazon Bedrock (optional)
 
@@ -888,7 +894,7 @@ Whichever path you choose, do the checklist first.
   ```
 
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
-- [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the first account created becomes admin). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
+- [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the account matching `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes admin, or the first account created if it is unset). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
 - [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
 
 ### Read-only production configuration preflight
@@ -1120,6 +1126,24 @@ The worker records health snapshots for active data lakes at 06:00 UTC, using th
 
 Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attempted-check timestamp advances so they cannot starve other lakes. The existing 2,000-lake cap and five concurrent computations remain; these are count bounds, not cancellation of a hung database request. This job reports health only. It neither repairs content nor runs inconsistency detection: absent or stale stored inconsistency results remain absent or stale. Other hosted maintenance jobs are not enabled by this registration.
 
+### Integration health checks
+
+The worker probes Slack, GitHub and Atlassian reachability every five minutes with the same unauthenticated checks hosted deployments run, and stores each result in MongoDB for the admin Integration Health dashboard. It emits no CloudWatch metrics and does not probe at startup, so a fresh container waits one full interval. Stored checks become eligible for MongoDB TTL cleanup after 25 hours.
+
+An install with no outbound HTTPS to `slack.com`, `api.github.com` or `api.atlassian.com` records those integrations as unhealthy on every run. Three consecutive failures open that integration's platform-wide circuit breaker, which blocks its callers: Slack message sends and updates return without sending, and GitHub and Atlassian MCP requests are refused as unavailable. Those integrations cannot work without that egress anyway, so there is no opt-out switch.
+
+A successful probe taking more than five seconds is also recorded as unhealthy. Three consecutive slow probes can therefore open the same circuit breaker even while the provider still responds.
+
+Probes use global `fetch`. If proxy support is added to an integration client, the probes must use equivalent proxy routing so a failed direct connection does not mark a working proxied integration as unavailable.
+
+### Storage counter drift check
+
+Every hour the worker compares each user's and organization's `currentStorageSize` counter with the bytes of the files charged to that owner, using the same sweep hosted deployments run. Self-host always runs it as a dry run: drift is recorded in MongoDB, and no counter is ever rewritten. One pass walks every owner across successive hourly ticks, completing when the last owner is visited (about a day on a typical install), and resumes from a cursor persisted in MongoDB, so a restarted worker continues the pass instead of starting it again. It sends no CloudWatch metrics, and the Slack drift alert posts only if a Slack webhook resolves: the LiveOps or default channel webhook in admin settings, or `SLACK_WEBHOOK_URL`. There is no run at startup.
+
+### Drive lake re-sync poll
+
+Every hour the worker enqueues each connected Google Drive folder that is due onto the Drive lake ingest queue, the same path the manual Re-sync button uses, so connected folders stay in sync without a click. A folder is due once it has not been polled for 6 hours, and each run enqueues at most 200, the longest-waiting first. It runs only while both the `EnableDataLakes` and `EnableDataLakeDrivePoll` admin settings are on, and does nothing otherwise. A connection that has not been fully re-walked in 24 hours is re-walked in full; the rest sync incrementally. There is no run at startup, and Drive push notifications are not used.
+
 ### Daily telemetry retention
 
 The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.
@@ -1134,7 +1158,10 @@ Focused tests use disposable Mongo, exact retention boundaries and an injected l
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCleanup.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
 TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+pnpm --filter @bike4mind/workers test src/selfhost/selfHostWorker.dst.test.ts
 ```
+
+The last command covers the worker scheduler itself, not just this task. It switches the process to `America/New_York` at runtime and checks that daily UTC tasks keep their UTC slot across both transitions and across a restart, and that interval tasks restart their cadence from the moment the worker starts again.
 
 ## Daily API-key usage baselines
 
@@ -1285,12 +1312,14 @@ Covered shapes (inventory kind in brackets):
 A Function that a covered trigger delivers to is inventoried under that trigger. A declaration
 built inside a named factory with a computed name (for example one log subscription per log
 group) is identified by its factory site; computed queue and schedule names fail, because
-local registrations are matched by that name.
+local registrations are matched by that name. The exception is the queue pairs packages declare
+in `b4mContributions.infraResources`: their constructors are listed by name expression in
+`DATA_NAMED_QUEUES` and skipped, since self-host does not provision contributed queues.
 
 Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
 reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
 (HTTP Functions, web/router/WebSocket surfaces, topics and buses whose subscriptions are
-covered, alarms, dashboards, IAM policies, deploy-time invocations, network and WAF plumbing,
+covered, alarms, dashboards, outbound SES metric destinations, IAM policies, deploy-time invocations, network and WAF plumbing,
 and infrastructure contributed by private overlays). A constructor that is neither covered nor
 listed fails the guard.
 
@@ -1316,9 +1345,12 @@ resource/provider configuration and outcome proof remain separate. `pending` is 
 capability decision linked to a shared roadmap epic (one for schedules, one for every other
 kind), not a per-gap issue. A
 `pending` queue or schedule that a self-host file now registers under the hosted name is
-reported as `Gap now has local wiring - review`. The infrastructure records excluded as
-separate workflows still require the associated consumer's broker configuration and recovery
-proof.
+reported as `Gap now has local wiring - review`. `excluded` records carry a one-line reason
+that the guard requires. Dead-letter infrastructure is excluded as a separate workflow, but
+still requires the associated consumer's broker configuration and recovery proof. A schedule
+that only serves the hosted deployment (production analytics, hosted announcements, hosted
+cloud-account scans, hosted error triage) is excluded as not applicable to a portable
+deployment, and needs no local registration.
 
 A hosted handler whose source file is missing fails the guard by name and path. The only
 accepted absence is a handler generated from a private overlay into the gitignored

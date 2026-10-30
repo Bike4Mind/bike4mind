@@ -174,7 +174,12 @@ describe('MongoDB Utility Functions', () => {
     });
 
     it('matches driver server-selection and network errors by name', () => {
-      for (const name of ['MongoServerSelectionError', 'MongoNetworkError', 'MongoNetworkTimeoutError']) {
+      for (const name of [
+        'MongoServerSelectionError',
+        'MongoNetworkError',
+        'MongoNetworkTimeoutError',
+        'MongoPoolClearedError',
+      ]) {
         expect(isConnectionLostError(Object.assign(new Error('x'), { name }))).toBe(true);
       }
     });

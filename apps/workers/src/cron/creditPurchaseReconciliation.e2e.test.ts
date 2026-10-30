@@ -18,7 +18,7 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
 const mockList = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   isStripeConfigured: () => true,
   stripe: { paymentIntents: { list: (...args: unknown[]) => mockList(...args) } },
 }));

@@ -1,4 +1,6 @@
-import type { BackgroundProcessStatus } from '@shared/chat';
+import { useEffect, useState } from 'react';
+import type { BackgroundProcessStatus, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import type { BackgroundProcessView } from './useBackgroundProcesses';
 
 /**
  * The count chip above the composer.
@@ -40,6 +42,13 @@ export function taskTitle(command: string): string {
   return firstLine || 'command';
 }
 
+export function taskStatusLabel(entry: BackgroundProcessView): string {
+  if (entry.status === 'killed') return 'stopped';
+  if (entry.status === 'failed') return 'failed';
+  if (entry.exitCode !== null && entry.exitCode !== undefined) return `exit ${entry.exitCode}`;
+  return entry.signal ?? 'exited';
+}
+
 /** The two sections of the panel, each in the order main reported them. */
 export function splitTasks<T extends { status: BackgroundProcessStatus }>(
   processes: readonly T[]
@@ -48,6 +57,60 @@ export function splitTasks<T extends { status: BackgroundProcessStatus }>(
     running: processes.filter(entry => entry.status === 'running'),
     finished: processes.filter(entry => entry.status !== 'running'),
   };
+}
+
+/**
+ * A clock for an elapsed column, and nothing else.
+ *
+ * Deliberately scoped to the component that draws the column: the same per-second `setState` hung
+ * off the shell would re-render the whole transcript once a second. It idles when nothing is
+ * running, so a list of finished tasks costs nothing at all.
+ */
+export function useSecondTick(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+
+  return now;
+}
+
+/** A session the agent spawned from the open one, as the session panel lists it. */
+export interface SpawnedSessionView {
+  id: string;
+  title: string;
+  createdAt: string;
+  /** Main's status for it; absent until main has reported one, which reads as not running. */
+  status: ChatSessionStatus | undefined;
+}
+
+export function isSpawnedRunning(entry: SpawnedSessionView): boolean {
+  return entry.status === 'processing' || entry.status === 'needs-action';
+}
+
+/**
+ * The open conversation's direct children, newest first. Grandchildren belong to the child that
+ * spawned them, and listing them here would offer a Stop for work this conversation never started.
+ */
+export function spawnedSessions(
+  sessions: readonly ChatSessionSummary[],
+  statuses: ReadonlyMap<string, ChatSessionStatus>,
+  parentId: string | null
+): SpawnedSessionView[] {
+  if (!parentId) return [];
+  return sessions
+    .filter(session => session.origin?.parentSessionId === parentId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map(session => ({
+      id: session.id,
+      title: session.title,
+      createdAt: session.createdAt,
+      status: statuses.get(session.id),
+    }));
 }
 
 /**

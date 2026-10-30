@@ -21,6 +21,7 @@ def configured_stack():
         'JWT_SECRET': 'j' * 64,
         'SESSION_SECRET': 's' * 64,
         'SECRET_ENCRYPTION_KEY': 'a' * 64,
+        'MEMORY_KEY_SECRET': 'm' * 64,
         'INTERNAL_WS_SECRET': 'w' * 64,
         'CHAT_COMPLETION_INTERNAL_SECRET': 'c' * 64,
         'INTERNAL_S3_WEBHOOK_SECRET': 'h' * 64,
@@ -178,12 +179,18 @@ class PreflightTests(unittest.TestCase):
     def test_signing_keys_and_encryption_keys_are_checked_without_echoing_them(self):
         for key, value in [('JWT_SECRET', 'change-me-openssl-rand-hex-32'),
                            ('JWT_SECRET', 'changeme'), ('JWT_SECRET', 'CHANGEME'),
+                           ('MEMORY_KEY_SECRET', ''), ('MEMORY_KEY_SECRET', 'changeme'),
                            ('SESSION_SECRET', ''), ('SECRET_ENCRYPTION_KEY', 'not-hex'),
                            ('SECRET_ENCRYPTION_KEY_PREVIOUS', 'not-hex')]:
             with self.subTest(key=key, value=value):
                 model = configured_stack()
                 model['services']['app']['environment'][key] = value
                 self.assertIn('app.secrets', check_config(model))
+
+    def test_memory_key_must_match_every_worker(self):
+        model = configured_stack()
+        model['services']['chatcompletion']['environment']['MEMORY_KEY_SECRET'] = 'a-different-memory-key'
+        self.assertIn('internal.shared-secrets', check_config(model))
 
     def test_placeholder_table(self):
         cases = [

@@ -29,6 +29,28 @@ const ReleaseNoteSchema = new Schema(
     status: { type: String, enum: ['scheduled', 'hidden'], required: true },
     publishAt: { type: Date, required: true },
     editedAt: { type: Date, default: null },
+    video: {
+      type: new Schema(
+        {
+          landscapeUrl: { type: String, default: null },
+          landscapePosterUrl: { type: String, default: null },
+          portraitUrl: { type: String, default: null },
+          portraitPosterUrl: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    image: {
+      type: new Schema(
+        {
+          landscapeUrl: { type: String, default: null },
+          portraitUrl: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
     schemaVersion: { type: Number, required: true },
   },
   {
@@ -43,11 +65,11 @@ const ReleaseNoteSchema = new Schema(
 // index, which the 20260921235998 migration drops.
 ReleaseNoteSchema.index({ status: 1, publishAt: -1, _id: -1 }, { name: 'status_publishAt_id' });
 
-export const ReleaseNote =
+export const ReleaseNote: Model<IReleaseNoteDocument> =
   (mongoose.models.ReleaseNote as mongoose.Model<IReleaseNoteDocument>) ||
   model<IReleaseNoteDocument>('ReleaseNote', ReleaseNoteSchema);
 
-export type GeneratedReleaseNote = Omit<ReleaseNoteData, 'editedAt'>;
+export type GeneratedReleaseNote = Omit<ReleaseNoteData, 'editedAt' | 'video' | 'image'>;
 
 /** Decoded keyset cursor: the last row of the previous page. */
 export interface ReleaseNoteKeyset {
@@ -66,7 +88,7 @@ export type ReleaseNoteAdminStatus = 'scheduled' | 'hidden' | 'published';
 export type ReleaseNoteMutationResult =
   { kind: 'ok'; note: IReleaseNoteDocument } | { kind: 'notFound' } | { kind: 'emptyItems' };
 
-export type ReleaseNoteEdit = Partial<Pick<ReleaseNoteData, 'headline' | 'summary' | 'items'>>;
+export type ReleaseNoteEdit = Partial<Pick<ReleaseNoteData, 'headline' | 'summary' | 'items' | 'video' | 'image'>>;
 
 const PAGE_SORT = { publishAt: -1, _id: -1 } as const;
 
@@ -76,6 +98,9 @@ const afterKeyset = (after: ReleaseNoteKeyset) => ({
     { publishAt: after.publishAt, _id: { $lt: new mongoose.Types.ObjectId(after.id) } },
   ],
 });
+
+// What readers may see at `now`: scheduled and past its embargo.
+const publishedAt = (now: Date) => ({ status: 'scheduled', publishAt: { $lte: now } });
 
 const isDuplicateKeyError = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
@@ -136,7 +161,13 @@ export class ReleaseNoteRepository extends BaseRepository<IReleaseNoteDocument> 
     after?: ReleaseNoteKeyset;
     limit: number;
   }): Promise<ReleaseNotePage> {
-    return this.page({ status: 'scheduled', publishAt: { $lte: now } }, after, limit);
+    return this.page(publishedAt(now), after, limit);
+  }
+
+  /** One note by id, only while listPublished would include it at `now`; null for a malformed id. */
+  async findPublishedById(id: string, now: Date): Promise<IReleaseNoteDocument | null> {
+    if (!mongoose.isValidObjectId(id)) return null;
+    return this.model.findOne({ _id: id, ...publishedAt(now) });
   }
 
   async adminList({
@@ -155,6 +186,29 @@ export class ReleaseNoteRepository extends BaseRepository<IReleaseNoteDocument> 
         ? { status: 'hidden' }
         : { status: 'scheduled', publishAt: status === 'published' ? { $lte: now } : { $gt: now } };
     return this.page(filter, after, limit);
+  }
+
+  /**
+   * Sets only the video and leaves editedAt alone: the release-video job's write is not an admin
+   * decision, so the note is not shown as edited and still regenerates (upsertGenerated keeps the video).
+   */
+  async attachVideo(id: string, video: ReleaseNoteData['video']): Promise<ReleaseNoteMutationResult> {
+    const note = await this.model.findOneAndUpdate(
+      { _id: id },
+      { $set: { video } },
+      { new: true, runValidators: true }
+    );
+    return note ? { kind: 'ok', note } : { kind: 'notFound' };
+  }
+
+  /** Sets only the image and leaves editedAt alone, for the same reason as attachVideo. */
+  async attachImage(id: string, image: ReleaseNoteData['image']): Promise<ReleaseNoteMutationResult> {
+    const note = await this.model.findOneAndUpdate(
+      { _id: id },
+      { $set: { image } },
+      { new: true, runValidators: true }
+    );
+    return note ? { kind: 'ok', note } : { kind: 'notFound' };
   }
 
   /*

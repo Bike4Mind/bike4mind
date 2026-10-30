@@ -2,7 +2,7 @@ import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { SecretRotation, secretRotationRepository } from '@bike4mind/database/infra';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { SECRET_ROTATION_CONFIG } from '@bike4mind/server-utils/lib/secretRotation/constants';
+import { getSecretRotationConfig } from '@bike4mind/server-utils/lib/secretRotation/constants';
 import { calculateNextRotationDate, toSafeSecretRotation } from '@client/lib/secretRotation/utils';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
@@ -15,11 +15,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     const secrets = await secretRotationRepository.findActiveKeys();
-    const configKeys = Object.keys(SECRET_ROTATION_CONFIG);
+    const rotationConfig = getSecretRotationConfig();
+    const configKeys = Object.keys(rotationConfig);
     const existingKeys = secrets.map(secret => secret.keyName);
 
     // Seed DB records for any config key not yet present
-    for (const [key, config] of Object.entries(SECRET_ROTATION_CONFIG)) {
+    for (const [key, config] of Object.entries(rotationConfig)) {
       if (!existingKeys.includes(key)) {
         await secretRotationRepository.create({
           keyName: key,

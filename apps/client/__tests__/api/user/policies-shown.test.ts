@@ -17,7 +17,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     };
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: mocks.rateLimit }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: mocks.rateLimit }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mocks.logEvent }));
 
 import handler from '../../../pages/api/user/accept-policies/shown';

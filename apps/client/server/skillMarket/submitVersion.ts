@@ -313,7 +313,8 @@ export function denormFor(version: ISkillListingVersion, autoChecked: boolean): 
     description: version.snapshot.description,
     honestSummaryText: version.honestSummary?.whatItDoes,
     descriptionMatches: version.honestSummary?.descriptionMatches ?? true,
-    usesTools: (version.snapshot.allowedTools?.length ?? 0) > 0,
+    usesTools:
+      (version.snapshot.allowedTools?.length ?? 0) + (version.snapshot.claudeCodeAllowedTools?.length ?? 0) > 0,
     riskTier: version.riskTier,
     autoChecked,
   };

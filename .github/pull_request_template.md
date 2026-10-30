@@ -14,6 +14,7 @@ Provide a detailed description of what this PR does. Explain the problem you're 
 <!--
 Optional. One or two plain sentences a customer would understand, used for the in-app release notes.
 Leave empty (or write "none") for internal changes. No internal names, ticket numbers or links.
+Say only what the code does: no role names for who can see it, and no speed or quality claim you did not measure.
 -->
 
 ## Changes
@@ -81,6 +82,7 @@ See CONTRIBUTING.md → "Preview deploys".
 
 - [ ] I have added the new AdminSettings to Staging, prod and the hydration script (if applicable)
 - [ ] I have made the UI/UX feel good (toasters, size, responsive, etc)
+- [ ] Admin UI changes follow the [admin design guide](../apps/client/app/components/admin/DESIGN_GUIDE.md) and use the shared toolkit (if applicable)
 - [ ] I have performed a self-review of my own code
 - [ ] I have commented my code, particularly in hard-to-understand areas
 - [ ] I have made corresponding changes to the documentation (if applicable)

@@ -1,5 +1,5 @@
-import type { VideoGenerationRequest, ValidatedVideoRequest } from './request';
-import type { DurationCapability, VideoModelCapabilities } from './types';
+import { videoRequestInputs, type VideoGenerationRequest, type ValidatedVideoRequest } from './request';
+import { VIDEO_INPUT_ROLES, type DurationCapability, type VideoInputRole, type VideoModelCapabilities } from './types';
 
 export const VIDEO_VALIDATION_ERROR_CODES = [
   'unsupported_duration',
@@ -8,6 +8,7 @@ export const VIDEO_VALIDATION_ERROR_CODES = [
   'unsupported_mode',
   'missing_input_image',
   'unexpected_input_image',
+  'unsupported_input_role',
   'unsupported_audio_option',
 ] as const;
 export type VideoValidationErrorCode = (typeof VIDEO_VALIDATION_ERROR_CODES)[number];
@@ -30,6 +31,48 @@ const describeDuration = (duration: DurationCapability): string =>
     ? `allowed: ${duration.values.join(', ')}s`
     : `allowed: ${duration.min}-${duration.max}s in ${duration.step}s steps`;
 
+const FRAME_ROLES = new Set<VideoInputRole>(['first_frame', 'last_frame']);
+
+const describeAcceptedRoles = (caps: VideoModelCapabilities): string => {
+  const accepted = VIDEO_INPUT_ROLES.filter(role => caps.inputs[role]);
+  return accepted.length > 0 ? `accepted: ${accepted.join(', ')}` : 'it takes no input images';
+};
+
+const checkInputs = (request: VideoGenerationRequest, caps: VideoModelCapabilities): VideoValidationResult | null => {
+  const hasLegacyFile = Boolean(request.inputImageFileId);
+  const hasLegacyGenerated = Boolean(request.inputGeneratedImageKey);
+  if (hasLegacyFile && hasLegacyGenerated) {
+    return fail('unexpected_input_image', 'set exactly one of inputImageFileId and inputGeneratedImageKey');
+  }
+  if (request.inputs && (hasLegacyFile || hasLegacyGenerated)) {
+    return fail('unexpected_input_image', 'set inputs or the legacy inputImageFileId/inputGeneratedImageKey, not both');
+  }
+  const inputs = videoRequestInputs(request);
+  const hasFirstFrame = inputs.some(input => input.role === 'first_frame');
+  if (request.mode === 'image_to_video' && !hasFirstFrame) {
+    return fail('missing_input_image', 'image_to_video requires a first_frame input');
+  }
+  const frame = inputs.find(input => FRAME_ROLES.has(input.role));
+  if (request.mode === 'text_to_video' && frame) {
+    return fail('unexpected_input_image', `a ${frame.role} input is only valid for image_to_video`);
+  }
+  for (const role of VIDEO_INPUT_ROLES) {
+    const count = inputs.filter(input => input.role === role).length;
+    if (count === 0) continue;
+    const accepted = caps.inputs[role];
+    if (!accepted) {
+      return fail(
+        'unsupported_input_role',
+        `${caps.displayName} does not accept a ${role} input (${describeAcceptedRoles(caps)})`
+      );
+    }
+    if (count > accepted.max) {
+      return fail('unsupported_input_role', `${caps.displayName} accepts at most ${accepted.max} ${role} input(s)`);
+    }
+  }
+  return null;
+};
+
 // Never rounds or clamps: a request the model cannot honour fails with a code the caller can surface.
 export const validateAgainstCapabilities = (
   request: VideoGenerationRequest,
@@ -38,18 +81,8 @@ export const validateAgainstCapabilities = (
   if (!caps.modes.includes(request.mode)) {
     return fail('unsupported_mode', `${caps.displayName} does not support ${request.mode}`);
   }
-  const hasFileInput = Boolean(request.inputImageFileId);
-  const hasGeneratedInput = Boolean(request.inputGeneratedImageKey);
-  if (request.mode === 'image_to_video' && !hasFileInput && !hasGeneratedInput) {
-    return fail('missing_input_image', 'image_to_video requires inputImageFileId');
-  }
-  if (hasFileInput && hasGeneratedInput) {
-    return fail('unexpected_input_image', 'set exactly one of inputImageFileId and inputGeneratedImageKey');
-  }
-  if (request.mode === 'text_to_video' && (hasFileInput || hasGeneratedInput)) {
-    const field = hasFileInput ? 'inputImageFileId' : 'inputGeneratedImageKey';
-    return fail('unexpected_input_image', `${field} is only valid for image_to_video`);
-  }
+  const inputsFailure = checkInputs(request, caps);
+  if (inputsFailure) return inputsFailure;
   if (!isDurationAllowed(request.durationSeconds, caps.duration)) {
     return fail(
       'unsupported_duration',

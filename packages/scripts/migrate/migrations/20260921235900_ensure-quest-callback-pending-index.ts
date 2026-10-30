@@ -7,7 +7,7 @@ import { type MigrationFile } from './index';
  * It serves findUndispatchedCallbacks, the questTimeoutSweep backstop that re-dispatches a
  * generation callback whose settle-site claim was missed. The partial filter keeps the index
  * tiny, but a partial filter narrows what the index stores, not what the build scans: the build
- * still reads every quest, and on DocumentDB it holds a foreground collection lock. Same
+ * still reads every quest, and autoIndex would run it on a request path. Same
  * rationale as 20260826000000_ensure-quest-status-updatedat-index.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist.

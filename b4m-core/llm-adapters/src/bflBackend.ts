@@ -125,6 +125,125 @@ export class BFLBackend implements ICompletionBackend {
         supportsSafetyTolerance: true,
         rank: 5,
       },
+      // FLUX.2 family. The endpoints are discovered from BFL's OpenAPI, but presentation and
+      // price are curated here: discovery supplies neither, so an endpoint without an entry is
+      // introduced under its slug, left auto-disabled and reported in the discovery run - it
+      // never reaches the picker. Prices are BFL's published first-megapixel rates
+      // (https://bfl.ai/pricing); the cost path bills a flat per-image figure, so a larger
+      // output under-bills. Keep the two preview entries' prices equal to the pinned siblings
+      // they mirror, since BFL publishes no rate for a preview.
+      {
+        id: ImageModels.FLUX_2_MAX,
+        type: 'image',
+        name: 'FLUX.2 Max',
+        backend: ModelBackend.BFL,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 700, output: 700 }, // $0.07 per image
+        },
+        description:
+          'FLUX.2 Max - Flagship FLUX.2 generation and editing with the highest output quality and up to eight reference images.',
+        supportsSafetyTolerance: true,
+        rank: 6,
+      },
+      {
+        id: ImageModels.FLUX_2_PRO,
+        type: 'image',
+        name: 'FLUX.2 Pro',
+        backend: ModelBackend.BFL,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 300, output: 300 }, // $0.03 per image
+        },
+        description:
+          'FLUX.2 Pro - Production FLUX.2 generation and editing with strong prompt adherence and up to eight reference images.',
+        supportsSafetyTolerance: true,
+        rank: 7,
+      },
+      {
+        id: ImageModels.FLUX_2_PRO_PREVIEW,
+        type: 'image',
+        name: 'FLUX.2 Pro (Preview)',
+        backend: ModelBackend.BFL,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 300, output: 300 }, // $0.03 per image: BFL publishes no preview rate, billed at FLUX.2 Pro's
+        },
+        description:
+          'FLUX.2 Pro (Preview) - Preview build of FLUX.2 Pro, sharing its generation and editing request contract.',
+        supportsSafetyTolerance: true,
+        rank: 8,
+      },
+      {
+        id: ImageModels.FLUX_2_FLEX,
+        type: 'image',
+        name: 'FLUX.2 Flex',
+        backend: ModelBackend.BFL,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 500, output: 500 }, // $0.05 per image
+        },
+        description:
+          'FLUX.2 Flex - FLUX.2 generation and editing with strong detail preservation and up to eight reference images.',
+        supportsSafetyTolerance: true,
+        rank: 9,
+      },
+      {
+        id: ImageModels.FLUX_2_KLEIN_9B,
+        type: 'image',
+        name: 'FLUX.2 Klein 9B',
+        backend: ModelBackend.BFL,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 150, output: 150 }, // $0.015 per image
+        },
+        description:
+          'FLUX.2 Klein 9B - Compact 9B FLUX.2 model for fast, low-cost generation and editing with up to four reference images.',
+        supportsSafetyTolerance: true,
+        rank: 10,
+      },
+      {
+        id: ImageModels.FLUX_2_KLEIN_9B_PREVIEW,
+        type: 'image',
+        name: 'FLUX.2 Klein 9B (Preview)',
+        backend: ModelBackend.BFL,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 150, output: 150 }, // $0.015 per image: BFL publishes no preview rate, billed at FLUX.2 Klein 9B's
+        },
+        description:
+          'FLUX.2 Klein 9B (Preview) - Preview build of FLUX.2 Klein 9B, sharing its generation and editing request contract.',
+        supportsSafetyTolerance: true,
+        rank: 11,
+      },
+      {
+        id: ImageModels.FLUX_2_KLEIN_4B,
+        type: 'image',
+        name: 'FLUX.2 Klein 4B',
+        backend: ModelBackend.BFL,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 140, output: 140 }, // $0.014 per image
+        },
+        description:
+          'FLUX.2 Klein 4B - Smallest FLUX.2 model, for the fastest and cheapest generation and editing at 4B parameters.',
+        supportsSafetyTolerance: true,
+        rank: 12,
+      },
       // OpenAI models moved to OpenAI backend where they belong
     ];
   }

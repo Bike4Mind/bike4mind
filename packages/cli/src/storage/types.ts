@@ -40,6 +40,7 @@ export interface Message {
      */
     earlyStopReason?: string;
     cancelled?: boolean; // True if this message/operation was cancelled by user
+    steered?: boolean; // User input sent mid-turn and injected into that running turn (session/steering.ts)
     isContinuation?: boolean; // True if this is a continuation message (renders without header)
     // Subagent execution metadata
     subagentExecution?: {
@@ -294,6 +295,10 @@ export interface CliConfig {
    * Each model is tried in order after the primary model exhausts its retries.
    */
   fallbackModels?: string[];
+  /** Ollama endpoint for local models, saved by `b4m models --ollama-host`; the flag and B4M_OLLAMA_HOST override it. */
+  ollamaHost?: string;
+  /** The defaultModel `b4m models use` last set; headless runs treat that model as local when it is missing. */
+  localDefaultModel?: string;
 }
 
 /**
@@ -489,6 +494,8 @@ export interface CustomCommandFrontmatter {
   context?: 'fork' | 'inline';
   /** When true, skill is hidden from AI's auto-loading in system prompt */
   'disable-model-invocation'?: boolean;
+  /** opencode's spelling of the same opt-out: false hides the skill from the AI */
+  autoinvoke?: boolean;
   /** When false, skill is hidden from /commands menu but still callable */
   'user-invocable'?: boolean;
   /** Lifecycle hooks for skill execution */

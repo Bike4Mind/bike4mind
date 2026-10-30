@@ -96,13 +96,16 @@ export class ModelPriceRepository extends BaseRepository<IModelPriceDocument> im
         `ModelPrice.append rejected ${parsed.modelId}: all-zero pricing would settle calls free (mark the model freeToRun instead)`
       );
     }
-    return this.create(parsed as IModelPriceDocument);
+    // Not this.create(): its plain toObject() leaves pricing a Map, which res.json() writes as {}.
+    const created = await this.model.create(parsed as IModelPriceDocument);
+    return created.toObject({ virtuals: true, flattenMaps: true }) as IModelPriceDocument;
   }
 
   async rowsInForce(at: Date = new Date()): Promise<IModelPrice[]> {
-    const docs = await this.model.aggregate<IModelPriceDocument>(rowsInForcePipeline(at));
-    // Aggregation bypasses Mongoose casting; Map fields come back as plain objects.
-    return docs.map(doc => ({ ...doc, pricing: doc.pricing }) as IModelPrice);
+    const docs = await this.model.aggregate<IModelPriceDocument & { _id: unknown }>(rowsInForcePipeline(at));
+    // Aggregation bypasses Mongoose casting and virtuals: Map fields come back as plain objects and
+    // `id` has to be set by hand (settlement stamps it on UsageEvent.priceRowId).
+    return docs.map(doc => ({ ...doc, id: String(doc._id), pricing: doc.pricing }) as IModelPrice);
   }
 
   async historyForModel(modelId: string): Promise<IModelPrice[]> {

@@ -24,8 +24,9 @@
  */
 
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { verifyEmbedApiKey } from '@server/cli/auth';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
 import { agentRepository } from '@bike4mind/database';
 import {
   isAgentOwnedByEmbedKey,
@@ -90,7 +91,13 @@ const handler = baseApi({ auth: false })
     let info;
     try {
       info = await verifyEmbedApiKey({ 'x-api-key': k });
-    } catch {
+    } catch (err) {
+      // The key check itself failed (database unreachable): say so, so the embed is retried
+      // rather than cached as gone. Independent of the key, so it confirms nothing about it.
+      if (isAuthInfraFailure(err)) {
+        setAuthInfraFailureHeaders(res, err);
+        return sendErrorPage(res, err.statusCode, 'Temporarily unavailable. Please try again shortly.');
+      }
       // Uniform 404 for every verification failure (unknown, revoked, wrong
       // scope, non-org): no branch may confirm that a probed key exists.
       return sendErrorPage(res, 404, 'Not found.');

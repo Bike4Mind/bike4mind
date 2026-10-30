@@ -15,7 +15,7 @@ import {
 
 export { GITHUB_PERSONAL_OWNER_ONLY_REASON } from '@client/app/components/datalake/lakeSourceShared';
 
-/** Must stay in sync with the server's LakeConnectorKind (server/dataLakes/assertLakeConnectorFree.ts). */
+/** Must stay in sync with the server's LakeConnectorKind (packages/server-utils/src/dataLakes/assertLakeConnectorFree.ts). */
 export type LakeSourceKind = 'googleDrive' | 'github';
 
 export const LAKE_MANAGER_ONLY_REASON = `Only people who can manage this ${DATA_LAKE} can connect a source to it.`;

@@ -167,15 +167,17 @@ export function isFinishedState(state: PrState | undefined): state is 'MERGED' |
 }
 
 /**
- * The four states the bar and the sidebar draw. Both derive it here from the same snapshot, so
- * a conversation's sidebar icon and its bar cannot disagree. A closed draft is closed.
+ * The states the bar and the sidebar draw. Both derive it here from the same snapshot, so a
+ * conversation's sidebar icon and its bar cannot disagree. A closed draft is closed. `queued` is
+ * an open PR in its base branch's merge queue; it reads as open again once the queue lets it go.
  */
-export type PrDisplayState = 'open' | 'draft' | 'merged' | 'closed';
+export type PrDisplayState = 'open' | 'draft' | 'queued' | 'merged' | 'closed';
 
-export function prDisplayState(state: PrState, isDraft = false): PrDisplayState {
+export function prDisplayState(state: PrState, isDraft = false, queued = false): PrDisplayState {
   if (state === 'MERGED') return 'merged';
   if (state === 'CLOSED') return 'closed';
-  return isDraft ? 'draft' : 'open';
+  if (isDraft) return 'draft';
+  return queued ? 'queued' : 'open';
 }
 
 /** What the sidebar shows for one conversation's PR. Built from stored and in-memory state only. */
@@ -207,6 +209,8 @@ export interface PrBarState {
   sessionId: string;
   /** Null when the conversation has no PR, or the user dismissed it: no bar. */
   binding: PrBinding | null;
+  /** The user dismissed the bar, but the PR is still this conversation's: offer no second one. */
+  dismissed?: true;
   /** Null until the first read lands. */
   snapshot: PrBarSnapshot | null;
   gh: PrGhStatus;

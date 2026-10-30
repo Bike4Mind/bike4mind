@@ -2,7 +2,7 @@
  * @vitest-environment node
  */
 import { describe, it, expect } from 'vitest';
-import { computeStatusAndScore } from '../wafScan';
+import { computeStatusAndScore } from '@bike4mind/server-utils/security/wafScan';
 
 /**
  * WAF Scan Scoring Tests

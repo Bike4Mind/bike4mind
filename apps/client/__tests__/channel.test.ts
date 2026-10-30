@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { escapeCsvField } from '@bike4mind/server-utils/integrations/slack/slackExportCsv';
 
 /**
  * Comprehensive Test Suite for Slack Channel Export API
  *
  * Coverage:
- * - Unit tests for CSV injection prevention
+ * - Unit tests for CSV formula escaping
  * - Unit tests for formatters (CSV, JSON, Markdown)
  * - Integration tests for API endpoint
  * - Error handling and edge cases
@@ -42,44 +43,29 @@ const mockExportData = {
   ],
 };
 
-describe('Slack Export - CSV Injection Prevention', () => {
-  // Inline copy of the helper under test; not yet exported from the source module.
-  const escapeCsvField = (field: string): string => {
-    if (!field) return '';
-
-    // Prevent CSV formula injection (security vulnerability)
-    if (field.startsWith('=') || field.startsWith('+') || field.startsWith('-') || field.startsWith('@')) {
-      field = "'" + field; // Prefix with single quote to neutralize formula
-    }
-
-    // Escape quotes and newlines for proper CSV parsing
-    field = field.replace(/"/g, '""').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-
-    return field;
-  };
-
-  it('should prevent = formula injection', () => {
+describe('Slack Export - CSV Formula Escaping', () => {
+  it('should escape = formula cells', () => {
     const malicious = '=cmd|"/c calc"!A1';
     const escaped = escapeCsvField(malicious);
     expect(escaped).toBe(`'=cmd|""/c calc""!A1`);
     expect(escaped.startsWith("'")).toBe(true);
   });
 
-  it('should prevent + formula injection', () => {
+  it('should escape + formula cells', () => {
     const malicious = '+1+1';
     const escaped = escapeCsvField(malicious);
     expect(escaped).toBe("'+1+1");
     expect(escaped.startsWith("'")).toBe(true);
   });
 
-  it('should prevent - formula injection', () => {
+  it('should escape - formula cells', () => {
     const malicious = '-1';
     const escaped = escapeCsvField(malicious);
     expect(escaped).toBe("'-1");
     expect(escaped.startsWith("'")).toBe(true);
   });
 
-  it('should prevent @ formula injection', () => {
+  it('should escape @ formula cells', () => {
     const malicious = '@SUM(A1:A10)';
     const escaped = escapeCsvField(malicious);
     expect(escaped).toBe("'@SUM(A1:A10)");
@@ -114,6 +100,10 @@ describe('Slack Export - CSV Injection Prevention', () => {
     expect(escaped).toBe('Normal message text');
   });
 
+  it.each(['\tcell', '\rcell'])('should prefix a leading control character in %j', value => {
+    expect(escapeCsvField(value).startsWith("'")).toBe(true);
+  });
+
   it('should handle combination of formula and quotes', () => {
     const malicious = '=1+1 "test"';
     const escaped = escapeCsvField(malicious);
@@ -124,15 +114,6 @@ describe('Slack Export - CSV Injection Prevention', () => {
 
 describe('Slack Export - CSV Formatter', () => {
   const formatAsCSV = (exportData: any): string => {
-    const escapeCsvField = (field: string): string => {
-      if (!field) return '';
-      if (field.startsWith('=') || field.startsWith('+') || field.startsWith('-') || field.startsWith('@')) {
-        field = "'" + field;
-      }
-      field = field.replace(/"/g, '""').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-      return field;
-    };
-
     const rows: string[] = ['timestamp,user_id,user_name,text,thread_ts,reply_count,has_attachments'];
 
     for (const message of exportData.messages) {

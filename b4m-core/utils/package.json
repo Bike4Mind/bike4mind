@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "8.1.4",
+  "version": "9.1.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -198,6 +198,16 @@
       "require": {
         "types": "./dist/videoProviders/index.d.cts",
         "default": "./dist/videoProviders/index.cjs"
+      }
+    },
+    "./embeddingProviders": {
+      "import": {
+        "types": "./dist/embeddingProviders/index.d.mts",
+        "default": "./dist/embeddingProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/embeddingProviders/index.d.cts",
+        "default": "./dist/embeddingProviders/index.cjs"
       }
     },
     "./musicProviders": {

@@ -60,6 +60,8 @@ export function makeDagDispatcher(args: {
     apiKeyId?: string;
     /** The parent's credential-scope tool denials, inherited so a node cannot regain a tool the key was denied. */
     scopeDeniedTools?: string[];
+    /** The parent's withheld admin role, inherited so a node cannot regain admin access the key lacks. */
+    adminRoleWithheld?: boolean;
     /**
      * The parent's permission lists, copied onto each node at creation: a node cannot pause for
      * approval, so `processSubagentDispatch` refuses any tool call these lists do not allow.
@@ -107,6 +109,7 @@ export function makeDagDispatcher(args: {
         authOrigin: nodeDefaults.authOrigin,
         ...(nodeDefaults.apiKeyId && { apiKeyId: nodeDefaults.apiKeyId }),
         ...(nodeDefaults.scopeDeniedTools?.length && { scopeDeniedTools: nodeDefaults.scopeDeniedTools }),
+        ...(nodeDefaults.adminRoleWithheld && { adminRoleWithheld: true }),
         model: resolveDeprecatedModelId(model, 'agentExecutorDag'),
         query: node.description,
         status: 'pending' as AgentExecutionStatus,
@@ -425,6 +428,24 @@ export function clampMaxIterationsForOverCapAggregationWake(args: {
   iterationIndex: number;
 }): number {
   if (args.isAggregationOnlyWake && args.isOverCap) {
+    return Math.min(args.maxIterations, args.iterationIndex + 1);
+  }
+  return args.maxIterations;
+}
+
+/**
+ * The same one-iteration bound for an aggregation-only wake whose model stopped being runnable
+ * (disabled, or the user lost the entitlement) while its children ran. The wrap-up iteration
+ * returns their already-paid-for results; without the bound the loop would keep iterating on a
+ * model the run is no longer entitled to.
+ */
+export function clampMaxIterationsForUnrunnableAggregationWake(args: {
+  isAggregationOnlyWake: boolean;
+  isRunnable: boolean;
+  maxIterations: number;
+  iterationIndex: number;
+}): number {
+  if (args.isAggregationOnlyWake && !args.isRunnable) {
     return Math.min(args.maxIterations, args.iterationIndex + 1);
   }
   return args.maxIterations;

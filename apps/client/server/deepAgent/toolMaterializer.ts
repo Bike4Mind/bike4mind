@@ -1,4 +1,5 @@
 import { Resource } from 'sst';
+import { getUserEntitlements } from '@server/entitlements';
 import {
   resolveToolAvailability,
   buildSharedTools,
@@ -8,6 +9,7 @@ import {
 import {
   adminSettingsRepository,
   apiKeyRepository,
+  cacheRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileChunkRepository,
@@ -25,7 +27,7 @@ import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import type { ToolMaterializer } from '@bike4mind/agents';
 import { buildSystemApiKeyTable } from '@bike4mind/server-utils/deepAgent/resolveBackend';
@@ -88,6 +90,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
     const toolDeps: ToolBuilderDeps = {
       userId: ownerUserId,
       user: owner,
+      getEntitlements: () => getUserEntitlements(owner),
       logger: config.logger,
       retrievalFilter: config.retrievalFilter,
       db: {
@@ -112,6 +115,8 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
         ...lakeWriteToolDb,
+        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
+        caches: cacheRepository,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),

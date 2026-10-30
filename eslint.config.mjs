@@ -7,6 +7,7 @@ import reactHooksPlugin from 'eslint-plugin-react-hooks';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
+import noRawAdminJoy from './eslint-rules/no-raw-admin-joy.mjs';
 
 /**
  * ESLint Flat Config for Bike4Mind Monorepo
@@ -307,6 +308,23 @@ const noWorkersImportInClient = [
   },
 ];
 
+// Root-barrel imports that vitest pays for on every test file that reaches them. Next's
+// optimizePackageImports rewrites these for the app bundle, but vitest loads the barrel as-is:
+// `@mui/icons-material` alone requires ~10k icon modules (a third of the client shard's import
+// time), and `lodash` loads the whole library for one function. Spread into every apps/client
+// block that owns no-restricted-imports, for the last-rule-wins reason above.
+const noHeavyBarrelImportsInClient = [
+  {
+    name: '@mui/icons-material',
+    allowImportNames: ['SvgIconComponent'],
+    message: "Import each icon from its own module: `import Close from '@mui/icons-material/Close'`.",
+  },
+  {
+    name: 'lodash',
+    message: "Import each function from its own module: `import debounce from 'lodash/debounce'`.",
+  },
+];
+
 // apps/workers has no react/next/mui dependency (see apps/workers/package.json) and must stay that
 // way - it runs EventBridge Lambda handlers and a self-host job runner, neither of which renders
 // anything. Scoped to apps/client/app specifically (not @client/* broadly), since apps/workers
@@ -369,7 +387,12 @@ const SERVER_UTILS_BOUNDARY = {
 
 // Local rules, served as one plugin. `--cache` keys results on the plugin's name@version, not on
 // the rule source, so the version is a hash of that source - editing a rule invalidates the cache.
-const localRuleSources = ['./eslint-rules/no-raw-entity-response.mjs'];
+const localRuleSources = [
+  './eslint-rules/no-raw-entity-response.mjs',
+  './eslint-rules/no-raw-admin-joy.mjs',
+  './eslint-rules/admin-joy-legacy.mjs',
+  './eslint-rules/admin-joy-legacy-imports.mjs',
+];
 const localRulesPlugin = {
   meta: {
     name: 'b4m-local-rules',
@@ -378,7 +401,7 @@ const localRulesPlugin = {
       .digest('hex')
       .slice(0, 12),
   },
-  rules: { 'no-raw-entity-response': noRawEntityResponse },
+  rules: { 'no-raw-entity-response': noRawEntityResponse, 'no-raw-admin-joy': noRawAdminJoy },
 };
 
 export default defineConfig([
@@ -480,6 +503,12 @@ export default defineConfig([
     files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
   })),
 
+  {
+    files: ['apps/client/app/components/admin/**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs}'],
+    ignores: ['apps/client/app/components/admin/shared/**'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-raw-admin-joy': 'error' },
+  },
   // TypeScript custom rules
   {
     files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
@@ -561,6 +590,7 @@ export default defineConfig([
         {
           paths: [
             ...b4mv3RestrictedPaths,
+            ...noHeavyBarrelImportsInClient,
             {
               name: 'next/router',
               message:
@@ -641,7 +671,7 @@ export default defineConfig([
       'no-restricted-imports': [
         'error',
         {
-          paths: [...b4mv3RestrictedPaths],
+          paths: [...b4mv3RestrictedPaths, ...noHeavyBarrelImportsInClient],
           patterns: [
             {
               group: ['**/overwatch/services/*', '**/overwatch/types'],

@@ -13,14 +13,28 @@ const fakeGemini = (): VideoProvider => ({
   fetchOutput: vi.fn(),
 });
 
+const fakeVeo = (): VideoProvider => ({
+  mode: 'async',
+  id: 'veo',
+  models: ['veo-3.1-fast-generate-preview'],
+  submit: vi.fn(),
+  poll: vi.fn(),
+  fetchOutput: vi.fn(),
+});
+
 const deps = (
   overrides: {
     enabled?: Record<string, boolean>;
     keys?: Partial<Record<VideoProviderId, string | null>>;
     withTest?: boolean;
+    withVeo?: boolean;
   } = {}
 ) => ({
-  providers: createVideoProviderRegistry([fakeGemini(), ...(overrides.withTest ? [new TestVideoProvider()] : [])]),
+  providers: createVideoProviderRegistry([
+    fakeGemini(),
+    ...(overrides.withTest ? [new TestVideoProvider()] : []),
+    ...(overrides.withVeo ? [fakeVeo()] : []),
+  ]),
   getSettings: vi.fn(async () => ({
     enforceCredits: true,
     videoGeneration: { enabledModels: overrides.enabled ?? {} },
@@ -36,6 +50,7 @@ describe('listUsableVideoModels', () => {
     expect(models.map(m => m.id)).toEqual(['gemini-omni-1.1-flash']);
     expect(VideoModelSchema.parse(models[0])).toEqual(models[0]);
     expect(models[0].credits_per_second).toEqual({ '720p': usdToCredits(0.1014) });
+    expect(models[0].input_roles).toEqual([{ role: 'first_frame', max: 1 }]);
   });
 
   it('omits an unregistered provider, a disabled model and a provider without a key', async () => {
@@ -54,6 +69,13 @@ describe('listUsableVideoModels', () => {
     const d = deps({ enabled: { 'gemini-omni-1.1-flash': false }, withTest: true });
     expect((await listUsableVideoModels('u1', d)).map(m => m.id)).toEqual(['test-video']);
     expect(d.resolveApiKey).not.toHaveBeenCalledWith('gemini-omni', 'u1');
+  });
+
+  // Every surface that picks a video model (agent tool, desktop, voice, Slack, Studio) reads this listing.
+  it('never lists a retired model, even when its provider is registered and an admin enabled it', async () => {
+    const d = deps({ withVeo: true, enabled: { 'veo-3.1-fast-generate-preview': true } });
+    expect((await listUsableVideoModels('u1', d)).map(m => m.id)).toEqual(['gemini-omni-1.1-flash']);
+    expect(d.resolveApiKey).not.toHaveBeenCalledWith('veo', 'u1');
   });
 
   it('resolves one key per registered provider for the listing user', async () => {

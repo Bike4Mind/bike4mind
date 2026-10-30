@@ -42,12 +42,11 @@ This project supports two deployment platforms:
 
 ### `deploy.yml` - Unified Deployment Workflow
 - **Triggers**: 
-  - Push to `main` or `prod` branches
+  - Push to `main`
   - Pull requests to `main` branches
-- **Purpose**: Handle all deployments (production and preview)
+- **Purpose**: Handle staging and preview deployments
 - **AWS Accounts**:
   - `main` → `dev` stage → **dev account** (staging.bike4mind.com)
-  - `prod` → `prod` stage → **prod account** (bike4mind.com)
   - `PR` → `pr{PR_NUMBER}` stage → **dev account** (preview environment)
 - **Features**:
   - Single workflow handles all deployment scenarios
@@ -65,23 +64,24 @@ The deployment workflow follows a clear branching strategy that maps branches to
 | Branch | Stage | AWS Account | Environment | Variables Used |
 |--------|-------|-------------|-------------|----------------|
 | `main` | `dev` | **dev** | Staging | `STAGING_*` or fallback to common |
-| `prod` | `production` | **prod** | Production | `PROD_*` or fallback to common |
 | `PR` | `pr{PR_NUMBER}` | **dev** | Preview | `STAGING_*` + preview domain |
 
 ### Deployment Behavior
 
-#### Protected Branches (Auto-Deploy)
+#### Main Branch (Auto-Deploy)
 - **`main` branch**: 
   - Maps to `dev` stage in dev account
   - Uses staging infrastructure (VPC, hosted zone, ECR)
   - Deploys to staging environment
   - Uses `STAGING_*` variables or falls back to common variables
 
-- **`prod` branch**: 
+#### Production (Promoted)
+
+- **Production**: promoted from a `main` commit by the deployment pipeline
   - Maps to `production` stage in prod account
   - Uses production infrastructure (VPC, hosted zone, ECR)
-  - Deploys to production environment
   - Uses `PROD_*` variables or falls back to common variables
+  - There is no separate production branch
 
 #### Pull Requests (Preview Deployments)
 - **Any PR to `main`**:
@@ -101,7 +101,7 @@ The deployment workflow follows a clear branching strategy that maps branches to
 This strategy provides clear environment separation:
 
 - **Staging Environment**: `main` branches → dev account
-- **Production Environment**: `prod` branch → prod account  
+- **Production Environment**: a promoted `main` commit → prod account
 - **Preview Environments**: PRs → dev account (isolated from production)
 - **Development Branches**: No deployment (prevents accidental deployments)
 
@@ -111,7 +111,7 @@ This strategy provides clear environment separation:
 - **Safe Previews**: PR deployments use staging infrastructure, not production
 - **Automatic Cleanup**: Preview environments are automatically removed
 - **Flexible Configuration**: Environment-specific variables allow customization
-- **Protected Production**: Only `prod` branch can deploy to production account
+- **Protected Production**: Production is promoted from a chosen `main` commit by the deployment pipeline
 
 ## Required Configuration
 

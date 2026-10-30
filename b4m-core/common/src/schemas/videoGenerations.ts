@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { BillingOrganizationIdSchema } from './billingOrganization';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { GENERATION_OUTPUT_AVAILABILITIES, type GenerationOutputAvailability } from '../generation/types';
-import { ASPECT_RATIOS, RESOLUTION_TIERS, VIDEO_MODES } from '../video/types';
+import { ASPECT_RATIOS, RESOLUTION_TIERS, VIDEO_INPUT_ROLES, VIDEO_MODES } from '../video/types';
+import { VIDEO_INPUTS_MAX } from '../video/request';
 import { VIDEO_VALIDATION_ERROR_CODES } from '../video/validate';
 import {
   GENERATION_JOB_SOURCES,
@@ -73,11 +74,25 @@ export const CreateVideoGenerationBodySchema = z.strictObject({
   mode: z
     .enum(VIDEO_MODES)
     .optional()
-    .describe('Defaults to image_to_video when input_image_file_id is set, else text_to_video.'),
+    .describe(
+      'Defaults to image_to_video when a first_frame input (or input_image_file_id) is set, else text_to_video.'
+    ),
   duration_seconds: z.number().positive().optional().describe("Defaults to the model's default duration."),
   aspect_ratio: z.enum(ASPECT_RATIOS).optional(),
   resolution: z.enum(RESOLUTION_TIERS).optional(),
-  input_image_file_id: z.string().min(1).optional().describe('An image file you own, for image_to_video.'),
+  inputs: z
+    .array(z.strictObject({ file_id: z.string().min(1), role: z.enum(VIDEO_INPUT_ROLES) }))
+    .max(VIDEO_INPUTS_MAX)
+    .optional()
+    .describe(
+      'Image files you own, each tagged with what it is for. image_to_video needs a first_frame. The roles a model ' +
+        'accepts, and how many of each, are its input_roles in GET /api/v1/video-models.'
+    ),
+  input_image_file_id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Deprecated: send inputs with role first_frame instead. Cannot be combined with inputs.'),
   audio: z.boolean().optional(),
   organization_id: BillingOrganizationIdSchema,
 });
@@ -133,6 +148,15 @@ export const VideoModelSchema = z.object({
   display_name: z.string(),
   provider: z.string(),
   modes: z.array(z.enum(VIDEO_MODES)),
+  // Loose on purpose: clients parse this at runtime, so a role added later (or a server from before input_roles)
+  // must not make an older client drop the whole model. Requests still take only the known roles.
+  input_roles: z
+    .array(z.object({ role: z.string(), max: z.number().int().positive() }))
+    .optional()
+    .describe(
+      `The inputs[] roles this model accepts and the most of each one request may carry. Roles today: ` +
+        `${VIDEO_INPUT_ROLES.join(', ')}; ignore any you do not know.`
+    ),
   duration: z.union([
     z.object({ kind: z.literal('range'), min: z.number(), max: z.number(), step: z.number() }),
     z.object({ kind: z.literal('discrete'), values: z.array(z.number()) }),

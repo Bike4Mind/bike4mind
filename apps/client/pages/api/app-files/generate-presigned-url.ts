@@ -31,11 +31,7 @@ const handler = baseApi().post(
       if (isExecutableUploadMimeType(data.mimeType))
         throw new BadRequestError(`Content type ${data.mimeType} is not allowed`);
 
-      let fileKey = `${uuidv4()}.${ext}`;
-      if (data.path) {
-        const filePath = data.path.endsWith('/') ? data.path : `${data.path}/`;
-        fileKey = `${filePath}${fileKey}`;
-      }
+      const fileKey = `${uuidv4()}.${ext}`;
 
       // Bind ContentType into the signature so the caller cannot PUT bytes under a different
       // (e.g. executable) content type than the one validated above. The browser PUT sends a

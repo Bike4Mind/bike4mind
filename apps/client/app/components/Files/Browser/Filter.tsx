@@ -1,9 +1,9 @@
 import { isFabFileTypeFilter } from '@bike4mind/common';
 import { ISearchFabFilesParams } from '@client/app/hooks/data/fabFiles';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import { Search } from '@mui/icons-material';
+import Search from '@mui/icons-material/Search';
 import { Box, Input, Option, Select } from '@mui/joy';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import { FC, useState } from 'react';
 import { FILE_TYPE_OPTIONS } from './constants';
 import GeneratedFilterToggle, { withGeneratedFilter } from './GeneratedFilterToggle';

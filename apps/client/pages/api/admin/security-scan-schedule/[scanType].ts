@@ -1,8 +1,8 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { securityScanScheduleRepository, SecurityScanType } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { calculateNextRunTime } from '@bike4mind/server-utils/utils/scheduleCalculator';
@@ -38,7 +38,10 @@ function validateStageName(stage: string): void {
  * @param scanType - Type of security scan (web, code, packages, secrets, cloud)
  * @returns Schedule configuration including enabled status and next run time
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .use(
     rateLimit({
       limit: 30, // 30 requests per minute per user
@@ -46,10 +49,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     let scanType: SecurityScanType;
     try {
       scanType = ScanTypeSchema.parse(req.query.scanType);
@@ -87,10 +86,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
    * @returns Success response with updated schedule
    */
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     let scanType: SecurityScanType;
     try {
       scanType = ScanTypeSchema.parse(req.query.scanType);

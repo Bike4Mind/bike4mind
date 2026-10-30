@@ -6,13 +6,17 @@ import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
 import appIcon from '../../build/icon.png?asset';
 import macAppIcon from '../../build/icon-mac.png?asset';
 import { registerAccount } from './account';
-import { registerAuth } from './auth';
+import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
+import { sessionScopeFor, sessionScopeKey } from './chat/sessionScope';
+import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
+import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
+import { registerModels } from './models';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
-import { isExternallyOpenable } from './externalLinks';
+import { isExternallyOpenable } from '@shared/externalLinks';
 import { persistConsoleWarnings } from './logFile';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
@@ -103,10 +107,17 @@ ipcMain.handle(IPC_CHANNELS.shellOpenExternal, (_event, url: unknown) => {
   if (typeof url === 'string' && isExternallyOpenable(url)) void shell.openExternal(url);
 });
 
+function sessionScopeKeyOf(state: Parameters<typeof sessionScopeFor>[0]): string | null {
+  const scope = sessionScopeFor(state);
+  return scope ? sessionScopeKey(scope) : null;
+}
+
 void app.whenReady().then(async () => {
   // First in this handler, so a failure below is on disk too (a packaged build has no terminal);
   // warnings before app ready are not persisted.
   persistConsoleWarnings(console, app.getPath('logs'));
+  // Started now so the first command or PR poll does not wait on a slow login shell.
+  void resolveUserPath();
 
   // macOS reads the dock icon from the app bundle, which only a packaged build has, so a
   // dev run would otherwise sit in the dock as Electron's own atom.
@@ -124,10 +135,16 @@ void app.whenReady().then(async () => {
     mcp,
     browser,
     pullRequests,
+    claudeImport,
+    spareWorktrees,
+    modelServers,
+    localContext,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
+    releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
   });
+  const models = registerModels(modelServers, { localContext: () => localContext.read() });
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
@@ -164,6 +181,7 @@ void app.whenReady().then(async () => {
         mcp.shutdown(),
         terminals.shutdown(),
         browser.cookies.clearOnQuit(),
+        spareWorktrees.dispose(),
       ]).catch(() => undefined);
     },
   });
@@ -191,7 +209,13 @@ void app.whenReady().then(async () => {
     event.preventDefault();
     // The imported cookies go too. They have no expiry and so were never written to disk, but
     // this is the pass that can await, and the guarantee is worth holding in two places.
-    void Promise.all([background.shutdown(), mcp.shutdown(), terminals.shutdown(), browser.cookies.clearOnQuit()])
+    void Promise.all([
+      background.shutdown(),
+      mcp.shutdown(),
+      terminals.shutdown(),
+      browser.cookies.clearOnQuit(),
+      spareWorktrees.dispose(),
+    ])
       .catch(() => undefined)
       .finally(() => app.quit());
   });
@@ -199,7 +223,9 @@ void app.whenReady().then(async () => {
   app.once('will-quit', () => {
     auth.dispose();
     fleet.dispose();
+    models.dispose();
     chat.dispose();
+    claudeImport.dispose();
     pullRequests.dispose();
     updates.dispose();
     // Synchronous and unconditional: this handler cannot await, and a quit that raced the
@@ -223,6 +249,15 @@ void app.whenReady().then(async () => {
   }
 
   createWindow();
+  claudeImport.start();
+  onAuthStateChanged(closeBrowsersOnScopeChange(auth.getState(), () => browser.closeAll()));
+  let importScope = sessionScopeKeyOf(auth.getState());
+  onAuthStateChanged(state => {
+    const next = sessionScopeKeyOf(state);
+    if (next === importScope) return;
+    importScope = next;
+    claudeImport.onScopeChanged();
+  });
 
   // Restoring runs alongside the window opening rather than gating it: the renderer starts in
   // the `initializing` state and is pushed the outcome, so a slow or unreachable backend

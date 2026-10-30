@@ -20,7 +20,7 @@ import {
 import { adminSettingsRepository, cacheRepository, sreErrorTrackingRepository } from '@bike4mind/database';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { postSreRevisionEscalationMessage } from '@server/integrations/slack/sreSlackApproval';
+import { postSreRevisionEscalationMessage } from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 import { z } from 'zod';
 
 /** Dedup window for PR-number-based dispatch dedup (1 hour, matches issue dispatch). */

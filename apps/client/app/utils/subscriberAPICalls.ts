@@ -1,9 +1,14 @@
 import { api } from '@client/app/contexts/ApiContext';
-import { ISubscriberDocument } from '@bike4mind/common';
+import { ISubscriberDocument, SubscriberSource } from '@bike4mind/common';
 import { PaginatedResponse } from '@bike4mind/common';
 import axios from 'axios';
 
-export const createSubscriber = async (data: { firstName: string; lastName: string; email: string }) => {
+export const createSubscriber = async (data: {
+  firstName: string;
+  lastName: string;
+  email: string;
+  source?: SubscriberSource;
+}) => {
   const response = await axios.post('/api/subscribers/create', data);
   return response.data;
 };

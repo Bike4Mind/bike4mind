@@ -11,7 +11,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import type { IDataLakeDocument } from '@bike4mind/common';
-import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
+import { shredMemoryForLakeTags } from '@bike4mind/server-utils/dataLakes/shredMemoryForLakeTags';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 export interface PurgeConnectionLogger {

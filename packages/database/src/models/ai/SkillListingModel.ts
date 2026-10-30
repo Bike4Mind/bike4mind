@@ -1,7 +1,8 @@
 import mongoose, { Document, Model, Schema, model } from 'mongoose';
 import { randomBytes } from 'crypto';
-import type { ISkillListing } from '@bike4mind/common';
+import { claudeSkillNameFor, type ISkillListing } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
+import { SkillBundle } from './SkillBundleModel';
 
 /**
  * A Skill Market listing. Holds a denormalized copy of its current APPROVED version (name,
@@ -10,7 +11,8 @@ import { softDeletePlugin } from '../../utils/mongo';
  *
  * Every write that publishes a version goes through `approvePendingListingVersion`, a CAS on
  * `pendingVersionId`, so a stale approve (or one racing a newer resubmit) cannot publish a
- * superseded version.
+ * superseded version. A winning approve also assigns an Organization listing its permanent
+ * `claudePluginName` (`assignClaudePluginName`).
  */
 export interface ISkillListingDocument extends Omit<ISkillListing, 'id'>, Document {
   id: string;
@@ -40,6 +42,8 @@ const SkillListingSchema = new Schema<ISkillListingDocument>(
     pendingVersionId: { type: String, default: null },
     pendingVersion: { type: Number, default: null },
     latestVersion: { type: Number, default: 0 },
+    // No default: assignClaudePluginName's CAS keys on the field being absent.
+    claudePluginName: { type: String },
 
     name: { type: String, required: true, maxlength: 64 },
     description: { type: String, required: true, maxlength: 500 },
@@ -90,6 +94,15 @@ SkillListingSchema.index({ sourceSkillId: 1 });
 SkillListingSchema.index(
   { authorUserId: 1, sourceSkillId: 1 },
   { unique: true, partialFilterExpression: { activeSlot: true }, name: 'skill_listing_one_active_per_skill' }
+);
+// Makes a plugin-name collision within an org a write error instead of a feed-order tiebreak.
+SkillListingSchema.index(
+  { organizationId: 1, claudePluginName: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { claudePluginName: { $type: 'string' } },
+    name: 'skill_listing_claude_plugin_name',
+  }
 );
 SkillListingSchema.index(
   { name: 'text', description: 'text', tags: 'text', honestSummaryText: 'text' },
@@ -165,7 +178,42 @@ export async function approvePendingListingVersion(
       },
     }
   );
-  return res.modifiedCount > 0;
+  if (res.modifiedCount === 0) return false;
+  try {
+    await assignClaudePluginName(listingId, denorm.name);
+  } catch (err) {
+    // The approve already landed; the Claude Code feed assigns the name on its next build instead.
+    console.error('[SkillListing] assigning claudePluginName failed', listingId, err);
+  }
+  return true;
+}
+
+/**
+ * Give an Organization listing its Claude Code plugin name, once: the skill-name slug, or
+ * `<slug>-<listing id tail>` when another listing in the org already holds the slug. Never
+ * overwrites an existing name, because `<plugin>@<marketplace>` installs are keyed on it; a no-op
+ * for public/unlisted listings and listings already named.
+ */
+export async function assignClaudePluginName(listingId: string, skillName: string): Promise<void> {
+  const base = claudeSkillNameFor(skillName);
+  const organizationId = (await SkillListing.findById(listingId).select('organizationId').lean())?.organizationId;
+  // A skill can deliberately occupy an id-suffixed name too. Keep trying unique-index-backed
+  // candidates instead of permanently omitting an otherwise approved listing from the feed.
+  for (let attempt = 0; ; attempt += 1) {
+    const claudePluginName =
+      attempt === 0 ? base : attempt === 1 ? `${base}-${listingId.slice(-6)}` : `${base}-${listingId}-${attempt}`;
+    // Bundles share the org feed's plugin namespace (SkillBundleModel), without a shared unique index.
+    if (organizationId && (await SkillBundle.exists({ organizationId, pluginName: claudePluginName }))) continue;
+    try {
+      await SkillListing.updateOne(
+        { _id: listingId, visibility: 'organization', claudePluginName: { $exists: false } },
+        { $set: { claudePluginName } }
+      );
+      return;
+    } catch (err) {
+      if (!(err instanceof Error) || !('code' in err) || err.code !== 11000) throw err;
+    }
+  }
 }
 
 /** Drop a pending version (reject / failed scan). Same CAS shape as the approve. */

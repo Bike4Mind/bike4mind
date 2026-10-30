@@ -17,7 +17,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { storageOwnerTransferDb } from './storageOwnerTransferDb';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

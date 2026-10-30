@@ -115,3 +115,13 @@ export function getStatusLabel(status: ModalPriorityStatus): string {
     }
   }
 }
+
+/**
+ * Weekly highlights are posted to a Slack channel, so the card is limited to the main
+ * environments: the source deployment's production, dev, and PR preview stages. Staging,
+ * shared-dev and personal stages are excluded, as is a fork's production.
+ */
+export function shouldShowWeeklyHighlights(env: { stage: string; isForkProduction: boolean } | undefined): boolean {
+  if (!env || env.isForkProduction) return false;
+  return env.stage === 'production' || env.stage === 'dev' || env.stage.startsWith('pr');
+}

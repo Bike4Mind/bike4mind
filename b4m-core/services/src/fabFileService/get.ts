@@ -6,8 +6,11 @@ import {
   IAdminSettingsRepository,
   isImageServeable,
 } from '@bike4mind/common';
-import { NotFoundError, secureParameters, getSettingByName } from '@bike4mind/utils';
+import { NotFoundError, secureParameters, getSettingByName, signedUrlExpiresAt } from '@bike4mind/utils';
 import { z } from 'zod';
+
+// Re-exported for the FabFile cache writers that import it from here.
+export { signedUrlExpiresAt };
 
 const getFabFileSchema = z.object({
   id: z.string(),
@@ -16,6 +19,15 @@ const getFabFileSchema = z.object({
 type GetFabFileParameters = z.infer<typeof getFabFileSchema>;
 
 const EXPIRE_IN_SECONDS = 3600;
+// Re-sign a little before expiry so a client is not handed a URL about to lapse mid-render.
+// Shared with projectService/listFiles so both cache readers apply the same rule.
+const REFRESH_MARGIN_MS = 5 * 60 * 1000;
+
+export const hasUsableCachedUrl = ({
+  fileUrl,
+  fileUrlExpireAt,
+}: Pick<IFabFileDocument, 'fileUrl' | 'fileUrlExpireAt'>) =>
+  Boolean(fileUrl && fileUrlExpireAt && new Date(fileUrlExpireAt).getTime() - REFRESH_MARGIN_MS > Date.now());
 
 /**
  * Check if a file ID is listed in the global SystemFiles admin setting
@@ -90,7 +102,12 @@ export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, stora
   // body. A shallow copy, not a mutation: this is the one function every outward-facing file read
   // (get/list/search, byIds, the shared-lake fallback) passes a FabFile through, and some of those
   // callers still hold and use their own reference to the same object afterward.
-  const fabFile = { ...fabFileIn, supersededInLakes: undefined };
+  // list/byIds hand over hydrated docs, whose spread copies only _doc/$__ and drops every field.
+  const plain =
+    typeof (fabFileIn as { toJSON?: unknown }).toJSON === 'function'
+      ? (fabFileIn as unknown as { toJSON: () => IFabFileDocument }).toJSON()
+      : fabFileIn;
+  const fabFile = { ...plain, supersededInLakes: undefined };
 
   // Never hand out a URL for an image that's still held (pending scan) or was
   // quarantined (blocked) by upload moderation, before any URL work. We withhold the
@@ -109,23 +126,9 @@ export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, stora
     fabFile.fileUrlExpireAt = undefined;
   }
 
-  // True if the current URL is invalid (fetch throws or returns non-OK).
-  const shouldGenerateNewUrl = async (url: string): Promise<boolean> => {
-    try {
-      const response = await fetch(url, { method: 'GET' });
-      return !response.ok;
-    } catch (error) {
-      return true;
-    }
-  };
-
-  // Skip generating a new URL if current URL is valid and not expired
-  if (fabFile.fileUrl && fabFile.fileUrlExpireAt && fabFile.fileUrlExpireAt > new Date()) {
-    const errorInUrl = await shouldGenerateNewUrl(fabFile.fileUrl);
-    if (!errorInUrl) {
-      return fabFile;
-    }
-  }
+  // Trust the stored expiry rather than probing the URL: a GET probe downloaded the object on
+  // every read and leaked an unhandled `TypeError: terminated` when S3 closed the unread body.
+  if (hasUsableCachedUrl(fabFile)) return fabFile;
 
   if (!fabFile.filePath) return fabFile;
 
@@ -133,7 +136,7 @@ export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, stora
   const fileUrl = await storage.generateSignedUrl(fabFile.filePath, EXPIRE_IN_SECONDS);
   if (!fileUrl) return fabFile; // Avoid updating if URL generation fails
 
-  const fileUrlExpireAt = new Date(Date.now() + 1000 * EXPIRE_IN_SECONDS);
+  const fileUrlExpireAt = signedUrlExpiresAt(fileUrl, EXPIRE_IN_SECONDS);
   fabFile.fileUrl = fileUrl;
   fabFile.fileUrlExpireAt = fileUrlExpireAt;
 

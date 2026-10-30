@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { extendTheme } from '@mui/joy/styles';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { environmentBannerPalette } from './admin';
 import { getThemeConfig } from './themePrimitives';
 
 /**
@@ -106,5 +107,41 @@ describe('text token contrast', () => {
   it('measures a known pair correctly, so a broken parser cannot pass', () => {
     expect(contrast('#000000', '#FFFFFF')).toBeCloseTo(21, 5);
     expect(contrast('rgba(0, 0, 0, 0)', '#FFFFFF')).toBeCloseTo(1, 5);
+  });
+});
+
+describe('admin token contrast', () => {
+  it.each(MODES)('%s: admin text and status labels reach 4.5:1', mode => {
+    const palette = theme.colorSchemes[mode].palette.admin;
+    const texts = [palette.ink, palette.inkSecondary, palette.inkMuted, palette.accent, palette.link, palette.danger];
+    for (const text of texts) {
+      for (const surface of [palette.canvas, palette.surface, palette.surfaceSubtle, palette.hover]) {
+        expect(contrast(text, surface), `${text} on ${surface}`).toBeGreaterThanOrEqual(AA_TEXT);
+      }
+    }
+    for (const tone of [...Object.values(palette.status), palette.selection]) {
+      expect(contrast(tone.foreground, tone.background), tone.foreground).toBeGreaterThanOrEqual(AA_TEXT);
+    }
+  });
+
+  // Pairs the admin skin (customizations/adminSkin.ts) sets text on, beyond plain surfaces.
+  it.each(MODES)('%s: admin skin buttons, tooltips and hover fills reach 4.5:1', mode => {
+    const palette = theme.colorSchemes[mode].palette.admin;
+    const pairs = {
+      'primary button and tooltip': [palette.surface, palette.ink],
+      'primary button on canvas text': [palette.canvas, palette.ink],
+      'solid danger button': [palette.surface, palette.danger],
+      'ghost button hover': [palette.ink, palette.hover],
+      'outlined danger hover': [palette.danger, palette.status.bad.background],
+    };
+    for (const [use, [text, fill]] of Object.entries(pairs)) {
+      expect(contrast(text, fill), use).toBeGreaterThanOrEqual(AA_TEXT);
+    }
+  });
+});
+
+describe('environment banner contrast', () => {
+  it.each(Object.entries(environmentBannerPalette.background))('%s: the banner label reaches 4.5:1', (_env, fill) => {
+    expect(contrast(environmentBannerPalette.foreground, fill)).toBeGreaterThanOrEqual(AA_TEXT);
   });
 });

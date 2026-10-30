@@ -6,13 +6,11 @@ import { useConnectGoogleDrive } from '@client/app/hooks/data/googleDrive';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import SiGoogledrive, { defaultColor as SiGoogledriveHex } from '@icons-pack/react-simple-icons/icons/SiGoogledrive';
-import {
-  ElectricBoltOutlined as BoltIcon,
-  ChevronRight as ChevronRightIcon,
-  ImageOutlined as ImageOutlinedIcon,
-  SettingsOutlined as SettingsOutlinedIcon,
-  WorkOutline as BriefcaseIcon,
-} from '@mui/icons-material';
+import BoltIcon from '@mui/icons-material/ElectricBoltOutlined';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import BriefcaseIcon from '@mui/icons-material/WorkOutline';
 import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import CasinoIcon from '@mui/icons-material/CasinoOutlined';
 import MenuBookIcon from '@mui/icons-material/MenuBookOutlined';

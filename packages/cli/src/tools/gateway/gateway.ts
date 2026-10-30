@@ -4,7 +4,8 @@ import { prepareSandbox, cleanupSandboxFiles } from './stages/sandbox.js';
 import { resolveInteractionMode, planModeRefusal } from './stages/planMode.js';
 import { assessCommandRisk } from './stages/commandRisk.js';
 import { bindEditPlan, isFuzzyEditPlan, resolveFuzzyEditGate } from './stages/fuzzyEdit.js';
-import { applyPromptResponse, canRunWithoutPrompt } from './stages/permissionDecision.js';
+import { applyPromptResponse, canRunWithoutPrompt, promptSessionScope } from './stages/permissionDecision.js';
+import { commandTextOf } from './toolPolicy.js';
 import { buildPromptPreview } from './stages/preview.js';
 import { executeAndRecord } from './stages/execution.js';
 
@@ -28,15 +29,18 @@ export function stripGateFields(args: ToolArgs | undefined): ToolArgs {
 }
 
 /**
- * Wrap a tool with the gateway: the shell sandbox, the plan-mode, command-risk, fuzzy-edit and
- * permission gates, a checkpoint before an approved file write, and server routing (which
- * redacts and caps the output). Every policy question about the tool is answered from its
- * descriptor in the permission manager's catalog, resolved per call.
+ * Wrap a tool with the gateway. Stages, in order: the shell sandbox; the plan-mode, command-risk,
+ * fuzzy-edit and permission gates; a checkpoint before an approved file write (stages/checkpoint);
+ * execution with server routing, where every run's output is redacted and then capped
+ * (stages/output) before the sandbox-escalation and path-grant retries look at it. Every policy
+ * question about the tool is answered from its descriptor in the permission manager's catalog,
+ * resolved per call.
  */
 export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapToolDeps): ICompletionOptionTools {
   const { permissionManager, showPermissionPrompt, allowedDirectories } = deps;
   const originalFn = tool.toolFn;
   const toolName = tool.toolSchema.name;
+  const isMcpTool = tool._isMcpTool === true;
 
   return {
     ...tool,
@@ -89,7 +93,18 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
         const forcePrompt = forcePromptForRisk || forcePromptForFuzzyEdit;
         execArgs = bindEditPlan(toolName, execArgs, effectiveArgs, editPlan);
 
-        if (canRunWithoutPrompt({ toolName, forcePrompt, isSandboxed, interactionMode, permissionManager })) {
+        const command = commandTextOf(descriptor, args);
+        if (
+          canRunWithoutPrompt({
+            toolName,
+            isMcpTool,
+            forcePrompt,
+            isSandboxed,
+            command,
+            interactionMode,
+            permissionManager,
+          })
+        ) {
           return await run();
         }
 
@@ -101,8 +116,9 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
           editPlan,
           forcingRisk: forcePromptForRisk ? commandRisk : null,
         });
+        const sessionScope = promptSessionScope(toolName, args, permissionManager);
         // Waits indefinitely for the user's answer.
-        const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
+        const response = await showPermissionPrompt(toolName, effectiveArgs, preview, undefined, { sessionScope });
         await applyPromptResponse(toolName, args, response.action, permissionManager, deps.configStore);
         return await run();
       } finally {

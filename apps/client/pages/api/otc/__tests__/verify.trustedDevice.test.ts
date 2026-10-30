@@ -25,6 +25,7 @@ vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
   setRefreshCookie: (...a: unknown[]) => mockSetRefreshCookie(...a),
 }));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
+vi.mock('@server/auth/networkMeta', () => ({ recordSignupNetwork: vi.fn(), recordLoginEvent: vi.fn() }));
 
 const mockLogAuthAudit = vi.fn((..._args: any[]) => Promise.resolve());
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: any[]) => mockLogAuthAudit(...a) }));

@@ -13,7 +13,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 
 const HASH_QUERY_CHUNK = 500;
 

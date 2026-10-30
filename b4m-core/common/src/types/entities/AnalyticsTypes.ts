@@ -13,6 +13,10 @@ export interface FacetResults {
     _id: string;
     email: string | null;
     interactions: number;
+    /** Daily leaderboard only: ledger spend in the window, magnitude (usage is stored negative). */
+    creditsSpent?: number;
+    /** Daily leaderboard only: the account was created within 7 days of the window end. */
+    isNew?: boolean;
     rankChange?: 'up' | 'down' | 'new' | 'same';
     lastWeekRank?: number | 'new' | '>#20';
   }>;

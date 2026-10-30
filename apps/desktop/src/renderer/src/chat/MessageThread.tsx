@@ -6,9 +6,19 @@ import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { isTurnBudgetStop, lastBoundaryIndex, type ChatMessage, type ChatUsage } from '@shared/chat';
+import { useNavigate } from '@tanstack/react-router';
+import {
+  isTurnBudgetStop,
+  lastBoundaryIndex,
+  SERVER_CREDENTIALS_STOP,
+  SESSION_EXPIRED_STOP,
+  type ChatMessage,
+  type ChatUsage,
+} from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
+import { CopyMessageButton, revealCopyButtonSx } from './CopyMessageButton';
+import { LinkifiedText } from './ExternalLink';
 import { ReasoningRow } from './ReasoningRow';
 import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
@@ -17,6 +27,7 @@ import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 import { automaticSummary, displayText, relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
+import { useShowDollarCosts } from './costDisplay';
 import { describeReplyCost, formatCreditsSpent } from './statusLine';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
@@ -67,6 +78,21 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
       </Chip>
     );
   }
+  if (reason === SESSION_EXPIRED_STOP) {
+    return (
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }} flexWrap="wrap" useFlexGap>
+        <Chip size="sm" color="neutral" variant="soft" data-testid="chat-session-expired-chip">
+          Paused - sign in again, then continue
+        </Chip>
+        {onContinue && (
+          <Button size="sm" variant="soft" color="primary" onClick={onContinue} data-testid="chat-continue-reply-btn">
+            Continue
+          </Button>
+        )}
+      </Stack>
+    );
+  }
+  if (reason === SERVER_CREDENTIALS_STOP) return <ServerCredentialsRow />;
   if (reason === 'aborted') {
     return (
       <Chip size="sm" color="neutral" variant="soft" sx={{ mt: 1 }} data-testid="chat-stopped-chip">
@@ -77,17 +103,42 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
   return null;
 }
 
+function ServerCredentialsRow() {
+  const navigate = useNavigate();
+  return (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }} flexWrap="wrap" useFlexGap>
+      <Chip size="sm" color="warning" variant="soft" data-testid="chat-server-credentials-chip">
+        The model server wants new credentials
+      </Chip>
+      <Button
+        size="sm"
+        variant="soft"
+        color="primary"
+        onClick={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
+        data-testid="chat-server-credentials-btn"
+      >
+        Open Model servers
+      </Button>
+    </Stack>
+  );
+}
+
 /**
  * The user's own turn: a right-aligned bubble, narrower than the column so the alignment
  * reads as "mine" at a glance even when the text is long.
+ *
+ * Copy takes what the bubble shows: on a skill turn that is the invocation the user typed,
+ * not the expanded body folded away under it.
  */
 const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: string | null }) {
   const attachments = message.attachments ?? [];
   const skill = message.skill;
   const [expanded, setExpanded] = useState(false);
+  const copyText = skill ? `/${skill.name}${skill.args ? ` ${skill.args}` : ''}` : message.content;
 
   return (
-    <Stack direction="row" justifyContent="flex-end">
+    <Stack direction="row" justifyContent="flex-end" alignItems="flex-end" spacing={0.5} sx={revealCopyButtonSx}>
+      {copyText && <CopyMessageButton text={copyText} testId="chat-message-user-copy-btn" />}
       <Sheet
         variant="soft"
         color="primary"
@@ -113,12 +164,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
                 /{skill.name}
                 {skill.args ? ` ${skill.args}` : ''}
               </Typography>
-              <Chip
-                size="sm"
-                variant="soft"
-                color={skillChipColor(skill.source)}
-                data-testid="chat-message-skill-chip"
-              >
+              <Chip size="sm" variant="soft" color={skillChipColor(skill.source)} data-testid="chat-message-skill-chip">
                 {skillSourceLabel(skill.source)} skill
               </Chip>
             </Stack>
@@ -133,7 +179,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
               </Typography>
               {expanded && (
                 <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.5 }}>
-                  {message.content}
+                  <LinkifiedText text={message.content} />
                 </Typography>
               )}
             </Box>
@@ -142,10 +188,15 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
           /* Literal, where a reply is markdown: this is what the user typed, and rendering it
              would change it. In a Code session they type paths and identifiers, and
              some_file_name would come back as some<em>file</em>name with the underscores eaten.
-             A reply is a model writing markdown on purpose; this is not. */
+             A reply is a model writing markdown on purpose; this is not. Urls are the one
+             thing picked out of it, and only to be made clickable. */
           message.content && (
-            <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {message.content}
+            <Typography
+              level="body-sm"
+              sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              data-testid="chat-message-user-text"
+            >
+              <LinkifiedText text={message.content} />
             </Typography>
           )
         )}
@@ -175,6 +226,7 @@ const REPLY_COST_CLASS = 'b4m-reply-cost';
  * and every reply stored before this was captured, would otherwise claim to have been free.
  */
 function ReplyCost({ usage }: { usage?: ChatUsage }) {
+  const showDollars = useShowDollarCosts();
   const credits = formatCreditsSpent(usage);
   if (!credits) return null;
 
@@ -185,7 +237,7 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
       className={REPLY_COST_CLASS}
       // Native, like the turn status line's own split: a Joy tooltip per reply would mount a
       // popper for every turn in the thread to serve the one the pointer is over.
-      title={describeReplyCost(usage) ?? undefined}
+      title={describeReplyCost(usage, showDollars) ?? undefined}
       sx={{ position: 'absolute', top: '100%', right: 0, mt: 0.5, whiteSpace: 'nowrap' }}
       data-testid="chat-message-cost"
     >
@@ -204,7 +256,9 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
  * that for the whole turn, and a spinner in the thread as well would be the same fact twice.
  *
  * The hover rule for the cost lives here rather than on the row it reveals, because CSS is what
- * keeps it free: see ReplyCost.
+ * keeps it free: see ReplyCost. Copy is revealed the same way and sits opposite it, in the gap
+ * under the turn. It copies `content`, the markdown source of every round's prose, and is not
+ * offered while the reply is still being written.
  *
  * Memoized, as every turn is: a streaming reply re-renders the thread once a frame, and only the
  * last turn's props change on those frames.
@@ -245,6 +299,7 @@ const AssistantTurn = memo(function AssistantTurn({
         position: 'relative',
         [`& .${REPLY_COST_CLASS}`]: { opacity: 0, pointerEvents: 'none', transition: 'opacity 120ms' },
         [`&:hover .${REPLY_COST_CLASS}`]: { opacity: 1, pointerEvents: 'auto' },
+        ...revealCopyButtonSx,
       }}
       data-testid="chat-message-assistant"
     >
@@ -284,7 +339,8 @@ const AssistantTurn = memo(function AssistantTurn({
           got there. `content` has already had the markup removed, so nothing is shown twice. */}
       <ArtifactList artifacts={message.artifacts ?? []} />
 
-      {message.error && (
+      {/* A paused turn says so in its stop row; the window's re-auth notice carries the why. */}
+      {message.error && message.stopReason !== SESSION_EXPIRED_STOP && (
         <Alert size="sm" color="danger" variant="soft" sx={{ mt: 1 }} data-testid="chat-message-error">
           {message.error}
         </Alert>
@@ -298,6 +354,12 @@ const AssistantTurn = memo(function AssistantTurn({
       {status && <Box sx={{ mt: 1 }}>{status}</Box>}
 
       <ReplyCost {...(message.usage ? { usage: message.usage } : {})} />
+
+      {!live && message.content.trim().length > 0 && (
+        <Box sx={{ position: 'absolute', top: '100%', left: 0 }}>
+          <CopyMessageButton text={message.content} testId="chat-message-assistant-copy-btn" />
+        </Box>
+      )}
     </Box>
   );
 });
@@ -322,7 +384,7 @@ const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage 
         From a session you started
       </Typography>
       <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-        {displayText(message)}
+        <LinkifiedText text={displayText(message)} />
       </Typography>
     </Sheet>
   );
@@ -400,7 +462,7 @@ function CollapsedTurn({
           textColor="text.secondary"
           data-testid={`chat-message-${kind}-body`}
         >
-          {kind === 'automatic' ? message.content : displayText(message)}
+          <LinkifiedText text={kind === 'automatic' ? message.content : displayText(message)} />
         </Typography>
       </Box>
     </Box>
@@ -598,6 +660,7 @@ export function MessageThread({
   messages,
   sessionId,
   noSession,
+  emptySession,
   streaming,
   onRespond,
   onMove,
@@ -614,6 +677,8 @@ export function MessageThread({
    * user to "send a message" while the composer refused to take one.
    */
   noSession?: ReactNode;
+  /** Replaces the ordinary invitation for an existing session whose transcript is still empty. */
+  emptySession?: ReactNode;
   /**
    * A reply is in flight for this conversation, however this window came to know it - so there
    * is nothing to resume, and the live line belongs at the foot of the last turn.
@@ -699,8 +764,13 @@ export function MessageThread({
 
   if (empty) {
     return (
-      <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 3 }}>
-        {sessionId ? (
+      <Box
+        sx={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'safe center', p: 3, ...scrollingColumnHostSx }}
+        data-testid="chat-thread-empty-host"
+      >
+        {sessionId && emptySession ? (
+          emptySession
+        ) : sessionId ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-empty">
             Send a message to start this conversation.
           </Typography>

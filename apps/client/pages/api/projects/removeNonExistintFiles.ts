@@ -3,7 +3,8 @@ import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
 import { fabFileRepository, projectRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents, IProjectDocument } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { ProjectEvents, IProjectDocument, removeNonExistentFilesResponseSchema } from '@bike4mind/common';
 import { z } from 'zod';
 
 const RequestSchema = z.object({
@@ -65,9 +66,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).delete(async 
     }
   }
 
-  return res.status(200).json({
-    updatedProjects: results,
-  });
+  return respond(res, removeNonExistentFilesResponseSchema, { updatedProjects: results });
 });
 
 export default handler;

@@ -56,7 +56,7 @@ import {
   type ConnectedFolderReachability,
   type DriveChange,
   type DriveFile,
-} from '@server/integrations/google/drive/driveClient';
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 import {
   walkFolder,
   fetchDriveFileContent,
@@ -76,7 +76,7 @@ import { Resource } from 'sst';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { z, ZodError } from 'zod';
-import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
 const Payload = z.object({
   connectionId: z.string(),

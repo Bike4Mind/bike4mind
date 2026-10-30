@@ -11,14 +11,30 @@ import {
   recordReplSandboxUnavailable,
 } from '@bike4mind/agents';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { BadRequestError, ForbiddenError, getTextModelCost, type IMessage, type ModelInfo } from '@bike4mind/common';
+import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
+import {
+  geminiThinkingOutputCap,
+  getAvailableModels,
+  getLlmByModel,
+  usesGeminiThinkingOutputCap,
+} from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_QUERY_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
 import { resolvePrincipalAuthHeaders } from '@server/tavern/rlm/principalAuthHeaders';
 import { resolveAccessibleLakes } from '@server/dataLakes';
+import {
+  completionUsd,
+  createModelAdmission,
+  reserveCompletionCredits,
+  settleCompletion,
+} from '@server/billing/meterPlatformCompletion';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 import { HARD_TIMEOUT_MS, PER_CALL_REPL_TIMEOUT_MS, SUB_LLM_HTTP_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
 
 /**
@@ -81,13 +97,45 @@ const RlmAnswerInput = z.object({
 
 const DEFAULT_MODEL = 'global.anthropic.claude-sonnet-4-6';
 // No hardcoded fallback model id - `getAvailableModels()` returns the live
-// roster, so if DEFAULT_MODEL isn't found we pick the first available model
-// whose id contains "sonnet" (or fall back to the first available, period).
+// roster, so when no model is requested we try DEFAULT_MODEL, then any
+// available Sonnet, then the rest, taking the first the caller is admitted to.
 // Avoids a stale-id failure mode when Anthropic deprecates a specific dated
 // snapshot.
 // 25 matches the per-session execution budget; v1 ran with 12 and clipped
 // T3 trajectories mid-orchestration. See doc 13-before-vs-middle-vs-after.md.
 const DEFAULT_MAX_ITERATIONS = 25;
+const ROOT_MAX_TOKENS = 4096;
+const ROOT_HISTORY_ITERATIONS = 4;
+const DEFAULT_MAX_EXECUTIONS = 25;
+// codeExecuteTool caps stdout plus error to ~7K chars, ~3K tokens at the 2.5 chars/token estimate.
+const OBSERVATION_TOKEN_CAP = 3000;
+
+/**
+ * Worst-case root-agent spend. Must stay >= real spend: settlement clamps to the hold, so any overrun
+ * past it is free. Every iteration emits ROOT_MAX_TOKENS and re-reads the base prompt plus the kept
+ * history. ReActAgent runs every tool_use in a turn with no per-turn cap, so the observation term is
+ * bounded per run instead: only a code execution yields a full observation, the session allows
+ * maxExecutions of them, and each is re-read by at most ROOT_HISTORY_ITERATIONS later turns. A call
+ * that runs no code (empty code, budget spent, sandbox gone) gets a short fixed observation, taken as
+ * no larger than the tool_use that asked for it, so kept output is counted twice.
+ */
+function rootCeilingUsd(
+  modelInfo: ModelInfo,
+  baseMessages: IMessage[],
+  maxIterations: number,
+  maxExecutions: number
+): number {
+  const providerMaxOutputTokens = usesGeminiThinkingOutputCap(modelInfo)
+    ? geminiThinkingOutputCap(modelInfo, ROOT_MAX_TOKENS).maxOutputTokens
+    : ROOT_MAX_TOKENS;
+  const perIterationInput = estimateInputTokens(baseMessages) + ROOT_HISTORY_ITERATIONS * 2 * providerMaxOutputTokens;
+  const observationInput = ROOT_HISTORY_ITERATIONS * maxExecutions * OBSERVATION_TOKEN_CAP;
+  return getTextModelCost(
+    modelInfo,
+    maxIterations * perIterationInput + observationInput,
+    maxIterations * providerMaxOutputTokens
+  );
+}
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
   .use(
@@ -96,147 +144,189 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
     // the chat endpoints (3 req/min vs 10) because individual calls are
     // 10-100x more expensive.
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 30 : 3,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 30 : 3),
       windowMs: 60 * 1000,
     })
   )
   .post(async (req: Request, res: Response) => {
-    const t0 = Date.now();
-
-    // --- Access gate: lake-scoped, fail-closed ---
-    // This endpoint spends real LLM budget per request (cost cap below), so
-    // unlike the cheap browse endpoints it refuses outright when the caller
-    // has no accessible lakes instead of returning an empty answer. Access is
-    // defined by each lake's own declared gate (requiredUserTag /
-    // requiredEntitlement), not by any product.
-    if ((await resolveAccessibleLakes(req)).length === 0) {
-      return res.status(403).json({ error: 'No accessible data lakes' });
-    }
-
-    // safeParse so validation failures surface as 400 with structured
-    // error details rather than throwing ZodError to the global handler.
-    // Mirrors the /api/data-lakes/semantic-search pattern.
-    const parseResult = RlmAnswerInput.safeParse(req.body || {});
-    if (!parseResult.success) {
-      return res.status(400).json({
-        error: 'Invalid request body',
-        details: parseResult.error.flatten(),
-      });
-    }
-    const parsed = parseResult.data;
-
-    // --- Resolve API keys ---
-    // Root LLM is routed through whatever provider getLlmByModel picks for the
-    // requested modelId - for `global.anthropic.*` that's Bedrock (no Anthropic
-    // API key needed; AWS creds handle it). For sub-LLM calls inside the REPL,
-    // tools.ts uses the Anthropic SDK directly, so we need a direct Anthropic
-    // key. Fall back to env if the user-scoped key isn't configured (spike
-    // deployment is local-dev; production will route sub-LLM through Bedrock too).
-    const dbAdapters = {
-      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-      getSettingsByNames,
-    };
-    const userId = req.user?.id || 'system';
-    const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
-    const subLlmAnthropicKey = apiKeyTable?.anthropic || process.env.ANTHROPIC_API_KEY || '';
-    if (!subLlmAnthropicKey) {
-      return res.status(500).json({
-        error:
-          'No Anthropic API key available for sub-LLM calls. ' +
-          'Configure user/system Anthropic key or set ANTHROPIC_API_KEY env var.',
-      });
-    }
-
-    // The in-REPL data-lake tools call /api/data-lakes/* and /api/files/* on this
-    // same server, so they need a credential. It MUST be the caller's own: those
-    // routes derive their lake scope from the authenticated principal, so any
-    // shared/service key would let the REPL read lakes the caller cannot. Replay
-    // the request's own credential headers - never a fallback identity.
-    const authHeaders = resolvePrincipalAuthHeaders(req.headers);
-    if (!authHeaders) {
-      return res.status(401).json({
-        error: 'No forwardable caller credential on this request for in-REPL data-lake tool calls',
-      });
-    }
-
-    // --- Resolve the root LLM backend ---
-    const models = await getAvailableModels(apiKeyTable);
-    const requestedModel = parsed.model ?? DEFAULT_MODEL;
-    let modelInfo = models.find(m => m.id === requestedModel);
-    if (!modelInfo) {
-      // Live fallback: prefer any available Sonnet, else the first
-      // available model. Avoids hardcoding a dated model id that could
-      // go stale when Anthropic deprecates a specific snapshot.
-      modelInfo = models.find(m => /sonnet/i.test(m.id)) ?? models[0];
-    }
-    if (!modelInfo) {
-      return res.status(500).json({
-        error: `Model "${requestedModel}" not available, and no fallback model could be resolved`,
-        availableModelIds: models.slice(0, 10).map(m => m.id),
-      });
-    }
-    const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });
-    if (!llm) {
-      return res.status(500).json({ error: `Failed to construct backend for model ${modelInfo.id}` });
-    }
-
-    // --- Construct a per-request ReplSession ---
-    // `executor: 'isolated'` is load-bearing, not a preference. The code this
-    // session runs is written by an LLM steered by the caller's own prompt,
-    // and this process holds the platform's credentials. Under a shared-realm
-    // backend an injected intrinsic or tool closure hands the guest the host
-    // realm's Function constructor, and from there `process.env` and a host
-    // `fetch`. There is deliberately NO fallback backend: if the isolate
-    // cannot be built, this endpoint refuses to run rather than running the
-    // guest next to the secrets.
-    const sessionId = `rlm-answer-${randomUUID()}`;
-    const baseUrl = `http://localhost:${process.env.PORT ?? '3000'}`;
-    let session: ReplSession;
+    const quota = await admitRequestCompletion(req, { holdSlot: true });
     try {
-      session = new ReplSession({
-        sessionId,
-        label: 'rlm-answer',
-        executor: 'isolated',
-        // Must stay well under HARD_TIMEOUT_MS: the REPL-level caps only mean
-        // anything if they fire BEFORE the request-level abort. At 60s neither
-        // the isolate timeout nor the host deadline (timeout + grace) could ever
-        // run here, so one hanging step cost the caller the whole request
-        // (`run_error: TIMEOUT`, no answer) instead of costing the agent one step
-        // it can see in an observation and route around.
-        perCallTimeoutMs: PER_CALL_REPL_TIMEOUT_MS,
-        // The dispatch bound a tool gets is `min(toolTimeoutMs, run time
-        // left)`, so it shrinks as the run proceeds and crosses under
-        // SUB_LLM_HTTP_TIMEOUT_MS about 7s in. Past that point the dispatcher
-        // would abandon the await while the provider call is still
-        // generating: the reservation settles after `getUsage()` has been
-        // snapshotted below and the session disposed, so the spend is booked
-        // where nobody reads it, and the guest sees a call that never settled
-        // with budget left to retry it. Two provider calls, one recorded.
-        //
-        // Only `subAgentQuery` carries a floor. The read tools also bound
-        // themselves (TOOL_HTTP_TIMEOUT_MS), but an abandoned lookup costs a
-        // wasted fetch and still surfaces as an attributable dispatcher
-        // error - refusing those late in a run would reject calls that
-        // ordinarily finish in under a second.
-        executorOptions: { toolMinBudgetMs: { subAgentQuery: SUB_LLM_HTTP_TIMEOUT_MS } },
-        budget: {
-          maxExecutions: parsed.budget?.max_executions ?? 25,
-          maxSubLlmCalls: parsed.budget?.max_sub_llm_calls ?? 200,
-          maxCostUsd: parsed.budget?.max_cost_usd ?? HARD_PER_REQUEST_COST_CAP_USD,
-        },
-      });
-    } catch (e) {
-      req.logger.error(
-        `[rlm-answer] refusing request: isolated REPL sandbox unavailable: ${
-          e instanceof Error ? e.message : String(e)
-        }`
-      );
-      // A 503 reads as an ordinary transient upstream, but a missing native
-      // addon is total for the build. Alarmed in infra/alarms.ts.
-      await recordReplSandboxUnavailable('rlm-answer', req.logger);
-      return res.status(503).json({ error: 'Code-execution sandbox unavailable' });
+      return await handleRlmAnswer(req, res);
+    } finally {
+      await quota.release();
     }
+  });
 
+async function handleRlmAnswer(req: Request, res: Response) {
+  const t0 = Date.now();
+
+  // --- Access gate: lake-scoped, fail-closed ---
+  // This endpoint spends real LLM budget per request (cost cap below), so
+  // unlike the cheap browse endpoints it refuses outright when the caller
+  // has no accessible lakes instead of returning an empty answer. Access is
+  // defined by each lake's own declared gate (requiredUserTag /
+  // requiredEntitlement), not by any product.
+  if ((await resolveAccessibleLakes(req)).length === 0) {
+    return res.status(403).json({ error: 'No accessible data lakes' });
+  }
+
+  // safeParse so validation failures surface as 400 with structured
+  // error details rather than throwing ZodError to the global handler.
+  // Mirrors the /api/data-lakes/semantic-search pattern.
+  const parseResult = RlmAnswerInput.safeParse(req.body || {});
+  if (!parseResult.success) {
+    return res.status(400).json({
+      error: 'Invalid request body',
+      details: parseResult.error.flatten(),
+    });
+  }
+  const parsed = parseResult.data;
+
+  // --- Resolve API keys ---
+  // Root LLM is routed through whatever provider getLlmByModel picks for the
+  // requested modelId - for `global.anthropic.*` that's Bedrock (no Anthropic
+  // API key needed; AWS creds handle it). For sub-LLM calls inside the REPL,
+  // tools.ts uses the Anthropic SDK directly, so we need a direct Anthropic
+  // key. Fall back to env if the user-scoped key isn't configured (spike
+  // deployment is local-dev; production will route sub-LLM through Bedrock too).
+  const dbAdapters = {
+    db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+    getSettingsByNames,
+  };
+  const userId = req.user?.id || 'system';
+  const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
+  const subLlmAnthropicKey = apiKeyTable?.anthropic || process.env.ANTHROPIC_API_KEY || '';
+  if (!subLlmAnthropicKey) {
+    return res.status(500).json({
+      error:
+        'No Anthropic API key available for sub-LLM calls. ' +
+        'Configure user/system Anthropic key or set ANTHROPIC_API_KEY env var.',
+    });
+  }
+
+  // The in-REPL data-lake tools call /api/data-lakes/* and /api/files/* on this
+  // same server, so they need a credential. It MUST be the caller's own: those
+  // routes derive their lake scope from the authenticated principal, so any
+  // shared/service key would let the REPL read lakes the caller cannot. Replay
+  // the request's own credential headers - never a fallback identity.
+  const authHeaders = resolvePrincipalAuthHeaders(req.headers);
+  if (!authHeaders) {
+    return res.status(401).json({
+      error: 'No forwardable caller credential on this request for in-REPL data-lake tool calls',
+    });
+  }
+
+  // --- Resolve the root LLM backend ---
+  const models = await getAvailableModels(apiKeyTable);
+  const admission = await createModelAdmission(req.user, models);
+  let modelInfo: ModelInfo | undefined;
+  if (parsed.model) {
+    // An explicitly requested model is never silently swapped for another one.
+    modelInfo = models.find(m => m.id === parsed.model);
+    if (!modelInfo) throw new BadRequestError(`Model "${parsed.model}" is not available`);
+    await admission.assert(modelInfo.id);
+  } else {
+    const preferred = models.find(m => m.id === DEFAULT_MODEL);
+    const candidates = [
+      ...(preferred ? [preferred] : []),
+      ...models.filter(m => m !== preferred && m.type === 'text' && /sonnet/i.test(m.id)),
+      ...models.filter(m => m !== preferred && m.type === 'text' && !/sonnet/i.test(m.id)),
+    ];
+    if (candidates.length === 0) {
+      return res.status(500).json({ error: 'No model available for data-lake answers' });
+    }
+    for (const candidate of candidates) {
+      if (await admission.admits(candidate.id)) {
+        modelInfo = candidate;
+        break;
+      }
+    }
+    if (!modelInfo) throw new ForbiddenError('No available model is accessible for data-lake answers');
+  }
+  const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });
+  if (!llm) {
+    return res.status(500).json({ error: `Failed to construct backend for model ${modelInfo.id}` });
+  }
+
+  // --- Compose system prompt ---
+  const baseAgentPrompt =
+    'You are a research analyst answering questions over the data lake. ' +
+    'Your only tool is `code_execute`, which runs JavaScript in a persistent REPL ' +
+    'with access to data-lake search functions. You MUST use code_execute for every ' +
+    'retrieval step. When you have the information, give a complete, well-organized ' +
+    'answer with citations to article filenames in [brackets].';
+  const systemPrompt = `${baseAgentPrompt}\n\n${REPL_TOOL_SYSTEM_PROMPT}`;
+
+  // --- Reserve credits: root-agent ceiling plus the whole sub-LLM budget ---
+  const maxIterations = parsed.max_iterations ?? DEFAULT_MAX_ITERATIONS;
+  const maxCostUsd = parsed.budget?.max_cost_usd ?? HARD_PER_REQUEST_COST_CAP_USD;
+  const maxExecutions = parsed.budget?.max_executions ?? DEFAULT_MAX_EXECUTIONS;
+  const baseMessages: IMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: parsed.query },
+  ];
+  const rootCeiling = rootCeilingUsd(modelInfo, baseMessages, maxIterations, maxExecutions);
+  const reservation = await reserveCompletionCredits(req, rootCeiling + maxCostUsd, 'data-lake answers');
+
+  // --- Construct a per-request ReplSession ---
+  // `executor: 'isolated'` is load-bearing, not a preference. The code this
+  // session runs is written by an LLM steered by the caller's own prompt,
+  // and this process holds the platform's credentials. Under a shared-realm
+  // backend an injected intrinsic or tool closure hands the guest the host
+  // realm's Function constructor, and from there `process.env` and a host
+  // `fetch`. There is deliberately NO fallback backend: if the isolate
+  // cannot be built, this endpoint refuses to run rather than running the
+  // guest next to the secrets.
+  const sessionId = `rlm-answer-${randomUUID()}`;
+  const baseUrl = `http://localhost:${process.env.PORT ?? '3000'}`;
+  let session: ReplSession;
+  try {
+    session = new ReplSession({
+      sessionId,
+      label: 'rlm-answer',
+      executor: 'isolated',
+      // Must stay well under HARD_TIMEOUT_MS: the REPL-level caps only mean
+      // anything if they fire BEFORE the request-level abort. At 60s neither
+      // the isolate timeout nor the host deadline (timeout + grace) could ever
+      // run here, so one hanging step cost the caller the whole request
+      // (`run_error: TIMEOUT`, no answer) instead of costing the agent one step
+      // it can see in an observation and route around.
+      perCallTimeoutMs: PER_CALL_REPL_TIMEOUT_MS,
+      // The dispatch bound a tool gets is `min(toolTimeoutMs, run time
+      // left)`, so it shrinks as the run proceeds and crosses under
+      // SUB_LLM_HTTP_TIMEOUT_MS about 7s in. Past that point the dispatcher
+      // would abandon the await while the provider call is still
+      // generating: the reservation settles after `getUsage()` has been
+      // snapshotted below and the session disposed, so the spend is booked
+      // where nobody reads it, and the guest sees a call that never settled
+      // with budget left to retry it. Two provider calls, one recorded.
+      //
+      // Only `subAgentQuery` carries a floor. The read tools also bound
+      // themselves (TOOL_HTTP_TIMEOUT_MS), but an abandoned lookup costs a
+      // wasted fetch and still surfaces as an attributable dispatcher
+      // error - refusing those late in a run would reject calls that
+      // ordinarily finish in under a second.
+      executorOptions: { toolMinBudgetMs: { subAgentQuery: SUB_LLM_HTTP_TIMEOUT_MS } },
+      budget: {
+        maxExecutions,
+        maxSubLlmCalls: parsed.budget?.max_sub_llm_calls ?? 200,
+        maxCostUsd,
+      },
+    });
+  } catch (e) {
+    req.logger.error(
+      `[rlm-answer] refusing request: isolated REPL sandbox unavailable: ${e instanceof Error ? e.message : String(e)}`
+    );
+    // A 503 reads as an ordinary transient upstream, but a missing native
+    // addon is total for the build. Alarmed in infra/alarms.ts.
+    await recordReplSandboxUnavailable('rlm-answer', req.logger);
+    await reservation.refund();
+    return res.status(503).json({ error: 'Code-execution sandbox unavailable' });
+  }
+
+  const thinkingVisibility = req.user ? await resolveThinkingVisibility(req.user) : undefined;
+  let agent: ReActAgent;
+  try {
     // Wire data-lake tools into the REPL (NOT into the agent's tool array)
     session.setTools(
       buildDataLakeTools({
@@ -256,104 +346,131 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       toolNames: ['semanticSearch', 'keywordSearch', 'listArticles', 'getArticle', 'subAgentQuery'],
     });
 
-    // --- Compose system prompt ---
-    const baseAgentPrompt =
-      'You are a research analyst answering questions over the data lake. ' +
-      'Your only tool is `code_execute`, which runs JavaScript in a persistent REPL ' +
-      'with access to data-lake search functions. You MUST use code_execute for every ' +
-      'retrieval step. When you have the information, give a complete, well-organized ' +
-      'answer with citations to article filenames in [brackets].';
-    const systemPrompt = `${baseAgentPrompt}\n\n${REPL_TOOL_SYSTEM_PROMPT}`;
-
     // --- Construct + run the agent ---
-    const agent = new ReActAgent({
+    agent = new ReActAgent({
       userId,
       logger: req.logger,
       llm,
       model: modelInfo.id,
       tools: [codeExecuteTool],
-      maxIterations: parsed.max_iterations ?? DEFAULT_MAX_ITERATIONS,
+      maxIterations,
       systemPrompt,
       temperature: 0.4,
-      maxTokens: 4096,
+      maxTokens: ROOT_MAX_TOKENS,
+      ...(thinkingVisibility && { thinkingVisibility }),
     });
+  } catch (e) {
+    // Nothing has run yet, so a setup failure owes nothing.
+    await reservation.refund();
+    throw e;
+  }
 
-    let timedOut = false;
-    const timeoutSignal = AbortSignal.timeout(HARD_TIMEOUT_MS);
-    timeoutSignal.addEventListener('abort', () => {
-      timedOut = true;
-    });
+  let timedOut = false;
+  const timeoutSignal = AbortSignal.timeout(HARD_TIMEOUT_MS);
+  timeoutSignal.addEventListener('abort', () => {
+    timedOut = true;
+  });
 
-    let result;
-    let runError: string | null = null;
-    // Snapshot usage and dispose in finally so the per-request session's
-    // resources (vm.Context today, worker thread when executor === 'worker'
-    // is enabled) are cleaned up on every code path - including agent.run
-    // throwing or the client disconnecting mid-flight.
-    let replUsage = session.getUsage();
+  let result;
+  let runError: string | null = null;
+  // Snapshot usage and dispose in finally so the per-request session's
+  // resources (vm.Context today, worker thread when executor === 'worker'
+  // is enabled) are cleaned up on every code path - including agent.run
+  // throwing or the client disconnecting mid-flight.
+  let replUsage = session.getUsage();
+  try {
     try {
-      try {
-        result = await agent.run(parsed.query, {
-          maxIterations: parsed.max_iterations ?? DEFAULT_MAX_ITERATIONS,
-          signal: timeoutSignal,
-          maxHistoryIterations: 4,
-        });
-      } catch (e) {
-        if (e instanceof BudgetExceededError) {
-          runError = `BUDGET_EXCEEDED: ${e.message}`;
-        } else if (timedOut) {
-          runError = `TIMEOUT after ${HARD_TIMEOUT_MS}ms`;
-        } else {
-          runError = e instanceof Error ? e.message : String(e);
-        }
-      }
-      replUsage = session.getUsage();
-    } finally {
-      // Best-effort dispose. A throw here would mask the real error; just log.
-      try {
-        await session.dispose();
-      } catch (e) {
-        req.logger.warn(
-          `[rlm-answer] session ${sessionId} dispose failed: ${e instanceof Error ? e.message : String(e)}`
-        );
-      }
-    }
-
-    const totalLatencyMs = Date.now() - t0;
-
-    if (!result) {
-      return res.status(500).json({
-        error: runError ?? 'agent.run() returned no result',
-        session_id: sessionId,
-        repl_usage: replUsage,
-        latency_ms: totalLatencyMs,
+      result = await agent.run(parsed.query, {
+        maxIterations,
+        signal: timeoutSignal,
+        maxHistoryIterations: ROOT_HISTORY_ITERATIONS,
       });
+    } catch (e) {
+      if (e instanceof BudgetExceededError) {
+        runError = `BUDGET_EXCEEDED: ${e.message}`;
+      } else if (timedOut) {
+        runError = `TIMEOUT after ${HARD_TIMEOUT_MS}ms`;
+      } else {
+        runError = e instanceof Error ? e.message : String(e);
+      }
     }
+    replUsage = session.getUsage();
+  } finally {
+    // Best-effort dispose. A throw here would mask the real error; just log.
+    try {
+      await session.dispose();
+    } catch (e) {
+      req.logger.warn(
+        `[rlm-answer] session ${sessionId} dispose failed: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
+  }
 
-    // Compact step trace for the response - full data also accessible via the
-    // structured response if a caller wants to dig deeper.
-    const trajectory = result.steps.map(s => ({
-      type: s.type,
-      content: s.type === 'observation' ? s.content.slice(0, 4000) : s.content,
-      tool: s.metadata?.toolName,
-      timestamp: s.metadata?.timestamp,
-    }));
+  // A run that throws (hard timeout or provider error mid root-LLM call) has no result, so its
+  // root spend comes from the agent's running totals, which hold every turn that completed.
+  const rootUsage = result?.completionInfo ?? agent.toCheckpoint();
+  // A run that completed but reports no root usage cannot be priced, so it is charged the root
+  // ceiling rather than nothing (as createRequestCompletionMeter does).
+  const rootUnreported =
+    !!result && !rootUsage.totalInputTokens && !rootUsage.totalOutputTokens && !rootUsage.turnUsage?.length;
+  if (rootUnreported) {
+    req.logger.warn(`[rlm-answer] ${modelInfo.id} reported no usage; charging the root ceiling`);
+  }
+  await settleCompletion(reservation, req, {
+    sessionId,
+    model: modelInfo.id,
+    provider: modelInfo.backend,
+    usd:
+      (rootUnreported
+        ? rootCeiling
+        : completionUsd(modelInfo, {
+            inputTokens: rootUsage.totalInputTokens,
+            outputTokens: rootUsage.totalOutputTokens,
+            cacheReadInputTokens: rootUsage.totalCacheReadTokens,
+            cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
+            turnUsage: rootUsage.turnUsage,
+          })) + replUsage.totalCostUsd,
+    inputTokens: (rootUsage.totalInputTokens ?? 0) + replUsage.promptTokens,
+    outputTokens: (rootUsage.totalOutputTokens ?? 0) + replUsage.completionTokens,
+    cacheReadInputTokens: rootUsage.totalCacheReadTokens,
+    cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
+  });
 
-    return res.json({
-      answer: result.finalAnswer,
+  const totalLatencyMs = Date.now() - t0;
+
+  if (!result) {
+    return res.status(500).json({
+      error: runError ?? 'agent.run() returned no result',
       session_id: sessionId,
-      model: modelInfo.id,
-      iterations: result.completionInfo.iterations,
-      tool_calls: result.completionInfo.toolCalls,
-      reached_max_iterations: result.completionInfo.reachedMaxIterations,
-      total_tokens: result.completionInfo.totalTokens,
-      total_input_tokens: result.completionInfo.totalInputTokens,
-      total_output_tokens: result.completionInfo.totalOutputTokens,
       repl_usage: replUsage,
       latency_ms: totalLatencyMs,
-      trajectory,
-      run_error: runError,
     });
+  }
+
+  // Compact step trace for the response - full data also accessible via the
+  // structured response if a caller wants to dig deeper.
+  const trajectory = result.steps.map(s => ({
+    type: s.type,
+    content: s.type === 'observation' ? s.content.slice(0, 4000) : s.content,
+    tool: s.metadata?.toolName,
+    timestamp: s.metadata?.timestamp,
+  }));
+
+  return res.json({
+    answer: result.finalAnswer,
+    session_id: sessionId,
+    model: modelInfo.id,
+    iterations: result.completionInfo.iterations,
+    tool_calls: result.completionInfo.toolCalls,
+    reached_max_iterations: result.completionInfo.reachedMaxIterations,
+    total_tokens: result.completionInfo.totalTokens,
+    total_input_tokens: result.completionInfo.totalInputTokens,
+    total_output_tokens: result.completionInfo.totalOutputTokens,
+    repl_usage: replUsage,
+    latency_ms: totalLatencyMs,
+    trajectory,
+    run_error: runError,
   });
+}
 
 export default handler;

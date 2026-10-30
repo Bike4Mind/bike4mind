@@ -9,7 +9,7 @@ import {
   type WafCustomRange,
   type WafRangeInput,
   type WafTrafficRange,
-} from './wafSharedHelpers';
+} from '@bike4mind/server-utils/security/wafSharedHelpers';
 import { WAF_CACHE_TTL, wafQueryCache } from './wafQueryCache';
 
 export type { WafCustomRange, WafRangeInput, WafTrafficRange };

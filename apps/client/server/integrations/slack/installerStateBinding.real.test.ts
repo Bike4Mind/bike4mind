@@ -4,7 +4,7 @@ import type { ISlackServerDependencies, ISlackDatabaseDependencies } from '@bike
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret-for-state-store' } }));
 
-import { createStateToken, verifyStateToken, validateJwtSecret } from '@server/auth/jwtStateStore';
+import { createStateToken, verifyStateToken, validateJwtSecret } from '@bike4mind/server-utils/auth/jwtStateStore';
 
 const installOptions = { scopes: ['chat:write'], redirectUri: 'https://example.com/cb' };
 

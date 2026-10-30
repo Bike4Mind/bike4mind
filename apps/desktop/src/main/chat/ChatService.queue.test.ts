@@ -2,14 +2,21 @@ import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatQueueEvent, ChatStreamEvent } from '@shared/chat';
+import { SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
+import {
+  SESSION_EXPIRED_STOP,
+  type BackgroundProcessInfo,
+  type ChatQueueEvent,
+  type ChatStreamEvent,
+} from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
+import { MAX_CONSECUTIVE_WAKES } from './backgroundWake';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -158,6 +165,38 @@ describe('ChatService queued messages', () => {
     expect(queueEvents.at(-1)?.returned?.reason).toBe('failed');
   });
 
+  it('pauses a turn the session expired under, hands queued text back, and continues it after sign-in', async () => {
+    const { id } = await service.createSession();
+    post.mockImplementationOnce(async () => {
+      // What the shared client throws once refresh and retry have both failed.
+      apiClient = null;
+      throw new SessionRevokedError('Your session expired. Sign in again to continue.');
+    });
+    const signedIn = apiClient;
+    await service.send(id, 'first');
+    await waitForEvent('start');
+    await service.send(id, 'typed ahead');
+    await waitForEvent('error');
+
+    expect(events.find(event => event.type === 'error')).toMatchObject({ stopReason: SESSION_EXPIRED_STOP });
+    expect(queueEvents.at(-1)?.returned).toMatchObject({ reason: 'session-expired' });
+    const paused = (await service.getSession(id))?.messages.at(-1);
+    expect(paused).toMatchObject({ role: 'assistant', stopReason: SESSION_EXPIRED_STOP });
+    expect(await service.continueReply(id)).toMatchObject({ ok: false });
+    expect(post).toHaveBeenCalledTimes(1);
+
+    apiClient = signedIn;
+    expect(await service.continueReply(id)).toMatchObject({ ok: true, messageId: paused?.id });
+    await waitForPost(2);
+    await finishReply(1, 'answer');
+    await waitForEvent('done');
+
+    const messages = (await service.getSession(id))?.messages ?? [];
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant']);
+    expect(messages.at(-1)).toMatchObject({ content: 'answer', stopReason: 'end_turn' });
+    expect(messages.at(-1)?.error).toBeUndefined();
+  });
+
   /**
    * A turn parked awaiting the user's answer is not a finished turn.
    *
@@ -255,6 +294,7 @@ describe('ChatService queued messages', () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitForEvent('start');
+    await waitForPost(1);
     await service.send(id, 'second');
     await service.send(id, 'third');
 
@@ -581,5 +621,371 @@ describe('ChatService queued messages', () => {
     await waitForEvent('start');
 
     expect(await plain.send(id, 'typed ahead')).toMatchObject({ ok: false, error: expect.stringMatching(/replying/i) });
+  });
+
+  /**
+   * A message typed while a reply is running reaches it at the next round boundary instead of
+   * waiting for the whole turn: the model reads it alongside the round's tool results, and the
+   * thread shows it after the rounds it followed.
+   */
+  describe('delivery into a running turn', () => {
+    type WireMessage = { role: string; content: unknown };
+    const requestMessages = (index: number) => post.mock.calls[index][1].messages as WireMessage[];
+    const askForTool = (index: number) => {
+      // An unknown tool settles at once with an error result: no approval, no folders needed.
+      streamFor(index).write(
+        frame({ type: 'tool_use', tools: [{ id: `call_${index}`, name: 'no_such_tool', arguments: '{}' }] })
+      );
+      streamFor(index).write(frame('[DONE]'));
+    };
+
+    it('hands a typed message to the next request after the tool results and clears the row', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      const queued = await service.send(id, 'what are you building?');
+      expect(queued).toMatchObject({ ok: true, queued: true });
+
+      askForTool(0);
+      await waitForPost(2);
+
+      const wire = requestMessages(1);
+      expect(wire.at(-2)).toMatchObject({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_0' }] });
+      // An array, not a string: see ChatService.arrivalWire.
+      const last = wire.at(-1) as { role: string; content: { type: string; text: string }[] };
+      expect(last.role).toBe('user');
+      expect(last.content).toHaveLength(1);
+      expect(last.content[0].text).toMatch(/^what are you building\?\n\n<system-reminder>\nThe user sent this while/);
+
+      expect(service.queuedMessages(id)).toEqual([]);
+      const sent = queueEvents.at(-1);
+      expect(sent?.queued).toEqual([]);
+      expect(sent?.sent?.message).toMatchObject({ role: 'user', content: 'what are you building?' });
+      expect(queueEvents.some(event => event.returned)).toBe(false);
+
+      await finishReply(1, 'docker images');
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 2000 });
+
+      // Exactly one request per round: no extra turn was started for the delivered message.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(post).toHaveBeenCalledTimes(2);
+      const session = await service.getSession(id);
+      expect(session?.messages.map(message => [message.role, message.content, message.toolCalls?.length ?? 0])).toEqual(
+        [
+          ['user', 'build it', 0],
+          ['assistant', '', 1],
+          ['user', 'what are you building?', 0],
+          ['assistant', 'docker images', 0],
+        ]
+      );
+      // Each half of the reply is announced as its own message, so the thread draws the question between them.
+      const starts = events.filter(event => event.type === 'start').map(event => event.messageId);
+      expect(new Set(starts).size).toBe(2);
+      expect(session?.messages[1].id).toBe(starts[0]);
+      expect(session?.messages[3].id).toBe(starts[1]);
+    });
+
+    it('replays the delivered message in the same place on the next turn', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      await service.send(id, 'what are you building?');
+      askForTool(0);
+      await waitForPost(2);
+      await finishReply(1, 'docker images');
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 2000 });
+
+      await service.send(id, 'thanks');
+      await waitForPost(3);
+      const roles = requestMessages(2)
+        .filter(message => message.role !== 'system')
+        .map(message => [
+          message.role,
+          Array.isArray(message.content) ? (message.content[0] as { type: string }).type : 'text',
+        ]);
+      expect(roles).toEqual([
+        ['user', 'text'],
+        ['assistant', 'tool_use'],
+        ['user', 'tool_result'],
+        ['user', 'text'],
+        ['assistant', 'text'],
+        ['user', 'text'],
+      ]);
+    });
+
+    it('leaves a relay for the end of the turn', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      queue.enqueueRelay(id, 'from the other conversation', { fromSessionId: 'sender', fromTitle: 'Sender', hops: 1 });
+
+      askForTool(0);
+      await waitForPost(2);
+
+      expect(service.queuedMessages(id).map(message => message.text)).toEqual(['from the other conversation']);
+      expect(JSON.stringify(requestMessages(1))).not.toContain('from the other conversation');
+
+      await finishReply(1);
+      await waitForPost(3);
+      expect(service.queuedMessages(id)).toEqual([]);
+    });
+
+    it('sends the message as a turn of its own when the round it waited for is the last', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      await service.send(id, 'typed ahead');
+
+      // No tool: the reply ends on this request, so there is no boundary to deliver at.
+      await finishReply(0);
+      await waitForPost(2);
+
+      const session = await service.getSession(id);
+      expect(session?.messages.map(message => [message.role, message.content])).toEqual([
+        ['user', 'build it'],
+        ['assistant', 'reply'],
+        ['user', 'typed ahead'],
+        ['assistant', ''],
+      ]);
+    });
+
+    it('keeps a delivered message in the thread when the reply is then stopped', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      await service.send(id, 'what are you building?');
+      askForTool(0);
+      await waitForPost(2);
+
+      service.stop(id);
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 2000 });
+
+      // Already sent, so a stop has nothing to hand back to the composer.
+      expect(queueEvents.some(event => event.returned)).toBe(false);
+      const session = await service.getSession(id);
+      expect(session?.messages.filter(message => message.role === 'user').map(message => message.content)).toEqual([
+        'build it',
+        'what are you building?',
+      ]);
+    });
+
+    it('does not deliver a message that "send now" has already taken', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      const queued = await service.send(id, 'now, please');
+      service.sendQueuedNow(id, queued.ok && queued.queued ? queued.message.id : '');
+
+      await waitForPost(2);
+      await waitForEvent('start', 1);
+      const session = await service.getSession(id);
+      expect(session?.messages.filter(message => message.content === 'now, please')).toHaveLength(1);
+    });
+  });
+
+  /**
+   * A background command the agent started ends on its own: an idle conversation is woken with
+   * an automatic turn, and a busy one is told at its next round boundary.
+   */
+  describe('background exit wake', () => {
+    let exits: Map<string, { info: BackgroundProcessInfo; tail: string }>;
+    let woken: ChatService;
+
+    const exited = (id: string, sessionId: string, exitCode = 0): void => {
+      exits.set(id, {
+        info: {
+          id,
+          sessionId,
+          command: 'docker build .',
+          cwd: '/work',
+          status: 'exited',
+          exitCode,
+          startedAt: new Date().toISOString(),
+          bufferedChars: 0,
+          droppedChars: 0,
+        },
+        tail: 'Successfully built abc123',
+      });
+      woken.backgroundExited(sessionId, id);
+    };
+
+    beforeEach(() => {
+      exits = new Map();
+      const background = {
+        takeExitNotice: (id: string) => {
+          const entry = exits.get(id) ?? null;
+          exits.delete(id);
+          return entry;
+        },
+        list: () => [],
+        sessionsWithRunning: () => new Set<string>(),
+        killSession: async () => undefined,
+      } as unknown as BackgroundProcessRegistry;
+      woken = new ChatService({
+        store,
+        access: { list: async () => [] } as unknown as AccessStore,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        queue,
+        background,
+        backgroundWakeDelayMs: 10,
+        getApiClient: () => apiClient,
+        getEnvironmentUrl: () => 'http://localhost:3000',
+        emit,
+      });
+    });
+
+    it('wakes an idle conversation with one notice for exits that land together', async () => {
+      const { id } = await woken.createSession();
+      exited('aaaa1111', id);
+      exited('bbbb2222', id, 1);
+
+      await waitForPost(1);
+      const session = await woken.getSession(id);
+      const notice = session?.messages[0];
+      expect(notice).toMatchObject({
+        role: 'user',
+        system: true,
+        automatic: { kind: 'background-exit', processIds: ['aaaa1111', 'bbbb2222'] },
+        display: 'Background command finished: [aaaa1111] exited 0, [bbbb2222] exited 1',
+      });
+      expect(notice?.content).toContain('Successfully built abc123');
+      expect(notice?.content).toContain('This is not the user typing.');
+    });
+
+    it('still wakes when the exit came due during a send that was then refused', async () => {
+      const slow = new ChatService({
+        store,
+        access: { list: async () => [] } as unknown as AccessStore,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        queue,
+        background: (woken as unknown as { deps: { background: BackgroundProcessRegistry } }).deps.background,
+        // Long enough that only the send's own settling can be what delivers it.
+        backgroundWakeDelayMs: 60_000,
+        getApiClient: () => apiClient,
+        getEnvironmentUrl: () => 'http://localhost:3000',
+        emit,
+      });
+      const { id } = await slow.createSession();
+      exits.set('aaaa1111', {
+        info: {
+          id: 'aaaa1111',
+          sessionId: id,
+          command: 'docker build .',
+          cwd: '/work',
+          status: 'exited',
+          exitCode: 0,
+          startedAt: new Date().toISOString(),
+          bufferedChars: 0,
+          droppedChars: 0,
+        },
+        tail: 'done',
+      });
+      slow.backgroundExited(id, 'aaaa1111');
+
+      const refused = slow.send(id, '   ');
+      // What the coalesce timer does when it fires mid-send: skipped as busy.
+      await (slow as unknown as { wakeForBackground(sessionId: string): Promise<void> }).wakeForBackground(id);
+      expect(await refused).toMatchObject({ ok: false });
+
+      await waitForPost(1);
+      const session = await slow.getSession(id);
+      expect(session?.messages[0]).toMatchObject({ automatic: { kind: 'background-exit' } });
+      slow.dispose();
+    });
+
+    it('does not wake for an exit the model has already seen', async () => {
+      const { id } = await woken.createSession();
+      exited('aaaa1111', id);
+      // What bash_output or bash_list does once it has shown the process finished.
+      exits.clear();
+
+      await new Promise(resolve => setTimeout(resolve, 80));
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it('does not wake an archived conversation', async () => {
+      const { id } = await woken.createSession();
+      await woken.setSessionArchived(id, true);
+      exited('aaaa1111', id);
+
+      await new Promise(resolve => setTimeout(resolve, 80));
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it('tells a running turn at its next round boundary instead of starting another', async () => {
+      const { id } = await woken.createSession();
+      await woken.send(id, 'build it');
+      await waitForPost(1);
+      exited('aaaa1111', id);
+      await new Promise(resolve => setTimeout(resolve, 40));
+      // Busy: nothing new went out.
+      expect(post).toHaveBeenCalledTimes(1);
+
+      streamFor(0).write(frame({ type: 'tool_use', tools: [{ id: 'call_0', name: 'no_such_tool', arguments: '{}' }] }));
+      streamFor(0).write(frame('[DONE]'));
+      await waitForPost(2);
+
+      const last = (post.mock.calls[1][1].messages as { content: { text: string }[] }[]).at(-1);
+      expect(last?.content[0].text).toContain('[aaaa1111] $ docker build .');
+      await finishReply(1);
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 2000 });
+      await new Promise(resolve => setTimeout(resolve, 40));
+      expect(post).toHaveBeenCalledTimes(2);
+      const session = await woken.getSession(id);
+      expect(session?.messages.map(message => [message.role, message.automatic?.kind ?? null])).toEqual([
+        ['user', null],
+        ['assistant', null],
+        ['user', 'background-exit'],
+        ['assistant', null],
+      ]);
+    });
+
+    it('wakes a conversation once its turn ends when the exit arrived too late for a boundary', async () => {
+      const { id } = await woken.createSession();
+      await woken.send(id, 'build it');
+      await waitForPost(1);
+      exited('aaaa1111', id);
+      await new Promise(resolve => setTimeout(resolve, 40));
+
+      await finishReply(0, 'started the build, waiting');
+      await waitForPost(2);
+      const session = await woken.getSession(id);
+      expect(session?.messages.at(-2)).toMatchObject({ automatic: { kind: 'background-exit' } });
+    });
+
+    it('does not wake a conversation after its reply is stopped', async () => {
+      const { id } = await woken.createSession();
+      await woken.send(id, 'build it');
+      await waitForPost(1);
+      exited('aaaa1111', id);
+      await new Promise(resolve => setTimeout(resolve, 40));
+
+      woken.stop(id);
+      await waitForEvent('done');
+      await new Promise(resolve => setTimeout(resolve, 60));
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops waking after a run of wakes nobody answered, until the user types', async () => {
+      const { id } = await woken.createSession();
+      for (let wake = 0; wake < MAX_CONSECUTIVE_WAKES; wake++) {
+        exited(`proc${wake}`, id);
+        await waitForPost(wake + 1);
+        await finishReply(wake);
+        await vi.waitUntil(() => events.filter(event => event.type === 'done').length === wake + 1, { timeout: 2000 });
+      }
+      exited('one-more', id);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      expect(post).toHaveBeenCalledTimes(MAX_CONSECUTIVE_WAKES);
+
+      await woken.send(id, 'what happened?');
+      await waitForPost(MAX_CONSECUTIVE_WAKES + 1);
+      await finishReply(MAX_CONSECUTIVE_WAKES);
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === MAX_CONSECUTIVE_WAKES + 1, {
+        timeout: 2000,
+      });
+      exited('after-reply', id);
+      await waitForPost(MAX_CONSECUTIVE_WAKES + 2);
+    });
   });
 });

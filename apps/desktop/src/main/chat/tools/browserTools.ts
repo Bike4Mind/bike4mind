@@ -102,7 +102,11 @@ function mayRead(context: ToolContext, url: string): boolean {
   if (!onUserSession(context, url)) return true;
   const origin = originOf(url);
   if (!origin) return false;
-  const consented = [`browser-open-as-you:${origin}`, `browser-act-as-you:${origin}`, `browser-script:${origin}`];
+  const consented = [
+    `browser-open-as-you:${origin}`,
+    `browser-act-as-you:${origin}`,
+    `browser-script-as-you:${origin}`,
+  ];
   if (context.approvedKey && consented.includes(context.approvedKey)) return true;
   return consented.some(key => context.isStanding?.(key) ?? false);
 }
@@ -194,10 +198,11 @@ const gatedAction = (verb: string): Pick<ToolDefinition, 'needsApproval' | 'appr
 const gatedScript: Pick<ToolDefinition, 'needsApproval' | 'approval'> = {
   needsApproval: (_input, context) => actionNeedsApproval(context),
   async approval(_input, context) {
-    const origin = new URL((await requireBrowser(context).page()).currentUrl()).origin;
+    const current = (await requireBrowser(context).page()).currentUrl();
+    const origin = new URL(current).origin;
     return {
       detail: `Run a script on ${origin}, with that site's cookies`,
-      key: `browser-script:${origin}`,
+      key: `browser-script${onUserSession(context, current) ? '-as-you' : ''}:${origin}`,
       askInAuto: true,
       askInFull: true,
     };
@@ -226,7 +231,8 @@ async function describePage(
   const note = snap.truncated
     ? '\n[Snapshot cut at the size limit. Use browser_evaluate to read a specific part of the page.]'
     : '';
-  return capOutput(`${header}\n\n${snap.text || '(no visible text)'}${note}${eventsSection(page)}`);
+  const model = `\n\nTyped page model:\n${JSON.stringify(snap.model)}`;
+  return capOutput(`${header}\n\n${snap.text || '(no visible text)'}${model}${note}${eventsSection(page)}`);
 }
 
 function hostOf(url: string): string {

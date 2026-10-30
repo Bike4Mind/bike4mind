@@ -1,7 +1,8 @@
-import { getTextModelCost, getTurnsCost } from '@bike4mind/common';
+import { buildUsagePriceStamp, getTextModelCost, getTurnsCost } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordOperationalUsage } from '../../../billing';
 import type { ToolContext } from './types';
+import { resolveToolBillingOrganization } from './resolveToolBillingOrganization';
 
 export type RecordToolOperationalUsageArgs = {
   /** Exact model id passed to the llm.complete call being measured. */
@@ -17,9 +18,10 @@ export type RecordToolOperationalUsageArgs = {
  * deep-research analysis, file edit, notebook generation). Resolves the owner + COGS
  * from the tool context and hands off to the shared recorder.
  *
- * Recorded-only by design: the narrowed tool db omits the billing repos, so this writes
- * analytics COGS but never debits credits (mirrors search_knowledge_base). Cost degrades
- * to 0 when the model isn't in the request's catalog, but the event is still written.
+ * Debits under the operational billing policy only on a host that wires
+ * `db.operationalBilling` and does not fold the spend itself via `onToolLlmUsage`; otherwise
+ * recorded only. Cost degrades to 0 when the model isn't in the request's catalog, but the
+ * event is still written.
  *
  * Best-effort: never throws, so a recording failure can't break the tool it measures.
  */
@@ -43,10 +45,7 @@ export async function recordToolOperationalUsage(
   }
 
   try {
-    const organization =
-      context.user.organizationId && context.db.organizations
-        ? await context.db.organizations.findById(context.user.organizationId)
-        : null;
+    const organization = await resolveToolBillingOrganization(context);
 
     const modelInfo = context.availableModels?.find(m => m.id === model);
     // Cost needs the model's pricing map; if the id isn't in this request's catalog we
@@ -100,11 +99,26 @@ export async function recordToolOperationalUsage(
         cachedInputTokens,
         cacheWriteTokens,
         costUsd,
+        priceStamp: modelInfo
+          ? buildUsagePriceStamp(modelInfo, {
+              turns: turnUsage,
+              tierBasisTokens: inputTokens + cachedInputTokens + cacheWriteTokens,
+            })
+          : undefined,
         latencyMs: Date.now() - startTime,
         source: 'system',
         finishReason: completionInfo?.stopReason,
       },
-      { db: { usageEvents: context.db.usageEvents, adminSettings: context.db.adminSettings }, logger: context.logger }
+      {
+        db: {
+          usageEvents: context.db.usageEvents,
+          adminSettings: context.db.adminSettings,
+          // A host that folds this spend through onToolLlmUsage already charges it.
+          ...(context.onToolLlmUsage ? {} : context.db.operationalBilling),
+        },
+        billingCheck: context.operationalBillingCheck,
+        logger: context.logger,
+      }
     );
   } catch (err) {
     context.logger.warn('[recordToolOperationalUsage] failed to record operational usage', err);

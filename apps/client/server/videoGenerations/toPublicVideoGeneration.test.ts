@@ -167,6 +167,20 @@ describe('toPublicVideoGeneration', () => {
     expect(resource.error).toEqual({ code: 'provider_error', message: 'The provider failed to generate the video.' });
   });
 
+  it.each([
+    ['failed', 'provider_error', 'The provider failed to generate the video.'],
+    ['blocked', 'content_blocked', 'The provider declined to generate this video under its content policy.'],
+    ['cancelled', 'cancelled', 'The generation was cancelled.'],
+  ] as const)('shows fixed text for a %s job, never the stored provider text', async (state, code, message) => {
+    const resource = await toPublicVideoGeneration(
+      job({ state, error: { code, message: 'raw upstream text for gemini key 123' } }),
+      { sign: vi.fn(), now }
+    );
+    expect(resource.error).toEqual({ code, message });
+    expect(JSON.stringify(resource)).not.toContain('raw upstream text');
+    expect(VideoGenerationSchema.parse(resource)).toEqual(resource);
+  });
+
   it('folds an internal-only code into a public one with the fixed message', async () => {
     const resource = await toPublicVideoGeneration(
       job({ state: 'failed', error: { code: 'orphaned_submit', message: 'raw upstream text' } }),

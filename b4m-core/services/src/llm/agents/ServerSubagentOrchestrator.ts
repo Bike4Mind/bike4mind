@@ -6,6 +6,7 @@ import {
   getTextModelCost,
   getTurnsCost,
   type ModelInfo,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
 import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -13,6 +14,7 @@ import type { Logger } from '@bike4mind/observability';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
 import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
+import { isModelRequiresSubscriptionError, type ModelAdmission } from '../modelAdmission';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -300,6 +302,8 @@ export interface ServerOrchestratorDeps {
   onProgress?: (status: string) => Promise<void>;
   /** Extended thinking configuration to propagate to subagents */
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller; each subagent withholds what it may not see. */
+  thinkingVisibility?: ThinkingVisibility;
   /**
    * Artifact-emission guidance appended to every spawned subagent's system
    * prompt (optional). Set by the Agent Executor when the admin `EnableArtifacts`
@@ -353,12 +357,25 @@ export interface ServerOrchestratorDeps {
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
   /**
+   * Returns true when the payer's balance cannot cover the first iteration of a subagent on
+   * `model`. Checked before an in-process delegation only: a Lambda-dispatched child runs the
+   * same admission in `processSubagentDispatch`. Omitted when credits are not enforced.
+   */
+  checkInsufficientCredits?: (model: string) => boolean | Promise<boolean>;
+  /**
    * Set when the parent runs under the agent executor's permission gate: every child tool
    * call is then classified against these lists and refused unless `allowed` (see
    * `gateSubagentTools`). Omitted by ungated parents (ChatCompletionProcess), whose
    * children stay ungated like the parent itself.
    */
   toolPermissions?: SubagentToolPermissions;
+  /**
+   * The delegating user's model admission. When set, an in-process delegation asserts the
+   * resolved model before it runs, matching the dispatched path's own check in
+   * `processSubagentDispatch` (apps/workers agentExecutor.ts). User/org agent definitions are
+   * already filtered by `admitAgentDefinitions`; this is what covers a built-in's pinned model.
+   */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
 }
 
 /**
@@ -391,6 +408,29 @@ export interface ServerAgentExecutionResult extends AgentResult {
   summary: string;
   /** Model the delegation actually ran on, for cost attribution by the caller. */
   model: string;
+  /**
+   * True when the run's spend is billed by its tracked child execution (the tracker's
+   * `onComplete`/`onFailure` for an in-process run, the child's own Lambda for a dispatched
+   * one), so the delegating tool must not report it for billing again.
+   */
+  billedByTracker?: boolean;
+}
+
+/** Thrown before an in-process delegation the payer's balance cannot start. */
+export class InsufficientSubagentCreditsError extends Error {
+  constructor() {
+    super('Insufficient credits to run subagent');
+    this.name = 'InsufficientSubagentCreditsError';
+  }
+}
+
+const SPENT_RESULT = Symbol('subagentSpentResult');
+
+/** The usage a delegateToAgent run spent before it threw, so the caller can bill it. */
+export function spentResultOf(error: unknown): ServerAgentExecutionResult | undefined {
+  return error instanceof Error
+    ? (error as Error & { [SPENT_RESULT]?: ServerAgentExecutionResult })[SPENT_RESULT]
+    : undefined;
 }
 
 /**
@@ -426,8 +466,14 @@ export class ServerSubagentOrchestrator {
    * two THROW, so the loop catches per candidate - letting one escape would
    * discard every remaining rung including the degradation this exists for.
    * See `getLlmByModel` + `backendForAdapterFamily` in @bike4mind/llm-adapters.
+   *
+   * A candidate the caller's plan does not cover (the free-tier gate) is skipped the same way, so a free
+   * account's subagent degrades instead of failing. Every other admission refusal is left for
+   * `assertModelAdmitted` to raise.
    */
-  private resolveAgentRuntime(agentDef: ServerAgentDefinition): { llm: ICompletionBackend; model: string } {
+  private async resolveAgentRuntime(
+    agentDef: ServerAgentDefinition
+  ): Promise<{ llm: ICompletionBackend; model: string }> {
     const parent = { llm: this.deps.llm, model: this.deps.llm.currentModel };
     if (!agentDef.model) return parent;
     // An agent can stay pinned to a retired id; map it to the successor before any backend lookup.
@@ -448,6 +494,10 @@ export class ServerSubagentOrchestrator {
     for (const model of candidates) {
       // The parent's own backend already serves this id; no need to build another.
       if (model === parent.model) return parent;
+      if (await this.isPaidOnlyForCaller(model)) {
+        this.deps.logger.warn(`🤖⚠️ [SubagentOrchestrator] "${model}" needs a paid plan; trying the next candidate`);
+        continue;
+      }
       let backend: ICompletionBackend | null;
       try {
         backend = this.deps.resolveBackend(model);
@@ -483,6 +533,61 @@ export class ServerSubagentOrchestrator {
     return parent;
   }
 
+  private async isPaidOnlyForCaller(model: string): Promise<boolean> {
+    try {
+      await this.deps.modelAdmission?.assert(model);
+      return false;
+    } catch (err) {
+      return isModelRequiresSubscriptionError(err);
+    }
+  }
+
+  /** Throws the admission error itself, the same message the dispatched path records on its failed child. */
+  private async assertModelAdmitted(agentName: string, model: string): Promise<void> {
+    try {
+      await this.deps.modelAdmission?.assert(model);
+    } catch (err) {
+      this.deps.logger.warn('[ModelAdmission] Refusing subagent model', {
+        agent: agentName,
+        model,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
+  /** Fills `totalCredits` from token usage when the agent did not report it (priced on `model`). */
+  private priceCompletion(completionInfo: AgentResult['completionInfo'], effectiveModel: string): void {
+    if (completionInfo.totalCredits === undefined && this.deps.availableModels) {
+      const modelInfo = this.deps.availableModels.find(m => m.id === effectiveModel);
+      if (modelInfo) {
+        const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, turnUsage } =
+          completionInfo;
+        // Cache-aware so this fallback stays on the same basis as the cache-aware
+        // costUsd recorded by delegateToAgent's onCredits (see #151) - otherwise a
+        // fallback-computed credit sits next to a cache-aware cost in the same row.
+        // Per request when the agent reports it: long-context tiers are chosen per request.
+        const usdCost = turnUsage?.length
+          ? getTurnsCost(modelInfo, turnUsage)
+          : getTextModelCost(
+              modelInfo,
+              totalInputTokens,
+              totalOutputTokens,
+              totalCacheReadTokens ?? 0,
+              totalCacheWriteTokens ?? 0,
+              totalInputTokens + (totalCacheReadTokens ?? 0) + (totalCacheWriteTokens ?? 0)
+            );
+        completionInfo.totalCredits = usdToCreditsStochastic(usdCost);
+      } else {
+        // Model absent from availableModels: credits stay unset and the delegation's
+        // cost is lost from the usage events. Warn so the miss rate is observable (#152).
+        this.deps.logger.warn(
+          `[SubagentOrchestrator] cannot compute credits: model "${effectiveModel}" not in availableModels`
+        );
+      }
+    }
+  }
+
   async delegateToAgent(options: ServerSpawnOptions): Promise<ServerAgentExecutionResult> {
     const { task, agentDef, thoroughness, variables, attachedFiles } = options;
 
@@ -497,7 +602,8 @@ export class ServerSubagentOrchestrator {
     // `effectiveModel` on the child doc, and the child re-resolves its backend
     // from that id alone - so an unserviceable id has to be replaced here or
     // the child Lambda dies on "Failed to create LLM backend".
-    const { llm: effectiveLlm, model: effectiveModel } = this.resolveAgentRuntime(agentDef);
+    const { llm: effectiveLlm, model: effectiveModel } = await this.resolveAgentRuntime(agentDef);
+    await this.assertModelAdmitted(agentDef.name, effectiveModel);
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
     const maxIterations = agentDef.maxIterations[effectiveThoroughness];
 
@@ -515,6 +621,14 @@ export class ServerSubagentOrchestrator {
         attachedFiles,
         effectiveModel,
       });
+    }
+
+    if (await this.deps.checkInsufficientCredits?.(effectiveModel)) {
+      this.deps.logger.warn('[Credits] Balance cannot cover a subagent iteration; refusing in-process delegation', {
+        agent: agentDef.name,
+        model: effectiveModel,
+      });
+      throw new InsufficientSubagentCreditsError();
     }
 
     // Build denied list: agent's deniedTools + depth cap enforcement.
@@ -591,6 +705,7 @@ export class ServerSubagentOrchestrator {
       }
     }
 
+    const effectiveModelInfo = this.deps.availableModels?.find(m => m.id === effectiveModel);
     const agent = new ReActAgent({
       userId: this.deps.userId,
       logger: this.deps.logger,
@@ -600,6 +715,9 @@ export class ServerSubagentOrchestrator {
       maxIterations,
       systemPrompt,
       thinking: this.deps.thinking,
+      thinkingVisibility: this.deps.thinkingVisibility,
+      modelBackend: effectiveModelInfo?.backend,
+      modelAdapterFamily: effectiveModelInfo?.adapterFamily,
       // Appended AFTER `systemPrompt` in getSystemPrompt(); only present when the
       // host opted into artifacts, so subagents emit <artifact> tags to bubble up.
       ...(this.deps.artifactEmissionPrompt && { artifactEmissionPrompt: this.deps.artifactEmissionPrompt }),
@@ -687,41 +805,13 @@ export class ServerSubagentOrchestrator {
       taskWithFiles += `\n\n[ATTACHED FILES — Use these fabFileId values when calling upload tools. Use the exact filename and fabFileId provided.]\n${fileLines.join('\n')}`;
     }
 
+    const billedByTracker = childExecutionId !== undefined;
     const startTime = Date.now();
     try {
       const result = await agent.run(taskWithFiles, { maxIterations, signal: combinedSignal, maxHistoryIterations: 4 });
       const duration = Date.now() - startTime;
 
-      // Compute credits from token usage if model info is available
-      if (!result.completionInfo.totalCredits && this.deps.availableModels) {
-        const modelInfo = this.deps.availableModels.find(m => m.id === effectiveModel);
-        if (modelInfo) {
-          const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, turnUsage } =
-            result.completionInfo;
-          // Cache-aware so this fallback stays on the same basis as the cache-aware
-          // costUsd recorded by delegateToAgent's onCredits (see #151) - otherwise a
-          // fallback-computed credit sits next to a cache-aware cost in the same row.
-          // Per request when the agent reports it: long-context tiers are chosen per request.
-          const usdCost = turnUsage?.length
-            ? getTurnsCost(modelInfo, turnUsage)
-            : getTextModelCost(
-                modelInfo,
-                totalInputTokens,
-                totalOutputTokens,
-                totalCacheReadTokens ?? 0,
-                totalCacheWriteTokens ?? 0,
-                totalInputTokens + (totalCacheReadTokens ?? 0) + (totalCacheWriteTokens ?? 0)
-              );
-          // Unbiased final charge: a cheap delegation may settle at 0.
-          result.completionInfo.totalCredits = usdToCreditsStochastic(usdCost);
-        } else {
-          // Model absent from availableModels: credits stay unset and the delegation's
-          // cost is lost from the usage events. Warn so the miss rate is observable (#152).
-          this.deps.logger.warn(
-            `🤖⚠️ [SubagentOrchestrator] cannot compute credits: model "${effectiveModel}" not in availableModels`
-          );
-        }
-      }
+      this.priceCompletion(result.completionInfo, effectiveModel);
 
       const summary = this.summarizeResult(result, agentDef);
 
@@ -738,6 +828,7 @@ export class ServerSubagentOrchestrator {
         thoroughness: effectiveThoroughness,
         summary,
         model: effectiveModel,
+        billedByTracker,
       };
 
       if (this.deps.tracker && childExecutionId) {
@@ -754,6 +845,23 @@ export class ServerSubagentOrchestrator {
     } catch (error) {
       // Graceful timeout handling: return partial results instead of losing all work
       const isAbortError = error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'));
+
+      // The tokens spent before the run ended are billed like a completed run's, whether it timed
+      // out or failed.
+      const usage = agent.toCheckpoint();
+      const spent: AgentResult['completionInfo'] = {
+        totalTokens: usage.totalTokens,
+        totalInputTokens: usage.totalInputTokens,
+        totalOutputTokens: usage.totalOutputTokens,
+        totalCacheReadTokens: usage.totalCacheReadTokens,
+        totalCacheWriteTokens: usage.totalCacheWriteTokens,
+        turnUsage: usage.turnUsage,
+        totalCredits: usage.totalCredits > 0 ? usage.totalCredits : undefined,
+        iterations: 0,
+        toolCalls: agent.getToolCallCount(),
+        reachedMaxIterations: false,
+      };
+      this.priceCompletion(spent, effectiveModel);
 
       if (isAbortError) {
         const duration = Date.now() - startTime;
@@ -772,14 +880,7 @@ export class ServerSubagentOrchestrator {
         const partialResult: AgentResult = {
           finalAnswer: partialAnswer,
           steps: agent.getSteps(),
-          completionInfo: {
-            totalTokens: agent.getTokenUsage(),
-            totalInputTokens: 0,
-            totalOutputTokens: 0,
-            iterations: 0,
-            toolCalls: agent.getToolCallCount(),
-            reachedMaxIterations: false,
-          },
+          completionInfo: spent,
         };
 
         const summary = this.summarizeResult(partialResult, agentDef);
@@ -789,6 +890,7 @@ export class ServerSubagentOrchestrator {
           thoroughness: effectiveThoroughness,
           summary: `⚠️ **Partial results (timed out after ${Math.round(duration / 1000)}s)**\n\n${summary}`,
           model: effectiveModel,
+          billedByTracker,
         };
 
         if (this.deps.tracker && childExecutionId) {
@@ -809,13 +911,25 @@ export class ServerSubagentOrchestrator {
         return partialServerResult;
       }
 
-      // Non-abort error - notify tracker, then rethrow
+      // Non-abort error - notify tracker, then rethrow, carrying what the run spent for its payer.
+      const failedResult: ServerAgentExecutionResult = {
+        finalAnswer: '',
+        steps: agent.getSteps(),
+        completionInfo: spent,
+        agentName: agentDef.name,
+        thoroughness: effectiveThoroughness,
+        summary: '',
+        model: effectiveModel,
+        billedByTracker,
+      };
+      if (error instanceof Error) Object.assign(error, { [SPENT_RESULT]: failedResult });
       if (this.deps.tracker && childExecutionId) {
         try {
           await this.deps.tracker.onFailure({
             childExecutionId,
             error: error instanceof Error ? error.message : String(error),
             isTimeout: false,
+            partialResult: failedResult,
           });
         } catch (err) {
           this.deps.logger.warn(
@@ -854,7 +968,7 @@ export class ServerSubagentOrchestrator {
     // backend from the persisted model id, so it must be one this deployment
     // can actually serve. The backend built here is discarded - the child
     // Lambda constructs its own.
-    const { model: effectiveModel } = this.resolveAgentRuntime(agentDef);
+    const { model: effectiveModel } = await this.resolveAgentRuntime(agentDef);
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
     const maxIterations = agentDef.maxIterations[effectiveThoroughness];
 
@@ -1031,6 +1145,7 @@ export class ServerSubagentOrchestrator {
       thoroughness,
       summary,
       model,
+      billedByTracker: true,
       finalAnswer: summary,
       steps: [],
       completionInfo: {
@@ -1083,6 +1198,7 @@ export class ServerSubagentOrchestrator {
       thoroughness,
       model,
       summary,
+      billedByTracker: true,
     };
   }
 

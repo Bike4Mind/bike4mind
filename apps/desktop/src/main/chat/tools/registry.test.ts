@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { publicVideoModel } from '../media/__fixtures__/videoModels';
-import { findTool, isOfferedEditTool, toolsForRequest } from './registry';
+import { findTool, isOfferedEditTool, offeredMediaToolNames, toolsForRequest } from './registry';
 import type { ToolSchema } from './types';
 
 const names = (options: Parameters<typeof toolsForRequest>[0]) =>
@@ -83,6 +83,12 @@ describe('toolsForRequest', () => {
     expect(names({ roots: ['/tmp'], media: true, host: true })).not.toContain('browser_navigate');
   });
 
+  it('offers screen_capture wherever the app can capture, folder or not', () => {
+    expect(names({ roots: [], media: false, host: false, screen: true })).toContain('screen_capture');
+    expect(names({ roots: ['/tmp'], media: true, host: true, browser: true })).not.toContain('screen_capture');
+    expect(findTool('screen_capture')).toBeDefined();
+  });
+
   it('offers explore only beside the local tools', () => {
     expect(names({ roots: ['/tmp'], media: false, host: false, explore: true })).toContain('explore');
     expect(names({ roots: [], media: false, host: false, explore: true })).not.toContain('explore');
@@ -141,5 +147,21 @@ describe('toolsForRequest', () => {
       expect(isOfferedEditTool('file_write', false)).toBe(true);
       expect(isOfferedEditTool('file_read', true)).toBe(true);
     });
+  });
+});
+
+describe('offeredMediaToolNames', () => {
+  const MEDIA = /^generate_/;
+
+  it('names exactly the generation tools toolsForRequest declares for the same inputs', () => {
+    const gemini = publicVideoModel('gemini-omni-1.1-flash');
+    for (const options of [
+      { media: false, video: [gemini] },
+      { media: true, video: [] },
+      { media: true, video: [gemini] },
+    ]) {
+      const declared = names({ roots: [], host: false, ...options }).filter(name => MEDIA.test(name));
+      expect(offeredMediaToolNames(options)).toEqual(declared);
+    }
   });
 });

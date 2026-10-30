@@ -62,22 +62,64 @@ through the shared consent-gated attribution reader.
 
 Account creation emits a `signup` event to each Overwatch product named by the
 consenting visitor's campaign touches, for products this deployment holds an
-ingest key for. The host product is excluded, because its own funnel already
-counts its signups.
+ingest key for. The host product is excluded from `signup`, because it already
+receives `signup_completed` for every new account from the signup funnel.
 
-A later payment by that account emits a `purchase` event to the same products:
+A later payment by that account emits a `purchase` event to the host product and
+to the same products:
 each paid individual subscription invoice (first charge, renewal, or seat change,
 from the invoice webhook) and each credit pack (from the payment-intent webhook). The
 credited product comes from the touches stored on the user at signup, not from
 the purchase, because a webhook has no browser and a credit-pack payment carries
-no attribution. Organization invoices are excluded because the checkout user's
-signup source is not the organization's acquisition source. Zero-amount invoices,
-refunds, disputes, and synthetic users send nothing. Each event carries the amount
-collected in major units, the currency, whether it was a subscription or credits,
-and the invoice billing reason. It is
+no attribution. The host product's copy needs no touch, so a user with none stored
+still produces it, with no campaign. Organization invoices are excluded because the
+checkout user's signup source is not the organization's acquisition source.
+Zero-amount invoices, refunds, disputes, and synthetic users send nothing. Each
+event carries the amount collected in the currency's major unit (dollars, or whole
+yen), the currency, whether it was a subscription or credits, and the invoice
+billing reason. It is
 keyed on the Stripe invoice or payment intent, so a redelivered webhook does not
 count twice. Overwatch has no purchase stage in its funnel yet, so these events
 are stored as raw events only.
+
+The rest of an individual subscription's lifecycle, and the account's, goes to the
+host product and to the same products in the same way:
+
+- `payment_failed`: a failed subscription invoice (amount due, currency, attempt
+  number, billing reason), once per attempt, or a failed credit-pack payment
+  (amount, currency), once per failed confirmation.
+- `subscription_ended`: from the subscription-deleted webhook, whatever ended it.
+  Carries Stripe's cancellation reason, the plan name and interval, and whole days
+  from the subscription's start to its end.
+- `plan_changed`: the subscription moved to another price. Carries the plan names
+  and intervals on each side and whether it was an upgrade, a downgrade or the same
+  tier, by plan tier.
+- `subscription_cancel_scheduled` and `subscription_cancel_reverted`: a period-end
+  cancellation being set, or withdrawn. Carries the plan name and interval.
+- `account_deleted`: an admin deleted the account. Sent after the deletion
+  commits, from the account as it stood just before it, so like every event here it
+  carries the user's pseudonym, and the host copy carries the stored first-touch
+  campaign. Carries whether the account was a subscriber and whole days since
+  signup. Deleting the account does not erase Overwatch's records keyed by that
+  pseudonym, this event and the account's earlier events included.
+
+Plans are named by plan name and interval, never by Stripe price id. Organization
+subscriptions send none of these. Every copy of these events, and of `purchase`,
+carries `metadata.userAction: false`, because each arrives from a webhook, a worker
+or an admin rather than from the user's own request, and Overwatch would otherwise
+count the user as active on that day. For the same reason, `signup_completed` and
+the other signup-funnel events for an account an admin created carry it too, as do
+`email_verified` and `credits_granted` when an admin verifies an account's email.
+Overwatch also leaves `userAction: false` signups out of its funnel's signup count,
+so an account an admin created is not counted as a signup.
+
+Synthetic accounts (`User.isSynthetic`: test personas and accounts on a configured
+test domain) are marked rather than dropped on the host's own Overwatch events: the
+signup-funnel events (`signup_completed`, `email_verified`, `credits_granted`,
+`first_value`) and the daily `active` event carry `metadata.lane: "synthetic"`, so
+they can be told apart from real accounts. Real users' events carry no lane. The
+billing and account events above, the cross-product `signup`, and the client-side GA4
+and ad-pixel conversions still send nothing for a synthetic account.
 
 Because the touches were recorded with consent at signup, a purchase is credited
 from them even if the visitor later withdraws cookie consent: the webhook has no
@@ -91,9 +133,10 @@ makes. Nothing in this app or at the ingest end checks it against where the
 visitor actually came from, so anyone who puts `?utm_source=<product>` on a link
 they share can cause a real signup to be credited to that product. This is the
 only place where a client-supplied string selects which product's record is
-written; every other emit sends to a product its caller fixed. Every event
-carries `metadata.attribution: 'self-reported'` so a consumer can identify and
-filter it.
+written; every other emit sends to a product its caller fixed. Every event sent
+to a credited product carries `metadata.attribution: 'self-reported'` so a consumer
+can identify and filter it. The host product's copies carry no such marker: the
+host observed the payment or the change itself.
 
 This stream is directional by owner decision, and it stays directional: it is
 never upgraded into a verified one. Do not use these events, or any Overwatch
@@ -147,9 +190,11 @@ already see the denial.
   invoice's processing and the MongoDB subscription record.
 - The admin subscription API includes acquisition, but the subscription table
   has no dedicated acquisition column.
-- For a missing cross-product purchase, check the user's stored signup acquisition,
-  the source product's ingest key, and the purchase failure warning in analytics logs.
-  Organization invoices do not emit cross-product purchases.
+- For a missing cross-product purchase or lifecycle event, check the user's stored
+  signup acquisition, the source product's ingest key, and the billing event failure
+  warning in analytics logs. Organization subscriptions emit none of them.
+- For one missing from the host product, check the host's own ingest key: its copy
+  needs no stored acquisition.
 
 ## API-key usage log
 
@@ -162,6 +207,44 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Latency        | Response time in milliseconds     | 90 days (TTL index) | Usage stats                                      |
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
+
+## Usage pattern signals
+
+A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin setting, derives a usage profile for recently active free-tier accounts and stores the latest result per user in the `UserUsagePatternSignals` collection. It collects no new raw data: every input already exists in `UsageEvent`, `ApiKeyUsageLog` or `UserApiKey`. The result is for admin review only and triggers no automatic action on the account, its keys or its balance. Paid accounts get a marker with no signals.
+
+| Data              | Storage                                                                                                                   | Lifetime                                         | Purpose      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------ |
+| Signals           | Per signal (API-key share, request cadence, balance polling, key-mint timing): value, triggered flag, weight, explanation | 30 days after last checked (TTL on `computedAt`) | Admin review |
+| Score and outcome | `score`, `needsReview`, `skipped` reason, `computedAt`, keyed by `userId`                                                 | 30 days after last checked (TTL on `computedAt`) | Admin review |
+
+## Signup and login network metadata
+
+Every self-service signup stores the network it came from on the new account (`signupMeta`), written once. Every successful signup and sign-in also writes one `AuthEvent` row. Admin-created accounts and impersonation sessions write neither. The network number (ASN) and country come from headers the CDN sets; when they are absent the fields are empty, never guessed. A failed write never blocks sign-in. Both are visible only to admins, and both are deleted with the account. The full IP on `signupMeta` is kept for the same 90 days as the `AuthEvent` rows; after that the daily `signupIpRetention` job replaces it with its /24 (IPv4) or /48 (IPv6) prefix. The other `signupMeta` fields stay for the account's lifetime. Two other stores keep sign-in IPs outside this retention: `User.loginRecords[].ip` holds the full IP of the most recent sign-ins for the account's lifetime, and `UserAuthAuditLog.actorIp` keeps it for 12 months (TTL index).
+
+| Data          | Storage                               | Lifetime                                                                               | Purpose                                             |
+| ------------- | ------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Client IP     | `signupMeta.ip`, `AuthEvent.ip`       | 90 days in full, then /24 or /48 prefix for the account lifetime / 90 days (TTL index) | Abuse and security investigation                    |
+| User agent    | `signupMeta.userAgent`, `AuthEvent`   | Account lifetime / 90 days (TTL index)                                                 | Abuse and security investigation                    |
+| Network (ASN) | `asn`, plus operator for hosting ASNs | Account lifetime / 90 days (TTL index)                                                 | Spot signups from one network or a hosting provider |
+| Country       | ISO country code                      | Account lifetime / 90 days (TTL index)                                                 | Abuse and security investigation                    |
+| Hosting flag  | `isDatacenter`                        | Account lifetime / 90 days (TTL index)                                                 | Flag signups from cloud and hosting networks        |
+
+`signupMeta.challengeVerified` records `true` only after a real server-verified challenge pass; skipped or unavailable checks remain null or absent. It shares the other non-IP signup metadata's admin-only access, account lifetime, and account-deletion behavior. Signed signup tokens carry this observation only to preserve it through verification; public test secrets and fail-open checks do not establish proof. On email sign-up the proof is single-use, because the signed token is consumed. On OAuth sign-up it is per-flow: the signed state is not consumed, so every callback that reuses the same state within its 5-minute lifetime records the same pass.
+
+Signup grant assessments also emit one of the `signup-grant-assessed-full`, `signup-grant-assessed-reduced`, or `signup-grant-assessed-review` log markers after commit. These markers contain only the outcome band, without account identifiers, policy weights, network observations, or challenge tokens. CloudWatch metric filters count them for monitoring and an optional review-volume alarm. The markers follow the server log group's retention; metric counts follow CloudWatch retention. Emission is best effort, so counts are operational monitoring rather than an exact grant ledger.
+
+## Chat turn timing
+
+Each chat reply records where its wall-clock time went, so a slow or retried reply can be diagnosed from the reply itself. The record holds durations, counts and provider metadata only: no prompt or reply text. It is shown in the reply's Answer diagnosis panel, and a short summary with a copyable turn ID appears under replies that retried, switched model or took a minute or more.
+
+| Data           | Storage                                                                                         | Lifetime             | Purpose                                                                      |
+| -------------- | ----------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------- |
+| Durations      | `turnTiming` on the reply: queue, context build, concurrency wait and total, in ms              | Lives with the reply | Find which phase made a reply slow                                           |
+| Retries        | `turnTiming.retries`: reason, HTTP status, Retry-After, provider request id, delay, model, time | Lives with the reply | Tell provider load from stalls; cite a provider request id in a support case |
+| Model switches | `turnTiming.fallbackHops`: a count                                                              | Lives with the reply | Show that a reply moved to a fallback model                                  |
+| Retry metric   | CloudWatch metric `ChatRetry`, dimensioned by stage, reason and model; no user or reply id      | CloudWatch retention | Retry rate by cause and model                                                |
+
+The record also ships to clients: on the live reply frames and in the `GET /api/v1/quests/{id}` poll body. It is not redacted for people a session is shared with, matching the session message API they can already call, which returns the same fields: the record carries no prompt or reply text, and the model and provider request ids appear there too.
 
 ## Integrations gallery usage
 
@@ -184,17 +267,33 @@ Integration requests themselves ("request this integration") are product data, n
 
 Bike4Mind Desktop can send aggregate activity to a team's Fleet. It sends nothing until two things are true: Fleet's installer has written `~/.claude/fleet/bike4mind-desktop.json` on the machine (mode 0600; Desktop ignores a copy other users can read), and the user has turned on "Share activity with Fleet" in Desktop's Profile. Turning the switch off deletes everything not yet sent. Desktop posts OTLP/HTTP JSON logs to the Fleet origin in that file, at `/v1/logs`, from the main process, with the team telemetry key the file holds. The key never reaches the renderer and is never logged.
 
-| Data       | Sent as                                                                               | Purpose                                      |
-| ---------- | ------------------------------------------------------------------------------------- | -------------------------------------------- |
-| Who        | `user.email` and `fleet.install.id`, from the installer file                          | Attribute activity to a person in Fleet      |
-| App        | `service.name` `bike4mind-desktop`, `service.version`                                 | Tell Desktop apart from other tools          |
-| Reply      | `bike4mind_desktop.session`: event id, conversation id, duration in ms                | Replies and active time per person and day   |
+| Data       | Sent as                                                                                                                                    | Purpose                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
+| Who        | `user.email` and `fleet.install.id`, from the installer file                                                                               | Attribute activity to a person in Fleet      |
+| App        | `service.name` `bike4mind-desktop`, `service.version`                                                                                      | Tell Desktop apart from other tools          |
+| Reply      | `bike4mind_desktop.session`: event id, conversation id, duration in ms                                                                     | Replies and active time per person and day   |
 | Usage      | On the reply record: `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `credits_milli` (credits x 1000) | Which models a person uses and what they use |
-| Tool call  | `bike4mind_desktop.tool`: the above plus a category only                              | Tool use by category                         |
-| Repository | `bike4mind_desktop.repository`: owner/name from the `origin` remote, `view` or `edit` | Which repositories a person works in         |
+| Tool call  | `bike4mind_desktop.tool`: the above plus a category only                                                                                   | Tool use by category                         |
+| Repository | `bike4mind_desktop.repository`: owner/name from the `origin` remote, `view` or `edit`                                                      | Which repositories a person works in         |
 
 The model id is the one the conversation is set to, for example `claude-opus-5`. Token counts and credits are the server's own figures for that reply, as the reply shows them. A reply that was resumed reports only what was added since the earlier part. A reply record names one model, so what the `explore` sub-agent spends is counted under the conversation's own model rather than the one that sub-agent ran on. None of it is message content.
 
 The tool category is one of `shell`, `editor`, `browser`, `mcp`, `agent` or `other`; a tool's name, its input and its output are never sent. Messages, prompts, model output, file contents, commands and paths are never sent. Unsent events wait in `fleet-activity-queue.json` (mode 0600) under the app's data folder and keep their event ids, so a retried batch is counted once.
 
 Repository identity uses the last two components of a supported network remote. The host and any earlier namespace components are omitted: a GitLab `group/subgroup/project` is reported as `subgroup/project`, and matching owner/name pairs on different hosts are combined. This is an activity label, not a globally unique repository identifier.
+
+## Model availability monitoring
+
+Hosted model monitoring publishes aggregate counts to CloudWatch. The
+`UnavailableModelReferences` count covers unavailable configured model pins and
+fallback references. `LifecycleSuggestions` counts unresolved operator review
+items, and `LifecycleDateChanges` counts lifecycle date changes observed by model
+discovery. The metrics use deployment stage and runtime host dimensions; they
+contain no user, session, prompt, reply, or provider credential fields.
+
+Diagnostic logs identify the affected model, its configuration reference path or
+fallback surface, and the availability problem. Audit failures record an error
+message. You use these records to identify broken model references and review
+lifecycle changes. Metrics follow CloudWatch retention, and logs follow the
+deployment's configured log retention. This operational monitoring does not send
+product usage events to third-party analytics services.

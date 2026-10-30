@@ -4,6 +4,7 @@ import SubscriberForm from '@client/app/components/SubscriberForm';
 import { useTheme } from '@mui/joy/styles';
 import Image from 'next/image';
 import useGetLogo from '@client/app/hooks/useGetLogo';
+import { useRouterState, useSearch } from '@tanstack/react-router';
 
 const lines = [
   {
@@ -81,6 +82,9 @@ const styles = {
 const SubscribePage = () => {
   const theme = useTheme();
   const logoUrl = useGetLogo();
+  const { source } = useSearch({ from: '/subscribe' });
+  const waitlistEmail = useRouterState({ select: state => state.location.state.waitlistEmail });
+  const cameFromClosedSignup = source !== undefined && source !== 'subscribe_page';
 
   return (
     <Box
@@ -135,8 +139,18 @@ const SubscribePage = () => {
           <Typography sx={styles.listItem}>🔍 Be the first to explore innovative AI tools</Typography>
         </Stack>
 
+        {cameFromClosedSignup && (
+          <Typography
+            data-testid="subscribe-signup-closed-notice"
+            level="body-md"
+            sx={{ color: 'text.secondary', textAlign: 'center', mb: 2, px: 2 }}
+          >
+            Sign-ups are invite-only right now. Join the waitlist and we&apos;ll email you an invite code.
+          </Typography>
+        )}
+
         <Box sx={{ width: '100%' }}>
-          <SubscriberForm />
+          <SubscriberForm initialEmail={waitlistEmail} source={source} />
         </Box>
 
         <Typography level="body-sm" sx={styles.subscribeText}>

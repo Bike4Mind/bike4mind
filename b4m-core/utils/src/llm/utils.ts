@@ -2,7 +2,6 @@ import { stripToolOutputMarker } from '../artifactParser';
 import { assemblyTokenBuffer, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION } from './contextBudget';
 import {
   type AttachmentLakeAccess,
-  dayjs,
   extractSnippetMeta,
   FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
@@ -42,9 +41,10 @@ import {
 } from '@bike4mind/fab-pipeline';
 import { getSettingsValue } from '../settings';
 import { Logger } from '@bike4mind/observability';
-import { ensureToolPairingIntegrity } from '@bike4mind/llm-adapters';
+import { ensureToolPairingIntegrity, isConverseBedrockModel } from '@bike4mind/llm-adapters';
 import { getFileContent } from '../fabfile';
 import { escapeRegex } from '../escapeRegex';
+import { signedUrlExpiresAt } from '../signedUrlExpiry';
 import { BadRequestError, CorruptedFileError } from '../errors';
 import { isAxiosError } from 'axios';
 import { ITokenizer } from '../tokenCounting';
@@ -1048,14 +1048,12 @@ export async function getCachedSignedUrl(
 
   const cachedSignedUrl = await db.caches.findByKey(key);
   if (cachedSignedUrl) {
-    return cachedSignedUrl.result;
+    return cachedSignedUrl.result as string;
   }
 
   const expiryInSeconds = 3600; // 1 hour
   const signedUrl = await storage.getSignedUrl(filePath, 'get', { expiresIn: expiryInSeconds });
-  const expiresAt = dayjs()
-    .add(expiryInSeconds * 1000, 'milliseconds')
-    .toDate();
+  const expiresAt = signedUrlExpiresAt(signedUrl, expiryInSeconds);
   await db.caches.createOrUpdate({ key, result: signedUrl, expiresAt });
   return signedUrl;
 }
@@ -1728,7 +1726,9 @@ export async function processFabFilesServer(
             if (
               modelInfo.backend === ModelBackend.Anthropic ||
               modelInfo.id.includes('anthropic') ||
-              modelInfo.id.includes('gemini')
+              modelInfo.id.includes('gemini') ||
+              modelInfo.adapterFamily === 'bedrock-converse' ||
+              isConverseBedrockModel(String(modelInfo.id))
             ) {
               // Check image size before downloading (Anthropic has 5MB base64 limit)
               // We use 3.5MB as safe threshold since base64 encoding adds ~33% overhead
@@ -3284,7 +3284,7 @@ export async function buildAndSortMessages(
     logger.log('\nFinal Combined Messages:');
     messages.forEach((msg, i) => {
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-      logger.log(`  ${i + 1}. Role: ${msg.role}, Content: ${content.substring(0, 50)}...`);
+      logger.log(`  ${i + 1}. Role: ${msg.role}, Content length: ${content.length}`);
     });
 
     logger.log(`\nTotal messages: ${messages.length}`);

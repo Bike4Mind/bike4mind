@@ -8,6 +8,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
 }));
 
 const h = vi.hoisted(() => ({
+  fetchPinned: vi.fn(),
   findCallbackById: vi.fn(),
   findById: vi.fn(),
   recordCallbackAttempt: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async importOriginal => 
   return {
     ...actual,
     assertUrlAllowed: h.assertUrlAllowed,
+    fetchPinned: h.fetchPinned,
   };
 });
 
@@ -97,7 +99,7 @@ function makeQuest(overrides: Record<string, unknown> = {}) {
 type FetchMock = ReturnType<typeof vi.fn>;
 
 function stubFetch(impl: FetchMock) {
-  vi.stubGlobal('fetch', impl);
+  h.fetchPinned.mockImplementation(impl as never);
 }
 
 describe('generationCallback dispatch', () => {
@@ -360,6 +362,46 @@ describe('generationCallback dispatch', () => {
       state: 'failed',
       statusCode: undefined,
       error: expect.any(String),
+    });
+  });
+
+  it('sends through the pinned fetch rather than global fetch', async () => {
+    const globalFetch = vi.fn();
+    vi.stubGlobal('fetch', globalFetch);
+    stubFetch(vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+
+    await dispatch(makeEvent(MESSAGE), {} as never, logger);
+
+    expect(h.fetchPinned).toHaveBeenCalledWith(CALLBACK_DISPATCHED.url, expect.objectContaining({ method: 'POST' }), {
+      discardBody: true,
+    });
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
+
+  it('records delivered on a 200 with a large response body and cancels the body', async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ pull: c => c.enqueue(new Uint8Array(1024)), cancel });
+    stubFetch(
+      vi
+        .fn()
+        .mockResolvedValue(new Response(body, { status: 200, headers: { 'content-length': String(50 * 1024 * 1024) } }))
+    );
+
+    await expect(dispatch(makeEvent(MESSAGE), {} as never, logger)).resolves.toBeUndefined();
+
+    expect(cancel).toHaveBeenCalled();
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', { state: 'delivered', statusCode: 200 });
+  });
+
+  it('fails permanently when the pinned fetch refuses the dialed address', async () => {
+    stubFetch(vi.fn().mockRejectedValue(new SsrfError('Blocked connection to a private address for x')));
+
+    await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
+
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
+      state: 'failed',
+      statusCode: undefined,
+      error: expect.stringContaining('Callback URL not allowed'),
     });
   });
 

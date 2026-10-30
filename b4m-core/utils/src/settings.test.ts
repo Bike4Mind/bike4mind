@@ -1,8 +1,74 @@
-import { describe, it, expect, vi } from 'vitest';
-import { getSettingsValue, getSettingByName, getSettingsByNames, loadTeamPlanSettings } from './settings';
-import { KNOWLEDGE_BASE_RETRIEVAL_PROMPT, WEB_SEARCH_FRESHNESS_PROMPT } from '@bike4mind/common';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  getSettingsValue,
+  getSettingByName,
+  getSettingsByNames,
+  getSettingsMap,
+  shutdownSettingsCache,
+  loadTeamPlanSettings,
+} from './settings';
+import { KNOWLEDGE_BASE_RETRIEVAL_PROMPT, WEB_SEARCH_FRESHNESS_PROMPT, settingsMap } from '@bike4mind/common';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
 import { Logger } from '@bike4mind/observability';
+
+describe('getSettingsValue - legacy numeric boolean rows', () => {
+  it.each(['1', '0'])('accepts numeric values only for the opted-in setting: %s', stored => {
+    const expected = stored === '1';
+    expect(getSettingsValue('enableTeamPlan', { enableTeamPlan: stored })).toBe(expected);
+    expect(getSettingsValue('EnableMCPServer', { EnableMCPServer: stored })).toBe(false);
+    expect(getSettingsValue('enforceCredits', { enforceCredits: stored })).toBe(true);
+  });
+
+  it('keeps opposite defaults for missing or rejected values', () => {
+    for (const stored of [undefined, 'not-a-boolean']) {
+      const settings = stored === undefined ? {} : { EnableMCPServer: stored, enforceCredits: stored };
+      expect(getSettingsValue('EnableMCPServer', settings)).toBe(false);
+      expect(getSettingsValue('enforceCredits', settings)).toBe(true);
+    }
+  });
+});
+
+describe('getSettingsValue - enforceCredits hosted lock', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  describe('hosted', () => {
+    beforeEach(() => {
+      vi.stubEnv('B4M_SELF_HOST', undefined);
+    });
+
+    it('resolves true over a stored false', () => {
+      expect(getSettingsValue('enforceCredits', { enforceCredits: 'false' })).toBe(true);
+    });
+
+    it('resolves true over a stored false even when the caller passes a false default', () => {
+      expect(getSettingsValue('enforceCredits', { enforceCredits: 'false' }, false)).toBe(true);
+    });
+
+    it('resolves true when no row is stored', () => {
+      expect(getSettingsValue('enforceCredits', {})).toBe(true);
+    });
+  });
+
+  describe('self-host', () => {
+    beforeEach(() => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+    });
+
+    it('honours a stored false', () => {
+      expect(getSettingsValue('enforceCredits', { enforceCredits: 'false' })).toBe(false);
+    });
+
+    it('honours a stored true', () => {
+      expect(getSettingsValue('enforceCredits', { enforceCredits: 'true' })).toBe(true);
+    });
+
+    it('falls back to the setting default when no row is stored', () => {
+      expect(getSettingsValue('enforceCredits', {})).toBe(settingsMap.enforceCredits.defaultValue);
+    });
+  });
+});
 
 /**
  * Regression coverage for the "cleared string setting must revert to the built-in default" contract.
@@ -148,6 +214,36 @@ describe('getSettingsByNames - stored falsy values survive the cached path', () 
     expect(values.valuelessRowRegression).toBeNull();
     expect(values.absentRegression).toBeNull();
     expect(db.adminSettings.findAll).not.toHaveBeenCalled();
+  });
+});
+
+// The per-process cache only invalidates locally, so a long-lived process can serve a value an
+// admin replaced in another process. This pins the contract every billing/security read relies on:
+// `skipCache` sees the new row on the next call, while the plain read keeps serving the warm one.
+describe('getSettingsMap - skipCache reads past a warm per-process cache', () => {
+  const dbReturning = (value: string) => ({
+    adminSettings: {
+      findAll: vi.fn().mockResolvedValue([{ settingName: 'enforceCredits', settingValue: value }]),
+      findBySettingNames: vi.fn(async (names: string[]) =>
+        names.map(name => ({ settingName: name, settingValue: value }))
+      ),
+    },
+  });
+
+  beforeEach(() => shutdownSettingsCache());
+  afterEach(() => shutdownSettingsCache());
+
+  it('serves the flipped flag to skipCache while the cached read still returns the warmed value', async () => {
+    expect(await getSettingsMap(dbReturning('true'))).toEqual({ enforceCredits: 'true' });
+
+    // The admin's write lands in another process; this one's cache knows nothing about it.
+    const flipped = dbReturning('false');
+    expect(await getSettingsMap(flipped)).toEqual({ enforceCredits: 'true' });
+
+    const fresh = await getSettingsMap(flipped, { names: ['enforceCredits'], skipCache: true });
+    expect(fresh).toEqual({ enforceCredits: 'false' });
+    expect(flipped.adminSettings.findBySettingNames).toHaveBeenCalledWith(['enforceCredits']);
+    expect(flipped.adminSettings.findAll).not.toHaveBeenCalled();
   });
 });
 

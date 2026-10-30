@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
+import { Logger } from '@bike4mind/observability';
 
 const {
   mockValidate,
@@ -54,6 +55,12 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
   // checkApiKeyRateLimit is stubbed.
@@ -107,7 +114,7 @@ vi.mock('@bike4mind/database', async orig => {
 const mockGetGenerationCallbackQueueUrl = vi.fn(
   () => 'https://sqs.example.com/generationCallbackQueue' as string | undefined
 );
-vi.mock('@server/generationCallback/dispatchQuestCallback', async orig => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   getGenerationCallbackQueueUrl: () => mockGetGenerationCallbackQueueUrl(),
 }));
@@ -225,6 +232,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(res._getJSONData()).toMatchObject({ quest: { id: 'quest-1' } });
     expect(GenerateImageResponseSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls[0][0].adminRoleWithheld).toBe(true);
   });
 
   it('strips server-owned fields from the returned session', async () => {
@@ -249,6 +257,20 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(session.origin).not.toHaveProperty('apiKeyId');
   });
 
+  it('sends a response the contract declares in full, session document included', async () => {
+    mockGetOrCreateSession.mockResolvedValue({
+      sessionId: 'sess-1',
+      asyncPromises: [],
+      session: { id: 'sess-1', origin: { channel: 'api', apiKeyId: 'k1' } },
+    });
+    const warn = vi.spyOn(Logger.resetMetadata(), 'warn');
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(warn.mock.calls.filter(([message]) => String(message).startsWith('[contract]'))).toEqual([]);
+  });
+
   describe('referenceImageFabFileIds', () => {
     const REFS = ['ref-1', 'ref-2'];
 
@@ -262,6 +284,32 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       expect(mockInvoke).toHaveBeenCalledWith(
         expect.objectContaining({ body: expect.objectContaining({ referenceImageFabFileIds: REFS }) })
       );
+    });
+
+    it('accepts reference images for FLUX.2 (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: { prompt: 'a red bicycle', model: 'flux-2-pro', referenceImageFabFileIds: REFS },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ referenceImageFabFileIds: REFS }) })
+      );
+    });
+
+    it('rejects too many FLUX.2 Klein references before enqueuing (400)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: {
+          prompt: 'a red bicycle',
+          model: 'flux-2-klein-4b',
+          referenceImageFabFileIds: ['a', 'b', 'c', 'd', 'e'],
+        },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockInvoke).not.toHaveBeenCalled();
     });
 
     it('rejects reference images for a non-gpt-image model (400) before creating a session or enqueuing', async () => {
@@ -624,6 +672,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     it('route -> invoke -> queued SQS body: organization_id null stays null, omitted becomes the home org', async () => {
       const queued: Array<Record<string, unknown>> = [];
       const service = new ImageGenerationService({
+        assertModelAdmission: async () => {},
         db: {
           sessions: { findById: vi.fn(async () => ({ id: 'sess-1' })) },
           quests: {

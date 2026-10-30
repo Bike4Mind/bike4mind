@@ -32,8 +32,9 @@
  */
 
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { verifyEmbedApiKey } from '@server/cli/auth';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
 import { parseBrandingColor, parseBrandingDisplayName } from '@bike4mind/common';
 
 /** Per-IP flood backstop: every request costs a key lookup on an unauth surface. */
@@ -72,7 +73,12 @@ const handler = baseApi({ auth: false })
     let info;
     try {
       info = await verifyEmbedApiKey({ 'x-api-key': k });
-    } catch {
+    } catch (err) {
+      // The key check itself failed (database unreachable): retryable, and independent of the key.
+      if (isAuthInfraFailure(err)) {
+        setAuthInfraFailureHeaders(res, err);
+        return sendError(res, err.statusCode, 'temporarily_unavailable');
+      }
       // Uniform 404 for every verification failure (unknown, revoked, wrong
       // scope, non-org): no branch may confirm that a probed key exists.
       return sendError(res, 404, 'not_found');

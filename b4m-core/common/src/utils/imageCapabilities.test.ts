@@ -21,6 +21,13 @@ const EXPECTED_SIZING: Record<ImageModels, ImageSizing['kind']> = {
   [ImageModels.FLUX_PRO_FILL]: 'inputImage',
   [ImageModels.FLUX_KONTEXT_PRO]: 'inputImage',
   [ImageModels.FLUX_KONTEXT_MAX]: 'inputImage',
+  [ImageModels.FLUX_2_MAX]: 'dimensions',
+  [ImageModels.FLUX_2_PRO]: 'dimensions',
+  [ImageModels.FLUX_2_PRO_PREVIEW]: 'dimensions',
+  [ImageModels.FLUX_2_FLEX]: 'dimensions',
+  [ImageModels.FLUX_2_KLEIN_9B]: 'dimensions',
+  [ImageModels.FLUX_2_KLEIN_9B_PREVIEW]: 'dimensions',
+  [ImageModels.FLUX_2_KLEIN_4B]: 'dimensions',
   [ImageModels.GROK_IMAGINE_IMAGE_QUALITY]: 'fixed',
   [ImageModels.GEMINI_2_5_FLASH_IMAGE]: 'aspectRatio',
   [ImageModels.GEMINI_3_PRO_IMAGE_PREVIEW]: 'aspectRatio',
@@ -86,7 +93,15 @@ describe('getImageModelCapabilities', () => {
       }
     });
 
-    it('advertises the BFL bounds resolveImageDimensions enforces', () => {
+    it('advertises the BFL bounds resolveImageDimensions enforces, FLUX.2 included', () => {
+      expect(getImageModelCapabilities(ImageModels.FLUX_2_PRO).sizing).toMatchObject({
+        kind: 'dimensions',
+        minWidth: BFL_DIMENSION_BOUNDS.min,
+        maxWidth: BFL_DIMENSION_BOUNDS.max,
+        minHeight: BFL_DIMENSION_BOUNDS.min,
+        maxHeight: BFL_DIMENSION_BOUNDS.max,
+        step: BFL_DIMENSION_BOUNDS.step,
+      });
       expect(getImageModelCapabilities(ImageModels.FLUX_PRO_1_1).sizing).toMatchObject({
         kind: 'dimensions',
         minWidth: BFL_DIMENSION_BOUNDS.min,
@@ -136,6 +151,15 @@ describe('getImageModelCapabilities', () => {
       expect(supports.qualities).toEqual([]);
       expect(supports.maxReferenceImages).toBe(0);
       expect(supports.transparentBackground).toBe(false);
+    });
+
+    it.each([
+      [ImageModels.FLUX_2_PRO, 8],
+      [ImageModels.FLUX_2_FLEX, 8],
+      [ImageModels.FLUX_2_KLEIN_9B, 4],
+      [ImageModels.FLUX_2_KLEIN_4B, 4],
+    ])('%s advertises its total reference input limit', (model, limit) => {
+      expect(getImageModelCapabilities(model).supports.maxReferenceImages).toBe(limit);
     });
 
     it('Kontext needs an input image', () => {

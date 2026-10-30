@@ -1,9 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { dataLakeRepository, dataLakeSpendNotificationRepository } from '@bike4mind/database';
+import { dataLakeRepository, dataLakeSpendNotificationRepository, withTransaction } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * Admin-only: zero a lake's lifetime embedding-spend meter (embeddingSpendMicroUsd).
@@ -26,8 +27,21 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     }
 
     const { id } = req.query as { id: string };
-    const reset = await dataLakeRepository.resetEmbeddingSpend(id);
-    if (!reset) throw new NotFoundError('Data lake not found');
+    await withTransaction(async () => {
+      const lake = await dataLakeRepository.findById(id);
+      if (!lake) throw new NotFoundError('Data lake not found');
+      const reset = await dataLakeRepository.resetEmbeddingSpend(id);
+      if (!reset) throw new NotFoundError('Data lake not found');
+
+      await recordAdminActionFromRequest(req, {
+        action: 'org.data_lake.embedding_spend_reset',
+        target: { kind: 'settings', id: lake.id, displayName: `data lake ${lake.name}` },
+        organizationId: lake.organizationId,
+        summary: `reset embedding spend meter for data lake ${lake.name}`,
+        changes: [{ field: 'embeddingSpendMicroUsd', before: lake.embeddingSpendMicroUsd ?? 0, after: 0 }],
+        details: { lakeId: lake.id, ownerUserId: lake.createdByUserId },
+      });
+    });
 
     // Re-arm the lake-scope spend notice: it's keyed on the configured budget value (see
     // spendNotificationKeys.ts), which a reset doesn't change, so without this a zeroed lake

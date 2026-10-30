@@ -71,6 +71,48 @@ describe('UsageEventRepository', () => {
       expect(doc!.apiKeyId).toBeUndefined();
     });
 
+    it('round-trips the price stamp: source, string row id, rates and per-turn usage', async () => {
+      // A string like every other id on this document, so a lean read matches what the type
+      // promises and a fixture id that is not hex still records.
+      const priceRowId = 'price-row-4';
+      const doc = await record({
+        priceSource: 'catalog',
+        priceRowId,
+        rates: { tierKey: 200_000, input: 2e-6, output: 12e-6, cacheRead: 2e-7, cacheWrite: 2.5e-6 },
+        turnUsage: [
+          { inputTokens: 900, outputTokens: 40, cacheReadTokens: 100, tierKey: 200_000 },
+          { inputTokens: 250_000, outputTokens: 10, tierKey: 2_097_152 },
+        ],
+        turnUsageTruncated: true,
+      });
+
+      const stored = await UsageEvent.findById(doc!.id).lean();
+      expect(stored!.priceSource).toBe('catalog');
+      expect(stored!.priceRowId).toBe(priceRowId);
+      expect(stored!.rates).toEqual({
+        tierKey: 200_000,
+        input: 2e-6,
+        output: 12e-6,
+        cacheRead: 2e-7,
+        cacheWrite: 2.5e-6,
+      });
+      expect(stored!.turnUsage).toEqual([
+        { inputTokens: 900, outputTokens: 40, cacheReadTokens: 100, tierKey: 200_000 },
+        { inputTokens: 250_000, outputTokens: 10, tierKey: 2_097_152 },
+      ]);
+      expect(stored!.turnUsageTruncated).toBe(true);
+    });
+
+    it('leaves the price stamp absent on a row written without it (no empty turnUsage array)', async () => {
+      const doc = await record();
+      const stored = await UsageEvent.findById(doc!.id).lean();
+      expect(stored!.priceSource).toBeUndefined();
+      expect(stored!.priceRowId).toBeUndefined();
+      expect(stored!.rates).toBeUndefined();
+      expect(stored!.turnUsage).toBeUndefined();
+      expect(stored!.turnUsageTruncated).toBeUndefined();
+    });
+
     it('persists dataLakeId when provided (ingestion spend attribution)', async () => {
       const doc = await record({ feature: 'embedding', dataLakeId: 'lake-1' });
       expect(doc!.dataLakeId).toBe('lake-1');
@@ -83,6 +125,67 @@ describe('UsageEventRepository', () => {
 
     it('rejects an unknown feature', async () => {
       await expect(record({ feature: 'nonsense' as IUsageEventInput['feature'] })).rejects.toThrow();
+    });
+  });
+
+  describe('userTokensSince', () => {
+    it("counts a chat row's cache tokens once, as part of its inputTokens", async () => {
+      await record({ feature: 'chat', inputTokens: 100, outputTokens: 50, cachedInputTokens: 20, cacheWriteTokens: 5 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(150);
+    });
+
+    it('adds the separate cache buckets of a non-chat row', async () => {
+      await record({
+        feature: 'completion_api',
+        inputTokens: 100,
+        outputTokens: 50,
+        cachedInputTokens: 20,
+        cacheWriteTokens: 5,
+      });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(175);
+    });
+
+    it("sums the user's own events in the window and reports the oldest", async () => {
+      const first = await record({ inputTokens: 100, outputTokens: 50 });
+      await record({ inputTokens: 10, outputTokens: 1 });
+      await record({ userId: 'user-2', ownerId: 'user-2', inputTokens: 9999 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(161);
+      expect(result.oldestAt?.getTime()).toBe(first!.createdAt.getTime());
+    });
+
+    it('leaves out usage billed to an organization', async () => {
+      await record({ inputTokens: 10, outputTokens: 0 });
+      await record({ ownerId: 'org-1', ownerType: CreditHolderType.Organization, inputTokens: 5000 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(10);
+    });
+
+    it('ignores events before the window', async () => {
+      await record({ inputTokens: 100 });
+      // Raw driver update: mongoose timestamps make createdAt immutable via the model.
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date(Date.now() - 120_000) } });
+      await record({ inputTokens: 7, outputTokens: 0 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(7);
+    });
+
+    it('reads zero for a user with no recent usage', async () => {
+      expect(await usageEventRepository.userTokensSince('nobody', new Date(Date.now() - 60_000))).toEqual({
+        tokens: 0,
+      });
     });
   });
 
@@ -822,5 +925,47 @@ describe('UsageEventRepository', () => {
       expect(summary.byAccount).toEqual([]);
       expect(summary.dailyCost).toEqual([]);
     });
+  });
+});
+
+describe('UsageEventRepository.creditsSpentByUser', () => {
+  const from = new Date('2026-10-20T10:00:00Z');
+  const to = new Date('2026-10-21T10:00:00Z');
+  const at = async (createdAt: Date, overrides: Partial<IUsageEventInput> = {}) => {
+    const event = await record(overrides);
+    // Raw driver update: mongoose timestamps make createdAt immutable via the model.
+    await UsageEvent.collection.updateOne({ _id: event!._id }, { $set: { createdAt } });
+  };
+
+  it('sums charged and written-off credits inside [from, to) for that user only', async () => {
+    await at(from, { creditsCharged: 30 });
+    await at(new Date('2026-10-21T09:59:59Z'), { creditsCharged: 20, writtenOffCredits: 5 });
+    await at(to, { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T09:59:59Z'), { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T12:00:00Z'), { userId: 'someone-else', creditsCharged: 1000 });
+
+    await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(55);
+  });
+
+  it('returns 0 when the user spent nothing in the window', async () => {
+    await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(0);
+  });
+});
+
+describe('UsageEventRepository.creditsSpentByUsers', () => {
+  it('sums charged and written-off credits per user, leaving out users who spent nothing', async () => {
+    await record({ userId: 'user-1', creditsCharged: 30 });
+    await record({ userId: 'user-1', creditsCharged: 20, writtenOffCredits: 5 });
+    await record({ userId: 'user-2', creditsCharged: 7 });
+    await record({ userId: 'someone-else', creditsCharged: 1000 });
+
+    await expect(usageEventRepository.creditsSpentByUsers(['user-1', 'user-2', 'user-3'])).resolves.toEqual({
+      'user-1': 55,
+      'user-2': 7,
+    });
+  });
+
+  it('returns nothing for no users', async () => {
+    await expect(usageEventRepository.creditsSpentByUsers([])).resolves.toEqual({});
   });
 });

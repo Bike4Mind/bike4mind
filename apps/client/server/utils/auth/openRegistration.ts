@@ -1,5 +1,6 @@
 import { settingsMap } from '@bike4mind/common';
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
+import { configuredBootstrapAdminEmail } from './bootstrapAdmin';
 
 /**
  * The `allowOpenRegistration` master switch, resolved the same way everywhere.
@@ -20,8 +21,9 @@ export async function isOpenRegistrationAllowed(): Promise<boolean> {
   const allowOpenRegistration = parsed.success ? parsed.data : false;
 
   // Self-host bootstrap: a fresh install (no users yet) accepts its first registration
-  // without an invite. Flips back off as soon as one user exists.
-  if (!allowOpenRegistration && process.env.B4M_SELF_HOST === 'true') {
+  // without an invite. Flips back off as soon as one user exists. With a bootstrap admin
+  // email configured, only that address is admitted (pages/api/otc/verify.ts).
+  if (!allowOpenRegistration && process.env.B4M_SELF_HOST === 'true' && !configuredBootstrapAdminEmail()) {
     return (await userRepository.count({})) === 0;
   }
 

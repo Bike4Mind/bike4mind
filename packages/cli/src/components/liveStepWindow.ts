@@ -1,4 +1,5 @@
 import type { AgentStep } from '@bike4mind/agents';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 /**
  * Bounds the height of the agent step trace while it is being rendered in
@@ -40,13 +41,21 @@ const TRACE_BOX_CHROME_ROWS = 2;
 export const ACTION_ARG_LIMIT = 100;
 export const OBSERVATION_LIMIT = 200;
 
+/** Raw chars scanned per output char in truncateValue; slack for escape bytes that sanitizing removes. */
+const SANITIZE_WINDOW_FACTOR = 4;
+
 /**
  * Truncates a value to maxLength, converting objects to JSON strings.
  * Appends '...' if truncated.
  */
 export function truncateValue(value: unknown, maxLength: number): string {
-  const str = typeof value === 'string' ? value : JSON.stringify(value);
-  if (str.length <= maxLength) {
+  const raw = typeof value === 'string' ? value : JSON.stringify(value);
+  // Sanitize before measuring so escape bytes neither count toward the limit nor get cut
+  // mid-sequence, but only a bounded prefix: this runs on every live frame, and a large
+  // tool result would otherwise be scanned in full each time.
+  const window = maxLength * SANITIZE_WINDOW_FACTOR;
+  const str = sanitizeTerminalText(raw.length > window ? raw.slice(0, window) : raw);
+  if (str.length <= maxLength && raw.length <= window) {
     return str;
   }
   return str.slice(0, maxLength) + '...';

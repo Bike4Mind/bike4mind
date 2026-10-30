@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import { ZodError } from 'zod';
-import { ForbiddenError, NotFoundError } from '@bike4mind/common';
+import { ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 const {
   getOwnedChannelMock,
@@ -88,7 +88,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 // Records the options each route asks for, so a limit can be asserted by value
 // rather than by "some middleware is present".
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => Object.assign(vi.fn(), { _rateLimit: options }),
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => vi.fn() }));
@@ -96,9 +96,10 @@ vi.mock('@server/middlewares/requireUser', () => ({ requireUser: vi.fn() }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: featureGateMock }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: sendToClientMock }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
-vi.mock('@bike4mind/database', () => ({
-  MAX_PRESENCE_FIELD_LENGTH: 200,
-  MAX_ROSTER_ROWS: 200,
+// Real constants (not re-declared literals) so the route is pinned to the same
+// window the roster sort uses; only the repository is faked.
+vi.mock('@bike4mind/database', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   hearthRepository: {
     store: storeMock,
     getOwnedChannel: getOwnedChannelMock,
@@ -226,6 +227,19 @@ describe('POST /api/hearth/events', () => {
     expect(ensureChannelByNameMock).toHaveBeenCalledWith('u1', 'agents');
     expect(getOwnedChannelMock).not.toHaveBeenCalled();
     expect(hearthLogAppendMock).toHaveBeenCalledWith(expect.objectContaining({ channelId: 'ch-default' }));
+  });
+
+  it('surfaces a channel-cap refusal and appends nothing', async () => {
+    // The repository owns the ceiling; the route only has to let the 409 through
+    // without writing an event for a channel that was never created.
+    ensureChannelByNameMock.mockRejectedValue(
+      new ConflictError('You can have at most 100 Hearth channels', { code: 'channel_limit', limit: 100 })
+    );
+
+    await expect(post()(makeReq({ channelName: 'brand-new', human: { text: 'hi' } }), makeRes())).rejects.toMatchObject(
+      { statusCode: 409 }
+    );
+    expect(hearthLogAppendMock).not.toHaveBeenCalled();
   });
 
   it('channelId keeps its ownership check and is mutually exclusive with channelName', async () => {
@@ -580,8 +594,10 @@ describe('GET /api/hearth/presence', () => {
     await get()(makeReq({}, { channelId: 'ch-1' }), res);
 
     // The roster is capped for cost (the ranking sort cannot be index-served and
-    // rows are never deleted), so the bound has to be visible to the client.
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ maxRows: 200 }));
+    // rows are never deleted), so the bound has to be visible to the client. It
+    // is asserted against the package constant, not the value published here.
+    const { MAX_ROSTER_ROWS } = await vi.importActual<{ MAX_ROSTER_ROWS: number }>('@bike4mind/database');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ maxRows: MAX_ROSTER_ROWS }));
   });
 
   it('declares the read scope list, so a read-only key is admitted', () => {
@@ -603,7 +619,7 @@ describe('GET /api/hearth/presence', () => {
     expect(rateLimitOptions(presenceRouter, 'get')).toEqual({ limit: 120, windowMs: 60000 });
   });
 
-  it('returns the repository order untouched (needs-you-first, not by recency)', async () => {
+  it('returns the repository order untouched (freshness-first, then needs-you-first)', async () => {
     presenceForChannelMock.mockResolvedValue([
       presenceRow('a-blocked', 'awaiting_permission', '2026-07-27T10:00:05Z', { reason: 'permission_prompt' }),
       presenceRow('a-working', 'running', '2026-07-27T10:00:20Z', { tool: 'Bash' }),
@@ -623,7 +639,13 @@ describe('GET /api/hearth/presence', () => {
       reason: 'permission_prompt',
       lastSeen: '2026-07-27T10:00:05.000Z',
     });
-    expect(body.staleAfterMs).toBeGreaterThan(0);
+    // The published hint and the roster sort's window are one value: a drifted
+    // local literal in the route would make the panel's dimming and the
+    // server's ordering disagree near the boundary.
+    const { PRESENCE_STALE_AFTER_MS } = await vi.importActual<{ PRESENCE_STALE_AFTER_MS: number }>(
+      '@bike4mind/database'
+    );
+    expect(body.staleAfterMs).toBe(PRESENCE_STALE_AFTER_MS);
   });
 
   it('requires a channelId', async () => {

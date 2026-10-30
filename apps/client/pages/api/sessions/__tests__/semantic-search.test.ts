@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
+
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const { mockGetEffectiveLLMApiKeys, mockGetSettingsValue, mockGetProviderFromModel, mockGenerateEmbedding } =
   vi.hoisted(() => ({
@@ -39,10 +43,25 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { getSettingsValue: mockGetSettingsValue },
   sessionRepository: { find: vi.fn(async () => []) },
+  organizationRepository: {},
+  usageEventRepository: {},
+  creditTransactionRepository: {},
+  userRepository: {},
+}));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  isCreditsEnforced: async () => false,
+  createRequestCompletionMeter: vi.fn(),
+  reserveCompletionCredits: async () => ({ refund: vi.fn() }),
+  settleCompletion: vi.fn(),
 }));
 vi.mock('@bike4mind/database/content', () => ({ Quest: { find: vi.fn(() => ({ lean: async () => [] })) } }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
+  // Metering is covered in semantic-search.metering.test.ts.
+  recordOperationalUsage: vi.fn(async () => undefined),
+  meterCompletionBackend: (llm: unknown) => llm,
+  creditService: {},
+  organizationService: {},
 }));
 vi.mock('@bike4mind/services/llm/SmallLLMService', () => ({
   // Query expansion is best-effort behind a try/catch; throwing exercises its keyword fallback
@@ -56,7 +75,7 @@ vi.mock('@bike4mind/services/llm/SmallLLMService', () => ({
 vi.mock('@bike4mind/services/llm/reranker', () => ({
   ReRankService: class {},
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn(async () => ({ modelId: 'm', llm: {} })) },
 }));
 

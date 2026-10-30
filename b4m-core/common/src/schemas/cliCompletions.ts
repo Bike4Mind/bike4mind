@@ -54,8 +54,8 @@ export const CompletionCustomToolSchema = z.object({
       .optional()
       .describe(
         'Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. ' +
-          'Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other ' +
-          'model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, ' +
+          'Honoured only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; on every other ' +
+          'model it is ignored and the tool is sent as usual. At least one tool, ' +
           'or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`).'
       ),
     cache_control: z
@@ -81,8 +81,8 @@ export type ToolSearchServerTool = z.infer<typeof ToolSearchServerToolSchema>;
 export const CompletionServerToolSchema = z.object({
   serverTool: ToolSearchServerToolSchema.describe(
     'A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and ' +
-      'only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, ' +
-      'Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
+      'only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; any other model is ' +
+      'refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
   ),
 });
 
@@ -110,6 +110,8 @@ export const COMPLETION_TOOL_ERROR_CODES = [
   'invalid_tool_change',
 ] as const satisfies readonly ApiErrorCode[];
 export type CompletionToolErrorCode = (typeof COMPLETION_TOOL_ERROR_CODES)[number];
+
+export const ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE = 'assistant_prefill_unsupported' as const satisfies ApiErrorCode;
 
 export const TOOL_CHANGE_BLOCK_TYPES = ['tool_addition', 'tool_removal'] as const;
 
@@ -180,7 +182,11 @@ export const CompletionMessageSchema = z.object({
         '`tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ' +
         'ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose ' +
         '`supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with ' +
-        '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed).'
+        '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). ' +
+        'A final non-blank assistant turn is an assistant prefill, except a server-tool continuation ending in ' +
+        '`server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. It is accepted only ' +
+        'when the selected model has `supports_assistant_prefill: true`; otherwise the request returns `400` with ' +
+        '`errorCode: "assistant_prefill_unsupported"` without changing the message.'
     ),
   cache: z.boolean().optional(),
 });
@@ -199,7 +205,7 @@ export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
  */
 export const CompletionRequestSchema = z.object({
   model: z.string().max(256),
-  messages: z.array(CompletionMessageSchema),
+  messages: z.array(CompletionMessageSchema).min(1),
   response_format: ResponseFormatSchema.optional(),
   stream: z.boolean().optional(),
   tools: z.array(CompletionToolSchema).optional(),
@@ -312,9 +318,11 @@ const CompletionContentEventSchema = z.object({
  */
 export const COMPLETION_SSE_ERROR_CODES = [
   ...QUEST_ERROR_CODES,
+  'invalid_request',
   'provider_error',
   'provider_rejected',
   'content_blocked',
+  'output_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number];
 
@@ -324,9 +332,9 @@ export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number]
  * real status instead; see completions.contract.ts.
  *
  * `code` is the machine-readable classifier: a billing code when settlement runs out mid-generation,
- * `provider_rejected` / `provider_error` when the model provider fails, `content_blocked` when the
- * model's safety classifier declined the request. Optional; callers must never match on the prose
- * `message`.
+ * `invalid_request` when the provider rejects caller-controlled input, `provider_rejected` /
+ * `provider_error` when the model provider fails, `content_blocked` when the model's safety classifier
+ * declined the request, `output_budget_exhausted` when a reasoning model spent the caller's whole `max_tokens` thinking. Optional; callers must never match on the prose `message`.
  *
  * The field is `code` rather than the conventions' `errorCode` because this frame shipped that way
  * and is a published wire shape.

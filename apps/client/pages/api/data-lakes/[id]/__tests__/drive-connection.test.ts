@@ -41,7 +41,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
-vi.mock('@server/utils/orgAccess', () => ({
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
   verifyOrgAccess: h.verifyOrgAccess,
   verifyOrgAdminRead: h.verifyOrgAdminRead,
 }));

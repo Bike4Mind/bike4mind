@@ -10,6 +10,7 @@
  * reintroduce both with the rest of the suite green, so they are pinned here.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { resolveGateDisposition } from './agentExecutorUtils/toolPermissions';
 

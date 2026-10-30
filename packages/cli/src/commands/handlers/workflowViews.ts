@@ -14,22 +14,23 @@ import {
   type ReviewGateStore,
 } from '../../tools';
 import type { CommandHandler } from '../types';
+import { sanitizeTerminalText } from '../../utils/sanitizeTerminalText.js';
 
 export function printDecisions(store: DecisionStore): void {
   console.log('\n📋 Decision Log\n');
-  console.log(formatDecisionsOutput(store.decisions));
+  console.log(sanitizeTerminalText(formatDecisionsOutput(store.decisions)));
   console.log('');
 }
 
 export function printBlockers(store: BlockerStore): void {
   console.log('\n🚧 Blockers\n');
-  console.log(formatBlockersOutput(store.blockers));
+  console.log(sanitizeTerminalText(formatBlockersOutput(store.blockers)));
   console.log('');
 }
 
 export function printReviewGates(store: ReviewGateStore): void {
   console.log('\n🛑 Review Gates\n');
-  console.log(formatReviewGatesOutput(store.reviewGates));
+  console.log(sanitizeTerminalText(formatReviewGatesOutput(store.reviewGates)));
   console.log('');
 }
 

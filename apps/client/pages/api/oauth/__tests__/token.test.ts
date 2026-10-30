@@ -48,7 +48,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (opts: NonNullable<typeof h.rateLimitOptions>) => {
     h.rateLimitOptions = opts;
     return () => undefined;
@@ -88,7 +88,9 @@ vi.mock('@server/auth/oauthRefreshToken', () => ({
   mintRefreshFamily: h.mintRefreshFamily,
   refreshFamilyExpiresAt: () => new Date('2030-01-01T00:00:00Z'),
 }));
-vi.mock('@server/auth/assertAccountStateUsable', () => ({ assertAccountStateUsable: h.assertAccountStateUsable }));
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
+  assertAccountStateUsable: h.assertAccountStateUsable,
+}));
 vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: h.issueSessionForRequest }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   ACCESS_TOKEN_TTL_SECONDS: 3600,

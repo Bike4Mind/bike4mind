@@ -51,14 +51,13 @@ Common issues you may encounter when using the CLI sandbox, with symptoms, cause
    /sandbox:violations
    ```
 
-2. If a read path was blocked, add it to `allowedReadPaths` in your config:
+2. For a non-sensitive read path, add it to `allowedReadPaths` in your config. A matching `deniedPaths` entry takes precedence, so an allow entry cannot expose a denied file or directory:
    ```json
    {
      "sandbox": {
        "filesystem": {
          "allowedReadPaths": [
            "$HOME/.gitconfig",
-           "$HOME/.npmrc",
            "$HOME/.your-needed-path"
          ]
        }
@@ -69,6 +68,22 @@ Common issues you may encounter when using the CLI sandbox, with symptoms, cause
 3. If a write path was blocked, remember that writes are restricted to your CWD. Either:
    - Change your working directory to where the file needs to be written
    - Temporarily disable the sandbox for that operation: `/sandbox:disable`
+
+## Private registry authentication fails
+
+**Symptoms:** A package command cannot find registry credentials, returns an authentication error, or reads an empty configuration file.
+
+**Cause:** Credential stores such as `~/.npmrc` and `~/.netrc` are denied by default. On Linux, a denied file appears empty; adding it to `allowedReadPaths` does not override the deny rule.
+
+**Solution:** Run the required authenticated command as a trusted operation outside the sandbox after reviewing it. Avoid copying credentials into the project or removing the default denied paths from shared configuration. Re-enable the sandbox before continuing agent commands.
+
+## Git staging or commits fail
+
+**Symptoms:** Git cannot create a lock file, stage files, or write a commit while the sandbox is enabled.
+
+**Cause:** Your working directory's `.git` metadata is read-only inside the sandbox. Project `.bike4mind` configuration is also read-only, even when general write restrictions are disabled.
+
+**Solution:** Review and run the required Git write as a trusted operation outside the sandbox, then re-enable the sandbox. Read-only Git commands and host-managed checkpoints remain available.
 
 ## Network request blocked
 
@@ -99,11 +114,29 @@ Common issues you may encounter when using the CLI sandbox, with symptoms, cause
 The violation log shows the exact domain that was blocked, including the method (`CONNECT` for HTTPS, `GET`/`POST` for HTTP). Use this to determine the correct domain to trust.
 :::
 
+## Linux: "Sandbox network on Linux requires socat"
+
+**Symptoms:** With network filtering enabled on Linux, every sandboxed command fails with this error.
+
+**Cause:** Sandboxed commands on Linux have no direct network access and reach the proxy through `socat`, which is not installed.
+
+**Solution:** Install `socat` with your package manager (`sudo apt install socat`, `sudo dnf install socat` or `sudo pacman -S socat`), or turn sandbox network filtering off.
+
+If commands instead fail with `sandbox: network relay failed to start`, `socat` was found on your `PATH` but could not run inside the sandbox, usually because it is installed outside the system directories the sandbox mounts (`/usr`, `/bin`, `/lib`, `/sbin`, `/etc`). Install it through your system package manager.
+
+## macOS: a local test server is unreachable inside the sandbox
+
+**Symptoms:** With network filtering enabled on macOS, a sandboxed command that starts a server on a loopback port and then connects to it (for example, tests using `supertest` or `listen(0)`, or a dev server checked with `curl`) fails with `ECONNREFUSED`, `EPERM` or `curl: (7)`. The same command works on Linux.
+
+**Cause:** On macOS the sandbox allows outbound loopback connections only to the network proxy port. Seatbelt cannot distinguish a server the command started itself from other services on your machine, so it blocks both.
+
+**Solution:** Run the command outside the sandbox (`/sandbox:disable`, then `/sandbox:enable` afterwards). Turning network filtering off does not help on macOS, because with the network off the sandbox blocks all IP traffic, loopback included.
+
 ## Proxy won't start
 
 **Symptoms:** `/sandbox:enable` succeeds but reports no proxy. Network filtering not active.
 
-**Cause:** Either `network.enabled` is `false` or a port conflict prevented the proxy from binding.
+**Cause:** Either `network.enabled` is `false` or a port conflict prevented the proxy from binding. On Linux the proxy also needs a unix socket in your temp directory; if it cannot be created there (for example, `$TMPDIR` is not writable or its path is too long for a socket), the proxy does not start.
 
 **Solution:**
 

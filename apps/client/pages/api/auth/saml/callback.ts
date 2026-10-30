@@ -15,6 +15,9 @@ import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
+import { recordSignupNetwork } from '@server/auth/networkMeta';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
+import { Logger } from '@bike4mind/observability';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {
@@ -142,6 +145,9 @@ const handleSamlCallback = async (req: any, res: any) => {
       // client-supplied one: only an active registered client yields a tag.
       if (user.isNewUser) {
         await stampOAuthSourceTag(user.id, clientIdFromAuthorizeRedirect(redirectTo));
+        await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.SAML });
+        // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+        await refreshSignupRiskScore(user.id, Logger.globalInstance);
         const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.SAML });
         await emitSignupFunnelEvents({
           user: { id: user.id, ...signupFunnel },
@@ -179,7 +185,8 @@ const handleSamlCallback = async (req: any, res: any) => {
       // Resume the originally requested path (round-tripped via RelayState);
       // /auth/success sanitizes it before navigating.
       const successQuery = authSuccessRedirectQuery(redirectTo);
-      const redirectUrl = `${baseUrl}/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}`;
+      const signupFragment = user.isNewUser ? '&firstSignupSession=1' : '';
+      const redirectUrl = `${baseUrl}/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
 
       console.log('Redirecting to:', redirectUrl.substring(0, LOG_URL_TRUNCATE_LENGTH) + '...');
       return res.redirect(redirectUrl);

@@ -17,12 +17,12 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { validatePrivateKeyFormat } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { logKeyRotated } from '@server/integrations/github/githubConnectionAuditLog';
 
 const logger = new Logger({ metadata: { component: 'org-github-rotate-key' } });

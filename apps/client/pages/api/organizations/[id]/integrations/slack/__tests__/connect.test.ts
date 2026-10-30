@@ -56,7 +56,7 @@ vi.mock('@bike4mind/slack', () => ({
 // issueStateNonce SETS A COOKIE on the response, so it is a side effect a refused caller must
 // never trigger - not merely a value the handler happens not to use.
 const mockIssueStateNonce = vi.fn();
-vi.mock('@server/auth/oauthFlowCookie', () => ({
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
   issueStateNonce: (...args: unknown[]) => mockIssueStateNonce(...args),
   NONCE_SLOT: { orgSlackConnect: 'org-slack-connect' },
 }));

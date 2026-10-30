@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
+import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, type ModelInfo } from '@bike4mind/common';
+import { buildReActAgentRuntimeConfig, runReasoningShortfall } from './agentExecutor.reActAgentConfig';
 
 describe('buildReActAgentRuntimeConfig', () => {
   it('returns an empty object when no knobs are set (preserves ReActAgent defaults)', () => {
@@ -51,5 +52,40 @@ describe('buildReActAgentRuntimeConfig', () => {
       maxTokens: 4096,
       thinking: { enabled: true, budget_tokens: 12000 },
     });
+  });
+});
+
+describe('runReasoningShortfall', () => {
+  const adaptive = {
+    id: 'adaptive-model',
+    type: 'text',
+    backend: 'anthropic',
+    can_think: true,
+    thinkingStyle: 'adaptive',
+    max_tokens: 128_000,
+  } as ModelInfo;
+
+  it('reports a budget below the reasoning floor on the first invocation', () => {
+    expect(runReasoningShortfall({ maxTokens: 8192 }, adaptive, true)).toEqual({
+      requested: 8192,
+      floor: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+    });
+  });
+
+  // A continuation carries the same budget; counting it again would double the run.
+  it('does not report on a continuation', () => {
+    expect(runReasoningShortfall({ maxTokens: 8192 }, adaptive, false)).toBeUndefined();
+  });
+
+  it('does not report without a model, without a budget, or at the floor', () => {
+    expect(runReasoningShortfall({ maxTokens: 8192 }, undefined, true)).toBeUndefined();
+    expect(runReasoningShortfall({}, adaptive, true)).toBeUndefined();
+    expect(runReasoningShortfall({ maxTokens: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR }, adaptive, true)).toBeUndefined();
+  });
+
+  // The Anthropic adapter raises a thinking run to the floor, so only a disabled toggle leaves it short.
+  it('follows the thinking the agent is built with', () => {
+    expect(runReasoningShortfall({ maxTokens: 8192, thinking: { enabled: true } }, adaptive, true)).toBeUndefined();
+    expect(runReasoningShortfall({ maxTokens: 8192, thinking: { enabled: false } }, adaptive, true)).toBeDefined();
   });
 });

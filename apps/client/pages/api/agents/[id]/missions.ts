@@ -1,15 +1,19 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
-import { agentRepository } from '@bike4mind/database';
+import { agentRepository, userRepository } from '@bike4mind/database';
+import type { IUserDocument } from '@bike4mind/common';
+import { assertOwnerCanFundWake, isInsufficientCredits } from '@server/deepAgent/wakeMetering';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess, type AgentAccess, type AgentAccessShape } from '@server/agents/assertAgentAccess';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel - its subtree pulls the
 // Lambda-runtime import graph, which deadlocks module init under Next dev).
-import { enrollMissionForAgent, listMissionsForAgent } from '@server/deepAgent/missions';
+import { discardEnrolledMission, enrollMissionForAgent, listMissionsForAgent } from '@server/deepAgent/missions';
+import { canCreateMissions } from '@server/deepAgent/missionAccess';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { runMissionFirstWake } from '@server/deepAgent/firstWake';
 
@@ -57,7 +61,9 @@ function agentAccessDenial(
 
 // baseApi's scope gate is per route, so it admits either agents scope and each method asserts its own.
 const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
-  .use(rateLimit({ limit: process.env.NODE_ENV === 'development' ? 30 : 5, windowMs: 60 * 1000 }))
+  .use(
+    rateLimit({ limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 30 : 5), windowMs: 60 * 1000 })
+  )
   .get(async (req: Request, res: Response) => {
     assertAgentsReadScope(req);
     const userId = req.user?.id;
@@ -80,10 +86,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'no authenticated user' });
 
-    const hasAccess =
-      req.user?.isAdmin ||
-      (req.user?.tags ?? []).map(t => t.toLowerCase()).some(t => ['developer', 'dev', 'developers'].includes(t));
-    if (!hasAccess) return res.status(403).json({ error: 'admin/developer access required' });
+    if (!canCreateMissions(req.user!)) return res.status(403).json({ error: 'admin/developer access required' });
 
     const b4mAgentId = String(req.query.id || '');
     if (!b4mAgentId) return res.status(400).json({ error: 'agent id required' });
@@ -101,7 +104,11 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
       return res.status(403).json({ error: "You don't have permission to create missions for this agent" });
     }
 
+    // Refuse before enrolling: a first wake refused for credits would leave an orphan charter behind.
+    const owner = agent!.userId && agent!.userId !== userId ? await userRepository.findById(agent!.userId) : req.user!;
     const logger = new Logger({ metadata: { component: 'agent-missions', b4mAgentId } });
+    if (owner) await assertOwnerCanFundWake(owner as IUserDocument, logger);
+
     const t0 = Date.now();
 
     try {
@@ -125,6 +132,12 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
         modelId: input.modelId,
         enableTools: input.enableTools,
         userId,
+      }).catch(async (error: unknown) => {
+        // The charter exists but the mission never went live (e.g. 422 credits or a refusal).
+        await discardEnrolledMission(missionId).catch((cleanupError: unknown) =>
+          logger.error('create_mission: failed to discard mission after first-wake failure', cleanupError as Error)
+        );
+        throw error;
       });
 
       return res.json({
@@ -147,6 +160,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
       // Backstop for a delete/ownership race between the pre-check and enrollMissionForAgent; also wraps runMissionFirstWake.
       const message = (error as Error).message;
       if (/not your agent|no agent /.test(message)) return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
+      if (isInsufficientCredits(error)) return res.status(422).json({ error: message });
       logger.error('mission create failed', error as Error);
       return res.status(500).json({ error: message });
     }

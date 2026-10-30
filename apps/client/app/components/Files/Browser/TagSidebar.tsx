@@ -24,7 +24,7 @@ import StarOutlineIcon from '@mui/icons-material/StarOutline';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import SwapVertIcon from '@mui/icons-material/SwapVert';
-import { Search } from '@mui/icons-material';
+import Search from '@mui/icons-material/Search';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import { FC, useState, useMemo, useEffect, useRef } from 'react';

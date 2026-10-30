@@ -26,6 +26,16 @@ export interface ResolvedTtsProvider {
   voice: string | undefined;
 }
 
+export async function hasTtsProviderKey(provider: VoiceGenerationVendor, userId: string): Promise<boolean> {
+  return Boolean(
+    await apiKeyService.getEffectiveApiKey(
+      userId,
+      { type: AUDIO_VENDOR_API_KEY_TYPE[provider], nullIfMissing: true },
+      { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
+    )
+  );
+}
+
 // Resolves the per-provider API key and effective voice, centralizing the key
 // lookup + voice-default logic shared by the unified /api/ai/tts route and the
 // legacy per-provider adapters.

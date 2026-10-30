@@ -427,6 +427,17 @@ describe('portable declaration inventory', () => {
       expect.arrayContaining([`Reason required: ${inventory[0].id}`, `AWS signals changed: ${inventory[0].id}`])
     );
   });
+
+  it('rejects an excluded entry with an empty reason', () => {
+    const inventory = discoverParityInventory(sources(queue));
+    const excluded = { ...inventory[0], disposition: 'excluded' as const, issue: 'Bike4Mind/bike4mind#2693' };
+    expect(validateParityPolicy(inventory, [{ ...excluded, reason: '' }], {})).toContain(
+      `Reason required: ${inventory[0].id}`
+    );
+    expect(validateParityPolicy(inventory, [{ ...excluded, reason: 'Hosted-only analytics' }], {})).not.toContain(
+      `Reason required: ${inventory[0].id}`
+    );
+  });
 });
 
 describe('background trigger shapes', () => {
@@ -607,6 +618,22 @@ describe('handler sources', () => {
     );
     expect(inventory[0].handlerSources[0].status).toBe('overlayAbsent');
     expect(validateParityPolicy(inventory, [], {}).filter(error => error.startsWith('Hosted handler'))).toEqual([]);
+  });
+
+  it('skips only the reviewed data-named queue constructors and keeps the literal rule elsewhere', () => {
+    const pairs =
+      'const dlq = new sst.aws.Queue(pair.dlqName, pair.dlqArgs); const queue = new sst.aws.Queue(pair.name, pair.queueArgs);';
+    expect(discoverParityInventory({ 'infra/queues.ts': pairs })).toEqual([]);
+    expect(() => discoverParityInventory({ 'infra/queues.ts': `${pairs} new sst.aws.Queue(other.name, {});` })).toThrow(
+      /literal name required/
+    );
+    expect(() => discoverParityInventory({ 'infra/test.ts': pairs })).toThrow(/literal name required/);
+    expect(() => discoverParityInventory({ 'infra/queues.ts': 'new sst.aws.Queue(pair.dlqName, {});' })).toThrow(
+      /stale DATA_NAMED_QUEUES entry pair\.name/
+    );
+    expect(() => discoverParityInventory({ 'infra/queues.ts': `${pairs} new sst.aws.Queue(pair.name, {});` })).toThrow(
+      /entry pair\.name names 2 queues/
+    );
   });
 
   it('treats only ENOENT as absence when reading repository sources', () => {

@@ -14,7 +14,11 @@ import {
   MAX_INGEST_CANDIDATES,
   MAX_INGEST_FILE_BYTES,
 } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
-import { FOLDER_MIME_TYPE, MAX_LIST_PAGES, isDriveRateLimitError } from './driveClient';
+import {
+  FOLDER_MIME_TYPE,
+  MAX_LIST_PAGES,
+  isDriveRateLimitError,
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 
 const folder = (id: string, name: string) => ({ id, name, mimeType: FOLDER_MIME_TYPE });
 const file = (id: string, name: string, mimeType: string) => ({ id, name, mimeType });

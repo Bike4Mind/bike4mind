@@ -41,7 +41,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     if (!gear) return res.status(404).json({ error: 'Gear not found' });
     if (gear.alreadyRewarded) return res.status(200).json({ key, alreadyClaimed: true });
     if (!gear.unlocked) return res.status(409).json({ error: 'not_unlocked' });
-    if (!gear.rewardEligible) return res.status(409).json({ error: 'reward_pending' });
+    if (!gear.rewardEligible) return res.status(409).json({ error: 'reward_pending', reason: gear.pendingReason });
     if (gear.credits <= 0) return res.status(409).json({ error: 'no_reward' });
 
     const transactionId = gearTxId(String(userId), key);

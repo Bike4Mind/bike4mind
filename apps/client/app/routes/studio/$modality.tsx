@@ -3,10 +3,12 @@ import { useNavigate } from '@tanstack/react-router';
 import PageFrame from '@client/app/components/common/PageFrame';
 import { STUDIO_MODALITIES, isStudioModality, type StudioModality } from '@client/app/components/Studio/studioModality';
 import { STUDIO_MODALITY_DEFINITIONS } from '@client/app/components/Studio/studioModalityRegistry';
+import { useStudioFeature } from '@client/app/components/Studio/useStudioFeature';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 
 const StudioPage = ({ modality }: { modality: StudioModality }) => {
   const navigate = useNavigate();
+  const showImagePreview = useStudioFeature('image');
   const { tabLabel, galleryTitle, testId, Workspace, Gallery } = STUDIO_MODALITY_DEFINITIONS[modality];
   useDocumentTitle(`${tabLabel} Studio`);
 
@@ -32,6 +34,12 @@ const StudioPage = ({ modality }: { modality: StudioModality }) => {
                 {STUDIO_MODALITY_DEFINITIONS[candidate].tabLabel}
               </Tab>
             ))}
+            {/* Admin-only placeholder for the coming Image medium; it has no route yet, so it cannot be picked. */}
+            {showImagePreview && (
+              <Tab value="image" disabled data-testid="studio-tab-image">
+                Image (preview)
+              </Tab>
+            )}
           </TabList>
         </Tabs>
         <Workspace testId={testId} />

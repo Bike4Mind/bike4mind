@@ -33,9 +33,8 @@ const handler = baseApi().get(
     // (enabled:false), not-yet-live and expired modals to any authenticated user. Admins keep
     // the unfiltered list -- the admin tab lists drafts by design.
     // startDate/endDate are usually date-only strings (`YYYY-MM-DD`, from the admin form's
-    // `type="date"` inputs), but the daily What's New generator and its edit form
-    // (whatsNewGeneration.ts, whatsNewModals.ts) write a full ISO timestamp into the same
-    // field. A bare `$lte: today` treats that longer string as greater than the bare date and
+    // `type="date"` inputs), but the admin form (hooks/data/whatsNewModals.ts) writes a
+    // full ISO timestamp into the same field. A bare `$lte: today` treats that longer string as greater than the bare date and
     // hides the modal on its own start day, so the upper bound is padded with the
     // highest-sorting UTF-8 char to stay tolerant of any same-day suffix. endDate's `$gte`
     // side needs no padding: a same-day timestamp already sorts above the bare date.

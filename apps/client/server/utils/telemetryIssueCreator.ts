@@ -10,7 +10,7 @@
  * detection, LLM/rule-based analysis, label management, priority determination.
  */
 
-import { Quest, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
+import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import {
   ContextTelemetry,
   ContextTelemetryAlertsSchema,
@@ -19,6 +19,7 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@server/services/githubService';
+import { cacheTelemetryAnalysisOnQuest } from '@server/utils/telemetryAnalysisCache';
 import {
   generateTelemetryFingerprint,
   generateSemanticTelemetryFingerprint,
@@ -26,7 +27,7 @@ import {
   extractSemanticFingerprintFromBody,
   getSeverityEmoji,
   formatPrimaryAnomaly,
-} from '@server/services/telemetryFingerprint';
+} from '@bike4mind/server-utils/services/telemetryFingerprint';
 import { escapeMarkdown } from '@bike4mind/server-utils/utils/markdownEscape';
 import { checkFingerprintDedup, type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
 import { type Priority, REQUIRED_TELEMETRY_LABELS } from '@bike4mind/server-utils/services/issueLabels';
@@ -67,10 +68,8 @@ export interface CreateTelemetryIssueOptions {
     source: AnalysisSource;
     baselines: HistoricalBaselines | null;
   };
-  /** Quest MongoDB _id for caching analysis (used by manual flow). */
+  /** Quest MongoDB _id for caching analysis (manual flow, and auto flow where the alert's requestId is the quest id). */
   questId?: string;
-  /** Quest requestId for caching analysis (used by auto-create flow). */
-  requestId?: string;
   /** Logger instance. */
   logger: Logger;
 }
@@ -253,7 +252,6 @@ export async function createTelemetryIssue(options: CreateTelemetryIssueOptions)
     llmTimeoutMs = sourcePrefix === 'auto' ? 30000 : 60000,
     skipDedup = false,
     questId,
-    requestId,
     logger,
   } = options;
 
@@ -411,18 +409,13 @@ export async function createTelemetryIssue(options: CreateTelemetryIssueOptions)
   }
 
   // 7. Cache analysis on Quest document
-  const cacheFilter = questId ? { _id: questId } : requestId ? { requestId } : null;
-  if (analysisResult && cacheFilter) {
+  if (analysisResult && questId) {
     try {
-      await Quest.updateOne(cacheFilter, {
-        $set: {
-          'promptMeta.contextTelemetry.cachedAnalysis': {
-            analysis: analysisResult,
-            analysisSource: analysisSourceTag,
-            historicalBaselines: baselines,
-            cachedAt: new Date().toISOString(),
-          },
-        },
+      await cacheTelemetryAnalysisOnQuest(questId, {
+        analysis: analysisResult,
+        analysisSource: analysisSourceTag,
+        historicalBaselines: baselines,
+        cachedAt: new Date().toISOString(),
       });
     } catch (cacheErr) {
       logger.warn('Failed to cache analysis on Quest', {

@@ -2,7 +2,10 @@ import { organizationRepository, userRepository, withTransaction } from '@bike4m
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -32,6 +35,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
 
     const { userId, subscriptionId } = req.query as RequestQuery;
     const { creditsPerCycle } = UpdateCreditsSchema.parse(req.body);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');
@@ -53,13 +57,41 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
       throw new NotFoundError('Subscription not found');
     }
 
+    // details.credits is the signed change in the effective per-cycle rate, derived as the admin
+    // subscriptions listing derives it, so a raise counts toward the grant thresholds.
+    const recordRateChange = (previousCreditsPerCycle: number, organizationId?: string) =>
+      recordAdminActionFromRequest(req, {
+        action: 'user.credits.adjusted',
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+        organizationId,
+        summary: `set subscription credits to ${creditsPerCycle} per billing cycle`,
+        reason,
+        changes: [
+          {
+            field: 'customCreditsPerCycle',
+            before: subscription.customCreditsPerCycle ?? null,
+            after: creditsPerCycle,
+          },
+        ],
+        details: {
+          credits: creditsPerCycle - previousCreditsPerCycle,
+          subscriptionId,
+          previousCreditsPerCycle,
+          creditsPerCycle,
+        },
+      });
+
     // Handle individual (user) subscription
     if (subscription.ownerType === SubscriptionOwnerType.User) {
+      const previousCreditsPerCycle =
+        subscription.customCreditsPerCycle ?? SUBSCRIPTION_PLANS_MAP[subscription.priceId]?.credits ?? 0;
+
       // This is an individual subscription - update customCreditsPerCycle
       await withTransaction(async () => {
         await subscriptionRepository.updateByStripeSubscriptionId(subscriptionId, {
           customCreditsPerCycle: creditsPerCycle,
         });
+        await recordRateChange(previousCreditsPerCycle);
 
         req.logger.info(
           `Admin ${req.user.id} set customCreditsPerCycle to ${creditsPerCycle} for individual subscription ${subscriptionId} (user ${userId})`,
@@ -100,10 +132,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
         throw new NotFoundError('Subscription ID not found');
       }
 
+      const previousCreditsPerCycle =
+        subscription.customCreditsPerCycle ?? subscription.quantity * (await getTeamPlanSettings()).creditsPerSeat;
+
       await withTransaction(async () => {
         await subscriptionRepository.updateByStripeSubscriptionId(subscriptionId, {
           customCreditsPerCycle: creditsPerCycle,
         });
+        await recordRateChange(previousCreditsPerCycle, organization.id);
 
         req.logger.info(
           `Admin ${req.user.id} set customCreditsPerCycle to ${creditsPerCycle} for team subscription ${subscriptionId} (organization ${organization.id})`,

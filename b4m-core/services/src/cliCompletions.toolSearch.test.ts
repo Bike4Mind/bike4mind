@@ -4,6 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * Tool search on executeCompletion: refusals land before any credit is reserved, what reaches the
  * adapter for each backend, and provider blocks reach onChunk untouched.
  */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -51,9 +57,29 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 import { ChatModels, type CompletionTool } from '@bike4mind/common';
 import { executeCompletion } from './cliCompletions';
 
-const DIRECT_MODEL = { id: ChatModels.CLAUDE_5_5_OPUS, backend: 'anthropic', max_tokens: 8192 };
-const BEDROCK_MODEL = { id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: 'bedrock', max_tokens: 8192 };
-const OPENAI_MODEL = { id: ChatModels.GPT5, backend: 'openai', max_tokens: 8192 };
+const priced = { pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } } };
+const DIRECT_MODEL = {
+  id: ChatModels.CLAUDE_5_5_OPUS,
+  type: 'text',
+  backend: 'anthropic',
+  max_tokens: 8192,
+  ...priced,
+};
+const BEDROCK_MODEL = {
+  id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+  type: 'text',
+  backend: 'bedrock',
+  max_tokens: 8192,
+  ...priced,
+};
+const OLD_BEDROCK_MODEL = {
+  id: ChatModels.CLAUDE_4_1_OPUS_BEDROCK,
+  type: 'text',
+  backend: 'bedrock',
+  max_tokens: 8192,
+  ...priced,
+};
+const OPENAI_MODEL = { id: ChatModels.GPT5, type: 'text', backend: 'openai', max_tokens: 8192, ...priced };
 
 const plainTool: CompletionTool = {
   toolSchema: { name: 'get_weather', description: 'Weather', parameters: { type: 'object' } },
@@ -99,9 +125,9 @@ describe('executeCompletion - tool search', () => {
     capturedOptions = undefined;
   });
 
-  it('refuses a server tool on a Bedrock-served model before reserving credits', async () => {
-    availableModels = [BEDROCK_MODEL];
-    const { promise, db } = run(ChatModels.CLAUDE_5_5_OPUS_BEDROCK, [deferredTool, searchTool]);
+  it('refuses a server tool on a Claude model without tool search before reserving credits', async () => {
+    availableModels = [OLD_BEDROCK_MODEL];
+    const { promise, db } = run(ChatModels.CLAUDE_4_1_OPUS_BEDROCK, [deferredTool, searchTool]);
 
     await expect(promise).rejects.toMatchObject({
       statusCode: 400,
@@ -120,7 +146,7 @@ describe('executeCompletion - tool search', () => {
 
   it.each([
     ['a non-Anthropic model', OPENAI_MODEL],
-    ['a Bedrock-served Claude model', BEDROCK_MODEL],
+    ['a Bedrock Claude model without tool search', OLD_BEDROCK_MODEL],
   ])('sends deferred tools as plain tools on %s', async (_label, model) => {
     availableModels = [model];
     await run(model.id, [deferredTool]).promise;
@@ -129,9 +155,12 @@ describe('executeCompletion - tool search', () => {
     expect(capturedOptions).not.toHaveProperty('providerTools');
   });
 
-  it('forwards defer_loading and the server tool on a direct Anthropic model', async () => {
-    availableModels = [DIRECT_MODEL];
-    await run(ChatModels.CLAUDE_5_5_OPUS, [deferredTool, searchTool]).promise;
+  it.each([
+    ['a direct Anthropic model', DIRECT_MODEL],
+    ['a Bedrock-served Claude model', BEDROCK_MODEL],
+  ])('forwards defer_loading and the server tool on %s', async (_label, model) => {
+    availableModels = [model];
+    await run(model.id, [deferredTool, searchTool]).promise;
 
     expect(capturedOptions?.tools[0].toolSchema).toEqual(deferredTool.toolSchema);
     expect(capturedOptions?.providerTools).toEqual([searchTool.serverTool]);

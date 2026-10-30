@@ -8,7 +8,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 vi.mock('@server/middlewares/embedCors', () => ({ embedCors: () => () => {} }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 
@@ -32,6 +32,8 @@ vi.mock('@server/embed/identifiedEmbedUser', async () => {
 });
 
 import handler from '../session';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
 
 const KEY_INFO = {
@@ -44,7 +46,7 @@ const KEY_INFO = {
 };
 const IDENTIFIED_BODY = { client_id: 'client-1', client_secret: 'secret', id_token: 'id-token' };
 
-async function mint(body: unknown, headers: Record<string, string> = {}) {
+async function mintWithHeaders(body: unknown, headers: Record<string, string> = {}) {
   const { req, res } = createMocks({
     method: 'POST',
     body: body as Record<string, unknown>,
@@ -52,8 +54,10 @@ async function mint(body: unknown, headers: Record<string, string> = {}) {
   });
   (req as unknown as { logger: object }).logger = { info: vi.fn(), warn: vi.fn() };
   await (handler as unknown as (q: typeof req, s: typeof res) => Promise<void>)(req, res);
-  return { status: res._getStatusCode(), json: res._getJSONData() };
+  return { status: res._getStatusCode(), json: res._getJSONData(), headers: res._getHeaders() };
 }
+
+const mint = mintWithHeaders;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -87,6 +91,55 @@ describe('POST /api/embed/session', () => {
     expect(mockAuditCreate).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'mint', keyId: 'key-1', actorUserId: 'host-user-1' })
     );
+  });
+
+  it('answers 503 with Retry-After and no driver text when the database is unreachable', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+    const { status, json, headers } = await mintWithHeaders({});
+    expect(status).toBe(503);
+    expect(json.error).toBe('server_error');
+    expect(headers['retry-after']).toBe('5');
+    expect(JSON.stringify(json)).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+  });
+
+  it('answers 500 server_error for an unexpected key-check failure', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(toApiKeyAuthError(new Error('boom')));
+    const { status, json } = await mint({});
+    expect(status).toBe(500);
+    expect(json.error).toBe('server_error');
+  });
+
+  it('answers 401 for an unknown key', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(new UnauthorizedError('Invalid or expired API key'));
+    const { status, json } = await mint({});
+    expect(status).toBe(401);
+    expect(json.error).toBe('unauthorized');
+  });
+
+  it('denies an opaque origin when the key restricts origins', async () => {
+    const { status, json } = await mint({}, { origin: 'null' });
+    expect(status).toBe(403);
+    expect(json.error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('denies an opaque origin when the key has no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
+    const { status, json } = await mint({}, { origin: 'null' });
+    expect(status).toBe(403);
+    expect(json.error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('mints without an Origin header when the key has no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
+    const { status } = await mint({});
+    expect(status).toBe(200);
+  });
+
+  it('still mints for a request that carries no Origin header', async () => {
+    const { status } = await mint({});
+    expect(status).toBe(200);
   });
 
   it('refuses an identified mint from a browser, since it carries a client secret', async () => {

@@ -10,13 +10,18 @@ import { projectService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
+import { ProjectEvents, projectResponseSchema } from '@bike4mind/common';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 
 const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).delete(async (req, res) => {
   const { userId: memberIdToRemove } = req.body;
   const isRemovingMember = !!memberIdToRemove;
   const projectId = req.query.id as string;
+
+  // Read before the leave: its cascade prunes the project's file list.
+  const cleanUpTargets = await projectRevokeCleanupTargets(projectId, memberIdToRemove || req.user.id, req.logger);
 
   const result = await withTransaction(async () => {
     const project = await projectService.leaveProject(
@@ -72,7 +77,10 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).delete(async 
     return project;
   });
 
-  return res.json(result);
+  // After the commit, outside its session (see cleanUpDeletedFileReferences).
+  await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
+
+  return respond(res, projectResponseSchema, result);
 });
 
 export const config = {

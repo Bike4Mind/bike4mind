@@ -1,11 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, ServerAgentDefinition } from '@bike4mind/agents';
-import { CREDITS_PER_USD_COST, getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
+import {
+  CREDITS_PER_USD_COST,
+  ForbiddenError,
+  getTextModelCost,
+  getTurnsCost,
+  type ModelInfo,
+} from '@bike4mind/common';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import {
   ServerSubagentOrchestrator,
+  spentResultOf,
   type ServerSubagentTracker,
   type SubagentHandoffSignal,
   type ChildExecutionStatus,
@@ -184,6 +191,130 @@ describe('ServerSubagentOrchestrator', () => {
           }),
         })
       );
+    });
+  });
+
+  describe('delegateToAgent - model admission', () => {
+    const GATED_ID = 'claude-opus-5';
+
+    it('refuses a built-in agent whose pinned model the user is not admitted to, before any work', async () => {
+      const llm = makeLlm();
+      const tracker = makeTracker();
+      const resolveBackend = vi.fn((modelId: string) => makeLlm(modelId));
+      const assert = vi.fn(async (modelId: string) => {
+        if (modelId === GATED_ID) throw new Error(`Model "${modelId}" is not accessible and no fallback available`);
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm,
+        logger: makeLogger(),
+        parentTools: [],
+        tracker,
+        resolveBackend,
+        modelAdmission: { assert },
+      });
+
+      await expect(
+        orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: GATED_ID }) })
+      ).rejects.toThrow(`Model "${GATED_ID}" is not accessible`);
+
+      expect(assert).toHaveBeenCalledWith(GATED_ID);
+      expect(llm.complete).not.toHaveBeenCalled();
+      expect(tracker.onStart).not.toHaveBeenCalled();
+    });
+
+    describe('free-tier refusal', () => {
+      const PAID_ID = 'claude-opus-5';
+      const FREE_ID = 'claude-haiku-5-5';
+      const PARENT_ID = 'parent-model';
+
+      const assertRefusingPaid = () =>
+        vi.fn(async (modelId: string) => {
+          if (modelId === PAID_ID) {
+            throw new ForbiddenError(`Model "${modelId}" requires a paid plan`, {
+              errorCode: 'model_requires_subscription',
+            });
+          }
+        });
+
+      const makeOrchestrator = (assert: (modelId: string) => Promise<void>, serviceable: string[]) => {
+        const resolveBackend = vi.fn((modelId: string) => (serviceable.includes(modelId) ? makeLlm(modelId) : null));
+        const orchestrator = new ServerSubagentOrchestrator({
+          userId: 'u1',
+          llm: makeLlm(PARENT_ID),
+          logger: makeLogger(),
+          parentTools: [],
+          resolveBackend,
+          modelAdmission: { assert },
+        });
+        return { orchestrator, resolveBackend };
+      };
+
+      beforeEach(() => {
+        vi.spyOn(ReActAgent.prototype, 'run').mockResolvedValue({
+          finalAnswer: 'done',
+          steps: [],
+          completionInfo: {
+            totalTokens: 100,
+            totalInputTokens: 80,
+            totalOutputTokens: 20,
+            totalCredits: 1,
+            iterations: 1,
+            toolCalls: 0,
+            reachedMaxIterations: false,
+          },
+        } satisfies AgentResult);
+      });
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it('runs on an admitted fallback instead of failing when the pinned model needs a paid plan', async () => {
+        const { orchestrator, resolveBackend } = makeOrchestrator(assertRefusingPaid(), [PAID_ID, FREE_ID]);
+
+        const result = await orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef({ model: PAID_ID, fallbackModels: [FREE_ID] }),
+          thoroughness: 'medium',
+        });
+
+        expect(resolveBackend).toHaveBeenCalledWith(FREE_ID);
+        expect(resolveBackend).not.toHaveBeenCalledWith(PAID_ID);
+        expect(result.model).toBe(FREE_ID);
+      });
+
+      it("runs on the parent's model when no fallback is admitted", async () => {
+        const { orchestrator, resolveBackend } = makeOrchestrator(assertRefusingPaid(), [PAID_ID]);
+
+        const result = await orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef({ model: PAID_ID, fallbackModels: [PAID_ID] }),
+          thoroughness: 'medium',
+        });
+
+        expect(resolveBackend).not.toHaveBeenCalled();
+        expect(result.model).toBe(PARENT_ID);
+      });
+
+      it('still rejects when the pinned model is refused for any reason other than the free-tier gate', async () => {
+        const assert = vi.fn(async (modelId: string) => {
+          // A ForbiddenError without the subscription errorCode pins that only that code degrades.
+          if (modelId === PAID_ID) {
+            throw new ForbiddenError(`Model "${modelId}" is not accessible and no fallback available`);
+          }
+        });
+        const { orchestrator } = makeOrchestrator(assert, [PAID_ID, FREE_ID]);
+
+        await expect(
+          orchestrator.delegateToAgent({
+            task: 't',
+            agentDef: makeAgentDef({ model: PAID_ID, fallbackModels: [FREE_ID] }),
+            thoroughness: 'medium',
+          })
+        ).rejects.toThrow(`Model "${PAID_ID}" is not accessible`);
+      });
     });
   });
 
@@ -395,6 +526,8 @@ describe('ServerSubagentOrchestrator', () => {
       });
       expect(result.summary).toContain('Dispatched');
       expect(result.summary).toContain('child-handoff-id');
+      // The handoff Lambda runs the child, so the delegating tool must not bill this placeholder.
+      expect(result.billedByTracker).toBe(true);
     });
 
     it('propagates abort: aborts child and throws when parent signal is aborted', async () => {
@@ -718,14 +851,14 @@ describe('ServerSubagentOrchestrator', () => {
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(MODEL_ID));
     });
 
-    it('does not overwrite totalCredits when the subagent already reported them', async () => {
+    it.each([0, 99])('preserves a previously settled charge of %s', async reportedCredits => {
       stubAgentRun({
         totalTokens: 15_000,
         totalInputTokens: 12_000,
         totalOutputTokens: 3_000,
         totalCacheReadTokens: 40_000,
         totalCacheWriteTokens: 5_000,
-        totalCredits: 99,
+        totalCredits: reportedCredits,
         iterations: 3,
         toolCalls: 2,
         reachedMaxIterations: false,
@@ -745,7 +878,179 @@ describe('ServerSubagentOrchestrator', () => {
         thoroughness: 'medium',
       });
 
-      expect(result.completionInfo.totalCredits).toBe(99);
+      expect(result.completionInfo.totalCredits).toBe(reportedCredits);
+    });
+
+    it('prices the tokens a timed-out run spent, so a timeout is not free', async () => {
+      const abort = Object.assign(new Error('aborted'), { name: 'AbortError' });
+      vi.spyOn(ReActAgent.prototype, 'run').mockRejectedValue(abort);
+      vi.spyOn(ReActAgent.prototype, 'toCheckpoint').mockReturnValue({
+        totalTokens: 15_000,
+        totalInputTokens: 12_000,
+        totalOutputTokens: 3_000,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
+        turnUsage: [],
+        totalCredits: 0,
+      } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: MODEL_ID }),
+        thoroughness: 'medium',
+      });
+
+      expect(result.summary).toContain('Partial results');
+      expect(result.completionInfo.totalCredits).toBeCloseTo(
+        settledAtHalf(getTextModelCost(model, 12_000, 3_000, 0, 0)),
+        10
+      );
+    });
+
+    it('carries the priced tokens a failed run spent on the error, so its payer can be charged', async () => {
+      vi.spyOn(ReActAgent.prototype, 'run').mockRejectedValue(new Error('provider 500'));
+      vi.spyOn(ReActAgent.prototype, 'toCheckpoint').mockReturnValue({
+        totalTokens: 15_000,
+        totalInputTokens: 12_000,
+        totalOutputTokens: 3_000,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
+        turnUsage: [],
+        totalCredits: 0,
+      } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+      });
+
+      const error = await orchestrator
+        .delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: MODEL_ID }), thoroughness: 'medium' })
+        .catch((err: unknown) => err);
+
+      expect((error as Error).message).toBe('provider 500');
+      expect(spentResultOf(error)?.completionInfo.totalCredits).toBeCloseTo(
+        settledAtHalf(getTextModelCost(model, 12_000, 3_000, 0, 0)),
+        10
+      );
+    });
+
+    it('hands the tracker the priced usage a failed run spent, so a tracked run is still billed', async () => {
+      vi.spyOn(ReActAgent.prototype, 'run').mockRejectedValue(new Error('provider 500'));
+      vi.spyOn(ReActAgent.prototype, 'toCheckpoint').mockReturnValue({
+        totalTokens: 15_000,
+        totalInputTokens: 12_000,
+        totalOutputTokens: 3_000,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
+        turnUsage: [],
+        totalCredits: 0,
+      } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
+      const tracker = makeTracker();
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+        tracker,
+      });
+
+      await expect(
+        orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: MODEL_ID }), thoroughness: 'medium' })
+      ).rejects.toThrow('provider 500');
+
+      expect(tracker.onFailure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childExecutionId: 'child-exec-id',
+          isTimeout: false,
+          partialResult: expect.objectContaining({
+            completionInfo: expect.objectContaining({
+              totalCredits: expect.closeTo(settledAtHalf(getTextModelCost(model, 12_000, 3_000, 0, 0)), 10),
+            }),
+          }),
+        })
+      );
+    });
+
+    const ranInfo: AgentResult['completionInfo'] = {
+      totalTokens: 15,
+      totalInputTokens: 10,
+      totalOutputTokens: 5,
+      totalCredits: 7,
+      iterations: 1,
+      toolCalls: 0,
+      reachedMaxIterations: false,
+    };
+
+    // The tracker's onComplete bills a tracked run; the delegating tool bills everything else.
+    it('marks a tracked run as billed by its tracker', async () => {
+      stubAgentRun(ranInfo);
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+        tracker: makeTracker(),
+      });
+
+      const result = await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: MODEL_ID }) });
+
+      expect(result.billedByTracker).toBe(true);
+    });
+
+    it('leaves a run untracked when tracker.onStart fails, so its caller bills it', async () => {
+      stubAgentRun(ranInfo);
+      const tracker = makeTracker({ onStart: vi.fn().mockRejectedValue(new Error('db down')) });
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+        tracker,
+      });
+
+      const result = await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: MODEL_ID }) });
+
+      expect(result.billedByTracker).toBe(false);
+      expect(tracker.onComplete).not.toHaveBeenCalled();
+    });
+
+    it("refuses an in-process delegation the payer's balance cannot start, before any work", async () => {
+      const run = vi.spyOn(ReActAgent.prototype, 'run');
+      const tracker = makeTracker();
+      const checkInsufficientCredits = vi.fn().mockResolvedValue(true);
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+        tracker,
+        checkInsufficientCredits,
+      });
+
+      await expect(
+        orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: MODEL_ID }) })
+      ).rejects.toThrow('Insufficient credits to run subagent');
+
+      expect(checkInsufficientCredits).toHaveBeenCalledWith(MODEL_ID);
+      expect(tracker.onStart).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
     });
   });
 

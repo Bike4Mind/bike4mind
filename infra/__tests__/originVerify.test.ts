@@ -4,6 +4,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { runInNewContext } from 'node:vm';
+import { CLOUDFRONT_VIEWER_JA4_HEADER } from '../../packages/server-utils/src/utils/trustedClientIpHeaders';
 
 // infra/*.ts only loads inside `sst`, so these assertions read the sources as text.
 const read = (rel: string) => readFileSync(join(__dirname, '..', '..', rel), 'utf8');
@@ -14,6 +16,24 @@ const proxy = read('apps/client/proxy.ts');
 const headerName = (src: string) => src.match(/const ORIGIN_VERIFY_HEADER = '([^']+)'/)?.[1];
 
 describe('origin verification wiring', () => {
+  it('removes viewer-supplied JA4 before stamping origin verification', () => {
+    const template = router.match(/const originVerifyInjection = \$interpolate`([\s\S]*?)`;/)?.[1];
+    expect(template).toBeTruthy();
+    const injection = template!
+      .replace('${ORIGIN_VERIFY_HEADER}', 'x-b4m-origin-verify')
+      .replace('${originVerifySecret.result}', 'synthetic-secret')
+      .replace('${CLOUDFRONT_VIEWER_JA4_HEADER}', CLOUDFRONT_VIEWER_JA4_HEADER);
+    const headers = {
+      [CLOUDFRONT_VIEWER_JA4_HEADER]: { value: 't13d0101h2_111111111111_222222222222' },
+      'x-b4m-origin-verify': { value: 'forged-secret' },
+      'user-agent': { value: 'synthetic-client' },
+    };
+    runInNewContext(injection, { event: { request: { headers } } });
+    expect(headers).not.toHaveProperty(CLOUDFRONT_VIEWER_JA4_HEADER);
+    expect(headers['x-b4m-origin-verify'].value).toBe('synthetic-secret');
+    expect(headers['user-agent'].value).toBe('synthetic-client');
+  });
+
   it('uses the same header name in infra/router.ts and apps/client/proxy.ts', () => {
     expect(headerName(router)).toBe('x-b4m-origin-verify');
     expect(headerName(proxy)).toBe(headerName(router));
@@ -24,7 +44,9 @@ describe('origin verification wiring', () => {
     expect(injection).toContain(
       'event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" }'
     );
-    expect(router).toMatch(/viewerRequest: \{\s*injection: \$interpolate`\$\{originVerifyInjection\}/);
+    expect(router).toMatch(
+      /viewerRequest: \{\s*injection: \$interpolate`\$\{usercontentGateInjection\}\$\{originVerifyInjection\}\$\{userFileMarkerInjection\}`/
+    );
   });
 
   it('generates an alphanumeric secret so it is safe inside the injected JS string', () => {

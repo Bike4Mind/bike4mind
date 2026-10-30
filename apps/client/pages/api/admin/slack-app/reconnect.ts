@@ -1,8 +1,10 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
+import { withTransaction } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * POST /api/admin/slack-app/reconnect
@@ -17,11 +19,10 @@ const ReconnectSchema = z.object({
   configToken: z.string().min(1, 'configToken is required'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const result = ReconnectSchema.safeParse(req.body);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');
@@ -65,10 +66,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   }
 
   // Token is valid, store it
-  const updated = await slackDevWorkspaceRepository.storeConfigToken(workspaceId, configToken);
-  if (!updated) {
-    throw new BadRequestError('Workspace not found or was deleted. Please refresh and try again.');
-  }
+  await withTransaction(async () => {
+    const updated = await slackDevWorkspaceRepository.storeConfigToken(workspaceId, configToken);
+    if (!updated) {
+      throw new BadRequestError('Workspace not found or was deleted. Please refresh and try again.');
+    }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'integration.slack_app.reconnected',
+      target: { kind: 'settings', id: workspaceId, displayName: workspace.name || workspace.slackAppId },
+      summary: `reconnected slack app ${workspace.slackAppId}`,
+      details: { appId: workspace.slackAppId },
+    });
+  });
 
   req.logger.info('✨ [Admin] Stored config token for workspace', {
     workspaceId,

@@ -1,16 +1,17 @@
 import { IUserDocument, IUserRepository } from '@bike4mind/common';
-import {
-  generateTOTPSetup,
-  generateBackupCodes,
-  hashBackupCode,
-  userEligibleForMFA,
-} from './utils';
+import { generateTOTPSetup, generateBackupCodes, hashBackupCode, userEligibleForMFA } from './utils';
 import { claimTOTPCode, MfaAttemptRejectedError, withReservedMfaAttempt, type MfaAttemptRepository } from './attempt';
 
 export interface SetupMFARequest {
   user: IUserDocument;
   appName?: string;
 }
+
+/**
+ * How long an unconfirmed TOTP secret is re-served by setupMFA. Bounded so a secret handed to a
+ * briefly hijacked session cannot become the factor the real user enrolls days later.
+ */
+export const PENDING_SECRET_REUSE_MS = 60 * 60 * 1000;
 
 export interface SetupMFAResponse {
   secret: string;
@@ -36,29 +37,41 @@ export async function setupMFA(
     throw new Error('MFA is already enabled for this user.');
   }
 
-  // Clear any previous incomplete setup
-  if (user.mfa && user.mfa.totpEnabled === false) {
-    user.mfa = null;
-  }
+  // A repeat call (reload, second tab, step-up retry) re-serves a recent unconfirmed secret AND its
+  // backup codes, so the QR code scanned and the codes saved from the first call both stay valid.
+  // Needs the user loaded via findByIdWithMfaSecrets. Rows missing either value get a fresh pair.
+  const pending = user.mfa && user.mfa.totpEnabled === false ? user.mfa : null;
+  const pendingCodes = pending?.pendingBackupCodes?.split(',').filter(Boolean) ?? [];
+  const reused =
+    pending?.totpSecret &&
+    pendingCodes.length > 0 &&
+    Date.now() - new Date(pending.setupAt).getTime() < PENDING_SECRET_REUSE_MS
+      ? { secret: pending.totpSecret, backupCodes: pendingCodes, setupAt: pending.setupAt }
+      : null;
 
   const email = user.email || '';
-  const setup = await generateTOTPSetup(email, appName);
-  const backupCodes = generateBackupCodes();
+  const setup = await generateTOTPSetup(email, appName, reused?.secret);
+  const backupCodes = reused?.backupCodes ?? generateBackupCodes();
   const hashedBackupCodes = backupCodes.map(hashBackupCode);
 
-  // Store hashed codes; return plaintext codes to the caller for one-time display.
+  // The step counter is a global clock, not tied to this secret: clear it so a code from a NEW
+  // secret is not refused as a replay. Kept on reuse, where clearing it would let a code already
+  // claimed by a concurrent verify be accepted again.
+  const stepReset = reused ? {} : { totpLastStep: null };
+
+  // Store hashed codes for verification; the plaintext copy lives only until enable clears it.
   const updatedUser = await userRepository.update({
     id: user.id,
     mfa: {
       totpSecret: setup.secret,
       totpEnabled: false,
       backupCodes: hashedBackupCodes,
-      setupAt: new Date(),
+      pendingBackupCodes: backupCodes.join(','),
+      // Kept on reuse so repeat calls cannot stretch the reuse window indefinitely.
+      setupAt: reused ? reused.setupAt : new Date(),
       lastUsedAt: undefined,
     },
-    // The step counter is a global clock, not tied to this secret: clear it so a code from the
-    // NEW secret is not refused as a replay of one claimed before re-enrollment.
-    totpLastStep: null,
+    ...stepReset,
     updatedAt: new Date(),
   });
 
@@ -70,7 +83,7 @@ export async function setupMFA(
     secret: setup.secret,
     qrCodeUrl: setup.qrCodeUrl,
     manualEntryKey: setup.manualEntryKey,
-    backupCodes, // plaintext — shown once at setup; not stored
+    backupCodes, // plaintext; re-served by a repeat call until enable
   };
 }
 

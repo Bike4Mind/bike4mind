@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   fabFileCreate: vi.fn(),
@@ -98,7 +98,11 @@ describe('POST /api/files/createFabFileURL', () => {
   });
 });
 
+afterEach(() => vi.unstubAllEnvs());
+
 it('returns a browser URL without modifying the privately cached imported row', async () => {
+  // A browser URL distinct from the cached private one is only minted on split-endpoint deploys.
+  vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://public.test');
   const saved = {
     ...PERSISTED,
     moderationStatus: 'clean',

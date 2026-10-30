@@ -472,6 +472,47 @@ describe('AnthropicBackend tool search (non-streaming)', () => {
       { provider: 'anthropic', block: searchResult },
     ]);
   });
+
+  it.each([
+    [
+      'a tool search turn',
+      [{ type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: searchInput }, searchResult],
+    ],
+    ['intro text', [{ type: 'text', text: 'Let me check.' }]],
+  ])('emits a reported tool call in exactly one tool_use frame after %s', async (_label, before) => {
+    const { backend } = buildBackend([
+      {
+        content: [
+          ...before,
+          { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Oslo' } },
+          { type: 'tool_use', id: 'toolu_2', name: 'get_time', input: { city: 'Oslo' } },
+        ],
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    ]);
+    const frames: Array<{ type: string; tools?: string[] }> = [];
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'weather?' }],
+      {
+        stream: false,
+        executeTools: false,
+        tools: [tool('get_weather', { defer_loading: true }), tool('get_time')],
+        providerTools: [searchTool],
+      },
+      async (text, info) => {
+        const event = buildCompletionStreamEvent(text, info);
+        frames.push({
+          type: event.type,
+          ...('tools' in event && event.tools ? { tools: event.tools.map(t => t.id!) } : {}),
+        });
+      }
+    );
+
+    expect(frames.filter(f => f.type === 'tool_use')).toEqual([{ type: 'tool_use', tools: ['toolu_1', 'toolu_2'] }]);
+    expect(frames[frames.length - 1].type).toBe('tool_use');
+  });
 });
 
 describe.each(THINKING_MODES)(

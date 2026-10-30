@@ -29,7 +29,16 @@ import type { Logger } from '@bike4mind/observability';
  * `getAccessibleDataLakeAccess`), so the catch is load-bearing: an unhandled throw would fail the
  * whole run rather than degrading to ownership-only.
  */
-export function createAttachmentLakeAccess(user: IUserDocument, logger: Logger): () => Promise<AttachmentLakeAccess> {
+export function createAttachmentLakeAccess(
+  user: IUserDocument,
+  logger: Logger,
+  /**
+   * Also report a view the resolver narrowed without throwing (`lakeViewComplete: false`) as
+   * `resolutionFailed`. For a caller that treats "no lake reaches the file" as proof, e.g. before
+   * removing a reference the user may still read.
+   */
+  opts: { requireCompleteView?: boolean } = {}
+): () => Promise<AttachmentLakeAccess> {
   let memo: Promise<AttachmentLakeAccess> | undefined;
 
   return () =>
@@ -40,6 +49,7 @@ export function createAttachmentLakeAccess(user: IUserDocument, logger: Logger):
           staticRegistryBypass: false,
           includeDraftLakes: true,
         });
+        if (opts.requireCompleteView && scope.lakeViewComplete === false) return { resolutionFailed: true };
         const lakeMemberships = dataLakeService.lakeMembershipsFrom(scope.lakes);
         dataLakeService.warnIfManyLakeMemberships(lakeMemberships, logger, 'attachment-resolution:agent');
         return {

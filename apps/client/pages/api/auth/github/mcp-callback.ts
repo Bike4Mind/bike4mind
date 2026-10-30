@@ -1,3 +1,4 @@
+import { Types } from 'mongoose';
 import { baseApi } from '@server/middlewares/baseApi';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -5,11 +6,11 @@ import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { McpServerName } from '@bike4mind/common';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
-import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, clearStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-import { encryptEnvVariables } from '@server/security/tokenEncryption';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
+import { encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 function getJwtSecret(): string {
@@ -248,7 +249,12 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     // Prepare environment variables for MCP server
     const plaintextEnvVariables = [{ key: 'GITHUB_ACCESS_TOKEN', value: access_token }];
-    const encryptedEnvVariables = encryptEnvVariables(plaintextEnvVariables);
+    const recordId = recentConnection?.id ?? new Types.ObjectId().toHexString();
+    const encryptedEnvVariables = encryptEnvVariables(plaintextEnvVariables, {
+      userId,
+      name: McpServerName.Github,
+      id: recordId,
+    });
 
     // Store or update MCP server configuration (reuse recentConnection from idempotency check)
     // Initially save with empty tools array - we'll discover tools dynamically next
@@ -312,6 +318,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       });
     } else {
       githubServer = await mcpServerRepository.create({
+        ...{ _id: recordId },
         userId,
         name: McpServerName.Github,
         enabled: true,

@@ -1,5 +1,19 @@
 # @bike4mind/observability
 
+## 1.0.1
+
+### Patch Changes
+
+- [#5883](https://github.com/Bike4Mind/bike4mind/pull/5883) [`7461ef5`](https://github.com/Bike4Mind/bike4mind/commit/7461ef5ebac9784370371b9602af454912cb327f) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - log error.cause and retry Gemini fetch failures
+
+- [#5955](https://github.com/Bike4Mind/bike4mind/pull/5955) [`a295054`](https://github.com/Bike4Mind/bike4mind/commit/a2950546d13fbf978e70ee33156e6094db9aabcd) Thanks [@ken-b4m](https://github.com/ken-b4m)! - clear open Dependabot alerts with in-major overrides and bumps
+
+## 1.0.0
+
+### Major Changes
+
+- [#5257](https://github.com/Bike4Mind/bike4mind/pull/5257) [`068b941`](https://github.com/Bike4Mind/bike4mind/commit/068b941bead19a117b6902b57d9f9a121ed4ad90) Thanks [@onoya](https://github.com/onoya)! - protect stored credentials and private data
+
 ## 0.2.3
 
 ### Patch Changes

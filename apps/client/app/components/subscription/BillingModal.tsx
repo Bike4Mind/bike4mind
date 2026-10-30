@@ -11,10 +11,15 @@ import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings'
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import type { BillingView } from '@client/app/utils/billingDeepLink';
-import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@client/lib/subscriptions/types';
+import {
+  isDelinquentSubscriptionStatus,
+  pickDisplayedSubscription,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { CreditsSection } from './CreditsSection';
+import CreditsExplanation from './CreditsExplanation';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';
+import { NoCardUnlockCard } from './NoCardUnlockCard';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
@@ -354,6 +359,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
               )}
             </Box>
           </Box>
+          {open && <CreditsExplanation />}
           {(noCredits || isLowCredits) && (
             <Box
               role="status"
@@ -416,13 +422,14 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
         >
           {open &&
             (ready ? (
-              !plansOffered ? (
-                creditsSection
-              ) : plansFirst ? (
-                [plansSection, creditsSection]
-              ) : (
-                [creditsSection, plansSection]
-              )
+              <>
+                {!plansOffered
+                  ? creditsSection
+                  : plansFirst
+                    ? [plansSection, creditsSection]
+                    : [creditsSection, plansSection]}
+                <NoCardUnlockCard />
+              </>
             ) : (
               <Box aria-busy="true" sx={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 <PlansSectionSkeleton />

@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels, type ModelInfo } from '@bike4mind/common';
 import { OpenAIImageCostCalculator } from '../llm/imageCostCalculator/OpenAIImageCostCalculator';
-import { computeImageUsdCostPerImage, estimateImageCredits, UnsupportedImageModelError } from './index';
+import {
+  computeImageUsdCostPerImage,
+  estimateImageCredits,
+  estimateImageToolCredits,
+  UnsupportedImageModelError,
+} from './index';
 
 describe('computeImageUsdCostPerImage', () => {
   it('returns 0 for a self-hosted local-image model (no provider spend)', () => {
@@ -28,6 +33,20 @@ describe('computeImageUsdCostPerImage', () => {
   // the moment the billed model became the model that actually renders.
   it('prices FLUX_PRO_FILL, the only BFL edit model, instead of throwing', () => {
     expect(computeImageUsdCostPerImage(ImageModels.FLUX_PRO_FILL, { model: ImageModels.FLUX_PRO_FILL })).toBe(0.05);
+  });
+
+  // BFL's published first-megapixel rates (https://bfl.ai/pricing). The preview endpoints
+  // have no published rate and are billed at the sibling they pin, by product decision.
+  it.each([
+    [ImageModels.FLUX_2_MAX, 0.07],
+    [ImageModels.FLUX_2_PRO, 0.03],
+    [ImageModels.FLUX_2_PRO_PREVIEW, 0.03],
+    [ImageModels.FLUX_2_FLEX, 0.05],
+    [ImageModels.FLUX_2_KLEIN_9B, 0.015],
+    [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, 0.015],
+    [ImageModels.FLUX_2_KLEIN_4B, 0.014],
+  ])('prices %s at %s USD per image', (model, usd) => {
+    expect(computeImageUsdCostPerImage(model, { model })).toBe(usd);
   });
 
   // #2899: this is the single seam both charging (validateUserCredits) and the client-side cost
@@ -80,5 +99,69 @@ describe('estimateImageCredits input images', () => {
     expect(estimateImageCredits(flux, 2, { model: flux.id, inputImageCount: 4 } as never)).toEqual(
       estimateImageCredits(flux, 2, { model: flux.id })
     );
+  });
+});
+
+describe('estimateImageToolCredits', () => {
+  const models = [
+    { id: ImageModels.GPT_IMAGE_2 },
+    { id: ImageModels.GPT_IMAGE_1 },
+    { id: ImageModels.FLUX_PRO_1_1 },
+  ] as ModelInfo[];
+  const gpt2 = models[0];
+
+  it('prices one image at the saved quality and size', () => {
+    const result = estimateImageToolCredits(models, {
+      model: ImageModels.GPT_IMAGE_2,
+      quality: 'high',
+      size: '1536x1024',
+    });
+    expect(result).toEqual({
+      model: ImageModels.GPT_IMAGE_2,
+      credits: estimateImageCredits(gpt2, 1, { model: gpt2.id, quality: 'high', size: '1536x1024' }).requiredCredits,
+    });
+  });
+
+  it('ignores a saved n so the figure stays per image', () => {
+    expect(estimateImageToolCredits(models, { model: ImageModels.GPT_IMAGE_2, quality: 'low', n: 4 })).toEqual(
+      estimateImageToolCredits(models, { model: ImageModels.GPT_IMAGE_2, quality: 'low' })
+    );
+  });
+
+  // Settlement runs the tool's args through resolveImageArgs, which upgrades gpt-image-1 and pins
+  // an omitted GPT quality; the preview must price what that charges, not the raw selection.
+  it('prices gpt-image-1 as the gpt-image-2 it is upgraded to', () => {
+    expect(estimateImageToolCredits(models, { model: ImageModels.GPT_IMAGE_1, quality: 'high' })).toEqual(
+      estimateImageToolCredits(models, { model: ImageModels.GPT_IMAGE_2, quality: 'high' })
+    );
+  });
+
+  it('prices an omitted GPT quality at the pinned tier', () => {
+    expect(estimateImageToolCredits(models, { model: ImageModels.GPT_IMAGE_2 })).toEqual(
+      estimateImageToolCredits(models, { model: ImageModels.GPT_IMAGE_2, quality: 'medium' })
+    );
+  });
+
+  it('defaults to gpt-image-2 when nothing is saved', () => {
+    expect(estimateImageToolCredits(models, undefined)?.model).toBe(ImageModels.GPT_IMAGE_2);
+  });
+
+  it('prices a flat-rate model', () => {
+    expect(estimateImageToolCredits(models, { model: ImageModels.FLUX_PRO_1_1 })?.credits).toBeGreaterThan(0);
+  });
+
+  // usdToCredits floors at 1 credit, but settlement charges a free model nothing.
+  it('prices a free local-image model at 0 credits', () => {
+    const local = [{ id: 'local-image/sd_xl' }] as ModelInfo[];
+    expect(estimateImageToolCredits(local, { model: 'local-image/sd_xl' as never })).toEqual({
+      model: 'local-image/sd_xl',
+      credits: 0,
+    });
+  });
+
+  it('returns null for a model missing from the list or with no price', () => {
+    expect(estimateImageToolCredits(models, { model: ImageModels.GPT_IMAGE_1_5 })).toBeNull();
+    const unpriced = [{ id: 'not-an-image-model' }] as ModelInfo[];
+    expect(estimateImageToolCredits(unpriced, { model: 'not-an-image-model' as never })).toBeNull();
   });
 });

@@ -1,6 +1,13 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
-import { ISkill, ISkillDocument, ISkillMethods, ISkillRepository } from '@bike4mind/common';
-import BaseRepository from '@bike4mind/db-core';
+import {
+  ConcurrencyConflictError,
+  ISkill,
+  ISkillDocument,
+  ISkillMethods,
+  ISkillRepository,
+  RepositoryUpdateOptions,
+} from '@bike4mind/common';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ShareableDocumentSchema, ShareableDocumentRepository } from '../content/SharableDocumentModel';
 
@@ -25,6 +32,34 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
     super(skillModel);
     this.skillModel = skillModel;
     this.shareable = extensions.shareable;
+  }
+
+  async updateIfNonGlobal(
+    data: Partial<ISkillDocument>,
+    options?: RepositoryUpdateOptions<ISkillDocument>
+  ): Promise<ISkillDocument | null> {
+    if (!data.id) {
+      throw new Error('id is required');
+    }
+    const { id, ...updateData } = data;
+    const idFilter = { _id: convertId(id) };
+    // Bump `__v` (with no `__v` precondition, so ordinary edits never conflict): a guarded writer that
+    // read the skill while it was global must not land on top of content written here unscanned.
+    const updated = await this._plainUpdate(
+      { ...idFilter, isGlobalRead: { $ne: true }, isGlobalWrite: { $ne: true } },
+      updateData as Record<string, unknown>,
+      options,
+      { $inc: { __v: 1 } }
+    );
+    if (updated) return updated;
+    // A miss on a row that still exists means it went global after the caller read it.
+    const existsQuery = this.skillModel.exists(idFilter);
+    if (options?.includeDeleted) existsQuery.setOptions({ includeDeleted: true });
+    if (this._txn) existsQuery.session(this._txn);
+    if (await existsQuery) {
+      throw new ConcurrencyConflictError(this.skillModel.modelName, { filter: idFilter, reason: 'became_global' });
+    }
+    return null;
   }
 
   async searchAccessible(
@@ -90,7 +125,7 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
   // behavior identical (only `find`/`findOne` get the plugin's pre-hook).
 
   async listForUser(userId: string): Promise<ISkill[]> {
-    const results = await this.skillModel.find({ userId, deletedAt: null }).sort({ name: 1 });
+    const results = await this.skillModel.find({ userId, deletedAt: null }).select('-files').sort({ name: 1 });
     return results.map(doc => doc.toJSON());
   }
 
@@ -123,6 +158,7 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
   async listInvocableForUser(userId: string, limit: number): Promise<ISkill[]> {
     const results = await this.skillModel
       .find({ userId, deletedAt: null, disableModelInvocation: { $ne: true } })
+      .select('-files')
       .sort({ updatedAt: -1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());
@@ -135,11 +171,13 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
    */
   async findByNamesForUser(userId: string, names: string[]): Promise<ISkill[]> {
     if (names.length === 0) return [];
-    const results = await this.skillModel.find({
-      userId,
-      name: { $in: names },
-      deletedAt: null,
-    });
+    const results = await this.skillModel
+      .find({
+        userId,
+        name: { $in: names },
+        deletedAt: null,
+      })
+      .select('-files');
     return results.map(doc => doc.toJSON());
   }
 
@@ -170,6 +208,7 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
         deletedAt: null,
         disableModelInvocation: { $ne: true },
       })
+      .select('-files')
       .sort({ updatedAt: -1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());
@@ -213,11 +252,13 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
    */
   async findAccessibleByNamesForUser(userId: string, names: string[]): Promise<ISkill[]> {
     if (names.length === 0) return [];
-    const matches = await this.skillModel.find({
-      name: { $in: names },
-      deletedAt: null,
-      $or: this.accessibleOr(userId),
-    });
+    const matches = await this.skillModel
+      .find({
+        name: { $in: names },
+        deletedAt: null,
+        $or: this.accessibleOr(userId),
+      })
+      .select('-files');
 
     // Collapse cross-scope collisions to the most-specific grant per name.
     // Value type is inferred from `matches` (hydrated docs) so `.toJSON()` stays
@@ -240,7 +281,15 @@ export const SkillSchema = new Schema<ISkill, ISkillModel, ISkillMethods>(
     body: { type: String, required: true, maxlength: 50_000 },
     argumentHint: { type: String, maxlength: 200 },
     allowedTools: { type: [String] },
+    claudeCodeAllowedTools: { type: [String], default: undefined },
     disableModelInvocation: { type: Boolean, default: false },
+    // Bounds live in checkSkillFiles (@bike4mind/common utils/skillFiles.ts), applied by every writer.
+    files: {
+      type: [
+        new Schema({ path: { type: String, required: true }, content: { type: String, default: '' } }, { _id: false }),
+      ],
+      default: undefined,
+    },
 
     // Scope discriminator. Exactly one of userId / organizationId / isSystem
     // must be set - enforced by the pre-save validator below. Mirrors AgentModel.

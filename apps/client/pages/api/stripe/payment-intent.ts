@@ -1,7 +1,7 @@
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { stripe } from '@server/integrations/stripe/stripe';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
 import { Request } from 'express';
 import Stripe from 'stripe';

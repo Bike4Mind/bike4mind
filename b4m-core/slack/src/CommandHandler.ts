@@ -414,6 +414,7 @@ export class CommandHandler {
             'notebook_new',
             'notebook_status',
             'image_generation',
+            'video_generation',
             ...additionalTools,
           ],
           enableSlackTools: true,

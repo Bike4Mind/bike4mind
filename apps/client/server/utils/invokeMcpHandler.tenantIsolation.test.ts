@@ -22,7 +22,7 @@ vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
   isMcpServerAvailable: vi.fn().mockResolvedValue({ available: true, reason: null }),
 }));
 
-vi.mock('@server/utils/mcpCall', () => ({
+vi.mock('@bike4mind/server-utils/utils/mcpCall', () => ({
   handler: mockLocalMcpHandler,
 }));
 
@@ -50,7 +50,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerTransition: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: { create: vi.fn() },
 }));
 

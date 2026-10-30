@@ -3,7 +3,13 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
+import { createModalVideoSchema } from '@bike4mind/common';
+import { modalAuditTitle } from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
+import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
+
+const ModalVideoSchema = createModalVideoSchema({ extraOrigins: deploymentMediaOrigins() });
 
 const ModalImageSchema = z.object({
   url: z.url(),
@@ -17,6 +23,7 @@ const CreateModalRequestSchema = z.object({
   textMessage: z.string().nullable(),
   imageUrl: z.string().nullable(),
   images: z.array(ModalImageSchema).optional(),
+  video: ModalVideoSchema.nullable().optional(),
   isBanner: z.boolean().prefault(false),
   description: z.string().nullable(),
   tags: z.array(z.string()).nullable(),
@@ -63,6 +70,11 @@ const handler = baseApi().post(
     const newModal = new ModalModel(newModalData);
 
     await newModal.save();
+    await recordModalChanges(
+      req,
+      [{ kind: 'created', id: String(newModal._id), title: modalAuditTitle(newModal) }],
+      'admin-modals'
+    );
     return res.status(201).send(newModal);
   })
 );

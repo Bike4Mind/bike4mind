@@ -307,3 +307,58 @@ wiring when that model exists.
   `NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS`. No schedule or production query is executed by running
   tests. The trailing-90-day external signup count flags the 300- and 1,000-signup measurement
   thresholds, independently of the chosen baseline window.
+
+## Signup cohort sweep
+
+`report:signup-cohorts` is a read-only operator report of candidate signup groups. It reads stored
+email domains, local-part shapes, signup times and signup ASN/datacenter metadata, optionally adds
+precomputed domain facts, and writes a CSV. It performs no live DNS/RDAP lookups, database writes
+or account actions. A shared signal is a review candidate, not evidence that an account is abusive.
+
+Run inside an SST shell, keeping the CSV in private storage because it contains user ids and domains:
+
+```sh
+pnpm exec sst shell --stage staging \
+  pnpm --filter @bike4mind/scripts report:signup-cohorts \
+  --out signup-cohorts.csv \
+  --since 2026-10-01T00:00:00Z --until 2026-10-26T00:00:00Z --max-users 2000
+```
+
+Use explicit UTC timestamps for the `[since, until)` signup window. Omitted date limits are
+unbounded. `--max-users` reads only the earliest signups in the window (by `createdAt`, then id) and warns
+when the cap is hit; it does not produce a random or complete sample of each domain. The example is a bounded staging run, not production tuning.
+All tuning defaults are placeholders: set thresholds and shared-provider exclusions deliberately
+before interpreting a report. `--help` lists every option. Without `--facts` or `--shapes`, only
+stored signup ASN and time-window keys can link domains.
+
+Optional `--facts domain-facts.json` accepts this shape; every fact field is optional:
+
+```json
+{
+  "example.com": {
+    "mxHosts": ["mx.example.com"],
+    "nameservers": ["ns.example.com"],
+    "registrar": "Example Registrar",
+    "registeredAt": "2026-10-01T00:00:00Z"
+  }
+}
+```
+
+Fact keys and `--mailbox-domains` entries normalize to registrable domains. Use `--ignore-hosts`
+for shared MX/NS host suffixes and `--shapes alpha+digits,hex` (or `--shapes any`) to enable local-part
+shape signals. `--max-domains-per-key` caps ASN/time keys; `--max-domains-per-infra-key` separately
+caps MX, nameserver, registration and shape keys. Keys exceeding their cap appear as `common_key`
+rows and do not link domains.
+
+The CSV has one `member` row per grouped user, including edges and reasons. A `too_broad` status
+means the connected cohort exceeds `--max-cohort-domains`; inspect its edges rather than treating
+it as one actionable group. Missing facts, widespread capped keys, excluded mailbox providers or
+insufficient shared key kinds can produce no candidate cohorts. Check the `common_key` rows and
+chosen options before interpreting an empty report as absence of related signups. Invalid inputs
+or database failures exit unsuccessfully and log `[signup-cohort-sweep] failed`.
+
+## Curated model list (Desktop)
+
+`curated:keygen`, `curated:sign`, `curated:publish` and `curated:check-build` manage the signed list in `catalog/model-hub/curated-v2.json` (see each script's header for usage). `curated:publish` trusts the keyring on the canonical repo's `main`, while Desktop trusts the keyring shipped in its own build, so a new key must ship in a Desktop release before lists signed only by it reach users.
+
+If the live list no longer verifies (corrupt bytes, or its key was dropped from `keys.json`), `curated:publish` refuses everything except a recovery-signed list: co-sign the replacement with the recovery key and give it a sequence above the one the live `latest.json.sig` names, which the script prints as a warning otherwise.

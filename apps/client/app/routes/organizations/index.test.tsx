@@ -65,6 +65,24 @@ describe('Teams list for an appointed manager', () => {
     expect(mocks.openCreateTeamModal).toHaveBeenCalledTimes(1);
   });
 
+  it('offers a public administration preview without a Team or an available subscription', () => {
+    mocks.teamPlanAvailable = false;
+    mocks.memberOrganizations = [];
+    render(
+      <CssVarsProvider theme={theme}>
+        <OrganizationListPage />
+      </CssVarsProvider>
+    );
+
+    const preview = screen.getByTestId('organizations-admin-preview-link');
+    expect(preview.tagName).toBe('A');
+    expect(preview.getAttribute('href')).toBe('https://docs.bike4mind.com/features/team-admin-preview');
+    expect(preview.textContent).toBe('Preview Team administration');
+    expect(screen.getByText('organization.no_organizations')).toBeTruthy();
+    expect(screen.getByTestId('organizations-create-team-btn').hasAttribute('disabled')).toBe(true);
+    expect(mocks.openCreateTeamModal).not.toHaveBeenCalled();
+  });
+
   it('keeps Create Team visible but disabled when enableTeamPlan is off', () => {
     mocks.teamPlanAvailable = false;
     render(

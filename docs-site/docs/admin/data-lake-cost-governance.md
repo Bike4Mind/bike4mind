@@ -64,7 +64,7 @@ measure without being asked and without spending anything extra:
   `[embedding-limits] ... ceiling CHANGED` warning naming the old figure and the new one.
 
 Every line names the provider account it describes. That matters because a user can store their own
-provider key under **Profile -> Settings -> API Keys**, and their embedding calls then report their
+provider key under **Profile menu -> More -> API Keys**, and their embedding calls then report their
 own organization's ceiling rather than the platform account's. Check which account a line names
 before reconciling a platform lever against its figure.
 

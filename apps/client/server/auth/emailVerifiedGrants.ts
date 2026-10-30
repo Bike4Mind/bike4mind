@@ -1,13 +1,17 @@
+import { signupProtection } from '@server/auth/signupProtection';
 import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
   userRepository,
 } from '@bike4mind/database';
+import type { INetworkMeta } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { applySignupDomainGrant, type SignupDomainGrantResult } from '@server/entitlements/signupDomainGrant';
 import type { SeatCeilingRaiseTrigger } from '@server/organizations/notifySeatCeilingRaised';
+import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 
 /**
  * The grants an EXISTING account earns the moment its email is proven. Every path that flips
@@ -48,7 +52,10 @@ export type EmailVerifiedGrantsResult = PendingFreeCreditReleaseResult & {
  */
 export async function isEligibleForFreeCredits(email: string, logger: Logger): Promise<boolean> {
   try {
-    return !(await userService.shouldBlockDisposableEmail(email, { adminSettings: adminSettingsRepository }));
+    return !(await userService.shouldBlockDisposableEmail(email, {
+      adminSettings: adminSettingsRepository,
+      signupProtection,
+    }));
   } catch (error) {
     logger.error('Free-credit eligibility check failed; withholding the grant', error);
     return false;
@@ -57,12 +64,15 @@ export async function isEligibleForFreeCredits(email: string, logger: Logger): P
 
 /**
  * Release a PENDING_FREE_CREDITS_TAG grant and persist the tag removal. No-op for an untagged user.
- * On failure the tag stays for the backfillPendingFreeCredits script.
+ * On failure the tag stays for the backfillPendingFreeCredits script. `signupNetwork` is the
+ * request's network when the account is being created now; otherwise its recorded signupMeta is used.
  */
 export async function releaseVerifiedPendingFreeCredits(
   user: PendingFreeCreditUser,
   reason: string,
-  logger: Logger
+  logger: Logger,
+  signupNetwork?: INetworkMeta,
+  options: { bypassBudget?: boolean } = {}
 ): Promise<PendingFreeCreditReleaseResult> {
   let release: Awaited<ReturnType<typeof userService.releasePendingFreeCredits>>;
   try {
@@ -74,9 +84,15 @@ export async function releaseVerifiedPendingFreeCredits(
           creditTransactions: creditTransactionRepository,
           creditLots: creditLotRepository,
           users: userRepository,
+          signupProtection,
         },
         reason,
         logger,
+        collectRiskSignals: createSignupGrantRiskCollector(signupNetwork),
+        bypassBudget: options.bypassBudget,
+        emitRiskBand: async band => {
+          logger.info(`signup-grant-assessed-${band}`);
+        },
       }
     );
   } catch (error) {
@@ -88,21 +104,22 @@ export async function releaseVerifiedPendingFreeCredits(
 
   const granted = { creditsGranted: release.creditsGranted, currentCredits: release.currentCredits };
   try {
-    await userRepository.update({ id: user.id, ...release.patch });
+    const updated = await userRepository.clearPendingFreeCreditGrant(user.id);
+    if (!updated) throw new Error('User no longer available after pending credit release');
+    logger.info(`Released ${release.creditsGranted} pending free credits to user ${user.id} (${reason})`);
+    return { ...granted, tags: updated.tags ?? [] };
   } catch (error) {
     // The credits landed under an idempotent transactionId, so the backfill script can safely
     // re-run the release to clear the tag.
     logger.error(`Released pending free credits for user ${user.id} but the tag removal failed`, error);
     return { ...granted, tags: null };
   }
-  logger.info(`Released ${release.creditsGranted} pending free credits to user ${user.id} (${reason})`);
-  return { ...granted, tags: release.patch.tags ?? null };
 }
 
 /**
  * The deferred flat grant, then the verified domain's signup grant (credits, partner org, tags,
- * entitlements). Order matters: the release $sets the whole tags array from the caller's snapshot,
- * so the partner-tag $addToSet must run after it or the release would erase those tags.
+ * entitlements). Partner tags are applied after the flat release so callers can merge tagsApplied
+ * into the returned tag snapshot.
  */
 export async function applyEmailVerifiedGrants(params: {
   user: PendingFreeCreditUser;
@@ -127,6 +144,7 @@ export async function applyEmailVerifiedGrants(params: {
     // Documented never to throw; guarded for the same reason as the release above.
     logger.error(`Domain signup grant (${trigger}) failed for user ${user.id}`, error);
   }
+  await refreshSignupRiskScore(user.id, logger);
   return {
     creditsGranted: release.creditsGranted + domainGrant.creditsGranted,
     currentCredits: domainGrant.currentCredits ?? release.currentCredits,

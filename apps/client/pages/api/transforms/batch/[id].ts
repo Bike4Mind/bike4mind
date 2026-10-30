@@ -1,8 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { transformBatchRepository } from '@bike4mind/database';
-import { NotFoundError } from '@bike4mind/utils';
-import { AnthropicBatchService } from '@bike4mind/llm-adapters';
+import { transformBatchRepository, usageEventRepository } from '@bike4mind/database';
+import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
+import type { ModelInfo } from '@bike4mind/common';
+import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
+import { anthropicBatchCost } from '@server/billing/anthropicBatchPricing';
+import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
+import { settleHeldCredits } from '@server/billing/reserveRequestCredits';
 
 /**
  * GET /api/transforms/batch/:id - poll a submitted batch (id = Anthropic batch id).
@@ -28,13 +32,17 @@ const handler = baseApi().get(async (req, res) => {
   // Short-circuit: once completed, results are cached on the row - return them
   // without re-streaming the (potentially large) JSONL from Anthropic on every
   // poll. The consumer typically polls completed once, but this also makes the
-  // poll idempotent + cheap if it retries.
-  if (batch.status === 'completed') {
+  // poll idempotent + cheap if it retries. An empty array is a stored zero-result batch; only an
+  // absent field means the results were never written.
+  // Durable pending holds can safely retry settlement after a poll dies: their receipt prevents
+  // duplicate charges. Legacy holds have no such receipt and remain first-claim-only.
+  const canRetrySettlement = Boolean(batch.creditHold?.pendingHoldId);
+  if (batch.status === 'completed' && Array.isArray(batch.results) && !canRetrySettlement) {
     return res.json({
       batch_id: anthropicBatchId,
       status: 'completed',
       counts: { succeeded: batch.succeededCount, errored: batch.erroredCount },
-      results: batch.results ?? [],
+      results: batch.results,
     });
   }
 
@@ -68,13 +76,115 @@ const handler = baseApi().get(async (req, res) => {
     error: r.error,
   }));
 
-  await transformBatchRepository.update({
-    id: batch.id,
-    status: 'completed',
-    succeededCount: status.counts.succeeded,
-    erroredCount: status.counts.errored + status.counts.canceled + status.counts.expired,
-    results,
-  });
+  // Best-effort: results over Mongo's 16MB document cap must not fail the poll; a completed row
+  // without stored results re-streams them from Anthropic on the next poll.
+  const saveResults = () =>
+    transformBatchRepository.saveResults(batch.id, results).catch(error => {
+      req.logger.error(`[transforms/batch] Failed to persist results for batch ${anthropicBatchId}`, error);
+    });
+
+  // Legacy holds cannot safely retry, but modern pending holds settle idempotently below.
+  if (batch.status === 'completed' && !canRetrySettlement) {
+    await saveResults();
+    return res.json({ batch_id: anthropicBatchId, status: 'completed', counts: status.counts, results });
+  }
+
+  const succeededResults = (status.results ?? []).filter(result => result.status === 'done');
+  if (batch.creditHold && succeededResults.length !== status.counts.succeeded) {
+    throw new Error(`[transforms/batch] Incomplete succeeded results for batch ${anthropicBatchId}`);
+  }
+
+  // Load prices before claiming completion so a catalog outage leaves new work unclaimed.
+  const mappings = new Map(batch.customIdMap.map(mapping => [mapping.customId, mapping]));
+  const needsCatalog =
+    Boolean(batch.creditHold) &&
+    succeededResults.some(result => !batch.billingModels?.[mappings.get(result.customId)?.model ?? '']);
+  const catalog = needsCatalog ? await getAvailableModels({ anthropic: apiKey }) : [];
+  const billedModels = new Map<string, ModelInfo>();
+  if (batch.creditHold) {
+    for (const result of succeededResults) {
+      const modelId = mappings.get(result.customId)?.model;
+      const modelInfo = batch.billingModels?.[modelId ?? ''] ?? catalog.find(model => model.id === modelId);
+      if (!result.tokenUsage || !modelInfo || isUnpricedTextModel({ ...modelInfo, type: 'text' })) {
+        throw new Error(
+          `[transforms/batch] Cannot price succeeded item ${result.customId} in batch ${anthropicBatchId}`
+        );
+      }
+      billedModels.set(result.customId, modelInfo);
+    }
+  }
+  // The first poll claims completion; later polls resume any durable unsettled hold. Concurrent
+  // retries are safe because settlement's pending-hold transaction moves the balance only once.
+  const claimed =
+    batch.status === 'completed'
+      ? batch
+      : await transformBatchRepository.claimCompletion(batch.id, {
+          succeededCount: status.counts.succeeded,
+          erroredCount: status.counts.errored + status.counts.canceled + status.counts.expired,
+        });
+  if (claimed?.creditHold) {
+    // Failed items are free. Each successful item uses the same batch/cache rates as its hold.
+    let usd = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    const models = new Set<string>();
+    for (const r of status.results ?? []) {
+      const modelInfo = billedModels.get(r.customId);
+      if (r.status !== 'done' || !r.tokenUsage || !modelInfo) continue;
+      const u = r.tokenUsage;
+      usd += anthropicBatchCost(modelInfo, u);
+      inputTokens += u.inputTokens;
+      outputTokens += u.outputTokens;
+      cacheReadTokens += u.cacheReadInputTokens ?? 0;
+      cacheWriteTokens += u.cacheCreationInputTokens ?? 0;
+      models.add(modelInfo.id);
+    }
+    const model = [...models].join(',') || 'unknown';
+    const creditsCharged = await settleHeldCredits(
+      claimed.creditHold,
+      usdToCreditsStochastic(usd),
+      {
+        type: 'completion_api_usage',
+        sessionId: anthropicBatchId,
+        model,
+        apiKeyId: claimed.apiKeyId,
+        source: claimed.usageSource,
+        inputTokens,
+        outputTokens,
+      },
+      { featureLabel: 'batch transforms', logger: req.logger, throwOnUnconfirmed: true }
+    );
+    // Stamped even when the sweep already refunded the hold (charged 0): either way it is resolved.
+    // Only the caller that clears the durable hold emits analytics; a concurrent receipt replay
+    // must not count the same batch twice.
+    const stamped = await transformBatchRepository.markCreditSettled(batch.id);
+    if (stamped !== false) {
+      await usageEventRepository
+        .record({
+          requestId: anthropicBatchId,
+          userId: claimed.ownerUserId,
+          ownerId: claimed.creditHold.ownerId,
+          ownerType: claimed.creditHold.ownerType,
+          feature: 'completion_api',
+          provider: 'anthropic',
+          model,
+          inputTokens,
+          outputTokens,
+          cachedInputTokens: cacheReadTokens,
+          cacheWriteTokens,
+          settledBasis: 'local',
+          costUsd: usd,
+          creditsCharged,
+          status: 'ok',
+          source: claimed.usageSource,
+          apiKeyId: claimed.apiKeyId,
+        })
+        .catch(err => req.logger.warn('[transforms/batch] usage event failed', err));
+    }
+  }
+  if (claimed) await saveResults();
 
   return res.json({
     batch_id: anthropicBatchId,

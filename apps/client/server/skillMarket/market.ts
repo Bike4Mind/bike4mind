@@ -2,11 +2,12 @@ import { timingSafeEqual } from 'crypto';
 import mongoose from 'mongoose';
 import { adminSettingsRepository, inboxRepository, SkillListing, SkillListingVersion } from '@bike4mind/database';
 import type { RequestHandler } from 'express';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { organizationRepository } from '@bike4mind/database/infra';
 import {
   BadRequestError,
   InboxType,
+  compareSkillFilePaths,
   SKILL_LISTING_MAX_TAGS as MAX_TAGS,
   SKILL_LISTING_TAG_PATTERN as TAG_PATTERN,
   type ISkill,
@@ -180,10 +181,16 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
   body: skill.body,
   ...(skill.argumentHint ? { argumentHint: skill.argumentHint } : {}),
   ...(skill.allowedTools?.length ? { allowedTools: [...skill.allowedTools] } : {}),
+  ...(skill.claudeCodeAllowedTools?.length ? { claudeCodeAllowedTools: [...skill.claudeCodeAllowedTools] } : {}),
   disableModelInvocation: Boolean(skill.disableModelInvocation),
+  ...(skill.files?.length
+    ? {
+        files: [...skill.files].sort(compareSkillFilePaths).map(({ path, content }) => ({ path, content })),
+      }
+    : {}),
 });
 
-export { skillContentHash } from './contentHash';
+export { skillContentHash } from '@bike4mind/server-utils/skillMarket/contentHash';
 
 export { TAG_PATTERN, MAX_TAGS };
 
@@ -308,6 +315,9 @@ export const submitRateLimits = () => [
     bucket: 'skill-market-submit-daily',
   }),
 ];
+
+/** Imports per user, shared by the SPA import route and its v1 twin so they draw on one allowance. */
+export const importRateLimit = () => rateLimit({ limit: 60, windowMs: HOUR_MS, bucket: 'skill-market-import' });
 
 /**
  * Applies `submitRateLimits` from inside a handler, for a route that scans only on some requests (a

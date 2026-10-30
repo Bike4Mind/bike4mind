@@ -9,6 +9,8 @@ import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 // b4m-core/services/src/llm/toolAvailability.test.ts already covers.
 const resolveToolAvailabilityMock = vi.fn();
 const buildSharedToolsSpy = vi.hoisted(() => vi.fn());
+const getUserEntitlements = vi.hoisted(() => vi.fn(async (_user: unknown) => ['plan:paid']));
+vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
 
 vi.mock('sst', () => ({
   Resource: { ImageProcessor: { name: 'image-processor' }, SECRET_ENCRYPTION_KEY: { value: 'test-secret' } },
@@ -25,6 +27,7 @@ vi.mock('@bike4mind/services/llm', async importOriginal => {
   };
 });
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   userRepository: {
     findById: vi.fn().mockResolvedValue({ _id: 'owner-1', id: 'owner-1' }),
     incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
@@ -32,6 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   // Lakes disabled, so the save tool answers right after its adapter gate without writing.
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
   apiKeyRepository: {},
+  cacheRepository: {},
   dataLakeRepository: {
     findByDatalakeTags: vi.fn().mockResolvedValue([]),
     findBySlug: vi.fn(),
@@ -80,6 +84,7 @@ const materialize = () => createDeepAgentToolMaterializer({ llm: fakeLlm, model:
 
 describe('createDeepAgentToolMaterializer', () => {
   beforeEach(() => {
+    getUserEntitlements.mockClear();
     resolveToolAvailabilityMock.mockReset();
     resolveToolAvailabilityMock.mockResolvedValue({});
   });
@@ -89,6 +94,18 @@ describe('createDeepAgentToolMaterializer', () => {
     // api-key table, storage, or buildSharedTools.
     await expect(materialize()([], 'owner-1')).resolves.toEqual([]);
     expect(resolveToolAvailabilityMock).not.toHaveBeenCalled();
+  });
+
+  it('resolves current owner entitlements lazily without precomputed keys', async () => {
+    await materialize()(['dice_roll'], 'owner-1');
+    const toolDeps = buildSharedToolsSpy.mock.calls[0][0] as {
+      getEntitlements: () => Promise<string[]>;
+      entitlementKeys?: string[];
+    };
+    expect(toolDeps.entitlementKeys).toBeUndefined();
+    expect(getUserEntitlements).not.toHaveBeenCalled();
+    await expect(toolDeps.getEntitlements()).resolves.toEqual(['plan:paid']);
+    expect(getUserEntitlements).toHaveBeenCalledExactlyOnceWith({ _id: 'owner-1', id: 'owner-1' });
   });
 
   it('resolves availability for the OWNER, fail-closed', async () => {

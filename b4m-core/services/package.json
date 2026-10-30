@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "20.0.0",
+  "version": "22.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -68,6 +68,16 @@
       "require": {
         "types": "./dist/apiKeyService/index.d.cts",
         "default": "./dist/apiKeyService/index.cjs"
+      }
+    },
+    "./billing/completionMeter": {
+      "import": {
+        "types": "./dist/billing/completionMeter.d.mts",
+        "default": "./dist/billing/completionMeter.mjs"
+      },
+      "require": {
+        "types": "./dist/billing/completionMeter.d.cts",
+        "default": "./dist/billing/completionMeter.cjs"
       }
     },
     "./creditService": {
@@ -248,6 +258,26 @@
       "require": {
         "types": "./dist/llm/intentClassifier.d.cts",
         "default": "./dist/llm/intentClassifier.cjs"
+      }
+    },
+    "./userService/accountState": {
+      "import": {
+        "types": "./dist/userService/accountState.d.mts",
+        "default": "./dist/userService/accountState.mjs"
+      },
+      "require": {
+        "types": "./dist/userService/accountState.d.cts",
+        "default": "./dist/userService/accountState.cjs"
+      }
+    },
+    "./llm/modelAdmission": {
+      "import": {
+        "types": "./dist/llm/modelAdmission.d.mts",
+        "default": "./dist/llm/modelAdmission.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/modelAdmission.d.cts",
+        "default": "./dist/llm/modelAdmission.cjs"
       }
     },
     "./llm/refineText": {
@@ -471,13 +501,13 @@
     "@types/mime-types": "^3.0.1",
     "@types/turndown": "^5.0.6",
     "@types/yauzl": "^3.4.0",
-    "@vitest/coverage-v8": "^4.1.11",
-    "@vitest/ui": "^4.1.11",
-    "mailparser": "^3.9.38",
+    "@vitest/coverage-v8": "^4.1.12",
+    "@vitest/ui": "^4.1.12",
+    "mailparser": "^3.12.4",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "optionalDependencies": {
     "@vscode/ripgrep": "^1.18.0"

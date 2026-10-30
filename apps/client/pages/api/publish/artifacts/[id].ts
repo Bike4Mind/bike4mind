@@ -17,6 +17,7 @@ import {
   validateEmbedOrigins,
 } from '@server/services/publish';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+import { deletePublishThumbnails } from '@bike4mind/server-utils/utils/publishThumbnails';
 
 /**
  * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
@@ -110,8 +111,10 @@ const handler = baseApi()
     const publicId = String(req.query.id);
     // Exclude the share-token capability: this GET is reachable by ANY viewer of a public
     // artifact, and .lean() bypasses the schema's toJSON strip - so project it out here.
+    // The thumbnail record goes too: thumbnails reach only the owner, and only as the signed
+    // link on GET /api/publish/artifacts?mine=true, never as a stored key on a manager/admin read.
     const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-      .select('-shareTokens.token')
+      .select('-shareTokens.token -thumbnail')
       .lean<(Record<string, unknown> & { ownerId: string; visibility: string }) | null>();
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
@@ -299,6 +302,8 @@ const handler = baseApi()
     // Defense in depth: the hash is select:false, but this doc was loaded in this
     // request's write path - never echo it.
     if (json.accessGate && 'passphraseHash' in json.accessGate) delete json.accessGate.passphraseHash;
+    // Same rule as the GET: the stored thumbnail record never leaves the server.
+    delete json.thumbnail;
     return res.status(200).json({ artifact: json });
   })
   .delete(async (req, res) => {
@@ -316,6 +321,8 @@ const handler = baseApi()
     if (wasPublic) {
       void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
     }
+    // softDelete dropped the owner-only thumbnail record; drop its objects too. Never throws.
+    await deletePublishThumbnails([publicId], req.logger);
     return res.status(200).json({ ok: true });
   });
 

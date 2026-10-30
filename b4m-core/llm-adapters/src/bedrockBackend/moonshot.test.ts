@@ -53,7 +53,9 @@ describe('MoonshotBedrockBackend payload', () => {
       { role: 'user', content: '' } as IMessage,
       { role: 'user', content: 'real' } as IMessage,
     ];
-    const body = JSON.parse(backend.getPayload(ChatModels.KIMI_K2_5_BEDROCK, withEmpty, {}).body);
+    const body = JSON.parse(
+      backend.getPayload(ChatModels.KIMI_K2_5_BEDROCK, withEmpty, { omitIdentityReminder: true }).body
+    );
     expect(body.messages).toEqual([{ role: 'user', content: 'real' }]);
   });
 });

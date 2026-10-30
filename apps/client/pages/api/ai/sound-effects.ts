@@ -1,3 +1,5 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { DEFAULT_SOUND_MODEL_ID } from '@bike4mind/common';
 import { randomUUID } from 'crypto';
 import {
   isSupportedElevenLabsFormat,
@@ -7,13 +9,14 @@ import {
   SoundGenerationVendor,
   usdToCreditsStochastic,
 } from '@bike4mind/common';
-import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
-import { apiKeyService, estimateSoundCredits } from '@bike4mind/services';
+import { adminSettingsRepository, apiKeyRepository, cacheRepository, usageEventRepository } from '@bike4mind/database';
+import { apiKeyService, estimateSoundCredits, ProviderBusyError, runElevenLabsWithCapacity } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/audioVendorApiKeyType';
@@ -47,6 +50,8 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
 
+  await (await createModelAdmission(req.user!)).assert(DEFAULT_SOUND_MODEL_ID);
+
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
     { type: AUDIO_VENDOR_API_KEY_TYPE[provider] },
@@ -61,7 +66,10 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     return res.status(503).json({ error: `No ${provider} API key configured` });
   }
 
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
   // Cost is deterministic from the request (duration-driven), so the same
@@ -119,14 +127,34 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   let audio: Buffer;
   let contentType: string;
   try {
-    const soundService = aiSoundService(provider, apiKey, req.logger);
-    ({ audio, contentType } = await soundService.generate(text, { durationSeconds, promptInfluence, format }));
+    ({ audio, contentType } = await runElevenLabsWithCapacity(
+      {
+        operation: 'sound',
+        apiKey,
+        db: { adminSettings: adminSettingsRepository, caches: cacheRepository },
+        logger: req.logger,
+      },
+      ({ timeoutMs }) =>
+        aiSoundService(provider, apiKey, req.logger, { timeoutMs }).generate(text, {
+          durationSeconds,
+          promptInfluence,
+          format,
+        })
+    ));
   } catch (error) {
+    // Log before refunding, so a refund that throws cannot swallow the original failure.
+    if (error instanceof ProviderBusyError) {
+      req.logger.warn('Sound-effects generation deferred: provider at capacity', { provider, reason: error.reason });
+      // Refund the reserved credits - a failed generation incurs no provider cost.
+      await reservation.refund();
+      // Only a 429'd attempt reached the provider; a request that never got a slot made no call to record.
+      if (error.reason === 'upstream_rate_limited') recordUsage('error', 0, 0);
+      throw providerBusyHttpError(error);
+    }
     req.logger.error('Sound-effects generation failed', {
       provider,
       error: error instanceof Error ? error.message : 'Unknown error',
     });
-    // Refund the reserved credits - a failed generation incurs no provider cost.
     await reservation.refund();
     recordUsage('error', 0, 0);
     return res.status(502).json({ error: 'Sound generation failed' });
@@ -158,6 +186,13 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
               prompt: text,
               ...(durationSeconds !== undefined && { durationSeconds }),
               ...(promptInfluence !== undefined && { promptInfluence }),
+              request: {
+                provider,
+                text,
+                ...(durationSeconds !== undefined && { durationSeconds }),
+                ...(promptInfluence !== undefined && { promptInfluence }),
+                ...(format !== undefined && { format }),
+              },
             },
           },
           req.logger

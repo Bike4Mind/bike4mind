@@ -5,7 +5,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { MCPClient } from '@bike4mind/mcp';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { decryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
@@ -25,7 +25,7 @@ const handler = baseApi().post(async (req, res) => {
 
   try {
     const invoked = await invokeMcpHandler<MCPClient['tools']>({
-      envVariables: decryptEnvVariables(server.envVariables),
+      envVariables: decryptEnvVariables(server.envVariables, server),
       name: server.name,
       action: 'getTools',
       userId: req.user.id,

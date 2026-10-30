@@ -1,4 +1,5 @@
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { isResponseTooLargeError } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 /**
  * Read a fetch Response body into a Buffer, aborting as soon as `maxBytes` is exceeded.
@@ -17,7 +18,10 @@ export async function streamWithSizeLimit(response: Response, maxBytes: number):
   let received = 0;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await reader.read().catch((e: unknown) => {
+        // safeFetch's own body cap can trip first when the caller passes the same maxBodyBytes.
+        throw isResponseTooLargeError(e) ? new BadRequestError('Image too large') : e;
+      });
       if (done) break;
       received += value.byteLength;
       if (received > maxBytes) {

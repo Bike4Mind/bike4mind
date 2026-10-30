@@ -26,6 +26,9 @@ const UNSNIFFABLE_BYTES = Buffer.from('just some plain text, not a real file');
 // when the OOXML marker entries sit past the sniffed window.
 const ZIP_SIGNATURE = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(60)]);
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+// An OLE compound file header - the container a legacy .xls (and .doc/.ppt) is stored in.
+const CFB_SIGNATURE = Buffer.concat([Buffer.from('d0cf11e0a1b11ae1', 'hex'), Buffer.alloc(504)]);
+const XLS_MIME = 'application/vnd.ms-excel';
 
 function deps(overrides: Partial<Parameters<typeof moderateUploadedFile>[0]> = {}) {
   return {
@@ -65,6 +68,14 @@ describe('moderateUploadedFile', () => {
     expect(d.downloadBytes).not.toHaveBeenCalled();
   });
 
+  it('resolves an empty (0-byte) non-image upload clean on the declared mimeType', async () => {
+    const d = deps({ mimeType: 'text/x-python', downloadPartialBytes: vi.fn(async () => Buffer.alloc(0)) });
+    const result = await moderateUploadedFile(d);
+    expect(result).toEqual({ moderationStatus: 'clean', correctedMimeType: undefined });
+    expect(d.downloadBytes).not.toHaveBeenCalled();
+    expect(d.moderateImageOrThrow).not.toHaveBeenCalled();
+  });
+
   it('keeps a declared OOXML mimeType when a partial read only sniffs the generic zip container', async () => {
     // xlsx/docx/pptx are ZIP containers; a partial sniff sees `application/zip`. That generic
     // type must NOT clobber the declared OOXML subtype (else viewers / AI-editing break).
@@ -81,6 +92,19 @@ describe('moderateUploadedFile', () => {
     const result = await moderateUploadedFile(d);
     expect(result.correctedMimeType).toBe('application/zip');
     expect(d.downloadBytes).not.toHaveBeenCalled(); // zip is non-image, so no scan
+  });
+
+  it('keeps a declared legacy .xls mimeType when the bytes sniff as the generic CFB container', async () => {
+    const d = deps({ mimeType: XLS_MIME, downloadPartialBytes: vi.fn(async () => CFB_SIGNATURE) });
+    const result = await moderateUploadedFile(d);
+    expect(result).toEqual({ moderationStatus: 'clean', correctedMimeType: undefined });
+    expect(d.downloadBytes).not.toHaveBeenCalled();
+  });
+
+  it('still corrects to application/x-cfb for any other declared type that sniffs as CFB', async () => {
+    const d = deps({ mimeType: 'application/pdf', downloadPartialBytes: vi.fn(async () => CFB_SIGNATURE) });
+    const result = await moderateUploadedFile(d);
+    expect(result.correctedMimeType).toBe('application/x-cfb');
   });
 
   it('returns clean when an image scans clean', async () => {

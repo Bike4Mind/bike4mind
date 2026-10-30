@@ -43,11 +43,13 @@ Type `@agent help` in any channel to see all available commands and agents.
 
 ### Step 1: Link Your Slack Account
 
-1. Go to **Profile → Integrations** in Bike4Mind
-2. Find **Slack Integration**
-3. Copy your Slack Member ID:
-   - In Slack: Click your profile → **Profile** → **More (...)** → **Copy member ID**
-4. Paste into Bike4Mind and click **Save**
+1. Go to **Profile > Integrations** in Bike4Mind.
+2. Find **Slack Integration** and click **Connect with Slack**.
+3. Select your workspace and approve the connection in Slack.
+
+If you linked Slack before this release, reconnect with Slack before using agents or notifications. Bike4Mind now verifies which Slack workspace your link belongs to, and links made earlier do not carry that verification. If the connect button is unavailable, ask an administrator to configure Slack OAuth.
+
+When you ask to share a curated file, review the file and destination in the preview. Only you can click **Confirm** to publish its download link in that conversation. Click **Cancel** to discard it.
 
 ### Step 2: Start Using Agents
 

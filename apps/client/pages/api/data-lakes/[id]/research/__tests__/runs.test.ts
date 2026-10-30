@@ -10,7 +10,10 @@ const h = vi.hoisted(() => ({
   listByLake: vi.fn(),
   queueResearchRun: vi.fn(),
   queueUrl: undefined as string | undefined,
+  admit: vi.fn(),
 }));
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.admit }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -49,7 +52,7 @@ vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
+vi.mock('@bike4mind/server-utils/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
 vi.mock('sst', () => ({
   Resource: {
     get dataLakeResearchQueue() {
@@ -112,6 +115,17 @@ describe('GET /api/data-lakes/[id]/research/runs', () => {
 });
 
 describe('POST /api/data-lakes/[id]/research/runs', () => {
+  it('refuses an over-quota request before persisting or queueing a run', async () => {
+    const error = new Error('token quota exceeded');
+    h.admit.mockRejectedValueOnce(error);
+    const request = req('POST', { id: 'my-lake' }, { configId: 'config-1' });
+
+    await expect(call(request, makeRes().res)).rejects.toBe(error);
+    expect(h.admit).toHaveBeenCalledWith(request, { holdSlot: false });
+    expect(h.startResearchRun).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+    expect(h.queueResearchRun).not.toHaveBeenCalled();
+  });
   it('queues a run and answers 202 with the queued row', async () => {
     const { res, json } = makeRes();
 

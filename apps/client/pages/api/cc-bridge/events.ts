@@ -2,7 +2,7 @@ import { activeCodeAgentRepository, codeAgentEventRepository } from '@bike4mind/
 import { BadRequestError } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 

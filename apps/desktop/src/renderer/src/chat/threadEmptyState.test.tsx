@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
+import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MessageThread } from './MessageThread';
@@ -26,13 +27,14 @@ describe('the empty transcript', () => {
     container.remove();
   });
 
-  const render = (sessionId: string | null) =>
+  const render = (sessionId: string | null, emptySession?: ReactNode) =>
     act(() => {
       root.render(
         <MessageThread
           messages={[]}
           sessionId={sessionId}
           noSession={<button data-testid="chat-start-session-btn">New conversation</button>}
+          emptySession={emptySession}
           streaming={false}
           onRespond={() => undefined}
           onContinue={() => undefined}
@@ -49,6 +51,12 @@ describe('the empty transcript', () => {
   it('offers the way in when there is no conversation at all', () => {
     render(null);
     expect(container.querySelector('[data-testid="chat-start-session-btn"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="chat-thread-empty"]')).toBeNull();
+  });
+
+  it('centers custom setup in place of the ordinary invitation for an empty session', () => {
+    render('s1', <form data-testid="workspace-setup">Workspace</form>);
+    expect(container.querySelector('[data-testid="workspace-setup"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="chat-thread-empty"]')).toBeNull();
   });
 });

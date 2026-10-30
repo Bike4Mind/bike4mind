@@ -16,7 +16,9 @@ import {
   RadioGroup,
   Box,
 } from '@mui/joy';
-import { AutoAwesome, Article, Close as CloseIcon } from '@mui/icons-material';
+import AutoAwesome from '@mui/icons-material/AutoAwesome';
+import Article from '@mui/icons-material/Article';
+import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'sonner';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 

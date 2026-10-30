@@ -208,6 +208,10 @@ export const getPriceTierTooltip = (priceTier: string, model?: ModelInfo): strin
   return `${tierText}: ${rates.input} credits per 1M input tokens, ${rates.output} per 1M output`;
 };
 
+// Space thousands separators: the Max output tokens read-out and the notices about that setting
+// share it, so one screen never shows "8 192" beside "8,192".
+export const formatTokenBudget = (tokens: number): string => tokens.toLocaleString().replace(/,/g, ' ');
+
 // Smallest default we ever hand a large-context model, so the headroom share below can only
 // raise the old flat cap, never lower it.
 const LARGE_CONTEXT_FLOOR = 16384;
@@ -272,6 +276,8 @@ export const refitMaxTokensForModel = (
  * the session and whether the write should be wrapped in a transition.
  */
 export const buildModelSelectionPatch = (modelInfo: ModelInfo) => ({
+  sessionModelOverride: null,
+  hasExplicitSessionModelSelection: true,
   model: modelInfo.id,
   max_tokens: computeDefaultMaxTokens(modelInfo),
   ...(FIXED_TEMPERATURE_MODELS.has(modelInfo.id) && { temperature: 1.0 }),

@@ -1,4 +1,6 @@
-import { Warning as WarningIcon, DeleteOutline, PushPinOutlined as PushPinOutlinedIcon } from '@mui/icons-material';
+import WarningIcon from '@mui/icons-material/Warning';
+import DeleteOutline from '@mui/icons-material/DeleteOutline';
+import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import { gray, red } from '@client/app/utils/themes/colors';
 import { Badge, Box, Chip, CircularProgress, Divider, IconButton, Tooltip, Typography } from '@mui/joy';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';

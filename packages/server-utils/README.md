@@ -18,3 +18,12 @@ The package must never import from either app, their path aliases (`@server/*`, 
 2. Run `pnpm tsx scripts/codemods/move-to-server-utils.ts <old paths...>` to rewrite every importer to the package path, and commit that separately so the move stays a pure rename.
 3. Add any new import the moved files need to this `package.json`; do not rely on hoisting. A workspace package that now imports a moved file needs this package as a dependency and the `inputs` glob above.
 4. Grep the premium overlays for the old paths. For each hit, leave a re-export shim at the old path (`export * from '@bike4mind/server-utils/<tail>';`, plus `export { default }` if the file has one) until the overlay imports the package. The codemod accepts a shim at an old path, so it can be re-run after a rebase.
+
+## Tests
+
+```bash
+pnpm --filter @bike4mind/server-utils test              # unit suites
+pnpm --filter @bike4mind/server-utils test:integration  # real-Mongo *.e2e.test.ts suites
+```
+
+A suite that boots a real mongod must be named `*.e2e.test.ts` (`src/mongoTestTimeoutBudget.test.ts` enforces it). CI runs the unit lane in the `misc` test shard and the integration lane in the shared `workers-server-utils-integration` leg.

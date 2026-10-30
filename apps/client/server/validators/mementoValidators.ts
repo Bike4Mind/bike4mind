@@ -8,7 +8,8 @@ export const CreateMementoSchema = z.object({
   tier: MementoTierEnum,
   weight: z.number().min(0).max(1000),
   summary: z.string().min(1),
-  fullContent: z.string().prefault(''),
+  // Trimmed before the check: the routes store the trimmed value and the model requires it non-empty.
+  fullContent: z.string().trim().min(1, 'fullContent is required'),
   sessionId: z.string().min(1, 'Session ID is required'),
   questId: z.string().optional(),
   tags: z.array(z.string()).optional(),
@@ -17,9 +18,11 @@ export const CreateMementoSchema = z.object({
   isArchived: z.boolean().optional(),
 });
 
-export const UpdateMementoSchema = CreateMementoSchema.partial().omit({
-  type: true, // type cannot be changed per business rules (optional, remove if allowed)
-});
+export const UpdateMementoSchema = CreateMementoSchema.partial()
+  .omit({
+    type: true, // type cannot be changed per business rules (optional, remove if allowed)
+  })
+  .extend({ fullContent: z.string().optional() });
 
 export type CreateMementoInput = z.infer<typeof CreateMementoSchema>;
 export type UpdateMementoInput = z.infer<typeof UpdateMementoSchema>;

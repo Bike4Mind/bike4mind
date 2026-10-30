@@ -1,4 +1,10 @@
-import { GEAR_KEYS, type GearKey, type GearKind } from '@client/lib/gears/keys';
+import {
+  GEAR_KEYS,
+  GEAR_TRUST_MIN_AGE_DAYS,
+  type GearKey,
+  type GearKind,
+  type GearPendingReason,
+} from '@client/lib/gears/keys';
 import {
   Project,
   FabFile,
@@ -38,7 +44,7 @@ import {
  */
 
 export { GEAR_KEYS };
-export type { GearKey, GearKind };
+export type { GearKey, GearKind, GearPendingReason };
 
 /**
  * One-time rewards per gear: destinations 1,000; skills 100-1,000 by
@@ -64,15 +70,32 @@ interface GearFacts {
   usageFeatures: Set<string>;
   chatModelCount: number;
   stamps: Set<string>;
+  accountAgeInDays: number;
+  emailVerified: boolean;
 }
 
 async function gatherFacts(userId: string): Promise<GearFacts> {
-  const [usageFeatures, chatModels, stamps] = await Promise.all([
+  const [usageFeatures, chatModels, stamps, user] = await Promise.all([
     UsageEvent.distinct('feature', { userId }) as Promise<string[]>,
     UsageEvent.distinct('model', { userId, feature: 'chat' }) as Promise<string[]>,
     gearStampRepository.stampedKeys(userId),
+    User.findById(userId, { createdAt: 1, emailVerified: 1 }).lean() as Promise<{
+      createdAt?: Date;
+      emailVerified?: boolean;
+    } | null>,
   ]);
-  return { userId, usageFeatures: new Set(usageFeatures), chatModelCount: chatModels.length, stamps };
+  // A missing createdAt predates mongoose timestamps, so the account is old (matches userApiKeyService/trust.ts).
+  const accountAgeInDays = user?.createdAt
+    ? (Date.now() - user.createdAt.getTime()) / (1000 * 60 * 60 * 24)
+    : Number.POSITIVE_INFINITY;
+  return {
+    userId,
+    usageFeatures: new Set(usageFeatures),
+    chatModelCount: chatModels.length,
+    stamps,
+    accountAgeInDays,
+    emailVerified: user?.emailVerified ?? false,
+  };
 }
 
 export interface GearDef {
@@ -230,11 +253,12 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await User.exists({ _id: userId, 'mfa.totpEnabled': true })),
   },
   {
-    // The partial index on slackMetadata exists for exactly this query shape.
+    // Filters on slackMetadata.channelId (required on the subdocument) rather than slackMetadata
+    // itself so the query implies the partial userId_1_slackNotebook index's filter.
     key: 'slack',
     credits: 1000,
     kind: 'skill',
-    check: async ({ userId }) => !!(await Session.exists({ userId, slackMetadata: { $exists: true, $ne: null } })),
+    check: async ({ userId }) => !!(await Session.exists({ userId, 'slackMetadata.channelId': { $exists: true } })),
   },
   {
     // Each imported history is its own reward (OpenAI and Claude count separately).
@@ -286,7 +310,7 @@ const GEARS: GearDef[] = [
     check: ({ stamps }) => stamps.has('forknotebook'),
   },
   // Tool gears - stamped by the shared-pipeline tool-finish observer
-  // (server/services/gears/toolGearObserver.ts): zero-latency by contract.
+  // (packages/server-utils/src/services/gears/toolGearObserver.ts): zero-latency by contract.
   {
     key: 'websearch',
     credits: 100,
@@ -340,6 +364,8 @@ export interface GearEvaluation {
   /** The payout's own condition - `rewardCheck` where the gear has one. */
   rewardEligible: boolean;
   alreadyRewarded: boolean;
+  /** Why rewardEligible is false for an unlocked, unpaid gear. */
+  pendingReason?: GearPendingReason;
 }
 
 /**
@@ -371,15 +397,33 @@ export async function evaluateGears(
     activeGears.map(async (def, i) => {
       const unlocked = unlockedFlags[i];
       const alreadyRewarded = rewarded.has(gearTxId(userId, def.key));
-      // The payout may lag the unlock behind a stricter condition (anti-farm
-      // friction); evaluate it only when it could change the outcome.
-      const rewardEligible = unlocked && !alreadyRewarded && def.rewardCheck ? await def.rewardCheck(facts) : unlocked;
+      const credits = overrides.get(def.key)?.credits ?? creditsFor(def);
+
+      let rewardEligible: boolean;
+      let pendingReason: GearPendingReason | undefined;
+      // Payouts require email verification and age even when API-key access has
+      // an admin, purchase, plan or manual-approval exemption: access is not a reward.
+      if (!unlocked || alreadyRewarded) {
+        rewardEligible = unlocked;
+      } else if (!facts.emailVerified) {
+        rewardEligible = false;
+        pendingReason = 'unverified';
+      } else if (facts.accountAgeInDays < GEAR_TRUST_MIN_AGE_DAYS) {
+        rewardEligible = false;
+        pendingReason = 'too_new';
+      } else {
+        const rewardCheckPassed = def.rewardCheck ? await def.rewardCheck(facts) : true;
+        rewardEligible = rewardCheckPassed;
+        if (!rewardCheckPassed) pendingReason = 'reward_check';
+      }
+
       return {
         def,
         unlocked,
-        credits: overrides.get(def.key)?.credits ?? creditsFor(def),
+        credits,
         rewardEligible,
         alreadyRewarded,
+        pendingReason,
       };
     })
   );

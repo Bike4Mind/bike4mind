@@ -12,6 +12,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * resolveOutputMaxTokens - a stubbed sizing rule could not catch a regression in the
  * rule itself, which is the whole subject here.
  */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -67,27 +73,34 @@ import {
 } from '@bike4mind/common';
 import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR } from '@bike4mind/llm-adapters';
 import { DEFAULT_OUTPUT_MAX_TOKENS, usdToCredits } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from './cliCompletions';
 import { isMemberCreditCapExceeded } from './creditService';
 
 const ADAPTIVE_MODEL = {
   id: 'adaptive-model',
+  type: 'text',
   backend: 'anthropic',
   max_tokens: 128_000,
   can_think: true,
   thinkingStyle: 'adaptive' as const,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
 };
 
 const PLAIN_MODEL = {
   id: 'plain-model',
+  type: 'text',
   backend: 'anthropic',
   max_tokens: 8192,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
 };
 
 const GPT5_MODEL = {
   id: ChatModels.GPT5,
+  type: 'text',
   backend: 'openai',
   max_tokens: 128_000,
+  pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
 };
 
 function buildDb() {
@@ -195,6 +208,54 @@ describe('executeCompletion - output budget', () => {
     expect(capturedOptions?.maxTokens).toBe(1000);
   });
 
+  // Telemetry only: how often an API or CLI caller's own low budget meets a reasoning model.
+  it('logs an explicit budget below the reasoning floor and still sends it', async () => {
+    availableModels = [ADAPTIVE_MODEL];
+    const { db } = buildDb();
+    const logger = new Logger({ minLevel: 'error' });
+    const info = vi.spyOn(logger, 'info');
+
+    await executeCompletion({ ...baseParams, model: 'adaptive-model', db, logger, options: { maxTokens: 1000 } });
+
+    expect(capturedOptions?.maxTokens).toBe(1000);
+    expect(info).toHaveBeenCalledWith('[cliCompletions] max_tokens below reasoning floor', {
+      model: 'adaptive-model',
+      requested: 1000,
+      floor: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+    });
+  });
+
+  // With thinking on, the Anthropic adapter sends at least the floor, so the turn never runs below it.
+  it('does not log the reasoning floor for a thinking turn the adapter raises to it', async () => {
+    availableModels = [ADAPTIVE_MODEL];
+    const { db } = buildDb();
+    const logger = new Logger({ minLevel: 'error' });
+    const info = vi.spyOn(logger, 'info');
+
+    await executeCompletion({
+      ...baseParams,
+      model: 'adaptive-model',
+      db,
+      logger,
+      options: { maxTokens: 1000, thinking: { enabled: true } },
+    });
+
+    expect(info).not.toHaveBeenCalledWith('[cliCompletions] max_tokens below reasoning floor', expect.anything());
+  });
+
+  it('does not log the reasoning floor for an absent budget or a non-reasoning model', async () => {
+    const { db } = buildDb();
+    const logger = new Logger({ minLevel: 'error' });
+    const info = vi.spyOn(logger, 'info');
+
+    availableModels = [ADAPTIVE_MODEL];
+    await executeCompletion({ ...baseParams, model: 'adaptive-model', db, logger });
+    availableModels = [PLAIN_MODEL];
+    await executeCompletion({ ...baseParams, model: 'plain-model', db, logger, options: { maxTokens: 1000 } });
+
+    expect(info).not.toHaveBeenCalledWith('[cliCompletions] max_tokens below reasoning floor', expect.anything());
+  });
+
   // The declared cap CLAMPS the sized budget, so the floor is a floor only up to what the
   // model can actually emit - over-requesting 400s the whole turn.
   it('clamps the sized budget to an adaptive model cap below the floor', async () => {
@@ -259,7 +320,12 @@ describe('executeCompletion - output budget', () => {
    * the one place the REAL resolver meets a capless row.
    */
   describe('a model row declaring no output cap', () => {
-    const CAPLESS_MODEL = { id: 'capless-model', backend: 'anthropic' };
+    const CAPLESS_MODEL = {
+      id: 'capless-model',
+      type: 'text',
+      backend: 'anthropic',
+      pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
+    };
 
     it('sends a finite budget rather than NaN', async () => {
       availableModels = [CAPLESS_MODEL];

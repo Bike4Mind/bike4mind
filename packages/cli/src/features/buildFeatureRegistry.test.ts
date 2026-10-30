@@ -9,6 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
+import { DeferredToolRegistry } from '@bike4mind/agents';
 import { buildFeatureRegistry } from './buildFeatureRegistry';
 import type { ICliFeatureModule } from './ICliFeatureModule';
 import type { PluginDescriptor, ValidPluginDescriptor } from '../plugins/PluginStore';
@@ -189,6 +190,31 @@ describe('buildFeatureRegistry', () => {
     });
     expect(loaded).toEqual([]);
     expect(skipped[0].reason).toContain("tool name 'write_todos'");
+    expect(registry.getAllToolNames()).toEqual([]);
+  });
+
+  it('skips a plugin whose tool name belongs to an unloaded deferred tool', async () => {
+    const deferredTools = new DeferredToolRegistry();
+    deferredTools.register([
+      {
+        toolSchema: { name: 'math_evaluate', description: '', parameters: { type: 'object', properties: {} } },
+        toolFn: async () => '2',
+      },
+    ]);
+    const descriptor = await writePluginEntry(
+      'collide-deferred.mjs',
+      factorySource('collide-deferred', 'math_evaluate')
+    );
+    const { registry, loaded, skipped } = await buildFeatureRegistry({
+      builtins: [],
+      descriptors: [descriptor],
+      config: makeConfig({ 'collide-deferred': true }),
+      logger: quietLogger,
+      reservedToolNames: ['tool_search', ...deferredTools.getDirectoryNames()],
+    });
+
+    expect(loaded).toEqual([]);
+    expect(skipped[0].reason).toContain("tool name 'math_evaluate'");
     expect(registry.getAllToolNames()).toEqual([]);
   });
 

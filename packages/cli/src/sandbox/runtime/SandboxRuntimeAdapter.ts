@@ -2,7 +2,7 @@
  * Abstract sandbox runtime adapter with platform detection and factory.
  */
 import os from 'os';
-import { accessSync, constants } from 'fs';
+import { accessSync, constants, lstatSync, readFileSync, realpathSync } from 'fs';
 import path from 'path';
 import type { FilesystemConfig, SandboxPlatform, WrappedCommand } from '../types.js';
 
@@ -16,6 +16,59 @@ export interface WrapCommandOptions {
   /** Grant network egress inside the sandbox. Required so every call site makes the
    *  fail-closed vs. open decision explicitly; false denies IP egress. */
   networkEnabled: boolean;
+  /** Filtering proxy port; with networkEnabled, the only loopback port the sandbox may connect to. */
+  proxyPort?: number;
+  /** Host unix socket of the filtering proxy (see UnixSocketRelay); Bubblewrap requires it with networkEnabled. */
+  proxySocketPath?: string;
+  /** Leave container engine sockets (see getContainerSocketPaths) reachable inside the sandbox. */
+  allowContainerSockets?: boolean;
+}
+
+export interface ContainerSocketPath {
+  path: string;
+  directory: boolean;
+}
+
+/** Docker, Podman, Colima, Lima, Rancher Desktop and OrbStack API sockets, or the directories holding them. */
+export function getContainerSocketPaths(): ContainerSocketPath[] {
+  const home = os.homedir();
+  const env = process.env;
+  const entries: ContainerSocketPath[] = [
+    { path: '/var/run/docker.sock', directory: false },
+    { path: '/run/docker.sock', directory: false },
+    { path: '/run/podman', directory: true },
+    { path: path.join(home, '.docker'), directory: true },
+    { path: path.join(home, 'Library', 'Containers', 'com.docker.docker', 'Data'), directory: true },
+    { path: path.join(home, '.colima'), directory: true },
+    { path: path.join(home, '.lima'), directory: true },
+    { path: path.join(home, '.rd'), directory: true },
+    { path: path.join(home, '.orbstack'), directory: true },
+    { path: path.join(home, '.local', 'share', 'containers'), directory: true },
+    { path: path.join(os.tmpdir(), 'podman'), directory: true },
+  ];
+  const addIfAbsolute = (p: string | undefined, directory: boolean) => {
+    if (p && path.isAbsolute(p)) entries.push({ path: p, directory });
+  };
+  if (env.XDG_RUNTIME_DIR && path.isAbsolute(env.XDG_RUNTIME_DIR)) {
+    addIfAbsolute(path.join(env.XDG_RUNTIME_DIR, 'docker.sock'), false);
+    addIfAbsolute(path.join(env.XDG_RUNTIME_DIR, 'podman'), true);
+  }
+  for (const host of [env.DOCKER_HOST, env.CONTAINER_HOST]) {
+    if (host?.startsWith('unix://')) addIfAbsolute(host.slice('unix://'.length), false);
+  }
+  addIfAbsolute(env.COLIMA_HOME, true);
+  addIfAbsolute(env.LIMA_HOME, true);
+  const configHome =
+    env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : path.join(home, '.config');
+  addIfAbsolute(path.join(configHome, 'colima'), true);
+  return entries;
+}
+
+/** Rejects anything but a TCP port number before it is written into a profile or relay script. */
+export function assertProxyPort(port: number): void {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid sandbox proxy port: ${port}`);
+  }
 }
 
 /** Abstract interface for platform-specific sandbox runtimes */
@@ -68,6 +121,78 @@ export function expandPath(pathStr: string): string {
     .replace(/~\//g, `${os.homedir()}/`);
 }
 
+/** Paths under cwd that stay read-only inside the writable working directory. */
+export function getProtectedWorkspacePaths(cwd: string): string[] {
+  const git = findGitEntry(cwd);
+  const repositoryRoot = path.dirname(git);
+  const protectedPaths = new Set([
+    path.join(cwd, '.git'),
+    path.join(cwd, '.bike4mind'),
+    git,
+    path.join(repositoryRoot, '.bike4mind'),
+  ]);
+  let ancestor = cwd;
+  while (path.dirname(ancestor) !== ancestor) {
+    if (['.git', '.bike4mind'].includes(path.basename(ancestor))) protectedPaths.add(ancestor);
+    ancestor = path.dirname(ancestor);
+  }
+  const gitFile = readMetadataFile(git);
+  const gitDirectory = gitFile?.match(/^gitdir:\s*(.+)\s*$/)?.[1];
+  if (gitDirectory) {
+    const metadataPath = path.resolve(repositoryRoot, gitDirectory.trim());
+    protectedPaths.add(metadataPath);
+    const commonDirectory = readMetadataFile(path.join(metadataPath, 'commondir'))?.trim();
+    if (commonDirectory) protectedPaths.add(path.resolve(metadataPath, commonDirectory));
+  }
+  for (const protectedPath of [...protectedPaths]) protectedPaths.add(resolveSandboxPath(protectedPath));
+  return [...protectedPaths];
+}
+
+function findGitEntry(cwd: string): string {
+  let directory = cwd;
+  while (true) {
+    const gitPath = path.join(directory, '.git');
+    try {
+      lstatSync(gitPath);
+      return gitPath;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR'].includes(String(error.code)))) {
+        throw error;
+      }
+    }
+    const parentDirectory = path.dirname(directory);
+    if (parentDirectory === directory) return path.join(cwd, '.git');
+    directory = parentDirectory;
+  }
+}
+
+function readMetadataFile(filePath: string): string | undefined {
+  try {
+    return readFileSync(filePath, 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR', 'EISDIR'].includes(String(error.code))) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/** Resolve aliases so sensitive symlinks are protected at their actual target. */
+export function resolveSandboxPath(pathString: string): string {
+  const expandedPath = path.resolve(expandPath(pathString));
+  try {
+    return realpathSync(expandedPath);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR'].includes(String(error.code))) {
+      const parentPath = path.dirname(expandedPath);
+      return parentPath === expandedPath
+        ? expandedPath
+        : path.join(resolveSandboxPath(parentPath), path.basename(expandedPath));
+    }
+    throw error;
+  }
+}
+
 /**
  * Factory function to create the appropriate sandbox runtime for the current platform.
  * Returns null if the platform is unsupported or the runtime binary is not available.
@@ -82,11 +207,7 @@ export async function createSandboxRuntime(): Promise<SandboxRuntime | null> {
     return runtime.isAvailable() ? runtime : null;
   }
 
-  if (platform === 'linux') {
-    const { BubblewrapRuntime } = await import('./BubblewrapRuntime.js');
-    const runtime = new BubblewrapRuntime();
-    return runtime.isAvailable() ? runtime : null;
-  }
-
-  return null;
+  const { BubblewrapRuntime } = await import('./BubblewrapRuntime.js');
+  const runtime = new BubblewrapRuntime();
+  return runtime.isAvailable() ? runtime : null;
 }

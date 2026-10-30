@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -22,7 +22,7 @@ import {
   lakeMemoryRateLimitKey,
 } from '@bike4mind/server-utils/dataLakes/lakeMemoryRateLimit';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 
 /**
  * GET  /api/data-lakes/:id/lake-memory  -> LakeMemoryHealth (the build door's own state, so the UI

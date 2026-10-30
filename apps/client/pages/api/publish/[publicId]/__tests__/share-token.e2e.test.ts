@@ -23,8 +23,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * `revokedAt` field counts as live, and the compare-and-set preconditions really do make a
  * racing writer lose. Two defects found in review came from exactly this gap.
  *
- * Only `baseApi` (the middleware chain) and `generateShareToken` (so tokens are predictable)
- * are mocked; the database is real.
+ * `baseApi` (the middleware chain) and `generateShareToken` (so tokens are predictable) are
+ * mocked. The rotation race delays collection writes at a barrier, then runs them against Mongo.
  */
 
 let tokenCounter = 0;
@@ -60,6 +60,7 @@ afterAll(async () => {
   await mongoServer?.stop();
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await PublishedArtifact.deleteMany({});
 });
 
@@ -210,8 +211,21 @@ describe('share-token route against real storage', () => {
   it('lets a rotate win over a concurrent rotate without either caller holding a dead link', async () => {
     await seed();
     await call();
+    const update = PublishedArtifact.collection.findOneAndUpdate.bind(PublishedArtifact.collection);
+    const bothRotationsReady = Promise.withResolvers<void>();
+    let pendingRotations = 0;
+    // Hold both writes until both requests have read the old link. Without this barrier,
+    // the second request can read the first rotation and legitimately revoke its new link.
+    vi.spyOn(PublishedArtifact.collection, 'findOneAndUpdate').mockImplementation(async (...args) => {
+      pendingRotations += 1;
+      if (pendingRotations === 2) bothRotationsReady.resolve();
+      await bothRotationsReady.promise;
+      return update(...args);
+    });
     const [x, y] = await Promise.all([call({ body: { regenerate: true } }), call({ body: { regenerate: true } })]);
 
+    expect(pendingRotations).toBe(2);
+    expect(x.body.shareToken).toBe(y.body.shareToken);
     // Both callers get 200, and each returned token must be one that actually resolves - the
     // loser is handed the persisted token rather than the one whose write lost.
     for (const result of [x, y]) {
@@ -221,6 +235,23 @@ describe('share-token route against real storage', () => {
       ).not.toBeNull();
     }
     // A rotate revokes every outstanding link, so exactly one survives.
+    expect(liveShareTokens((await raw()) as never)).toHaveLength(1);
+  });
+
+  it('revokes the previous rotation when a later request reads the new link', async () => {
+    await seed();
+    await call();
+
+    const first = await call({ body: { regenerate: true } });
+    const second = await call({ body: { regenerate: true } });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body.shareToken).not.toBe(first.body.shareToken);
+    expect(await PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(first.body.shareToken) })).toBeNull();
+    expect(
+      await PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(second.body.shareToken) })
+    ).not.toBeNull();
     expect(liveShareTokens((await raw()) as never)).toHaveLength(1);
   });
 });

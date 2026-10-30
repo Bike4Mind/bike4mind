@@ -5,7 +5,7 @@ import { type MigrationFile } from './index';
  * Build the GenerationJob collection's indexes.
  *
  * Built here rather than by autoIndex: `mongo.ts` only awaits `connect`, so an autoIndex build is
- * fire-and-forget and fails silently, and DocumentDB takes a foreground lock for the build.
+ * fire-and-forget and fails silently, and would start on a cold Lambda boot.
  *
  * The id is backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), whose own
  * test requires it to stay the highest id on disk.

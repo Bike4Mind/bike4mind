@@ -3,6 +3,7 @@ import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRe
 import {
   AuthenticatedApiClient,
   NotAuthenticatedError,
+  SessionRevokedError,
   type AuthTokens,
   type DeviceFlowClient,
   type RefreshTokenResponse,
@@ -303,6 +304,20 @@ describe('AuthService', () => {
     service.dispose();
   });
 
+  it('starts a fresh install on Production, ready to sign in', async () => {
+    process.env[BAKED] = HOSTED;
+    const { service } = build({});
+
+    await service.initialize();
+
+    expect(service.getState()).toMatchObject({
+      status: 'signed-out',
+      hostedAvailable: true,
+      environment: { preset: 'hosted', url: HOSTED, label: 'Production' },
+    });
+    service.dispose();
+  });
+
   it('reports an unconfigured build instead of pointing at a localhost that is not there', async () => {
     const { service } = build({});
 
@@ -377,18 +392,14 @@ function buildWithSharedClient(options: { file?: VaultFile; refreshToken: Return
     userAgent: 'b4m-desktop/test',
     onStateChanged: state => states.push(state),
     createDeviceFlowClient: () => device,
-    createApiClient: (baseUrl, tokenStore, onTokensCleared) => {
-      if (onTokensCleared) cleared.push(onTokensCleared);
-      const client = new AuthenticatedApiClient({
-        baseUrl,
-        tokenStore,
-        oauthClient: device,
-        logger: silentLogger,
-        onTokensCleared,
-        reauthMessages: { refreshFailed: 'expired', stillUnauthorized: 'invalid' },
-      });
+    // The service's own client options, so these run the desktop's refresh rules for real.
+    createApiClient: options => {
+      if (options.onTokensCleared) cleared.push(options.onTokensCleared);
+      const client = new AuthenticatedApiClient(options);
       client.getAxiosInstance().defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
         const sent = String(config.headers.Authorization ?? '').replace('Bearer ', '');
+        if (config.url === '/forbidden') throw httpError(403, config);
+        if (config.url === '/provider-key') throw httpError(401, config, { errorCode: 'provider_rejected' });
         if (accepted.has(sent)) {
           return {
             data: { user: { id: 'user-1' } },
@@ -407,11 +418,11 @@ function buildWithSharedClient(options: { file?: VaultFile; refreshToken: Return
   return { service, vault, file, states, accepted, device, cleared };
 }
 
-function httpError(status: number, config = {} as InternalAxiosRequestConfig): AxiosError {
+function httpError(status: number, config = {} as InternalAxiosRequestConfig, data: unknown = {}): AxiosError {
   return new AxiosError(`HTTP ${status}`, 'ERR_BAD_RESPONSE', config, {}, {
     status,
     statusText: String(status),
-    data: {},
+    data,
     headers: {},
     config,
   } as AxiosResponse);
@@ -452,6 +463,51 @@ describe('AuthService token refresh', () => {
     return harness;
   }
 
+  it('moves a typed-in production URL to the hosted preset without losing its session', async () => {
+    vi.useFakeTimers();
+    process.env[BAKED] = HOSTED;
+    const { service, vault, accepted, device } = buildWithSharedClient({ refreshToken: vi.fn() });
+    const typed = `${HOSTED.toUpperCase()}/`;
+    accepted.add('access-0');
+    await vault.setEnvironment({ preset: 'custom', customUrl: typed });
+    await vault.setTokens(typed, storedTokens(0, 30 * 60_000));
+
+    await service.initialize();
+
+    expect(service.getState()).toMatchObject({
+      status: 'signed-in',
+      environment: { preset: 'hosted', url: HOSTED, label: 'Production' },
+    });
+    expect(await vault.getEnvironment()).toEqual({ preset: 'hosted' });
+    expect(device.initiateDeviceFlow).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it('restores the production session even when persisting the preset migration fails', async () => {
+    vi.useFakeTimers();
+    process.env[BAKED] = HOSTED;
+    const { service, vault, accepted, device } = buildWithSharedClient({ refreshToken: vi.fn() });
+    const typed = `${HOSTED.toUpperCase()}/`;
+    accepted.add('access-0');
+    await vault.setEnvironment({ preset: 'custom', customUrl: typed });
+    await vault.setTokens(typed, storedTokens(0, 30 * 60_000));
+    const persist = vi.spyOn(vault, 'setEnvironment').mockRejectedValue(new Error('read-only vault'));
+    silentLogger.warn.mockClear();
+
+    await service.initialize();
+
+    expect(persist).toHaveBeenCalledExactlyOnceWith({ preset: 'hosted' });
+    expect(silentLogger.warn).toHaveBeenCalledWith('AUTH: could not store the migrated environment: read-only vault');
+    expect(service.getState()).toMatchObject({
+      status: 'signed-in',
+      environment: { preset: 'hosted', url: HOSTED, label: 'Production' },
+      user: { id: 'user-1' },
+    });
+    expect(await vault.getTokens(HOSTED)).toMatchObject({ accessToken: 'access-0' });
+    expect(device.initiateDeviceFlow).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
   it('keeps the session and the vault when a proactive refresh fails transiently', async () => {
     const { service, vault } = await signedIn(vi.fn().mockRejectedValue(httpError(503)));
 
@@ -462,15 +518,16 @@ describe('AuthService token refresh', () => {
     service.dispose();
   });
 
-  it('shows signed-out with a reason, and empties the vault, when the server rejects the refresh token', async () => {
+  it('asks to sign in again over the conversation, and empties the vault, when the server rejects the refresh token', async () => {
     const { service, vault } = await signedIn(vi.fn().mockRejectedValue(httpError(401)));
 
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(service.getState()).toMatchObject({
       status: 'signed-out',
-      user: undefined,
-      error: { message: 'This session has expired. Sign in again.', remedy: 'retry-sign-in' },
+      reauthRequired: true,
+      user: { id: 'user-1' },
+      error: { message: 'Your session expired. Sign in again to continue.', remedy: 'retry-sign-in' },
     });
     expect(await vault.reloadTokens(HOSTED)).toBeNull();
     expect(silentLogger.warn).toHaveBeenCalledWith(expect.stringContaining('HTTP 401'));
@@ -499,7 +556,7 @@ describe('AuthService token refresh', () => {
 
     expect(service.getState()).toMatchObject({
       status: 'signed-out',
-      error: { message: 'You were signed out in another window. Sign in again.', remedy: 'retry-sign-in' },
+      error: { message: 'You were signed out in another window. Sign in again to continue.', remedy: 'retry-sign-in' },
     });
     service.dispose();
   });
@@ -519,7 +576,7 @@ describe('AuthService token refresh', () => {
 
     expect(service.getState()).toMatchObject({
       status: 'signed-out',
-      error: { message: 'You were signed out in another window. Sign in again.', remedy: 'retry-sign-in' },
+      error: { message: 'You were signed out in another window. Sign in again to continue.', remedy: 'retry-sign-in' },
     });
     expect(await vault.reloadTokens(HOSTED)).toBeNull();
     service.dispose();
@@ -538,7 +595,7 @@ describe('AuthService token refresh', () => {
 
     expect(service.getState()).toMatchObject({
       status: 'signed-out',
-      error: { message: 'You were signed out in another window. Sign in again.', remedy: 'retry-sign-in' },
+      error: { message: 'You were signed out in another window. Sign in again to continue.', remedy: 'retry-sign-in' },
     });
     expect(refreshToken).not.toHaveBeenCalled();
     service.dispose();
@@ -561,9 +618,13 @@ describe('AuthService token refresh', () => {
     accepted.clear();
     await vault.setTokens(HOSTED, storedTokens(0, -1_000));
 
-    await expect(service.getApiClient()?.get('/api/anything')).rejects.toThrow('expired');
+    await expect(service.getApiClient()?.get('/api/anything')).rejects.toBeInstanceOf(SessionRevokedError);
 
-    expect(service.getState()).toMatchObject({ status: 'signed-out', error: { remedy: 'retry-sign-in' } });
+    expect(service.getState()).toMatchObject({
+      status: 'signed-out',
+      reauthRequired: true,
+      error: { remedy: 'retry-sign-in' },
+    });
     expect(service.getApiClient()).toBeNull();
     service.dispose();
   });
@@ -614,6 +675,213 @@ describe('AuthService token refresh', () => {
     expect(refreshToken).not.toHaveBeenCalled();
     expect(await vault.getTokens(HOSTED)).toMatchObject({ refreshToken: 'refresh-5' });
     expect(service.getState().status).toBe('signed-in');
+    service.dispose();
+  });
+
+  it('refreshes once and retries when the server refuses a token still inside its lifetime', async () => {
+    const refreshToken = vi.fn().mockResolvedValue(rotation(1));
+    const { service, accepted, vault } = await signedIn(refreshToken);
+    // The server stopped accepting access-0 early, as after a secret rotation.
+    accepted.delete('access-0');
+    accepted.add('access-1');
+
+    await expect(service.getApiClient()?.get('/api/anything')).resolves.toBeTruthy();
+
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(await vault.reloadTokens(HOSTED)).toMatchObject({ accessToken: 'access-1' });
+    expect(service.getState().status).toBe('signed-in');
+    expect(silentLogger.warn).toHaveBeenCalledWith('AUTH: refreshing the session');
+    expect(silentLogger.warn).toHaveBeenCalledWith('AUTH: session refresh succeeded');
+    service.dispose();
+  });
+
+  it('shares one refresh between concurrent 401s', async () => {
+    let release: (value: RefreshTokenResponse) => void = () => {};
+    const refreshToken = vi.fn(() => new Promise<RefreshTokenResponse>(resolve => (release = resolve)));
+    const { service, accepted } = await signedIn(refreshToken);
+    accepted.delete('access-0');
+    accepted.add('access-1');
+    const api = service.getApiClient();
+
+    const requests = [api?.get('/a'), api?.get('/b'), api?.get('/c')];
+    await vi.waitFor(() => expect(refreshToken).toHaveBeenCalled());
+    release(rotation(1));
+
+    await expect(Promise.all(requests)).resolves.toHaveLength(3);
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    service.dispose();
+  });
+
+  it('asks to sign in again when the refresh on a 401 is rejected, and stops handing out the client', async () => {
+    const { service, accepted, vault } = await signedIn(vi.fn().mockRejectedValue(httpError(401)));
+    accepted.clear();
+
+    await expect(service.getApiClient()?.get('/api/anything')).rejects.toBeInstanceOf(SessionRevokedError);
+
+    expect(service.getState()).toMatchObject({ status: 'signed-out', reauthRequired: true, user: { id: 'user-1' } });
+    expect(service.getApiClient()).toBeNull();
+    expect(await vault.reloadTokens(HOSTED)).toBeNull();
+    expect(silentLogger.warn).toHaveBeenCalledWith('AUTH: session refresh rejected (HTTP 401)');
+    service.dispose();
+  });
+
+  it('asks to sign in again when a request is still refused after the refresh, without re-adopting that token', async () => {
+    const file = memoryFile();
+    const refreshToken = vi.fn().mockResolvedValue(rotation(1));
+    const { service, accepted, vault } = await signedIn(refreshToken, file);
+    accepted.clear();
+
+    await expect(service.getApiClient()?.get('/api/anything')).rejects.toBeInstanceOf(SessionRevokedError);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(service.getState()).toMatchObject({ status: 'signed-out', reauthRequired: true });
+    // Kept for the other instances sharing the vault; only this one stops presenting it.
+    expect(await vault.reloadTokens(HOSTED)).toMatchObject({ refreshToken: 'refresh-1' });
+
+    await expect(service.adoptStoredSession()).resolves.toBe(false);
+    expect(service.getState()).toMatchObject({ status: 'signed-out', reauthRequired: true });
+
+    // Another instance signs in; this one carries on with that session, no sign-in of its own.
+    accepted.add('access-7');
+    await new TokenVault(cipher, file, silentLogger).setTokens(HOSTED, storedTokens(7, 30 * 60_000));
+    await expect(service.adoptStoredSession()).resolves.toBe(true);
+
+    expect(service.getState()).toMatchObject({ status: 'signed-in', reauthRequired: undefined });
+    await expect(service.getApiClient()?.get('/api/anything')).resolves.toBeTruthy();
+    service.dispose();
+  });
+
+  it('keeps the session and the vault when the refresh on a 401 cannot reach the server', async () => {
+    const network = new AxiosError('connect ECONNREFUSED', 'ECONNREFUSED');
+    const { service, accepted, vault } = await signedIn(vi.fn().mockRejectedValue(network));
+    accepted.clear();
+
+    const err = await service
+      .getApiClient()
+      ?.get('/api/anything')
+      .catch((e: unknown) => e);
+
+    expect(err).not.toBeInstanceOf(SessionRevokedError);
+    expect((err as Error).message).toBe('Could not renew your session. Check your connection and try again.');
+    expect(service.getState()).toMatchObject({ status: 'signed-in' });
+    expect(service.getState().reauthRequired).toBeUndefined();
+    expect(await vault.reloadTokens(HOSTED)).toMatchObject({ refreshToken: 'refresh-0' });
+    service.dispose();
+  });
+
+  it('says the session expired, not to check the connection, when launch finds the refresh rejected', async () => {
+    vi.useFakeTimers();
+    process.env[BAKED] = HOSTED;
+    const { service, vault } = buildWithSharedClient({ refreshToken: vi.fn().mockRejectedValue(httpError(401)) });
+    await vault.setTokens(HOSTED, storedTokens(0, 60_000));
+
+    await service.initialize();
+
+    expect(service.getState()).toMatchObject({
+      status: 'signed-out',
+      error: { message: 'Your session expired. Sign in again to continue.', remedy: 'retry-sign-in' },
+    });
+    service.dispose();
+  });
+
+  it('adopts a session another instance stored when the user asks to sign in, with no device flow', async () => {
+    const file = memoryFile();
+    const { service, accepted, device } = await signedIn(vi.fn().mockResolvedValue(rotation(1)), file);
+    accepted.clear();
+    await service
+      .getApiClient()
+      ?.get('/api/anything')
+      .catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(service.getState().reauthRequired).toBe(true);
+
+    accepted.add('access-7');
+    await new TokenVault(cipher, file, silentLogger).setTokens(HOSTED, storedTokens(7, 30 * 60_000));
+    await service.signIn();
+
+    expect(service.getState()).toMatchObject({ status: 'signed-in', reauthRequired: undefined });
+    expect(device.initiateDeviceFlow).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it('starts no device flow when focus and the sign-in action both adopt the stored session', async () => {
+    const file = memoryFile();
+    const { service, accepted, device } = await signedIn(vi.fn().mockResolvedValue(rotation(1)), file);
+    accepted.clear();
+    await service
+      .getApiClient()
+      ?.get('/api/anything')
+      .catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+
+    accepted.add('access-7');
+    await new TokenVault(cipher, file, silentLogger).setTokens(HOSTED, storedTokens(7, 30 * 60_000));
+    await Promise.all([service.adoptStoredSession(), service.signIn()]);
+
+    expect(service.getState()).toMatchObject({ status: 'signed-in', reauthRequired: undefined });
+    expect(device.initiateDeviceFlow).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it('retries with a token another instance rotated into the vault instead of exchanging', async () => {
+    const file = memoryFile();
+    const refreshToken = vi.fn();
+    const { service, accepted } = await signedIn(refreshToken, file);
+    await new TokenVault(cipher, file, silentLogger).setTokens(HOSTED, storedTokens(5, 30 * 60_000));
+    accepted.delete('access-0');
+    accepted.add('access-5');
+
+    await expect(service.getApiClient()?.get('/api/anything')).resolves.toBeTruthy();
+
+    expect(refreshToken).not.toHaveBeenCalled();
+    expect(service.getState().status).toBe('signed-in');
+    service.dispose();
+  });
+
+  it('leaves a 403 as an error: no refresh, no re-login', async () => {
+    const refreshToken = vi.fn();
+    const { service } = await signedIn(refreshToken);
+
+    const err = await service
+      .getApiClient()
+      ?.get('/forbidden')
+      .catch((caught: unknown) => caught);
+
+    expect((err as AxiosError).response?.status).toBe(403);
+    expect(refreshToken).not.toHaveBeenCalled();
+    expect(service.getState()).toMatchObject({ status: 'signed-in' });
+    expect(service.getState().reauthRequired).toBeUndefined();
+    service.dispose();
+  });
+
+  it('leaves a 401 whose body says the credential was accepted as an error', async () => {
+    const refreshToken = vi.fn();
+    const { service } = await signedIn(refreshToken);
+
+    const err = await service
+      .getApiClient()
+      ?.get('/provider-key')
+      .catch((caught: unknown) => caught);
+
+    expect((err as AxiosError).response?.status).toBe(401);
+    expect(refreshToken).not.toHaveBeenCalled();
+    expect(service.getState().status).toBe('signed-in');
+    service.dispose();
+  });
+
+  it('clears the re-auth state when the user signs out from it', async () => {
+    const { service, accepted } = await signedIn(vi.fn().mockRejectedValue(httpError(401)));
+    accepted.clear();
+    await service
+      .getApiClient()
+      ?.get('/api/anything')
+      .catch(() => undefined);
+    expect(service.getState().reauthRequired).toBe(true);
+
+    await service.signOut();
+
+    expect(service.getState()).toMatchObject({ status: 'signed-out', user: undefined });
+    expect(service.getState().reauthRequired).toBeUndefined();
     service.dispose();
   });
 });

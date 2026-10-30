@@ -7,7 +7,7 @@ import {
   TERMINAL_SUBSCRIPTION_STATUSES,
   pickDisplayedSubscription,
   resolveSubscriptionSource,
-} from '@client/lib/subscriptions/types';
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import BaseRepository from '@bike4mind/database';
 import { IMongoDocument } from '@bike4mind/common';
 import { executeFacetCompatible } from '@bike4mind/database';
@@ -104,6 +104,16 @@ const SubscriptionSchema = new mongoose.Schema<ISubscription>(
       ),
       required: false,
     },
+    // Stripe mirror (stripeMirrorFields in @bike4mind/server-utils/lib/subscriptions/stripeMirror).
+    unitAmount: { type: Number, required: false },
+    currency: { type: String, required: false },
+    interval: { type: String, required: false },
+    intervalCount: { type: Number, required: false },
+    cancelAtPeriodEnd: { type: Boolean, required: false },
+    cancelAt: { type: Date, required: false },
+    trialEndsAt: { type: Date, required: false },
+    stripeCustomerId: { type: String, required: false },
+    lastSyncedAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -123,6 +133,15 @@ SubscriptionSchema.index({ priceId: 1, ownerType: 1, ownerId: 1, status: 1 }); /
 SubscriptionSchema.index({ periodEndsAt: 1, status: 1 }); // For subscription expiry queries
 // Admin grants listing in /api/admin/organizations/grants - small cardinality query
 SubscriptionSchema.index({ ownerType: 1, source: 1, status: 1 });
+// Admin subscriptions list sorts, each with an _id tiebreak (server/admin/subscriptionsList). Keep in sync
+// with SUBSCRIPTION_ADMIN_LIST_INDEXES in packages/scripts/migrate/migrations/20260921236200_*.
+SubscriptionSchema.index({ createdAt: -1, _id: -1 });
+SubscriptionSchema.index({ periodEndsAt: 1, _id: 1 });
+SubscriptionSchema.index({ status: 1, createdAt: -1, _id: -1 });
+// Admin subscriptions list views (renewing soon, canceling). Built in deployed stages by the
+// 20260921236300_ensure-subscription-mirror-indexes migration; keep the two in sync.
+SubscriptionSchema.index({ source: 1, status: 1, periodEndsAt: 1 });
+SubscriptionSchema.index({ cancelAtPeriodEnd: 1, status: 1 });
 
 // Invoices remembered per row for the payment-failed claim. Only invoices still inside Stripe's
 // retry window can fire again, so a short history is enough and keeps the row bounded.
@@ -226,6 +245,20 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
         }
       )
       .lean({ virtuals: true });
+  }
+
+  /**
+   * The same write as updateByStripeSubscriptionId, resolving to the row as it stood just before
+   * it. The pre-image comes from the write itself, so a caller comparing before and after sees
+   * exactly the change this write made, even with another update to the row in flight; a separate
+   * read first could see a state another write has already replaced. Null when there is no row.
+   */
+  updateByStripeSubscriptionIdReturningBefore(
+    subscriptionId: string,
+    data: Partial<ISubscription>
+  ): Promise<ISubscription | null> {
+    if (!subscriptionId) return Promise.resolve(null);
+    return this.model.findOneAndUpdate({ subscriptionId }, data, { new: false }).lean({ virtuals: true });
   }
 
   markPastDue(subscriptionId: string): Promise<ISubscription | null> {

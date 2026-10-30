@@ -7,6 +7,7 @@ import {
   CompletionInfo,
   getTextModelCost,
   getTurnsCost,
+  buildUsagePriceStamp,
   type TurnUsage,
   pricingTierForTokens,
   publishesCacheReadRate,
@@ -22,6 +23,7 @@ import {
   IUsageEventRepository,
   IUserApiKeyRepository,
   IUserRepository,
+  type IUserDocument,
   normalizeMultimodalMessages,
   BadRequestError,
   HTTPError,
@@ -30,9 +32,17 @@ import {
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   completionsSupportsToolSearch,
+  supportsAssistantPrefill,
+  ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
   isClaudeModelId,
   type CreditHoldRecord,
   type ICacheStrategy,
+  type ThinkingVisibility,
+  createReasoningWithholder,
+  reasoningChannelOf,
+  type ReasoningWithholder,
+  providerSummarizesReasoning,
+  withholdsReasoning,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -45,15 +55,18 @@ import {
   isSafetyRefusalError,
 } from '@bike4mind/utils';
 import {
+  buildApiKeyTable,
   getLlmByModel,
   getAvailableModels,
   reasonsWithinOutputBudget,
+  RUNTIME_DISCOVERED_BACKENDS,
   resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
   isModelProviderConfigured,
   isAdaptiveThinkingByDefault,
 } from '@bike4mind/llm-adapters';
+import { sentBelowReasoningFloor } from '@bike4mind/llm-adapters/model-sizing';
 import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
@@ -61,8 +74,11 @@ import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE }
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
-import { prepareWireTools } from './cliCompletionsToolSearch';
+import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
+import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './llm/modelAdmission';
+import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+import { fallbackThinkingVisibility } from './thinkingVisibility';
 
 /** Persistence boundary: implementations commit each callback and its hold transition atomically. */
 export type CompletionCreditHolds = {
@@ -140,6 +156,11 @@ export interface CompletionParams {
     userApiKeys?: IUserApiKeyRepository;
   };
   /**
+   * Applied to the reloaded caller before model admission, e.g. to withhold an admin role the
+   * authenticating API key does not grant. The org-membership check reads the stored role.
+   */
+  scopeActor?: <U extends { isAdmin?: boolean }>(actor: U) => U;
+  /**
    * API key information if authenticated via API key
    * Used for credit transaction tracking and audit logging
    */
@@ -182,13 +203,17 @@ export interface CompletionParams {
    * A throw from it refunds the hold.
    */
   onReady?: () => void | Promise<void>;
+  /** Entitlement resolver for model admission; omitted means tag-only access. */
+  getEntitlements?: (user: IUserDocument) => Promise<string[]>;
+  /** Resolved on the reloaded caller; omitted means `raw`. A failed resolution withholds. */
+  getThinkingVisibility?: (user: IUserDocument) => Promise<ThinkingVisibility>;
 }
 
 /**
  * Estimate input tokens from messages. Conservative pre-flight estimate at
  * 2.5 chars/token (code, JSON, and non-English tokenize less efficiently).
  */
-function estimateInputTokens(messages: IMessage[]): number {
+export function estimateInputTokens(messages: IMessage[]): number {
   const totalChars = messages.reduce((sum, msg) => {
     const contentLength = typeof msg.content === 'string' ? msg.content.length : JSON.stringify(msg.content).length;
     return sum + contentLength;
@@ -203,7 +228,7 @@ function estimateInputTokens(messages: IMessage[]): number {
  * the tool is sent in full. Decided here rather than trusting prepareWireTools to have stripped
  * the flag, because `serverTools` never pass through it.
  */
-function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured: boolean): number {
+export function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured = false): number {
   const totalChars = tools.reduce(
     (sum, tool) =>
       deferralHonoured && tool.toolSchema.defer_loading === true ? sum : sum + JSON.stringify(tool.toolSchema).length,
@@ -385,6 +410,53 @@ export function resolveOpenAiBareModelAlias(modelId: string): string {
   return OPENAI_BARE_MODEL_ALIASES.get(modelId) ?? modelId;
 }
 
+const EMPTY_CONVERSATION_MESSAGE = 'request must contain at least one non-empty user or assistant message';
+
+function hasEffectiveConversationMessage(messages: IMessage[]): boolean {
+  return messages.some(message => {
+    if (message.role !== 'user' && message.role !== 'assistant') return false;
+    if ('tool_calls' in message && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true;
+    if (typeof message.content === 'string') return message.content.trim().length > 0;
+    return Array.isArray(message.content)
+      ? message.content.some(block => block.type !== 'text' || Boolean(block.text?.trim()))
+      : false;
+  });
+}
+
+async function resolveCallerThinkingVisibility(
+  params: Pick<CompletionParams, 'getThinkingVisibility' | 'userId' | 'db'>,
+  actor: IUserDocument | null,
+  logger: Logger | undefined
+): Promise<ThinkingVisibility> {
+  if (!params.getThinkingVisibility) return 'raw';
+  try {
+    if (actor) return await params.getThinkingVisibility(actor);
+  } catch (error) {
+    logger?.warn?.('[cliCompletions] thinking visibility resolution failed; using the free level', {
+      userId: params.userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return fallbackThinkingVisibility({ adminSettings: params.db.adminSettings });
+}
+
+/**
+ * One frame with the caller-withheld reasoning removed. Anthropic thinking blocks ride client-tool
+ * frames so the caller can echo them unchanged on the next turn, which the provider requires; they
+ * are kept when the provider returns them summarized and dropped when they would carry the raw trace.
+ */
+export function withholdReasoningFromFrame(
+  withholder: ReasoningWithholder,
+  text: (string | null | undefined)[],
+  info: CompletionInfo | undefined,
+  model: string
+): { text: (string | null | undefined)[]; info: CompletionInfo | undefined } {
+  const visibleText = text.map(entry => (entry ? withholder.visible(entry, info?.channel) : entry));
+  if (!info?.thinking || providerSummarizesReasoning(model)) return { text: visibleText, info };
+  const { thinking: _withheld, ...rest } = info;
+  return { text: visibleText, info: rest };
+}
+
 /**
  * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
  */
@@ -396,7 +468,14 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // token estimate below and every backend translator read the same shape.
   const messages = normalizeMultimodalMessages(params.messages);
   const source: CompletionSource = params.source ?? 'api';
+  // One id per request: the usage event and the credit transaction share it so the admin ledger can
+  // point at the usage record.
+  const requestId = params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`;
   const completionStartTime = Date.now();
+
+  if (!hasEffectiveConversationMessage(messages)) {
+    throw new BadRequestError(EMPTY_CONVERSATION_MESSAGE);
+  }
 
   // Fail-closed before any credit reservation: wire tools (client-executed, executeTools
   // false) and server tools (executeTools true) imply opposite loop semantics - silently
@@ -456,9 +535,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     billToOrg ? db.organizations!.findById(holderId) : db.users.findById(holderId);
 
   // Get effective API keys (user keys or fallback to admin demo keys)
-  const apiKeys = await getEffectiveLLMApiKeys(userId, { db, getSettingsByNames });
+  const apiKeys = buildApiKeyTable(await getEffectiveLLMApiKeys(userId, { db, getSettingsByNames }));
 
-  const models = await getAvailableModels(apiKeys);
+  let failedListings: readonly ModelBackend[] = [];
+  const models = await getAvailableModels(apiKeys, { onFailedListings: failed => (failedListings = failed) });
   const modelInfo = models.find(m => m.id === (model as ChatModels));
   const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
@@ -468,6 +548,45 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     throw new BadRequestError(
       `Model '${params.model}' is currently unavailable${reason}. List the models you can call with GET /api/v1/models.`,
       { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
+
+  // Modality is a property of the model, not its backend: an image/video model routed
+  // through a chat backend cannot be served by this text endpoint.
+  if (modelInfo && modelInfo.type !== 'text') {
+    throw new BadRequestError(
+      `Model '${params.model}' (type: ${modelInfo.type}) cannot be used for text completions.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
+
+  // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
+  const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
+  const enforceCredits = getSettingsValue('enforceCredits', settings);
+
+  const [storedActor, modelConfigs, freeTierAllowedModels] = await Promise.all([
+    db.users.findById(userId),
+    loadModelConfigurations(db.adminSettings),
+    loadFreeTierAllowedModels(db.adminSettings),
+  ]);
+  const actor = storedActor && params.scopeActor ? params.scopeActor(storedActor) : storedActor;
+  await createModelAdmission({
+    user: actor ?? {},
+    configs: modelConfigs,
+    getEntitlements: actor && params.getEntitlements ? () => params.getEntitlements!(actor) : undefined,
+    models,
+    enforceCredits: Boolean(enforceCredits),
+    freeTierAllowedModels,
+  }).assert(model);
+  const withholdReasoning = withholdsReasoning(await resolveCallerThinkingVisibility(params, actor, logger), model);
+  const reasoningChannel = reasoningChannelOf(modelInfo ?? { id: model });
+  // Reasoning the caller may not see is not requested at all when the provider would return it raw.
+  const suppressThinking = withholdReasoning && reasoningChannel !== 'never' && !providerSummarizesReasoning(model);
+
+  if (modelInfo && !supportsAssistantPrefill(modelInfo) && hasAssistantPrefill(messages)) {
+    throw new BadRequestError(
+      `Model '${params.model}' does not support assistant message prefill. End the conversation with a user message.`,
+      { errorCode: ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE }
     );
   }
 
@@ -482,17 +601,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       `Unknown model '${params.model}'. List the models you can call with GET /api/v1/models.`,
       { errorCode: UNKNOWN_MODEL_ERROR_CODE }
     );
-    if (!catalogued) throw unknownModel;
+    const providerUnavailable = (message = `Failed to create LLM backend for model: ${params.model}`) =>
+      new HTTPError(503, message, {
+        errorCode: 'provider_not_configured',
+      });
+    // Ollama pulls and local checkpoints exist only in their live listing, so a failed one proves no absence.
+    if (!catalogued) {
+      const failedRuntime = failedListings.filter(b => RUNTIME_DISCOVERED_BACKENDS.includes(b));
+      if (failedRuntime.length === 0) throw unknownModel;
+      logger?.warn?.('[cliCompletions] live model listing failed; answering 503', { model, failedListings });
+      throw providerUnavailable(`Model listing for ${failedRuntime.join(', ')} is unavailable; retry shortly.`);
+    }
     const providerConfigured = await isModelProviderConfigured(model, apiKeys).catch((cause: unknown) => {
       logger?.error?.('[cliCompletions] provider check failed; answering 503', { model, cause });
       return false;
     });
-    if (!providerConfigured)
-      throw new HTTPError(503, `Failed to create LLM backend for model: ${params.model}`, {
-        errorCode: 'provider_not_configured',
-      });
-    // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status
-    // would loop clients forever. Static listings cannot time out, so absence here is not transient.
+    if (!providerConfigured) throw providerUnavailable();
+    // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status would loop
+    // clients forever. Catalogued ids come from static listings, which cannot fail, so absence here is not transient.
     logger?.warn?.('[cliCompletions] catalogued model unavailable on a configured provider', { model });
     throw unknownModel;
   }
@@ -545,12 +671,28 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
   // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
+  // DeepSeek reasons unless told not to, so withheld reasoning would still be billed.
   const thinking = withOllamaThinkingDefault(
-    options?.thinking?.enabled && modelInfo?.can_think
-      ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
-      : undefined,
+    suppressThinking && modelInfo?.backend === ModelBackend.DeepSeek
+      ? { enabled: false, budget_tokens: 0 }
+      : options?.thinking?.enabled && modelInfo?.can_think && !suppressThinking
+        ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
+        : undefined,
     modelInfo
   );
+  const reasoningShortfall =
+    modelInfo &&
+    sentBelowReasoningFloor({
+      requested: options?.maxTokens,
+      fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+      modelInfo,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+      thinking,
+    });
+  if (reasoningShortfall) {
+    // Honored as set; logged so an empty reply at max_tokens can be traced to the caller's budget.
+    logger?.info?.('[cliCompletions] max_tokens below reasoning floor', { model, ...reasoningShortfall });
+  }
 
   const requestTools = useServerTools ? params.serverTools! : (promotedTools ?? []);
   const cacheStrategy = buildClaudeCacheStrategy(modelInfo, messages, requestTools.length > 0, source);
@@ -558,11 +700,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // This path has no complexity classifier and clients rarely send an effort, so an adaptive Claude
   // that thinks unasked would run every request at the provider default (high on Opus 5). Any
   // explicit effort or thinking value from the client wins.
-  const reasoningEffort =
-    options?.reasoningEffort ??
-    (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(model, modelInfo)
-      ? 'medium'
-      : undefined);
+  const reasoningEffort = suppressThinking
+    ? undefined
+    : (options?.reasoningEffort ??
+      (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(model, modelInfo)
+        ? 'medium'
+        : undefined));
 
   const completionOptions: Partial<ICompletionOptions> = {
     temperature: options?.temperature,
@@ -588,8 +731,6 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   }
 
   // Credit enforcement: Fail-fast if model info is missing
-  const settings = await getSettingsMap(db);
-  const enforceCredits = getSettingsValue('enforceCredits', settings);
 
   if (enforceCredits) {
     if (!modelInfo) {
@@ -739,6 +880,14 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens
         );
 
+  // Provenance of the rates settledUsdCost applied: the same turns, else the same tier basis.
+  const settledPriceStamp = (pricedModel: ModelInfo) =>
+    buildUsagePriceStamp(pricedModel, {
+      turns: finalTurnUsage,
+      tierBasisTokens: finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens,
+    });
+
+  const reasoningWithholder = withholdReasoning ? createReasoningWithholder(reasoningChannel) : null;
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -770,6 +919,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // only frame with `credits`, so a client reading credits sees exactly one number, and it is
     // the one the ledger charged. A provisional round-up here (usdToCredits, minimum 1) used to
     // precede a stochastic settlement of 0 on cheap calls, which read as a double charge.
+    if (reasoningWithholder) {
+      const withheld = withholdReasoningFromFrame(reasoningWithholder, text, info, model);
+      await onChunk(withheld.text, withheld.info);
+      return;
+    }
     await onChunk(text, info);
   };
 
@@ -780,6 +934,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   try {
     await params.onReady?.();
     await llm.complete(model, messages, completionOptions, wrappedOnChunk);
+    const heldText = reasoningWithholder?.flush();
+    if (heldText) await onChunk([heldText]);
   } catch (error) {
     if (params.abortSignal?.aborted && streamedOutputChars > 0) {
       abortError = error;
@@ -811,7 +967,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       ) {
         db.usageEvents
           ?.record({
-            requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+            requestId,
             userId,
             ownerId: holderId,
             ownerType: holderType,
@@ -826,6 +982,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             cacheWriteTokens: finalCacheCreationTokens,
             costUsd: settledUsdCost(modelInfo),
             creditsCharged: 0,
+            ...settledPriceStamp(modelInfo),
             status: isRefusal ? 'refusal' : 'error',
             latencyMs: Date.now() - completionStartTime,
           })
@@ -869,6 +1026,17 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   if (modelInfo) {
     finalUsdCost = settledUsdCost(modelInfo);
     finalCredits = usdToCreditsStochastic(finalUsdCost);
+    logLlmUsageSettled({
+      backend: modelInfo.backend,
+      model: modelInfo.id,
+      inputTokens: finalInputTokens,
+      outputTokens: finalOutputTokens,
+      cacheReadTokens: finalCacheReadTokens,
+      cacheWriteTokens: finalCacheCreationTokens,
+      usd: finalUsdCost,
+      source,
+      accountCreatedAt: storedActor?.createdAt,
+    });
 
     logger?.info?.(
       `[CLI_CREDITS] Sending final credits to client: ${finalCredits} credits (${finalInputTokens} input + ${finalOutputTokens} output tokens` +
@@ -902,7 +1070,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const recordUsageEvent = (creditsCharged: number) => {
     db.usageEvents
       ?.record({
-        requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+        requestId,
         userId,
         ownerId: holderId,
         ownerType: holderType,
@@ -919,6 +1087,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         cacheWriteTokens: finalCacheCreationTokens,
         costUsd: finalUsdCost,
         creditsCharged,
+        ...settledPriceStamp(modelInfo!),
         // Same refund key the web chat path records: a stream aborted as degenerate is
         // priced normally (the provider tokens were spent) but must not read as a clean,
         // fully-valued success. See usageEventStatusForFinish.
@@ -1059,6 +1228,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
                   apiKeyName: apiKeyInfo.keyName,
                 }),
                 authMethod: apiKeyInfo ? 'api_key' : 'jwt',
+                requestId,
                 // For org-billed keys, keep the acting user for attribution even
                 // though the credits leave the org pool.
                 ...(billToOrg && { billedTo: 'organization', actingUserId: userId }),

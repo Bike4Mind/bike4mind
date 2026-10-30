@@ -10,6 +10,7 @@ import type { AgentContext, ShowKindedPermissionPrompt, ShowPermissionPrompt, To
 import { runSandboxed } from './sandboxEscalation.js';
 import type { PermissionManager } from '../../../utils/PermissionManager.js';
 import { executeWithFuzzyConfirmation } from './fuzzyEdit.js';
+import { checkpointBeforeWrite } from './checkpoint.js';
 
 export type ExecutionInput = {
   toolName: string;
@@ -32,13 +33,13 @@ export type ExecutionInput = {
 };
 
 /**
- * Run an approved call: checkpoint, execute through the sandbox stage (ToolRouter redacts and
- * caps the output; a sandbox denial asks before retrying unsandboxed), offer retry on a path
- * denial, then fire the post-tool signals.
+ * Run an approved call: checkpoint, execute through the sandbox stage (each execution's output
+ * is redacted and capped by the output stage; a sandbox denial asks before retrying
+ * unsandboxed), offer retry on a path denial, then fire the post-tool signals.
  */
 export async function executeAndRecord(input: ExecutionInput): Promise<string> {
   const { toolName, descriptor, rawArgs, execArgs, isSandboxed, originalFn, apiClient, showPermissionPrompt } = input;
-  await checkpointBeforeWrite(input.checkpointStore, toolName, writePathOf(descriptor, rawArgs));
+  await checkpointBeforeWrite(input.checkpointStore, toolName, descriptor, rawArgs);
   const attempt = async (args: ToolArgs): Promise<string> => {
     try {
       return await executeWithFuzzyConfirmation(toolName, args, apiClient, originalFn, showPermissionPrompt);
@@ -80,25 +81,6 @@ export async function executeAndRecord(input: ExecutionInput): Promise<string> {
   // block sentinel (matcher "*").
   void getProcessHooks()?.firePostToolUse(toolName);
   return result;
-}
-
-/**
- * Snapshot the target of a file write in the shadow git repo so /undo can restore it. Called
- * once the permission gate approves the write, so a write denied there or blocked by plan mode
- * leaves no checkpoint (a later fuzzy-edit re-prompt or directory grant can still be denied after
- * it). A checkpoint failure never blocks the write.
- */
-async function checkpointBeforeWrite(
-  checkpointStore: CheckpointStore | null | undefined,
-  toolName: string,
-  writePath: string | undefined
-): Promise<void> {
-  if (!checkpointStore || !writePath) return;
-  try {
-    await checkpointStore.createCheckpoint(toolName, [writePath], `before-${toolName}-${path.basename(writePath)}`);
-  } catch {
-    // Best effort: losing an undo point must not fail the user's write.
-  }
 }
 
 // Must stay in sync with the success strings returned by the core editLocalFile

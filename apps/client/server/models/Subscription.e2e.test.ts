@@ -4,7 +4,7 @@ import type Stripe from 'stripe';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { mongoose } from '@bike4mind/database';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { Subscription, subscriptionRepository } from './Subscription';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.
@@ -423,6 +423,44 @@ describe('markPastDue', () => {
 
   it('returns null when this stage has no row', async () => {
     expect(await subscriptionRepository.markPastDue('sub_missing')).toBeNull();
+  });
+});
+
+describe('updateByStripeSubscriptionIdReturningBefore', () => {
+  it('writes the update and resolves to the row as it was before it', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_swap', priceId: 'price_basic' }));
+
+    const before = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore('sub_swap', {
+      priceId: 'price_pro',
+      canceledAt: new Date('2026-01-15T00:00:00Z'),
+    });
+
+    expect(before).toMatchObject({ priceId: 'price_basic', canceledAt: null });
+    const stored = await Subscription.findOne({ subscriptionId: 'sub_swap' }).lean<{ priceId: string }>();
+    expect(stored?.priceId).toBe('price_pro');
+  });
+
+  it('gives each of two successive writes the state the other left', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_seq', priceId: 'price_basic' }));
+
+    const first = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore('sub_seq', {
+      priceId: 'price_pro',
+    });
+    const second = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore('sub_seq', {
+      priceId: 'price_team',
+    });
+
+    expect([first?.priceId, second?.priceId]).toEqual(['price_basic', 'price_pro']);
+  });
+
+  it('returns null, and writes nothing, when this stage has no row or the id is missing', async () => {
+    expect(
+      await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore('sub_missing', { priceId: 'p' })
+    ).toBeNull();
+    await Subscription.create(row({ subscriptionId: 'sub_other' }));
+    expect(await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore('', { priceId: 'p' })).toBeNull();
+    const stored = await Subscription.findOne({ subscriptionId: 'sub_other' }).lean<{ priceId: string }>();
+    expect(stored?.priceId).toBe('price_pro');
   });
 });
 

@@ -144,7 +144,7 @@ class SyncTranslation {
     // The translation model + API keys are resolved from the database (system
     // keys) by OperationsModelService below - not from a process.env key - so
     // there's no upfront env-key/model availability gate here.
-    const { OperationsModelService } = await import('../../apps/client/services/operationsModelService');
+    const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
 
     let translation = '';
 

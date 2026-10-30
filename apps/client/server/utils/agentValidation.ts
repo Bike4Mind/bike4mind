@@ -6,7 +6,15 @@
  */
 
 import { BadRequestError } from '@bike4mind/utils';
-import { IAgent, supportedChatModels, supportedImageModels, triggerWordsSchema } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+import {
+  IAgent,
+  IUserDocument,
+  ServiceUnavailableError,
+  supportedChatModels,
+  supportedImageModels,
+  triggerWordsSchema,
+} from '@bike4mind/common';
 
 /**
  * A body field failed one of these validators. A BadRequestError (400) on the SPA routes; the
@@ -157,18 +165,57 @@ export function validateTriggerWords(value: unknown): string[] | undefined {
   return result.data;
 }
 
+type CatalogLogger = { log: (message: string) => void };
+
+/**
+ * The static enums only know models that shipped with the build; newer ones arrive through the
+ * dynamic catalog and chat accepts them by that route. An enum hit passes without a lookup, so the
+ * live fan-out runs only for ids the enums miss. An id is accepted when the build knows it or, for
+ * a catalog-only id, when it is selectable in chat for this user.
+ */
+async function assertModelsSelectable(agentData: Partial<IAgent>, user: IUserDocument, logger: CatalogLogger) {
+  const checks = [
+    { id: agentData.preferredModel, known: supportedChatModels, type: 'text' as const, message: 'Invalid model' },
+    {
+      id: agentData.preferredImageModel,
+      known: supportedImageModels,
+      type: 'image' as const,
+      message: 'Invalid image model',
+    },
+  ].filter(({ id, known }) => id && !known.safeParse(id).success);
+  const malformed = checks.find(({ id }) => typeof id !== 'string');
+  if (malformed) throw new AgentValidationError(`${malformed.message}: expected a string`);
+  if (checks.length === 0) return;
+
+  // Loaded lazily: callerModelList pulls in the entitlements and billing graph, and skillValidation
+  // and the create-from-context routes import this module only for the pure validators.
+  const { getCallerModelList } = await import('@server/utils/callerModelList');
+  const { models } = await getCallerModelList(user, logger);
+  // An empty catalog means every backend listing failed; reject as unavailable, not as a bad model.
+  if (models.length === 0) {
+    throw new ServiceUnavailableError('Model catalog is unavailable; try again shortly');
+  }
+  // The catalog is one flat list across modalities, so match the slot's type too or a chat id would pass as an image model.
+  for (const { id, type, message } of checks) {
+    if (!models.some(model => model.id === id && model.type === type)) {
+      throw new AgentValidationError(`${message}: ${id}`);
+    }
+  }
+}
+
 /**
  * Validates and normalizes the fields of an agent body in place, for PUT /api/agents/[id],
  * PATCH /api/v1/agents/[id] and createAgent (both POST routes). Only fields present on `agentData` are checked. `label` renames a field
- * in an error message, so the v1 route can name its snake_case spelling.
+ * in an error message, so the v1 route can name its snake_case spelling. `user` scopes the model
+ * catalog lookup to what the caller can actually chat with (their keys and plan); `logger` carries the
+ * request's logger into that lookup.
  */
-export function validateAgentUpdate(agentData: Partial<IAgent>, label: (field: string) => string = field => field) {
-  if (agentData.preferredModel && !supportedChatModels.safeParse(agentData.preferredModel).success) {
-    throw new AgentValidationError(`Invalid model: ${agentData.preferredModel}`);
-  }
-  if (agentData.preferredImageModel && !supportedImageModels.safeParse(agentData.preferredImageModel).success) {
-    throw new AgentValidationError(`Invalid image model: ${agentData.preferredImageModel}`);
-  }
+export async function validateAgentUpdate(
+  agentData: Partial<IAgent>,
+  user: IUserDocument,
+  label: (field: string) => string = field => field,
+  logger: CatalogLogger = new Logger()
+) {
   if (agentData.temperature !== undefined && (agentData.temperature < 0 || agentData.temperature > 2)) {
     throw new AgentValidationError('Temperature must be between 0 and 2');
   }
@@ -205,4 +252,7 @@ export function validateAgentUpdate(agentData: Partial<IAgent>, label: (field: s
   if (agentData.fallbackModels !== undefined) {
     agentData.fallbackModels = validateStringList(agentData.fallbackModels, 'fallbackModels');
   }
+
+  // Last, so a body the cheap checks reject never pays for the live catalog fan-out.
+  await assertModelsSelectable(agentData, user, logger);
 }

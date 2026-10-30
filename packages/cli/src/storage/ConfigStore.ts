@@ -17,6 +17,7 @@ import {
 import { resolveStaticToolDescriptor } from '../tools/gateway/toolCatalog.js';
 import { canTrustTool } from '../tools/gateway/toolPolicy.js';
 import { PROJECT_CONTEXT_FILES } from '../utils/contextLoader';
+import { escapeTerminalControlChars, sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import { logger } from '../utils/Logger';
 
 /**
@@ -65,6 +66,7 @@ const SandboxConfigSchema = z
     network: SandboxNetworkSchema.default(DEFAULT_SANDBOX_CONFIG.network),
     excludedCommands: z.array(z.string()).default(DEFAULT_SANDBOX_CONFIG.excludedCommands),
     allowUnsandboxedCommands: z.boolean().default(true),
+    allowContainerSockets: z.boolean().default(false),
     platform: SandboxPlatformSchema.default(DEFAULT_SANDBOX_CONFIG.platform),
   })
   .refine(
@@ -101,6 +103,7 @@ const PartialSandboxConfigSchema = z
       .optional(),
     excludedCommands: z.array(z.string()).optional(),
     allowUnsandboxedCommands: z.boolean().optional(),
+    allowContainerSockets: z.boolean().optional(),
     platform: SandboxPlatformSchema.optional(),
   })
   .optional();
@@ -317,6 +320,8 @@ const CliConfigSchema = z.object({
   sandbox: SandboxConfigSchema.optional(),
   additionalDirectories: z.array(z.string()).prefault([]),
   fallbackModels: z.array(z.string()).optional(),
+  ollamaHost: z.string().optional(),
+  localDefaultModel: z.string().optional(),
 });
 
 /**
@@ -653,7 +658,8 @@ function isWithin(root: string, target: string): boolean {
  * only ever TIGHTEN it, never loosen it. A repo layer may enable the sandbox,
  * raise the mode (disabled < auto-allow < permissions) but never select
  * auto-allow itself, add denied paths, narrow read paths / domains / excluded
- * commands, turn the network filter on, and force allowUnsandboxedCommands off.
+ * commands, turn the network filter on, and force allowUnsandboxedCommands and
+ * allowContainerSockets off.
  * Every loosening value is ignored with a warning. `platform` is ignored.
  */
 function tightenSandbox(base: SandboxConfig | undefined, repo: PartialSandboxConfig | undefined): SandboxConfig {
@@ -698,6 +704,9 @@ function tightenSandbox(base: SandboxConfig | undefined, repo: PartialSandboxCon
 
   if (repo.allowUnsandboxedCommands === false) result.allowUnsandboxedCommands = false;
   else if (repo.allowUnsandboxedCommands === true && !b.allowUnsandboxedCommands) warn('allowUnsandboxedCommands=true');
+
+  if (repo.allowContainerSockets === false) result.allowContainerSockets = false;
+  else if (repo.allowContainerSockets === true && !b.allowContainerSockets) warn('allowContainerSockets=true');
 
   // Keep enabled/mode consistent for the schema refine: an enabled sandbox needs
   // a non-disabled mode (default to the strictest), and a disabled one needs
@@ -1161,10 +1170,11 @@ export class ConfigStore {
   warnPendingMcpApprovals(): void {
     if (this.pendingMcpWarned || this.pendingMcpApprovals.length === 0) return;
     this.pendingMcpWarned = true;
-    const names = this.pendingMcpApprovals.map(s => s.name).join(', ');
+    const names = sanitizeTerminalText(this.pendingMcpApprovals.map(s => s.name).join(', '));
+    const root = escapeTerminalControlChars(this.projectRealPath ?? '').replace(/\n/g, '\\n');
     logger.warn(
       `Skipping ${this.pendingMcpApprovals.length} unapproved repo MCP server(s): ${names}. ` +
-        `Run b4m interactively in ${this.projectRealPath} to approve them.`
+        `Run b4m interactively in ${root} to approve them.`
     );
   }
 
@@ -1313,6 +1323,43 @@ export class ConfigStore {
   }
 
   /**
+   * `b4m models` writes defaultModel, ollamaHost and localDefaultModel from its own process, so like features
+   * they are taken from disk unless this caller's patch sets them.
+   */
+  private async mergeModelFields(
+    next: CliConfig,
+    snapshot: CliConfig,
+    patch: GlobalConfigPatch | undefined
+  ): Promise<CliConfig> {
+    let disk: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
+      const result = z.record(z.string(), z.unknown()).safeParse(parsed);
+      if (!result.success) return next;
+      disk = result.data;
+    } catch {
+      return next;
+    }
+    // A patch naming a key sets it; a whole config spread back (it carries `version`) only sets what it changed.
+    const wholeConfig = patch !== undefined && Object.prototype.hasOwnProperty.call(patch, 'version');
+    const changed = (key: 'defaultModel' | 'ollamaHost' | 'localDefaultModel') =>
+      patch !== undefined &&
+      Object.prototype.hasOwnProperty.call(patch, key) &&
+      (!wholeConfig || patch[key] !== snapshot[key]);
+    const optional = (key: 'ollamaHost' | 'localDefaultModel') =>
+      changed(key) || (disk[key] !== undefined && typeof disk[key] !== 'string')
+        ? next[key]
+        : (disk[key] as string | undefined);
+    return {
+      ...next,
+      defaultModel:
+        changed('defaultModel') || typeof disk.defaultModel !== 'string' ? next.defaultModel : disk.defaultModel,
+      ollamaHost: optional('ollamaHost'),
+      localDefaultModel: optional('localDefaultModel'),
+    };
+  }
+
+  /**
    * Save configuration to disk
    */
   async save(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
@@ -1379,6 +1426,9 @@ export class ConfigStore {
       // refresh features from disk so a concurrent writer isn't reverted - unless
       // this is a reset, which intentionally wipes the feature map.
       this.globalConfig = { ...global, features: opts?.clearFeatures ? {} : await this.readDiskFeatures() };
+    }
+    if (!opts?.clearFeatures) {
+      this.globalConfig = await this.mergeModelFields(this.globalConfig, global, config);
     }
 
     try {

@@ -256,15 +256,19 @@ export async function getOidcConfiguration(
 
     return config;
   } catch (error) {
-    Logger.error(`[OktaOidc] Discovery failed for ${authServerType} auth server at: ${discoveryUrl}`, error);
+    const failureMessage = `[OktaOidc] Discovery failed for ${authServerType} auth server at: ${discoveryUrl}`;
 
     // Only attempt the org-level fallback when this is the documented
     // misconfiguration signal (4xx from the discovery endpoint). Bail on
     // org-level configs (no further fallback to attempt) and on transient
     // errors (5xx, network) where a silent recovery would mask the real cause.
     if (useOrgAuthServer || !isLikelyMisconfigDiscoveryError(error)) {
+      Logger.error(failureMessage, error);
       throw error;
     }
+
+    // WARN, not ERROR: the fallback below usually recovers, and a failed fallback logs at error itself.
+    Logger.warn(failureMessage, error);
 
     const idpHint = idp?.id ? `idp ${idp.id}` : 'SST-fallback config';
     Logger.warn(`[OktaOidc] Retrying discovery against org-level auth server for ${idpHint}`);

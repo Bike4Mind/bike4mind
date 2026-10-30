@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import SelectInput from 'ink-select-input';
-import { escapeTerminalControlChars } from './PermissionPrompt';
+import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
 
 export type FolderTrustChoice = 'trust' | 'not-now';
 

@@ -27,7 +27,9 @@ export const getMeContract = defineEndpoint({
     'and entitlement keys. The subject is always the credential holder - this endpoint accepts no ' +
     'user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own ' +
     "owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws " +
-    'on a pool this number does not describe. Gate on `tier != "free"` for "does this caller hold a paid plan (own or org seat)" and ' +
+    'on a pool this number does not describe. `credits.monthly_allowance` totals monthly personal plan grants, ' +
+    'including custom grants; it is null when unavailable and may be omitted by older servers. ' +
+    'Gate on `tier != "free"` for "does this caller hold a paid plan (own or org seat)" and ' +
     'on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ' +
     "ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's " +
     "organization) confers that org plan's tier and `subscription`, even when the caller pays nothing " +
@@ -51,7 +53,7 @@ export const getMeContract = defineEndpoint({
           interval: 'monthly',
           current_period_ends_at: '2026-10-18T00:00:00.000Z',
         },
-        credits: { balance: 31667 },
+        credits: { balance: 31667, monthly_allowance: 50000 },
         entitlements: ['base'],
       },
     },

@@ -68,7 +68,7 @@ export const ContinuationSchema = z.object({
   executionId: z.string(),
   connectionId: z.string(),
   // Optional for backward compat with in-flight messages that pre-date the depth guard.
-  // Defaults to 0 at the call site when absent. See MAX_CHECKPOINT_DEPTH in agentExecutor.ts.
+  // Defaults to 0 at the call site when absent. See MAX_CHECKPOINT_DEPTH in agentExecutor.checkpointDepth.ts.
   checkpointDepth: z.number().int().min(0).optional(),
 });
 

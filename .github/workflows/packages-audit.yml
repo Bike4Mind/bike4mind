@@ -16,6 +16,9 @@ on:
 env:
   DEFAULT_PACKAGES_STAGE: dev
 
+permissions:
+  contents: read
+
 jobs:
   packages-audit:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}

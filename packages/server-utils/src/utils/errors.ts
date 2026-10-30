@@ -16,6 +16,7 @@ import {
   MethodNotAllowedError,
   ConflictError,
   BadGatewayError,
+  ServiceUnavailableError,
   TooManyRequestsError,
   isZodError,
   canAccessTavern,
@@ -33,6 +34,7 @@ export {
   MethodNotAllowedError,
   ConflictError,
   BadGatewayError,
+  ServiceUnavailableError,
   TooManyRequestsError,
   isZodError,
 };

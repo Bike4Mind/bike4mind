@@ -4,6 +4,8 @@ import type { Server } from 'http';
 import express from 'express';
 
 // Real @bike4mind/common (pure SSE + origin helpers). Only the seams below are mocked.
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -148,6 +150,8 @@ vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProc
 
 import { registerEmbedRoutes } from './embedRoute';
 import { spendCapExceededError } from '@bike4mind/common';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const VALID_INFO = {
   keyId: 'key-1',
@@ -255,6 +259,33 @@ describe('POST /api/embed/chat', () => {
     expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
   });
 
+  it('answers 503 server_error with Retry-After and no driver text when the database is unreachable', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+    const res = await post(CHAT);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBe('5');
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe('server_error');
+    expect(JSON.stringify(body)).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('answers 500 server_error for an unexpected key-check failure', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(toApiKeyAuthError(new Error('boom')));
+    const res = await post(CHAT);
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as Record<string, unknown>).error).toBe('server_error');
+  });
+
+  it('answers 401 for an unknown key', async () => {
+    mockVerifyEmbedApiKey.mockRejectedValue(new UnauthorizedError('Invalid or expired API key'));
+    const res = await post(CHAT);
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as Record<string, unknown>).error).toBe('unauthorized');
+  });
+
   it('rejects a body agentId that does not match the key', async () => {
     const res = await post({ ...CHAT, agentId: 'someone-elses-agent' });
     expect(res.status).toBe(403);
@@ -319,8 +350,37 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('treats Origin: null (sandboxed iframe) as absent rather than 403', async () => {
+  it('denies an opaque origin when the key restricts origins', async () => {
     const res = await post(CHAT, { origin: 'null' });
+    expect(res.status).toBe(403);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('denies an opaque origin when the key has no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
+    const res = await post(CHAT, { origin: 'null' });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as Record<string, unknown>).error_description).toBe(
+      'Origin not allowed for this embed key'
+    );
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('serves a request without an Origin header when the key has no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves an origin on the key allow-list', async () => {
+    const res = await post(CHAT, { origin: 'https://example.com' });
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('still serves a request that carries no Origin header', async () => {
+    const res = await post(CHAT);
     expect(res.status).toBe(200);
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
   });
@@ -361,6 +421,12 @@ describe('POST /api/embed/chat', () => {
 
   it('rejects an empty-content message (400)', async () => {
     const res = await post({ messages: [{ role: 'user', content: '' }] });
+    expect(res.status).toBe(400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('rejects a whitespace-only message (400)', async () => {
+    const res = await post({ messages: [{ role: 'user', content: '   ' }] });
     expect(res.status).toBe(400);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
@@ -452,6 +518,49 @@ describe('POST /api/embed/chat', () => {
       body: JSON.stringify(CHAT),
     });
   }
+
+  it('gates the session-token path on the live key allow-list, not the token copy', async () => {
+    // Only the stale token lists this origin, so reading the token's list instead would let it through.
+    mockVerifyEmbedSessionToken.mockReturnValue({
+      keyId: 'key-1',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      sessionId: 'sess-1',
+      allowedOrigins: ['https://stale.example'],
+    });
+    mockVerifyEmbedKeyById.mockResolvedValue(VALID_INFO);
+    const res = await fetch(`${baseUrl}/api/embed/chat`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer session.jwt.token',
+        origin: 'https://stale.example',
+      },
+      body: JSON.stringify(CHAT),
+    });
+    expect(res.status).toBe(403);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('denies an opaque origin on the session-token path when the live key lists no origins', async () => {
+    mockVerifyEmbedSessionToken.mockReturnValue({
+      keyId: 'key-1',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      sessionId: 'sess-1',
+    });
+    mockVerifyEmbedKeyById.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
+    const res = await fetch(`${baseUrl}/api/embed/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer session.jwt.token', origin: 'null' },
+      body: JSON.stringify(CHAT),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as Record<string, unknown>).error_description).toBe(
+      'Origin not allowed for this embed key'
+    );
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
 
   it('rejects a session token whose bound agent no longer matches the live key (post-rebind replay)', async () => {
     mockVerifyEmbedSessionToken.mockReturnValue({
@@ -1121,5 +1230,24 @@ describe('POST /api/embed/chat - anonymous mode stays stateless', () => {
       { role: 'assistant', content: 'b' },
       { role: 'user', content: 'c' },
     ]);
+  });
+});
+
+describe('POST /api/embed/chat - admin role on the key owner', () => {
+  type ScopeActor = (<U extends { isAdmin?: boolean }>(actor: U) => U) | undefined;
+  const scopeActorOf = async (res: Response): Promise<ScopeActor> => {
+    expect(res.status).toBe(200);
+    await res.text();
+    return mockExecuteCompletion.mock.calls[0][0].scopeActor;
+  };
+
+  it('withholds an admin owner role for an anonymous visitor', async () => {
+    const scopeActor = await scopeActorOf(await post(CHAT));
+    expect(scopeActor?.({ isAdmin: true }).isAdmin).toBe(false);
+  });
+
+  it('keeps the role for a key that holds the admin scope', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, scopes: ['embed:chat', 'admin:*'] });
+    expect(await scopeActorOf(await post(CHAT))).toBeUndefined();
   });
 });

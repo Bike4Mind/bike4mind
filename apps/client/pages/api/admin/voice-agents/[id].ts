@@ -1,8 +1,9 @@
 import { adminSettingsRepository, agentRepository } from '@bike4mind/database';
-import { BadRequestError, ForbiddenError, NotFoundError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { deleteElevenLabsAgent, getElevenLabsAgent, updateElevenLabsAgent } from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
+import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const UpdateVoiceAgentBodySchema = z.object({
@@ -17,12 +18,11 @@ const UpdateVoiceAgentBodySchema = z.object({
   isDefault: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', PATCH: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const id = typeof req.query.id === 'string' ? req.query.id : null;
     if (!id) throw new NotFoundError('Agent ID required');
 
@@ -53,10 +53,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
   })
   .patch(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const id = typeof req.query.id === 'string' ? req.query.id : null;
     if (!id) throw new NotFoundError('Agent ID required');
 
@@ -106,11 +102,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
     }
 
+    // AgentModel requires a non-empty description, so clearing it falls back to the name.
+    const description = body.description !== undefined ? body.description.trim() || body.name || agent.name : undefined;
+
     // Mirror the editable fields onto the B4M agent document.
     await agentRepository.update({
       id,
       ...(body.name !== undefined ? { name: body.name } : {}),
-      ...(body.description !== undefined ? { description: body.description } : {}),
+      ...(description !== undefined ? { description } : {}),
       ...(body.systemPrompt !== undefined ? { systemPrompt: body.systemPrompt } : {}),
       ...(body.voiceId !== undefined ? { elevenLabsVoiceId: body.voiceId } : {}),
       ...(body.firstMessage !== undefined ? { firstMessage: body.firstMessage } : {}),
@@ -126,13 +125,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     const updated = await agentRepository.findById(id);
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.voice_agent.updated',
+      target: { kind: 'settings', id, displayName: updated?.name ?? agent.name },
+      summary: `updated voice agent ${updated?.name ?? agent.name}`,
+      // Field names only: the system prompt can be long and is not worth copying into the log.
+      details: { fields: definedKeys(body) },
+    });
     return res.status(200).json({ agent: updated });
   })
   .delete(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const id = typeof req.query.id === 'string' ? req.query.id : null;
     if (!id) throw new NotFoundError('Agent ID required');
 
@@ -163,11 +165,26 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     await agentRepository.delete(id);
 
     // If the deleted agent was the default, promote the next surviving agent.
-    if (agent.isDefaultVoiceAgent) {
-      const remaining = await agentRepository.listAllVoiceAgents();
-      if (remaining.length > 0) {
-        await agentRepository.setDefaultVoiceAgent(remaining[0].id);
+    let promotedDefaultId: string | undefined;
+    try {
+      if (agent.isDefaultVoiceAgent) {
+        const remaining = await agentRepository.listAllVoiceAgents();
+        if (remaining.length > 0) {
+          promotedDefaultId = remaining[0].id;
+          await agentRepository.setDefaultVoiceAgent(promotedDefaultId);
+        }
       }
+    } finally {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.voice_agent.deleted',
+        target: { kind: 'settings', id, displayName: agent.name },
+        summary: `deleted voice agent ${agent.name}`,
+        details: {
+          elevenLabsAgentId: agent.elevenLabsAgentId,
+          wasDefault: agent.isDefaultVoiceAgent === true,
+          ...(promotedDefaultId !== undefined ? { promotedDefaultId } : {}),
+        },
+      });
     }
 
     return res.status(200).json({ ok: true });

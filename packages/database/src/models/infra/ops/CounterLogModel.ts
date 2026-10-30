@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import {
+  AI_USAGE_TRANSACTION_TYPES,
   AiEvents,
   ICounterLog,
   ICounterLogDocument,
@@ -8,6 +9,8 @@ import {
   FacetResults,
   parseInternalStaffDomains,
   internalStaffEmailRegex,
+  internalAccountCondition,
+  type TopUserResult,
 } from '@bike4mind/common';
 import { dayjs } from '@bike4mind/common';
 import utc from 'dayjs/plugin/utc';
@@ -16,8 +19,136 @@ import utc from 'dayjs/plugin/utc';
 dayjs.extend(utc);
 import BaseRepository from '@bike4mind/db-core';
 import { executeFacetCompatible, convertPipelineForDocumentDB } from '../../../utils/documentdb-compat';
+import { CreditTransaction } from '../../billing/CreditTransactionModel';
 
 export interface ICounterLogModel extends mongoose.Model<ICounterLogDocument, {}, {}>, ICounterLogRepository {}
+
+function newAccountExpression(createdAtField: string, windowEnd: Date) {
+  return {
+    $and: [
+      { $gt: [createdAtField, dayjs(windowEnd).subtract(168, 'hours').toDate()] },
+      { $lte: [createdAtField, windowEnd] },
+    ],
+  };
+}
+
+/**
+ * Date ranges for `metricsByDate`. The `week*` range is the report's main window (named for the
+ * weekly report; a daily report's is one day), `lastWeek*` the comparison window, and `month*`
+ * the weekly report's 4-week baseline. All bounds are inclusive.
+ */
+type ReportWindows = {
+  weekStart: Date;
+  weekEnd: Date;
+  lastWeekStart: Date;
+  lastWeekEnd: Date;
+  monthStart: Date | null;
+  monthEnd: Date | null;
+  lastMonthStart: Date | null;
+  lastMonthEnd: Date | null;
+  /** Elapsed ms of a partial current week; the 4-week baselines are then clipped to the same offset. */
+  weekSpanMs: number | null;
+};
+
+/** Daily: the rolling 24 hours for today, else the UTC day; compared with the same span 7 days earlier. */
+function dailyReportWindows(date: string): ReportWindows {
+  const now = dayjs().utc();
+  const queryDate = dayjs.utc(date);
+  const isToday = queryDate.startOf('day').isSame(now.startOf('day'));
+  const weekStart = isToday ? now.subtract(24, 'hours') : queryDate.startOf('day');
+  const weekEnd = isToday ? now : queryDate.endOf('day');
+
+  return {
+    weekStart: weekStart.toDate(),
+    weekEnd: weekEnd.toDate(),
+    lastWeekStart: weekStart.subtract(7, 'days').startOf('day').toDate(),
+    lastWeekEnd: weekEnd.subtract(7, 'days').endOf('day').toDate(),
+    monthStart: null,
+    monthEnd: null,
+    lastMonthStart: null,
+    lastMonthEnd: null,
+    weekSpanMs: null,
+  };
+}
+
+/**
+ * Weekly: [startDate 00:00, endDate 23:59:59.999] UTC, the same span 7 days earlier, and as the
+ * 4-week baseline the 28 days before this week (`month*`) and the 28 days before those
+ * (`lastMonth*`), so `fourWeekAverage` is a true average of the four preceding weeks.
+ * A week still in progress is clipped to now, and the comparison windows to the same elapsed span.
+ */
+function weeklyReportWindows(startDate: string, endDate: string): ReportWindows {
+  const weekStart = dayjs.utc(startDate).startOf('day');
+  let weekEnd = dayjs.utc(endDate).endOf('day');
+  if (!weekStart.isValid() || !weekEnd.isValid() || weekEnd.isBefore(weekStart)) {
+    throw new Error(`Invalid weekly report range: ${startDate} to ${endDate}`);
+  }
+  const now = dayjs().utc();
+  const isPartial = !weekStart.isAfter(now) && now.isBefore(weekEnd);
+  if (isPartial) weekEnd = now;
+  const monthStart = weekStart.subtract(28, 'days');
+  const lastMonthStart = monthStart.subtract(28, 'days');
+
+  return {
+    weekStart: weekStart.toDate(),
+    weekEnd: weekEnd.toDate(),
+    lastWeekStart: weekStart.subtract(7, 'days').toDate(),
+    lastWeekEnd: weekEnd.subtract(7, 'days').toDate(),
+    monthStart: monthStart.toDate(),
+    monthEnd: weekStart.subtract(1, 'millisecond').toDate(),
+    lastMonthStart: lastMonthStart.toDate(),
+    lastMonthEnd: monthStart.subtract(1, 'millisecond').toDate(),
+    weekSpanMs: isPartial ? now.diff(weekStart) : null,
+  };
+}
+
+/** Keeps events whose offset within their own 7-day block (blocks aligned to `anchor`) is below `spanMs`. */
+function sameElapsedSpanExpression(anchor: Date | null, spanMs: number) {
+  return { $lt: [{ $mod: [{ $subtract: ['$datetime', anchor] }, 7 * 24 * 60 * 60 * 1000] }, spanMs] };
+}
+
+export type YoungAccountSpender = {
+  userId: string;
+  creditsSpent: number;
+  accountCreatedAt: Date;
+};
+
+export type YoungAccountSpendSummary = {
+  totalCredits: number;
+  accountCount: number;
+  topSpenders: YoungAccountSpender[];
+};
+
+/**
+ * Per-user AI credit spend in [start, end) for accounts created in the 168 hours before `end`,
+ * highest spend first. Shares newAccountExpression with the report's `isNew` flag.
+ */
+function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.PipelineStage[] {
+  return [
+    {
+      $match: {
+        ownerType: 'User',
+        type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+        createdAt: { $gte: start, $lt: end },
+      },
+    },
+    { $group: { _id: '$ownerId', creditsSpent: { $sum: { $abs: '$credits' } } } },
+    { $match: { creditsSpent: { $gt: 0 } } },
+    { $addFields: { userObjectId: { $convert: { input: '$_id', to: 'objectId', onError: null } } } },
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'userObjectId',
+        foreignField: '_id',
+        as: 'user',
+      },
+    },
+    { $unwind: '$user' },
+    { $match: { $expr: newAccountExpression('$user.createdAt', end) } },
+    { $project: { _id: 0, userId: '$_id', creditsSpent: 1, accountCreatedAt: '$user.createdAt' } },
+    { $sort: { creditsSpent: -1, userId: 1 } },
+  ];
+}
 
 // CounterLog.userId is a free-form string and real rows carry non-ObjectId values such as
 // 'SYSTEM'. Every user $lookup below therefore derives userObjectId with
@@ -25,9 +156,46 @@ export interface ICounterLogModel extends mongoose.Model<ICounterLogDocument, {}
 // whole aggregation, while $convert yields null and that single row simply fails to join. Keep any
 // new user join in this file on the same form.
 
+const DAILY_TOP_USERS = 20;
+/**
+ * Credits are fetched after the event ranking, for candidates only, so the event facet
+ * over-fetches: a credits tie-break can then reorder users tied on events at the cut.
+ */
+const DAILY_TOP_USER_CANDIDATES = 50;
+
 class CounterLogRepository extends BaseRepository<ICounterLogDocument> implements ICounterLogRepository {
   constructor(model: ICounterLogModel) {
     super(model);
+  }
+
+  /** In-window AI credit spend per user, for the given leaderboard candidates only. */
+  private async findCreditsSpentByUsers(userIds: string[], start: Date, end: Date): Promise<Map<string, number>> {
+    if (userIds.length === 0) return new Map();
+    const spend = await CreditTransaction.aggregate<{ _id: string; creditsSpent: number }>(
+      convertPipelineForDocumentDB([
+        {
+          $match: {
+            ownerType: 'User',
+            ownerId: { $in: userIds },
+            type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+            createdAt: { $gte: start, $lte: end },
+          },
+        },
+        { $group: { _id: '$ownerId', creditsSpent: { $sum: { $abs: '$credits' } } } },
+      ])
+    ).allowDiskUse(true);
+    return new Map(spend.map(({ _id, creditsSpent }) => [String(_id), creditsSpent]));
+  }
+
+  async findYoungAccountSpend(start: Date, end: Date, limit: number): Promise<YoungAccountSpendSummary> {
+    const rows = await CreditTransaction.aggregate<YoungAccountSpender>(
+      convertPipelineForDocumentDB(buildYoungAccountSpendPipeline(start, end))
+    ).allowDiskUse(true);
+    return {
+      totalCredits: rows.reduce((sum, row) => sum + row.creditsSpent, 0),
+      accountCount: rows.length,
+      topSpenders: rows.slice(0, limit),
+    };
   }
 
   async findRecentByUserIdAndHasMetadata(userId: string): Promise<ICounterLogDocument[]> {
@@ -82,8 +250,9 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
     startDate: string,
     endDate: string
   ): Promise<(ICounterLog & { user: IUserDocument })[]> {
-    const start = dayjs(startDate).startOf('day').toDate();
-    const end = dayjs(endDate).endOf('day').toDate();
+    // UTC, matching the weekly report's metricsByDate window.
+    const start = dayjs.utc(startDate).startOf('day').toDate();
+    const end = dayjs.utc(endDate).endOf('day').toDate();
 
     const pipeline = [
       {
@@ -121,50 +290,45 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
     });
   }
 
+  /** Most active users: events first, then in-window credits, then id so equal rows keep a stable order. */
+  private async rankDailyTopUsers(candidates: TopUserResult[], start: Date, end: Date): Promise<TopUserResult[]> {
+    const creditsByUser = await this.findCreditsSpentByUsers(
+      candidates.map(user => user._id),
+      start,
+      end
+    );
+    return candidates
+      .map(user => ({ ...user, creditsSpent: creditsByUser.get(user._id) ?? 0 }))
+      .sort(
+        (first, second) =>
+          second.interactions - first.interactions ||
+          second.creditsSpent - first.creditsSpent ||
+          (first._id < second._id ? -1 : first._id > second._id ? 1 : 0)
+      )
+      .slice(0, DAILY_TOP_USERS);
+  }
+
   async metricsByDate(date: string, startDate?: string): Promise<FacetResults[]> {
     const isWeeklyReport = !!startDate;
+    const {
+      weekStart: weekStartDate,
+      weekEnd: weekEndDate,
+      lastWeekStart,
+      lastWeekEnd,
+      monthStart,
+      monthEnd,
+      lastMonthStart,
+      lastMonthEnd,
+      weekSpanMs,
+    } = startDate ? weeklyReportWindows(startDate, date) : dailyReportWindows(date);
 
-    // Always work with dates in UTC
-    const now = dayjs().utc();
-    // Convert input date to UTC immediately
-    const queryDate = dayjs.utc(date);
-
-    // Different handling for current day vs past days
-    const isToday = queryDate.startOf('day').isSame(now.startOf('day'));
-    let weekEnd, weekStart;
-
-    if (isToday) {
-      // For today: use current time
-      weekEnd = now;
-      weekStart = now.subtract(24, 'hours');
-    } else {
-      // For past dates: use UTC day boundaries
-      weekStart = queryDate.startOf('day');
-      weekEnd = queryDate.endOf('day');
-    }
-
-    // Convert to Date objects while preserving UTC
-    const weekEndDate = weekEnd.toDate();
-    const weekStartDate = weekStart.toDate();
-
-    // Calculate other ranges
-    const lastWeekEnd = weekEnd.subtract(7, 'days').endOf('day').toDate();
-    const lastWeekStart = weekStart.subtract(7, 'days').startOf('day').toDate();
-
-    // Only calculate these for weekly reports
-    const monthEnd = isWeeklyReport ? weekEndDate : null;
-    const monthStart = isWeeklyReport ? dayjs(monthEnd).utc().subtract(30, 'days').startOf('day').toDate() : null;
-    const lastMonthEnd = isWeeklyReport ? monthStart : null;
-    const lastMonthStart = isWeeklyReport
-      ? dayjs(lastMonthEnd).utc().subtract(30, 'days').startOf('day').toDate()
-      : null;
-
-    // Internal-user match from the shared NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS list
-    // (all internal domains, not a hardcoded one) so it can't drift from the
-    // entitlement layer (#172). Null == none configured -> facet matches nothing.
+    // Internal = admin/system/synthetic flag, or an email on the shared
+    // NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS list. The same condition marks internal users,
+    // and its negation is what DAU, WAU and the leaderboard count.
     const internalStaffRegex = internalStaffEmailRegex(
       parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS)
     );
+    const isInternalUser = (userPath: string) => internalAccountCondition(userPath, internalStaffRegex);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const facetStages: any = {
@@ -185,8 +349,8 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           },
         },
       ],
-      // Same window as last24h: the rolling 24 hours for today, the UTC day for past
-      // dates. startDate only flags a weekly report; it does not widen this window.
+      // Same window as last24h: the whole startDate..date range for a weekly report, the
+      // rolling 24 hours (today) or the UTC day (past dates) for a daily one.
       thisWeek: [
         {
           $match: {
@@ -270,12 +434,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             preserveNullAndEmptyArrays: true,
           },
         },
-        {
-          $match: internalStaffRegex
-            ? { 'user.email': { $regex: internalStaffRegex } }
-            : // None configured: count no internal users.
-              { $expr: false },
-        },
+        { $match: isInternalUser('user') },
         {
           $group: {
             _id: '$userId',
@@ -296,7 +455,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             weeklyActiveUsers: [
               {
                 $match: {
-                  datetime: { $gte: weekEnd.subtract(7, 'days').toDate(), $lte: weekEndDate },
+                  datetime: { $gte: dayjs.utc(weekEndDate).subtract(7, 'days').toDate(), $lte: weekEndDate },
                 },
               },
               { $group: { _id: '$userId' } },
@@ -313,7 +472,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                   as: 'user',
                 },
               },
-              ...(internalStaffRegex ? [{ $match: { $nor: [{ 'user.email': { $regex: internalStaffRegex } }] } }] : []),
+              { $match: { $nor: [isInternalUser('user')] } },
               { $count: 'count' },
             ],
           }),
@@ -614,13 +773,11 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             { $limit: 3 },
           ]
         : [
-            // Daily report version - simpler, no rank comparisons
+            // Ranked by events, then credits (see rankDailyTopUsers). A user with no event in the
+            // window is never a candidate, however much they spent.
             {
               $match: {
-                datetime: {
-                  $gte: dayjs(weekEndDate).subtract(24, 'hours').toDate(),
-                  $lte: weekEndDate,
-                },
+                datetime: { $gte: weekStartDate, $lte: weekEndDate },
                 userId: { $exists: true },
               },
             },
@@ -637,26 +794,29 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                 as: 'userDetails',
               },
             },
+            // No preserveNullAndEmptyArrays on purpose: an id with no user document ('SYSTEM', or a
+            // deleted account) is not a person and never belongs on the leaderboard.
+            { $unwind: '$userDetails' },
+            { $match: { $nor: [isInternalUser('userDetails')] } },
             {
               $group: {
                 _id: '$userId',
                 interactions: { $sum: 1 },
-                email: {
-                  $first: {
-                    $cond: [{ $gt: [{ $size: '$userDetails' }, 0] }, { $arrayElemAt: ['$userDetails.email', 0] }, null],
-                  },
-                },
+                email: { $first: { $ifNull: ['$userDetails.email', null] } },
+                userCreatedAt: { $first: '$userDetails.createdAt' },
               },
             },
-            { $sort: { interactions: -1 } },
-            { $limit: 20 },
             {
               $project: {
                 _id: 1,
                 email: 1,
                 interactions: 1,
+                // Against the window's own end, so a re-rendered past date stays correct. Hours, not days: DST-safe.
+                isNew: newAccountExpression('$userCreatedAt', weekEndDate),
               },
             },
+            { $sort: { interactions: -1, _id: 1 } },
+            { $limit: DAILY_TOP_USER_CANDIDATES },
           ],
       topOrganizations: [
         {
@@ -916,6 +1076,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
               $gte: monthStart,
               $lte: monthEnd,
             },
+            ...(weekSpanMs !== null && { $expr: sameElapsedSpanExpression(monthStart, weekSpanMs) }),
           },
         },
         {
@@ -933,6 +1094,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
               $gte: lastMonthStart,
               $lte: lastMonthEnd,
             },
+            ...(weekSpanMs !== null && { $expr: sameElapsedSpanExpression(lastMonthStart, weekSpanMs) }),
           },
         },
         {
@@ -953,15 +1115,14 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
     });
 
     // Execute the aggregation with DocumentDB compatibility
-    const result = await executeFacetCompatible(
-      this.model,
-      [], // No base pipeline for this aggregation
-      convertedFacetStages
-    );
+    const result = await executeFacetCompatible(this.model, [], convertedFacetStages);
 
     // Process the results to match the expected format (similar to the original $project stage)
     if (result && result.length > 0) {
       const facetData = result[0];
+      const topUsers: TopUserResult[] = isWeeklyReport
+        ? facetData.topUsers || []
+        : await this.rankDailyTopUsers(facetData.topUsers ?? [], weekStartDate, weekEndDate);
 
       // Apply the same transformations as the original $project stage
       const processedResult = [
@@ -973,7 +1134,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           allUsers: facetData.allUsers || [],
           internalUsers: facetData.internalUsers || [],
           weeklyActiveUsers: facetData.weeklyActiveUsers || [],
-          topUsers: facetData.topUsers || [],
+          topUsers,
           topModels: facetData.topModels || [],
           topOrganizations: facetData.topOrganizations || [],
           peakDay:
@@ -1158,6 +1319,10 @@ CounterLogSchema.index({ datetime: 1 });
 
 // Index for user activity analysis
 CounterLogSchema.index({ userId: 1, datetime: 1, counterName: 1 });
+
+// A user's recent activity (findRecentByUserIdAndHasMetadata) sorts by createdAt, not datetime,
+// which callers can set; without this the read sorts every log the user has in memory.
+CounterLogSchema.index({ userId: 1, createdAt: -1 });
 
 // Add compound index for the specific aggregation (optimizes common aggregation queries)
 CounterLogSchema.index({ datetime: 1, counterName: 1, userId: 1 }, { background: true });

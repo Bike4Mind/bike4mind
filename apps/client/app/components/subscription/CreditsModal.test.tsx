@@ -16,6 +16,8 @@ vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useLowCreditsThresho
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => 100 }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: vi.fn() }) }));
 vi.mock('./CreditsSection', () => ({ CreditsSection: () => null }));
+vi.mock('./CreditsExplanation', () => ({ default: () => null }));
+vi.mock('./NoCardUnlockCard', () => ({ NoCardUnlockCard: () => null }));
 vi.mock('./PlansSection', () => ({ PlansSection: () => null, PlansSectionSkeleton: () => null }));
 
 import CreditsModal from './CreditsModal';

@@ -28,14 +28,14 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { dataLakeService } from '@bike4mind/services';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
-import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { createStateToken, verifyStateToken, type BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
+import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';
 import {
   assertLakeConnectorFree,
   withConnectionId,
   withLakeConnectorClaim,
-} from '@server/dataLakes/assertLakeConnectorFree';
+} from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import {
   purgeConnectionIngestedFiles,
   type PurgeConnectionLogger,
@@ -69,7 +69,7 @@ import {
   listUserInstallations,
   type GitHubLakeAppConfig,
   type GitHubLakeUserInstallation,
-} from './lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import { findInstallationPolicyViolation } from './lakeAppPolicy';
 
 export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state', expiresIn: '10m' } as const;

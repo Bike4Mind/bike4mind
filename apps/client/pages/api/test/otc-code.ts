@@ -2,7 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { pendingOtcTokenRepository } from '@bike4mind/database';
-import { Resource } from 'sst';
+import { isValidE2eTestSecret } from '@server/auth/e2eTestSecret';
 import { Request } from 'express';
 
 /**
@@ -24,10 +24,8 @@ const handler = baseApi({ auth: false }).get(
       return res.status(404).json({ error: 'Not found' });
     }
 
-    // Guard 2: shared secret
-    const secret = req.headers['x-e2e-cleanup-secret'];
-    const expectedSecret = Resource.E2E_CLEANUP_SECRET?.value || process.env.E2E_CLEANUP_SECRET;
-    if (!expectedSecret || expectedSecret === 'not-configured' || secret !== expectedSecret) {
+    // Guard 2: E2E secret header
+    if (!isValidE2eTestSecret(req.headers['x-e2e-cleanup-secret'])) {
       return res.status(401).json({ error: 'Invalid cleanup secret' });
     }
 

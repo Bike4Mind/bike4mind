@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/cli",
-  "version": "3.4.0",
+  "version": "4.1.0",
   "mcpName": "io.github.Bike4Mind/bike4mind",
   "type": "module",
   "description": "Interactive CLI tool for Bike4Mind with ReAct agents",
@@ -57,6 +57,7 @@
     "@aws-sdk/client-lambda": "^3.1150.0",
     "@aws-sdk/client-s3": "^3.1150.0",
     "@aws-sdk/client-sqs": "^3.1150.0",
+    "@aws-sdk/client-sts": "^3.1150.0",
     "@aws-sdk/client-transcribe": "^3.1150.0",
     "@aws-sdk/credential-provider-node": "^3.972.86",
     "@aws-sdk/s3-request-presigner": "^3.1150.0",
@@ -118,6 +119,7 @@
     "web-tree-sitter": "0.25.10",
     "ws": "^8.21.3",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "yaml": "^2.9.1",
     "yargs": "^18.1.0",
     "yauzl": "^3.4.0",
     "zod": "^4.6.6",
@@ -131,6 +133,7 @@
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/hearth": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
+    "@bike4mind/local-models": "workspace:*",
     "@bike4mind/mcp": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/sdk": "workspace:*",
@@ -148,7 +151,7 @@
     "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "optionalDependencies": {
     "@vscode/ripgrep": "^1.18.0"

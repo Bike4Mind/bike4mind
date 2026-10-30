@@ -11,9 +11,13 @@ const TIERS: readonly AccountTier[] = ['free', 'basic', 'pro', 'other'];
 
 /** The fields of `MeResponse` this client reads. Everything else on the wire is ignored. */
 interface WireMe {
-  credits?: { balance?: unknown };
+  credits?: { balance?: unknown; monthly_allowance?: unknown };
   tier?: unknown;
-  subscription?: { plan_name?: unknown; interval?: unknown; current_period_ends_at?: unknown } | null;
+  subscription?: {
+    plan_name?: unknown;
+    interval?: unknown;
+    current_period_ends_at?: unknown;
+  } | null;
 }
 
 export interface AccountServiceLogger {
@@ -56,7 +60,13 @@ export class AccountService {
 
   private async read(): Promise<AccountProfile> {
     const api = this.deps.getApiClient();
-    if (!api) return { credits: { balance: null, error: 'Sign in to see your balance.' }, plan: null, tier: null };
+    if (!api) {
+      return {
+        credits: { balance: null, monthlyAllowance: null, error: 'Sign in to see your balance.' },
+        plan: null,
+        tier: null,
+      };
+    }
 
     try {
       const response = await api.get<WireMe>(ME_PATH);
@@ -64,17 +74,29 @@ export class AccountService {
       if (balance === null) {
         this.deps.logger.warn('ACCOUNT: /api/v1/me answered without a credit balance');
         return {
-          credits: { balance: null, error: 'This server did not report a balance.' },
+          credits: {
+            balance: null,
+            monthlyAllowance: readMonthlyAllowance(response),
+            error: 'This server did not report a balance.',
+          },
           plan: readPlan(response),
           tier: readTier(response),
         };
       }
-      return { credits: { balance }, plan: readPlan(response), tier: readTier(response) };
+      return {
+        credits: { balance, monthlyAllowance: readMonthlyAllowance(response) },
+        plan: readPlan(response),
+        tier: readTier(response),
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`ACCOUNT: balance lookup failed: ${message}`);
       return {
-        credits: { balance: null, error: 'Could not read your balance from this server.' },
+        credits: {
+          balance: null,
+          monthlyAllowance: null,
+          error: 'Could not read your balance from this server.',
+        },
         plan: null,
         tier: null,
       };
@@ -92,6 +114,12 @@ export function readBalance(wire: unknown): number | null {
   if (!wire || typeof wire !== 'object') return null;
   const balance = (wire as WireMe).credits?.balance;
   return typeof balance === 'number' && Number.isFinite(balance) ? balance : null;
+}
+
+export function readMonthlyAllowance(wire: unknown): number | null {
+  if (!wire || typeof wire !== 'object') return null;
+  const allowance = (wire as WireMe).credits?.monthly_allowance;
+  return typeof allowance === 'number' && Number.isFinite(allowance) && allowance >= 0 ? allowance : null;
 }
 
 /**

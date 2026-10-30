@@ -28,17 +28,15 @@ import {
   Alert,
   CircularProgress,
 } from '@mui/joy';
-import {
-  Edit,
-  Delete,
-  Visibility,
-  VisibilityOff,
-  Warning,
-  Info,
-  Refresh,
-  CheckCircle,
-  Error as ErrorIcon,
-} from '@mui/icons-material';
+import Edit from '@mui/icons-material/Edit';
+import Delete from '@mui/icons-material/Delete';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
+import Warning from '@mui/icons-material/Warning';
+import Info from '@mui/icons-material/Info';
+import Refresh from '@mui/icons-material/Refresh';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
 import Tooltip from '@mui/joy/Tooltip';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';

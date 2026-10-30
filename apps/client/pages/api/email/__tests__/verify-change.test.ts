@@ -13,18 +13,19 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/csrfProtection', () => ({
   csrfProtection: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: any, _res: any, next: any) => next?.(),
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+// logAuditEvent writes a CounterLog row; an own email change must never reach it.
 const mockLogAuditEvent = vi.fn();
 vi.mock('@server/utils/auditLog', () => ({
   logAuditEvent: (...a: unknown[]) => mockLogAuditEvent(...a),
-  EmailAuditEvents: {
-    EMAIL_CHANGE_SUCCESS: 'success',
-    EMAIL_CHANGE_FAILED: 'failed',
-    EMAIL_CHANGE_TOKEN_REUSED: 'reused',
-    EMAIL_CHANGE_TOKEN_EXPIRED: 'expired',
-  },
   calculateTokenAge: vi.fn(() => 0),
+}));
+const mockLogAuthAudit = vi.fn();
+vi.mock('@server/utils/authAudit', () => ({
+  logAuthAudit: (...a: unknown[]) => mockLogAuthAudit(...a),
 }));
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
@@ -135,7 +136,32 @@ describe('POST /api/email/verify-change', () => {
 
     await expect(handler(req, res)).rejects.toThrow('Token has expired');
     expect(mockSessionEnded).not.toHaveBeenCalled();
-    expect(mockLogAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'expired' }), req.logger);
+    expect(mockLogAuthAudit).toHaveBeenCalledWith(req, {
+      userId: 'user-1',
+      event: 'email_change_failed',
+      metadata: {
+        reason: 'token_expired',
+        oldEmail: 'old@example.com',
+        newEmail: 'new@example.com',
+        tokenAge: undefined,
+        error: 'Token has expired',
+      },
+    });
+    expect(mockLogAuditEvent).not.toHaveBeenCalled();
+  });
+
+  it('audits a reused token as a failed change with its reason', async () => {
+    mockVerifyEmailChange.mockRejectedValue(new Error('This link has already been used'));
+    const { req, res } = fire();
+
+    await expect(handler(req, res)).rejects.toThrow('already been used');
+    expect(mockLogAuthAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        event: 'email_change_failed',
+        metadata: expect.objectContaining({ reason: 'token_reused' }),
+      })
+    );
   });
 
   it('fails the request, audited as a failed change, when the session end rolls it back', async () => {
@@ -143,8 +169,14 @@ describe('POST /api/email/verify-change', () => {
     const { req, res } = fire();
 
     await expect(handler(req, res)).rejects.toThrow('db down');
-    expect(mockLogAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'failed' }), req.logger);
-    expect(mockLogAuditEvent).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'success' }), req.logger);
+    expect(mockLogAuthAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ event: 'email_change_failed', metadata: expect.objectContaining({ reason: 'error' }) })
+    );
+    expect(mockLogAuthAudit).not.toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ event: 'email_change_confirmed' })
+    );
   });
 
   it('rejects an unknown token without touching sessions', async () => {
@@ -182,9 +214,12 @@ describe('POST /api/email/verify-change', () => {
     expect((error as ConflictError).statusCode).toBe(409);
     expect((error as ConflictError).message).toBe('This email address is no longer available.');
     expect(mockSessionEnded).toHaveBeenCalledWith(undefined);
-    expect(mockLogAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'failed', error: 'This email address is no longer available.' }),
-      req.logger
+    expect(mockLogAuthAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        event: 'email_change_failed',
+        metadata: expect.objectContaining({ error: 'This email address is no longer available.' }),
+      })
     );
   });
 
@@ -194,9 +229,11 @@ describe('POST /api/email/verify-change', () => {
 
     await handler(req, res);
 
-    expect(mockLogAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'success', newEmail: 'new@b.test' }),
-      req.logger
-    );
+    expect(mockLogAuthAudit).toHaveBeenCalledWith(req, {
+      userId: 'user-1',
+      event: 'email_change_confirmed',
+      metadata: { oldEmail: 'old@example.com', newEmail: 'new@b.test', tokenAge: undefined },
+    });
+    expect(mockLogAuditEvent).not.toHaveBeenCalled();
   });
 });

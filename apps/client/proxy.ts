@@ -1,7 +1,16 @@
 import { NextResponse } from 'next/server';
 import { resolvePyodideMirrorOrigin } from '@client/app/utils/pyodideDistribution';
-import { getTrustedHeaderClientIp } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
+import {
+  CLOUDFRONT_VIEWER_JA4_HEADER,
+  getTrustedHeaderClientIp,
+} from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
+import {
+  resolveFilesOrigin,
+  resolveObjectStoreOrigin,
+  resolveWhatsNewUpstreamOrigin,
+} from '@client/server/utils/deploymentMediaOrigins';
 import type { NextRequest } from 'next/server';
+import { allowsUsercontentRequest } from '@bike4mind/server-utils/utils/usercontentRequest';
 
 // Blocks path traversal and null-byte injection before reaching the ISR cache layer (#7190)
 const PATH_TRAVERSAL_PATTERN = /(\.\.[/\\])|([/\\]\.\.)|(\.\.%2[fF])|(%2[fF]\.\.)/;
@@ -14,6 +23,8 @@ const PDF_WORKER_PATH = /^\/pdf\.worker(-\d+\.\d+\.\d+)?\.min\.mjs$/;
 // sync with ORIGIN_VERIFY_HEADER in infra/router.ts. ORIGIN_VERIFY_SECRET is set only on
 // deployed stages (infra/web.ts), so self-host, local dev and tests are not gated.
 const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
+
+const NEXT_ACTION_HEADER = 'next-action';
 
 // Never the raw x-forwarded-for: its leftmost token is client-controlled on every deploy, so a
 // [SECURITY] line would record whatever source the attacker chose.
@@ -30,29 +41,20 @@ function originVerified(request: NextRequest, secret: string): boolean {
   return diff === 0;
 }
 
-function resolveObjectStoreOrigin(raw: string | undefined): string {
-  const configured = raw?.trim();
-  if (!configured) return '';
-  try {
-    if (
-      /[\s;]/.test(configured) ||
-      [...configured].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
-    ) {
-      throw new Error('Invalid endpoint');
-    }
-    const url = new URL(configured);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported protocol');
-    if (/[\s;,'"*\\]/.test(url.origin)) throw new Error('Invalid origin');
-    return url.origin;
-  } catch {
-    console.warn('[csp] ignoring invalid S3_PRESIGN_ENDPOINT');
-    return '';
-  }
-}
-
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const rawUrl = request.url;
+
+  if (
+    !allowsUsercontentRequest(
+      request.headers.get('host') ?? request.nextUrl.host ?? request.nextUrl.hostname,
+      pathname,
+      request.method,
+      process.env.SERVER_DOMAIN ?? ''
+    )
+  ) {
+    return new NextResponse('Not found', { status: 404 });
+  }
 
   // Blocks direct calls to the public server function URL, which would bypass the WAF and the
   // CloudFront-stamped client IP headers.
@@ -91,11 +93,25 @@ export function proxy(request: NextRequest) {
     return new NextResponse('Bad Request', { status: 400 });
   }
 
+  // The app defines no server actions, so a Next-Action header is only ever scanner traffic. Next
+  // answers an unknown action with a text/plain error, which the app-page runtime turns into a 500
+  // invariant for RSC requests (vercel/next.js#97568). Remove this guard if server actions are ever
+  // introduced. Sits after the [SECURITY] guards so probes that also trip them are still logged.
+  if (request.headers.has(NEXT_ACTION_HEADER)) {
+    return new NextResponse('Not found', { status: 404 });
+  }
+
   // Strip the origin secret before route handlers see it, so nothing that logs headers leaks it.
   let response: NextResponse;
   if (originSecret) {
     const headers = new Headers(request.headers);
     headers.delete(ORIGIN_VERIFY_HEADER);
+    if (process.env.B4M_SELF_HOST === 'true') headers.delete(CLOUDFRONT_VIEWER_JA4_HEADER);
+    response = NextResponse.next({ request: { headers } });
+  } else if (request.headers.has(CLOUDFRONT_VIEWER_JA4_HEADER)) {
+    // Without origin verification a direct client can supply this observation header.
+    const headers = new Headers(request.headers);
+    headers.delete(CLOUDFRONT_VIEWER_JA4_HEADER);
     response = NextResponse.next({ request: { headers } });
   } else {
     response = NextResponse.next();
@@ -147,13 +163,13 @@ export function proxy(request: NextRequest) {
   // www.redditstatic.com, pixel config fetch from pixel-config.reddit.com, and the
   // conversion beacon (rp.gif) to alb.reddit.com — the latter goes in both img-src
   // and connect-src since the pixel may use either transport.
-  const scriptSrcPolicy = `'self' 'unsafe-inline'${wasmUnsafeEval}${devUnsafeEval} blob: https://unpkg.com https://cdn.tailwindcss.com https://assets.mailerlite.com https://accounts.google.com https://js.stripe.com https://apis.google.com https://cdn.jsdelivr.net https://www.googletagmanager.com https://www.redditstatic.com https://connect.facebook.net`;
-  // assets.mailerlite.com hosts universal.css for the in-app subscriber widget; explicit host avoids re-opening blanket https:.
-  const styleSrcPolicy = `'self' 'unsafe-inline' https://assets.mailerlite.com`;
+  const scriptSrcPolicy = `'self' 'unsafe-inline'${wasmUnsafeEval}${devUnsafeEval} blob: https://accounts.google.com https://js.stripe.com https://apis.google.com https://cdn.jsdelivr.net https://www.googletagmanager.com https://www.redditstatic.com https://connect.facebook.net https://challenges.cloudflare.com`;
+  const styleSrcPolicy = `'self' 'unsafe-inline'`;
 
   // Deployment's own files subdomain for CSP, derived from the account-tied SERVER_DOMAIN with
   // no brand fallback (#9310/#9306); empty when unconfigured.
-  const filesHost = process.env.SERVER_DOMAIN ? ` https://files.dev.${process.env.SERVER_DOMAIN}` : '';
+  const filesOrigin = resolveFilesOrigin(process.env.SERVER_DOMAIN);
+  const filesHost = filesOrigin ? ` ${filesOrigin}` : '';
 
   // Operator blog host for the optional blog-integration feature, driven by the same
   // NEXT_PUBLIC_BLOG_HOST config the client uses (open-core #9392); no brand fallback, empty
@@ -194,17 +210,28 @@ export function proxy(request: NextRequest) {
   const mapTileHost = ' https://tile.openstreetmap.org';
   const objectStoreOrigin = resolveObjectStoreOrigin(process.env.S3_PRESIGN_ENDPOINT);
   const objectStoreHost = objectStoreOrigin ? ` ${objectStoreOrigin}` : '';
+  // Upstream release notes play their uploaded videos from the upstream's own media route. connect-src
+  // too, for the service worker's re-fetch (see mapTileHost).
+  const whatsNewUpstreamOrigin = resolveWhatsNewUpstreamOrigin(process.env.WHATS_NEW_FEED_URL);
+  const whatsNewUpstreamHost = whatsNewUpstreamOrigin ? ` ${whatsNewUpstreamOrigin}` : '';
+  // The desktop download page reads its latest release from the GitHub API (app/utils/desktopReleases.ts).
+  const desktopReleasesApiHost = ' https://api.github.com';
+  // Social post thumbnails. video.bsky.app redirects every poster frame to video.cdn.bsky.app and CSP
+  // checks each redirect hop; Facebook's per-region edge hosts are why fbcdn.net is a wildcard.
+  // connect-src too, for the service worker's re-fetch (see mapTileHost).
+  const socialImageHosts =
+    ' https://cdn.bsky.app https://video.bsky.app https://video.cdn.bsky.app https://*.fbcdn.net https://i.ytimg.com';
 
   const cspHeader = `
     default-src 'self';
     script-src ${scriptSrcPolicy}${pyodideHost};
     style-src ${styleSrcPolicy};
-    img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com${mapTileHost}${objectStoreHost};
+    img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com${mapTileHost}${socialImageHosts}${objectStoreHost}${whatsNewUpstreamHost};
     font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com data:;
-    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://assets.mailerlite.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://unpkg.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${mapTileHost}${objectStoreHost};
-    frame-src 'self' blob: https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
+    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://challenges.cloudflare.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${desktopReleasesApiHost}${mapTileHost}${socialImageHosts}${objectStoreHost}${whatsNewUpstreamHost};
+    frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
     object-src 'none';
-    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com${objectStoreHost};
+    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com${objectStoreHost}${whatsNewUpstreamHost};
     base-uri 'self';
     frame-ancestors 'self';
     form-action 'self';
@@ -221,7 +248,7 @@ export function proxy(request: NextRequest) {
   // to blessed libs; assets + reply/fabfile viewers: script-src 'none'). Applying
   // the global app CSP here would conflict with and weaken that artifact policy.
   // The HTML artifact sandbox follows the same pattern: /api/artifact-sandbox sets
-  // its own permissive-but-scoped CSP (style-src https: + connect-src 'none').
+  // its own resource allowlist and connect-src 'none'.
   // `/uc/*` (Approach B, #9383) is the per-artifact isolated-origin bundle: it must
   // be EXCLUDED too — it sets its own CSP, and the global `X-Frame-Options: SAMEORIGIN`
   // here would BLOCK the app-origin wrapper from framing the cross-origin usercontent
@@ -269,14 +296,5 @@ export function proxy(request: NextRequest) {
 
 // Apply proxy to all routes
 export const config = {
-  matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public folder
-     */
-    '/((?!_next/static|_next/image|favicon.ico|public/).*)',
-  ],
+  matcher: ['/:path*'],
 };

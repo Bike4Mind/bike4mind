@@ -4,8 +4,12 @@
 import passport from '@server/auth/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { issueStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { oauthIpRateLimit } from '@server/middlewares/oauthIpRateLimit';
 import { OAUTH_NONCE_HASH_REQ_KEY } from '@server/auth/passportOAuthStateStore';
+import { requireOAuthStartTurnstile } from '@server/utils/auth/oauthStartTurnstile';
 import { isLocalAppUrl } from '@server/utils/validators';
 
 const SERVICES: { [service: string]: { scope: string[] | string } } = {
@@ -35,31 +39,39 @@ const SERVICES: { [service: string]: { scope: string[] | string } } = {
  * @param {string} service - The name of the authentication service (e.g., 'google', 'facebook')
  * @returns {void} - Redirects to the appropriate authentication page for the specified service
  */
-const handler = baseApi({ auth: false }).get(
-  asyncHandler<{}, unknown, unknown, { strategy: string }>(async (req, res, next) => {
-    const { strategy } = req.query;
+const handler = baseApi({ auth: false })
+  .use(checkBlockedIP())
+  // One bucket for every provider, so the cap is per client IP rather than per provider.
+  .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-start' }))
+  // Admin-tunable sustained cap; the fixed limit above only catches bursts.
+  .use(oauthIpRateLimit('oauth-init'))
+  // After the rate limit so an unsolved challenge cannot drive unbounded siteverify calls.
+  .use(requireOAuthStartTurnstile())
+  .get(
+    asyncHandler<{}, unknown, unknown, { strategy: string }>(async (req, res, next) => {
+      const { strategy } = req.query;
 
-    if (!strategy || !Object.keys(SERVICES).includes(strategy)) {
-      return res.status(400).json({ error: 'Invalid request' });
-    }
+      if (!strategy || !Object.keys(SERVICES).includes(strategy)) {
+        return res.status(400).json({ error: 'Invalid request' });
+      }
 
-    // Bind this login to the initiating browser: set the nonce cookie now (only
-    // here do we hold `res`) and stash its hash so the state store binds it into
-    // the state token minted inside passport.authenticate below.
-    (req as unknown as Record<string, unknown>)[OAUTH_NONCE_HASH_REQ_KEY] = issueStateNonce(res);
+      // Bind this login to the initiating browser: set the nonce cookie now (only
+      // here do we hold `res`) and stash its hash so the state store binds it into
+      // the state token minted inside passport.authenticate below.
+      (req as unknown as Record<string, unknown>)[OAUTH_NONCE_HASH_REQ_KEY] = issueStateNonce(res);
 
-    // In dev, derive callback URL from the actual request host so OAuth
-    // redirects back to the correct port (Next.js may not be on :3000)
-    const authenticateOptions: Record<string, unknown> = { scope: SERVICES[strategy].scope };
-    if (isLocalAppUrl()) {
-      const protocol = req.headers['x-forwarded-proto'] || 'http';
-      const host = req.headers.host || 'localhost:3000';
-      authenticateOptions.callbackURL = `${protocol}://${host}/api/auth/${strategy}/callback`;
-    }
+      // In dev, derive callback URL from the actual request host so OAuth
+      // redirects back to the correct port (Next.js may not be on :3000)
+      const authenticateOptions: Record<string, unknown> = { scope: SERVICES[strategy].scope };
+      if (isLocalAppUrl()) {
+        const protocol = req.headers['x-forwarded-proto'] || 'http';
+        const host = req.headers.host || 'localhost:3000';
+        authenticateOptions.callbackURL = `${protocol}://${host}/api/auth/${strategy}/callback`;
+      }
 
-    passport.authenticate(strategy, authenticateOptions)(req, res, next);
-  })
-);
+      passport.authenticate(strategy, authenticateOptions)(req, res, next);
+    })
+  );
 
 export const config = {
   api: {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useGearsStatus, type GearKey } from '@client/app/hooks/useGearsStatus';
 import { isGettingStarted } from '@client/lib/gears/tabs';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
@@ -16,14 +16,18 @@ export function useVisibleGears() {
   const { isFeatureEnabled } = useFeatureEnabled();
   const { isFeatureEnabled: isAdminFeatureEnabled } = useAdminSettingsCache();
 
-  const visible = (key: GearKey) => {
-    if (key === 'agents') return isFeatureEnabled('enableAgents');
-    if (key === 'datalakes') return isAdminFeatureEnabled('EnableDataLakes');
-    if (key === 'hearth') return isFeatureEnabled('enableHearth');
-    return true;
-  };
+  // Memoised so consumers can keep `gears` in effect dependencies without re-running on every render.
+  const gears = useMemo(() => {
+    const visible = (key: GearKey) => {
+      if (key === 'agents') return isFeatureEnabled('enableAgents');
+      if (key === 'datalakes') return isAdminFeatureEnabled('EnableDataLakes');
+      if (key === 'hearth') return isFeatureEnabled('enableHearth');
+      return true;
+    };
+    return (query.data?.gears ?? []).filter(g => visible(g.key));
+  }, [query.data, isFeatureEnabled, isAdminFeatureEnabled]);
 
-  return { ...query, gears: (query.data?.gears ?? []).filter(g => visible(g.key)) };
+  return { ...query, gears };
 }
 
 /** How long an account counts as new for the sidenav's Start here tag. */

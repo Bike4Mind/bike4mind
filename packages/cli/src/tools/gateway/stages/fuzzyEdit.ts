@@ -4,7 +4,7 @@ import {
   isFuzzyEditConfirmationRequired,
   type EditPlan,
 } from '@bike4mind/services/llm/tools/cliTools';
-import { executeTool } from '../../../llm/ToolRouter.js';
+import { executeSanitized } from './output.js';
 import type { ApiClient } from '../../../auth/ApiClient.js';
 import type { ShowPermissionPrompt, ToolArgs } from '../gatewayTypes.js';
 
@@ -102,11 +102,11 @@ export async function executeWithFuzzyConfirmation(
   showPermissionPrompt: ShowPermissionPrompt
 ): Promise<string> {
   try {
-    return await executeTool(toolName, args, apiClient, originalFn);
+    return await executeSanitized(toolName, args, apiClient, originalFn);
   } catch (err) {
     if (!isFuzzyEditConfirmationRequired(err)) throw err;
     const response = await showPermissionPrompt(toolName, args, prependFuzzyEditBanner(err.diffPreview));
     if (response.action === 'deny') throw new PermissionDeniedError(toolName, args);
-    return executeTool(toolName, { ...args, confirmedFuzzyHash: err.contentHash }, apiClient, originalFn);
+    return executeSanitized(toolName, { ...args, confirmedFuzzyHash: err.contentHash }, apiClient, originalFn);
   }
 }

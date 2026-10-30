@@ -60,3 +60,30 @@ export const CURRENT_POLICY_VERSION = 'v1';
  * 18+ attestation, so `ageAttestedAdult` is intentionally left absent for them.
  */
 export const GRANDFATHERED_POLICY_VERSION = 'grandfathered';
+
+/** Shared challenge action for requesting an email login code. */
+export const TURNSTILE_ACTION_OTC_SEND = 'otc-send';
+
+/** Shared challenge action for starting a self-serve OAuth sign-in. */
+export const TURNSTILE_ACTION_OAUTH_START = 'oauth-start';
+
+/** Query parameter that carries the solved token to the OAuth start route. */
+export const TURNSTILE_OAUTH_TOKEN_PARAM = 'turnstileToken';
+
+/**
+ * Providers whose sign-in is open to anyone and so run the challenge before the provider
+ * redirect. Enterprise SSO (Okta, SAML) is configured per organisation and stays unchallenged.
+ */
+export const TURNSTILE_OAUTH_PROVIDERS = ['google', 'github', 'facebook'] as const;
+export type TurnstileOAuthProvider = (typeof TURNSTILE_OAUTH_PROVIDERS)[number];
+export const isTurnstileOAuthProvider = (provider: unknown): provider is TurnstileOAuthProvider =>
+  typeof provider === 'string' && (TURNSTILE_OAUTH_PROVIDERS as readonly string[]).includes(provider);
+
+/**
+ * Entitlement key held by a user with an active paid ladder plan (Basic or Pro, org seats included)
+ * or a credit purchase (`lastCreditsPurchasedAt`). Derived only from those in
+ * apps/client/server/entitlements/index.ts, never from a tag,
+ * partner rule or contribution (reserved in isReservedContributionKey). The free-tier model gate in
+ * b4m-core/services/src/llm/modelAdmission.ts reads it.
+ */
+export const PAID_PLAN_ENTITLEMENT_KEY = 'plan:paid';

@@ -22,9 +22,15 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import React, { useState, useMemo } from 'react';
-import UserSelector from './UserSelector';
-import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
-import { isValidAdminActionReason } from '@bike4mind/common';
+import UserSelector from '@client/app/components/admin/shared/UserSelector';
+import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
+import {
+  ADMIN_REASON_PRESETS,
+  type AdminReasonDraft,
+  EMPTY_ADMIN_REASON,
+  composeAdminReason,
+  isAdminReasonComplete,
+} from '@client/app/components/admin/shared/adminReason';
 
 interface GrantSubscriptionModalProps {
   user: AdminUserListItem;
@@ -43,7 +49,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
   const [organizationName, setOrganizationName] = useState('');
   const [durationMonths, setDurationMonths] = useState(1);
   const [billingOwnerId, setBillingOwnerId] = useState<string | null>(null);
-  const [reason, setReason] = useState('');
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
 
   const grantSubscription = useGrantSubscription();
   const plans = useGetSubscriptionPlans();
@@ -62,7 +68,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
         subscriptionType: 'individual',
         priceId,
         durationMonths,
-        reason: reason.trim(),
+        reason: composeAdminReason(reason),
       });
     } else {
       if (!organizationName.trim()) return;
@@ -74,7 +80,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
         organizationName: organizationName.trim(),
         durationMonths,
         billingOwnerId: billingOwnerId || undefined,
-        reason: reason.trim(),
+        reason: composeAdminReason(reason),
       });
     }
 
@@ -89,7 +95,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
     setOrganizationName('');
     setDurationMonths(1);
     setBillingOwnerId(null);
-    setReason('');
+    setReason(EMPTY_ADMIN_REASON);
   };
 
   const handleClose = () => {
@@ -100,7 +106,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
   const selectedPlan = availableIndividualPlans.find(plan => plan.priceId === priceId);
   const isSelectionValid =
     subscriptionType === 'individual' ? !!priceId : !!organizationName.trim() && seats >= minSeats;
-  const isFormValid = isSelectionValid && isValidAdminActionReason(reason);
+  const isFormValid = isSelectionValid && isAdminReasonComplete(reason);
 
   const calculateCredits = () => {
     if (subscriptionType === 'individual' && selectedPlan) {
@@ -234,7 +240,12 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
             </Select>
           </FormControl>
 
-          <AdminReasonField value={reason} onChange={setReason} data-testid="grant-subscription-reason-input" />
+          <ReasonPicker
+            presets={ADMIN_REASON_PRESETS.subscriptionGrant}
+            value={reason}
+            onChange={setReason}
+            data-testid="grant-subscription-reason-input"
+          />
 
           {isSelectionValid && (
             <Box sx={{ p: 2, backgroundColor: 'background.level1', borderRadius: 'md' }}>

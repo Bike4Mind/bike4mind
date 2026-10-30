@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { admitLandedUpload } from '@server/s3/uploadSizeGate';
+import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';

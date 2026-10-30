@@ -18,7 +18,7 @@
 import { adminSettingsRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { prReportService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 import { assertRepoFormat, createAssertChatTargetFormat } from './guards';
 import { createFetchApprovedPrNumbers, createFetchOpenPullRequests } from './githubPrSource';

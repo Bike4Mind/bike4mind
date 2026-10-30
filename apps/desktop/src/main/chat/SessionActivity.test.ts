@@ -71,6 +71,20 @@ describe('SessionActivity', () => {
     expect(activity.statusOf('a')).toBe('needs-action');
   });
 
+  it('stays processing from a worktree being prepared into the reply it starts, with no done between', () => {
+    const { activity, events } = track();
+
+    activity.preparingStarted('a');
+    expect(activity.statusOf('a')).toBe('processing');
+    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'processing' }]);
+    activity.replyStarted('a');
+    activity.preparingEnded('a');
+    expect(activity.statusOf('a')).toBe('processing');
+    activity.replyEnded('a');
+
+    expect(events.map(event => event.status)).toEqual(['processing', 'done']);
+  });
+
   it('tracks sessions independently', () => {
     const { activity } = track();
     activity.replyStarted('a');

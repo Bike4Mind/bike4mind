@@ -20,11 +20,17 @@ const draft: AttachmentDraft = {
   dismissRejected: () => {},
   add: async () => {},
   pick: async () => {},
+  attachImage: async () => {},
   remove: () => {},
   clear: () => {},
 };
 
-const usage: ComposerUsage = { contextTokens: 44_000, contextLimit: 200_000, credits: 31_667 };
+const usage: ComposerUsage = {
+  contextTokens: 44_000,
+  contextLimit: 200_000,
+  credits: 25_000,
+  monthlyAllowance: 50_000,
+};
 
 function statusMarkup(props: Partial<Parameters<typeof Composer>[0]> = {}): string {
   return renderToStaticMarkup(
@@ -70,38 +76,31 @@ describe('the composer indicator', () => {
   it('draws the ring and nothing else, keeping the figure as its name', () => {
     expect(statusMarkup()).not.toContain('composer-status-text');
     expect(statusMarkup()).not.toContain('turn-dot');
-    expect(ringLabel()).toBe('Context 22%');
-    expect(ringValue()).toBe(22);
+    expect(ringLabel()).toBe('Credits 50% of monthly plan allowance');
+    expect(ringValue()).toBe(50);
   });
 
-  // The behaviour the ring was added to protect: a turn in flight is when the figure matters
-  // most, and it holds the last measured request rather than blanking.
   it('keeps the ring up through a turn in flight', () => {
     expect(hasRing({ streaming: true })).toBe(true);
-    expect(ringLabel({ streaming: true })).toBe('Context 22%');
+    expect(ringLabel({ streaming: true })).toBe('Credits 50% of monthly plan allowance');
   });
 
-  /**
-   * A measured context under a percent would draw an arc a few pixels long, which is the empty
-   * ring that means nothing was measured at all. The floor is what keeps the two apart - the
-   * same thing "<1%" does for the words.
-   */
-  it('floors the arc so a tiny measured context still reads as measured', () => {
-    const tiny = { contextTokens: 900, contextLimit: 1_050_000, credits: 31_667 };
+  it('floors a tiny positive balance share so it remains visible', () => {
+    const tiny = { ...usage, credits: 1, monthlyAllowance: 50_000 };
     expect(ringValue({ usage: tiny })).toBe(4);
-    // Escaped because this reads the attribute out of static markup, not out of the DOM.
-    expect(ringLabel({ usage: tiny })).toBe('Context &lt;1%');
+    expect(ringLabel({ usage: tiny })).toBe('Credits &lt;1% of monthly plan allowance');
   });
 
-  /**
-   * A determinate ring draws 0% and "no idea" identically, so an unstated window draws the bare
-   * track instead of an arc. The ring stays: it is the tooltip's hover target, and the balance
-   * lives in that tooltip whether or not a window was ever stated.
-   */
-  it('draws an empty ring, not a full-looking one, for a window the catalog does not state', () => {
-    const unstated = { contextTokens: 44_000, contextLimit: null, credits: 31_667 };
+  it('draws an empty ring when no finite monthly allowance is stated', () => {
+    const unstated = { ...usage, credits: 31_667, monthlyAllowance: null };
     expect(ringValue({ usage: unstated })).toBe(0);
-    expect(ringLabel({ usage: unstated })).toBe('Context --');
+    expect(ringLabel({ usage: unstated })).toBe('Credits personal balance; no monthly plan allowance');
+  });
+
+  it('clamps rollover above the allowance to a full arc while stating the real percentage', () => {
+    const rollover = { ...usage, credits: 75_000, monthlyAllowance: 50_000 };
+    expect(ringValue({ usage: rollover })).toBe(100);
+    expect(ringLabel({ usage: rollover })).toBe('Credits 150% of monthly plan allowance');
   });
 
   // Nothing to measure and nothing to say: the sidebar dot speaks for these, so a ring here
@@ -281,6 +280,56 @@ describe('the composer command menu', () => {
   });
 });
 
+describe('skills mid-sentence', () => {
+  const skills = {
+    skills: [
+      { name: 'review', description: 'Review a change.', source: 'project' as const, filePath: '/r/review/SKILL.md' },
+      { name: 'ship-it', description: 'Release.', source: 'global' as const, filePath: '/g/ship-it/SKILL.md' },
+    ],
+    projectDirectory: '/r',
+    untrustedProject: null,
+    refresh: async () => {},
+    trustProject: async () => {},
+  };
+  const skillRows = () => Array.from(host?.querySelectorAll('[data-testid="skill-picker-option"]') ?? []);
+  const marks = () =>
+    Array.from(host?.querySelectorAll('[data-skill-token]') ?? []).map(mark => mark.getAttribute('data-skill-token'));
+
+  it('opens the skill menu for a slash after a word, without offering commands', () => {
+    mount({ skills, onRunCommand: () => {} });
+    type('fix the login bug then /rev');
+
+    expect(skillRows().map(row => row.textContent)).toEqual([expect.stringContaining('review')]);
+    // A command run from here would throw away the sentence before it.
+    expect(rows()).toHaveLength(0);
+  });
+
+  it('puts the picked skill in place and keeps the words before it', () => {
+    mount({ skills });
+    type('fix the login bug then /rev');
+    press('Enter');
+
+    expect(input().value).toBe('fix the login bug then /review ');
+    expect(input().selectionStart).toBe(input().value.length);
+    expect(skillRows()).toHaveLength(0);
+  });
+
+  it('draws a highlight behind known skills only', () => {
+    mount({ skills, onRunCommand: () => {} });
+    type('first /ship-it after /review, not /nope or /clear');
+    expect(marks()).toEqual(['ship-it', 'review']);
+
+    type('just prose');
+    expect(host?.querySelector('[data-testid="composer-skill-highlight"]')).toBeNull();
+  });
+
+  it('highlights a command only when it leads the draft', () => {
+    mount({ skills, onRunCommand: () => {} });
+    type('/clear');
+    expect(marks()).toEqual(['clear']);
+  });
+});
+
 describe('the suggested next prompt', () => {
   const placeholder = () => input().getAttribute('placeholder');
 
@@ -320,6 +369,19 @@ describe('the suggested next prompt', () => {
     press('Enter');
     expect(send).toHaveBeenCalledWith('Add a test');
     expect(dismissed).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a composer that cannot send yet', () => {
+  it('keeps the draft on Enter instead of clearing it into a refused send', () => {
+    const send = vi.fn();
+    mount({ notReady: 'Sign in', onSend: send });
+
+    type('written while signed out');
+    press('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('written while signed out');
   });
 });
 
@@ -431,6 +493,17 @@ describe('the attach shortcut', () => {
     expect(pick).not.toHaveBeenCalled();
     add.mockRestore();
     remove.mockRestore();
+  });
+
+  it('blocks sending with a reason and runs the fix button', () => {
+    const onSend = vi.fn();
+    const onClick = vi.fn();
+    mount({ onSend, blockedReason: 'No local model.', blockedAction: { label: 'Open Models', onClick } });
+    expect(host?.querySelector('[data-testid="composer-blocked-reason"]')?.textContent).toContain('No local model.');
+    act(() => (host?.querySelector('[data-testid="composer-blocked-action-btn"]') as HTMLElement).click());
+    expect(onClick).toHaveBeenCalledOnce();
+    expect((host?.querySelector('[data-testid="chat-send-btn"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it('advertises the chord on the attach button', () => {

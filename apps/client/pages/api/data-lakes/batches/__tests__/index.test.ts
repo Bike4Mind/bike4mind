@@ -254,6 +254,37 @@ describe('POST /api/data-lakes/batches - admission contract wiring', () => {
   });
 });
 
+describe('POST /api/data-lakes/batches - taxonomy payer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeWriteAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
+    h.assertLakeAdmission.mockResolvedValue(undefined);
+    h.listGrantsByLake.mockResolvedValue([]);
+    h.batchCreate.mockResolvedValue({ id: 'b1' });
+  });
+
+  it.each([
+    { billingOwnerType: 'Organization', organizationId: 'orgB', expectedOrg: 'orgB' },
+    { billingOwnerType: 'User', organizationId: undefined, expectedOrg: null },
+  ])('captures $billingOwnerType key billing instead of the uploader seat', async ({ expectedOrg, ...apiKeyInfo }) => {
+    const req = {
+      method: 'POST',
+      user: { id: 'u1', organizationId: 'homeOrg' },
+      apiKeyInfo: { ...apiKeyInfo, keyId: 'key1', scopes: ['datalake:write'] },
+      headers: { 'user-agent': 'b4m-cli/1.0' },
+      logger: console,
+      body: { dataLakeId: 'lake1', totalFiles: 2, totalSizeBytes: 10, wantsTaxonomy: true },
+    };
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req, makeRes().res);
+
+    expect(h.batchCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taxonomyBilling: { organizationId: expectedOrg, apiKeyId: 'key1', source: 'cli' },
+      })
+    );
+  });
+});
+
 describe('POST /api/data-lakes/batches - uploader rung', () => {
   const ORG_LAKE = {
     id: 'lake1',

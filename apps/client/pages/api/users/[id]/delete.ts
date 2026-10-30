@@ -22,12 +22,41 @@ import {
   parseAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
+import { emitBillingEvent } from '@server/analytics/signupEvents';
+import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
+import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
+import { resolveUserType } from '@server/analytics/resolveUserType';
 
 const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' | 'username' | 'email'> | null) => ({
   kind: 'user' as const,
   id,
   displayName: user?.name || user?.username || user?.email || id,
 });
+
+/**
+ * The account's own churn, for Overwatch: to the host, and to the product the user came through.
+ * An admin's request rather than the user's, so it is marked as no action of theirs. The
+ * occurrence is the pseudonym, never the raw id, which an eventId is sent verbatim beside.
+ * Never throws: it runs in a `finally`, where a throw would replace the request's own error.
+ */
+async function emitAccountDeleted(account: IUserDocument | null): Promise<void> {
+  if (!account) return;
+  try {
+    const daysSinceSignup = wholeDaysBetween(account.createdAt, new Date());
+    await emitBillingEvent({
+      user: account,
+      event: 'account_deleted',
+      occurrence: pseudonymizeUserId(account.id),
+      metadata: {
+        wasSubscriber:
+          resolveUserType({ level: account.level, subscribedUntil: account.subscribedUntil }) === 'subscriber',
+        ...(daysSinceSignup !== undefined && { daysSinceSignup }),
+      },
+    });
+  } catch {
+    console.warn('[b4m-analytics] account_deleted not sent');
+  }
+}
 
 const handler = baseApi().delete(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -47,6 +76,8 @@ const handler = baseApi().delete(
     // skip the purge: a retry would 404, so nothing would run it again.
     let deleteCommitted = false;
     let integrationGrants: UserIntegrationGrants | null = null;
+    // The account as it stood before the delete, for account_deleted below.
+    let deletedAccount: IUserDocument | null = null;
     const users: IUserRepository = Object.create(userRepository, {
       delete: {
         value: async (id: string) => {
@@ -54,6 +85,7 @@ const handler = baseApi().delete(
           // provider grants and they are unreadable once the delete commits.
           integrationGrants = await readUserIntegrationGrants(id);
           const target = await userRepository.findById(id);
+          deletedAccount = target;
           // The delete and its audit entry commit together; cascades and notifications run after.
           const result = await withTransaction(async () => {
             const deleted = await userRepository.delete(id);
@@ -114,6 +146,9 @@ const handler = baseApi().delete(
           logger: req.logger,
           integrationGrants,
         });
+        // Here rather than after the try for the same reason as the purge: a Slack or mail
+        // failure after the commit would otherwise skip it, and the retry 404s.
+        await emitAccountDeleted(deletedAccount);
       }
     }
 

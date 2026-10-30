@@ -2,7 +2,7 @@
  * Post-processing for tool output before it reaches the model.
  *
  * Every tool result - success OR error - is routed through {@link sanitizeToolOutput}
- * at the single choke point in ToolRouter.executeTool. Two guarantees:
+ * by the tool gateway's output stage (tools/gateway/stages/output.ts). Two guarantees:
  *   1. Known secret shapes (API keys, tokens, credentialed connection strings) are
  *      redacted so a leaky tool or a token-bearing error can't flow into the transcript.
  *   2. Output is capped so an unbounded result can't blow the context budget.

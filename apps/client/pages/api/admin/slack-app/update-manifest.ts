@@ -1,10 +1,11 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { mergeManifest, extractBaseUrl } from '@bike4mind/slack';
-import { isSlackUserValidationError } from '@server/integrations/slack/slackExportErrors';
+import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * POST /api/admin/slack-app/update-manifest
@@ -18,11 +19,10 @@ const UpdateManifestSchema = z.object({
   workspaceId: z.string().min(1, 'workspaceId is required'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const result = UpdateManifestSchema.safeParse(req.body);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');
@@ -136,6 +136,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     workspaceId,
     appId: workspace.slackAppId,
     adminUserId: req.user?.id,
+  });
+
+  await recordAdminActionFromRequest(req, {
+    action: 'integration.slack_app.manifest_updated',
+    target: { kind: 'settings', id: workspaceId, displayName: workspace.name || workspace.slackAppId },
+    summary: `updated slack app manifest for ${workspace.slackAppId}`,
+    details: { appId: workspace.slackAppId },
   });
 
   return res.status(200).json({

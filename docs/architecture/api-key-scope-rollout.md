@@ -26,11 +26,43 @@ land on their own: a scope nobody requires yet changes no request's outcome.
 
 Two generated/declared files trail step 1 and are gated in CI, not locally:
 
-- `apps/client/public/openapi.json` is committed, and its `info.description` publishes
-  the enum verbatim (`ALL_API_KEY_SCOPES`). Adding a value drifts the snapshot - run
-  `pnpm turbo:openapi:generate` and commit the result, or the `OpenAPI Spec` job fails.
+- `apps/client/public/openapi.json` is committed, and its `info.description` publishes the documented
+  scopes (`PUBLIC_DOC_API_KEY_SCOPES`, the enum minus `UNDOCUMENTED_API_KEY_SCOPES`). Adding a value drifts the
+  snapshot - run `pnpm turbo:openapi:generate` and commit the result, or the `OpenAPI Spec` job fails. Classify
+  the new scope as published or undocumented too: the test in `UserApiKeyTypes.test.ts` fails until you do.
 - `infra/deploy-contract.json` must name any `process.env` that `infra/` reads at deploy
   time. Threading a new lever through `infra/web.ts` alone fails `Core Build`.
+
+## Scopes contributed by an overlay package
+
+An overlay package can add self-service scopes without touching the enum or the catalog, by declaring literal `b4mContributions.apiKeyScopes` data in its `package.json`:
+
+```json
+{
+  "b4mContributions": {
+    "apiKeyScopes": [
+      {
+        "value": "example:read",
+        "label": "Read example data",
+        "description": "Read-only access to the example endpoints.",
+        "endpoints": ["GET /api/example/items"],
+        "requiredEntitlement": "example:pro"
+      }
+    ]
+  }
+}
+```
+
+Run `pnpm --filter @bike4mind/client codegen` after changing the declaration. The generator (`apps/client/scripts/generate-premium-glue.mjs`) validates the rows and writes `apps/client/app/premium-generated/premiumApiKeyScopes.generated.ts`, which `constants/apiKeyScopes.ts` merges into the catalog, the route gate's known set and both mint routes. With no overlay the list is empty. The contract type is `PremiumApiKeyScope` in `apps/client/app/premiumContract.ts`.
+
+- `value` is `<resource>:<action>`, lowercase, at most 100 characters, matching `^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$`. Wildcard actions (`<res>:*`) are built-in only.
+- The `admin`, `cc-bridge`, `embed` and `datalake` resources are reserved. A value that collides with a built-in scope is dropped at load time; built-ins always win.
+- `label` is at most 64 characters, `description` at most 200; `endpoints` is at most 50 `METHOD /path` lines, shown in the scope docs only and never used for routing. Unknown fields fail codegen.
+- `requiredEntitlement` (optional, a lowercase entitlement key) limits who is offered and may mint the scope to users holding that key, **plus every admin and developer-tagged user**. A route serving a paid feature must check the entitlement itself rather than trusting the scope alone.
+- A contributed scope is never confined and always self-mintable; the contract has no field for either.
+- Two packages giving one value different rows fail codegen; an identical repeat collapses. Rows rejected at load time are logged as `[api-keys] dropped contributed scope rows`.
+
+Steps 3 and 4 above apply unchanged: declare `requiredScopes` with the contributed value and stage the gate before enforcing it.
 
 ## Confined scopes (default-deny)
 
@@ -66,7 +98,7 @@ Where a surface both reads state and commissions billable work, give it two scop
 not one. A key that only reads is then *structurally* unable to spend - which is what
 lets an agent hold one. `optihashi:read` / `optihashi:compute` is the reference pair;
 `datalake:read` / `datalake:query` (semantic-search, rlm-answer) is the same split for
-data lakes.
+data lakes, and `bob:read` / `bob:run` (site reads, comparisons and re-checks) for Bob.
 
 Keep the suffix honest: the New-Key modal builds its "Read-only" and "Read & write"
 presets from the `:read` and `:write` suffixes, so a spend scope must carry neither,

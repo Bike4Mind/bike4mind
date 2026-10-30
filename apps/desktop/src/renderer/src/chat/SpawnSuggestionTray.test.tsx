@@ -42,6 +42,7 @@ const draft: AttachmentDraft = {
   dismissRejected: () => {},
   add: async () => {},
   pick: async () => {},
+  attachImage: async () => {},
   remove: () => {},
   clear: () => {},
 };
@@ -163,7 +164,7 @@ describe('SpawnSuggestionTray', () => {
 
   it('starts in this folder without a branch, and shows a refusal on the card', async () => {
     const on = handlers();
-    on.onStart.mockResolvedValueOnce({ ok: false, error: '3 started sessions are already running' });
+    on.onStart.mockResolvedValueOnce({ ok: false, error: 'Too many started sessions are already running' });
     render([BASE], on);
 
     await choose('local');

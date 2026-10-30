@@ -29,6 +29,8 @@ on:
         description: 'AI model to test'
         type: choice
         options:
+          - Claude Opus 5.5
+          - GPT-5.6 Sol
           - Claude Opus 4.8
           - Claude Opus 4.7
           - Claude Opus 4.6
@@ -68,7 +70,7 @@ jobs:
   # single-cell and all-specs dispatch modes — those use the dispatch-selected model.
   discover-models:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_full_matrix)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -144,8 +146,8 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Install Playwright Chromium
-        working-directory: apps/client
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 12
+        uses: ./.github/actions/install-playwright-chromium
 
       - name: Wait for deployment to be healthy
         env:
@@ -170,10 +172,11 @@ jobs:
           API_URL: ${{ steps.config.outputs.api_url }}
           # dev reads E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper below
           # (same-account). Preview stacks live in a SEPARATE AWS account the dev role
-          # can't `sst shell` into, so for pr<N> runs we inject it directly from this repo
-          # secret (the stable value the deployer seeds onto every stage). It is the ONLY
-          # SST value the suite needs. Same pattern as e2e-run.yml / e2e-on-label.yml.
-          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          # can't `sst shell` into, so for pr<N> runs we derive it per stage from this seed
+          # secret (matching what the deployer sets on preview stages), and
+          # leave it unset for dev so SST wins. It is the ONLY SST value the suite needs.
+          # Same pattern as e2e-run.yml / e2e-on-label.yml.
+          E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           # Sanitized upstream (pr<digits> or the `dev` choice input); safe to branch on.
           STAGE: ${{ steps.config.outputs.stage }}
           E2E_TEST_ID: discover-models
@@ -184,13 +187,14 @@ jobs:
           set -o pipefail
           case "$STAGE" in
             pr[0-9]*)
-              # Preview (cross-account): use the injected repo secret, no sst shell.
+              # Preview (cross-account): use the derived secret, no sst shell.
+              . .github/scripts/derive-preview-e2e-secret.sh "$STAGE"
               # Skip rather than `exit 1` so this does not read as a broken discovery
               # test. A full-matrix run genuinely cannot continue without the discovered
               # models, so setup-matrix still stops the run - but it names THIS cause,
               # rather than reporting an unexplained empty discovery result.
               if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping model discovery (0 tests run)"
+                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured; skipping model discovery (0 tests run)"
                 echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
@@ -248,7 +252,7 @@ jobs:
           build_full_matrix() {
             if [ -z "$DISCOVERED_GPT" ] || [ -z "$DISCOVERED_CLAUDE" ]; then
               if [ "$DISCOVERY_SKIPPED" = "true" ]; then
-                echo "::error::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured, so model discovery could not run. No tests were executed - this is a configuration gap, not a test failure."
+                echo "::error::preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured, so model discovery could not run. No tests were executed - this is a configuration gap, not a test failure."
               else
                 echo "Full matrix requested but model discovery did not return both models (gpt='$DISCOVERED_GPT', claude='$DISCOVERED_CLAUDE')."
               fi
@@ -286,7 +290,7 @@ jobs:
     # There is no run shape in which some cells skip and others do not.
     outputs:
       preview_skipped: ${{ steps.e2e.outputs.preview_skipped }}
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: '${{ matrix.spec_file }} — ${{ matrix.ai_model }}'
     timeout-minutes: 90
     permissions:
@@ -404,12 +408,8 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Install Playwright Chromium
-        working-directory: apps/client
-        # Cap the install: the yauzl/Node>=24.16 extraction wedge
-        # (playwright#40724) can hang this step indefinitely, idling to the job
-        # cap. Fail fast instead.
-        timeout-minutes: 8
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 12
+        uses: ./.github/actions/install-playwright-chromium
 
       - name: Wait for deployment to be healthy
         env:
@@ -437,10 +437,11 @@ jobs:
           API_URL: ${{ steps.config.outputs.api_url }}
           # dev reads E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper below
           # (same-account). Preview stacks live in a SEPARATE AWS account the dev role
-          # can't `sst shell` into, so for pr<N> runs we inject it directly from this repo
-          # secret (the stable value the deployer seeds onto every stage). It is the ONLY
-          # SST value the suite needs. Same pattern as e2e-run.yml / e2e-on-label.yml.
-          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          # can't `sst shell` into, so for pr<N> runs we derive it per stage from this seed
+          # secret (matching what the deployer sets on preview stages), and
+          # leave it unset for dev so SST wins. It is the ONLY SST value the suite needs.
+          # Same pattern as e2e-run.yml / e2e-on-label.yml.
+          E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           # Sanitized upstream (pr<digits> or the `dev` choice input); safe to branch on.
           STAGE: ${{ steps.config.outputs.stage }}
           E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
@@ -453,7 +454,8 @@ jobs:
           set -o pipefail
           case "$STAGE" in
             pr[0-9]*)
-              # Preview (cross-account): use the injected repo secret, no sst shell.
+              # Preview (cross-account): use the derived secret, no sst shell.
+              . .github/scripts/derive-preview-e2e-secret.sh "$STAGE"
               # Skip rather than `exit 1` - a red cell here is indistinguishable from a
               # real latency/quality failure. Exiting 0 alone would only swap that for a
               # misleading green, so `preview_skipped` is published as a job output and the
@@ -461,7 +463,7 @@ jobs:
               # pass/fail. Must stay in sync with that branch: without it, every cell
               # renders "No Data", whose legend blames Playwright for a config gap.
               if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
+                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured; skipping (0 tests run)"
                 echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
@@ -502,10 +504,23 @@ jobs:
           echo "Found pw-results.json candidates:"
           find . -type f -name 'pw-results.json' 2>/dev/null | head -20 || true
 
+      - name: Scrub E2E secrets from test output
+        id: scrub
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        env:
+          E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
+          STAGE: ${{ steps.config.outputs.stage }}
+        # A preview run sent its derived value, not the staging secret, so scrub that one.
+        run: |
+          case "$STAGE" in pr[0-9]*) . .github/scripts/derive-preview-e2e-secret.sh "$STAGE" ;; esac
+          python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
+
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were
         # found" warning that reads like the run lost its report.
-        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        if: always() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v6
         with:
           name: ai-latency-${{ matrix.spec_file }}-${{ steps.sanitize.outputs.model_safe }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
@@ -604,7 +619,7 @@ jobs:
           # at the suite when the cause is a missing repo secret. The benchmark cells exit 0 on
           # a skip, so without this branch the whole run renders green.
           if [ "${PREVIEW_SKIPPED:-}" = "true" ]; then
-            OVERALL_STATUS=":fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)"
+            OVERALL_STATUS=":fast_forward: Skipped (E2E_CLEANUP_SECRET_PREVIEW not configured)"
           elif [ "${#ALL_PW_RESULTS[@]}" -gt 0 ]; then
             PASSED=$(jq -rs '[.[].stats.expected] | add // 0' "${ALL_PW_RESULTS[@]}")
             FAILED=$(jq -rs '[.[].stats.unexpected] | add // 0' "${ALL_PW_RESULTS[@]}")
@@ -646,12 +661,12 @@ jobs:
           MODEL_W=20
           QUAL_W=8
 
-          TABLE_HDR="$(printf "%-${SUITE_W}s %-${MODEL_W}s %-${QUAL_W}s %s" 'Suite' 'Model' 'Quality' 'Average Latency')"
+          TABLE_HDR="$(printf "%-${SUITE_W}s %-${MODEL_W}s %-${QUAL_W}s %s" 'Suite' 'Model' 'Quality' 'Median Latency (TTFT)')"
           TABLE_SEP="$(printf "%-${SUITE_W}s %-${MODEL_W}s %-${QUAL_W}s %s" \
             '--------------------------------' \
             '--------------------' \
             '--------' \
-            '---------------')"
+            '---------------------')"
           TABLE_ROWS=""
 
           for SPEC in "${SPEC_FILES[@]}"; do
@@ -687,7 +702,7 @@ jobs:
                 # Skip the latency gate test: its breach belongs to the Latency column below, and
                 # counting it here would read a slow-but-correct cell as a quality failure. The
                 # title must stay in sync with LATENCY_GATE_TITLE in ai-latency-suite-factory.ts.
-                UNEXPECTED="$(jq -r --arg gate 'average AI latency is within the threshold' \
+                UNEXPECTED="$(jq -r --arg gate 'median AI latency is within the threshold' \
                   '[.. | objects | select(has("specs")) | .specs[] | select(.title != $gate and .ok == false)] | length' \
                   "$PW_JSON" 2>/dev/null || echo 0)"
                 [ "$UNEXPECTED" -gt 0 ] && QUALITY="Fail" || QUALITY="Pass"
@@ -698,34 +713,51 @@ jobs:
               # Latency column
               if [ -n "$LATENCY_JSON" ]; then
                 THRESHOLD="$(jq -r '.thresholdSec // empty' "$LATENCY_JSON")"
-                AVG="$(jq -r '.averageResponseTimeSec // 0' "$LATENCY_JSON")"
-                # A prompt abandoned at its budget has no upper bound, so averaging it in understates
-                # the cell: two fast prompts drag the mean back under thresholdSec and the breach
-                # disappears into it. Count any abandoned gated prompt as a breach in its own right.
-                ABANDONED="$(jq -r '[.results[]? | select(.incomplete == true) | select(.measuresDeliverable != true)] | length' "$LATENCY_JSON")"
+                # Median over gated prompts, each on its slowest attempt (gatedMedianSec in
+                # ai-latency-budget.ts); TTFT is the median time to first answer token beside it.
+                MEDIAN="$(jq -r '.medianResponseTimeSec // 0' "$LATENCY_JSON")"
+                TTFT="$(jq -r '.medianFirstTokenSec // 0' "$LATENCY_JSON")"
+                # A prompt abandoned at its budget has no upper bound, so faster prompts can outvote it
+                # in the median and the breach disappears. Count a gated prompt whose LATEST attempt was
+                # abandoned as a breach in its own right; one a retry completed only feeds the median.
+                ABANDONED="$(jq -r '[.results[]? | select(.incomplete == true) | select(.measuresDeliverable != true) | select(.retried != true)] | length' "$LATENCY_JSON")"
+                # An unflagged prompt that answered with an artifact is excluded from the median; show it
+                # so the mode switch is noticed rather than hidden. Counted per prompt on its latest attempt
+                # (unexpectedArtifactIds in ai-latency-budget.ts): a retry that answered in chat is in the median.
+                SWITCHED="$(jq -r '[.results[]? | select(.unexpectedArtifact == true) | select(.retried != true) | .id] | unique | length' "$LATENCY_JSON")"
+                # Earlier attempts of a retried gated prompt are kept and can set its value in the median;
+                # say how many.
+                RETRIED="$(jq -r '[.results[]? | select(.retried == true) | select(.measuresDeliverable != true)] | length' "$LATENCY_JSON")"
+                LATENCY_VALUE="$(printf '%.2fs' "$MEDIAN")"
+                IS_TTFT="$(echo "$TTFT > 0" | bc -l 2>/dev/null || echo 0)"
+                [ "$IS_TTFT" = "1" ] && LATENCY_VALUE="${LATENCY_VALUE} (TTFT $(printf '%.2fs' "$TTFT"))"
 
                 if [ -z "$THRESHOLD" ] || [ "$THRESHOLD" = "null" ]; then
-                  LATENCY_STR="$(printf '%.2fs' "$AVG") / <=N/A FAIL"
+                  LATENCY_STR="${LATENCY_VALUE} / <=N/A FAIL"
                   LATENCY_EXCEEDED_COUNT=$((LATENCY_EXCEEDED_COUNT + 1))
                   EXCEEDED=true
                 else
-                  IS_ZERO="$(echo "$AVG == 0" | bc -l 2>/dev/null || echo 0)"
-                  IS_OVER="$(echo "$AVG > $THRESHOLD" | bc -l 2>/dev/null || echo 0)"
+                  IS_ZERO="$(echo "$MEDIAN == 0" | bc -l 2>/dev/null || echo 0)"
+                  IS_OVER="$(echo "$MEDIAN > $THRESHOLD" | bc -l 2>/dev/null || echo 0)"
                   if [ "$IS_ZERO" = "1" ]; then
                     LATENCY_STR="No Data"
+                    [ "${SWITCHED:-0}" -gt 0 ] && LATENCY_STR="No Data (${SWITCHED} artifact-mode excluded)"
                     LATENCY_NO_DATA=$((LATENCY_NO_DATA + 1))
                     HAS_NO_DATA=true
                   elif [ "$IS_OVER" = "1" ] || [ "${ABANDONED:-0}" -gt 0 ]; then
-                    REASON="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s FAIL"
+                    REASON="${LATENCY_VALUE} / <=${THRESHOLD}s FAIL"
+                    [ "${SWITCHED:-0}" -gt 0 ] && REASON="${REASON} (${SWITCHED} artifact-mode excluded)"
                     [ "${ABANDONED:-0}" -gt 0 ] && REASON="${REASON} (${ABANDONED} prompt(s) never finished)"
                     LATENCY_STR="$REASON"
                     echo "::error title=AI latency breach::${SPEC} on ${AI_MODEL}: ${REASON}"
                     LATENCY_EXCEEDED_COUNT=$((LATENCY_EXCEEDED_COUNT + 1))
                     EXCEEDED=true
                   else
-                    LATENCY_STR="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s"
+                    LATENCY_STR="${LATENCY_VALUE} / <=${THRESHOLD}s"
                     LATENCY_WITHIN=$((LATENCY_WITHIN + 1))
+                    [ "${SWITCHED:-0}" -gt 0 ] && LATENCY_STR="${LATENCY_STR} (${SWITCHED} artifact-mode excluded)"
                   fi
+                  [ "$IS_ZERO" != "1" ] && [ "${RETRIED:-0}" -gt 0 ] && LATENCY_STR="${LATENCY_STR} (${RETRIED} retried attempt(s) kept)"
                 fi
               else
                 LATENCY_STR="No Data"
@@ -738,7 +770,7 @@ jobs:
             done
           done
 
-          # Average latency exceeding threshold is a real failure - downgrade overall status, and
+          # Median latency exceeding threshold is a real failure - downgrade overall status, and
           # publish the verdict as ONE output. Never over a skip: no cell produced latency data, so
           # a breach could only be stale there and the skip is the honest verdict either way. Every
           # consumer (Slack page, run gate) reads latency_breach rather than re-deriving
@@ -758,7 +790,7 @@ jobs:
           # On a skip every cell is empty for one known reason, so the default legend would
           # send the reader to debug a suite that never ran. Name the cause instead.
           if [ "${PREVIEW_SKIPPED:-}" = "true" ]; then
-            FOOTNOTE_1="--- / No Data = preview e2e unavailable: the E2E_CLEANUP_SECRET repo secret is not configured, so no tests ran"
+            FOOTNOTE_1="--- / No Data = preview e2e unavailable: the E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured, so no tests ran"
             FOOTNOTE_2="This is a configuration gap, not a test failure. Set the repo secret; do not debug the suite."
           else
             FOOTNOTE_1="--- = No quality data: Playwright crashed, timed out, or failed before results were collected"
@@ -866,7 +898,7 @@ jobs:
         # no longer silently retire the slowness signal.
         if: ${{ always() && steps.aggregate.outputs.latency_breach == 'true' }}
         run: |
-          echo "::error::Latency gate: a suite/model cell averaged over its declared threshold, or abandoned a prompt at the streaming cap. The summary table in the aggregate step says which cell and which cause."
+          echo "::error::Latency gate: a suite/model cell's median went over its declared threshold, or abandoned a prompt at the streaming cap. The summary table in the aggregate step says which cell and which cause."
           exit 1
 
       # Same run as the staging ingest above, posted to production's /status too. Last in the

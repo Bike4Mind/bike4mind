@@ -3,9 +3,11 @@ import {
   estimateVideoCostUsd,
   getVideoModelCapabilities,
   MAX_INLINE_PROVIDER_OUTPUT_BYTES,
+  retiredVideoModelMessage,
   validateAgainstCapabilities,
   videoFileExtension,
-  videoInputImageRef,
+  videoInputRef,
+  videoRequestInputs,
   type GenerationJobErrorCode,
   type IGenerationJobDocumentOf,
   type ValidatedVideoRequest,
@@ -19,6 +21,7 @@ import {
   ProviderOutputTooLargeError,
   type ProviderJobHandle,
   type ProviderOutput,
+  type ResolvedInputImage,
   type ResolvedInputs,
   type VideoProvider,
   type VideoProviderContext,
@@ -134,6 +137,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
     job: VideoJob,
     context: GenerationJobStepContext
   ): Promise<PreparedSubmit | VideoStepResult> => {
+    // A job queued before its model was retired fails here rather than spending a submit the provider refuses.
+    const retired = retiredVideoModelMessage(job.payload.request.model);
+    if (retired) return fail('provider_error', retired);
     const provider = providerFor(job);
     const ctx = await contextFor(job, context);
     if (!ctx) return noApiKey(job);
@@ -141,14 +147,13 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
     // Defensive: the catalog may have changed since the job was created.
     const validation = validateAgainstCapabilities(request, getVideoModelCapabilities(request.model));
     if (!validation.ok) return fail('provider_error', `stored request is no longer valid: ${validation.message}`);
-    const inputs: ResolvedInputs = {};
-    const inputImage = request.mode === 'image_to_video' ? videoInputImageRef(request) : null;
-    if (inputImage) {
-      const image = await deps.loadInputImage(job.requestedBy, inputImage);
-      if (!image) return fail('input_image_not_found', 'Input image not found');
-      inputs.inputImage = image;
+    const images: ResolvedInputImage[] = [];
+    for (const videoInput of videoRequestInputs(request)) {
+      const image = await deps.loadInputImage(job.requestedBy, videoInputRef(videoInput));
+      if (!image) return fail('input_image_not_found', `Input image not found (${videoInput.role})`);
+      images.push({ role: videoInput.role, ...image });
     }
-    return { provider, request: validation.request, inputs, ctx };
+    return { provider, request: validation.request, inputs: { images }, ctx };
   };
 
   return {
@@ -250,6 +255,11 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
         durationSeconds: payload.reportedDurationSeconds ?? payload.request.durationSeconds,
       };
 
+      // Generated-key inputs (chat images in quest.images) are not Files, so they carry no lineage. The file id is
+      // the caller's raw string, and the input lookup accepts uppercase hex, so canonicalize it for the lineage guard.
+      const derivedFrom = videoRequestInputs(payload.request).flatMap(input =>
+        'fileId' in input ? [{ fileId: input.fileId.toLowerCase(), role: input.role }] : []
+      );
       const files = await deps.saveToFiles({
         userId: job.requestedBy,
         bytes,
@@ -261,7 +271,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
           jobId: job.id,
           prompt: payload.request.prompt,
           durationSeconds: common.durationSeconds,
+          request: payload.request,
         },
+        ...(derivedFrom.length > 0 && { derivedFrom }),
         ...(job.questId && { questId: job.questId }),
         signal: context.signal,
       });

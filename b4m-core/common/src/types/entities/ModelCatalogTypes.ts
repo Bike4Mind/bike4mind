@@ -12,7 +12,7 @@ import { MODEL_PRICE_UNITS } from './ModelPriceTypes';
  * ones - the read schemas below are lenient precisely so a version skew shortens
  * nobody's model list.
  */
-export const CATALOG_SCHEMA_VERSION = 1;
+export const CATALOG_SCHEMA_VERSION = 2;
 
 /**
  * How a model's request is built and which backend constructor serves it.
@@ -30,6 +30,8 @@ export const ADAPTER_FAMILIES = [
   'bedrock-moonshot',
   'bedrock-jurassic',
   'bedrock-titan',
+  // Any Converse-compatible Bedrock model; request shaping reads the record, not the id.
+  'bedrock-converse',
   'gemini',
   'xai',
   // Moonshot direct. Not 'openai-chat': the envelope matches but the reasoning
@@ -124,6 +126,8 @@ export const lifecycleStatusRank = (status: unknown): number | undefined => {
 };
 
 const LifecycleWrite = z.strictObject({
+  /** Absent on v1 rows means current; true folds the model without disabling it. */
+  isSuperseded: z.boolean().optional(),
   status: z.enum(LIFECYCLE_STATUSES),
   deprecationDate: CALENDAR_DATE.optional(),
   retirementDate: CALENDAR_DATE.optional(),
@@ -328,10 +332,11 @@ export const FIELD_GROUP_OF: Record<keyof ModelRecord, FieldGroup> = {
 /**
  * ModelInfo fields that never come from a catalog row. `pricing` is supplied by
  * applyModelPriceCatalog from the ModelPrice collection; a catalog row carrying
- * a price is a spec violation the write schema rejects. `image` is derived from the
+ * a price is a spec violation the write schema rejects. `priceSource` and `priceRowId`
+ * are the provenance of that overlay, stamped by the same call. `image` is derived from the
  * model id by getImageModelCapabilities when GET /api/models lists the model.
  */
-export const MODEL_INFO_FIELDS_NOT_IN_CATALOG = ['pricing', 'image'] as const;
+export const MODEL_INFO_FIELDS_NOT_IN_CATALOG = ['pricing', 'priceSource', 'priceRowId', 'image'] as const;
 
 /**
  * Which record group each ModelInfo field is derived from. Exhaustive by
@@ -362,6 +367,7 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
   supportsImageVariation: 'modalities',
   supportsSafetyTolerance: 'modalities',
 
+  isSuperseded: 'lifecycle',
   deprecationDate: 'lifecycle',
   replacedBy: 'lifecycle',
 

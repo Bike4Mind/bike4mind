@@ -32,7 +32,7 @@ export const withEventContext = <T extends EventBridgeEvent<string, any>>(
       },
     });
 
-    logger.info({ ...event['detail'], eventName });
+    logger.info('Received event', { eventName, eventId: event.id });
 
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
 

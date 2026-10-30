@@ -8,7 +8,7 @@ import {
   resolveQuestTimeoutRecovery,
   STUCK_QUEST_RECOVERED_LOG,
 } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
-import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
+import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 
 // Reading a quest is the documented poll step after POST /api/chat, so the contract's scopes

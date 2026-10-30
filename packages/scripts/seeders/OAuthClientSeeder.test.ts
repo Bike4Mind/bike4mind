@@ -106,7 +106,7 @@ describe('OAuthClientSeeder', () => {
         clientId: PREVIEW_FEDERATED_CLIENT_ID,
         tokenEndpointAuthMethod: 'client_secret_post',
         clientType: 'relying-party',
-        allowedScopes: ['openid', 'email', 'profile', 'ai:generate'],
+        allowedScopes: ['openid', 'email', 'profile', 'ai:generate', 'federated:admin-status'],
         federatedIdp: {
           issuer: 'https://pr-1.preview.example.com',
           audience: PREVIEW_FEDERATED_CLIENT_ID,

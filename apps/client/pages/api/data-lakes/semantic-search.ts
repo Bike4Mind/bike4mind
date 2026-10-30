@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_QUERY_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { resolveDefaultEmbeddingModel } from '@server/utils/resolveDefaultEmbeddingModel';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { dataLakeService } from '@bike4mind/services';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';

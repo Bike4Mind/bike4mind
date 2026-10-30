@@ -72,7 +72,7 @@ function renderApp() {
 describe('App queued-row padding on resize', () => {
   beforeEach(() => {
     fakeStdout = new FakeStdout(60, 20);
-    useCliStore.setState({ messageQueue: ['a queued message'] });
+    useCliStore.setState({ messageQueue: [{ text: 'a queued message', kind: 'steer' }] });
   });
 
   afterEach(() => {

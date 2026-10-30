@@ -1,7 +1,7 @@
 import { ChipVariant, getChipStyles } from '@client/app/utils/aiSettingsUtils';
 import { green } from '@client/app/utils/themes/colors';
 import { Chip, Tooltip, Box } from '@mui/joy';
-import { Star as StarIcon } from '@mui/icons-material';
+import StarIcon from '@mui/icons-material/Star';
 
 interface MetadataChipProps {
   label: string;

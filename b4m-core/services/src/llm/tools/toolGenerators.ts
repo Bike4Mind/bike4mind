@@ -23,6 +23,7 @@ import type { BaseStorage } from '@bike4mind/utils';
 import type { B4MLLMTools as LlmTools, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from './base/types';
 import type { IChatCompletionServiceOptions } from '../ChatCompletionFeatures';
+import { memoizeOperationalBillingCheck } from '../../billing/isOperationalBillingEnabled';
 
 export const generateTools = (
   userId: string,
@@ -34,6 +35,7 @@ export const generateTools = (
   // inputs should keep going here.
   {
     db,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -49,11 +51,14 @@ export const generateTools = (
     authOrigin,
     apiKeyId,
     questId,
+    requestConfirmation,
+    slackDestination,
     numberCitables,
     decide,
     getAbortSignal,
   }: {
     db: ToolContext['db'];
+    getEntitlements?: ToolContext['getEntitlements'];
     retrievalFilter?: ToolContext['retrievalFilter'];
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
@@ -70,6 +75,8 @@ export const generateTools = (
     authOrigin: ToolContext['authOrigin'];
     apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
+    requestConfirmation?: ToolContext['requestConfirmation'];
+    slackDestination?: ToolContext['slackDestination'];
     numberCitables?: ToolContext['numberCitables'];
     decide?: ToolContext['decide'];
     getAbortSignal?: ToolContext['getAbortSignal'];
@@ -77,10 +84,10 @@ export const generateTools = (
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>,
-  onStart: (toolName: string, data: any) => Promise<void>,
-  onFinish: (toolName: string, data: any) => Promise<void>,
+  onStart: (toolName: string, data: unknown) => Promise<void>,
+  onFinish: (toolName: string, data: unknown) => Promise<void>,
   llm: ICompletionBackend,
-  config: { [key in LlmTools]?: any },
+  config: { [key in LlmTools]?: unknown },
   model: string | undefined,
   imageProcessorLambdaName: string | undefined,
   // `tools` is required (no default): the previous `= b4mTools` default silently
@@ -93,7 +100,8 @@ export const generateTools = (
   sessionId?: string,
   codeMinifier?: ToolContext['codeMinifier'],
   availableModels?: import('@bike4mind/common').ModelInfo[],
-  onToolLlmUsage?: ToolContext['onToolLlmUsage']
+  onToolLlmUsage?: ToolContext['onToolLlmUsage'],
+  servingModel?: ToolContext['servingModel']
 ): Record<string, ICompletionOptionTools> => {
   assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
   const context: ToolContext = {
@@ -101,6 +109,8 @@ export const generateTools = (
     user,
     sessionId,
     questId,
+    requestConfirmation,
+    slackDestination,
     logger,
     db,
     storage,
@@ -113,6 +123,7 @@ export const generateTools = (
     imageProcessorLambdaName,
     allowedDirectories,
     entitlementKeys,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -130,9 +141,13 @@ export const generateTools = (
     codeMinifier,
     availableModels,
     onToolLlmUsage,
+    operationalBillingCheck: db.operationalBilling
+      ? memoizeOperationalBillingCheck({ adminSettings: db.adminSettings }, logger)
+      : undefined,
     decide,
     getAbortSignal,
     numberCitables,
+    servingModel,
   };
 
   return Object.entries(tools).reduce(
@@ -262,7 +277,7 @@ export const generateMcpTools = async (
     const optionTools: ICompletionOptionTools = {
       toolFn: async (args: any) => {
         // Use original tool name when calling the MCP server
-        Logger.debug(`Calling ${originalToolName} tool via ${mcpData.serverName}`, args);
+        Logger.debug(`Calling ${originalToolName} tool via ${mcpData.serverName}`);
         try {
           const toolResult = await mcpData.callTool(originalToolName, stripServerOnlyArgs(args));
           const contentBlocks = (toolResult as any)?.content;
@@ -275,7 +290,7 @@ export const generateMcpTools = async (
                 return JSON.stringify(entry);
               })
               .join('\n');
-            Logger.debug(`[Tool Result] ${originalToolName}:`, normalized);
+            Logger.debug(`[Tool Result] ${originalToolName}:`, { resultLength: normalized.length });
             return normalized;
           }
 
@@ -344,7 +359,7 @@ export const generateMcpToolsFromCache = (
     const parameters = normalizeToolParameters(rest as Record<string, unknown>);
     const optionTools: ICompletionOptionTools = {
       toolFn: async (args: unknown) => {
-        Logger.debug(`Calling ${originalToolName} tool via ${serverName}`, args);
+        Logger.debug(`Calling ${originalToolName} tool via ${serverName}`);
         try {
           const toolResult = await callTool(originalToolName, stripServerOnlyArgs(args));
           const contentBlocks = (toolResult as Record<string, unknown>)?.content;
@@ -357,7 +372,7 @@ export const generateMcpToolsFromCache = (
                 return JSON.stringify(entry);
               })
               .join('\n');
-            Logger.debug(`[Tool Result] ${originalToolName}:`, normalized);
+            Logger.debug(`[Tool Result] ${originalToolName}:`, { resultLength: normalized.length });
             return normalized;
           }
 

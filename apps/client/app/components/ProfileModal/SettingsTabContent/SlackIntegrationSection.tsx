@@ -9,10 +9,6 @@ import {
   Alert,
   Box,
   Grid,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-  AccordionGroup,
   CircularProgress,
   Chip,
   Card,
@@ -26,7 +22,6 @@ import {
 } from '@mui/joy';
 import { FieldTooltip } from '@client/app/components/help';
 import LinkIcon from '@mui/icons-material/Link';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -210,6 +205,9 @@ const SlackIntegrationSection = () => {
       // Check if it's a duplicate Slack ID error (409 Conflict)
       if (error?.response?.status === 409) {
         toast.error(error.response.data.error || 'This Slack Member ID is already in use by another account.');
+      } else if (error?.response?.status === 400 && error.response.data?.error) {
+        // The server explains refusals such as an unverified Slack identity or channel.
+        toast.error(error.response.data.error);
       } else {
         toast.error('Failed to update Slack settings');
       }
@@ -219,7 +217,7 @@ const SlackIntegrationSection = () => {
   const unlinkSlackAccount = useMutation({
     mutationFn: async () => {
       const response = await api.patch(`/api/users/${currentUser?.id}/slack-settings`, {
-        slackUserId: undefined,
+        slackUserId: '',
         defaultNotebookId: undefined,
         autoCreateNotebook: true,
         notebookNamePrefix: 'Slack Chat',
@@ -308,7 +306,9 @@ const SlackIntegrationSection = () => {
   };
 
   // Use savedSlackUserId for UI state - updated on save/unlink, not while typing
-  const isLinked = Boolean(savedSlackUserId);
+  const isLinked = Boolean(savedSlackUserId && currentUser?.slackSettings?.slackTeamId);
+  // A link made before workspace verification has no team, so Slack delivery refuses it.
+  const needsReconnect = Boolean(savedSlackUserId && !currentUser?.slackSettings?.slackTeamId);
 
   return (
     <SectionContainer
@@ -361,6 +361,13 @@ const SlackIntegrationSection = () => {
       }
     >
       <Stack spacing={3}>
+        {needsReconnect && (
+          <Alert color="warning" variant="soft" data-testid="slack-reconnect-alert">
+            Your Slack account was linked before workspace verification was required. Reconnect with Slack to keep using
+            Slack agents and notifications.
+          </Alert>
+        )}
+
         {/* Loading state while checking OAuth availability */}
         {!isLinked && isLoadingWorkspaces && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -388,57 +395,6 @@ const SlackIntegrationSection = () => {
               >
                 Connect with Slack
               </Button>
-
-              {/* Manual Entry Fallback - collapsed by default */}
-              <AccordionGroup sx={{ mt: 1 }}>
-                <Accordion defaultExpanded={false}>
-                  <AccordionSummary indicator={<ExpandMoreIcon />}>
-                    <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                      Having trouble? Enter Member ID manually
-                    </Typography>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Stack spacing={2} sx={{ pt: 1 }}>
-                      <FormControl>
-                        <FormLabel sx={{ userSelect: 'text', color: 'text.primary', opacity: 0.5 }}>
-                          Slack Member ID
-                        </FormLabel>
-                        <Input
-                          placeholder="U0123456789"
-                          value={slackUserId}
-                          onChange={e => setSlackUserId(e.target.value)}
-                          sx={{
-                            maxWidth: 300,
-                            backgroundColor: theme => theme.palette.loginRegister.inputFieldBg,
-                            '& input': {
-                              backgroundColor: 'transparent',
-                              color: 'text.primary',
-                              fontSize: '14px',
-                              '&::placeholder': {
-                                color: 'text.primary',
-                                opacity: 0.5,
-                                fontSize: '14px',
-                              },
-                            },
-                          }}
-                        />
-                        <Typography level="body-xs" sx={{ mt: 0.5, color: 'primary.500' }}>
-                          Slack Profile → Three dot button → Copy Member ID
-                        </Typography>
-                      </FormControl>
-                      <Button
-                        size="sm"
-                        onClick={handleSave}
-                        loading={updateSlackSettings.isPending}
-                        disabled={!slackUserId}
-                        sx={{ alignSelf: 'flex-start' }}
-                      >
-                        Save Member ID
-                      </Button>
-                    </Stack>
-                  </AccordionDetails>
-                </Accordion>
-              </AccordionGroup>
             </Stack>
           </Box>
         )}
@@ -459,23 +415,13 @@ const SlackIntegrationSection = () => {
               <Typography level="body-sm" sx={{ color: 'text.primary', opacity: 0.5, mb: 1.5, fontWeight: 'bold' }}>
                 Setup Instructions:
               </Typography>
-              <Stack spacing={1}>
-                <Typography level="body-sm" sx={{ color: 'text.primary' }}>
-                  1. Find your Slack Member ID in your Slack profile
-                </Typography>
-                <Typography level="body-sm" sx={{ color: 'text.primary' }}>
-                  2. Enter it below to link your account
-                </Typography>
-                <Typography level="body-sm" sx={{ color: 'text.primary' }}>
-                  3. Use <code>/notebook</code> commands in Slack to manage your notebooks
-                </Typography>
-              </Stack>
+              <Typography level="body-sm">Ask an administrator to configure Slack OAuth, then connect here.</Typography>
             </Box>
           </Alert>
         )}
 
         {/* Input Fields Row - Only show when linked OR no OAuth configured (after loading) */}
-        {(isLinked || (!isLoadingWorkspaces && !hasOAuthConfigured)) && (
+        {isLinked && (
           <Grid container spacing={2}>
             {/* Slack User ID Input */}
             <Grid xs={12} md={4}>

@@ -12,6 +12,7 @@
  */
 
 import {
+  disposableDomainRefreshCron,
   modelDiscoveryCronEnabled,
   modelDiscoveryFunction,
   modelDiscoveryStalenessFunction,
@@ -144,6 +145,38 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: Billing Event Ingest Failures
+   *
+   * Fires when billing and account events (purchase, payment_failed, subscription_ended, ...)
+   * repeatedly fail to reach Overwatch's ingest endpoint: a network failure or timeout, a 5xx, or
+   * a 4xx or redirect, which means a bad key or OVERWATCH_INGEST_URL. Each failure is an event
+   * dropped for good, since the webhook or worker that sent it succeeds and is not retried, so
+   * revenue and churn reporting would otherwise go quietly short. Three in an hour, not one, so a
+   * single ingest blip stays quiet.
+   *
+   * Metric emitted by: apps/client/server/analytics/emitActiveEvent.ts (INGEST_FAILURE_METRIC)
+   * Namespace: Lumina5/Analytics / IngestEmitFailed
+   */
+  new aws.cloudwatch.MetricAlarm('billingEventIngestFailures', {
+    name: `${$app.name}-${$app.stage}-billing-event-ingest-failures`,
+    alarmDescription: 'Billing events are failing to reach Overwatch ingest and are being dropped',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'IngestEmitFailed',
+    namespace: 'Lumina5/Analytics',
+    dimensions: { Stage: $app.stage },
+    period: 3600, // 1 hour
+    statistic: 'Sum',
+    threshold: 3,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Analytics',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
    * Alarm: High Failure Count
    *
    * Triggers when more than 2 failures occur in a 5-minute period.
@@ -266,6 +299,37 @@ if (isMonitoredStage) {
     alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AnthropicAPI',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: LLM Stream Idle Timeouts
+   *
+   * Our own stream idle watchdog cut a provider stream. Since the keepalive ceiling follows
+   * max_tokens, a steady count here means live generations are still being killed, and each one is
+   * billed by the provider and then retried or sent to a fallback model.
+   * Metric emitted by: b4m-core/llm-adapters/src/anthropicBackend.ts -> emitIdleTimeoutMetric. Reads
+   * its `{ Stage }`-only datum, which sums every model.
+   */
+  new aws.cloudwatch.MetricAlarm('streamIdleTimeouts', {
+    name: `${$app.name}-${$app.stage}-stream-idle-timeouts`,
+    alarmDescription:
+      'LLM streams are being cut by our own idle watchdog. Each cut attempt is billed by the provider and then retried or sent to a fallback model. See the ChatCompletion logs for "Stream idle timeout"; keepalive: true means the model was still generating.',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'StreamIdleTimeoutTriggered',
+    namespace: 'Lumina5/LLMStreaming',
+    period: 3600, // 1 hour
+    statistic: 'Sum',
+    threshold: 10,
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      Stage: $app.stage,
+    },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'LLMStreaming',
       Severity: 'High',
     },
   });
@@ -841,6 +905,57 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: disposable email domain list refresh failing two days running
+   *
+   * A failing source keeps its previous entries, so one bad day is tolerable; two means the
+   * signup gate is reading lists that are going stale.
+   *
+   * Metric emitted by: apps/workers/src/cron/disposableDomainRefresh.ts
+   * Namespace: Lumina5/DisposableDomains / SourceFailures
+   * MUST STAY IN SYNC with that handler's namespace, metric name and dimensions.
+   */
+  if (disposableDomainRefreshCron) {
+    new aws.cloudwatch.MetricAlarm('disposableDomainRefreshFailures', {
+      name: `${$app.name}-${$app.stage}-disposable-domain-refresh-failures`,
+      alarmDescription: 'Disposable email domain list refresh failed on two consecutive days',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 2,
+      metricName: 'SourceFailures',
+      namespace: 'Lumina5/DisposableDomains',
+      period: 86400, // 1 day, the run cadence
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { Stage: $app.stage },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SignupProtection',
+        Severity: 'Medium',
+      },
+    });
+
+    // A timeout, OOM or init crash never reaches the handler's emit, so SourceFailures stays silent.
+    new aws.cloudwatch.MetricAlarm('disposableDomainRefreshLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-disposable-domain-refresh-lambda-errors`,
+      alarmDescription: 'Disposable email domain list refresh Lambda errored on two consecutive days',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 2,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 86400, // 1 day, the run cadence
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: disposableDomainRefreshCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SignupProtection',
+        Severity: 'Medium',
+      },
+    });
+  }
+
+  /**
    * Alarm: Model Discovery no successful run (dead-man's switch)
    *
    * An independent check reads the last completed hosted 'ok' run every 15
@@ -870,6 +985,42 @@ if (isMonitoredStage) {
         Severity: 'High',
       },
     });
+
+    new aws.cloudwatch.MetricAlarm('unavailableModelReferences', {
+      name: `${$app.name}-${$app.stage}-unavailable-model-references`,
+      alarmDescription:
+        'Model pins are unavailable; model-reference-audit logs name the model, configuration path and cause. See admin model-deprecation-status for the report.',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 2,
+      datapointsToAlarm: 2,
+      metricName: 'UnavailableModelReferences',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 1800,
+      statistic: 'Maximum',
+      threshold: 0,
+      treatMissingData: 'breaching',
+      dimensions: modelDiscoveryDimensions,
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'ModelDiscovery', Severity: 'High' },
+    });
+
+    for (const metricName of ['ModelsDeprecated', 'LifecycleDateChanges'] as const) {
+      new aws.cloudwatch.MetricAlarm(`modelDiscovery-${metricName}`, {
+        name: `${$app.name}-${$app.stage}-model-discovery-${metricName}`,
+        alarmDescription: `Model discovery reports ${metricName}; review the model lifecycle operator queue and discovery logs`,
+        comparisonOperator: 'GreaterThanThreshold',
+        evaluationPeriods: 1,
+        metricName,
+        namespace: 'Lumina5/ModelDiscovery',
+        period: 21600,
+        statistic: 'Maximum',
+        threshold: 0,
+        treatMissingData: 'notBreaching',
+        dimensions: modelDiscoveryDimensions,
+        alarmActions: [dlqAlarmTopic.arn],
+        tags: { Application: 'ModelDiscovery', Severity: 'Medium' },
+      });
+    }
 
     new aws.cloudwatch.MetricAlarm('modelDiscoveryStalenessCheckErrors', {
       name: `${$app.name}-${$app.stage}-model-discovery-staleness-check-errors`,
@@ -1301,6 +1452,72 @@ if (isMonitoredStage) {
     dimensions: { Stage: $app.stage },
     // No emission means no ANN query ran anywhere, which is the common state - the HTTP route in
     // particular has served single-digit requests per day.
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'DataLakeRetrieval',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: forced retrieval answering large lakes from a by-name cut
+   *
+   * A turn whose candidates were cut to the 100-file cap (the lake, plus the library when the turn
+   * includes it) publishes 1 (by-name cut) or 0 (relevance pick), so the Stage-only Average is
+   * the by-name share. A turn whose 1000-row listing overflowed but left <= 100 servable files
+   * publishes nothing. The share is Sum / SampleCount in metric math so a day with one turn, where
+   * a single cut reads as 100%, cannot fire: the alarm needs 2+ turns. Volume is low (about 16
+   * large-lake turns in 14 days on production), hence a daily period and a >50% bar, against a
+   * pre-fix rate of 7 of 16.
+   *
+   * relevance-unavailable cuts count too: EnableDataLakeVectorSearch off, Atlas vector search not
+   * available (self-host), or that setting failing to read. The first two fire on any day with
+   * 2+ large turns, which is a config to fix; a read failure is logged as a warn on the turn.
+   *
+   * Metric emitted by: b4m-core/services/src/llm/forcedRetrievalSelectionMetrics.ts ->
+   * recordForcedRetrievalCutMetrics.
+   * Namespace: Lumina5/DataLakeRetrieval / ForcedRetrievalByNameCut
+   * Alarms on the Stage-only dimension set; the second set adds an attribution dimension.
+   */
+  new aws.cloudwatch.MetricAlarm('forcedRetrievalByNameCut', {
+    name: `${$app.name}-${$app.stage}-forced-retrieval-by-name-cut`,
+    alarmDescription:
+      'Over half of a day of large-lake forced-retrieval turns (min 2) were cut by file name instead of relevance. Check the Reason series on the data-lake search dashboard: deadline points at the vector index, relevance-unavailable at the EnableDataLakeVectorSearch setting or Atlas vector search availability (or a warn that the setting could not be read)',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    threshold: 0.5,
+    metricQueries: [
+      {
+        id: 'byName',
+        returnData: false,
+        metric: {
+          metricName: 'ForcedRetrievalByNameCut',
+          namespace: 'Lumina5/DataLakeRetrieval',
+          period: 86400, // 1 day
+          stat: 'Sum',
+          dimensions: { Stage: $app.stage },
+        },
+      },
+      {
+        id: 'turns',
+        returnData: false,
+        metric: {
+          metricName: 'ForcedRetrievalByNameCut',
+          namespace: 'Lumina5/DataLakeRetrieval',
+          period: 86400, // 1 day
+          stat: 'SampleCount',
+          dimensions: { Stage: $app.stage },
+        },
+      },
+      {
+        id: 'rate',
+        returnData: true,
+        label: 'By-name share (min 2 turns)',
+        expression: 'IF(turns >= 2, byName / turns, 0)',
+      },
+    ],
+    // No emission means no large-lake turn ran, the usual state on most days.
     treatMissingData: 'notBreaching',
     alarmActions: [dlqAlarmTopic.arn],
     tags: {

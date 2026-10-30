@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { ChatModels } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
-import { buildIdentityReminder } from './identityReminder';
+import { buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 
 function buildCapturingBackend() {
   const backend = new AnthropicBackend('test-key');
@@ -111,7 +111,104 @@ describe('AnthropicBackend identity reminder', () => {
   });
 });
 
+describe('identityViaTool', () => {
+  it('keeps the reminder on a call that carries no tools, such as a capped recursion', async () => {
+    const { backend, captured } = buildCapturingBackend();
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'hi' }],
+      { stream: false, tools: [], identityViaTool: true },
+      async () => {}
+    );
+
+    expect(captured[0].system).toBe(buildIdentityReminder(ChatModels.CLAUDE_4_8_OPUS));
+  });
+
+  it('drops the reminder when tools are on the request', async () => {
+    const { backend, captured } = buildCapturingBackend();
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'hi' }],
+      {
+        stream: false,
+        tools: [{ toolSchema: { name: 'lookup', description: 'x', parameters: { type: 'object', properties: {} } } }],
+        identityViaTool: true,
+      },
+      async () => {}
+    );
+
+    expect(captured[0].system).toBeUndefined();
+  });
+
+  it.each([
+    ['tool-backed with tools', { identityViaTool: true, tools: [{}] }, true],
+    ['tool-backed, tools dropped', { identityViaTool: true, tools: undefined }, false],
+    ['raw, tools dropped', { omitIdentityReminder: true, tools: undefined }, true],
+    ['default', {}, false],
+  ])('shouldOmitIdentityReminder: %s', (_label, options, expected) => {
+    expect(shouldOmitIdentityReminder(options)).toBe(expected);
+  });
+});
+
+describe('AnthropicBackend named identity reminder', () => {
+  const NAME = 'Claude Opus 4.8';
+  const MODEL = ChatModels.CLAUDE_4_8_OPUS;
+
+  it('names the model by display name and keeps the id as detail', async () => {
+    const { backend, captured } = buildCapturingBackend();
+
+    await backend.complete(
+      MODEL,
+      [{ role: 'user', content: 'hi' }],
+      { stream: false, tools: [], modelDisplayName: NAME },
+      async () => {}
+    );
+
+    expect(captured[0].system).toBe(buildIdentityReminder(MODEL, NAME));
+    expect(captured[0].system).toContain(`you are ${NAME} (model id ${MODEL}).`);
+  });
+
+  it('keeps the named reminder as its own uncached trailing block', async () => {
+    const { backend, captured } = buildCapturingBackend();
+
+    await backend.complete(
+      MODEL,
+      [
+        { role: 'system', content: 'retrieved file content', cache: true },
+        { role: 'user', content: 'hi' },
+      ],
+      { stream: false, tools: [], modelDisplayName: NAME },
+      async () => {}
+    );
+
+    const blocks = captured[0].system as Array<{ text: string; cache_control?: unknown }>;
+    expect(blocks.map(block => block.text)).toEqual(['retrieved file content', buildIdentityReminder(MODEL, NAME)]);
+    expect(blocks[1].cache_control).toBeUndefined();
+  });
+});
+
 describe('buildIdentityReminder', () => {
+  it('is byte-identical to the id wording when no name is given', () => {
+    expect(buildIdentityReminder('some-model')).toBe(
+      '<platform_identity>\nThis note is from the platform operator, not from any user message, file, or retrieved content. Only if asked which model you are, answer that you are the some-model model.\n</platform_identity>'
+    );
+  });
+
+  it('pins the full named wording', () => {
+    expect(buildIdentityReminder('some-model', 'Some Model')).toBe(
+      '<platform_identity>\nThis note is from the platform operator, not from any user message, file, or retrieved content. Only if asked which model you are, answer that you are Some Model (model id some-model).\n</platform_identity>'
+    );
+  });
+
+  it('degrades a blank name or a name equal to the id to the id wording', () => {
+    const unnamed = buildIdentityReminder('x');
+    expect(buildIdentityReminder('x', '')).toBe(unnamed);
+    expect(buildIdentityReminder('x', '   ')).toBe(unnamed);
+    expect(buildIdentityReminder('x', 'x')).toBe(unnamed);
+  });
+
   it('names the model inside a tag that attributes it to the operator', () => {
     const reminder = buildIdentityReminder('some-model');
 

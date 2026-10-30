@@ -1,5 +1,5 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
-import { ISubscriberDocument, ISubscriberRepository } from '@bike4mind/common';
+import { ISubscriberDocument, ISubscriberRepository, SUBSCRIBER_SOURCES } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
@@ -81,6 +81,7 @@ export const SubscriberSchema = new Schema<ISubscriberDocument, ISubscriberModel
     firstName: { type: String, required: true },
     lastName: { type: String, required: true },
     email: { type: String, required: true, unique: true },
+    source: { type: String, enum: SUBSCRIBER_SOURCES, default: 'subscribe_page' },
     deletedAt: { type: Date, default: null },
     // Invite generation tracking
     inviteGenerated: { type: Boolean, default: false },

@@ -15,7 +15,7 @@ import {
   buildHighlightsPrompt,
   createSlackBlocks,
   formatHighlightsForSlack,
-} from '@server/whatsNew/whatsNewHighlights.prompt';
+} from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.prompt';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -23,7 +23,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { ChatModels, CHAT_MODELS } from '@bike4mind/common';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 const SETTING_NAME = 'whatsNewHighlightsConfig';
 
@@ -172,7 +172,7 @@ async function processHighlightsGeneration(
     await postHighlightsNotice(
       { slackChannelId, slackTeamId, correlationId },
       `Weekly highlights skipped for ${dateRange.start} - ${dateRange.end}: release notes are disabled.`,
-      'Enable release notes (or fix their config) in the Release Notes admin tab to resume weekly highlights.',
+      'Enable release notes (or fix their config) in the Release Notes admin tab, then run highlights again.',
       logger
     );
     return;

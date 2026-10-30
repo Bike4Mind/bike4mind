@@ -77,8 +77,8 @@ feedbackSchema.index({ organizationId: 1, subject: 1, createdAt: -1 }, { name: '
 // null key and collide them all against each other.
 //
 // Pre-built by 20260916000000_ensure-feedback-helpcontext-index rather than left to autoIndex:
-// the router's correctness depends on this constraint existing before the first write, and on
-// DocumentDB an autoIndex build would take a foreground lock on whichever Lambda cold-boots
+// the router's correctness depends on this constraint existing before the first write, and an
+// autoIndex build is fire-and-forget (a failure is silent) on whichever Lambda cold-boots
 // first. Note that neither autoIndex nor createIndexes can change the options of an index that
 // already exists - narrowing or widening this one later needs a migration that drops it first.
 feedbackSchema.index(

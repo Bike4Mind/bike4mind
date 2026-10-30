@@ -18,7 +18,8 @@ import {
   DialogActions,
   Divider,
 } from '@mui/joy';
-import { Info, Warning as WarningIcon } from '@mui/icons-material';
+import Info from '@mui/icons-material/Info';
+import WarningIcon from '@mui/icons-material/Warning';
 import { useBrandingSettings } from '@client/app/hooks/data/settings';
 import { api } from '@client/app/contexts/ApiContext';
 import { generateFullManifest } from '@bike4mind/common';

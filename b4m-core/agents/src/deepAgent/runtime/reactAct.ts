@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { pairDataLakeTools } from '@bike4mind/common';
+import { pairDataLakeTools, type ThinkingVisibility } from '@bike4mind/common';
 import { ReActAgent } from '../../ReActAgent';
 import { ReplSession } from '../../rlm/ReplSession';
 import { makeCodeExecuteTool } from '../../rlm/codeExecuteTool';
@@ -108,6 +108,8 @@ export interface ReActRunActConfig {
    * agents skip it.
    */
   loadLinkedAgent?: (linkedAgentId: string) => Promise<LinkedAgentContext | null>;
+  /** The owner's thinking visibility, applied to the act's steps and answer. Omitted means `raw`. */
+  resolveThinkingVisibility?: (ownerUserId: string) => Promise<ThinkingVisibility>;
 }
 
 /**
@@ -189,6 +191,7 @@ export function createReActRunAct(config: ReActRunActConfig): (ctx: ActContext) 
     });
 
     try {
+      const thinkingVisibility = await config.resolveThinkingVisibility?.(ctx.charter.identity.ownerUserId);
       const agent = new ReActAgent({
         userId: ctx.charter.identity.ownerUserId,
         logger: config.logger,
@@ -199,6 +202,7 @@ export function createReActRunAct(config: ReActRunActConfig): (ctx: ActContext) 
         maxTotalTokens: profile.maxTotalTokens,
         temperature: profile.temperature,
         systemPrompt: buildActSystemPrompt(ctx, linked?.systemPrompt),
+        ...(thinkingVisibility && { thinkingVisibility }),
       });
 
       // Stream the trajectory to the logs so a wake is watchable live.

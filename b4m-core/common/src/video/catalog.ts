@@ -17,6 +17,8 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     provider: 'test',
     displayName: 'Test video (non-production)',
     modes: ['text_to_video', 'image_to_video'],
+    // Every role, so multi-input requests can be exercised end to end; the test provider ignores the images.
+    inputs: { first_frame: { max: 1 }, last_frame: { max: 1 }, reference: { max: 3 }, style: { max: 1 } },
     duration: { kind: 'range', min: 1, max: 10, step: 1 },
     aspectRatios: ['16:9', '9:16'],
     resolutions: ['720p'],
@@ -31,6 +33,7 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     provider: 'gemini-omni',
     displayName: 'Gemini Omni Flash',
     modes: ['text_to_video', 'image_to_video'],
+    inputs: { first_frame: { max: 1 } },
     duration: { kind: 'range', min: 3, max: 10, step: 1 },
     aspectRatios: ['16:9', '9:16'],
     resolutions: ['720p'],
@@ -45,6 +48,7 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     provider: 'xai',
     displayName: 'Grok Imagine Video 1.5',
     modes: ['text_to_video', 'image_to_video'],
+    inputs: { first_frame: { max: 1 } },
     duration: { kind: 'range', min: 1, max: 15, step: 1 },
     aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'],
     resolutions: ['480p', '720p'],
@@ -55,11 +59,14 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     pricing: { unit: 'per_second', usdByResolution: { '480p': 0.08, '720p': 0.14 } },
     defaultEnabled: true,
   },
-  // Audio is generated and included in the per-second price; a blocked clip is documented as not charged.
+  // Google shut this preview down on the Gemini API; its GA id is served only on Vertex, which the Veo adapter does
+  // not call. Still priced so jobs made before then settle: audio is included in the per-second price, and a
+  // blocked clip is documented as not charged.
   'veo-3.1-fast-generate-preview': {
     provider: 'veo',
     displayName: 'Veo 3.1 Fast',
     modes: ['text_to_video', 'image_to_video'],
+    inputs: { first_frame: { max: 1 } },
     duration: { kind: 'discrete', values: [4, 6, 8] },
     aspectRatios: ['16:9', '9:16'],
     // 1080p ($0.12/s) and 4k are documented only for 8s clips, which a per-model duration list cannot express.
@@ -68,8 +75,22 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     typicalRenderSeconds: 90,
     audio: 'always',
     pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
-    defaultEnabled: true,
+    defaultEnabled: false,
+    retired: { date: '2026-10-22', replacement: 'gemini-omni-1.1-flash' },
   },
 };
 
 export const getVideoModelCapabilities = (id: VideoModelId): VideoModelCapabilities => VIDEO_MODEL_CATALOG[id];
+
+export const isVideoModelRetired = (id: VideoModelId): boolean => VIDEO_MODEL_CATALOG[id].retired !== undefined;
+
+/** The refusal for a new job on a retired model, naming the model to use instead; null while the model is live. */
+export const retiredVideoModelMessage = (id: VideoModelId): string | null => {
+  const { displayName, retired } = VIDEO_MODEL_CATALOG[id];
+  if (!retired) return null;
+  const replacement = VIDEO_MODEL_CATALOG[retired.replacement];
+  return (
+    `${displayName} (${id}) was retired by its provider on ${retired.date}; ` +
+    `use ${retired.replacement} (${replacement.displayName}) instead`
+  );
+};

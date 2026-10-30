@@ -7,7 +7,7 @@ import {
   extractArtifactBlocks,
   isSvgGraphicallyEmpty,
 } from '@bike4mind/utils/artifactParser';
-import { tryParseChartJSON } from './chartJsonParser';
+import { tryParseChartJSON } from '@bike4mind/server-utils/app/utils/chartJsonParser';
 import { scanImportStatements } from '@bike4mind/utils/importStatements';
 
 // Block extraction, the shared types and every fence-promotion detector live in core, so the

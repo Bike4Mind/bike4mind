@@ -8,6 +8,7 @@ import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { parseAuthParams } from '@client/app/utils/authParams';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
+import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { usePublicConfig } from '@client/app/hooks/data/settings';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import MFAModal from '@client/app/components/common/MFAModal';
@@ -23,10 +24,12 @@ const AuthSuccessPage = () => {
   const redirectTo = (search as { redirectTo?: string }).redirectTo;
   // Set when an SSO signup arrives still owing a second factor: the conversion fires once
   // the session exists, as it does for a direct sign-in.
+  const pendingFirstSignupSession = useRef(false);
   const pendingSignupMethod = useRef<string | null>(null);
   const mfaChallenge = useMfaChallenge({
     allowRememberDevice: publicConfig?.allowTrustedDevices ?? false,
     onComplete: ({ user }) => {
+      if (pendingFirstSignupSession.current) markFirstSignupSession(user.id);
       setCurrentUser(user);
       if (pendingSignupMethod.current) trackSignupConversion(pendingSignupMethod.current);
       applyRedirect(router.history, redirectTo);
@@ -54,7 +57,9 @@ const AuthSuccessPage = () => {
     hasProcessed.current = true;
 
     const handleAuthSuccess = async () => {
-      const { token, error, userId, isNewUser, signupMethod, mfa } = parseAuthParams(search as Record<string, unknown>);
+      const { token, error, userId, isNewUser, firstSignupSession, signupMethod, mfa } = parseAuthParams(
+        search as Record<string, unknown>
+      );
 
       if (error) {
         console.error('Authentication error:', error);
@@ -71,6 +76,7 @@ const AuthSuccessPage = () => {
           applyRedirect(router.history, redirectTo);
           return;
         }
+        pendingFirstSignupSession.current = !!(firstSignupSession || isNewUser);
         if (isNewUser) pendingSignupMethod.current = signupMethod || 'oauth';
         await mfaChallenge.begin({
           userId,
@@ -108,6 +114,7 @@ const AuthSuccessPage = () => {
 
           if (response.ok) {
             const userData = await response.json();
+            if (firstSignupSession || isNewUser) markFirstSignupSession(userId);
             setCurrentUser(userData);
 
             // Fire the signup ad conversion for brand-new OAuth accounts.

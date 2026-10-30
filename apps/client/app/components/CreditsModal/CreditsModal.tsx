@@ -5,12 +5,11 @@ import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
-import { isCancellableSubscriptionStatus } from '@client/lib/subscriptions/types';
+import { isCancellableSubscriptionStatus } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { TransactionType } from '@client/lib/credits/types';
 import { SUBSCRIPTION_PLANS_GROUPED_BY_INTERVAL } from '@client/lib/userSubscriptions/constants';
-import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
-import { Box, Button, Card, IconButton, Modal, ModalDialog, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
+import { Box, Button, Card, Modal, ModalClose, ModalDialog, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -111,23 +110,11 @@ const CreditsModal = () => {
           minHeight: '80%',
           maxHeight: '1200px',
           borderRadius: 'md',
-          p: 3,
-          boxShadow: 'lg',
           position: 'relative',
           overflow: 'auto',
         }}
       >
-        <IconButton
-          onClick={() => setOpen(false)}
-          sx={{
-            position: 'absolute',
-            top: '10px',
-            right: '10px',
-            zIndex: 1,
-          }}
-        >
-          <CloseRoundedIcon />
-        </IconButton>
+        <ModalClose />
 
         {isCreditsEnabled ? (
           <>

@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
 import { Box, Button, Sheet, Stack, Tab, TabList, TabPanel, Tabs, Typography, useTheme } from '@mui/joy';
-import {
-  HomeRounded,
-  PersonSearch as PersonSearchIcon,
-  Lock,
-  Key,
-  MailOutlined,
-  History as HistoryIcon,
-  Block as BlockIcon,
-  Refresh as RefreshIcon,
-} from '@mui/icons-material';
+import HomeRounded from '@mui/icons-material/HomeRounded';
+import PersonSearchIcon from '@mui/icons-material/PersonSearch';
+import Lock from '@mui/icons-material/Lock';
+import Key from '@mui/icons-material/Key';
+import MailOutlined from '@mui/icons-material/MailOutlined';
+import HistoryIcon from '@mui/icons-material/History';
+import BlockIcon from '@mui/icons-material/Block';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { useQueryClient } from '@tanstack/react-query';
 import SecurityOverviewTab from './overview/SecurityOverviewTab';
 import SuspiciousLoginsTab from './tabs/SuspiciousLoginsTab';
@@ -20,13 +18,7 @@ import RecentActivityTab from './tabs/RecentActivityTab';
 import BlockedIPsTab from './tabs/BlockedIPsTab';
 
 type SecurityTabId =
-  | 'overview'
-  | 'suspicious-logins'
-  | 'failed-logins'
-  | 'api-keys'
-  | 'phishing'
-  | 'activity'
-  | 'blocked-ips';
+  'overview' | 'suspicious-logins' | 'failed-logins' | 'api-keys' | 'phishing' | 'activity' | 'blocked-ips';
 
 const SECURITY_QUERY_KEYS = [
   ['security', 'user', 'summary'],

@@ -1,0 +1,25 @@
+# unmetered-llm-route-allowlist.txt
+#
+# Frozen baseline for scripts/check-contract-gate.sh scan 3: handlers under
+# apps/client/pages/api that accept API keys (no `auth: 'jwtOnly'`) and call an LLM
+# directly, but name no credit-billing seam from
+# apps/client/server/billing/meterPlatformCompletion.ts.
+#
+# Rules:
+#   - This list only shrinks. Do not add a handler: meter its LLM calls, or make an
+#     SPA-only helper `auth: 'jwtOnly'`.
+#   - When a route is metered, made jwtOnly or deleted, remove its entry. The gate prints
+#     an INFO line for entries that no longer need exemption.
+#   - Each entry carries a trailing `# reason`.
+
+apps/client/pages/api/admin/modal-tool.ts  # admin-only: ADMIN-scoped key plus isAdmin
+apps/client/pages/api/admin/operations-model.ts  # admin-only: ADMIN-scoped key plus isAdmin; a config test call
+apps/client/pages/api/admin/security-dashboard/ai-assessment.ts  # admin-only: ADMIN-scoped key plus isAdmin
+apps/client/pages/api/agents/[id]/enhance-field.ts  # not yet metered; follow-up
+apps/client/pages/api/agents/[id]/generate-avatar.ts  # not yet metered; follow-up
+apps/client/pages/api/agents/[id]/generate-description.ts  # not yet metered; follow-up
+apps/client/pages/api/agents/[id]/generate-system-prompt.ts  # not yet metered; follow-up
+apps/client/pages/api/publish/[publicId]/revise.ts  # not yet metered; follow-up
+apps/client/pages/api/security/behavioral-summary.ts  # not yet metered; follow-up
+apps/client/pages/api/sessions/[id]/auto-rename.ts  # not yet metered; follow-up
+apps/client/pages/api/users/counterLogs.ts  # admin-only: ADMIN-scoped key

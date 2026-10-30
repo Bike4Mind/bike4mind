@@ -214,6 +214,17 @@ describe('PermissionRuleSet', () => {
     );
   });
 
+  it('matches a toolchain run past a tuning variable both with and without naming it', async () => {
+    const script = 'NODE_ENV=production pnpm build';
+    const scan = await scanShell(script, PROJECT, [PROJECT]);
+    if (!scan) throw new Error('Expected the script to parse');
+    const subject = shell(script, scan.commands);
+    expect(decide(set({ allow: ['Bash(pnpm build:*)'] }), subject)).toBe('allow');
+    expect(decide(set({ allow: ['Bash(NODE_ENV=production pnpm build:*)'] }), subject)).toBe('allow');
+    expect(decide(set({ deny: ['Bash(NODE_ENV=production pnpm build:*)'] }), subject)).toBe('deny');
+    expect(decide(set({ ask: ['Bash(NODE_ENV=production pnpm build)'] }), subject)).toBe('ask');
+  });
+
   it('requires an explicit eval form for Deno inline code', async () => {
     const script = 'deno eval "fetch(1)"';
     const scan = await scanShell(script, PROJECT, [PROJECT]);
@@ -255,7 +266,8 @@ describe('PermissionRuleSet', () => {
   });
 
   it.each(['settings.json', 'settings.local.json', 'permission-rules.json'])(
-    'does not allow a shell write through a symlink to %s inside a shared root', async filename => {
+    'does not allow a shell write through a symlink to %s inside a shared root',
+    async filename => {
       const directory = await realpath(await mkdtemp(join(tmpdir(), 'permission-paths-')));
       try {
         const protectedDirectory = join(directory, filename === 'permission-rules.json' ? 'app-data' : '.claude');
@@ -268,27 +280,39 @@ describe('PermissionRuleSet', () => {
         if (!scan) throw new Error('Expected the alias command to parse');
         expect(scan.directories).toEqual([]);
         expect(scan.paths).toContain(join(protectedDirectory, filename));
-        const subject = permissionSubject({ name: 'bash_execute', input: { command: script } }, {
-          detail: '', key: 'test', always: {
-            namespace: 'bash_execute',
-            commands: scan.commands.map(command => ({ ...command, pattern: command.always })),
-            directories: scan.directories,
-            paths: scan.paths,
+        const subject = permissionSubject(
+          { name: 'bash_execute', input: { command: script } },
+          {
+            detail: '',
+            key: 'test',
+            always: {
+              namespace: 'bash_execute',
+              commands: scan.commands.map(command => ({ ...command, pattern: command.always })),
+              directories: scan.directories,
+              paths: scan.paths,
+            },
           },
-        }, { roots: [directory], workingDirectory: directory });
+          { roots: [directory], workingDirectory: directory }
+        );
         expect(decide(set({ allow: ['Bash(cp:*)'] }, [protectedDirectory]), subject)).toBeNull();
         // Copying a file into the aliased folder names only that folder, not its final target.
         const intoFolder = await scanShell(`cp ${filename} alias/`, directory, [directory]);
         if (!intoFolder) throw new Error('Expected the destination-folder command to parse');
-        expect(decide(set({ allow: ['Bash(cp:*)'] }), {
-          tool: 'bash_execute', shell: { script: `cp ${filename} alias/`, ...intoFolder },
-        })).toBeNull();
+        expect(
+          decide(set({ allow: ['Bash(cp:*)'] }), {
+            tool: 'bash_execute',
+            shell: { script: `cp ${filename} alias/`, ...intoFolder },
+          })
+        ).toBeNull();
         // Starting inside the protected folder must be caught even when no argument names it.
         const inside = await scanShell('cp payload other.json', protectedDirectory, [directory]);
         if (!inside) throw new Error('Expected the protected cwd command to parse');
-        expect(decide(set({ allow: ['Bash(cp:*)'] }, [protectedDirectory]), {
-          tool: 'bash_execute', shell: { script: 'cp payload other.json', ...inside },
-        })).toBeNull();
+        expect(
+          decide(set({ allow: ['Bash(cp:*)'] }, [protectedDirectory]), {
+            tool: 'bash_execute',
+            shell: { script: 'cp payload other.json', ...inside },
+          })
+        ).toBeNull();
       } finally {
         await rm(directory, { recursive: true, force: true });
       }
@@ -313,16 +337,22 @@ describe('PermissionRuleSet', () => {
       const scan = await scanShell(script, directory, [directory]);
       if (!scan) throw new Error('Expected the operand command to parse');
       expect(scan.paths).toContain(join(directory, '.claude/settings.local.json'));
-      expect(decide(set({ allow: ['Bash'] }), {
-        tool: 'bash_execute', shell: { script, ...scan },
-      })).toBeNull();
+      expect(
+        decide(set({ allow: ['Bash'] }), {
+          tool: 'bash_execute',
+          shell: { script, ...scan },
+        })
+      ).toBeNull();
       const harmless = "sed 's/old/new/' public.txt";
       const harmlessScan = await scanShell(harmless, directory, [directory]);
       if (!harmlessScan) throw new Error('Expected the harmless command to parse');
       expect(harmlessScan.directories).toEqual([]);
-      expect(decide(set({ allow: ['Bash'] }), {
-        tool: 'bash_execute', shell: { script: harmless, ...harmlessScan },
-      })).toBe('allow');
+      expect(
+        decide(set({ allow: ['Bash'] }), {
+          tool: 'bash_execute',
+          shell: { script: harmless, ...harmlessScan },
+        })
+      ).toBe('allow');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -344,6 +374,24 @@ describe('PermissionRuleSet', () => {
     expect(decide(rules, { tool: 'mcp__danger_x', mcp: { server: 'danger', tool: 'x' } })).toBe('deny');
   });
 
+  it('reads a bare WebFetch as every site, beside the domain form', () => {
+    expect(parsed('WebFetch').matcher).toEqual({ kind: 'any' });
+    const everySite = set({ allow: ['WebFetch'] });
+    for (const host of ['docs.example.com', 'example.org', 'pricing.vendor.io']) {
+      expect(decide(everySite, { tool: 'web_fetch', host })).toBe('allow');
+    }
+    expect(decide(everySite, { tool: 'browser_navigate' })).toBeNull();
+    const oneSite = set({ allow: ['WebFetch(domain:example.org)'] });
+    expect(decide(oneSite, { tool: 'web_fetch', host: 'example.org' })).toBe('allow');
+    expect(decide(oneSite, { tool: 'web_fetch', host: 'docs.example.com' })).toBeNull();
+    expect(
+      decide(set({ allow: ['WebFetch'], deny: ['WebFetch(domain:evil.test)'] }), {
+        tool: 'web_fetch',
+        host: 'evil.test',
+      })
+    ).toBe('deny');
+  });
+
   it.each(['deny', 'ask'] as const)('applies %s rules to descendants of recursive searches', list => {
     const rules = set({ allow: ['Read'], [list]: ['Read(/secrets/**)'] });
     for (const tool of ['grep_search', 'glob_files']) {
@@ -355,10 +403,15 @@ describe('PermissionRuleSet', () => {
   });
 
   it.each(['Read(.env)', 'Read(/secr*/credentials.json)', 'Read(/private.txt)'])(
-    'conservatively refuses an ancestor search that can reach %s', rule => {
-      expect(decide(set({ allow: ['Read'], deny: [rule] }), {
-        tool: 'grep_search', paths: [PROJECT], recursive: true,
-      })).toBe('deny');
+    'conservatively refuses an ancestor search that can reach %s',
+    rule => {
+      expect(
+        decide(set({ allow: ['Read'], deny: [rule] }), {
+          tool: 'grep_search',
+          paths: [PROJECT],
+          recursive: true,
+        })
+      ).toBe('deny');
     }
   );
 

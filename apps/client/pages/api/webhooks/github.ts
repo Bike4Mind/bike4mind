@@ -36,7 +36,7 @@ import {
 } from '@server/integrations/github/webhookUtils';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 
 // Disable body parsing to get raw body for signature verification
 export const config = {

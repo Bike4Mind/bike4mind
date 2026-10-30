@@ -1,6 +1,17 @@
 import { describe, it, expect, vi, beforeEach, MockedObject } from 'vitest';
-import { subtractCredits, SubtractCreditsAdapters, SubtractCreditsParameters } from './subtractCredits';
-import { ICreditHolder, ICreditHolderMethods, CreditHolderType } from '@bike4mind/common';
+import {
+  subtractCredits,
+  subtractCreditsWithLedgerRow,
+  SubtractCreditsAdapters,
+  SubtractCreditsParameters,
+} from './subtractCredits';
+import {
+  ICreditHolder,
+  ICreditHolderMethods,
+  CreditHolderType,
+  GenericDeductReason,
+  registerGenericDeductReason,
+} from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { createMockCreditTransactionRepository } from '../__tests__/utils/testUtils';
 
@@ -65,6 +76,48 @@ describe('creditService - subtractCredits', () => {
         reason: 'admin_adjustment',
         userId: 'user1',
       });
+    });
+
+    it('accepts a reason added through the registry', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+      const reason = 'subtract_test_registered_reason';
+      registerGenericDeductReason(reason);
+
+      await subtractCredits(
+        {
+          type: 'generic_deduct',
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 5,
+          reason: reason as GenericDeductReason,
+        },
+        mockAdapters
+      );
+
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        'generic_deduct',
+        expect.objectContaining({ reason, credits: -5 })
+      );
+    });
+
+    it('rejects a reason that was never registered', async () => {
+      await expect(
+        subtractCredits(
+          {
+            type: 'generic_deduct',
+            ownerId: 'user1',
+            ownerType: CreditHolderType.User,
+            credits: 5,
+            reason: 'subtract_test_unregistered_reason' as GenericDeductReason,
+          },
+          mockAdapters
+        )
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        message: expect.stringContaining('Unregistered generic deduct reason'),
+      });
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
+      expect(mockCreditTransactionRepo.createTransaction).not.toHaveBeenCalled();
     });
 
     it('should subtract credits from organization for generic_deduct transaction', async () => {
@@ -529,6 +582,45 @@ describe('creditService - subtractCredits', () => {
         'realtime_voice_usage',
         expect.objectContaining({ credits: -20 })
       );
+    });
+  });
+
+  describe('subtractCreditsWithLedgerRow', () => {
+    const parameters: SubtractCreditsParameters = {
+      type: 'generic_deduct',
+      ownerId: 'user1',
+      ownerType: CreditHolderType.User,
+      credits: 10,
+      description: 'Admin deduction',
+    };
+
+    it('returns the holder and the id of the ledger row it wrote', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-sub' } as never);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const result = await subtractCreditsWithLedgerRow(parameters, mockAdapters);
+
+      expect(result).toEqual({ creditHolder: mockUser, creditTransactionId: 'tx-sub' });
+    });
+
+    it('returns the row id on the skipBalanceUpdate path', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-skip' } as never);
+
+      const result = await subtractCreditsWithLedgerRow(parameters, {
+        ...mockAdapters,
+        skipBalanceUpdate: true,
+        currentCreditHolder: mockUser,
+      });
+
+      expect(result).toEqual({ creditHolder: mockUser, creditTransactionId: 'tx-skip' });
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
+    });
+
+    it('subtractCredits still returns just the holder', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-sub' } as never);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await expect(subtractCredits(parameters, mockAdapters)).resolves.toBe(mockUser);
     });
   });
 

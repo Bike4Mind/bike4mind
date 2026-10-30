@@ -76,7 +76,7 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
         ? next()
         : res.status(403).json({ error: 'Feature not available', code: 'FEATURE_DISABLED' }),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     mockRateLimitOptions(options);
     return (_req: unknown, _res: unknown, next: () => void) => next();
@@ -93,6 +93,7 @@ vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConf
 vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => ({ kind: 'user' }) }));
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   adminSettingsRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeRepository: { touchIfStable: mockTouchIfStable, findByDatalakeTags: vi.fn().mockResolvedValue([]) },

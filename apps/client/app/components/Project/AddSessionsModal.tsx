@@ -2,7 +2,7 @@ import { Box, Button, Checkbox } from '@mui/joy';
 import { FC, useCallback, useMemo, useState, useEffect } from 'react';
 import AddIcon from '@mui/icons-material/Add';
 import { useGetOwnSessions } from '@client/app/hooks/data/sessions';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import { useAddSessionsToProject } from '@client/app/hooks/data/projects';
 import { useDetectScrollBottom } from '@client/app/hooks/useDetectScrollBottom';
 import { ISessionDocument } from '@bike4mind/common';

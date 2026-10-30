@@ -437,6 +437,66 @@ describe('outgoing search request logging', () => {
     });
   });
 
+  it('logs an empty SearXNG answer at warn with the engines that did not respond', async () => {
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        results: [],
+        unresponsive_engines: [
+          ['google', 'Suspended: too many requests'],
+          ['duckduckgo', 'CAPTCHA'],
+        ],
+      })
+    );
+
+    await expect(createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5)).resolves.toEqual([]);
+
+    expect(warnSpy).toHaveBeenCalledWith('WebSearch Tool: SearXNG answered with no results', {
+      status: 200,
+      request: { q: 'job shop scheduling', limit: 5 },
+      hits: 0,
+      rawResults: 0,
+      unresponsiveEngines: [
+        { engine: 'google', reason: 'Suspended: too many requests' },
+        { engine: 'duckduckgo', reason: 'CAPTCHA' },
+      ],
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('tolerates a missing or malformed unresponsive_engines field on an empty SearXNG answer', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ results: [{ title: 'no url' }], unresponsive_engines: ['bing', [42]] }));
+
+    await createSearxngProvider('http://searxng:8080').search('q', 5);
+
+    expect(logSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SearXNG answered with no results',
+      expect.objectContaining({ hits: 0, rawResults: 1, unresponsiveEngines: [] })
+    );
+  });
+
+  it('keeps a plain zero-hit answer at log level, so warn means an engine did not answer', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ results: [] }));
+
+    await createSearxngProvider('http://searxng:8080').search('no hits', 5);
+
+    expect(logSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SearXNG answered with no results',
+      expect.objectContaining({ hits: 0, unresponsiveEngines: [] })
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unresponsive engine with a non-string reason, and still warns', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ results: [], unresponsive_engines: [['google', 42]] }));
+
+    await createSearxngProvider('http://searxng:8080').search('q', 5);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SearXNG answered with no results',
+      expect.objectContaining({ unresponsiveEngines: [{ engine: 'google', reason: '' }] })
+    );
+  });
+
   it('logs the SearXNG request on a non-OK response', async () => {
     fetchMock.mockResolvedValue(jsonRes({}, false, 500));
 

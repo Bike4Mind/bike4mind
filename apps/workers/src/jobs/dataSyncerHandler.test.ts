@@ -308,6 +308,35 @@ describe('dataSyncerHandler', () => {
     expect(state.findFilters.find(f => f.name === 'rapidreplymappings')?.filter).toEqual({});
   });
 
+  it('does not copy the Turnstile settings into a preview', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    await invoke();
+
+    const adminFilter = state.findFilters.find(f => f.name === 'adminsettings')?.filter as {
+      settingName: { $nin: string[] };
+    };
+    expect(adminFilter.settingName.$nin).toEqual(
+      expect.arrayContaining(['turnstileEnabled', 'turnstileFailClosed', 'turnstileSiteKey'])
+    );
+  });
+
+  it('excludes ciphertext-shaped values under any name and keeps plaintext', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    await invoke();
+
+    const adminFilter = state.findFilters.find(f => f.name === 'adminsettings')?.filter as {
+      settingValue: { $not: RegExp };
+    };
+    const matcher = adminFilter.settingValue.$not;
+    expect(matcher).toBeInstanceOf(RegExp);
+    const ciphertext = `${'a'.repeat(32)}:${'b'.repeat(32)}:${'c'.repeat(10)}`;
+    expect(matcher.test(ciphertext)).toBe(true);
+    expect(matcher.test(`v2:${ciphertext}`)).toBe(true);
+    expect(matcher.test('Welcome aboard')).toBe(false);
+  });
+
   it('rejects stage names that are not pr<number>', async () => {
     process.env.SEED_STAGE_NAME = 'prod';
 

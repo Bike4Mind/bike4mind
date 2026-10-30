@@ -11,16 +11,14 @@ import {
 } from '@client/app/utils/sessionExport';
 import { downloadFile } from '@client/app/components/common/DownloadMenu';
 import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';
-import {
-  SaveAlt as ExportIcon,
-  Description as MarkdownIcon,
-  DataObject as JSONIcon,
-  TableChart as CSVIcon,
-  ContentCopy as CopyIcon,
-  GridOn as ExcelIcon,
-  Article as WordIcon,
-  Html as HtmlIcon,
-} from '@mui/icons-material';
+import ExportIcon from '@mui/icons-material/SaveAlt';
+import MarkdownIcon from '@mui/icons-material/Description';
+import JSONIcon from '@mui/icons-material/DataObject';
+import CSVIcon from '@mui/icons-material/TableChart';
+import CopyIcon from '@mui/icons-material/ContentCopy';
+import ExcelIcon from '@mui/icons-material/GridOn';
+import WordIcon from '@mui/icons-material/Article';
+import HtmlIcon from '@mui/icons-material/Html';
 import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';

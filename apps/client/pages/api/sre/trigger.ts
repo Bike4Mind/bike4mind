@@ -6,8 +6,9 @@
  */
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, sreErrorTrackingRepository, cacheRepository } from '@bike4mind/database';
 import { SreAgentConfigSchema, getConfiguredRepoSlugs, resolveFullConfig } from '@bike4mind/common';
 import { GitHubService } from '@server/services/githubService';
@@ -17,7 +18,7 @@ import {
   computeIssueFingerprint,
   type SreIssuePayload,
   type SreDispatchResult,
-} from '@server/integrations/github/sreWebhookDispatch';
+} from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
@@ -34,10 +35,8 @@ interface TriggerResultItem {
   labels?: string[];
 }
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
     const parsed = TriggerRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       throw new BadRequestError(`Invalid request: ${parsed.error.issues.map(i => i.message).join(', ')}`);
@@ -63,24 +62,34 @@ const handler = baseApi().post(
       throw new BadRequestError('SRE config missing github owner/repo');
     }
 
+    const recordTriggerAudit = (results: TriggerResultItem[], blockedReason?: string) => {
+      const dispatchedCount = results.filter(r => r.dispatched).length;
+      return recordAdminActionFromRequest(req, {
+        action: 'ops.sre.run_triggered',
+        target: { kind: 'system', id: 'sre-trigger', displayName: 'SRE manual trigger' },
+        summary: `triggered SRE, dispatched ${dispatchedCount} of ${issueNumbers.length} issues in ${systemRepo}`,
+        details: {
+          repoSlug: systemRepo,
+          issueNumbers,
+          dispatched: dispatchedCount,
+          ...(blockedReason ? { blockedReason } : {}),
+        },
+      });
+    };
+
     // Check per-repo enablement and GitHub source enablement
     const repoConfig = resolveFullConfig(config, systemRepo);
-    if (!repoConfig) {
-      res.status(200).json({
-        results: issueNumbers.map(n => ({ issueNumber: n, dispatched: false, reason: 'repo-not-configured' })),
-      });
-      return;
-    }
-    if (!repoConfig.enabled) {
-      res.status(200).json({
-        results: issueNumbers.map(n => ({ issueNumber: n, dispatched: false, reason: 'repo-disabled' })),
-      });
-      return;
-    }
-    if (!repoConfig.sources.github.enabled) {
-      res.status(200).json({
-        results: issueNumbers.map(n => ({ issueNumber: n, dispatched: false, reason: 'github-source-disabled' })),
-      });
+    const blockedReason = !repoConfig
+      ? 'repo-not-configured'
+      : !repoConfig.enabled
+        ? 'repo-disabled'
+        : !repoConfig.sources.github.enabled
+          ? 'github-source-disabled'
+          : undefined;
+    if (!repoConfig || blockedReason) {
+      const results = issueNumbers.map(n => ({ issueNumber: n, dispatched: false, reason: blockedReason }));
+      await recordTriggerAudit(results, blockedReason);
+      res.status(200).json({ results });
       return;
     }
 
@@ -163,6 +172,8 @@ const handler = baseApi().post(
         results.push({ issueNumber, dispatched: false, reason: 'internal-error' });
       }
     }
+
+    await recordTriggerAudit(results);
 
     res.status(200).json({ results });
   })

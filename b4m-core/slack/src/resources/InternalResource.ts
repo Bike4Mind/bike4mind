@@ -6,8 +6,8 @@ import { getSlackDb } from '../di/registry';
  * InternalResource handles interactions with internal database models
  * and file storage operations.
  *
- * File listing and sharing logic lives in the tools/ directory
- * (listCuratedFiles, shareCuratedFile) and is delegated to from here.
+ * File listing logic lives in the tools/ directory
+ * (listCuratedFiles) and is delegated to from here.
  */
 export class InternalResource extends BaseResource {
   private userCache: IUserDocument | null = null;

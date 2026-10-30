@@ -1,3 +1,4 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import {
   adminSettingsRepository,
   agentRepository,
@@ -27,7 +28,7 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { reserveVoiceHold, settlePriorVoiceHold } from '@bike4mind/server-utils/voice/settleVoiceHold';
 import {
   REALTIME_VOICE_RESERVE_USD,
   REALTIME_VOICE_HOLD_SECONDS,
@@ -38,6 +39,7 @@ import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/
 import axios from 'axios';
 import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const CreateSessionBodySchema = z.object({
   sessionId: z.string().optional(),
@@ -63,6 +65,7 @@ function voiceUnavailableError(extra?: Record<string, unknown>) {
 }
 
 const handler = baseApi().post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const { sessionId, isReconnect } = CreateSessionBodySchema.parse(req.body);
 
   const settings = await getSettingsMap(
@@ -75,8 +78,12 @@ const handler = baseApi().post(async (req, res) => {
         'voiceSessionAiVoice',
         'voiceSessionVadType',
         'voiceSessionVadEagerness',
+        'voiceSessionTranscriptionModel',
         'enforceCredits',
       ],
+      // Every key this handler reads must be named above: under skipCache an unlisted key comes
+      // back absent and silently reverts to its coded default (e.g. whisper-1 for the model).
+      skipCache: true,
     }
   );
   const enableVoiceSession = getSettingsValue('enableVoiceSession', settings);
@@ -110,6 +117,7 @@ const handler = baseApi().post(async (req, res) => {
   const reservedCredits = usdToCredits(REALTIME_VOICE_RESERVE_USD);
 
   const realtimeModel = 'gpt-realtime-1.5';
+  await (await createModelAdmission(req.user!)).assert(realtimeModel);
 
   const openaiApiKey = await apiKeyService.getEffectiveApiKey(
     req.user?.id,
@@ -135,7 +143,7 @@ const handler = baseApi().post(async (req, res) => {
       }
     );
     // The credit hold lives on the session and is settled for, and refunded to, its owner
-    // (server/websocket/voiceSessionEnded.ts, server/voice/settleVoiceHold.ts), so only the owner
+    // (server/websocket/voiceSessionEnded.ts, packages/server-utils/src/voice/settleVoiceHold.ts), so only the owner
     // may open one. Matches POST /api/v1/voice/sessions, which looks the session up by owner.
     if (session.userId !== req.user.id) {
       throw new ForbiddenError('Voice calls can only be started in your own notebooks');

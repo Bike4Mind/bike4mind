@@ -14,10 +14,11 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { filterReadableQuests } from '@server/utils/sessionAccess';
+import { filterReadableQuests } from '@bike4mind/server-utils/utils/sessionAccess';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { resolveProxyTarget } from '@bike4mind/server-utils/utils/appFileProxy';
 import { apiKeyService } from '@bike4mind/services';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   ChatModels,
   isImageServeable,
@@ -626,7 +627,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       'Generating executive summary...'
     );
 
-    const summary = await generateSummary(markdown, plan.goal, logger, userId);
+    const requester = userId ? await userRepository.findById(userId) : null;
+    const summary =
+      requester && !aiAccessDeniedMessage(requester)
+        ? await generateSummary(markdown, plan.goal, logger, userId)
+        : null;
     if (summary) {
       logger.info('Executive summary generated successfully');
     } else {

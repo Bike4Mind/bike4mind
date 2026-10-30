@@ -65,6 +65,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   withTransaction: async (fn: () => unknown) => {
     h.inTransaction.push('enter');
     try {

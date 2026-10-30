@@ -4,8 +4,8 @@ import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/service
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
-import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import jwt from 'jsonwebtoken';
 
@@ -57,6 +57,9 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
   }
   if (decoded.mfaPending) {
     throw new UnauthorizedError('MFA verification required');
+  }
+  if (decoded.impersonatedBy) {
+    throw new ForbiddenError('Impersonated sessions cannot use realtime credentials.');
   }
 
   const user = await User.findById(decoded.id);

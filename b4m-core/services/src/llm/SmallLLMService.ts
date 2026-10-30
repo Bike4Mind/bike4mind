@@ -109,7 +109,7 @@ export class SmallLLMService {
         };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        this.logger.warn(`SmallLLMService: attempt ${attempt + 1} failed:`, lastError.message);
+        this.logger.warn(`SmallLLMService: attempt ${attempt + 1} failed:`, { errorType: lastError.name });
       }
     }
 
@@ -148,8 +148,9 @@ export class SmallLLMService {
 
         const jsonStr = extractJSON(rawText);
         if (!jsonStr) {
-          // Log raw response at debug level only to avoid leaking user content/PII
-          this.logger.debug('SmallLLMService.completeJSON: no valid JSON found in response', rawText.slice(0, 200));
+          this.logger.debug('SmallLLMService.completeJSON: no valid JSON found in response', {
+            responseLength: rawText.length,
+          });
           throw new Error('SmallLLMService: no valid JSON found in response');
         }
 
@@ -165,7 +166,9 @@ export class SmallLLMService {
         lastError = err;
 
         if (attempt < retries) {
-          this.logger.warn(`SmallLLMService.completeJSON: attempt ${attempt + 1} failed, retrying...`, err.message);
+          this.logger.warn(`SmallLLMService.completeJSON: attempt ${attempt + 1} failed, retrying...`, {
+            errorType: err.name,
+          });
           continue;
         }
       }
@@ -174,7 +177,7 @@ export class SmallLLMService {
     const err = lastError ?? new Error('SmallLLMService.completeJSON: unknown error');
 
     if (fallback) {
-      this.logger.warn('SmallLLMService.completeJSON: using fallback:', err.message);
+      this.logger.warn('SmallLLMService.completeJSON: using fallback:', { errorType: err.name });
       try {
         fallback.onFallback?.(err);
       } catch (callbackError) {

@@ -1,9 +1,11 @@
+import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { ApiKeyScope, LLMModelConfig, OAUTH_SOURCE_TAG_PREFIX, isOAuthSourceTag } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 import { ForbiddenError, NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 // Get LLM Model Configurations (readable by all authenticated users, needed for model selection)
@@ -113,11 +115,20 @@ const putHandler = asyncHandler<unknown, unknown, { configurations: LLMModelConf
 
   try {
     await AdminSettings.syncIndexes();
-    const updatedSetting = await AdminSettings.findOneAndUpdate(
-      { settingName: 'llmModelConfigurations' },
-      { $set: { settingValue: optimizedConfigurations } },
-      { upsert: true, new: true }
-    );
+    const updatedSetting = await withTransaction(async () => {
+      const existing = await AdminSettings.findOne({ settingName: 'llmModelConfigurations' }).lean();
+      const written = await AdminSettings.findOneAndUpdate(
+        { settingName: 'llmModelConfigurations' },
+        { $set: { settingValue: optimizedConfigurations } },
+        { upsert: true, new: true }
+      );
+      await recordAdminSettingChange(req, {
+        settingName: 'llmModelConfigurations',
+        before: existing?.settingValue ?? null,
+        after: optimizedConfigurations,
+      });
+      return written;
+    });
 
     if (!updatedSetting) throw new NotFoundError('Failed to save LLM model configurations');
 

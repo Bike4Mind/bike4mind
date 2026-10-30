@@ -6,8 +6,8 @@ const iconColor = (html: string) => /data-pr-state="[a-z]+" data-pr-color="([^"]
 
 describe('PR state colour', () => {
   it.each(['light', 'dark'] as const)('is the same in the bar and the sidebar for every state (%s)', mode => {
-    for (const { display, state, isDraft } of STATES) {
-      const bar = renderBar(mode, state, isDraft);
+    for (const { display, state, isDraft, queued } of STATES) {
+      const bar = renderBar(mode, state, isDraft, queued);
       const sidebar = renderSidebar({ number: 611, state: display }, 'done', mode);
       expect(bar).toContain(`data-testid="pr-bar-${display}-icon" data-pr-state="${display}"`);
       expect(sidebar).toContain(`data-session-pr-state="${display}"`);
@@ -16,11 +16,21 @@ describe('PR state colour', () => {
     }
   });
 
-  it('follows GitHub: open green, draft grey, merged purple, closed red', () => {
+  it('follows GitHub: open green, draft grey, queued amber, merged purple, closed red', () => {
     expect(prStateColor('open', 'light')).toBe('success.plainColor');
     expect(prStateColor('draft', 'light')).toBe('text.tertiary');
+    expect(prStateColor('queued', 'light')).toBe('warning.plainColor');
+    expect(prStateColor('queued', 'dark')).toBe('warning.plainColor');
     expect(prStateColor('merged', 'light')).toBe(MERGED_COLOR.light);
     expect(prStateColor('merged', 'dark')).toBe(MERGED_COLOR.dark);
     expect(prStateColor('closed', 'dark')).toBe('danger.plainColor');
+  });
+
+  it('colours a queued PR in the bar and its Queued to merge chip as warnings', () => {
+    const html = renderBar('light', 'OPEN', false, true);
+    expect(html).toContain('data-testid="pr-bar-queued-icon" data-pr-state="queued"');
+    const chip = /<[^>]*data-testid="pr-bar-automerge-armed"[^>]*>/.exec(html)?.[0];
+    expect(chip).toContain('data-queued="true"');
+    expect(chip).toContain('MuiChip-colorWarning');
   });
 });

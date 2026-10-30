@@ -22,15 +22,22 @@ import {
   Stack,
   Option,
   Table,
-  Textarea,
   Typography,
 } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { IOrganizationDocument, WithId, isValidAdminActionReason } from '@bike4mind/common';
-import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
+import { IOrganizationDocument, WithId } from '@bike4mind/common';
+import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
+import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
+import {
+  ADMIN_REASON_PRESETS,
+  type AdminReasonDraft,
+  EMPTY_ADMIN_REASON,
+  composeAdminReason,
+  isAdminReasonComplete,
+} from '@client/app/components/admin/shared/adminReason';
 import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { toast } from 'sonner';
-import OrganizationProfileUpdated from './OrganizationProfileUpdated';
+import OrganizationProfileModal from './OrganizationProfileModal';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import AddIcon from '@mui/icons-material/Add';
 import SortIcon from '@mui/icons-material/Sort';
@@ -51,41 +58,9 @@ import {
 import { useGetPendingOrganizationUsers } from '@client/app/hooks/data/user';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import { useShallow } from 'zustand/react/shallow';
 import { openInNewTab } from '@client/app/utils/externalLinks';
-
-const PAGE_LIMIT_OPTIONS = [5, 10, 20];
-
-interface OrganizationsTabParams {
-  page: number;
-  limit: number;
-  search: string;
-  personal: boolean | undefined;
-  sortBy: 'name' | 'createdAt' | 'updatedAt';
-  sortDirection: 'asc' | 'desc';
-}
-
-const useOrganizationsTab = create<{
-  params: OrganizationsTabParams;
-  setParams: (params: Partial<OrganizationsTabParams>) => void;
-}>()(
-  persist(
-    (set, get) => ({
-      params: {
-        page: 1,
-        limit: 10,
-        search: '',
-        personal: undefined,
-        sortBy: 'name' as const,
-        sortDirection: 'asc' as const,
-      },
-      setParams: params => set({ params: { ...get().params, ...params } }),
-    }),
-    { name: 'admin-organizations-tab-01' }
-  )
-);
+import { ORGS_PAGE_LIMIT_OPTIONS, organizationsPageToClampTo } from './organizationsTabSearch';
+import { useOpenOrganizationId, useOrganizationsParams, useOrganizationsTabUrlSync } from './useOrganizationsTabParams';
 
 /**
  * Adjust Seats modal, extracted so it can fetch pending invites for the org
@@ -98,7 +73,7 @@ interface AdjustSeatsModalProps {
   seatsValue: number;
   setSeatsValue: (value: number) => void;
   onClose: () => void;
-  onSubmit: () => void;
+  onSubmit: (reason: string) => void;
   isPending: boolean;
 }
 
@@ -111,6 +86,7 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
   isPending,
 }) => {
   const { data: pendingUsers } = useGetPendingOrganizationUsers(org.id);
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   const { maxSeats } = useTeamSeatLimits();
   const pendingCount = pendingUsers?.length ?? 0;
   const acceptedTeamSize = (org.users?.length ?? 0) + 1; // +1 for owner
@@ -141,11 +117,24 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
             data-testid="seats-input"
           />
         </FormControl>
+        <Box sx={{ mt: 2 }}>
+          <ReasonPicker
+            presets={ADMIN_REASON_PRESETS.seatChange}
+            value={reason}
+            onChange={setReason}
+            data-testid="seats-reason-input"
+          />
+        </Box>
         <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
           <Button variant="outlined" color="neutral" onClick={onClose}>
             Cancel
           </Button>
-          <Button loading={isPending} onClick={onSubmit} data-testid="seats-submit">
+          <Button
+            loading={isPending}
+            disabled={!isAdminReasonComplete(reason)}
+            onClick={() => onSubmit(composeAdminReason(reason))}
+            data-testid="seats-submit"
+          >
             Update seats
           </Button>
         </Stack>
@@ -156,7 +145,7 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
 
 const OrganizationsTab: React.FC = () => {
   const isMobile = useIsMobile();
-  const [selectedOrg, setSelectedOrg] = useState<WithId<IOrganizationDocument> | null>(null);
+  const { setOrgId } = useOpenOrganizationId();
   const [membersOrg, setMembersOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newOrgName, setNewOrgName] = useState('');
@@ -166,24 +155,25 @@ const OrganizationsTab: React.FC = () => {
   const [grantOwnerEmail, setGrantOwnerEmail] = useState('');
   const [grantSeats, setGrantSeats] = useState<number>(4);
   const [grantInitialCredits, setGrantInitialCredits] = useState<number>(200_000);
-  const [grantReason, setGrantReason] = useState('');
+  const [grantReason, setGrantReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
 
   // Row action dialog state
   const [topUpOrg, setTopUpOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [topUpCredits, setTopUpCredits] = useState<number>(50_000);
-  const [topUpReason, setTopUpReason] = useState('');
 
   const [seatsOrg, setSeatsOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [seatsValue, setSeatsValue] = useState<number>(4);
 
   const [revokeOrg, setRevokeOrg] = useState<WithId<IOrganizationDocument> | null>(null);
-  const [revokeReason, setRevokeReason] = useState('');
+  const [reconcileOrg, setReconcileOrg] = useState<WithId<IOrganizationDocument> | null>(null);
+  const [convertOrg, setConvertOrg] = useState<WithId<IOrganizationDocument> | null>(null);
 
-  const [params, setParams] = useOrganizationsTab(useShallow(state => [state.params, state.setParams]));
+  useOrganizationsTabUrlSync();
+  const [params, setParams] = useOrganizationsParams();
 
   const [totalOrganizations, setTotalOrganizations] = useState<number>(0);
 
-  const { data, isLoading, refetch } = useSearchOrganizations({
+  const { data, isLoading, isFetching, refetch } = useSearchOrganizations({
     page: params.page,
     limit: params.limit,
     search: params.search,
@@ -203,6 +193,13 @@ const OrganizationsTab: React.FC = () => {
     setTotalOrganizations(curr => data?.totalOrganizations ?? curr);
   }, [data?.totalOrganizations]);
 
+  // A linked or restored page can be past the end of the list.
+  const totalPages = data?.totalPages ?? 0;
+  useEffect(() => {
+    const page = organizationsPageToClampTo({ page: params.page, totalPages, isFetching });
+    if (page !== undefined) setParams({ page });
+  }, [isFetching, totalPages, params.page, setParams]);
+
   const createOrganizationMutation = useCreateOrganization();
   const grantOrgMutation = useGrantOrganization();
   const topUpMutation = useTopUpOrganization();
@@ -218,12 +215,12 @@ const OrganizationsTab: React.FC = () => {
     setGrantOwnerEmail('');
     setGrantSeats(4);
     setGrantInitialCredits(200_000);
-    setGrantReason('');
+    setGrantReason(EMPTY_ADMIN_REASON);
   };
 
   const handleCreateOrganization = async () => {
     if (grantMode) {
-      if (!newOrgName.trim() || !grantOwnerEmail.trim() || !isValidAdminActionReason(grantReason)) {
+      if (!newOrgName.trim() || !grantOwnerEmail.trim() || !isAdminReasonComplete(grantReason)) {
         toast.error('Name, owner email, and a reason of at least 5 characters are required for grants');
         return;
       }
@@ -233,7 +230,7 @@ const OrganizationsTab: React.FC = () => {
           ownerEmail: grantOwnerEmail.trim(),
           seats: grantSeats,
           initialCredits: grantInitialCredits,
-          reason: grantReason.trim(),
+          reason: composeAdminReason(grantReason),
         });
         resetCreateModal();
         refetch();
@@ -257,27 +254,26 @@ const OrganizationsTab: React.FC = () => {
     }
   };
 
-  const handleTopUp = async () => {
+  const handleTopUp = async (reason: string) => {
     if (!topUpOrg) return;
     try {
       await topUpMutation.mutateAsync({
         organizationId: topUpOrg.id,
         credits: topUpCredits,
-        reason: topUpReason.trim(),
+        reason,
       });
       setTopUpOrg(null);
       setTopUpCredits(50_000);
-      setTopUpReason('');
       refetch();
     } catch {
       // toast handled
     }
   };
 
-  const handleAdjustSeats = async () => {
+  const handleAdjustSeats = async (reason: string) => {
     if (!seatsOrg) return;
     try {
-      await seatsMutation.mutateAsync({ organizationId: seatsOrg.id, seats: seatsValue });
+      await seatsMutation.mutateAsync({ organizationId: seatsOrg.id, seats: seatsValue, reason });
       setSeatsOrg(null);
       refetch();
     } catch {
@@ -285,21 +281,26 @@ const OrganizationsTab: React.FC = () => {
     }
   };
 
-  const handleReconcileSeats = async (org: WithId<IOrganizationDocument>) => {
+  const handleReconcileSeats = async (reason: string) => {
+    if (!reconcileOrg) return;
     try {
-      await reconcileMutation.mutateAsync({ organizationId: org.id });
+      await reconcileMutation.mutateAsync({ organizationId: reconcileOrg.id, reason });
+      setReconcileOrg(null);
       refetch();
     } catch {
       // toast handled
     }
   };
 
-  const handleConvertToPaid = async (org: WithId<IOrganizationDocument>) => {
+  const handleConvertToPaid = async (reason: string) => {
+    if (!convertOrg) return;
     try {
       const { checkoutUrl } = await convertMutation.mutateAsync({
-        organizationId: org.id,
+        organizationId: convertOrg.id,
         callbackUrl: window.location.href,
+        reason,
       });
+      setConvertOrg(null);
       if (checkoutUrl) {
         await navigator.clipboard?.writeText(checkoutUrl).catch(() => undefined);
         toast.success('Checkout URL copied to clipboard');
@@ -310,15 +311,11 @@ const OrganizationsTab: React.FC = () => {
     }
   };
 
-  const handleRevoke = async () => {
+  const handleRevoke = async (reason: string) => {
     if (!revokeOrg) return;
     try {
-      await revokeMutation.mutateAsync({
-        organizationId: revokeOrg.id,
-        reason: revokeReason.trim() || undefined,
-      });
+      await revokeMutation.mutateAsync({ organizationId: revokeOrg.id, reason });
       setRevokeOrg(null);
-      setRevokeReason('');
       refetch();
     } catch {
       // toast handled
@@ -361,7 +358,15 @@ const OrganizationsTab: React.FC = () => {
             <FormLabel sx={{ fontSize: 'sm' }}>Search by name</FormLabel>
             <SearchBar
               handleChange={handleSearchChange}
-              placeHolder="Search organizations..."
+              placeHolder="Search organizations (/)"
+              slotProps={{
+                input: {
+                  'data-testid': 'admin-organizations-search-input',
+                  'data-admin-search': true,
+                  'aria-label': 'Search organizations',
+                  'aria-keyshortcuts': '/',
+                },
+              }}
               debounceTimeout={300}
               endDecorator={isLoading && <CircularProgress size="sm" />}
             />
@@ -434,7 +439,7 @@ const OrganizationsTab: React.FC = () => {
         itemsPerPage={params.limit}
         onItemsPerPageChange={l => setParams({ limit: l, page: 1 })}
         totalItems={totalOrganizations}
-        pageLimitOptions={PAGE_LIMIT_OPTIONS}
+        pageLimitOptions={ORGS_PAGE_LIMIT_OPTIONS}
       />
 
       {isMobile ? (
@@ -473,7 +478,7 @@ const OrganizationsTab: React.FC = () => {
                         color="primary"
                         size="sm"
                         startDecorator={<EditIcon sx={{ fontSize: 14 }} />}
-                        onClick={() => setSelectedOrg(org)}
+                        onClick={() => setOrgId(org.id)}
                       >
                         Edit
                       </Button>
@@ -500,7 +505,6 @@ const OrganizationsTab: React.FC = () => {
                             onClick={() => {
                               setTopUpOrg(org);
                               setTopUpCredits(50_000);
-                              setTopUpReason('');
                             }}
                           >
                             Top up credits
@@ -517,18 +521,12 @@ const OrganizationsTab: React.FC = () => {
                             </MenuItem>
                           )}
                           {!isGranted && !org.personal && (
-                            <MenuItem
-                              data-testid={`reconcile-seats-${org.id}`}
-                              onClick={() => handleReconcileSeats(org)}
-                            >
+                            <MenuItem data-testid={`reconcile-seats-${org.id}`} onClick={() => setReconcileOrg(org)}>
                               Reconcile seats from Stripe
                             </MenuItem>
                           )}
                           {isGranted && (
-                            <MenuItem
-                              data-testid={`convert-to-paid-${org.id}`}
-                              onClick={() => handleConvertToPaid(org)}
-                            >
+                            <MenuItem data-testid={`convert-to-paid-${org.id}`} onClick={() => setConvertOrg(org)}>
                               Convert to paid
                             </MenuItem>
                           )}
@@ -538,7 +536,6 @@ const OrganizationsTab: React.FC = () => {
                               color="danger"
                               onClick={() => {
                                 setRevokeOrg(org);
-                                setRevokeReason('');
                               }}
                             >
                               Revoke grant
@@ -601,7 +598,7 @@ const OrganizationsTab: React.FC = () => {
                             color="primary"
                             size="sm"
                             startDecorator={<EditIcon sx={{ fontSize: 14 }} />}
-                            onClick={() => setSelectedOrg(org)}
+                            onClick={() => setOrgId(org.id)}
                           >
                             Edit
                           </Button>
@@ -628,7 +625,6 @@ const OrganizationsTab: React.FC = () => {
                                 onClick={() => {
                                   setTopUpOrg(org);
                                   setTopUpCredits(50_000);
-                                  setTopUpReason('');
                                 }}
                               >
                                 Top up credits
@@ -647,16 +643,13 @@ const OrganizationsTab: React.FC = () => {
                               {!isGranted && !org.personal && (
                                 <MenuItem
                                   data-testid={`reconcile-seats-${org.id}`}
-                                  onClick={() => handleReconcileSeats(org)}
+                                  onClick={() => setReconcileOrg(org)}
                                 >
                                   Reconcile seats from Stripe
                                 </MenuItem>
                               )}
                               {isGranted && (
-                                <MenuItem
-                                  data-testid={`convert-to-paid-${org.id}`}
-                                  onClick={() => handleConvertToPaid(org)}
-                                >
+                                <MenuItem data-testid={`convert-to-paid-${org.id}`} onClick={() => setConvertOrg(org)}>
                                   Convert to paid
                                 </MenuItem>
                               )}
@@ -666,7 +659,6 @@ const OrganizationsTab: React.FC = () => {
                                   color="danger"
                                   onClick={() => {
                                     setRevokeOrg(org);
-                                    setRevokeReason('');
                                   }}
                                 >
                                   Revoke grant
@@ -700,26 +692,12 @@ const OrganizationsTab: React.FC = () => {
           itemsPerPage={params.limit}
           onItemsPerPageChange={l => setParams({ limit: l, page: 1 })}
           totalItems={totalOrganizations}
-          pageLimitOptions={PAGE_LIMIT_OPTIONS}
+          pageLimitOptions={ORGS_PAGE_LIMIT_OPTIONS}
         />
       </Box>
 
       {/* Organization Profile Modal */}
-      {selectedOrg && (
-        <Modal open={!!selectedOrg} onClose={() => setSelectedOrg(null)}>
-          <ModalDialog size="lg" sx={{ maxHeight: '80vh', overflow: 'auto' }}>
-            <ModalClose />
-            <OrganizationProfileUpdated
-              org={selectedOrg}
-              onClose={() => {
-                setSelectedOrg(null);
-                refetch();
-              }}
-              activeDays={30}
-            />
-          </ModalDialog>
-        </Modal>
-      )}
+      <OrganizationProfileModal onClosed={refetch} />
 
       {/* Members Modal */}
       {membersOrg && (
@@ -794,10 +772,10 @@ const OrganizationsTab: React.FC = () => {
                     data-testid="grant-credits-input"
                   />
                 </FormControl>
-                <AdminReasonField
+                <ReasonPicker
+                  presets={ADMIN_REASON_PRESETS.organizationGrant}
                   value={grantReason}
                   onChange={setGrantReason}
-                  placeholder="Why this org is being granted (e.g. 'demo for ACME')"
                   data-testid="org-grant-reason-input"
                 />
               </>
@@ -809,7 +787,7 @@ const OrganizationsTab: React.FC = () => {
             </Button>
             <Button
               loading={createOrganizationMutation.isPending || grantOrgMutation.isPending}
-              disabled={grantMode && !isValidAdminActionReason(grantReason)}
+              disabled={grantMode && !isAdminReasonComplete(grantReason)}
               onClick={handleCreateOrganization}
               data-testid={grantMode ? 'grant-org-submit' : 'create-org-submit'}
             >
@@ -819,42 +797,34 @@ const OrganizationsTab: React.FC = () => {
         </ModalDialog>
       </Modal>
 
-      {/* Top Up Credits Modal */}
-      {topUpOrg && (
-        <Modal open onClose={() => setTopUpOrg(null)}>
-          <ModalDialog>
-            <ModalClose />
-            <Typography level="h4">Top up credits — {topUpOrg.name}</Typography>
-            <Divider sx={{ my: 2 }} />
-            <Stack spacing={2}>
-              <FormControl>
-                <FormLabel>Credits to add</FormLabel>
-                <Input
-                  type="number"
-                  slotProps={{ input: { min: 1, step: 10_000 } }}
-                  value={topUpCredits}
-                  onChange={e => setTopUpCredits(Math.max(1, Number(e.target.value || 1)))}
-                  data-testid="topup-credits-input"
-                />
-              </FormControl>
-              <AdminReasonField value={topUpReason} onChange={setTopUpReason} data-testid="org-topup-reason-input" />
-            </Stack>
-            <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
-              <Button variant="outlined" color="neutral" onClick={() => setTopUpOrg(null)}>
-                Cancel
-              </Button>
-              <Button
-                loading={topUpMutation.isPending}
-                disabled={!isValidAdminActionReason(topUpReason)}
-                onClick={handleTopUp}
-                data-testid="topup-submit"
-              >
-                Add credits
-              </Button>
-            </Stack>
-          </ModalDialog>
-        </Modal>
-      )}
+      <ActionDialog
+        open={!!topUpOrg}
+        onClose={() => setTopUpOrg(null)}
+        title={`Top up credits for ${topUpOrg?.name ?? 'organization'}`}
+        reasonPresets={ADMIN_REASON_PRESETS.creditAdjustment}
+        confirmLabel={`Add ${topUpCredits.toLocaleString()} credits`}
+        pending={topUpMutation.isPending}
+        onConfirm={handleTopUp}
+        data-testid="org-topup-dialog"
+        testIds={{ reason: 'org-topup-reason-input', confirm: 'topup-submit' }}
+      >
+        <FormControl>
+          <FormLabel>Credits to add</FormLabel>
+          <Input
+            type="number"
+            slotProps={{ input: { min: 1, step: 10_000 } }}
+            value={topUpCredits}
+            onChange={e => setTopUpCredits(Math.max(1, Number(e.target.value || 1)))}
+            data-testid="topup-credits-input"
+          />
+        </FormControl>
+        {topUpOrg && (
+          <Typography level="body-sm" data-testid="org-topup-preview">
+            Balance: {(topUpOrg.currentCredits ?? 0).toLocaleString()} {'\u2192'}{' '}
+            {((topUpOrg.currentCredits ?? 0) + topUpCredits).toLocaleString()} credits
+          </Typography>
+        )}
+      </ActionDialog>
 
       {/* Adjust Seats Modal */}
       {seatsOrg && (
@@ -868,41 +838,43 @@ const OrganizationsTab: React.FC = () => {
         />
       )}
 
-      {/* Revoke Modal */}
-      {revokeOrg && (
-        <Modal open onClose={() => setRevokeOrg(null)}>
-          <ModalDialog>
-            <ModalClose />
-            <Typography level="h4">Revoke grant — {revokeOrg.name}</Typography>
-            <Divider sx={{ my: 2 }} />
-            <Typography level="body-sm" sx={{ mb: 1 }}>
-              This will mark the org&apos;s active grant as canceled. Members keep access until you remove them.
-            </Typography>
-            <FormControl>
-              <FormLabel>Reason (optional)</FormLabel>
-              <Textarea
-                minRows={2}
-                value={revokeReason}
-                onChange={e => setRevokeReason(e.target.value)}
-                data-testid="revoke-reason-input"
-              />
-            </FormControl>
-            <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
-              <Button variant="outlined" color="neutral" onClick={() => setRevokeOrg(null)}>
-                Cancel
-              </Button>
-              <Button
-                color="danger"
-                loading={revokeMutation.isPending}
-                onClick={handleRevoke}
-                data-testid="revoke-submit"
-              >
-                Revoke
-              </Button>
-            </Stack>
-          </ModalDialog>
-        </Modal>
-      )}
+      <ActionDialog
+        open={!!revokeOrg}
+        onClose={() => setRevokeOrg(null)}
+        title={`Revoke grant for ${revokeOrg?.name ?? 'organization'}`}
+        description="This will mark the org's active grant as canceled. Members keep access until you remove them."
+        reasonPresets={ADMIN_REASON_PRESETS.compChange}
+        confirmLabel="Revoke"
+        tone="danger"
+        pending={revokeMutation.isPending}
+        onConfirm={handleRevoke}
+        data-testid="org-revoke-dialog"
+        testIds={{ reason: 'revoke-reason-input', confirm: 'revoke-submit' }}
+      />
+
+      <ActionDialog
+        open={!!reconcileOrg}
+        onClose={() => setReconcileOrg(null)}
+        title={`Reconcile seats for ${reconcileOrg?.name ?? 'organization'}`}
+        description="Sets the seat count to the quantity Stripe bills for. Stripe is not changed."
+        reasonPresets={ADMIN_REASON_PRESETS.seatChange}
+        confirmLabel="Reconcile seats"
+        pending={reconcileMutation.isPending}
+        onConfirm={handleReconcileSeats}
+        data-testid="org-reconcile-seats-dialog"
+      />
+
+      <ActionDialog
+        open={!!convertOrg}
+        onClose={() => setConvertOrg(null)}
+        title={`Convert ${convertOrg?.name ?? 'organization'} to paid`}
+        description={`Creates a Stripe checkout link for ${convertOrg?.seats ?? 0} seats and copies it to your clipboard. Nothing is charged until the customer pays.`}
+        reasonPresets={ADMIN_REASON_PRESETS.paidConversion}
+        confirmLabel="Create checkout link"
+        pending={convertMutation.isPending}
+        onConfirm={handleConvertToPaid}
+        data-testid="org-convert-to-paid-dialog"
+      />
     </Sheet>
   );
 };

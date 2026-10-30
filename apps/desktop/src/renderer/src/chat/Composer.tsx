@@ -1,6 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  type SyntheticEvent,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import CircularProgress from '@mui/joy/CircularProgress';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
@@ -9,7 +20,8 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage, ChatSessionMode } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
-import { matchCommands, type ComposerCommand } from './commands';
+import { findCommand, matchCommands, type ComposerCommand } from './commands';
+import { ComposerHighlight, type HighlightToken } from './ComposerHighlight';
 import {
   attachShortcut,
   COMPOSER_BUTTON_LABELS,
@@ -22,18 +34,19 @@ import {
   isAttachChord,
   shownSuggestion,
 } from './composerInput';
+import { useShowDollarCosts } from './costDisplay';
 import { ArrowUpIcon, StopIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { isMac } from './platform';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
-import { matchSkills, skillQuery } from './skillMenu';
+import { highlightedTokens, insertSkill, matchSkills, skillChipColor, skillQuery } from './skillMenu';
 import { SkillPicker } from './SkillPicker';
 import {
-  contextPercent,
+  allowanceArc,
+  allowanceColor,
+  creditAllowancePercent,
   describeUsage,
-  occupancyArc,
-  occupancyColor,
   usageLabel,
   type ComposerUsage,
 } from './statusLine';
@@ -60,6 +73,7 @@ export function Composer({
   streaming,
   attachments,
   blockedReason,
+  blockedAction,
   notReady,
   usage,
   placeholder = 'Send a message...',
@@ -73,6 +87,8 @@ export function Composer({
   onSendQueuedNow,
   returned,
   onReturnedConsumed,
+  fill,
+  onFillConsumed,
   footer,
   leading,
   skills,
@@ -92,6 +108,8 @@ export function Composer({
    * alternative is a request that is refused for reasons the user never sees.
    */
   blockedReason?: string | null;
+  /** A button beside `blockedReason` that fixes it. */
+  blockedAction?: { label: string; onClick: () => void } | null;
   /**
    * A word for the idle indicator naming a state that is not ready to send - "No folder" for a
    * Code session with no project. It blocks Send and draws NO banner: the control that answers
@@ -100,8 +118,8 @@ export function Composer({
    */
   notReady?: string | null;
   /**
-   * What the idle indicator says INSTEAD of a bare "Ready": how full the window is and what is
-   * left to spend. Only the idle case - the three states above all name something the user may
+   * What the idle indicator says INSTEAD of a bare "Ready": the personal credit balance against
+   * its monthly allowance. Only the idle case - the three states above all name something the user may
    * need to act on, and those still win.
    */
   usage?: ComposerUsage | null;
@@ -139,6 +157,12 @@ export function Composer({
    */
   returned?: { id: number; messages: ChatQueuedMessage[] } | null;
   onReturnedConsumed?: () => void;
+  /**
+   * Text to put in the box in place of the draft, focused with the caret at its end - a blank
+   * chat's suggestion. Taken once per id, like `returned`, so picking the same card twice works.
+   */
+  fill?: { id: number; text: string } | null;
+  onFillConsumed?: () => void;
   /** Controls that belong to the next turn rather than to the app - the model picker. */
   footer?: ReactNode;
   /**
@@ -168,33 +192,37 @@ export function Composer({
    */
   onSuggestionDismissed?: () => void;
 }) {
+  const showDollars = useShowDollarCosts();
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Where the caret is, so the `/` menu answers the token being typed wherever it sits in the draft.
+  const [caret, setCaret] = useState(0);
+  // A caret position to restore once a programmatic draft change has rendered.
+  const pendingCaret = useRef<number | null>(null);
+
+  /** Replace the draft and put the caret at `at` (the end by default), as typing would have. */
+  const replaceDraft = (next: string, at: number = next.length) => {
+    setText(next);
+    setCaret(at);
+    pendingCaret.current = at;
+  };
+
+  useLayoutEffect(() => {
+    const target = pendingCaret.current;
+    if (target === null) return;
+    pendingCaret.current = null;
+    textareaRef.current?.setSelectionRange(target, target);
+  }, [text]);
 
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
 
-  /**
-   * The usage the ring reports, in flight or not.
-   *
-   * It used to be blanked while a reply streamed, on the grounds that the turn already has its
-   * own line under the transcript. The two do not report the same fact: TurnStatus counts what
-   * THIS turn has spent so far, and this reports how full the window was when the last request
-   * went out. A turn is also the moment the answer matters most, and a field that empties
-   * itself exactly then is a worse answer than a figure a round trip behind.
-   *
-   * What keeps them from disagreeing is that neither one estimates. The streamed 'usage' events
-   * carry the turn's running bill, which is not window occupancy, so this deliberately does not
-   * read them: the figure holds the last COMPLETED request and steps when the next one lands -
-   * see latestReply, which is where the holding happens. `disabled` and `notReady` stay, because
-   * in those there is no conversation and nothing was ever measured to hold - and with the word
-   * beside it gone, a ring in those states would be a glyph standing for nothing. The dot in the
-   * sidebar is what speaks for them now; see TurnDot.
-   */
   const shownUsage = !disabled && !notReady ? (usage ?? null) : null;
   const usageText = shownUsage && usageLabel(shownUsage);
-  const usageDetail = shownUsage && usageText ? describeUsage(shownUsage) : null;
-  const occupancy = shownUsage ? contextPercent(shownUsage.contextTokens, shownUsage.contextLimit) : null;
+  const usageDetail = shownUsage ? describeUsage(shownUsage, showDollars) : null;
+  const allowancePercent = shownUsage
+    ? creditAllowancePercent(shownUsage.credits, shownUsage.monthlyAllowance ?? null)
+    : null;
 
   // See composerInput.ts for what wins here and why.
   const shown = shownSuggestion({ disabled, text, suggestion });
@@ -225,13 +253,13 @@ export function Composer({
     const draft = text.trim();
     const action = composerSubmitAction(draft, sessionMode);
     if (action.kind === 'command' && onRunCommand && !disabled) {
-      setText('');
+      replaceDraft('');
       onSuggestionDismissed?.();
       onRunCommand(action.invocation.command.name, action.invocation.args);
       return;
     }
     if (!canSubmit) return;
-    setText('');
+    replaceDraft('');
     onSuggestionDismissed?.();
     onSend(draft);
   };
@@ -247,24 +275,51 @@ export function Composer({
     onReturnedConsumed?.();
   }, [returned, onReturnedConsumed]);
 
+  const consumedFill = useRef<number | null>(null);
+  const [caretRequest, setCaretRequest] = useState(0);
+  useEffect(() => {
+    if (!fill || consumedFill.current === fill.id) return;
+    consumedFill.current = fill.id;
+    setText(fill.text);
+    setCaretRequest(request => request + 1);
+    onFillConsumed?.();
+  }, [fill, onFillConsumed]);
+  // After the commit that put the text in, so the caret lands past it and not at its old length.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!caretRequest || !el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [caretRequest]);
+
   /**
    * The `/` menu.
    *
-   * Open is DERIVED from the text rather than stored, so there is no state to get out of step
-   * with what is on screen: the menu is showing exactly when the whole input is a bare `/token`
-   * (see skillQuery). Escape is the one thing that needs memory, and it is remembered against
-   * the text that was dismissed - so typing another character brings the menu back, which is
-   * what makes Escape "not this one" rather than "not until I reload".
+   * Open is DERIVED from the text and caret rather than stored, so there is no state to get out
+   * of step with what is on screen: the menu is showing exactly when the caret ends a bare
+   * `/token`, at the start of the draft or after a space (see skillQuery). Escape is the one
+   * thing that needs memory, and it is remembered against the text that was dismissed - so
+   * typing another character brings the menu back, which is what makes Escape "not this one"
+   * rather than "not until I reload".
+   *
+   * Commands are offered only when the token is the whole draft: running one replaces the turn,
+   * so a command taken from mid-sentence would discard the sentence. Skills go anywhere.
    */
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  const query = (skills || onRunCommand) && !disabled ? skillQuery(text) : null;
+  const token = (skills || onRunCommand) && !disabled ? skillQuery(text, caret) : null;
+  const query = token?.query ?? null;
+  const offerCommands = !!onRunCommand && !!token?.wholeDraft;
   const commandMatches = useMemo(
-    () => (onRunCommand && query !== null ? matchCommands(query, sessionMode) : []),
-    [onRunCommand, query, sessionMode]
+    () => (offerCommands && query !== null ? matchCommands(query, sessionMode) : []),
+    [offerCommands, query, sessionMode]
   );
-  const matches = useMemo(() => (skills && query !== null ? matchSkills(skills.skills, query) : []), [skills, query]);
+  const wholeDraft = token?.wholeDraft;
+  const matches = useMemo(
+    () => (skills && query !== null ? matchSkills(skills.skills, query, !wholeDraft) : []),
+    [skills, query, wholeDraft]
+  );
   // One list for the keyboard: commands first, then skills, which is also the order drawn.
   const menuCount = commandMatches.length + matches.length;
   const pickerOpen = query !== null && dismissed !== text && (menuCount > 0 || !!skills);
@@ -289,12 +344,27 @@ export function Composer({
   }, [pickerOpen, skills]);
 
   const pick = (name: string) => {
-    // The trailing space is what closes the menu (the text is no longer a bare token) and what
-    // leaves the user positioned to type arguments.
-    setText(`/${name} `);
+    if (!token) return;
+    // In place, so a skill picked mid-sentence keeps the words around it. See insertSkill for
+    // the trailing space, which is what closes the menu.
+    const next = insertSkill(text, token, name);
+    replaceDraft(next.text, next.caret);
     setDismissed(null);
     textareaRef.current?.focus();
   };
+
+  /**
+   * The tokens drawn as pills behind the text: known skills anywhere, a command only where it
+   * would run. Coloured like the picker's source chips, so the pill says where a skill came from.
+   */
+  const highlights = useMemo<HighlightToken[]>(() => {
+    const bySkill = new Map((skills?.skills ?? []).map(skill => [skill.name, skill]));
+    const isCommand = (name: string) => !!onRunCommand && !!findCommand(name, sessionMode);
+    return highlightedTokens(text, new Set(bySkill.keys()), isCommand).map(mention => {
+      const skill = bySkill.get(mention.name);
+      return { ...mention, color: skill ? skillChipColor(skill.source) : 'primary' };
+    });
+  }, [text, skills, onRunCommand, sessionMode]);
 
   /**
    * Taking a command out of the menu RUNS it, where taking a skill only fills the draft.
@@ -307,11 +377,11 @@ export function Composer({
   const runCommand = (command: ComposerCommand) => {
     setDismissed(null);
     if (command.requiresArgument) {
-      setText(`/${command.name} `);
+      replaceDraft(`/${command.name} `);
       textareaRef.current?.focus();
       return;
     }
-    setText('');
+    replaceDraft('');
     onRunCommand?.(command.name, '');
     textareaRef.current?.focus();
   };
@@ -366,7 +436,7 @@ export function Composer({
     }
     // Fills the draft and stops. The user still has to press Enter, on text they can now read
     // and edit - which is the whole reason this is a different key from the one that sends.
-    if (shown) setText(shown);
+    if (shown) replaceDraft(shown);
   };
 
   // Read inside the window listener so it is bound once, not rebuilt on every draft keystroke.
@@ -432,7 +502,25 @@ export function Composer({
 
       {blockedReason && (
         <Box sx={{ ...contentColumnSx, mt: 1 }}>
-          <Alert size="sm" color="warning" variant="soft" data-testid="composer-blocked-reason">
+          <Alert
+            size="sm"
+            color="warning"
+            variant="soft"
+            data-testid="composer-blocked-reason"
+            endDecorator={
+              blockedAction && (
+                <Button
+                  size="sm"
+                  variant="soft"
+                  color="warning"
+                  onClick={blockedAction.onClick}
+                  data-testid="composer-blocked-action-btn"
+                >
+                  {blockedAction.label}
+                </Button>
+              )
+            }
+          >
             {blockedReason}
           </Alert>
         </Box>
@@ -474,7 +562,11 @@ export function Composer({
           value={text}
           // Only hides the hint (see shownSuggestion), never ends it: emptying the box again
           // brings the same guess back, since nothing has been sent and it still fits the reply.
-          onChange={event => setText(event.target.value)}
+          onChange={event => {
+            pendingCaret.current = null;
+            setText(event.target.value);
+            setCaret(event.target.selectionStart);
+          }}
           onKeyDown={onKeyDown}
           placeholder={composerPlaceholder({ disabled, text, suggestion, placeholder, disabledPlaceholder })}
           disabled={disabled}
@@ -490,7 +582,13 @@ export function Composer({
           // fontSize rather than size="sm": the smaller size would also shrink the padding and
           // the min-height, and it is only the text that reads too large here. The inner
           // textarea inherits it, so this sets the placeholder and the suggestion hint too.
-          sx={{ flexDirection: 'row', alignItems: 'flex-end', fontSize: 'sm' }}
+          // `position: relative` anchors the skill highlight, which is laid over the textarea.
+          sx={{ flexDirection: 'row', alignItems: 'flex-end', fontSize: 'sm', position: 'relative' }}
+          startDecorator={
+            highlights.length > 0 ? (
+              <ComposerHighlight text={text} tokens={highlights} textareaRef={textareaRef} />
+            ) : undefined
+          }
           endDecorator={
             /* One button, never two. Stopping this turn and queueing the next one are still
                different intentions - that has not stopped being true - but a pair of buttons in
@@ -535,15 +633,22 @@ export function Composer({
             // wrong axis and the negative start would drag the button over the text. The gap
             // between text and button is the textarea's own paddingInlineEnd.
             endDecorator: { sx: { marginBlockStart: 0, marginInlineStart: 0 } },
+            // The highlight layer, lifted out of the flex row so it takes no width, and under
+            // the textarea (which is raised and transparent) so clicks and text stay its own.
+            startDecorator: {
+              sx: { position: 'absolute', inset: 0, margin: 0, display: 'block', pointerEvents: 'none' },
+            },
             textarea: {
               // Joy stretches the textarea to the flex line, and the button's min-height makes
               // that line taller than one line of text - so the text rendered at the top of the
               // band and every spare pixel fell underneath it (6px above, 13px below). Centring
               // splits them. Only bites while the box is one row; once the text is the tallest
               // item it drives the height itself and this does nothing.
-              sx: { alignSelf: 'center' },
+              sx: { alignSelf: 'center', position: 'relative', zIndex: 1, backgroundColor: 'transparent' },
               'data-testid': 'chat-composer-input',
               onPaste,
+              // Arrow keys and clicks move the caret without a change event; the `/` menu follows it.
+              onSelect: (event: SyntheticEvent<HTMLTextAreaElement>) => setCaret(event.currentTarget.selectionStart),
               // Held so selecting a skill can put focus back where the arguments get typed.
               ref: textareaRef,
               // So the hint is distinguishable from the ordinary placeholder without reading
@@ -554,8 +659,9 @@ export function Composer({
         />
       </Box>
 
-      {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses. */}
-      <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, py: 1, gap: 1 }}>
+      {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses.
+          The window's last row, so a wider gap below than above. */}
+      <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, pt: 1, pb: 2, gap: 1 }}>
         {/* No correction of its own: its box goes on the content edge like every other control
             in the column, and the '+' rides inside it. Pulling the box left so the glyph alone
             sat on the line is what used to send its hover surface outside the column. */}
@@ -582,17 +688,6 @@ export function Composer({
 
         {footer}
 
-        {/* The whole status line: one ring, and the detail one hover behind it.
-
-            The dot and the figure that used to flank it are gone, and nothing went with them.
-            A reply in flight already turns the send button into Stop and draws its own line
-            under the transcript; a Code session with no folder has the "Choose a folder" chip
-            a few pixels above, which is the thing to act on rather than a word repeating it;
-            and a window with no conversation says so in the composer's own placeholder. The
-            words those two carried were each the second place something was said.
-
-            The figure itself is not lost either - it is the ring's accessible name, and the
-            tooltip states it in full alongside the balance. See usageLabel. */}
         {shownUsage && (
           <Tooltip
             title={usageDetail ?? ''}
@@ -608,20 +703,17 @@ export function Composer({
             <Box sx={{ display: 'inline-flex' }} data-testid="composer-status">
               <CircularProgress
                 determinate
-                // An occupancy nobody stated draws the bare track: no arc, and dimmed, so
-                // "nothing measured" cannot be read as "the window is empty". A determinate
-                // ring has no other way to say unknown, and the tooltip says it in words.
-                value={occupancy === null ? 0 : occupancyArc(occupancy)}
-                color={occupancyColor(occupancy)}
+                value={allowancePercent === null ? 0 : allowanceArc(allowancePercent)}
+                color={allowanceColor(allowancePercent)}
                 // Sized off the text rather than off Joy's own scale: this sits in a row of
                 // body-xs controls, and the smallest preset is half again as tall as they are.
                 sx={{
                   '--CircularProgress-size': '14px',
                   '--CircularProgress-trackThickness': '2px',
                   '--CircularProgress-progressThickness': '2px',
-                  ...(occupancy === null ? { opacity: 0.5 } : {}),
+                  ...(allowancePercent === null ? { opacity: 0.5 } : {}),
                 }}
-                aria-label={usageText ?? 'Context window'}
+                aria-label={usageText ?? 'Credits'}
                 data-testid="composer-status-ring"
               />
             </Box>

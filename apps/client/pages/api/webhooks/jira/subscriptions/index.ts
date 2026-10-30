@@ -1,3 +1,8 @@
+import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { Logger } from '@bike4mind/observability';
+import { resolveNotificationDestination } from '@bike4mind/slack';
+initializeSlackPackage();
+
 /**
  * Jira Webhook Subscriptions API
  *
@@ -9,10 +14,16 @@
  */
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { respond } from '@server/utils/respond';
 import { baseApi } from '@server/middlewares/baseApi';
 import { jiraWebhookConfigRepository, jiraWebhookSubscriptionRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
-import { IJiraWebhookSubscriptionRequest, IJiraWebhookSubscriptionResponse } from '@bike4mind/common';
+import {
+  IJiraWebhookSubscriptionRequest,
+  IJiraWebhookSubscriptionResponse,
+  jiraWebhookSubscriptionResponseSchema,
+  jiraWebhookSubscriptionListResponseSchema,
+} from '@bike4mind/common';
 import { AtlassianTokenManager } from '@server/integrations/jira/atlassianTokenManager';
 import { validateFilters } from '@server/integrations/jira/types';
 
@@ -55,6 +66,16 @@ const handler = baseApi()
         // DM target uses the user's linked Slack account - no extra fields needed
       } else {
         throw new BadRequestError('slackTarget.type must be "channel" or "dm"');
+      }
+
+      try {
+        await resolveNotificationDestination(
+          user.id,
+          slackTarget.type === 'channel' ? slackTarget.channelId : undefined
+        );
+      } catch (error) {
+        Logger.warn('Jira Slack destination verification failed', { userId: user.id, error });
+        throw new BadRequestError('Choose a destination you belong to in your linked Slack workspace');
       }
 
       const filterError = validateFilters({ projectFilter, priorityFilter, issueTypeFilter });
@@ -113,7 +134,7 @@ const handler = baseApi()
         atlassianSiteName: webhookConfig.atlassianSiteUrl,
       };
 
-      return res.status(201).json(response);
+      return respond(res, jiraWebhookSubscriptionResponseSchema, response, 201);
     })
   )
   // GET - List user's subscriptions
@@ -154,7 +175,7 @@ const handler = baseApi()
         atlassianSiteName: configMap.get(subscription.webhookConfigId),
       }));
 
-      return res.status(200).json(response);
+      return respond(res, jiraWebhookSubscriptionListResponseSchema, response);
     })
   );
 

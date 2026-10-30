@@ -1,10 +1,12 @@
 import { useMutation } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { AnalyticsEventPayloads } from '@server/types/analytics';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import { AnalyticsEventPayloads } from '@bike4mind/server-utils/types/analytics/index';
 
 export function useLogEvent() {
   return useMutation({
     mutationFn: async (event: Omit<AnalyticsEventPayloads, 'userId'>) => {
+      if (useAccessToken.getState().impersonating) return null;
       try {
         return await api.post('/api/analytics/log-event', event);
       } catch (error) {

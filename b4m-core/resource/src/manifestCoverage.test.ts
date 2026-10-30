@@ -150,14 +150,19 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   webhookDeliveryQueue: 'reachable from the webhook retry and replay-dlq routes - needs a consumer first',
 
   // Admin-only, and each needs something self-host has not got.
-  whatsNewGenerationQueue: 'admin-only backfill route; needs a content-generation decision',
+  whatsNewGenerationQueue: 'subscribes releaseNotes.dispatch; self-host has no release-notes pipeline to run it',
   // Same feature family, surfaced once the scanner learned to read a wide cast and a wrapped
   // access. Worth noting for whoever wires it: the 500 guard at generate-highlights.ts cannot
   // fire on self-host, because the shim's Proxy throws on the property access before `?.url` is
-  // ever evaluated. The cron site degrades to a logged error instead.
-  whatsNewHighlightsQueue: 'admin route + highlights cron; needs the same content-generation decision',
+  // ever evaluated.
+  whatsNewHighlightsQueue: 'admin route; needs the same content-generation decision',
   secopsTriageQueue: 'admin security-dashboard ingest; needs Prowler and AWS findings',
   sreJobQueue: 'admin SRE rerun/retry routes; handler needs Bedrock and CloudWatch',
+
+  // Publish enqueues on every bundle publish, but the enqueue skips quietly when no URL resolves,
+  // so leaving it unregistered is the safe state: a declared queue with no consumer would only
+  // pile up messages. Registered as hosted-only in packages/scripts/src/selfhostParityPolicy.ts.
+  publishThumbnailQueue: 'publish thumbnail renders; consumer needs a headless Chromium the worker image lacks',
 };
 
 /**
@@ -208,5 +213,27 @@ describe('self-host resource manifest coverage', () => {
       k => !referenced.has(k)
     );
     expect(stale, `exempted but no longer read anywhere: ${stale.join(', ')}`).toEqual([]);
+  });
+});
+
+// readOptionalSecret swallows the shim's "not registered" throw, so a missing manifest entry
+// silently disables the feature instead of failing loudly.
+describe('self-host secret manifest coverage', () => {
+  const optionalSecretNames = (): string[] => {
+    const content = readFileSync(join(REPO_ROOT, 'packages/server-utils/src/utils/config.ts'), 'utf8');
+    return [...content.matchAll(/readOptionalSecret\(\s*'([A-Z][A-Z0-9_]*)'/g)].map(m => m[1]);
+  };
+
+  it('finds readOptionalSecret references at all', () => {
+    const names = optionalSecretNames();
+    expect(names.length).toBeGreaterThanOrEqual(3);
+    expect(names).toContain('OAUTH_RSA_PRIVATE_KEY');
+  });
+
+  it('registers every secret Config reads through readOptionalSecret', () => {
+    const missing = optionalSecretNames().filter(
+      name => (DEFAULT_MANIFEST as Record<string, { kind: string }>)[name]?.kind !== 'secret'
+    );
+    expect(missing, `readOptionalSecret names absent from the manifest: ${missing.join(', ')}`).toEqual([]);
   });
 });

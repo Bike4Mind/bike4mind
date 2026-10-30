@@ -221,6 +221,32 @@ describe('db-core defineAbilitiesFor - user-shared document access', () => {
   });
 });
 
+// Mirrors the HTTP ability's FabFile export block (apps/client/server/auth/ability.ts). The
+// knowledge-files export route compiles this into a Mongo query via accessibleBy, so a missing
+// rule here empties the archive exactly as a missing rule there does.
+describe('db-core defineAbilitiesFor - FabFile export scoping', () => {
+  const ownDoc = () => Object.assign(new FabFile(), { userId: 'u1' });
+  const othersDoc = () => Object.assign(new FabFile(), { userId: 'someone-else' });
+
+  it("lets a user export their own files but not someone else's", () => {
+    const a = defineAbilitiesFor(makeUser());
+    expect(a.can('export', ownDoc())).toBe(true);
+    expect(a.can('export', othersDoc())).toBe(false);
+  });
+
+  it("scopes the export query to the caller and to an admin's own files, and fails closed without one", () => {
+    expect(accessibleBy(defineAbilitiesFor(makeUser()), 'export').ofType(FabFile)).toEqual({
+      $or: [{ userId: 'u1' }],
+    });
+    expect(accessibleBy(defineAbilitiesFor(makeUser({ isAdmin: true })), 'export').ofType(FabFile)).toEqual({
+      $or: [{ userId: 'u1' }],
+    });
+    expect(accessibleBy(defineAbilitiesFor(undefined), 'export').ofType(FabFile)).toEqual({
+      $expr: { $eq: [0, 1] },
+    });
+  });
+});
+
 // The user/group share arm used to be hand-copied into apps/client/server/auth/ability.ts, and the
 // copies drifted twice: a dotted cross-entry over-grant, and a missing Project resource. The BODY
 // is now one exported function both builders call, so it cannot drift and the behavioural tests

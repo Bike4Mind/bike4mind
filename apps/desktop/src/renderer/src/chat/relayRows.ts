@@ -13,10 +13,11 @@ export function displayText(message: Pick<ChatMessage, 'content' | 'display'>): 
   return message.display?.trim() || message.content;
 }
 
-/** The collapsed row for a turn auto-fix started: who started it, then what it is about. */
+/** The collapsed row for a turn the app started: who started it, then what it is about. */
 export function automaticSummary(message: Pick<ChatMessage, 'automatic'>): string {
   const summary = message.automatic?.summary;
-  return summary ? `Started by auto-fix: ${summary}` : 'Started by auto-fix';
+  const head = message.automatic?.kind === 'background-exit' ? 'Background command finished' : 'Started by auto-fix';
+  return summary ? `${head}: ${summary}` : head;
 }
 
 /**

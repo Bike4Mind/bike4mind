@@ -53,7 +53,7 @@ const {
 }));
 
 // The enforceMFA enrollment gate (auth/mfaEnforcement.ts) is covered by its own tests; inert here.
-vi.mock('@server/auth/mfaEnforcement', async orig => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   isMfaEnrollmentOwed: async () => false,
 }));
@@ -120,7 +120,7 @@ vi.mock('@server/analytics/analyticsMiddleware', () => ({
 
 // auto-rename's positive control reaches the LLM chain past the guard; stub those two edges so an
 // owned-session request completes deterministically instead of hitting real model config.
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: (...a: unknown[]) => mockGetOperationsModel(...a) },
 }));
 vi.mock('@bike4mind/services', async orig => {

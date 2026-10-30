@@ -31,6 +31,7 @@ import {
   IUserMargin,
   USAGE_EVENT_FEATURES,
   USAGE_EVENT_STATUSES,
+  USAGE_PRICE_SOURCES,
 } from '@bike4mind/common';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
@@ -83,6 +84,41 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     // into the UNCLASSIFIED_SOURCE bucket in aggregation.
     source: { type: String, required: false, enum: [...COMPLETION_SOURCES] },
     apiKeyId: { type: String, required: false },
+
+    // Price stamp (see UsageEventTypes). All optional: older rows and non-text features leave
+    // them unset. turnUsage defaults to undefined, not [], so a single-turn row stays without it.
+    priceSource: { type: String, required: false, enum: [...USAGE_PRICE_SOURCES] },
+    priceRowId: { type: String, required: false },
+    rates: {
+      type: new Schema(
+        {
+          tierKey: { type: Number, required: true },
+          input: { type: Number, required: true },
+          output: { type: Number, required: true },
+          cacheRead: { type: Number, required: false },
+          cacheWrite: { type: Number, required: false },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    turnUsage: {
+      type: [
+        new Schema(
+          {
+            inputTokens: { type: Number, required: true },
+            outputTokens: { type: Number, required: true },
+            cacheReadTokens: { type: Number, required: false },
+            cacheWriteTokens: { type: Number, required: false },
+            tierKey: { type: Number, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      required: false,
+      default: undefined,
+    },
+    turnUsageTruncated: { type: Boolean, required: false },
   },
   {
     timestamps: true,
@@ -123,6 +159,65 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
 
   async record(event: IUsageEventInput): Promise<IUsageEventDocument | null> {
     return this.create(event as IUsageEventDocument);
+  }
+
+  /**
+   * Tokens a user's provider calls billed to the user themself (ownerType User) settled since
+   * `since`, and when the oldest of those calls landed. Input plus output, plus the cache buckets
+   * where they are separate: a 'chat' row's inputTokens is the estimate of the whole prompt, so its
+   * cache read and write tokens are already in it; every other feature records them disjointly
+   * (see `rates` in UsageEventTypes.ts). Served by the { userId, createdAt } index.
+   */
+  async userTokensSince(userId: string, since: Date): Promise<{ tokens: number; oldestAt?: Date }> {
+    const [row] = await this.model.aggregate<{ tokens: number; oldestAt: Date }>([
+      { $match: { userId, ownerType: CreditHolderType.User, createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          tokens: {
+            $sum: {
+              $add: [
+                '$inputTokens',
+                '$outputTokens',
+                {
+                  $cond: [{ $eq: ['$feature', 'chat'] }, 0, { $add: ['$cachedInputTokens', '$cacheWriteTokens'] }],
+                },
+              ],
+            },
+          },
+          oldestAt: { $min: '$createdAt' },
+        },
+      },
+    ]);
+    return row ? { tokens: row.tokens, oldestAt: row.oldestAt } : { tokens: 0 };
+  }
+
+  async creditsSpentByUser(userId: string, from: Date, to: Date): Promise<number> {
+    const [row] = await this.model.aggregate<{ credits: number }>([
+      { $match: { userId, createdAt: { $gte: from, $lt: to } } },
+      {
+        $group: {
+          _id: null,
+          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+        },
+      },
+    ]);
+    return row?.credits ?? 0;
+  }
+
+  async creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>> {
+    if (userIds.length === 0) return {};
+    // Lifetime spend on purpose; the {userId, createdAt} index serves it for a bounded id list.
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      { $match: { userId: { $in: userIds } } },
+      {
+        $group: {
+          _id: '$userId',
+          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+        },
+      },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
   }
 
   async marginByModelDay(since?: Date): Promise<IModelDayMargin[]> {
@@ -663,6 +758,26 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       { $project: { _id: 0, usd: 1 } },
     ]);
     return result?.usd ?? 0;
+  }
+
+  /**
+   * Personal credits spent since UTC midnight. writtenOffCredits is already part of
+   * creditsCharged, so adding it would double count. The cap's read-before-request
+   * check is non-atomic; concurrent requests may overshoot the allowance.
+   */
+  async findDailySpendByUser(userId: string, since: Date): Promise<number> {
+    // {ownerId, ownerType, createdAt} index covers this; ownerType: 'User' excludes org-billed turns.
+    const [result] = await this.model.aggregate<{ total: number }>([
+      { $match: { ownerId: userId, ownerType: 'User', createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$creditsCharged' },
+        },
+      },
+      { $project: { _id: 0, total: 1 } },
+    ]);
+    return result?.total ?? 0;
   }
 }
 

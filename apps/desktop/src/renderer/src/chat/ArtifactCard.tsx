@@ -96,12 +96,15 @@ export function SvgArtifact({
   title,
   maxHeight = 420,
   testId = 'chat-artifact-svg',
+  fill = false,
   onFailure,
 }: {
   content: string;
   title: string;
   maxHeight?: number;
   testId?: string;
+  /** Scale to the box it sits in, whatever its size, rather than to its own width under maxHeight. */
+  fill?: boolean;
   onFailure?: () => void;
 }) {
   const [failed, setFailed] = useState(false);
@@ -116,7 +119,11 @@ export function SvgArtifact({
         setFailed(true);
         onFailure?.();
       }}
-      sx={{ display: 'block', maxWidth: '100%', maxHeight, m: '0 auto', p: 1.5 }}
+      sx={
+        fill
+          ? { display: 'block', width: '100%', height: '100%', objectFit: 'contain', p: 1.5 }
+          : { display: 'block', maxWidth: '100%', maxHeight, m: '0 auto', p: 1.5 }
+      }
       data-testid={testId}
     />
   );
@@ -138,10 +145,12 @@ export function SvgArtifact({
 function MermaidArtifact({
   content,
   title,
+  fill,
   onFailure,
 }: {
   content: string;
   title: string;
+  fill: boolean;
   onFailure: (reason: MermaidFailure | undefined) => void;
 }) {
   const mode = useTheme().palette.mode === 'dark' ? 'dark' : 'light';
@@ -172,11 +181,15 @@ function MermaidArtifact({
       content={svg}
       title={title}
       maxHeight={640}
+      fill={fill}
       testId="chat-artifact-mermaid"
       onFailure={() => onFailure('invalid')}
     />
   );
 }
+
+/** The drawing's share of a filled card: whatever the footer leaves. */
+const fillSx = { flex: 1, minHeight: 0 } as const;
 
 /** Where the server's copy of this artifact ended up, in the words the outcome deserves. */
 function SaveStatus({ artifact }: { artifact: ChatArtifactView }) {
@@ -209,8 +222,18 @@ function SaveStatus({ artifact }: { artifact: ChatArtifactView }) {
  * line, while an artifact is the deliverable itself. The source disclosure below it borrows the
  * tool row's shape - a summary line and a chevron - so the two read as the same family.
  */
-export function ArtifactCard({ artifact }: { artifact: ChatArtifactView }) {
-  const [showSource, setShowSource] = useState(false);
+export function ArtifactCard({
+  artifact,
+  fill = false,
+}: {
+  artifact: ChatArtifactView;
+  /**
+   * Fill the box it is placed in, with the drawing taking every spare pixel: the library's opened
+   * view, whose own header already names the artifact. A type drawn only as source shows it open.
+   */
+  fill?: boolean;
+}) {
+  const [showSource, setShowSource] = useState(() => fill && !RENDERED_TYPES.has(artifact.type));
   // Passed straight to MermaidArtifact as its failure callback: a useState setter is stable,
   // so the compile effect is not re-run by this component re-rendering.
   const [diagramFailure, setDiagramFailure] = useState<MermaidFailure | undefined>(undefined);
@@ -225,45 +248,68 @@ export function ArtifactCard({ artifact }: { artifact: ChatArtifactView }) {
   return (
     <Sheet
       variant="outlined"
-      sx={{ borderRadius: 'sm', overflow: 'hidden', my: 1 }}
+      sx={
+        fill
+          ? { borderRadius: 'sm', overflow: 'hidden', height: '100%', display: 'flex', flexDirection: 'column' }
+          : { borderRadius: 'sm', overflow: 'hidden', my: 1 }
+      }
       data-testid="chat-artifact-card"
       data-artifact-type={artifact.type}
     >
-      <Stack
-        direction="row"
-        spacing={1}
-        alignItems="center"
-        sx={{ px: 1.5, py: 1, borderBottom: '1px solid', borderColor: 'divider' }}
-      >
-        <Typography level="body-sm" fontWeight="lg" noWrap sx={{ flex: 1, minWidth: 0 }}>
-          {artifact.title}
-        </Typography>
-        <Chip size="sm" variant="soft" color="neutral" data-testid="chat-artifact-type">
-          {TYPE_LABEL[artifact.type] ?? artifact.type}
-        </Chip>
-      </Stack>
+      {!fill && (
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ px: 1.5, py: 1, borderBottom: '1px solid', borderColor: 'divider' }}
+        >
+          <Typography level="body-sm" fontWeight="lg" noWrap sx={{ flex: 1, minWidth: 0 }}>
+            {artifact.title}
+          </Typography>
+          <Chip size="sm" variant="soft" color="neutral" data-testid="chat-artifact-type">
+            {TYPE_LABEL[artifact.type] ?? artifact.type}
+          </Chip>
+        </Stack>
+      )}
 
       {/* Mermaid stays mounted through a failure, unlike the other two: its verdict comes from
           compiling the source, and a streaming artifact's source is malformed until the last
           line lands. Unmounting on the first bad parse would leave the finished diagram
           showing its own error note. */}
       {artifact.type === 'mermaid' ? (
-        <Box sx={{ bgcolor: rendered ? 'background.level1' : undefined }}>
-          <MermaidArtifact content={artifact.content} title={artifact.title} onFailure={setDiagramFailure} />
+        <Box sx={{ bgcolor: rendered ? 'background.level1' : undefined, ...(fill && rendered ? fillSx : {}) }}>
+          <MermaidArtifact
+            content={artifact.content}
+            title={artifact.title}
+            fill={fill}
+            onFailure={setDiagramFailure}
+          />
         </Box>
       ) : (
         rendered && (
-          <Box sx={{ bgcolor: 'background.level1' }}>
+          <Box sx={{ bgcolor: 'background.level1', ...(fill ? fillSx : {}) }}>
             {artifact.type === 'html' ? (
-              <HtmlArtifactFrame content={artifact.content} title={artifact.title} />
+              <HtmlArtifactFrame
+                content={artifact.content}
+                title={artifact.title}
+                {...(fill ? { height: '100%' } : {})}
+              />
             ) : (
-              <SvgArtifact content={artifact.content} title={artifact.title} />
+              <SvgArtifact content={artifact.content} title={artifact.title} fill={fill} />
             )}
           </Box>
         )
       )}
 
-      <Box sx={{ px: 1.5, py: 1 }}>
+      <Box
+        sx={{
+          px: 1.5,
+          py: 1,
+          ...(fill ? { minHeight: 0, overflowY: 'auto', ...thinScrollbarSx } : {}),
+          ...(fill && !rendered ? fillSx : {}),
+          ...(fill && rendered ? { borderTop: '1px solid', borderColor: 'divider' } : {}),
+        }}
+      >
         {note && (
           <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 0.5 }} data-testid="chat-artifact-note">
             {note}
@@ -306,7 +352,7 @@ export function ArtifactCard({ artifact }: { artifact: ChatArtifactView }) {
             sx={{
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
-              maxHeight: 360,
+              maxHeight: fill && !rendered ? 'none' : 360,
               overflowY: 'auto',
               mt: 0.5,
               ...thinScrollbarSx,

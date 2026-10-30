@@ -108,8 +108,8 @@ describe('buildEmailMirrorMessage', () => {
     });
     expect(msg).toContain('password-reset');
     expect(msg).toContain('*To:* user@example.com');
-    expect(msg).toContain('*Subject:* Reset your password');
-    expect(msg).toContain('Preview (secrets redacted)');
+    expect(msg).toContain('*Subject:* [Security email]');
+    expect(msg).not.toContain('Preview (secrets redacted)');
   });
 
   it('omits the preview line when there is no body preview', () => {
@@ -120,5 +120,23 @@ describe('buildEmailMirrorMessage', () => {
       bodyPreview: '',
     });
     expect(msg).not.toContain('Preview');
+  });
+});
+
+describe('security mail', () => {
+  it.each(['Your sign-in code 123456', 'Your invitation ABCD-EFGH-IJKL-MNOP', 'One-time password 4321'])(
+    'withholds security mail content for %s',
+    subject => {
+      const message = buildEmailMirrorMessage({
+        to: 'person@example.com',
+        subject,
+        emailType: inferEmailType(subject),
+        bodyPreview: 'secret 123456 ABCD-EFGH-IJKL-MNOP',
+      });
+      expect(message).not.toMatch(/123456|4321|ABCD-EFGH-IJKL-MNOP/);
+    }
+  );
+  it('redacts short codes even if classification misses the email', () => {
+    expect(redactEmailContentForMirror('123456 ABCD-EFGH-IJKL-MNOP')).not.toMatch(/\d{4,}|ABCD-EFGH-IJKL-MNOP/);
   });
 });

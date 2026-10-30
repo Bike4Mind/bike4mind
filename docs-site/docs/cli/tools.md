@@ -389,7 +389,11 @@ Preview:
 
 - **Allow (A)**: Execute this once
 - **Deny (D)**: Block this execution
-- **Trust (T)**: Allow this tool for the session
+- **Trust (T)**: Allow this tool for the session. For shell commands, this option names the command scopes it remembers, such as `git status`. Approving `git status` also covers `git status -s`, but `git log` still asks separately.
+
+Shell session approval is available only for supported read-only commands and test/build runners. Each command in a pipeline or chain needs its own approved scope. Commands with unsupported options or shell expansions require approval each time, and input sent to a running shell has no session option. Other tools keep whole-tool session trust.
+
+If the session option is missing, use **Allow** to run that call once. A command outside the supported scopes cannot gain session approval by repeating it.
 
 ### Trusting Tools
 

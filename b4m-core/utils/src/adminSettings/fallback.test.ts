@@ -12,6 +12,14 @@ import { AxiosError } from 'axios';
 import { ApiError } from '@google/genai';
 import { ModelInfo, ModelBackend } from '@bike4mind/common';
 import { toProviderEndUserId } from '../llm';
+import {
+  LlmTimeoutError,
+  createAnthropicRequestTimeoutError,
+  createAnthropicStreamTimeoutError,
+  bedrockEmptyResponseMessage,
+  OutputBudgetExhaustedError,
+  StreamEndedWithoutFinishError,
+} from '@bike4mind/llm-adapters';
 
 // Helper to create mock Axios errors
 function createAxiosError(status: number, code?: string): AxiosError {
@@ -43,6 +51,20 @@ function createAwsSdkError(name: string, httpStatusCode?: number, message?: stri
 }
 
 describe('shouldTriggerFallback', () => {
+  describe('empty reasoning turns', () => {
+    it('falls back on a stream that ended without a finish reason', () => {
+      expect(shouldTriggerFallback(new StreamEndedWithoutFinishError('DeepSeek', 'deepseek-flash'))).toBe(true);
+    });
+
+    it('does not fall back on an exhausted output budget, which fails the same way again', () => {
+      expect(shouldTriggerFallback(new OutputBudgetExhaustedError('DeepSeek', 'deepseek-flash'))).toBe(false);
+    });
+  });
+
+  it('returns true for a Bedrock empty stream that stalled without a terminal event', () => {
+    expect(shouldTriggerFallback(new Error(bedrockEmptyResponseMessage('m', 'r', true)))).toBe(true);
+  });
+
   describe('Anthropic API errors', () => {
     it('should return true for overloaded_error from Anthropic API', () => {
       const error = new Error(
@@ -185,6 +207,15 @@ describe('shouldTriggerFallback', () => {
       const error = new TypeError('terminated');
       expect(shouldTriggerFallback(error)).toBe(true);
     });
+
+    it('should return true for TypeError: fetch failed (undici/fetch)', () => {
+      const error = new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNRESET' }) });
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should not treat a non-TypeError "fetch failed" as a transport failure', () => {
+      expect(shouldTriggerFallback(new Error('fetch failed'))).toBe(false);
+    });
   });
 
   describe('Model-specific error messages', () => {
@@ -286,6 +317,24 @@ describe('isSafetyRefusalError', () => {
 });
 
 describe('isOverloadedError', () => {
+  it.each([
+    ['stream idle', createAnthropicStreamTimeoutError('stream_idle', 90_000)],
+    ['first event', createAnthropicStreamTimeoutError('first_event', 30_000)],
+    ['request', createAnthropicRequestTimeoutError(60_000)],
+  ])('does not read our own %s timeout as provider overload', (_label, error) => {
+    expect(isOverloadedError(error)).toBe(false);
+  });
+
+  it('excludes a typed timeout even if its text mentions overload', () => {
+    const error = new LlmTimeoutError('stream_idle', 90_000, 'stream timeout - the model may be overloaded');
+    expect(isOverloadedError(error)).toBe(false);
+  });
+
+  it('still treats our timeouts as fallback-worthy', () => {
+    expect(shouldTriggerFallback(createAnthropicStreamTimeoutError('stream_idle', 90_000))).toBe(true);
+    expect(shouldTriggerFallback(createAnthropicRequestTimeoutError(60_000))).toBe(true);
+  });
+
   it('should return true for Axios 503', () => {
     expect(isOverloadedError(createAxiosError(503))).toBe(true);
   });
@@ -423,6 +472,38 @@ describe('getLlmWithFallback - forceSwitch option', () => {
       { forceSwitch: true }
     );
     expect(result).toBeNull();
+  });
+});
+
+describe('getLlmWithFallback - isAdmitted', () => {
+  const opus45 = createModelInfo({ id: 'claude-opus-4-5-20251101', name: 'Opus', backend: ModelBackend.Anthropic });
+  const sonnet46 = createModelInfo({ id: 'claude-sonnet-4-6', name: 'Sonnet', backend: ModelBackend.Anthropic });
+  const gated = createModelInfo({ id: 'claude-opus-4-6', name: 'Gated', backend: ModelBackend.Anthropic });
+  const apiKeyTable = { anthropic: 'valid-key' } as Record<string, string>;
+  const isAdmitted = async (id: string) => id !== gated.id;
+
+  it('drops a non-admitted frontend fallback and selects an admitted one automatically', async () => {
+    const result = await getLlmWithFallback(opus45, gated.id, [opus45, gated, sonnet46], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted,
+    });
+    expect(result!.model.id).toBe('claude-sonnet-4-6');
+  });
+
+  it('never selects a non-admitted model automatically', async () => {
+    const result = await getLlmWithFallback(opus45, undefined, [opus45, gated], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('still uses an admitted frontend fallback', async () => {
+    const result = await getLlmWithFallback(opus45, gated.id, [opus45, gated], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted: async () => true,
+    });
+    expect(result!.model.id).toBe(gated.id);
   });
 });
 

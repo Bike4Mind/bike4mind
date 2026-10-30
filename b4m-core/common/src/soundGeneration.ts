@@ -8,12 +8,14 @@ import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
  */
 export const supportedSoundGenerationVendor = z.enum(['elevenlabs']);
 
+export const DEFAULT_SOUND_MODEL_ID = 'eleven_text_to_sound_v2';
+
 export type SoundGenerationVendor = z.infer<typeof supportedSoundGenerationVendor>;
 
-// Max prompt length (characters) for a sound-effects generation, per the
-// ElevenLabs sound-generation API. Exported so the client can enforce the same
-// limit before calling the endpoint.
-export const SOUND_EFFECTS_MAX_INPUT_CHARS = 1000;
+// Max prompt length (characters) for a sound-effects generation. ElevenLabs
+// rejects anything longer with a 400 `text_too_long`. Exported so the client can
+// enforce the same limit before calling the endpoint.
+export const SOUND_EFFECTS_MAX_INPUT_CHARS = 450;
 
 /**
  * Inbound request body for `POST /api/ai/sound-effects`.

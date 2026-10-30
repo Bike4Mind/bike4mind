@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/llm-adapters",
-  "version": "1.5.1",
+  "version": "2.1.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -33,6 +33,16 @@
         "types": "./dist/backend.d.cts",
         "default": "./dist/backend.cjs"
       }
+    },
+    "./model-sizing": {
+      "import": {
+        "types": "./dist/modelSizing.d.mts",
+        "default": "./dist/modelSizing.mjs"
+      },
+      "require": {
+        "types": "./dist/modelSizing.d.cts",
+        "default": "./dist/modelSizing.cjs"
+      }
     }
   },
   "files": [
@@ -53,6 +63,7 @@
     "@anthropic-ai/sdk": "^0.111.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1150.0",
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
+    "@aws-sdk/client-sts": "^3.1150.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@google/genai": "^1.46.0",
@@ -68,6 +79,6 @@
     "dotenv": "^17.4.2",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

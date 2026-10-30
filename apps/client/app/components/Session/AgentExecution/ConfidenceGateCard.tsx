@@ -1,7 +1,7 @@
 /**
  * ConfidenceGateCard - inline Proceed/Stop prompt for a confidence-gate pause.
  *
- * When an iteration's confidence falls below the threshold the executor
+ * When consecutive iterations' confidence falls below the threshold the executor
  * persists `pendingGate`, flips the run to `paused`, emits `confidence_gate`,
  * and exits, holding the run's concurrent slot. This card is the only way to
  * release it: Proceed dispatches `gate_response: continue` and the run resumes,

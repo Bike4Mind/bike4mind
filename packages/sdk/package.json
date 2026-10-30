@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/sdk",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "description": "Typed client for the Bike4Mind HTTP API, generated from its OpenAPI spec",
   "license": "BUSL-1.1",
   "author": "Bike4Mind",
@@ -60,6 +60,6 @@
     "prettier": "^3.9.6",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

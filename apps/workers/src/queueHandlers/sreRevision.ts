@@ -38,7 +38,7 @@ import {
   postSreAnalysisFailureMessage,
   postSreRateLimitedMessage,
   postSreNoFixNeededMessage,
-} from '@server/integrations/slack/sreSlackApproval';
+} from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 import { buildWontFixCommentBody, WONT_FIX_COMMENT_MARKER } from '@workers/integrations/sre/wontFixComment';
 
 /** HTML marker so the self-heal escalation comment is posted at most once per PR/issue. */

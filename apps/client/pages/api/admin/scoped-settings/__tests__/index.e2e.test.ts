@@ -2,18 +2,20 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import {
-  createMongoServer,
+  createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
+import { AdminAuditLogModel } from '@bike4mind/database';
 import { adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database/infra';
 import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
 
 /**
  * Agreement test for the scoped-override write surface, driving the REAL write service, repository,
- * model and unique index against createMongoServer. The unit test beside this one mocks the service,
+ * model and unique index against a createMongoReplSet replica set (the route's strict audit write needs a transaction). The unit test beside this one mocks the service,
  * so it can pin auth, validation and delegation but not what the overlay actually does; only this
  * test proves the two things an operator depends on:
  *
@@ -31,10 +33,14 @@ import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergen
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
-        use: () => chain,
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
         put: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.PUT = fns[fns.length - 1]), chain),
         delete: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.DELETE = fns[fns.length - 1]), chain),
@@ -49,7 +55,7 @@ import handler from '../index';
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-let mongoServer: MongoMemoryServer;
+let replSet: MongoMemoryReplSet;
 
 // A lake the kill switch can resolve: an org-less lake, so scopeForLake puts the owner rung on the
 // creating user. The id must be a real ObjectId hex - the kill switch skips the lookup for a static
@@ -68,7 +74,7 @@ const call = (
   opts: { body?: unknown; query?: Record<string, string>; isAdmin?: boolean } = {}
 ) => {
   const { req, res } = createMocks({ method, body: opts.body, query: opts.query });
-  (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: opts.isAdmin ?? true };
+  (req as Record<string, unknown>).user = { id: 'admin-1', name: 'Admin', isAdmin: opts.isAdmin ?? true };
   (req as Record<string, unknown>).logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn() };
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
@@ -93,13 +99,14 @@ const messageOf = async (promise: Promise<unknown>): Promise<string> => {
 };
 
 beforeAll(async () => {
-  mongoServer = await createMongoServer();
-  await mongoose.connect(mongoServer.getUri());
+  replSet = await createMongoReplSet();
+  await mongoose.connect(replSet.getUri());
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {
   await mongoose.disconnect();
-  await mongoServer?.stop();
+  await replSet?.stop();
 });
 
 afterEach(async () => {
@@ -129,6 +136,26 @@ describe('PUT/DELETE /api/admin/scoped-settings (real service, repository and Mo
     rows = await scopedSettingsRepository.find({});
     expect(rows).toHaveLength(1);
     expect(rows[0].settingValue).toBe('true');
+  });
+
+  it('writes one audit entry per PUT and per effective DELETE, and none for a DELETE of an empty address', async () => {
+    const address = { settingName: 'PauseLakeConvergence', scopeLevel: 'lake', scopeId: LAKE_ID };
+    const targetId = `PauseLakeConvergence@lake:${LAKE_ID}`;
+
+    await call('PUT', { body: { ...address, value: true } }).promise;
+    await call('DELETE', { query: address }).promise;
+    await call('DELETE', { query: address }).promise;
+
+    const entries = await AdminAuditLogModel.find({ action: 'settings.admin_settings.updated' })
+      .sort({ _id: 1 })
+      .lean();
+    expect(entries.map(entry => entry.target.id)).toEqual([targetId, targetId]);
+    expect(entries[0].changes).toEqual([
+      expect.objectContaining({ field: 'PauseLakeConvergence', before: null, after: 'true' }),
+    ]);
+    expect(entries[1].changes).toEqual([
+      expect.objectContaining({ field: 'PauseLakeConvergence', before: 'true', after: null }),
+    ]);
   });
 
   it('GET returns the live rows and refuses a non-admin', async () => {

@@ -1,4 +1,5 @@
 import { UserPromptProps } from './types/UserPromptTypes';
+import { ReplyMarkdownImage } from './ReplyMarkdownImage';
 import CodeBlockHeader from './CodeBlockHeader';
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import { Box, IconButton, Typography, Tooltip } from '@mui/joy';
@@ -6,16 +7,19 @@ import ReactMarkdown, { ExtraProps } from 'react-markdown';
 import ErrorBoundary from '../common/ErrorBoundary';
 import ImageContainer from './ImageContainer';
 import { GetFileIcon } from '@client/app/utils/fabFileUtils';
-import { FC, useState, useEffect, ComponentProps, Children } from 'react';
+import { FC, memo, useState, useEffect, useMemo, useRef, ComponentProps, Children } from 'react';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import { highlightTextSearch } from '@client/app/components/GenAI/highlight';
-import { EditOutlined as EditOutlinedIcon, KeyboardArrowDown, KeyboardArrowUp } from '@mui/icons-material';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import KeyboardArrowDown from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUp from '@mui/icons-material/KeyboardArrowUp';
 import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
 import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import { Components } from 'react-markdown';
+import type { PluggableList } from 'unified';
 import { extractSnippetMeta } from '@bike4mind/common';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
@@ -107,85 +111,111 @@ const isCodeContent = (content: string): { isCode: boolean; language: string } =
   }
 };
 
+const promptMarkdownComponents: Omit<Components, 'img'> = {
+  p: ({ node, children, ...props }: ComponentProps<'p'> & ExtraProps) => {
+    if (!children) return null;
+    // Check if this is the last paragraph in the parent
+    const isLast =
+      node &&
+      (node as any).parent &&
+      Array.isArray((node as any).parent.children) &&
+      (node as any).parent.children[(node as any).parent.children.length - 1] === node;
+
+    const processedChildren = Children.map(children, child => {
+      if (typeof child === 'string') {
+        return highlightTextSearch(child);
+      }
+      return child;
+    });
+
+    return (
+      <Typography
+        component="p"
+        level="body-md"
+        gutterBottom={false}
+        sx={{ display: 'block', color: 'text.primary', mb: isLast ? '0 !important' : '8px !important' }}
+      >
+        {processedChildren}
+      </Typography>
+    );
+  },
+  code: ({ node, className, children, ...props }) => {
+    const match = /language-(\w+)/.exec(className || '');
+    const language = match ? match[1] : 'text';
+    const inline =
+      node?.position?.start.line === node?.position?.end.line &&
+      node?.position?.start.column !== node?.position?.end.column;
+
+    // An empty fence has no children at all.
+    const text = String(children ?? '');
+
+    return !inline ? (
+      <CodeBlockHeader code={text} language={language}>
+        <HighlightedCode code={text.replace(/\n$/, '')} language={language} />
+      </CodeBlockHeader>
+    ) : (
+      <Box
+        component="code"
+        sx={{
+          padding: '3px 6px',
+          backgroundColor: 'neutral.700',
+          borderRadius: '.235rem',
+          color: 'neutral.50',
+          textWrap: 'balance',
+        }}
+      >
+        {children}
+      </Box>
+    );
+  },
+};
+
+const remarkPlugins: PluggableList = [remarkBreaks, [remarkMath, { singleDollarTextMath: false }]];
+const rehypePlugins: PluggableList = [rehypeKatex];
+
 /**
- * Renders markdown or code content
+ * Renders markdown or code content. The components map is memoized so a streaming re-render of
+ * the parent does not remount the markdown subtree; a remounted image would be fetched again
+ * and would lose the viewer's approval in ReplyMarkdownImage.
  */
 const PromptContent: FC<{
   content: string;
   search?: string;
-}> = ({ content, search }) => {
+  onSendMessage?: UserPromptProps['onSendMessage'];
+}> = memo(({ content, onSendMessage }) => {
   const { isCode, language } = isCodeContent(content);
+  const markdown = useMemo(() => (isCode ? '' : promoteInlineLatexDollars(content)), [isCode, content]);
 
-  const markdownComponents: Components = {
-    p: ({ node, children, ...props }: ComponentProps<'p'> & ExtraProps) => {
-      if (!children) return null;
-      // Check if this is the last paragraph in the parent
-      const isLast =
-        node &&
-        (node as any).parent &&
-        Array.isArray((node as any).parent.children) &&
-        (node as any).parent.children[(node as any).parent.children.length - 1] === node;
-
-      const processedChildren = Children.map(children, child => {
-        if (typeof child === 'string') {
-          return highlightTextSearch(child);
-        }
-        return child;
-      });
-
-      return (
-        <Typography
-          component="p"
-          level="body-md"
-          gutterBottom={false}
-          sx={{ display: 'block', color: 'text.primary', mb: isLast ? '0 !important' : '8px !important' }}
-        >
-          {processedChildren}
-        </Typography>
-      );
-    },
-    code: ({ node, className, children, ...props }) => {
-      const match = /language-(\w+)/.exec(className || '');
-      const language = match ? match[1] : 'text';
-      const inline =
-        node?.position?.start.line === node?.position?.end.line &&
-        node?.position?.start.column !== node?.position?.end.column;
-
-      return !inline ? (
-        <CodeBlockHeader code={children!.toString()} language={language}>
-          <HighlightedCode code={String(children).replace(/\n$/, '')} language={language} />
-        </CodeBlockHeader>
-      ) : (
-        <Box
-          component="code"
-          sx={{
-            padding: '3px 6px',
-            backgroundColor: 'neutral.700',
-            borderRadius: '.235rem',
-            color: 'neutral.50',
-            textWrap: 'balance',
-          }}
-        >
-          {children}
-        </Box>
-      );
-    },
-  };
+  // Read through a ref so a parent passing a fresh callback does not change the img renderer's identity.
+  const onSendMessageRef = useRef(onSendMessage);
+  useEffect(() => {
+    onSendMessageRef.current = onSendMessage;
+  }, [onSendMessage]);
+  const markdownComponents = useMemo<Components>(
+    () => ({
+      ...promptMarkdownComponents,
+      img: ({ src, alt }) => (
+        <ReplyMarkdownImage
+          src={typeof src === 'string' ? src : ''}
+          alt={alt}
+          onSendMessage={(...args) => onSendMessageRef.current?.(...args) ?? Promise.resolve()}
+        />
+      ),
+    }),
+    []
+  );
 
   return isCode ? (
     <CodeBlockHeader code={content} language={language}>
       <HighlightedCode code={content} language={language} />
     </CodeBlockHeader>
   ) : (
-    <ReactMarkdown
-      remarkPlugins={[remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]}
-      rehypePlugins={[rehypeKatex]}
-      components={markdownComponents}
-    >
-      {promoteInlineLatexDollars(content)}
+    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+      {markdown}
     </ReactMarkdown>
   );
-};
+});
+PromptContent.displayName = 'PromptContent';
 
 /**
  * Wrapper component that handles content truncation with the styled container.
@@ -195,7 +225,8 @@ const TruncatablePromptContent: FC<{
   content: string;
   search?: string;
   isEnabled?: boolean;
-}> = ({ content, search, isEnabled = true }) => {
+  onSendMessage?: UserPromptProps['onSendMessage'];
+}> = ({ content, search, isEnabled = true, onSendMessage }) => {
   const { needsTruncation, isExpanded, toggleExpanded, displayContent } = useContentTruncation({
     content,
     isEnabled,
@@ -229,7 +260,7 @@ const TruncatablePromptContent: FC<{
           '& p:last-child': { mb: '0 !important' },
         })}
       >
-        <PromptContent content={displayContent} search={search} />
+        <PromptContent content={displayContent} search={search} onSendMessage={onSendMessage} />
       </Typography>
 
       <ExpandCollapseButton needsTruncation={needsTruncation} isExpanded={isExpanded} onToggle={toggleExpanded} />
@@ -316,6 +347,7 @@ const UserPrompt: FC<UserPromptProps> = ({ prompt, messageFiles = [], search, on
                 }}
                 search={search}
                 isEditMode={isEditMode}
+                onSendMessage={onSendMessage}
               />
             ) : (
               <Box
@@ -331,7 +363,7 @@ const UserPrompt: FC<UserPromptProps> = ({ prompt, messageFiles = [], search, on
                 }}
               >
                 {!isEditMode ? (
-                  <TruncatablePromptContent content={section.content} search={search} />
+                  <TruncatablePromptContent content={section.content} search={search} onSendMessage={onSendMessage} />
                 ) : (
                   <EditModeContent
                     content={prompt}
@@ -455,7 +487,7 @@ const UserPrompt: FC<UserPromptProps> = ({ prompt, messageFiles = [], search, on
       >
         {!isEditMode ? (
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 2 }}>
-            <TruncatablePromptContent content={prompt} search={search} />
+            <TruncatablePromptContent content={prompt} search={search} onSendMessage={onSendMessage} />
 
             {/* Edit button */}
             {!!onEdit && (
@@ -494,7 +526,8 @@ const SnippetSection: FC<{
   onToggle: () => void;
   search?: string;
   isEditMode: boolean;
-}> = ({ section, isExpanded, onToggle, search, isEditMode }) => {
+  onSendMessage?: UserPromptProps['onSendMessage'];
+}> = ({ section, isExpanded, onToggle, search, isEditMode, onSendMessage }) => {
   const {
     needsTruncation,
     isExpanded: isTruncationExpanded,
@@ -542,7 +575,7 @@ const SnippetSection: FC<{
               '& p:last-child': { mb: '0 !important' },
             })}
           >
-            <PromptContent content={contentToShow} search={search} />
+            <PromptContent content={contentToShow} search={search} onSendMessage={onSendMessage} />
           </Typography>
 
           {/* Only show expand button if not already manually expanded and truncation is needed */}

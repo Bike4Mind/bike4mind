@@ -5,9 +5,11 @@ const { process } = processModule;
 import { IResearchTask, ResearchTaskStatus, KnowledgeType, ResearchTaskType } from '@bike4mind/common';
 import { NotFoundError, BadRequestError } from '@bike4mind/utils';
 import * as fabFilesService from '../fabFileService';
+import * as tagService from '../tagService';
 import { mockResearchTask } from '../__tests__/utils/testUtils';
 import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './utils';
 import { getLinksFromHtml } from '../lib/cheerio';
+import { performDeepResearch } from '../llm/tools/implementation/deepResearch';
 
 vi.mock('../lib/turndown', () => ({
   htmlToMarkdown: vi.fn().mockImplementation(html => html),
@@ -17,6 +19,9 @@ vi.mock('../lib/turndown', () => ({
 vi.mock('../lib/cheerio', () => ({
   getLinksFromHtml: vi.fn().mockReturnValue([]),
 }));
+
+vi.mock('../llm/tools/implementation/deepResearch', () => ({ performDeepResearch: vi.fn() }));
+vi.mock('../apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn(async () => ({ openai: 'sk-platform-test' })) }));
 
 vi.mock('../fabFileService', () => ({ createFabFile: vi.fn() }));
 vi.mock('../taskSchedulerService', () => ({ create: vi.fn() }));
@@ -171,6 +176,29 @@ describe('researchTaskService - process', () => {
       content: '# Scraped Title\nTest content', // Always use markdown content
       fileSize: Buffer.byteLength('# Scraped Title\nTest content', 'utf8'),
     }));
+  });
+
+  it('keeps the metered worker backend for deep research instead of passing replacement provider keys', async () => {
+    const task = mockResearchTask({
+      id: 'deep-task',
+      type: ResearchTaskType.DEEP_RESEARCH,
+      description: 'Research bicycles',
+    });
+    mockResearchTaskRepo.findByIdAndUserId.mockResolvedValue(task);
+    mockResearchTaskRepo.findById.mockResolvedValue(task);
+    mockLLM.currentModel = 'metered-operations-model';
+    vi.mocked(performDeepResearch).mockResolvedValue({
+      success: true,
+      data: { findings: [], finalAnalysisPrompt: '', completedSteps: 1, totalSteps: 1 },
+    });
+
+    await process(mockUser, { id: task.id }, adapters);
+
+    expect(performDeepResearch).toHaveBeenCalledOnce();
+    const [context, , config] = vi.mocked(performDeepResearch).mock.calls[0];
+    expect(context.llm).toBe(mockLLM);
+    expect(config?.model).toBe('metered-operations-model');
+    expect(config).not.toHaveProperty('apiKeys');
   });
 
   it('should process a scrape research task successfully', async () => {
@@ -746,8 +774,6 @@ describe('researchTaskService - process', () => {
     (fabFilesService.createFabFile as Mock).mockResolvedValue(mockFabFile);
     (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: mockMarkdownContent, metadata: {} });
 
-    // Import and mock tagService
-    const { tagService } = await import('..');
     (tagService.createFileTag as Mock).mockResolvedValue(mockCreatedTag);
 
     // Act
@@ -804,7 +830,6 @@ describe('researchTaskService - process', () => {
     (fabFilesService.createFabFile as Mock).mockResolvedValue(mockFabFile);
     (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: mockMarkdownContent, metadata: {} });
 
-    const { tagService } = await import('..');
     (tagService.createFileTag as Mock).mockResolvedValue(mockExistingTag);
 
     // Act

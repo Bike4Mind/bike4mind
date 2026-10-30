@@ -14,6 +14,7 @@ import {
 } from './patch';
 import { realpathNearest } from './paths';
 import { recentFiles, recordRecentFile } from './recentFiles';
+import { recordSessionWrite } from './sessionScripts';
 import type { ApprovalPrompt, ToolContext, ToolDefinition } from './types';
 import {
   assertNoControlCharacters,
@@ -473,7 +474,11 @@ async function runPatch(input: Record<string, unknown>, context: ToolContext): P
     context.beginWrite?.();
 
     await writeChanges(plan);
-    for (const change of plan.changes) if (change.status !== 'D') recordRecentFile(context, change.to);
+    for (const change of plan.changes) {
+      if (change.status === 'D') continue;
+      recordRecentFile(context, change.to);
+      await recordSessionWrite(context, change.to);
+    }
 
     for (const change of plan.changes) {
       const source = plan.disk.get(change.from);

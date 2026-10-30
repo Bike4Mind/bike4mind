@@ -26,7 +26,7 @@ import {
   getRepository,
   gitHubErrorStatus,
   gitHubRateLimitDelaySeconds,
-} from '@server/integrations/github/dataLake/lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'githubLakeReconcile' } });

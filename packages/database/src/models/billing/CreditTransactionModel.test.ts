@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { CreditTransaction, creditTransactionRepository } from './CreditTransactionModel';
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, GenericCreditDeductTransaction, GenericDeductReasons } from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
 
@@ -414,5 +414,199 @@ describe('CreditTransactionRepository.findAdminAdjustmentsForUser', () => {
     const rows = await creditTransactionRepository.findAdminAdjustmentsForUser('user-1', day(2), day(6), 2);
 
     expect(rows.map(row => row.credits)).toEqual([-20, 10]);
+  });
+});
+
+describe('generic_deduct rows with built-in reasons', () => {
+  it('read back through the per-owner ledger query and still satisfy the transaction schema', async () => {
+    await seed(
+      GenericDeductReasons.map((reason, i) => ({
+        type: 'generic_deduct',
+        reason,
+        credits: -1,
+        createdAt: day(i + 1),
+        updatedAt: day(i + 1),
+      }))
+    );
+
+    const rows = await creditTransactionRepository.findByOwnerWithFilters(ORG, CreditHolderType.Organization, {
+      transactionTypes: ['generic_deduct'],
+    });
+
+    expect(rows.map(r => r.reason).sort()).toEqual([...GenericDeductReasons].sort());
+    for (const row of rows) {
+      const parsed = GenericCreditDeductTransaction.safeParse(row.toObject());
+      expect(parsed.success, `${row.reason}: ${parsed.error?.message}`).toBe(true);
+    }
+  });
+});
+
+describe('admin ledger repository methods', () => {
+  const USER = 'user-ledger';
+  const userRow = (r: Record<string, unknown>) => seed([{ ownerId: USER, ownerType: CreditHolderType.User, ...r }]);
+  const at = (hour: number) => new Date(Date.UTC(2026, 0, 10, hour));
+
+  describe('findLedgerPage', () => {
+    it('pages newest-first with an _id tiebreak and never skips or repeats rows sharing a timestamp', async () => {
+      await seed(
+        [1, 2, 3, 4, 5].map(i => ({
+          ownerId: USER,
+          ownerType: CreditHolderType.User,
+          createdAt: i <= 3 ? at(12) : at(i),
+        }))
+      );
+
+      const seen: string[] = [];
+      let after: { createdAt: Date; id: string } | undefined;
+      for (let guard = 0; guard < 10; guard++) {
+        const page = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, {
+          after,
+          limit: 2,
+        });
+        if (page.length === 0) break;
+        seen.push(...page.map(row => row.id));
+        const last = page[page.length - 1];
+        after = { createdAt: last.createdAt, id: last.id };
+      }
+
+      expect(seen).toHaveLength(5);
+      expect(new Set(seen).size).toBe(5);
+    });
+
+    it('filters by type and ignores other owners', async () => {
+      await userRow({ type: 'purchase', createdAt: at(1) });
+      await userRow({ type: 'text_generation_usage', createdAt: at(2) });
+      await seed([{ ownerId: 'someone-else', ownerType: CreditHolderType.User, type: 'purchase' }]);
+
+      const page = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, {
+        types: ['purchase'],
+        limit: 10,
+      });
+      expect(page.map(row => row.type)).toEqual(['purchase']);
+    });
+
+    it('filters by model, source and a [from, before) createdAt range, also past a cursor', async () => {
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(1) });
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(2) });
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(3) });
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(4) });
+      await userRow({ model: 'm-b', source: 'cli', createdAt: at(2) });
+      await userRow({ model: 'm-a', source: 'web', createdAt: at(2) });
+
+      const filter = { model: 'm-a', source: 'cli', createdFrom: at(2), createdBefore: at(4) };
+      const page = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, {
+        ...filter,
+        limit: 10,
+      });
+      expect(page.map(row => row.createdAt)).toEqual([at(3), at(2)]);
+
+      const next = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, {
+        ...filter,
+        after: { createdAt: page[0].createdAt, id: page[0].id },
+        limit: 10,
+      });
+      expect(next.map(row => row.createdAt)).toEqual([at(2)]);
+    });
+  });
+
+  describe('sumSignedCreditsNewerThan', () => {
+    it('sums only strictly newer rows with type-derived signs', async () => {
+      await userRow({ type: 'text_generation_usage', credits: -5, createdAt: at(1) });
+      await userRow({ type: 'purchase', credits: 100, createdAt: at(2) });
+      await userRow({ type: 'text_generation_usage', credits: 7, createdAt: at(3) });
+      await userRow({ type: 'generic_deduct', credits: -20, createdAt: at(4) });
+
+      const oldest = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, { limit: 10 });
+      const first = oldest[oldest.length - 1];
+      const total = await creditTransactionRepository.sumSignedCreditsNewerThan(USER, CreditHolderType.User, {
+        createdAt: first.createdAt,
+        id: first.id,
+      });
+      // purchase +100, usage -7, deduct -20; the row at the position itself is excluded.
+      expect(total).toBe(73);
+    });
+
+    it('returns 0 when nothing is newer', async () => {
+      await userRow({ type: 'purchase', credits: 10, createdAt: at(1) });
+      const [newest] = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, { limit: 1 });
+      expect(
+        await creditTransactionRepository.sumSignedCreditsNewerThan(USER, CreditHolderType.User, {
+          createdAt: newest.createdAt,
+          id: newest.id,
+        })
+      ).toBe(0);
+    });
+  });
+
+  describe('summarizeAiSpend', () => {
+    const now = new Date(Date.UTC(2026, 5, 15, 12));
+    const hoursAgo = (h: number) => new Date(now.getTime() - h * 3600_000);
+
+    it('splits spend across windows, picks the top model and buckets days', async () => {
+      await userRow({ type: 'text_generation_usage', credits: -10, model: 'm-a', createdAt: hoursAgo(1) });
+      await userRow({ type: 'completion_api_usage', credits: -30, model: 'm-b', createdAt: hoursAgo(48) });
+      await userRow({ type: 'text_generation_usage', credits: -100, model: 'm-a', createdAt: hoursAgo(24 * 20) });
+      await userRow({ type: 'text_generation_usage', credits: -1000, model: 'm-c', createdAt: hoursAgo(24 * 60) });
+      await userRow({ type: 'purchase', credits: 500, createdAt: hoursAgo(2) });
+      await userRow({ type: 'transfer_credit', credits: -999, createdAt: hoursAgo(2) });
+
+      const summary = await creditTransactionRepository.summarizeAiSpend(USER, CreditHolderType.User, now);
+      expect(summary.spent).toEqual({ last24h: 10, last7d: 40, last30d: 140 });
+      expect(summary.topModel30d).toEqual({ model: 'm-a', credits: 110 });
+      expect(summary.dailyCredits.reduce((sum, d) => sum + d.credits, 0)).toBe(1140);
+      expect(summary.dailyCredits.map(d => d.day)).toEqual([...summary.dailyCredits.map(d => d.day)].sort());
+    });
+
+    it('buckets spend by model and source over day-aligned 7/30/90 windows that match the daily series', async () => {
+      // Inside a rolling 7 x 24h window but before the first of the last 7 UTC days (June 9).
+      const june8Evening = new Date(Date.UTC(2026, 5, 8, 18));
+      await userRow({ credits: -10, model: 'm-a', source: 'web', createdAt: june8Evening });
+      await userRow({ credits: -5, model: 'm-a', source: 'web', createdAt: hoursAgo(1) });
+      await userRow({ credits: -20, model: 'm-b', source: 'cli', createdAt: hoursAgo(24 * 20) });
+      await userRow({ credits: -40, source: 'cli', createdAt: hoursAgo(24 * 60) });
+      await userRow({ credits: -80, model: 'm-a', createdAt: hoursAgo(24 * 100) });
+      await userRow({ type: 'purchase', credits: 500, model: 'm-a', createdAt: hoursAgo(1) });
+
+      const summary = await creditTransactionRepository.summarizeAiSpend(USER, CreditHolderType.User, now);
+      expect(summary.byModel).toEqual([
+        { key: null, last7d: 0, last30d: 0, last90d: 40 },
+        { key: 'm-b', last7d: 0, last30d: 20, last90d: 20 },
+        { key: 'm-a', last7d: 5, last30d: 15, last90d: 15 },
+      ]);
+      expect(summary.bySource).toEqual([
+        { key: 'cli', last7d: 0, last30d: 20, last90d: 60 },
+        { key: 'web', last7d: 5, last30d: 15, last90d: 15 },
+      ]);
+      const last7Days = summary.dailyCredits.filter(d => d.day >= '2026-06-09');
+      expect(last7Days.reduce((sum, d) => sum + d.credits, 0)).toBe(5);
+    });
+
+    it('returns zeros and a null top model when there is no usage', async () => {
+      const summary = await creditTransactionRepository.summarizeAiSpend(USER, CreditHolderType.User, now);
+      expect(summary).toEqual({
+        spent: { last24h: 0, last7d: 0, last30d: 0 },
+        topModel30d: null,
+        dailyCredits: [],
+        byModel: [],
+        bySource: [],
+      });
+    });
+  });
+
+  describe('findLatestTopUp', () => {
+    it('returns the newest completed purchase or subscription, skipping pending purchases', async () => {
+      await userRow({ type: 'subscription', credits: 50, createdAt: at(1) });
+      await userRow({ type: 'purchase', credits: 200, status: 'completed', createdAt: at(2) });
+      await userRow({ type: 'purchase', credits: 900, status: 'pending', createdAt: at(3) });
+      await userRow({ type: 'generic_add', credits: 1, createdAt: at(4) });
+
+      const top = await creditTransactionRepository.findLatestTopUp(USER, CreditHolderType.User);
+      expect(top?.type).toBe('purchase');
+      expect(top?.credits).toBe(200);
+    });
+
+    it('returns null when the owner never topped up', async () => {
+      expect(await creditTransactionRepository.findLatestTopUp(USER, CreditHolderType.User)).toBeNull();
+    });
   });
 });

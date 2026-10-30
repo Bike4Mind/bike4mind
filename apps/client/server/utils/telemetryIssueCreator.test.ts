@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ContextTelemetry, AnomaliesTelemetry } from '@bike4mind/common';
 import { getFallbackPriority, createTelemetryIssue } from './telemetryIssueCreator';
 import { Logger } from '@bike4mind/observability';
+import { Quest } from '@bike4mind/database';
 
 vi.mock('@server/services/githubService', () => ({
   GitHubService: {
@@ -16,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { claimDedup: vi.fn().mockResolvedValue({ claimed: true }) },
 }));
 
-vi.mock('@server/services/telemetryFingerprint', () => ({
+vi.mock('@bike4mind/server-utils/services/telemetryFingerprint', () => ({
   generateTelemetryFingerprint: vi.fn().mockReturnValue('fp-abc123'),
   generateSemanticTelemetryFingerprint: vi.fn().mockReturnValue('sfp-def456'),
   extractFingerprintFromBody: vi.fn().mockReturnValue(null),
@@ -321,6 +322,46 @@ describe('createTelemetryIssue', () => {
       expect(result.hasAnalysis).toBe(true);
       expect(result.analysisSource).toBe('auto-llm');
     }
+  });
+
+  it('caches the precomputed analysis on the quest by _id', async () => {
+    await createTelemetryIssue({
+      telemetry: createTestTelemetry(),
+      repository: 'owner/repo',
+      sourcePrefix: 'auto',
+      skipDedup: true,
+      precomputedDedup: { isRegression: false },
+      precomputedAnalysis: {
+        analysis: { summary: 'test', findings: ['f1'], recommendations: ['r1'], estimatedImpact: 'low' },
+        source: 'auto-llm',
+        baselines: null,
+      },
+      questId: '507f1f77bcf86cd799439011',
+      logger: createMockLogger(),
+    });
+
+    expect(vi.mocked(Quest.updateOne)).toHaveBeenCalledWith({ _id: '507f1f77bcf86cd799439011' }, expect.anything());
+  });
+
+  it('skips the quest cache write when questId is not an ObjectId', async () => {
+    vi.mocked(Quest.updateOne).mockClear();
+
+    await createTelemetryIssue({
+      telemetry: createTestTelemetry(),
+      repository: 'owner/repo',
+      sourcePrefix: 'auto',
+      skipDedup: true,
+      precomputedDedup: { isRegression: false },
+      precomputedAnalysis: {
+        analysis: { summary: 'test', findings: ['f1'], recommendations: ['r1'], estimatedImpact: 'low' },
+        source: 'auto-llm',
+        baselines: null,
+      },
+      questId: 'not-an-id',
+      logger: createMockLogger(),
+    });
+
+    expect(vi.mocked(Quest.updateOne)).not.toHaveBeenCalled();
   });
 
   it('creates issue with rule-based analysis when no LLM configured (manual path)', async () => {

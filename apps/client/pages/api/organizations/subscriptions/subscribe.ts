@@ -1,18 +1,21 @@
 import { adminSettingsRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { OrgSubscriptionSubscribeSchema, StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
-import { SubscriptionOwnerType, isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
+import { isTeamPlanPriceId } from '@client/lib/userSubscriptions/constants';
+import {
+  OrgSubscriptionSubscribeSchema,
+  StripeSubscriptionMetadataSchema,
+} from '@bike4mind/server-utils/lib/subscriptions/schema';
+import { SubscriptionOwnerType, isDelinquentSubscriptionStatus } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';
 import { z } from 'zod';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
 import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
@@ -23,7 +26,7 @@ const handler = baseApi()
     const { priceId, organizationId, quantity, organizationData, callbackUrl, attributionConsent, surface } =
       OrgSubscriptionSubscribeSchema.parse(req.body);
 
-    if (priceId !== ORGANIZATION_SUBSCRIPTION_PRICE_ID) {
+    if (!isTeamPlanPriceId(priceId)) {
       throw new BadRequestError('Invalid Organization Subscription Price ID');
     }
 
@@ -84,7 +87,7 @@ const handler = baseApi()
         gatedOrganizationId
       );
 
-      // The price is pinned to ORGANIZATION_SUBSCRIPTION_PRICE_ID above, so for an org this is
+      // The price is pinned to the Team price (isTeamPlanPriceId) above, so for an org this is
       // "any non-terminal subscription"; keep the match so the guard reads the same for any price.
       const blockingSubscription = liveSubscriptions.find(subscription => subscription.priceId === priceId);
 

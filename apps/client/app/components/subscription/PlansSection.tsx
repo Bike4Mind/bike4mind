@@ -1,5 +1,6 @@
 import { useCreateTeamModal } from '@client/app/components/organizations/CreateTeamModal';
-import { useGetSettingsValue, useConfig } from '@client/app/hooks/data/settings';
+import { useConfig } from '@client/app/hooks/data/settings';
+import { useSignupGrantCredits } from '@client/app/hooks/useSignupGrantCredits';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
@@ -9,12 +10,12 @@ import {
   pickSubscriptionByPrice,
   resolveSubscriptionSource,
   SubscriptionSource,
-} from '@client/lib/subscriptions/types';
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
   TEAM_PLAN_UNAVAILABLE_MESSAGE,
 } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { professionalPriceIdForStage, SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
 import { Box, Button, Skeleton, Stack, Tab, tabClasses, TabList, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useId, useMemo, useState } from 'react';
@@ -58,7 +59,7 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
   const { t } = useTranslation();
   const [audience, setAudience] = useState<PlanAudience>(PlanAudience.Personal);
   // The starter-credits line is only true while sign-ups are actually granted something.
-  const hasStarterCredits = Number(useGetSettingsValue('defaultFreeCredits')) > 0;
+  const hasStarterCredits = useSignupGrantCredits() > 0;
   const { data: config } = useConfig();
   const seedStageName = config?.seedStageName || process.env.NEXT_PUBLIC_SEED_STAGE_NAME || '';
   const isTestMode = seedStageName !== 'production';
@@ -105,12 +106,8 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
     () => [
       {
         ...PROFESSIONAL_PLAN,
-        // Account-tied Stripe price from NEXT_PUBLIC_* env vars (no brand fallback). Same env
-        // contract as PROFESSIONAL_PRICE_ID in userSubscriptions/constants; selected by runtime
-        // stage here to match the rest of this section.
-        priceId: isTestMode
-          ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
-          : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? ''),
+        // Selected by runtime stage here to match the rest of this section.
+        priceId: professionalPriceIdForStage(isTestMode),
       },
     ],
     [isTestMode]

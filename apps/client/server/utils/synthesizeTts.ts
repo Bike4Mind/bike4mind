@@ -1,13 +1,8 @@
-import {
-  supportedVoiceGenerationVendor,
-  TTS_MAX_INPUT_CHARS,
-  VOICE_VENDOR_SUPPORTED_FORMATS,
-  VoiceGenerationVendor,
-  VoiceOutputFormat,
-} from '@bike4mind/common';
+import { VOICE_VENDOR_SUPPORTED_FORMATS, VoiceGenerationVendor, VoiceOutputFormat } from '@bike4mind/common';
 import { aiVoiceService, type VoiceSynthesisResult } from '@bike4mind/utils';
 import { type Logger } from '@bike4mind/observability';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from './resolveTtsProvider';
+import { ttsCandidates } from './ttsCandidates';
 
 /**
  * HTTP status of an upstream provider failure. The OpenAI SDK exposes it as
@@ -34,15 +29,6 @@ export function isCredentialRejection(error: unknown): boolean {
 const isRecoverable = (error: unknown) =>
   error instanceof TtsProviderNotConfiguredError || isCredentialRejection(error);
 
-// Alternates worth attempting after `primary` fails, in preference order. A
-// vendor whose input ceiling is below this text is not a real alternate: it
-// would only fail on length.
-function alternatesFor(primary: VoiceGenerationVendor, text: string): VoiceGenerationVendor[] {
-  return supportedVoiceGenerationVendor.options.filter(
-    vendor => vendor !== primary && text.length <= TTS_MAX_INPUT_CHARS[vendor]
-  );
-}
-
 // An alternate may not support the requested container; drop back to its own
 // default (mp3) rather than turning a recovered request into a 422.
 const formatFor = (vendor: VoiceGenerationVendor, format: VoiceOutputFormat | undefined) =>
@@ -50,6 +36,7 @@ const formatFor = (vendor: VoiceGenerationVendor, format: VoiceOutputFormat | un
 
 export interface SynthesizeTtsArgs {
   provider: VoiceGenerationVendor;
+  candidates?: readonly VoiceGenerationVendor[];
   text: string;
   userId: string | undefined;
   requestedVoice?: string;
@@ -83,7 +70,7 @@ export interface SynthesizedTts {
  */
 export async function synthesizeTts(args: SynthesizeTtsArgs): Promise<SynthesizedTts> {
   const { provider, text, logger } = args;
-  const candidates: VoiceGenerationVendor[] = [provider, ...alternatesFor(provider, text)];
+  const candidates = args.candidates ?? ttsCandidates(provider, text.length);
   let primaryError: unknown;
 
   for (const vendor of candidates) {

@@ -74,6 +74,12 @@ describe('buildE2EEmailPattern', () => {
       expect(pattern.test('qa-user-e2e@test.com')).toBe(false);
     }
   });
+
+  it('never matches the standing fixture accounts (apiLoginStandingUser in e2e/helpers/api.ts)', () => {
+    for (const pattern of [buildE2EEmailPattern(''), buildE2EEmailPattern('gh1')]) {
+      expect(pattern.test('datalake-fixture-e2e@test.com')).toBe(false);
+    }
+  });
 });
 
 describe('sanitizeTestId', () => {

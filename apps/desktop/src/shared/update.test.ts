@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  compareVersions,
   describeBusy,
   initialUpdateState,
   isBusy,
+  isNewerRelease,
   reduceUpdate,
   updateAttention,
+  updateNoticeVersion,
   updateSummary,
   type UpdateEvent,
   type UpdateState,
@@ -232,5 +235,81 @@ describe('isBusy / describeBusy', () => {
     expect(describeBusy({ replying: 2, awaitingApproval: 1, background: 3 })).toBe(
       '2 sessions are still working, 1 session is waiting for you and 3 background processes are running.'
     );
+  });
+});
+
+describe('compareVersions', () => {
+  it('orders by major, minor, then patch numerically', () => {
+    expect(compareVersions('0.1.10', '0.1.9')).toBe(1);
+    expect(compareVersions('0.2.0', '0.10.0')).toBe(-1);
+    expect(compareVersions('1.0.0', '0.99.99')).toBe(1);
+    expect(compareVersions('0.1.10', '0.1.10')).toBe(0);
+  });
+
+  it('ranks a release above its prereleases, and prereleases by SemVer identifier rules', () => {
+    expect(compareVersions('1.0.0', '1.0.0-beta.1')).toBe(1);
+    expect(compareVersions('1.0.0-beta.2', '1.0.0-beta.10')).toBe(-1);
+    expect(compareVersions('1.0.0-alpha', '1.0.0-alpha.1')).toBe(-1);
+    expect(compareVersions('1.0.0-1', '1.0.0-alpha')).toBe(-1);
+  });
+
+  it('ignores a leading v and build metadata', () => {
+    expect(compareVersions('v1.2.3', '1.2.3+build.7')).toBe(0);
+  });
+
+  it('answers null for anything that is not a version', () => {
+    expect(compareVersions('latest', '1.0.0')).toBeNull();
+    expect(compareVersions('1.0', '1.0.0')).toBeNull();
+    expect(compareVersions('1.0.0', '')).toBeNull();
+  });
+});
+
+describe('isNewerRelease', () => {
+  it('is true only for a strictly newer version', () => {
+    expect(isNewerRelease('0.1.11', '0.1.10')).toBe(true);
+    expect(isNewerRelease('0.1.10', '0.1.10')).toBe(false);
+    expect(isNewerRelease('0.1.9', '0.1.10')).toBe(false);
+  });
+
+  it('does not offer a locally packaged build the release it was cut from', () => {
+    // package-local.cjs names a build of main after desktop-v0.1.12 "0.1.12-local.<sha>".
+    expect(isNewerRelease('0.1.12', '0.1.12-local.0123456789ab')).toBe(false);
+    expect(isNewerRelease('0.1.11', '0.1.12-local.0123456789ab')).toBe(false);
+    expect(isNewerRelease('0.1.13', '0.1.12-local.0123456789ab')).toBe(true);
+  });
+
+  it('is false when either side does not parse', () => {
+    expect(isNewerRelease('garbage', '0.1.10')).toBe(false);
+    expect(isNewerRelease('0.2.0', '')).toBe(false);
+  });
+});
+
+describe('updateNoticeVersion', () => {
+  const offered = (version: string, extra: Partial<UpdateState> = {}): UpdateState => ({
+    ...reduceUpdate(supported(), { type: 'available', version, at: AT }),
+    ...extra,
+  });
+
+  it('names the offered version while it is available, downloading or staged', () => {
+    expect(updateNoticeVersion(offered('1.1.0'))).toBe('1.1.0');
+    expect(updateNoticeVersion(offered('1.1.0', { status: 'downloading' }))).toBe('1.1.0');
+    expect(updateNoticeVersion(offered('1.1.0', { status: 'ready' }))).toBe('1.1.0');
+  });
+
+  it('shows nothing when no newer version is on offer', () => {
+    expect(updateNoticeVersion(supported())).toBeNull();
+    expect(updateNoticeVersion(drive(supported(), { type: 'up-to-date', at: AT }))).toBeNull();
+    expect(updateNoticeVersion(drive(supported(), { type: 'unreachable' }))).toBeNull();
+    expect(updateNoticeVersion(initialUpdateState('1.0.0', false))).toBeNull();
+  });
+
+  it('shows nothing when the feed offers the running version or an older one', () => {
+    expect(updateNoticeVersion(offered('1.0.0'))).toBeNull();
+    expect(updateNoticeVersion(offered('0.9.0'))).toBeNull();
+  });
+
+  it('hides the dismissed version only, and shows a later one again', () => {
+    expect(updateNoticeVersion(offered('1.1.0', { dismissedVersion: '1.1.0' }))).toBeNull();
+    expect(updateNoticeVersion(offered('1.2.0', { dismissedVersion: '1.1.0' }))).toBe('1.2.0');
   });
 });

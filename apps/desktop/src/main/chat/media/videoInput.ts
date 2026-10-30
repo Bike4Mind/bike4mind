@@ -1,7 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
-import { isWithin, PathAccessDenied, realpathNearest, resolveWithinRoots } from '../tools/paths';
-import { credentialPaths } from '../tools/sandbox';
+import { isWithin, PathAccessDenied, physicalTarget, resolveWithinRoots } from '../tools/paths';
+import { protectionFor } from '../tools/sandbox';
 import type { ToolContext } from '../tools/types';
 import { MediaToolError, type MediaApiClient } from './MediaApiClient';
 import type { MediaStore } from './MediaStore';
@@ -37,8 +37,8 @@ export interface VideoInputImage {
  * Two sources. `inputGeneratedImage` is an image generate_image produced in this conversation,
  * named by the id that tool reported; it resolves only inside this conversation's own media
  * folder, so an id from another conversation finds nothing. `inputImagePath` is a file the user
- * shared, under the same roots as the file tools plus the protected paths the write tools honour:
- * this file leaves the machine, so the token vault and ~/.ssh are refused whatever was granted.
+ * shared, under the same roots as the file tools: this file leaves the machine, so the token
+ * vault and the secret stores (sandbox.ts `protectionFor`) are refused whatever was granted.
  */
 export async function resolveInputImage(
   generatedId: string | undefined,
@@ -61,14 +61,15 @@ export async function resolveInputImage(
   if (!requestedPath) return undefined;
 
   const path = await resolveWithinRoots(requestedPath, context.roots, context.workingDirectory);
-  const real = await realpathNearest(path);
-  for (const guarded of [...(context.protectedPaths ?? []), ...credentialPaths()]) {
-    if (isWithin(guarded, real) || isWithin(guarded, path)) {
-      throw new PathAccessDenied(
-        requestedPath,
-        `Refused: ${requestedPath} is a protected location and cannot be uploaded.`
-      );
-    }
+  const real = await physicalTarget(path);
+  if (
+    (context.protectedPaths ?? []).some(guarded => isWithin(guarded, real) || isWithin(guarded, path)) ||
+    protectionFor([path, real], 'read')
+  ) {
+    throw new PathAccessDenied(
+      requestedPath,
+      `Refused: ${requestedPath} is a protected location and cannot be uploaded.`
+    );
   }
   const mimeType = INPUT_IMAGE_TYPES[extname(path).toLowerCase()];
   if (!mimeType) throw new Error(`${requestedPath} is not a PNG, JPEG or WebP image.`);

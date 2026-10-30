@@ -8,7 +8,7 @@ import {
   AtlassianTokenManager,
   AtlassianReconnectRequiredError,
 } from '@server/integrations/jira/atlassianTokenManager';
-import { decryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 
 export type EnvVariable = { key: string; value: string };
 
@@ -38,7 +38,7 @@ export const buildMcpEnvVariables = async (mcpServer: IMcpServerDocument): Promi
       // Stored tokens may also be expired - the MCP call will fail and the tools layer will prompt reconnection.
       if (Array.isArray(mcpServer.envVariables) && mcpServer.envVariables.length > 0) {
         console.warn('⚠️ Atlassian token refresh failed, falling back to stored tokens');
-        return decryptEnvVariables(mcpServer.envVariables);
+        return decryptEnvVariables(mcpServer.envVariables, mcpServer);
       }
 
       throw new AtlassianReconnectRequiredError(
@@ -53,7 +53,9 @@ export const buildMcpEnvVariables = async (mcpServer: IMcpServerDocument): Promi
     ];
   }
 
-  const storedEnvVariables = Array.isArray(mcpServer.envVariables) ? decryptEnvVariables(mcpServer.envVariables) : [];
+  const storedEnvVariables = Array.isArray(mcpServer.envVariables)
+    ? decryptEnvVariables(mcpServer.envVariables, mcpServer)
+    : [];
 
   if (mcpServer.name === McpServerName.Github) {
     return withGitHubRepositorySelection(storedEnvVariables, mcpServer.metadata?.selectedRepositories);

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Card, CardContent, Typography, Stack, Grid, Alert, Sheet, Table, Chip, IconButton } from '@mui/joy';
-import { KeyboardArrowUp, KeyboardArrowDown } from '@mui/icons-material';
+import KeyboardArrowUp from '@mui/icons-material/KeyboardArrowUp';
+import KeyboardArrowDown from '@mui/icons-material/KeyboardArrowDown';
 
 interface MetricData {
   totalRequests: number;
@@ -36,13 +37,7 @@ interface RapidReplyMetricsProps {
 }
 
 type SortField =
-  | 'mainModel'
-  | 'rapidModel'
-  | 'usageCount'
-  | 'avgLatency'
-  | 'avgTtfvtSavings'
-  | 'avgTtfvt'
-  | 'successRate';
+  'mainModel' | 'rapidModel' | 'usageCount' | 'avgLatency' | 'avgTtfvtSavings' | 'avgTtfvt' | 'successRate';
 type SortDirection = 'asc' | 'desc';
 
 // Module-level component for sortable table headers

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_IMPORT_DEPTH,
   MAX_INSTRUCTIONS_BYTES,
@@ -12,6 +12,13 @@ import {
 async function scratch(prefix = 'b4m-instr-'): Promise<string> {
   return realpath(await mkdtemp(join(tmpdir(), prefix)));
 }
+
+// Credential fixtures must never read or overwrite the developer's own home files.
+beforeEach(async () => {
+  vi.stubEnv('HOME', await scratch('b4m-instr-home-'));
+});
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('defaultUserInstructionsRoot', () => {
   it('is ~/.claude, the same folder the skills loader reads', () => {
@@ -218,7 +225,7 @@ describe('import containment', () => {
 
   it('refuses a credential store that lies inside the project tree itself', async () => {
     // Containment alone would allow this one - the home directory is the project - so it is the
-    // credentialPaths() deny list, and nothing else, that has to refuse it.
+    // shared read protection, and nothing else, that has to refuse it.
     const home = homedir();
     await mkdir(join(home, '.ssh'), { recursive: true });
     await writeFile(join(home, '.ssh', 'id_rsa.md'), 'SECRET PAYLOAD', 'utf8');
@@ -228,6 +235,21 @@ describe('import containment', () => {
     expect(blocks[0].text).not.toContain('SECRET PAYLOAD');
     expect(blocks[0].text).toContain('refused, a protected path');
   });
+
+  it.each(['settings.json', 'settings.local.json', 'Settings.local.json'])(
+    'refuses a markdown alias to prefix-protected ~/.claude/%s inside a home project',
+    async file => {
+      const home = homedir();
+      await mkdir(join(home, '.claude'), { recursive: true });
+      await writeFile(join(home, '.claude', file), 'SECRET SETTINGS PAYLOAD', 'utf8');
+      await symlink(join(home, '.claude', file), join(home, 'alias.md'));
+      await writeFile(join(home, 'CLAUDE.md'), '@alias.md', 'utf8');
+
+      const blocks = await loadInstructions(home, home, userRoot);
+      expect(blocks[0].text).not.toContain('SECRET SETTINGS PAYLOAD');
+      expect(blocks[0].text).toContain('[import @alias.md refused, a protected path.]');
+    }
+  );
 
   it('refuses a non-markdown import, which is what keeps ~/.claude/.credentials.json out', async () => {
     await writeFile(join(userRoot, '.credentials.json'), '{"token":"SECRET PAYLOAD"}', 'utf8');

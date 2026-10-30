@@ -35,7 +35,7 @@ import {
   logProjectSessionAddedEvent,
   recordNotebookAddedToProjectActivity,
 } from './sessionSideEffects';
-import { pinnableMessageFileIds } from './pinnableMessageFileIds';
+import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 
 /**
  * Session lifecycle, querying, and basic persistence.

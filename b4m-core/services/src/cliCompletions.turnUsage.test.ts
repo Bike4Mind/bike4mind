@@ -1,5 +1,8 @@
+import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { CompletionInfo } from '@bike4mind/common';
+
+vi.mock('./llm/llmUsageSettledLog', () => ({ logLlmUsageSettled: vi.fn() }));
 
 const perM = (usd: number) => usd / 1_000_000;
 
@@ -18,12 +21,19 @@ const tieredModel = {
 
 const emitted: { info: CompletionInfo; trailing?: CompletionInfo; fail?: boolean } = { info: {} };
 
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
   subtractCredits: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  buildApiKeyTable: (keys: object) => keys,
   reasonsWithinOutputBudget: vi.fn(() => false),
   isAdaptiveThinkingByDefault: vi.fn(() => false),
   resolveOutputMaxTokens: vi.fn(
@@ -87,6 +97,17 @@ describe('executeCompletion - long-context tier per request', () => {
     const turn = { inputTokens: 80_000, outputTokens: 1_000 };
     const usd = await settledUsd({ inputTokens: 240_000, outputTokens: 3_000, turnUsage: [turn, turn, turn] });
     expect(usd).toBeCloseTo(0.516, 10);
+    expect(logLlmUsageSettled).toHaveBeenCalledTimes(1);
+    expect(logLlmUsageSettled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: 'gemini',
+        model: 'tiered-model',
+        inputTokens: 240_000,
+        outputTokens: 3_000,
+        usd,
+        source: 'api',
+      })
+    );
   });
 
   it('picks the long tier for a request whose prompt crosses it only with its cache reads', async () => {

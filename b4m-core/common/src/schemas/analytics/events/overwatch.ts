@@ -76,6 +76,17 @@ export const OVERWATCH_USERTYPE_VALUES = ['subscriber', 'free', 'trial'] as cons
 export type OverwatchUserType = (typeof OVERWATCH_USERTYPE_VALUES)[number];
 
 // ---------------------------------------------------------------------------
+// Lane convention - a synthetic user's events carry metadata.lane: 'synthetic'
+// (a test account, see apps/client/server/analytics/lane.ts). The consumer copies
+// the mark onto that user's per-user rows as a top-level `lane` and never clears
+// it. 'synthetic' is the only value ever written: an absent lane means
+// "unmarked", never a verified real user, so there is no 'real' value.
+// ---------------------------------------------------------------------------
+
+export const OVERWATCH_LANE_VALUES = ['synthetic'] as const;
+export type OverwatchLane = (typeof OVERWATCH_LANE_VALUES)[number];
+
+// ---------------------------------------------------------------------------
 // Session and identity conventions
 //
 // Overwatch does not mint identifiers; it counts distinct values of what a

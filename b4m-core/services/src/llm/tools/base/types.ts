@@ -1,15 +1,18 @@
 import { BaseStorage } from '@bike4mind/utils';
+import type { ILatticeModelRepository } from '../../../latticeService/latticeModelService';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { DecisionToolRequest } from '../implementation/decide/request';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
+import type { ProviderSlotStore } from '../../../providerCapacity';
+import type { OperationalBillingAdapters } from '../../../billing/recordOperationalUsage';
+import type { OperationalBillingCheck } from '../../../billing/isOperationalBillingEnabled';
 import {
   IChatHistoryItemDocument,
   IChatHistoryItemRepository,
   ISessionRepository,
-  ILatticeModel,
   IUserDocument,
   IFabFileRepository,
   IFabFileChunkRepository,
@@ -116,15 +119,15 @@ export interface ToolContext {
    * consumer - see its own doc comment.
    */
   questId?: string;
+  requestConfirmation?: (action: { tool: string; params: Record<string, unknown>; ts: number }) => Promise<void>;
+  slackDestination?: { workspaceId: string; channelId: string; threadTs: string };
   logger: Logger;
   db: GetEffectiveApiKeyAdapters['db'] & {
-    latticeModels?: {
-      create: (data: any) => Promise<ILatticeModel>;
-      findById: (id: string) => Promise<ILatticeModel | null>;
-      update: (data: any) => Promise<ILatticeModel | null>;
-    };
+    latticeModels?: Pick<ILatticeModelRepository, 'create' | 'findById' | 'update'>;
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
+    /** Concurrency slots for the shared ElevenLabs key (runElevenLabsWithCapacity); absent runs unslotted. */
+    caches?: ProviderSlotStore;
     /**
      * The image tools bump the session's imageCount through this (see recordGeneratedImages).
      * `findAllByIds` pairs with `quests` below for resolveOwnedGeneratedImageUrl.
@@ -208,6 +211,11 @@ export interface ToolContext {
      */
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
     /**
+     * Lets tool-internal operational spend (KB query embeddings, tool `llm.complete` calls) debit
+     * credits under the operational billing policy. Absent, that spend is recorded only.
+     */
+    operationalBilling?: OperationalBillingAdapters;
+    /**
      * Owner lookup for usage attribution (`findById`) plus the org-membership resolution the
      * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
      * an absent resolver would silently drop every org lake from retrieval.
@@ -255,6 +263,8 @@ export interface ToolContext {
    * absent means tag-only matching (the neutral default). See getDynamicDataLakeAccess.
    */
   entitlementKeys?: string[];
+  /** Resolve current plan access lazily; failures must reach model admission. */
+  getEntitlements?: () => Promise<string[]>;
   /**
    * The turn's active organization, already authorization-validated upstream on the web and
    * public API paths (resolveActiveOrg) but NOT on every host (Slack), so a tool that scopes a
@@ -400,10 +410,16 @@ export interface ToolContext {
    * citationNumbering.ts.
    */
   numberCitables?: (citables: CitableSource[]) => CitableSource[] | undefined;
-  onStart?: (toolName: string, data: any) => Promise<void>;
-  onFinish?: (toolName: string, data: any) => Promise<void>;
+  onStart?: (toolName: string, data: unknown) => Promise<void>;
+  onFinish?: (toolName: string, data: unknown) => Promise<void>;
   llm: Pick<ICompletionBackend, 'complete'>;
   model?: string; // User's selected model for the current quest
+  /**
+   * Per-turn mutable reference to the model actually serving the turn. The completion loop
+   * reassigns `.current` on every fallback hop while tools stay built, so read it at call time
+   * and never capture it at build time. Absent on hosts that do not run the fallback loop.
+   */
+  servingModel?: { current: ModelInfo };
   /**
    * Model catalog for the current request, used to resolve provider + COGS pricing when a
    * tool records its own operational llm.complete spend (see recordToolOperationalUsage).
@@ -425,6 +441,8 @@ export interface ToolContext {
    * write. Keep implementations pure arithmetic (see agentExecutor's addToolUsage).
    */
   onToolLlmUsage?: (usage: ToolLlmUsage) => void;
+  /** Turn-scoped memo of the operational billing decision, set alongside `db.operationalBilling`. */
+  operationalBillingCheck?: OperationalBillingCheck;
   /**
    * Runs one typed decision through the host's shared runner, so a `decide` call bills, retries
    * and normalizes exactly as POST /api/v1/decisions does. Injected because that runner's credit
@@ -475,5 +493,5 @@ export interface ToolDefinition {
    * TOOL_ARTIFACT_EMITTERS instead, which wins on a name clash (see resolveToolArtifactType).
    */
   artifactType?: string;
-  implementation: (context: Omit<ToolContext, 'config'>, config: any) => ICompletionOptionTools;
+  implementation: (context: Omit<ToolContext, 'config'>, config: unknown) => ICompletionOptionTools;
 }

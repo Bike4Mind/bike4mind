@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import type { VideoToolConfig } from '@bike4mind/services/llm/tools';
+import { TooManyRequestsError } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
-// This exercises the error path of the Slack quest handler: chatCompletion.process()
-// throws, so the normal delivery block below it never runs. Only the thin edges are
-// stubbed (config, event bus, DB models, Slack client) - the handler's own control flow
-// is the thing under test.
+// Exercises the Slack quest handler's delivery and video resolver wiring. The chat processor and external
+// dependencies are stubbed; the handler's control flow and Slack delivery-target wrapper run unchanged.
 
 const benignStub: ProxyHandler<object> = {
   get(_, key) {
@@ -48,22 +49,31 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   publishTelemetryAlertCallback: vi.fn(),
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: () => 'xoxb-decrypted',
 }));
 
 const processError = new Error('Model context window is smaller than its reserved output');
 const mockProcess = vi.fn().mockRejectedValue(processError);
+const mockCreateVideoJob = vi.fn();
+const mockBuildVideoToolConfig = vi.fn();
+const videoAvailability = { marker: 'video-availability' };
+const videoCreateDeps = { marker: 'video-create-deps' };
 
-vi.mock('@bike4mind/services/llm', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/services/llm')>('@bike4mind/services/llm');
-  return {
-    ...actual,
-    ChatCompletionProcess: class {
-      process = mockProcess;
-    },
-  };
-});
+vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({
+  buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
+}));
+
+vi.mock('@server/generationJobs/wiring', () => ({
+  getVideoJobDeps: () => videoAvailability,
+  getCreateVideoJobDeps: () => videoCreateDeps,
+}));
+
+vi.mock('@bike4mind/services/llm', () => ({
+  ChatCompletionProcess: class {
+    process = mockProcess;
+  },
+}));
 
 const mockUpdateMessage = vi.fn().mockResolvedValue(undefined);
 const mockUploadFile = vi.fn().mockResolvedValue(undefined);
@@ -101,7 +111,7 @@ vi.mock('@bike4mind/database', async () => {
       findOne: vi.fn(() => ({ sort: () => null })),
     },
     Session: { findById: vi.fn(async () => ({ userId: 'user-1' })) },
-    User: { findById: vi.fn(async () => ({ _id: 'user-1' })) },
+    User: { findById: vi.fn(async () => ({ _id: 'user-1', id: 'user-1' })) },
     sessionRepository: { findById: vi.fn(async () => ({ id: 'session-1' })) },
     slackDevWorkspaceRepository: {
       findByIdWithCredentials: vi.fn(async () => ({ name: 'Test WS', slackBotToken: 'encrypted' })),
@@ -132,6 +142,7 @@ describe('slackQuestProcessor failure notice', () => {
     mockProcess.mockRejectedValue(processError);
     mockUpdateMessage.mockResolvedValue(undefined);
     mockFindByIdAndUpdate.mockResolvedValue(undefined);
+    mockBuildVideoToolConfig.mockResolvedValue({ usableModels: ['test-video'], createJob: mockCreateVideoJob });
     questDoc = { slackNotification, type: 'error', reply: processError.message };
   });
 
@@ -159,6 +170,45 @@ describe('slackQuestProcessor failure notice', () => {
     expect(mockProcess).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.objectContaining({ authOrigin: 'internal' }) })
     );
+  });
+
+  it('wires the requesting quest and user into the video resolver passed to process', async () => {
+    mockProcess.mockImplementationOnce(
+      async ({ videoToolConfigResolver }: { videoToolConfigResolver?: () => Promise<VideoToolConfig | null> }) => {
+        if (!videoToolConfigResolver) throw new Error('Slack video resolver was not wired');
+        const config = await videoToolConfigResolver();
+        if (!config) throw new Error('Slack video config was not available');
+        await config.createJob({
+          user: { id: 'user-1', organizationId: null },
+          questId: QUEST_ID,
+          source: 'agent',
+          request: {},
+        });
+      }
+    );
+
+    await handler(makeEvent());
+
+    const { Quest } = await import('@bike4mind/database');
+    expect(Quest.findById).toHaveBeenNthCalledWith(1, QUEST_ID);
+    expect(mockBuildVideoToolConfig).toHaveBeenCalledExactlyOnceWith('user-1', {
+      availability: videoAvailability,
+      createDeps: videoCreateDeps,
+    });
+    expect(mockBuildVideoToolConfig.mock.calls[0][1].availability).toBe(videoAvailability);
+    expect(mockBuildVideoToolConfig.mock.calls[0][1].createDeps).toBe(videoCreateDeps);
+    expect(mockCreateVideoJob).toHaveBeenCalledExactlyOnceWith({
+      user: { id: 'user-1', organizationId: null },
+      questId: QUEST_ID,
+      source: 'agent',
+      request: {},
+      delivery: {
+        kind: 'slack',
+        workspaceId: slackNotification.workspaceId,
+        channelId: slackNotification.channelId,
+        threadTs: slackNotification.messageTs,
+      },
+    });
   });
 
   it('replaces the failure notice with the answer when a retry succeeds', async () => {
@@ -231,5 +281,47 @@ describe('slackQuestProcessor failure notice', () => {
     await expect(handler(makeEvent())).rejects.toThrow(processError.message);
 
     expect(mockUpdateMessage).not.toHaveBeenCalled();
+  });
+
+  describe('when billing refuses the turn with the free-tier daily cap', () => {
+    const capError = new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+      errorCode: 'daily_free_limit_reached',
+      retryAfter: 3600,
+    });
+
+    it('consumes the event, still posts the failure notice, and logs at warn', async () => {
+      const warnSpy = vi.spyOn(Logger.prototype, 'warn');
+      const errorSpy = vi.spyOn(Logger.prototype, 'error');
+      mockProcess.mockRejectedValueOnce(capError);
+      questDoc = { slackNotification, type: 'error', reply: capError.message };
+
+      await expect(handler(makeEvent())).resolves.toBeUndefined();
+
+      expect(mockUpdateMessage).toHaveBeenCalledTimes(1);
+      expect(mockUpdateMessage.mock.calls[0][0].text).toContain(capError.message);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('refused by billing'),
+        expect.objectContaining({ questId: QUEST_ID })
+      );
+      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Chat processing failed'), expect.anything());
+    });
+
+    it('resolves even when the Slack notice cannot be delivered', async () => {
+      mockProcess.mockRejectedValueOnce(capError);
+      mockUpdateMessage.mockRejectedValue(new Error('slack down'));
+
+      await expect(handler(makeEvent())).resolves.toBeUndefined();
+    });
+
+    it('still logs a generic failure at error and rethrows it', async () => {
+      const errorSpy = vi.spyOn(Logger.prototype, 'error');
+
+      await expect(handler(makeEvent())).rejects.toThrow(processError.message);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Chat processing failed'),
+        expect.objectContaining({ questId: QUEST_ID })
+      );
+    });
   });
 });

@@ -12,21 +12,35 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
+
 // Mock the middlewares
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const handlers: Record<string, any> = {};
+    const middlewares: any[] = [];
+    // Each captured handler runs the .use() middlewares (the adminApi gate) first, as the real chain does.
+    const withMiddlewares = (fn: any) => async (req: any, res: any) => {
+      for (const middleware of middlewares) middleware(req, res, () => undefined);
+      return fn(req, res);
+    };
     const chain = {
+      use: (fn: any) => {
+        middlewares.push(fn);
+        return chain;
+      },
       get: (fn: any) => {
-        handlers.get = fn;
+        handlers.get = withMiddlewares(fn);
         return chain;
       },
       put: (fn: any) => {
-        handlers.put = fn;
+        handlers.put = withMiddlewares(fn);
         return chain;
       },
       delete: (fn: any) => {
-        handlers.delete = fn;
+        handlers.delete = withMiddlewares(fn);
         return chain;
       },
       // Make the chain callable to get handlers
@@ -101,10 +115,8 @@ describe('/api/admin/tool-definitions', () => {
 
       // Get the handler from the chain
       const handlers = (listHandler as any)._handlers;
-      await handlers.get(req as any, res as any);
-
-      expect(res._getStatusCode()).toBe(403);
-      expect(res._getJSONData()).toEqual({ error: 'Unauthorized. Admin access required.' });
+      await expect(handlers.get(req as any, res as any)).rejects.toThrow(/missing permission/i);
+      expect(mockFindAll).not.toHaveBeenCalled();
     });
 
     it('should return list of tools for admin users', async () => {
@@ -245,9 +257,8 @@ describe('/api/admin/tool-definitions', () => {
       });
 
       const handlers = (toolIdHandler as any)._handlers;
-      await handlers.get(req as any, res as any);
-
-      expect(res._getStatusCode()).toBe(403);
+      await expect(handlers.get(req as any, res as any)).rejects.toThrow(/missing permission/i);
+      expect(mockFindByToolId).not.toHaveBeenCalled();
     });
 
     it('should return code tool when no override exists', async () => {
@@ -342,9 +353,8 @@ describe('/api/admin/tool-definitions', () => {
       });
 
       const handlers = (toolIdHandler as any)._handlers;
-      await handlers.put(req as any, res as any);
-
-      expect(res._getStatusCode()).toBe(403);
+      await expect(handlers.put(req as any, res as any)).rejects.toThrow(/missing permission/i);
+      expect(mockFindByToolId).not.toHaveBeenCalled();
     });
 
     it('should validate description minimum length', async () => {
@@ -475,9 +485,8 @@ describe('/api/admin/tool-definitions', () => {
       });
 
       const handlers = (toolIdHandler as any)._handlers;
-      await handlers.delete(req as any, res as any);
-
-      expect(res._getStatusCode()).toBe(403);
+      await expect(handlers.delete(req as any, res as any)).rejects.toThrow(/missing permission/i);
+      expect(mockFindByToolId).not.toHaveBeenCalled();
     });
 
     it('should return 404 when no override exists', async () => {

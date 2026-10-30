@@ -5,6 +5,7 @@ import {
   type PurgedPublishedArtifact,
   type PurgeOwnerPublishedArtifactsResult,
 } from '@bike4mind/database';
+import { deletePublishThumbnails } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { invalidatePublishCdnMany, toCacheTarget } from './invalidatePublishCdn';
 import type { MinimalLogger } from './minimalLogger';
 
@@ -12,10 +13,12 @@ import type { MinimalLogger } from './minimalLogger';
  * Take down everything `userId` has published (see purgeOwnerPublishedArtifacts) and purge the
  * CDN for the public pages among them, the same way an owner delete does. Org pages handed to
  * their last publisher are invalidated too, so a cached copy stops naming the deleted owner.
- * Idempotent.
+ * Idempotent. The removed bundles' owner-only thumbnails are deleted from storage; transferred org
+ * pages keep theirs, since they stay live.
  *
  * Awaited rather than fire-and-forget: this runs once per account deletion, and a Lambda can
- * freeze before a dangling promise sends. invalidatePublishCdnMany never throws.
+ * freeze before a dangling promise sends. invalidatePublishCdnMany and deletePublishThumbnails
+ * never throw.
  */
 export async function purgeUserPublishedArtifacts(
   userId: string,
@@ -23,6 +26,11 @@ export async function purgeUserPublishedArtifacts(
 ): Promise<PurgeOwnerPublishedArtifactsResult> {
   const result = await purgeOwnerPublishedArtifacts(userId, { deletedBy });
   await invalidatePublicPages([...result.artifacts, ...result.transferred], logger);
+  // Only bundles are ever rendered (apps/workers/src/queueHandlers/publishThumbnail.ts).
+  await deletePublishThumbnails(
+    result.artifacts.filter(a => a.source.kind === 'bundle').map(a => a.publicId),
+    logger ?? console
+  );
   logger?.info(
     `[PUBLISH] purged published artifacts for user ${userId}: artifacts=${result.artifacts.length} ` +
       `transferred=${result.transferred.length} ` +
@@ -34,6 +42,7 @@ export async function purgeUserPublishedArtifacts(
 /**
  * Take down what `userId` published from notebooks or files they just deleted (see
  * purgeOwnerPublishedArtifactsBySource) and purge the CDN for the public ones. Idempotent.
+ * Replies and files never get a rendered thumbnail, so there are no thumbnail objects to delete.
  */
 export async function unpublishUserArtifactsBySource(
   userId: string,

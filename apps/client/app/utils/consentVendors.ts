@@ -1,10 +1,9 @@
 import { isMetaPixelConfigured, loadMetaPixel } from './metaPixel';
 import { isRedditPixelConfigured, loadRedditPixel } from './redditPixel';
-import { loadMailerLite } from './mailerLite';
 import { getGaMeasurementId } from './gaConsentBootstrap';
 
 export type ConsentVendor = {
-  category: 'analytics' | 'advertising' | 'email marketing';
+  category: 'analytics' | 'advertising';
   name: string;
   isConfigured: () => boolean;
   /** Injects the vendor's script on a grant. Absent when consent is applied another way. */
@@ -25,7 +24,6 @@ export const CONSENT_VENDORS: readonly ConsentVendor[] = [
   },
   { category: 'advertising', name: 'Meta', isConfigured: isMetaPixelConfigured, load: loadMetaPixel },
   { category: 'advertising', name: 'Reddit', isConfigured: isRedditPixelConfigured, load: loadRedditPixel },
-  { category: 'email marketing', name: 'MailerLite', isConfigured: () => true, load: loadMailerLite },
 ];
 
 /** Runs the loader of every configured vendor - the same set the banner names. */

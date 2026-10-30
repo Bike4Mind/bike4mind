@@ -11,7 +11,7 @@ import { organizationService, creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType, dayjs, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -110,21 +110,22 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         quantity: seats,
       });
 
-      if (initialCredits > 0) {
-        await creditService.addCredits(
-          {
-            ownerId: org.id,
-            ownerType: CreditHolderType.Organization,
-            credits: initialCredits,
-            type: 'subscription',
-            metadata: { source: SubscriptionSource.AdminGrant, reason },
-          },
-          {
-            db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
-            creditHolderMethods: organizationRepository,
-          }
-        );
-      }
+      const ledger =
+        initialCredits > 0
+          ? await creditService.addCreditsWithLedgerRow(
+              {
+                ownerId: org.id,
+                ownerType: CreditHolderType.Organization,
+                credits: initialCredits,
+                type: 'subscription',
+                metadata: { source: SubscriptionSource.AdminGrant, reason },
+              },
+              {
+                db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
+                creditHolderMethods: organizationRepository,
+              }
+            )
+          : undefined;
 
       await recordAdminActionFromRequest(req, {
         action: 'org.credits.granted',
@@ -132,6 +133,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         summary: `granted org with ${seats} seats and ${initialCredits} initial credits`,
         reason,
         details: { ownerId: owner.id, seats, initialCredits, credits: initialCredits },
+        related: ledger?.creditTransactionId ? { creditTransactionId: ledger.creditTransactionId } : undefined,
       });
 
       return org;

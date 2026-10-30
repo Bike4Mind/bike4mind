@@ -1,3 +1,4 @@
+import type { DismissedUpdateMemory } from './DismissedUpdatePreference';
 import {
   initialUpdateState,
   isBusy,
@@ -25,6 +26,12 @@ export interface UpdateServiceDeps {
   /** Graceful teardown of background processes and MCP children, before the app is handed over. */
   prepareQuit: () => Promise<void>;
   onChanged: (state: UpdateState) => void;
+  /** Where a version's release notes live, or null when the feed has no known notes page. */
+  releaseUrl?: (version: string) => string | null;
+  /** Remembers the version whose notice the user closed, across launches. */
+  dismissed?: DismissedUpdateMemory;
+  /** Failures nobody is shown still get a line here. */
+  log?: (message: string) => void;
 }
 
 /**
@@ -46,7 +53,32 @@ export class UpdateService {
   }
 
   snapshot(): UpdateState {
-    return { ...this.state };
+    const version = this.state.version;
+    return { ...this.state, releaseUrl: version && this.deps.releaseUrl ? this.deps.releaseUrl(version) : null };
+  }
+
+  /** Load the persisted dismissal. A missing or unreadable file is "nothing dismissed". */
+  async restoreDismissed(): Promise<void> {
+    const version = await this.deps.dismissed?.read().catch(() => null);
+    if (!version || version === this.state.dismissedVersion) return;
+    this.state = { ...this.state, dismissedVersion: version };
+    this.deps.onChanged(this.snapshot());
+  }
+
+  /**
+   * Hide the notice for this version only. Applied before it is written, so a disk that will not
+   * take the file still closes the notice for this run.
+   */
+  async dismiss(version: string): Promise<void> {
+    const dismissed = version.trim();
+    if (!dismissed || dismissed === this.state.dismissedVersion) return;
+    this.state = { ...this.state, dismissedVersion: dismissed };
+    this.deps.onChanged(this.snapshot());
+    try {
+      await this.deps.dismissed?.record(dismissed);
+    } catch (error) {
+      this.deps.log?.(`[update] could not persist dismissed version: ${errorMessage(error)}`);
+    }
   }
 
   /** Fold an event in and push the result, but only when it actually changed something. */
@@ -71,7 +103,8 @@ export class UpdateService {
       // The outcome arrives as an event from the updater, not as this promise's value: it is
       // the same path a check started by the timer takes, so there is one place it is handled.
       await this.deps.updater.check();
-    } catch {
+    } catch (error) {
+      this.deps.log?.(`[update] check failed: ${errorMessage(error)}`);
       this.apply({ type: 'unreachable' });
     } finally {
       this.inFlight = false;
@@ -86,7 +119,8 @@ export class UpdateService {
     this.apply({ type: 'download-started' });
     try {
       await this.deps.updater.download();
-    } catch {
+    } catch (error) {
+      this.deps.log?.(`[update] download failed: ${errorMessage(error)}`);
       this.apply({ type: 'download-failed' });
     } finally {
       this.inFlight = false;
@@ -115,4 +149,8 @@ export class UpdateService {
     this.deps.updater.install();
     return { ok: true };
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

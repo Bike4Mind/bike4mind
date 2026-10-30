@@ -69,7 +69,7 @@ describe('desktopAppGuidance', () => {
       const text = desktopAppGuidance(mode).join('\n');
       expect(text).toContain('you cannot change them');
       expect(text).toContain('Settings -> Permissions');
-      expect(text).toContain('Always, in every session');
+      expect(text).toContain('Allow in this chat');
       expect(text).toContain('~/.claude/settings.json');
     }
   });

@@ -32,6 +32,7 @@ export {
   ServerSubagentOrchestrator,
   SUBAGENT_TIMEOUT_BY_THOROUGHNESS,
   PARENT_DEADLINE_BUFFER_MS,
+  spentResultOf,
 } from './agents/ServerSubagentOrchestrator';
 export type {
   ServerSubagentTracker,

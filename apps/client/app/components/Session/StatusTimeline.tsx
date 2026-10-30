@@ -3,6 +3,7 @@ import { Box, Typography, Stack, Tooltip, IconButton } from '@mui/joy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
+import { formatDuration } from './formatDuration';
 
 // Status Log timeline. Shared between the per-message Prompt Metadata inspector
 // and the Admin -> Model Metrics -> Raw Data view. Driven entirely by a quest's
@@ -10,15 +11,6 @@ import dayjs from 'dayjs';
 // array gets the same waterfall visualization.
 
 export type StatusLogEntry = { status: string; timestamp: string | Date };
-
-/** Human-friendly duration: 850ms, 3.0s, 1m 5s. */
-export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  const m = Math.floor(ms / 60000);
-  const s = Math.round((ms % 60000) / 1000);
-  return `${m}m ${s}s`;
-}
 
 export type TimelineRow = { entry: StatusLogEntry; delta: number; offset: number; abs: number };
 

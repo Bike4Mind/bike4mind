@@ -14,8 +14,16 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
-import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
-import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
+import { ApiKeyScope, UserApiKeyEvents, isBuiltInApiKeyScope } from '@bike4mind/common';
+import {
+  ADMIN_ONLY_API_KEY_SCOPES,
+  USER_API_KEY_SCOPE_VALUES,
+  isApiKeyScopeOffered,
+  isKnownApiKeyScope,
+} from '@client/app/constants/apiKeyScopes';
+import { toEntitlementUser } from '@server/entitlements';
+import { resolveApiKeyScopeAccessForUser } from '@server/entitlements/apiKeyScopeAccess';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 // Scopes this admin endpoint may mint: the standard self-service set plus the
 // admin-provisioned ingest scopes. ADMIN and CC_BRIDGE are still excluded -
@@ -204,6 +212,21 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       if (invalidScopes.length > 0) {
         throw new BadRequestError(`Scope not allowed: ${invalidScopes.join(', ')}`);
       }
+      // The release-note routes keep their isAdmin check, so this key is useless on anyone else.
+      if (requestedScopes.includes(ApiKeyScope.RELEASE_NOTES_WRITE) && !targetUser.isAdmin) {
+        throw new BadRequestError(`${ApiKeyScope.RELEASE_NOTES_WRITE} needs a target user who is a platform admin`);
+      }
+
+      // A contributed scope is only ever minted for a holder of its requiredEntitlement, so the
+      // target must hold it. Built-in product scopes stay admin-grantable without that check.
+      const contributedScopes = requestedScopes.filter(s => !isBuiltInApiKeyScope(s));
+      if (contributedScopes.length > 0) {
+        const targetAccess = await resolveApiKeyScopeAccessForUser(toEntitlementUser(targetUser));
+        const unentitled = contributedScopes.filter(s => !isApiKeyScopeOffered(s, targetAccess));
+        if (unentitled.length > 0) {
+          throw new ForbiddenError(`Scope not available on the target account: ${unentitled.join(', ')}`);
+        }
+      }
 
       const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUserId, {
         logger: req.logger,
@@ -233,8 +256,38 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
             userApiKeys: userApiKeyRepository,
             agents: agentRepository,
           },
+          isKnownScope: isKnownApiKeyScope,
+          // An admin minting for the user has already vouched for the account.
+          trust: { status: 'exempt' },
         }
       );
+
+      // Not in a transaction: createIfUnderCap's cap check must see concurrent inserts, which a
+      // snapshot would hide. The raw key only ever leaves in this response, so a key whose audit
+      // write failed is revoked unseen and the request fails.
+      try {
+        await recordAdminActionFromRequest(req, {
+          action: 'user.api_key.generated',
+          target: { kind: 'user', id: targetUserId, displayName: targetUser.email ?? targetUser.username },
+          summary: `generated API key ${newApiKey.keyPrefix} for user`,
+          details: {
+            keyId: newApiKey.id,
+            keyPrefix: newApiKey.keyPrefix,
+            name: newApiKey.name,
+            scopes: newApiKey.scopes,
+            expiresAt: newApiKey.expiresAt?.toISOString(),
+            preauthorizedLakeIds: lakeBinding,
+          },
+        });
+      } catch (error) {
+        // Surface the audit failure even if the revoke also fails; the log names the key left live.
+        await userApiKeyRepository
+          .revokeIfNotDisabled(newApiKey.id, req.user.impersonatedBy ?? req.user.id, 'admin audit write failed')
+          .catch((revokeError: unknown) => {
+            req.logger.error('Failed to revoke unaudited API key', { keyId: newApiKey.id, revokeError });
+          });
+        throw error;
+      }
 
       // Attributed to the target user, since the key is theirs - but the acting admin is recorded
       // alongside (createdBy*), so the event is not readable as a self-service mint by that user.

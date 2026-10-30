@@ -1,6 +1,6 @@
 ---
-title: "Teams"
-description: "How Teams work in Bike4Mind: creating a team, what it costs, how many people and credits it includes, who pays for usage, and how to manage members and roles"
+title: 'Teams'
+description: 'How Teams work in Bike4Mind: creating a team, what it costs, how many people and credits it includes, who pays for usage, and how to manage members and roles'
 sidebar_position: 7
 tags: [organizations, teams, collaboration]
 ---
@@ -8,6 +8,8 @@ tags: [organizations, teams, collaboration]
 # Teams
 
 A Team is a shared workspace for a group of people. Everyone on a Team draws from one shared pool of credits, and the Team owner manages the subscription, the seats and the members.
+
+Before subscribing, [preview Team administration](./team-admin-preview.md) with fictional members, monthly limits and usage examples. You do not need an account or a paid Team to read the preview.
 
 ## Open the Teams page
 
@@ -40,22 +42,39 @@ Usage is charged to whichever account you have selected in the account menu, not
 
 ## Add and manage members
 
-Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Other tabs (Groups, Usage, Analysis, Integrations, Settings) appear only for people with the right access. The Usage tab, which shows the Team's credit usage, is for the owner. The **Billing** tab is visible to the owner only. A Team manager finds the Team in the Teams list marked with a **Manager** badge.
+Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Other tabs (Groups, Usage, Analysis, Integrations, Connectors, Settings) appear only for people with the right access. The Usage tab, which shows the Team's credit usage, is for the owner and platform admins; being a Team manager does not grant access. The **Billing** tab is visible to the owner only. A Team manager finds the Team in the Teams list marked with a **Manager** badge.
 
 On the **Members** tab:
 
 - The heading shows how many seats are in use, for example "Members (3 / 10)". Pending invites hold a seat until they are accepted or cancelled.
-- The Team owner and appointed Team admins can invite people and cancel pending invites. The Team owner, Team managers and platform admins can remove people; only the owner can remove a manager. Click **Add Member**, type at least 3 characters, select a person and add them. The search finds people you already share a Team or project with by name, or anyone by their full email address. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
+- The Team owner, Team managers and platform admins can invite people, cancel pending invites and remove members. Only the owner and platform admins can remove a Team manager. Click **Add Member**, type at least 3 characters, select a person and add them. The search finds people you already share a Team or project with by name, or anyone by their full email address. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
 - If every seat is taken, the owner sees "You've reached your seat limit" and needs to add seats before inviting more people.
 - Use the three-dot menu on a member to **Revoke Access**, or on a pending invite to **Cancel Invite**. Each option appears only to people who are allowed to use it. Members can choose **Leave Team** for themselves.
-- The Team owner and appointed Team admins can cap monthly credit spending. The **Monthly credit limit per member** card sets a default (**Set limit** or **Change limit**), and **Set monthly limit** in a member's menu sets a limit for one person. With no limit, members can spend from the pool without a monthly cap.
+- The Team owner, Team managers and platform admins can cap monthly credit spending. The **Monthly credit limit per member** card sets a default (**Set limit** or **Change limit**), and **Set monthly limit** in a member's menu sets a limit for one person. With no limit, members can spend from the pool without a monthly cap.
+
+## Custom connector policy
+
+If you are the Team owner, a current Team manager or a platform admin, open **View Details > Connectors** to manage custom MCP connectors for the Team's members.
+
+- Turn **Custom connectors** off to block members' custom connector tools. Policy changes can take up to five minutes to reach every server handling requests. Members can still remove their connections.
+- Choose catalog connectors only, allowed hosts only, or any host. Blocked hosts apply in every mode. Enter host patterns one per line; `*.example.com` matches subdomains but does not match `example.com` itself.
+- Choose whether every tool call needs approval, whether tools without a read-only annotation are allowed, whether servers without sign-in are allowed, and the connection limit per member.
+- Click **Save policy** to apply your changes. **Use platform default** removes the Team's override and loads the deployment's default policy.
+
+**Member connections** lists connections created under this Team by its current members, with their status under this Team's policy. Members manage their own connections. Older connections saved without a Team association do not appear here: membership alone cannot establish which Team a personal connection belongs to, so those connections are not automatically assigned or exposed to Team admins. The Team's policy still applies to its members.
+
+### Troubleshooting connectors
+
+If you do not see **Connectors**, ask the Team owner to check your management access. An **Admin** role label alone does not make you a Team manager.
+
+If the deployment has custom connectors turned off, the page shows a notice; saving a Team policy cannot turn them on. If the saved policy is invalid, save a valid replacement or use **Use platform default**. If a policy or member-connections request fails, use **Retry** instead of treating the missing data as an empty list. A member who belongs to several Teams is subject to every Team's connector policy, so another Team's restrictions can also block a connection.
 
 ## Roles
 
 Each member shows a role label on the Members tab.
 
 - **Owner:** created the Team and holds the subscription.
-- **Admin**, **Editor** and **Viewer:** the access level shown on a member. Viewer is the level new invites start with. These labels do not decide who manages the roster: inviting is limited to the Team owner and appointed Team admins, and removing members to the Team owner, Team managers and platform admins.
+- **Admin**, **Editor** and **Viewer:** the access level shown on a member. Viewer is the level new invites start with. These labels do not decide who manages the roster: the Team owner, Team managers and platform admins do.
 
 ## Billing tab (owner only)
 

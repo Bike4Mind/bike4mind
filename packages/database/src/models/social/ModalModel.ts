@@ -8,10 +8,21 @@ const ModalImageSchema = new Schema({
   height: { type: Number, default: null },
 });
 
+const ModalVideoSchema = new Schema(
+  {
+    landscapeUrl: { type: String, default: null },
+    landscapePosterUrl: { type: String, default: null },
+    portraitUrl: { type: String, default: null },
+    portraitPosterUrl: { type: String, default: null },
+  },
+  { _id: false }
+);
+
 /**
  * Embedded schema for generation metadata.
- * Only populated for auto-generated modals (e.g., What's New).
- * Null/undefined for manually created modals and banners.
+ * Only historical rows carry it: the generator that wrote it and the fork import that copied it
+ * were both removed, so the fields are kept only to preserve those rows' provenance.
+ * Null/undefined for hand-authored modals and banners.
  */
 const GenerationMetadataSchema = new Schema(
   {
@@ -48,6 +59,7 @@ const ModalSchema = new Schema<IModalDocument>(
     description: { type: String, default: null },
     imageUrl: { type: String, default: null },
     images: [ModalImageSchema],
+    video: { type: ModalVideoSchema, default: null },
     textMessage: { type: String, default: null },
     isBanner: { type: Boolean, default: false },
     tags: { type: [String], default: null },
@@ -81,11 +93,11 @@ const ModalSchema = new Schema<IModalDocument>(
 );
 
 // Index for efficient querying of What's New modals
-// Used by whatsNewGeneration.ts to fetch previous modals for style learning
 ModalSchema.index({ tags: 1, enabled: 1, startDate: -1 });
 
-// Partial unique index for idempotency: no duplicate auto-generated modals per
-// date/environment. Only applies when generationMetadata.generatedDate is set.
+// Partial unique index: at most one row per generation date and environment.
+// Only applies when generationMetadata.generatedDate is set, which only historical
+// generated rows carry.
 ModalSchema.index(
   { 'generationMetadata.generatedDate': 1, 'generationMetadata.environment': 1 },
   {
@@ -97,9 +109,9 @@ ModalSchema.index(
   }
 );
 
-// Sparse unique index for fork-imported modals
-// Prevents duplicate imports from production by sourceModalId
-// Only indexes documents where sourceModalId exists
+// Sparse unique index on sourceModalId: at most one row per production modal.
+// Only indexes documents where sourceModalId exists, which only historical
+// fork-imported rows carry.
 ModalSchema.index(
   { 'generationMetadata.sourceModalId': 1 },
   {
@@ -113,7 +125,7 @@ ModalSchema.index(
 );
 
 // Sparse index for admin queries filtering by import source
-// Used by admin UI to filter modals by importedFrom (production vs self)
+// Only historical imported rows carry importedFrom (production vs self)
 ModalSchema.index(
   { 'generationMetadata.importedFrom': 1 },
   {
@@ -122,8 +134,8 @@ ModalSchema.index(
   }
 );
 
-// Compound index for sync query efficiency
-// Used by syncExistingModals() to find all production-imported modals
+// Compound index on the production-imported row shape. The fork sync that read it
+// was removed; kept so historical imported rows stay queryable by the same filter.
 ModalSchema.index(
   { 'generationMetadata.sourceModalId': 1, 'generationMetadata.importedFrom': 1 },
   {

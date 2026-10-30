@@ -1,5 +1,17 @@
 import { z } from 'zod';
-import { paginatedResponseSchema, PublicReleaseNoteSchema, type PublicReleaseNote } from '@bike4mind/common';
+import {
+  fromPublicReleaseNoteImage,
+  fromPublicReleaseNoteVideo,
+  getModalStillImageErrors,
+  getModalVideoErrors,
+  paginatedResponseSchema,
+  PublicReleaseNoteSchema,
+  type PublicReleaseNote,
+  type PublicReleaseNoteImage,
+  type PublicReleaseNoteVideo,
+} from '@bike4mind/common';
+import { isUpstreamMediaUrl } from '@server/releaseNotes/publicMedia';
+import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { safeFetch } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 
@@ -167,7 +179,7 @@ async function fetchPage(
       body = undefined;
     }
     const parsed = pageSchema.safeParse(body);
-    if (parsed.success) return { page: parsed.data, upstreamDown: false };
+    if (parsed.success) return { page: vetMedia(parsed.data, base), upstreamDown: false };
     const feed = jsonFeedSchema.safeParse(body);
     if (feed.success) return { page: jsonFeedToPage(feed.data, limit, cursor), upstreamDown: false };
     logger.warn('[whats-new] upstream feed body matched neither the public schema nor JSON Feed');
@@ -180,6 +192,33 @@ async function fetchPage(
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Drops a video or image with any URL outside the deployment's media allowlist, which the CSP would block
+// anyway, each independently. The upstream's own media route is allowed too (proxy.ts adds its origin to the CSP).
+function vetMedia(page: UpstreamFeedPage, feedUrl: string): UpstreamFeedPage {
+  const extraOrigins = deploymentMediaOrigins();
+  const upstreamMediaUrls = (media: PublicReleaseNoteVideo | PublicReleaseNoteImage) =>
+    new Set(Object.values(media).filter((url): url is string => !!url && isUpstreamMediaUrl(url, feedUrl)));
+  return {
+    ...page,
+    data: page.data.map(note => {
+      let vetted = note;
+      if (note.video) {
+        const policy = { extraOrigins, allowedUrls: upstreamMediaUrls(note.video) };
+        if (Object.keys(getModalVideoErrors(fromPublicReleaseNoteVideo(note.video), policy)).length > 0) {
+          vetted = { ...vetted, video: null };
+        }
+      }
+      if (note.image) {
+        const policy = { extraOrigins, allowedUrls: upstreamMediaUrls(note.image) };
+        if (Object.keys(getModalStillImageErrors(fromPublicReleaseNoteImage(note.image), policy)).length > 0) {
+          vetted = { ...vetted, image: null };
+        }
+      }
+      return vetted;
+    }),
+  };
 }
 
 /** A page of JSON Feed items ordered by publish date and id, with a stable cursor across new entries. */

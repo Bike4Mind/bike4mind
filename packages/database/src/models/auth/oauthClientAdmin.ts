@@ -5,6 +5,8 @@ import {
   BadRequestError,
   ConflictError,
   NotFoundError,
+  OAUTH_OPT_IN_SCOPES,
+  nonOptInScopes,
   createOAuthClientSchema,
   oauthRedirectUriSchema,
   resolveOAuthFederatedIdp,
@@ -28,6 +30,7 @@ export const OAUTH_CLIENT_SECRET_BCRYPT_ROUNDS = 10;
 const IDENTITY_SCOPES = ['openid', 'email', 'profile'];
 // A federated client mints per-user ai:generate keys via /api/oauth/ai-token, which requires the
 // user to have approved ai:generate at /authorize, so the scope must be requestable there.
+// Opt-in scopes (OAUTH_OPT_IN_SCOPES in b4m-core/common) are deliberately left out of this default.
 const FEDERATED_SCOPES = [...IDENTITY_SCOPES, 'ai:generate', 'me:read'];
 
 // The b4m_<slug>_<8 hex> shape is parsed back by oauthClientSourceSlug (b4m-core/common/src/constants/oauthClients.ts).
@@ -170,4 +173,34 @@ export async function updateOAuthClient(
   }
 
   return { before, after: toOAuthClientView(doc) };
+}
+
+/**
+ * Adds opt-in scopes to an existing federated relying-party client. Idempotent ($addToSet), so a rerun
+ * is a no-op. Relying-party only: first-party clients skip the grant gate (federatedGrantGate.ts), so
+ * the scope would reach them with no user consent. Throws BadRequestError on an empty list, a scope
+ * outside OAUTH_OPT_IN_SCOPES, or a client that is not federated or not a relying party; NotFoundError
+ * when no client has that clientId. There is no remove counterpart: revoking is a manual $pull.
+ */
+export async function addOAuthClientOptInScopes(clientId: string, scopes: readonly string[]): Promise<OAuthClientView> {
+  if (scopes.length === 0) throw new BadRequestError('No opt-in scopes given');
+  const unknown = nonOptInScopes(scopes);
+  if (unknown.length) {
+    throw new BadRequestError(
+      `Not an opt-in scope: ${unknown.join(', ')} (allowed: ${OAUTH_OPT_IN_SCOPES.join(', ')})`
+    );
+  }
+
+  const doc = await OAuthClientModel.findOneAndUpdate(
+    { clientId, federatedIdp: { $exists: true }, clientType: 'relying-party' },
+    { $addToSet: { allowedScopes: { $each: [...scopes] } } },
+    { new: true }
+  ).exec();
+  if (!doc) {
+    if (await OAuthClientModel.exists({ clientId })) {
+      throw new BadRequestError('Opt-in scopes can only be granted to a federated relying-party client');
+    }
+    throw new NotFoundError('OAuth client not found');
+  }
+  return toOAuthClientView(doc);
 }

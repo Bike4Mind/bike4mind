@@ -43,10 +43,12 @@ pnpm install
 The CLI uses native dependencies (`better-sqlite3` for image caching, `sharp` for image processing) that require compilation. These should build automatically during installation, but if you encounter errors:
 
 **Prerequisites:**
+
 - Python 3 (required by node-gyp)
 - C++ compiler (Xcode Command Line Tools on macOS, build-essential on Linux, Visual Studio on Windows)
 
 **Manual rebuild if needed:**
+
 ```bash
 # If you see "Could not locate the bindings file" errors
 pnpm rebuild better-sqlite3
@@ -77,42 +79,43 @@ A bare positional argument seeds **and** submits the first turn while keeping th
 
 **Environment / API** (see [API Configuration](#api-configuration)):
 
-| Flag | Effect |
-| --- | --- |
-| `--dev` | Point the CLI at the local dev server (`http://localhost:3001`) and remember it. Aliases: `--local`, single-dash forms. |
-| `--prod` | Point the CLI at Bike4Mind production and remember it. Alias: `--production`. |
+| Flag              | Effect                                                                                                                                                                                        |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--dev`           | Point the CLI at the local dev server (`http://localhost:3001`) and remember it. Aliases: `--local` (except after `b4m mcp serve`), single-dash forms.                                        |
+| `--prod`          | Point the CLI at Bike4Mind production and remember it. Alias: `--production`.                                                                                                                 |
 | `--api-url <url>` | Point the CLI at **any** instance — a self-hosted stack, an AWS deployment, `http://localhost:3000`, etc. Clears cached auth (bound to the old origin) and exits; run `b4m` again to sign in. |
-| `--reset-api` | Reset the API URL to the built-in default and clear auth, then exit. |
+| `--reset-api`     | Reset the API URL to the built-in default and clear auth, then exit.                                                                                                                          |
 
 **Session / behavior:**
 
-| Flag | Effect |
-| --- | --- |
-| `--verbose`, `-v` | Show debug logs in the console (also always written to file — see [Debug Logs](#debug-logs)). |
-| `--debug-stream` | Ultra-verbose: log every SSE event (stream-parser debugging). Implies `--verbose`. |
-| `--no-project-config` | Skip loading project-specific config (`.bike4mind/`). |
-| `--add-dir <dir>` | Grant file access to an additional directory. Repeatable. |
-| `--ollama-host <url>` | Add a local Ollama endpoint's models to the picker (e.g. `http://localhost:11434`). |
-| `--no-remote-skills` | Skip fetching remote B4M-web skills for this run (local files only). |
+| Flag                  | Effect                                                                                        |
+| --------------------- | --------------------------------------------------------------------------------------------- |
+| `--verbose`, `-v`     | Show debug logs in the console (also always written to file — see [Debug Logs](#debug-logs)). |
+| `--debug-stream`      | Ultra-verbose: log every SSE event (stream-parser debugging). Implies `--verbose`.            |
+| `--no-project-config` | Skip loading project-specific config (`.bike4mind/`).                                         |
+| `--add-dir <dir>`     | Grant file access to an additional directory. Repeatable.                                     |
+| `--ollama-host <url>` | Add a local Ollama endpoint's models to the picker (e.g. `http://localhost:11434`).           |
+| `--no-remote-skills`  | Skip fetching remote B4M-web skills for this run (local files only).                          |
 
 **Headless / non-interactive** (for scripts and CI):
 
-| Flag | Effect |
-| --- | --- |
-| `-p`, `--prompt <query>` | Run a single query non-interactively and exit. |
-| `--output-format <fmt>` | Output when using `-p`: `text` (default), `json`, or `stream-json` (NDJSON of thoughts/actions/observations). |
-| `--dangerously-skip-permissions` | With `-p`, auto-allow all tool permission prompts. Use with caution in CI/CD. |
+| Flag                             | Effect                                                                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `-p`, `--prompt <query>`         | Run a single query non-interactively and exit.                                                                |
+| `--output-format <fmt>`          | Output when using `-p`: `text` (default), `json`, or `stream-json` (NDJSON of thoughts/actions/observations). |
+| `--dangerously-skip-permissions` | With `-p`, auto-allow all tool permission prompts. Use with caution in CI/CD.                                 |
 
 **Info:**
 
-| Flag | Effect |
-| --- | --- |
-| `--help`, `-h` | Show help. |
+| Flag              | Effect            |
+| ----------------- | ----------------- |
+| `--help`, `-h`    | Show help.        |
 | `--version`, `-V` | Show CLI version. |
 
 > **Host / `claude`-drop-in flags** (`--mcp-config`, `--strict-mcp-config`, `--append-system-prompt`, `--allowedTools`, `--settings`, `--session-id`, `--resume`) are documented under [Running as a `claude` engine inside a host app](#running-as-a-claude-engine-inside-a-host-app).
 
 **Examples:**
+
 ```bash
 # Point at a self-hosted stack, then sign in
 b4m --api-url http://localhost:3000
@@ -138,7 +141,57 @@ b4m mcp enable <name> | disable <name>    # Toggle a server on/off
 b4m mcp serve [--http] [--port <n>]       # Expose Bike4Mind itself as an MCP server
 b4m update                                # Check for and install CLI updates
 b4m doctor                                # Diagnose the CLI installation (Node, registry, ripgrep, native modules)
+b4m skills push <path>                    # Create a skill from a folder, SKILL.md, or commands/*.md
+b4m skills push <path> --update           # Update your skill with the same name without a prompt
+b4m models ls | search | show | curated | pull | rm | use   # Find, download and use local models (see below)
 ```
+
+### Local models
+
+`b4m models` manages models on a local Ollama and finds GGUF builds on Hugging Face.
+
+```bash
+b4m models ls --ollama-host http://127.0.0.1:11434   # list installed models; a host that answers is saved
+b4m models search qwen2.5 0.5b                       # Hugging Face GGUF repos: downloads, likes, license, gated
+b4m models show Qwen/Qwen2.5-0.5B-Instruct-GGUF      # builds with size, fit, quant and Ollama ref, license, gating
+b4m models curated                                   # Bike4Mind's picks for this computer, then every curated build
+b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
+b4m models pull qwen2.5:0.5b                         # Ollama registry names (model[:tag], ollama.com/owner/model)
+b4m models pull <ref> --force                        # pull even when the fit check rates it too large
+b4m models use hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M   # default model for chat
+b4m models rm qwen2.5:0.5b
+```
+
+`search` hides abliterated and uncensored builds and prints how many it hid; `--include-abliterated` lists them last, labelled as not recommended.
+
+`show` rates each build `fits`, `tight` or `too large` for this machine, and `pull` prints the verdict with its reasoning before asking anything. It is a rough estimate using the shared memory-budget and compute-buffer calculations: the file size (plus any vision projector) and compute buffers against the memory a model can use here, at the context the CLI asks Ollama for (the model's trained length capped at 32K, or at `OLLAMA_MAX_NUM_CTX`). `pull` refuses a too-large build unless `--force`. The fit is `unknown`, and never blocks, when download sizes are unavailable, the hardware cannot be read, or the Ollama host is another machine. An Ollama reached through an SSH tunnel on localhost is rated as this machine, so use `--force` when the far host has the memory.
+
+`curated` prints the curated list Desktop uses, bundled with the CLI: the picks for this computer's memory first, then every build with the ref to pull, its size, license and tags (including the Ollama version a build needs). It contacts no runtime and downloads nothing; pull a row with `b4m models pull <ref>`, which asks for the license as below but does not check the build against the reviewed one. Abliterated builds are never on it, and a license that is not permissive, the model's own or its base model's, is shown as `restricted: <license>` (with `(base: <license>)`) and must be accepted before `pull`. With a saved Ollama host on another machine, the picks still describe this computer.
+
+Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar), or no declared license, is named with a link and must be accepted at a prompt or with `--accept-license`. For Ollama registry models the license is read from the model's own license texts, and only unmodified Apache-2.0 or MIT texts count as permissive. Refs naming any other registry are refused. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added at https://huggingface.co/settings/keys. Ctrl-C cancels a pull without installing anything; pulling again resumes, and says how much was already downloaded. Without a saved host, `b4m models` uses the first local runtime it detects; a scheme-less host without a port uses 11434, and `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search`, `show` and `curated` as JSON. With a saved host, `b4m -p` fails instead of switching to another model when the model picked with `b4m models use` is not available, or Ollama does not answer.
+
+`b4m mcp serve` (stdio only) offers the same operations to MCP clients as `models_list`, `models_search`, `models_pull` and `models_remove`, with the same checks. Pull and remove act only on the user's own approval. A client that supports elicitation asks the user directly, showing the size and every license, with a separate tick for a license that is not all permissive. With any other client nothing changes: the tool returns the preview and the `b4m models pull` or `b4m models rm` command for the user to run in a terminal, where the CLI asks them. `models_pull` reports the same fit verdict in its preview and prompt, and refuses a too-large model before asking unless the caller passes `force: true`, which still leaves the download to the user's approval. `models_search` leaves abliterated and uncensored builds out unless `includeAbliterated` is true, and then lists them last, labelled `notRecommended`, as `b4m models search --include-abliterated` does. The host comes from `B4M_OLLAMA_HOST`, the saved host, or detection, as for `b4m models`. `b4m mcp serve --local` serves these four tools alone and needs no Bike4Mind backend.
+
+### Pushing a local skill
+
+Log in with `b4m /login`, then run `b4m skills push ~/.claude/skills/my-skill`.
+Only the Markdown instructions are uploaded; supporting files and unsupported
+frontmatter (including `allowed-tools`) are reported and skipped. If no description
+is present, the first non-empty body line supplies it.
+
+An existing skill prompts before updating. For scripts without a terminal, pass
+`--update` explicitly. Removing `argument-hint` from the file clears the stored hint
+on update. A Skill Market import cannot be overwritten; rename the local skill or
+delete the import first.
+
+An export from another Skill Market author requires separate consent because the
+copy becomes your own trusted skill. Prefer importing it from the market to retain
+attribution and updates; `--yes` acknowledges this warning when pushing a copy.
+
+If push reports missing or expired authentication, run `b4m /login` again. If a
+non-interactive push stops at a name conflict, use `--update` only when you intend
+to replace that skill. Server validation errors are printed without creating or
+updating the skill.
 
 ### Switching environments (`--dev` / `--prod`)
 
@@ -162,16 +215,28 @@ shown in the startup banner (`🌍 API Environment: …`).
 > For a one-off custom/self-hosted URL, use the in-session `/set-api <url>` command
 > (see [API Configuration](#api-configuration) below).
 
+### Typing while the agent works
+
+You can keep typing while a turn is running. Nothing you send is dropped, and a second turn never starts in parallel with the first.
+
+- **Enter** steers the running turn. The message is added to the agent's next model request, which is sent after the current batch of tool calls finishes. If the agent has just answered and has iterations left, it reopens to take the message into account. A message the turn never reaches runs as the next turn.
+- **Tab** queues the message as a follow-up. It runs as a new turn once the current one ends. Everything still queued at that point runs together as a single turn, in the order you sent it.
+- **Esc** cancels the turn and moves any queued messages back into the input, where you can edit and resend them or clear them with Ctrl+C. Any message you send while the cancelled turn is still shutting down runs once the turn has stopped.
+
+Queued messages appear above the input. Follow-ups are labelled `[next turn]`.
+
 ## Commands
 
 While in interactive mode. This mirrors the registry in `src/config/commands.ts` — run `/help` in a session for the live list (which also includes any custom and project commands).
 
 **Authentication:**
+
 - `/login` - Authenticate with your B4M account
 - `/logout` - Clear authentication and sign out
 - `/whoami` - Show current authenticated user
 
 **Session management:**
+
 - `/save <name>` - Save current session
 - `/resume` (alias `/sessions`) - List and resume saved sessions
 - `/clear` (alias `/new`) - Start a new session
@@ -180,11 +245,13 @@ While in interactive mode. This mirrors the registry in `src/config/commands.ts`
 - `/usage` - Show credit usage and balance
 
 **API configuration:**
+
 - `/set-api <url>` - Connect to a self-hosted / custom Bike4Mind instance
 - `/reset-api` - Reset to the Bike4Mind main service
 - `/api-info` - Show current API configuration
 
 **Files & checkpoints:**
+
 - `/add-dir <path>` / `/remove-dir <path>` / `/dirs` - Manage accessible directories
 - `/undo` - Undo the last file change
 - `/checkpoints` - List file restore points
@@ -193,9 +260,11 @@ While in interactive mode. This mirrors the registry in `src/config/commands.ts`
 - `/rewind` - Rewind the conversation to a previous point
 
 **Tool permissions:**
+
 - `/trust <tool-name>` / `/untrust <tool-name>` / `/trusted` - Manage auto-approved tools
 
 **Sandbox** (OS-level isolation for `bash`):
+
 - `/sandbox` - Show sandbox status and configuration
 - `/sandbox:enable` / `/sandbox:disable` - Toggle the sandbox
 - `/sandbox:mode <auto-allow|permissions>` - Set enforcement mode
@@ -204,20 +273,24 @@ While in interactive mode. This mirrors the registry in `src/config/commands.ts`
 - `/sandbox:violations [count]` / `/sandbox:violations:clear` - Inspect / clear violations
 
 **MCP & agents:**
+
 - `/mcp` (alias `/mcp:list`) - Show MCP server status and connected tools
 - `/agents` (alias `/agents:list`) - List available agents
 - `/agents:new <name>` / `/agents:reload` - Create / reload agent definitions
 
 **Custom commands:**
+
 - `/commands` - List all custom commands
 - `/commands:new <name>` / `/commands:reload` - Create / reload custom commands
 
 **Durable workflow** (cross-session continuity):
+
 - `/workflow [decisions|blockers|handoff|review-gates]` - Workflow overview or a section
 - `/decisions` / `/blockers` / `/review-gates` - Shortcuts for the sections above
 - `/handoff [generate|--local]` - Show or generate a session handoff (`--local` = LLM-free snapshot)
 
 **General:**
+
 - `/help` - Show help
 - `/config` - Open the interactive configuration editor
 - `/project-config` - Show merged project configuration
@@ -304,6 +377,7 @@ export SERPER_API_KEY="your-key-here"
 ```
 
 **Available Tools:**
+
 - ✅ `dice_roll` - No API key needed
 - ✅ `math_evaluate` - No API key needed
 - ✅ `current_datetime` - No API key needed
@@ -315,6 +389,7 @@ export SERPER_API_KEY="your-key-here"
 - 🔑 `deep_research` - Requires `toolApiKeys.serper`
 
 **Get API Keys:**
+
 - OpenWeather API: https://openweathermap.org/api
 - Serper API: https://serper.dev/
 
@@ -361,6 +436,7 @@ You can run MCP servers in Docker containers for isolation and portability:
 ```
 
 **Docker Configuration Notes:**
+
 - The `-i` flag is required for stdin communication with the MCP server
 - Use `-e VAR_NAME` (without value) to pass a variable through to the container. It must be listed in this server's `env` block: the MCP child is started with those variables plus the MCP SDK's own defaults (`PATH`, `HOME`, `SHELL`, `TERM`, `USER`), never with your whole shell environment
 - Keys that would have the runtime load code before the server starts - `NODE_*`, `LD_*`, `DYLD_*`, `ELECTRON_RUN_AS_NODE` - are refused and logged. Everything else in `env` is passed through, so `HTTPS_PROXY`, `NO_PROXY` and a `PATH` your wrapper needs all work here
@@ -387,6 +463,7 @@ You can also run any MCP server via npx or custom executables:
 ```
 
 **Available Built-in MCP Servers:**
+
 - 🔧 **GitHub** - Repository management, issues, PRs (requires `GITHUB_ACCESS_TOKEN`)
 - 🔧 **LinkedIn** - Post management, analytics (requires `LINKEDIN_ACCESS_TOKEN`, `COMPANY_NAME`)
 - 🔧 **Atlassian** - Jira/Confluence integration (requires `ATLASSIAN_ACCESS_TOKEN`, `ATLASSIAN_CLOUD_ID`, `ATLASSIAN_SITE_URL`)
@@ -395,16 +472,35 @@ You can also run any MCP server via npx or custom executables:
 
 #### Serve Bike4Mind itself as an MCP server (`b4m mcp serve`)
 
-The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises nineteen tools (`list_notebooks`, `get_notebook`, `create_notebook`, `rename_notebook`, `clone_notebook`, `delete_notebook`, `list_projects`, `get_project`, `create_project`, `send_message`, `search_knowledge_base`, `list_lakes`, `list_files`, `get_file`, `generate_sound_effect`, `text_to_speech`, `generate_image`, `create_artifact`, `publish_artifact`) plus four resource templates (`b4m://notebook/{id}`, `b4m://file/{id}`, `b4m://project/{id}`, `b4m://artifact/{id}`), each listable and readable as JSON, and `b4m://agent-quest` - the credential-free manifest for The Open Door, the onboarding quest for agents.
+The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises twenty-six tools (`list_notebooks`, `get_notebook`, `create_notebook`, `rename_notebook`, `clone_notebook`, `delete_notebook`, `list_projects`, `get_project`, `create_project`, `send_message`, `search_knowledge_base`, `list_lakes`, `list_files`, `get_file`, `generate_sound_effect`, `text_to_speech`, `generate_image`, `create_artifact`, `publish_artifact`, `bob_read_site`, `bob_compare_sites`, `bob_recheck`, `get_bob_report`, `get_bob_comparison`, `list_bob_reports`, `bob_runs_left`) plus four resource templates (`b4m://notebook/{id}`, `b4m://file/{id}`, `b4m://project/{id}`, `b4m://artifact/{id}`), each listable and readable as JSON, and `b4m://agent-quest` - the credential-free manifest for The Open Door, the onboarding quest for agents.
 
 To get answers grounded in a data lake, call `list_lakes`, then `create_notebook { dataLakeId }` with a lake's id, then `send_message { notebookId }` on that notebook: the result carries the `reply` plus the `citables` it was grounded in. `list_lakes` needs a key with `datalake:read` (and data lakes enabled on the instance).
+
+The seven Bob tools read websites with Bob on an instance that serves it. `bob_read_site` and `bob_compare_sites` spend the key owner's credits and publish each report, as a run started in the app does; they wait up to `waitSeconds` (default 600, at most 900) with progress, then return the report as Markdown with its in-app and published links, or the id to read back with `get_bob_report` / `get_bob_comparison` when Bob is still reading. `bob_recheck` re-scans one finding against the live site; it costs no credits and adds the reading to the existing report. Bob's routes enforce their scopes: starting work needs `bob:run`, which can also read back, and reading needs `bob:read`.
 
 ```bash
 b4m mcp serve                        # stdio (default) - for local clients that spawn the process
 b4m mcp serve --http --port 7000     # stateless streamable HTTP at http://127.0.0.1:7000/mcp
+b4m mcp serve --local                # stdio, local model tools only; no backend needed
 ```
 
-Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool *listing* needs no credentials; tool *calls* authenticate. Prefer `B4M_API_KEY` over `--api-key` (a flag value shows up in process listings). HTTP mode binds loopback only (`127.0.0.1`, `/mcp` path) and has no per-request auth, so do not expose it off-host. The advertised scopes are the recommended key configuration, not per-route hard gates. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and details.
+`--local` serves only `models_list`, `models_search`, `models_pull` and `models_remove`, ignores any configured endpoint, and notes this in one stderr line. It is stdio only (`--http` with it is an error, as are `--dev` and `--prod`). Only after `b4m mcp serve` is `--local` serve's own flag and leaves the saved backend alone; before it, as in `b4m --local mcp serve`, it is the `--dev` alias. Without it, `mcp serve` exits with `No API endpoint configured` when no backend is set.
+
+Over stdio only, when the caller is entitled to OptiHashi and the key carries `optihashi:read` and `optihashi:compute`, the server also offers `optihashi_solvers` and `optihashi_solve` (a free, bounded classical solver race). With an API key, the CLI first checks the key's own scopes and offers them only when it holds both. The solve input schema comes from the server at startup, with a 5 second discovery budget; restart the session to pick up changed family ids, solver ids or limits. `optihashi_solvers` fetches the current roster on every call. With no entitlement, scopes or feature, they are simply not listed. No paid compute is exposed, and HTTP mode never offers them.
+
+Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool _listing_ needs no credentials, apart from the optional stdio-only tools above, which are fetched once at startup; tool _calls_ authenticate. Prefer `B4M_API_KEY` over `--api-key` (a flag value shows up in process listings). HTTP mode binds loopback only (`127.0.0.1`, `/mcp` path) and requires an `Authorization: Bearer <token>` header on every request. The token is `--token`, else `B4M_MCP_TOKEN`, else a random one generated at startup and printed to stderr (a token you set yourself is printed masked). Prefer `B4M_MCP_TOKEN` over `--token`, which shows up in process listings. The advertised scopes are the recommended key configuration, not per-route hard gates, apart from Bob's, which its routes enforce. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and details. Point an HTTP client at it like this:
+
+```json
+{
+  "mcpServers": {
+    "bike4mind": {
+      "type": "http",
+      "url": "http://127.0.0.1:7000/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
 
 ## Plugins
 
@@ -438,22 +534,22 @@ The entry default-exports a factory. It receives a context (currently `{ logger 
 
 ```js
 export default ctx => ({
-  name: 'foo',                       // unique module name
+  name: 'foo', // unique module name
   description: 'What this plugin does',
   getTools: () => [
     {
-      toolFn: async args => 'result',   // invoked when the agent calls the tool
+      toolFn: async args => 'result', // invoked when the agent calls the tool
       toolSchema: {
         name: 'foo_tool',
         description: 'What the tool does',
-        parameters: { type: 'object', properties: {} },  // JSON Schema
+        parameters: { type: 'object', properties: {} }, // JSON Schema
       },
     },
   ],
   getSystemPromptSection: () => 'Extra system-prompt text (or an empty string)',
-  getCommands: () => [{ name: 'foo', description: '...', execute: args => {} }],  // optional
-  registerWsHandlers: wsManager => {},  // optional
-  dispose: () => {},                    // optional, runs on exit/disable
+  getCommands: () => [{ name: 'foo', description: '...', execute: args => {} }], // optional
+  registerWsHandlers: wsManager => {}, // optional
+  dispose: () => {}, // optional, runs on exit/disable
 });
 ```
 
@@ -489,6 +585,7 @@ The CLI includes a `recent_changes` tool that uses git history to find recently 
 ### How It Works
 
 The tool uses `git log` to track file modifications and returns:
+
 - Files sorted by activity (most commits first)
 - Commit messages for context
 - Optional statistics showing lines changed
@@ -503,6 +600,7 @@ The CLI supports loading project-specific instructions from context files, simil
 ### Supported Files
 
 **Project-level** (in your project directory, checked in priority order):
+
 1. `CLAUDE.local.md` - Personal/gitignored instructions (highest priority)
 2. `CLAUDE.md` - Project instructions
 3. `AGENTS.md` - Cross-tool standard
@@ -511,6 +609,7 @@ The CLI supports loading project-specific instructions from context files, simil
 6. `INSTRUCTIONS.md` - Project instructions (lowest priority)
 
 **Global** (in `~/.bike4mind/`):
+
 1. `AI.local.md` - Personal global instructions
 2. `AI.md` - Global instructions
 
@@ -535,6 +634,7 @@ Create a `CLAUDE.md` in your project:
 ```
 
 On startup, you'll see:
+
 ```
 📄 Project context: CLAUDE.md
 ```
@@ -546,6 +646,7 @@ The agent will follow these instructions for all interactions in that project.
 Sessions are saved to `~/.bike4mind/sessions/`
 
 Each session includes:
+
 - Full conversation history
 - Token usage tracking
 - Agent reasoning steps
@@ -556,6 +657,7 @@ Each session includes:
 Debug logs are automatically written to `~/.bike4mind/debug/[session-id].txt` for every session, regardless of the `--verbose` flag.
 
 **What's logged:**
+
 - Session configuration (API endpoint, environment, model)
 - HTTP requests and responses (with size and preview)
 - SSE streaming events from LLM
@@ -564,6 +666,7 @@ Debug logs are automatically written to `~/.bike4mind/debug/[session-id].txt` fo
 - Authentication flow events
 
 **Accessing logs:**
+
 ```bash
 # List all debug logs
 ls -lh ~/.bike4mind/debug/
@@ -576,12 +679,40 @@ tail -f ~/.bike4mind/debug/[session-id].txt
 ```
 
 **Log retention:**
+
 - Debug logs older than 30 days are automatically cleaned up on CLI startup
 - Each log file is named by session ID for easy correlation
 
 **Verbose mode:**
+
 - Without `--verbose`: Debug logs only written to file (clean console output)
 - With `--verbose`: Debug logs shown in console AND written to file
+
+### Hearth hook troubleshooting
+
+If the standalone `bin/hearth-hook.mjs` reporter is not reaching Hearth, enable its diagnostic:
+
+```bash
+export B4M_HEARTH_DEBUG=1
+echo '{}' | node packages/cli/bin/hearth-hook.mjs
+```
+
+Set `B4M_API_URL` and `B4M_API_KEY` first. With missing credentials the hook makes no request.
+Diagnostics are off by default; an empty `B4M_HEARTH_DEBUG` or exactly `0` also disables them.
+Other nonempty values enable one stderr line on failure:
+
+- `POST /api/hearth/events failed: HTTP 401`: check whether the API key is valid.
+- `POST /api/hearth/events error: ECONNREFUSED`: check the endpoint and server availability.
+- `POST /api/hearth/events error: TimeoutError`: check connectivity and server responsiveness.
+- `stdin payload error: SyntaxError`: the hook received malformed JSON.
+- `configuration error: ERR_INVALID_URL`: check that `B4M_API_URL` is a valid absolute URL.
+- `configuration error: missing B4M_API_URL or B4M_API_KEY`: set both variables before running the hook.
+
+Each line starts with `hearth-hook:`. Errors expose a native error code or name, never the error
+message, API key, URL, or hook payload. The hook still exits `0` on reporting failures. With debugging
+enabled, the request gets 2.75 seconds and the diagnostic flush gets up to 250 ms within the 3-second
+request/diagnostic budget. A closed or stalled stderr can lose the diagnostic; reporting remains
+best-effort. Unset `B4M_HEARTH_DEBUG` after troubleshooting to keep routine hook events quiet.
 
 ## Development
 
@@ -679,6 +810,7 @@ pnpm --filter @bike4mind/agents dev
 `dist/` rebuilds on save, so the next `b4m` invocation sees changes without a manual `build`.
 
 Caveats:
+
 - This does **not** hot-reload an already-running interactive `b4m` session — you still exit and re-run.
 - Running multiple watchers in parallel (one per package you're touching) hasn't been load-tested in this repo. If watch seems to miss changes or feels unreliable, fall back to manual `pnpm --filter <pkg> build`.
 
@@ -786,15 +918,15 @@ runtime. Unknown flags are tolerated (never hard-error) and the interactive TUI 
 preserved (a positional prompt seeds **and** submits turn 1 without switching to
 headless `-p`):
 
-| Flag | Effect |
-| --- | --- |
-| `--mcp-config <file>` | Inject MCP servers from a claude-shape JSON (`{ "mcpServers": {...} }`). Supports HTTP transport (`type: "http"`, `url`, `headers`) with per-launch Bearer auth. |
-| `--strict-mcp-config` | Use ONLY `--mcp-config` servers; ignore file-config and `.mcp.json` (board YAML pane). |
-| `--append-system-prompt <text>` | Append text verbatim to the end of the system prompt (the 3-layer brief). |
-| `--allowedTools <patterns>` | Auto-approve matching tools without a permission prompt (glob `mcp__manifold__*` or a space-separated explicit list). |
-| `--settings <json>` | Inline JSON; the `hooks` subset drives lifecycle hooks (see below). Malformed JSON is ignored, never fatal. |
+| Flag                                      | Effect                                                                                                                                                                                                           |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--mcp-config <file>`                     | Inject MCP servers from a claude-shape JSON (`{ "mcpServers": {...} }`). Supports HTTP transport (`type: "http"`, `url`, `headers`) with per-launch Bearer auth.                                                 |
+| `--strict-mcp-config`                     | Use ONLY `--mcp-config` servers; ignore file-config and `.mcp.json` (board YAML pane).                                                                                                                           |
+| `--append-system-prompt <text>`           | Append text verbatim to the end of the system prompt (the 3-layer brief).                                                                                                                                        |
+| `--allowedTools <patterns>`               | Auto-approve matching tools without a permission prompt (glob `mcp__manifold__*` or a space-separated explicit list).                                                                                            |
+| `--settings <json>`                       | Inline JSON; the `hooks` subset drives lifecycle hooks (see below). Malformed JSON is ignored, never fatal.                                                                                                      |
 | `--session-id <uuid>` / `--resume <uuid>` | Pin / resume a session (board pane). `/clear` and `/compact` keep the pinned uuid; a bad `--resume` prints `No conversation found with session ID <uuid>` and exits non-zero so the host can self-heal the pane. |
-| `<positional prompt>` | Seeds and auto-fires turn 1 while staying interactive. |
+| `<positional prompt>`                     | Seeds and auto-fires turn 1 while staying interactive.                                                                                                                                                           |
 
 ### Lifecycle hooks (`--settings.hooks`)
 
@@ -803,6 +935,19 @@ Mirrors claude's hook contract for the host's `action_required` signal: a
 interactive permission prompt blocks; `PostToolUse` / `Stop` / `UserPromptSubmit`
 commands remove it. Each hook command runs via a real shell with its stdin piped
 then closed (EOF), so a blocking `cat > <file>` hook returns immediately.
+
+### Folder trust on a host launch
+
+A launch with a positional prompt **and** at least one host flag (`--mcp-config`,
+`--append-system-prompt`, `--allowedTools`, `--settings`, `--session-id` or
+`--resume`) does not show the folder-trust prompt or the repo MCP-approval prompt,
+since no hook fires for either and the auto-fired turn would wait behind it. An
+untrusted folder's repo config (`CLAUDE.md`, `AGENTS.md`, `.mcp.json`, `.claude/`,
+`.bike4mind/`) stays inert for that session, exactly as if "Not now" had been
+chosen, and nothing is persisted. A one-line notice says so; run `/trust folder`
+to trust it. Pending repo MCP servers stay off with the usual warning. Context the
+host needs should reach the session through `--append-system-prompt` and
+`--mcp-config`.
 
 ## License
 

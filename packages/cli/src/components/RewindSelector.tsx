@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import type { Message } from '../storage/types';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 interface RewindSelectorProps {
   messages: Message[];
@@ -39,15 +40,18 @@ export function RewindSelector({ messages, onSelect, onCancel }: RewindSelectorP
     }
   });
 
-  // Get user messages only for selection
+  // Get user messages only for selection. A steer is persisted ahead of its
+  // turn's reply (session/steering.ts), so rewinding to it would also drop the
+  // work done before it; rewind to the turn's own prompt instead.
   const userMessages = messages
     .map((msg, idx) => ({ msg, originalIndex: idx }))
-    .filter(({ msg }) => msg.role === 'user');
+    .filter(({ msg }) => msg.role === 'user' && !msg.metadata?.steered);
 
   // Create selection items (chronological order - oldest first)
   const items: RewindItem[] = userMessages.map(({ msg, originalIndex }, index) => {
     // Truncate content to 50 chars
-    const preview = msg.content.length > 50 ? msg.content.substring(0, 50) + '...' : msg.content;
+    const content = sanitizeTerminalText(msg.content);
+    const preview = content.length > 50 ? content.substring(0, 50) + '...' : content;
     const timestamp = new Date(msg.timestamp).toLocaleString();
     // Show position (1 = first/oldest message)
     const position = index + 1;
@@ -120,11 +124,8 @@ export function RewindSelector({ messages, onSelect, onCancel }: RewindSelectorP
     selectedMessageIndex !== null && selectedMessageIndex >= 0 && selectedMessageIndex < messages.length
       ? messages[selectedMessageIndex]
       : null;
-  const selectedPreview = selectedMessage
-    ? selectedMessage.content.length > 50
-      ? selectedMessage.content.substring(0, 50) + '...'
-      : selectedMessage.content
-    : '';
+  const selectedContent = selectedMessage ? sanitizeTerminalText(selectedMessage.content) : '';
+  const selectedPreview = selectedContent.length > 50 ? selectedContent.substring(0, 50) + '...' : selectedContent;
 
   return (
     <Box flexDirection="column" marginY={1}>

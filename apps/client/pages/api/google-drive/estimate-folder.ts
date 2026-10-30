@@ -2,7 +2,7 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
@@ -10,7 +10,7 @@ import {
   createDriveClient,
   isValidDriveFolderId,
   withDriveReconnectOnAuthError,
-} from '@server/integrations/google/drive/driveClient';
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 import { estimateFolder } from '@server/integrations/google/drive/driveContent';
 import { MAX_INGEST_CANDIDATES } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
 

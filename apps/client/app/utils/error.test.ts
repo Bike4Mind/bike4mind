@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { AxiosError, AxiosHeaders } from 'axios';
-import { getInsufficientCreditsMessage, getServerErrorField } from './error';
+import { getInsufficientCreditsMessage, getServerErrorField, getValidationViolationsMessage } from './error';
 
 /** An axios rejection shaped like one from the shared error envelope (errorHandler.ts). */
 const apiError = (status: number, data: unknown): AxiosError => {
@@ -61,5 +61,34 @@ describe('getServerErrorField', () => {
 
   it('returns the server error string', () => {
     expect(getServerErrorField({ isAxiosError: true, response: { data: { error: 'boom' } } })).toBe('boom');
+  });
+});
+
+describe('getValidationViolationsMessage', () => {
+  it('returns the violation reasons instead of the bare "Validation failed"', () => {
+    const message = getValidationViolationsMessage(
+      apiError(422, {
+        error: 'Validation failed',
+        violations: [
+          { type: 'forbidden_pattern', message: 'Provide a single self-contained component.', file: 'index.html' },
+        ],
+      })
+    );
+
+    expect(message).toBe('Provide a single self-contained component.');
+  });
+
+  it('joins several distinct reasons and counts the ones it leaves out', () => {
+    const violations = ['A.', 'B', 'A.', 'C!', 'D.', 'E.'].map(message => ({ type: 'invalid_path', message }));
+
+    expect(getValidationViolationsMessage(apiError(422, { error: 'Validation failed', violations }))).toBe(
+      'A. B. C! (+2 more)'
+    );
+  });
+
+  it('returns undefined when there are no usable violation messages', () => {
+    expect(getValidationViolationsMessage(apiError(422, { error: 'Validation failed' }))).toBeUndefined();
+    expect(getValidationViolationsMessage(apiError(422, { violations: [{ type: 'x' }, null, 'y'] }))).toBeUndefined();
+    expect(getValidationViolationsMessage(new Error('boom'))).toBeUndefined();
   });
 });

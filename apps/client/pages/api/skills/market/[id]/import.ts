@@ -1,19 +1,8 @@
 // apps/client/pages/api/skills/market/[id]/import.ts
 import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { SkillListing, SkillListingImport, SkillListingVersion, skillRepository } from '@bike4mind/database';
-import {
-  BadRequestError,
-  ConflictError,
-  NotFoundError,
-  type ISkillDocument,
-  type ISkillImportedFrom,
-  type ISkillListingVersion,
-} from '@bike4mind/common';
-import { canSeeListing, findListing, memberOrgIdsFor, skillContentHash } from '@server/skillMarket/market';
-import { validateSkillName } from '@server/utils/skillValidation';
-import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { importRateLimit } from '@server/skillMarket/market';
+import { importListing } from '@server/skillMarket/importListing';
 
 const bodySchema = z.object({
   token: z.string().max(64).optional(),
@@ -27,120 +16,16 @@ const bodySchema = z.object({
   expectedVersionId: z.string().max(64).optional(),
 });
 
-/** First free `<name>-N` for the caller, offered back on a name collision. */
-async function suggestName(userId: string, name: string): Promise<string | undefined> {
-  for (let n = 2; n <= 20; n++) {
-    const candidate = `${name.slice(0, 60)}-${n}`;
-    if (!(await skillRepository.findByNameForUser(userId, candidate))) return candidate;
-  }
-  return undefined;
-}
-
 /**
  * POST /api/skills/market/[id]/import - copy the listing's current APPROVED snapshot into a
- * user-scoped skill (or refresh an earlier copy). Pending or rejected content can never reach an
- * importer: the snapshot is read through `currentApprovedVersionId` only.
+ * user-scoped skill (see `importListing`). v1 twin: pages/api/v1/skills/market/listings/[id]/import.ts.
  */
 const handler = baseApi({ auth: 'jwtOnly' })
-  .use(rateLimit({ limit: 60, windowMs: 60 * 60 * 1000, bucket: 'skill-market-import' }))
+  .use(importRateLimit())
   .post(async (req, res) => {
-    const userId = req.user!.id;
     const body = bodySchema.parse(req.body ?? {});
-    const listing = await findListing(String(req.query.id));
-    const hasImported = listing
-      ? Boolean(await SkillListingImport.exists({ listingId: String(listing.id), userId }))
-      : false;
-    if (!listing || !canSeeListing(listing, await memberOrgIdsFor(userId), body.token, hasImported)) {
-      throw new NotFoundError('Listing not found');
-    }
-    if (listing.authorUserId === userId) throw new BadRequestError('This is your own listing');
-
-    const versionDoc = listing.currentApprovedVersionId
-      ? await SkillListingVersion.findById(listing.currentApprovedVersionId)
-      : null;
-    const version = versionDoc?.toJSON() as unknown as ISkillListingVersion | undefined;
-    if (!version || !['approved', 'auto_approved'].includes(version.reviewStatus)) {
-      throw new NotFoundError('Listing not found');
-    }
-    if (body.expectedVersionId && body.expectedVersionId !== String(version.id)) {
-      throw new ConflictError('A newer version was approved since you reviewed this one', {
-        code: 'version_changed',
-      });
-    }
-
-    const snap = version.snapshot;
-    const importedFrom: ISkillImportedFrom = {
-      listingId: String(listing.id),
-      versionId: String(version.id),
-      version: version.version,
-      contentHash: version.contentHash,
-    };
-    // Explicit '' / [] (not undefined) so an update clears fields the new version dropped.
-    const content = {
-      description: snap.description,
-      body: snap.body,
-      argumentHint: snap.argumentHint ?? '',
-      allowedTools: snap.allowedTools ?? [],
-      disableModelInvocation: Boolean(snap.disableModelInvocation),
-      importedFrom,
-    };
-
-    let skill;
-    if (body.targetSkillId) {
-      const target = await skillRepository.findById(body.targetSkillId);
-      if (!target || target.userId !== userId || target.importedFrom?.listingId !== String(listing.id)) {
-        throw new NotFoundError('Imported copy not found');
-      }
-      // A global copy reaches everyone, and the listing's bar can be lower than Public (an org or
-      // unlisted version auto-approves at the `review` tier). Content changes to a global skill go
-      // through `scanGlobalSkillUpdate` on PUT instead; see `globalSkillScanFor` in skillAccess.ts.
-      if ((target.isGlobalRead || target.isGlobalWrite) && !req.user!.isAdmin) {
-        throw new BadRequestError(
-          'This copy is shared with everyone, so it cannot be updated from the market. Edit it directly instead.'
-        );
-      }
-      if (skillContentHash(target) !== target.importedFrom.contentHash && !body.overwrite) {
-        throw new ConflictError('You edited this copy since importing it; updating will overwrite your changes', {
-          code: 'local_changes',
-        });
-      }
-      skill = await skillRepository.update({ id: target.id, ...content }, { new: true });
-    } else {
-      const name = body.name !== undefined ? validateSkillName(body.name) : snap.name;
-      try {
-        skill = await skillRepository.create({
-          name,
-          ...content,
-          userId,
-          isGlobalRead: false,
-          isGlobalWrite: false,
-          users: [],
-          groups: [],
-        } as unknown as Omit<ISkillDocument, 'id' | 'createdAt' | 'updatedAt'>);
-      } catch (error) {
-        if (isDuplicateKeyError(error)) {
-          throw new ConflictError(`You already have a skill named "${name}"`, {
-            code: 'name_taken',
-            suggestedName: await suggestName(userId, name),
-          });
-        }
-        throw error;
-      }
-    }
-
-    // One row per (listing, importer): only the first import counts toward importCount.
-    try {
-      const before = await SkillListingImport.findOneAndUpdate(
-        { listingId: String(listing.id), userId },
-        { $set: { skillId: String(skill!.id), version: version.version }, $setOnInsert: { importedAt: new Date() } },
-        { upsert: true, new: false }
-      );
-      if (!before) await SkillListing.updateOne({ _id: listing.id }, { $inc: { importCount: 1 } });
-    } catch (error) {
-      if (!isDuplicateKeyError(error)) throw error; // a concurrent first import already counted it
-    }
-
-    res.status(body.targetSkillId ? 200 : 201).json({ skill: { id: String(skill!.id), name: skill!.name } });
+    const { skill, created } = await importListing(req.user!, String(req.query.id), body);
+    res.status(created ? 201 : 200).json({ skill });
   });
 
 export default handler;

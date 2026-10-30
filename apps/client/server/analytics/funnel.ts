@@ -1,42 +1,29 @@
 import type { Request } from 'express';
-import { FirstRunEvents, type IUserAcquisition } from '@bike4mind/common';
+import {
+  FirstRunEvents,
+  isSyntheticIdentity,
+  parseSyntheticDomainList,
+  type IUserAcquisition,
+} from '@bike4mind/common';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { readConsentedAcquisitionTouches } from './acquisition';
 import { emitProductEvent, HOST_PRODUCT_ID } from './emitActiveEvent';
-import { pseudonymizeUserId } from './pseudonymize';
+import { laneMetadata } from './lane';
+import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { stableEventId } from './signupEvents';
 import { logEventSafe } from '@server/utils/analyticsLog';
+import { rewardInviterForFirstAnswer } from '@server/referrals/firstAnswerReward';
 
 // Server half of the funnel instrumentation. The client half (begin_checkout, upsell_*) is
-// app/utils/funnelEvents.ts; both skip users flagged isSynthetic so test personas never reach
-// conversion metrics.
-
-export const SYNTHETIC_USERNAME_PREFIX = 'persona-';
-
-/** Lower-cased domains from a comma/whitespace separated list; leading `@` tolerated. */
-export function parseDomainList(raw: unknown): string[] {
-  if (typeof raw !== 'string') return [];
-  return raw
-    .split(/[\s,]+/)
-    .map(d => d.trim().toLowerCase().replace(/^@/, ''))
-    .filter(Boolean);
-}
-
-/** Whether an account is a test persona: the username prefix, or an email on (or under) a test domain. */
-export function isSyntheticIdentity(
-  identity: { username?: string | null; email?: string | null },
-  testDomains: readonly string[]
-): boolean {
-  if (identity.username?.toLowerCase().startsWith(SYNTHETIC_USERNAME_PREFIX)) return true;
-  const domain = identity.email?.split('@')[1]?.toLowerCase();
-  if (!domain) return false;
-  return testDomains.some(d => domain === d || domain.endsWith(`.${d}`));
-}
+// app/utils/funnelEvents.ts. Users flagged isSynthetic are handled differently by each: the client
+// half feeds GA4 and ad pixels, which have no way to set a test persona aside, so it skips them;
+// this half feeds Overwatch, which can tell them apart, so it sends them marked with the synthetic
+// lane (lane.ts).
 
 async function syntheticTestDomains(): Promise<string[]> {
   try {
-    return parseDomainList(await adminSettingsRepository.getSettingsValue('syntheticUserEmailDomains'));
+    return parseSyntheticDomainList(await adminSettingsRepository.getSettingsValue('syntheticUserEmailDomains'));
   } catch {
     return [];
   }
@@ -84,9 +71,13 @@ export async function recordSignupAcquisition(opts: {
   user: { id: string; username?: string | null; email?: string | null };
   method: string;
 }): Promise<{ acquisition?: IUserAcquisition; isSynthetic: boolean }> {
+  // Decided first and kept through a failed write: callers gate the signup pixel, the
+  // cross-product credit and the synthetic lane on it, so a write error must not turn a persona
+  // into a real signup.
+  let isSynthetic = false;
   try {
+    isSynthetic = isSyntheticIdentity(opts.user, await syntheticTestDomains());
     const acquisition = toUserAcquisition(readConsentedAcquisitionTouches(opts.req), opts.method);
-    const isSynthetic = isSyntheticIdentity(opts.user, await syntheticTestDomains());
     if (acquisition || isSynthetic) {
       await userRepository.update({
         id: opts.user.id,
@@ -97,7 +88,7 @@ export async function recordSignupAcquisition(opts: {
     return { ...(acquisition && { acquisition }), isSynthetic };
   } catch (err) {
     console.warn('[b4m-analytics] signup acquisition not recorded', err instanceof Error ? err.message : err);
-    return { isSynthetic: false };
+    return { isSynthetic };
   }
 }
 
@@ -123,25 +114,39 @@ export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value' |
  * One once-per-user funnel stage to Overwatch under the host product. The eventId is keyed on the
  * user's pseudonym, so a retried handler sends the same id and the receiver keeps one event. The
  * campaign is the stored first touch, not the 30-minute session cookie, so later stages stay
- * joinable to the door the user came through. Synthetic users are skipped. Never throws.
- * Resolves to whether an emit was attempted.
+ * joinable to the door the user came through. Never throws. Resolves to whether an emit was
+ * attempted.
+ *
+ * A synthetic user's stages are sent with `lane: 'synthetic'` rather than skipped. Skipped, a
+ * persona's signup was indistinguishable from no signup at all; marked, it can be counted apart
+ * from real signups and a persona run can still be checked. The lane is spread last so caller
+ * metadata cannot unmark a synthetic user.
  */
 export async function emitFunnelEvent(opts: {
   user: FunnelUser;
   event: FunnelEvent;
   metadata?: Record<string, string | number | boolean>;
 }): Promise<boolean> {
-  if (opts.user.isSynthetic) return false;
   const utm = opts.user.acquisition?.firstTouch;
+  const metadata = { ...opts.metadata, ...laneMetadata(opts.user) };
   await emitProductEvent({
     productId: HOST_PRODUCT_ID,
     event: opts.event,
     eventId: stableEventId(opts.event, HOST_PRODUCT_ID, pseudonymizeUserId(opts.user.id)),
     userId: opts.user.id,
     ...(utm && { utm }),
-    ...(opts.metadata && { metadata: opts.metadata }),
+    ...(Object.keys(metadata).length > 0 && { metadata }),
   }).catch(() => {});
   return true;
+}
+
+// A stage an admin caused (create-user, bulk-create-users, an admin verifying the email) is still
+// the stage, but not a day its user was active: `userAction: false` keeps Overwatch from counting
+// them in DAU, or as a new user, before they have signed in once; their first real request does
+// that. Overwatch also leaves `userAction: false` signups out of the funnel's signup count, so an
+// admin-created account does not inflate signups either.
+function funnelMethodMetadata(method: string): { method: string; userAction?: false } {
+  return { method, ...(method === 'admin' && { userAction: false as const }) };
 }
 
 /**
@@ -157,7 +162,7 @@ export async function emitSignupFunnelEvents(opts: {
   emailVerified: boolean;
   creditsGranted: number;
 }): Promise<void> {
-  const metadata = { method: opts.method };
+  const metadata = funnelMethodMetadata(opts.method);
   await Promise.all([
     opts.emailVerified && emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
     (opts.emailVerified || opts.creditsGranted > 0) &&
@@ -180,7 +185,7 @@ export async function emitEmailVerifiedFunnelEvents(opts: {
   creditsGranted: number;
 }): Promise<void> {
   if (!signedUpAfterLaunch(opts.user.createdAt)) return;
-  const metadata = { method: opts.method };
+  const metadata = funnelMethodMetadata(opts.method);
   await Promise.all([
     emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
     emitFunnelEvent({
@@ -188,6 +193,7 @@ export async function emitEmailVerifiedFunnelEvents(opts: {
       event: 'credits_granted',
       metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
     }),
+    rewardInviterForFirstAnswer(opts.user.id),
   ]);
 }
 
@@ -211,16 +217,20 @@ export async function recordFirstValue(opts: {
     if (res.modifiedCount !== 1) return false;
     await opts.onRecorded?.();
     const createdAt = opts.user.createdAt ? new Date(opts.user.createdAt).getTime() : NaN;
-    return await emitFunnelEvent({
-      user: opts.user,
-      event: 'first_value',
-      metadata: {
-        feature: opts.feature,
-        ...(Number.isFinite(createdAt) && {
-          secondsSinceSignup: Math.max(0, Math.round((now.getTime() - createdAt) / 1000)),
-        }),
-      },
-    });
+    const [emitted] = await Promise.all([
+      emitFunnelEvent({
+        user: opts.user,
+        event: 'first_value',
+        metadata: {
+          feature: opts.feature,
+          ...(Number.isFinite(createdAt) && {
+            secondsSinceSignup: Math.max(0, Math.round((now.getTime() - createdAt) / 1000)),
+          }),
+        },
+      }),
+      rewardInviterForFirstAnswer(opts.user.id),
+    ]);
+    return emitted;
   } catch (err) {
     console.warn('[b4m-analytics] first_value not recorded', err instanceof Error ? err.message : err);
     return false;

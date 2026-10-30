@@ -3,6 +3,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { skillRepository } from '@bike4mind/database';
 import { ISkill } from '@bike4mind/common';
+import type { RepositoryUpdateOptions } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import {
   validateSkillName,
@@ -10,6 +11,8 @@ import {
   validateSkillBody,
   validateSkillArgumentHint,
   validateSkillAllowedTools,
+  validateSkillFiles,
+  validateSkillClaudeCodeAllowedTools,
 } from '@server/utils/skillValidation';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import {
@@ -58,9 +61,13 @@ const handler = baseApi()
     if (body.body !== undefined) patch.body = validateSkillBody(body.body);
     if (body.argumentHint !== undefined) patch.argumentHint = validateSkillArgumentHint(body.argumentHint);
     if (body.allowedTools !== undefined) patch.allowedTools = validateSkillAllowedTools(body.allowedTools);
+    if (body.claudeCodeAllowedTools !== undefined) {
+      patch.claudeCodeAllowedTools = validateSkillClaudeCodeAllowedTools(body.claudeCodeAllowedTools);
+    }
     if (body.disableModelInvocation !== undefined) {
       patch.disableModelInvocation = Boolean(body.disableModelInvocation);
     }
+    if (body.files !== undefined) patch.files = validateSkillFiles(body.files) ?? [];
 
     const scanMode = globalSkillScanFor(skill, patch, { id: req.user!.id, isAdmin: req.user!.isAdmin });
     if (scanMode !== 'none') {
@@ -73,15 +80,22 @@ const handler = baseApi()
 
     // A global skill's write is conditioned on the version that was read (and scanned), so two
     // editors who each passed a scan on different fields can't combine into unscanned content: the
-    // second write throws ConcurrencyConflictError (409).
+    // second write throws ConcurrencyConflictError (409). A non-global skill's write skipped the
+    // scan, so it only lands while the skill is still non-global: a concurrent flip to global 409s.
     const isGlobal = Boolean(skill.isGlobalRead || skill.isGlobalWrite);
+    // An undefined $set value is ignored by Mongoose; explicitly unset a cleared hint.
+    const updateOptions: RepositoryUpdateOptions<ISkill> = {
+      new: true,
+      ...(body.argumentHint !== undefined && patch.argumentHint === undefined ? { unset: ['argumentHint'] } : {}),
+    };
 
     try {
       const updated = isGlobal
-        ? await skillRepository.updateGuarded({ __v: (skill as { __v?: number }).__v, ...patch } as Partial<ISkill>, {
-            new: true,
-          })
-        : await skillRepository.update(patch, { new: true });
+        ? await skillRepository.updateGuarded(
+            { __v: (skill as { __v?: number }).__v, ...patch } as Partial<ISkill>,
+            updateOptions
+          )
+        : await skillRepository.updateIfNonGlobal(patch, updateOptions);
       res.json(updated ?? (await skillRepository.findById(id as string)));
     } catch (error) {
       // Rename-to-existing surfaces as a MongoDB duplicate-key error (code 11000)

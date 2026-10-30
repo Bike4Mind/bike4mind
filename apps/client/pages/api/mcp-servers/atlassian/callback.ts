@@ -3,9 +3,9 @@ import { userRepository } from '@bike4mind/database';
 import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import crypto from 'crypto';
-import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { readStateNonceHash, clearStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 const OAUTH_TIMEOUT = 30000;
 
@@ -61,7 +61,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   }
 
   if (!state || typeof state !== 'string') {
-    console.error('❌ Missing state parameter');
+    console.warn('❌ Missing state parameter');
     auditLogger.failure('missing_state');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -85,7 +85,9 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       throw new Error('Missing required state parameters');
     }
   } catch (parseError) {
-    console.error('❌ Failed to parse state parameter:', parseError);
+    // warn, not error: a junk state is caller input (scanners, hand-edited URLs), not a server fault,
+    // and error-level lines raise production alerts. The audit row still records it.
+    console.warn('❌ Failed to parse state parameter:', parseError);
     auditLogger.failure('invalid_state');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }

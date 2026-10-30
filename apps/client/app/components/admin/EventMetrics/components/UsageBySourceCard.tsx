@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Box, Card, CardContent, Stack, Typography, Select, Option, Table, CircularProgress } from '@mui/joy';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import type { PieLabelRenderProps } from 'recharts';
 import { useUsageBySource } from '../hooks/useUsageBySource';
+import { AnalyticsTermHelp } from './AnalyticsTermHelp';
+import { getUsageSourceHelp } from '../utils/usageSourceHelp';
 
 // Stable colour-per-source so the chart's slice colours match the table rows
 // across renders (recharts colours-by-index would re-shuffle on data changes).
@@ -35,6 +36,7 @@ export const UsageBySourceCard: React.FC = () => {
   const { data, isLoading, isError } = useUsageBySource(hours);
 
   const buckets = data?.buckets ?? [];
+  const chartBuckets = buckets.map(bucket => ({ ...bucket, label: getUsageSourceHelp(bucket.source).label }));
   const totalEvents = buckets.reduce((sum, b) => sum + b.events, 0);
   // Sum of per-source uniques, NOT a distinct overall user count: a user active
   // on both web and CLI is counted in each row, so the column total is
@@ -44,8 +46,20 @@ export const UsageBySourceCard: React.FC = () => {
   return (
     <Card data-testid="usage-by-source-card">
       <CardContent>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-          <Typography level="h4">Usage by Source</Typography>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          justifyContent="space-between"
+          alignItems={{ xs: 'flex-start', sm: 'center' }}
+          spacing={1}
+          sx={{ mb: 2 }}
+        >
+          <Typography level="h4">
+            Usage by Source
+            <AnalyticsTermHelp
+              term="Usage by Source"
+              description="Groups recorded activity by its source. Sources can be apps, entry points, or automatic/manual triggers, so this is not a comparison of apps alone. Events without a source are excluded."
+            />
+          </Typography>
           <Select
             value={hours}
             onChange={(_, value) => value != null && setHours(value)}
@@ -60,6 +74,10 @@ export const UsageBySourceCard: React.FC = () => {
             ))}
           </Select>
         </Stack>
+
+        <Typography level="body-sm" sx={{ mb: 2 }}>
+          Sources include apps, entry points, and triggers. Hover, focus, or tap a help icon for an explanation.
+        </Typography>
 
         {isLoading && (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
@@ -81,24 +99,10 @@ export const UsageBySourceCard: React.FC = () => {
 
         {!isLoading && !isError && buckets.length > 0 && (
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems="center">
-            <Box sx={{ width: '100%', maxWidth: 320, height: 240 }}>
+            <Box sx={{ width: '100%', maxWidth: 320, height: 280 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie
-                    data={buckets}
-                    dataKey="uniqueUsers"
-                    nameKey="source"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={90}
-                    label={entry => {
-                      const { source, uniqueUsers } = entry as PieLabelRenderProps & {
-                        source: string;
-                        uniqueUsers: number;
-                      };
-                      return `${source}: ${uniqueUsers}`;
-                    }}
-                  >
+                  <Pie data={chartBuckets} dataKey="uniqueUsers" nameKey="label" cx="50%" cy="50%" outerRadius={90}>
                     {buckets.map(b => (
                       <Cell key={b.source} fill={SOURCE_COLORS[b.source] ?? FALLBACK_COLOR} />
                     ))}
@@ -112,14 +116,32 @@ export const UsageBySourceCard: React.FC = () => {
               </ResponsiveContainer>
             </Box>
 
-            <Box sx={{ flex: 1, width: '100%' }} data-testid="usage-by-source-table">
-              <Table size="sm" stripe="odd">
+            <Box sx={{ flex: 1, minWidth: 0, width: '100%', overflowX: 'auto' }} data-testid="usage-by-source-table">
+              <Table size="sm" stripe="odd" sx={{ minWidth: 600, '& th:first-of-type': { width: '35%' } }}>
                 <thead>
                   <tr>
                     <th>Source</th>
-                    <th style={{ textAlign: 'right' }}>Users on Surface</th>
-                    <th style={{ textAlign: 'right' }}>Events</th>
-                    <th style={{ textAlign: 'right' }}>Share</th>
+                    <th style={{ textAlign: 'right' }}>
+                      Users
+                      <AnalyticsTermHelp
+                        term="Users"
+                        description="Distinct users with activity in this source during the selected period. A person using multiple sources is counted once in each row. The chart shows these counts."
+                      />
+                    </th>
+                    <th style={{ textAlign: 'right' }}>
+                      Events
+                      <AnalyticsTermHelp
+                        term="Events"
+                        description="Recorded actions for this source during the selected period. One person can generate many events. Background activity can have events without an associated user."
+                      />
+                    </th>
+                    <th style={{ textAlign: 'right' }}>
+                      Event share
+                      <AnalyticsTermHelp
+                        term="Event share"
+                        description="This source's events divided by all events shown in this table. This percentage measures events; the chart shows users per source."
+                      />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -136,8 +158,12 @@ export const UsageBySourceCard: React.FC = () => {
                             }}
                           />
                           <Typography level="body-sm" fontWeight="md">
-                            {b.source}
+                            {getUsageSourceHelp(b.source).label}
                           </Typography>
+                          <AnalyticsTermHelp
+                            term={getUsageSourceHelp(b.source).label}
+                            description={`${getUsageSourceHelp(b.source).description} Recorded value: ${b.source}.`}
+                          />
                         </Stack>
                       </td>
                       <td style={{ textAlign: 'right' }}>{b.uniqueUsers.toLocaleString()}</td>
@@ -154,13 +180,15 @@ export const UsageBySourceCard: React.FC = () => {
                       </Typography>
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      <Typography
-                        level="body-sm"
-                        fontWeight="lg"
-                        title="Sum of users-on-surface across rows; cross-surface users are counted in each row they appear"
-                      >
-                        {totalSurfaceActivations.toLocaleString()}
-                      </Typography>
+                      <Stack direction="row" justifyContent="flex-end" alignItems="center">
+                        <Typography level="body-sm" fontWeight="lg">
+                          {totalSurfaceActivations.toLocaleString()}
+                        </Typography>
+                        <AnalyticsTermHelp
+                          term="Total users"
+                          description="Sum of the user counts in each row, not a count of distinct people across all sources. Someone active in two sources contributes two to this total."
+                        />
+                      </Stack>
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <Typography level="body-sm" fontWeight="lg">

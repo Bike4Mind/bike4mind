@@ -54,13 +54,14 @@ export interface ICreditHolderIdentifier {
 /**
  * Type guard to check if an entity implements ICreditHolder
  */
-export function isCreditHolder(entity: any): entity is ICreditHolder {
+export function isCreditHolder(entity: unknown): entity is ICreditHolder {
+  if (typeof entity !== 'object' || entity === null) return false;
+  const e = entity as Partial<ICreditHolder>;
   return (
-    entity &&
-    typeof entity.currentCredits === 'number' &&
-    (entity.lastCreditsPurchasedAt === null ||
-      entity.lastCreditsPurchasedAt === undefined ||
-      entity.lastCreditsPurchasedAt instanceof Date)
+    typeof e.currentCredits === 'number' &&
+    (e.lastCreditsPurchasedAt === null ||
+      e.lastCreditsPurchasedAt === undefined ||
+      e.lastCreditsPurchasedAt instanceof Date)
   );
 }
 
@@ -79,3 +80,10 @@ export type CreditHoldRecord = {
   /** The owner's balance right after the hold; the ledger row's balance when no refund lands. */
   balanceAfterHold: number;
 };
+
+/**
+ * A hold persisted for a later request to settle, with the id of the PendingCreditHold row the
+ * expired-hold sweep refunds. Settling claims that row, so settle and sweep can never both move
+ * balance. Absent on records written before the row existed; those settle directly.
+ */
+export type PersistedCreditHold = CreditHoldRecord & { pendingHoldId?: string };

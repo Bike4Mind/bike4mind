@@ -1,4 +1,4 @@
-import type { GenerationProviderJobHandle, ProviderOutput } from '@bike4mind/common';
+import type { GenerationProviderJobHandle, ProviderOutput, VideoInputRole } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 // Defined in common because the job payload persists them; re-exported so adapters import one module.
@@ -24,7 +24,13 @@ export type ProviderPollResult =
   | { status: 'running'; /** Fraction complete, 0..1; the job handler clamps anything outside. */ progress?: number }
   | ProviderTerminalResult;
 
-export type ResolvedInputs = { inputImage?: { bytes: Buffer; mimeType: string } };
+export type ResolvedInputImage = { role: VideoInputRole; bytes: Buffer; mimeType: string };
+
+/** The request's input images, loaded, in request order. Validation has already checked each role against the model. */
+export type ResolvedInputs = { images?: readonly ResolvedInputImage[] };
+
+export const findInputImage = (inputs: ResolvedInputs, role: VideoInputRole): ResolvedInputImage | undefined =>
+  inputs.images?.find(image => image.role === role);
 
 export type ProviderContext = {
   apiKey: string;

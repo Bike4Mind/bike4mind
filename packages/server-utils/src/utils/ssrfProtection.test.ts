@@ -14,14 +14,39 @@ const dnsMock = vi.hoisted(() => ({
 }));
 vi.mock('dns', () => ({ default: dnsMock, ...dnsMock }));
 
+// Each pinned client delegates to `pinned.fetch`, which a test swaps per case; `pinned.create` records
+// the options every client was built with.
+const pinned = vi.hoisted(() => ({
+  fetch: (() => Promise.reject(new Error('pinned.fetch not set'))) as (
+    input: string | URL,
+    init?: RequestInit
+  ) => Promise<unknown>,
+  create: vi.fn(),
+}));
+vi.mock('@bike4mind/fab-pipeline/ssrf', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/fab-pipeline/ssrf')>();
+  return {
+    ...actual,
+    createPinnedFetch: (options: unknown) => {
+      pinned.create(options);
+      return Object.assign((input: string | URL, init?: RequestInit) => pinned.fetch(input, init), {
+        close: async () => undefined,
+      });
+    },
+  };
+});
+
 import {
   isPrivateIP,
   isPrivateOrInternalHostname,
   validateTargetUrl,
   assertUrlAllowed,
   safeFetch,
+  fetchPinned,
+  isResponseTooLargeError,
   SsrfError,
 } from './ssrfProtection';
+import { PinnedFetchError } from '@bike4mind/fab-pipeline/ssrf';
 
 // isPrivateIP / isPrivateOrInternalHostname are re-exported from @bike4mind/fab-pipeline (the
 // classifier is single-sourced there, #1969). These pin that the re-export is wired to the hardened
@@ -119,9 +144,7 @@ describe('assertUrlAllowed (DNS-resolving gate)', () => {
 });
 
 describe('safeFetch - initial-host and redirect-hop SSRF protection', () => {
-  const realFetch = global.fetch;
   afterEach(() => {
-    global.fetch = realFetch;
     vi.restoreAllMocks();
   });
 
@@ -133,14 +156,14 @@ describe('safeFetch - initial-host and redirect-hop SSRF protection', () => {
 
   it('rejects a non-https target before fetching', async () => {
     const fetchMock = vi.fn();
-    global.fetch = fetchMock as never;
+    pinned.fetch = fetchMock;
     await expect(safeFetch('http://blog.example.com')).rejects.toBeInstanceOf(SsrfError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('rejects a private target before fetching', async () => {
     const fetchMock = vi.fn();
-    global.fetch = fetchMock as never;
+    pinned.fetch = fetchMock;
     await expect(safeFetch('https://169.254.169.254/')).rejects.toBeInstanceOf(SsrfError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -148,7 +171,7 @@ describe('safeFetch - initial-host and redirect-hop SSRF protection', () => {
   it('fetches with redirect:manual and returns a non-redirect response directly', async () => {
     const res = okResponse();
     const fetchMock = vi.fn().mockResolvedValueOnce(res);
-    global.fetch = fetchMock as never;
+    pinned.fetch = fetchMock;
     // public IP literals so the guard's DNS path is not exercised here (covered separately)
     await expect(safeFetch('https://93.184.216.34')).resolves.toBe(res);
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -158,23 +181,23 @@ describe('safeFetch - initial-host and redirect-hop SSRF protection', () => {
   it('follows one redirect to a public host with redirect:error on the second hop', async () => {
     const final = okResponse();
     const fetchMock = vi.fn().mockResolvedValueOnce(redirectTo('https://8.8.8.8/img')).mockResolvedValueOnce(final);
-    global.fetch = fetchMock as never;
+    pinned.fetch = fetchMock;
     await expect(safeFetch('https://93.184.216.34')).resolves.toBe(final);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1][0]).toBe('https://8.8.8.8/img');
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ redirect: 'error' });
   });
 
-  it('blocks a redirect to a private host without following it (the follow-fetch bypass)', async () => {
+  it('blocks a redirect to a private host without following it', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(redirectTo('https://169.254.169.254/'));
-    global.fetch = fetchMock as never;
+    pinned.fetch = fetchMock;
     await expect(safeFetch('https://93.184.216.34')).rejects.toThrow(/blocked redirect/i);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('lets a caller reject a recursive redirect before the second fetch', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(redirectTo('https://app.example.com/api/v1/whats-new'));
-    global.fetch = fetchMock as never;
+    pinned.fetch = fetchMock;
     await expect(
       safeFetch(
         'https://example.com/whats-new.json',
@@ -187,5 +210,66 @@ describe('safeFetch - initial-host and redirect-hop SSRF protection', () => {
       )
     ).rejects.toThrow('recursive feed');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('fetchPinned and safeFetch - shared pinned client', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('safeFetch dials through the pinned client, not global fetch', async () => {
+    const globalFetch = vi.fn();
+    vi.stubGlobal('fetch', globalFetch);
+    const res = { status: 200, ok: true };
+    const fetchMock = vi.fn().mockResolvedValueOnce(res);
+    pinned.fetch = fetchMock;
+
+    await expect(safeFetch('https://93.184.216.34/a', { method: 'POST', body: 'x' })).resolves.toBe(res);
+    expect(fetchMock).toHaveBeenCalledWith('https://93.184.216.34/a', {
+      method: 'POST',
+      body: 'x',
+      redirect: 'manual',
+    });
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
+
+  it('builds a client with the requested body cap and http allowance', async () => {
+    pinned.fetch = vi.fn().mockResolvedValue({ status: 200, ok: true });
+    await safeFetch('https://93.184.216.34/img', {}, { maxBodyBytes: 7 * 1024 * 1024 });
+    await fetchPinned('http://93.184.216.34/hook', {}, { allowHttp: true });
+    expect(pinned.create).toHaveBeenCalledWith({ allowHttp: false, maxBodyBytes: 7 * 1024 * 1024 });
+    expect(pinned.create).toHaveBeenCalledWith({ allowHttp: true, maxBodyBytes: undefined });
+  });
+
+  it('builds an uncapped client for discardBody callers', async () => {
+    pinned.fetch = vi.fn().mockResolvedValue({ status: 200, ok: true });
+    await fetchPinned('http://93.184.216.34/hook', {}, { allowHttp: true, discardBody: true, maxBodyBytes: 1024 });
+    expect(pinned.create).toHaveBeenCalledWith({ allowHttp: true, maxBodyBytes: Infinity });
+  });
+
+  it('reports a blocked address from the pinned client as SsrfError', async () => {
+    pinned.fetch = vi
+      .fn()
+      .mockRejectedValue(new PinnedFetchError('ssrf_blocked', 'Blocked connection to a private address for x'));
+    await expect(fetchPinned('https://93.184.216.34')).rejects.toBeInstanceOf(SsrfError);
+    await expect(safeFetch('https://93.184.216.34')).rejects.toBeInstanceOf(SsrfError);
+  });
+
+  it('reports a blocked address on the redirect hop as a blocked redirect', async () => {
+    pinned.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 302, headers: { get: () => 'https://8.8.8.8/next' } })
+      .mockRejectedValueOnce(new PinnedFetchError('ssrf_blocked', 'Blocked connection to a private address for x'));
+    await expect(safeFetch('https://93.184.216.34')).rejects.toThrow(/blocked redirect/i);
+  });
+
+  it('passes other pinned client errors through unchanged', async () => {
+    const tooLarge = new PinnedFetchError('size_cap', 'Response body exceeded 10 bytes');
+    pinned.fetch = vi.fn().mockRejectedValue(tooLarge);
+    const error = await safeFetch('https://93.184.216.34').catch((e: unknown) => e);
+    expect(error).toBe(tooLarge);
+    expect(isResponseTooLargeError(error)).toBe(true);
+    expect(isResponseTooLargeError(new Error('other'))).toBe(false);
   });
 });

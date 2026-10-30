@@ -1,6 +1,6 @@
 import { questMasterPlanResponseSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { respond } from '@server/utils/respond';
 import { verifyQuestPlanReadAccess } from '@server/utils/questMasterPlanAccess';

@@ -39,6 +39,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: { applyCorpusAction: h.applyCorpusAction },
 }));
 vi.mock('@bike4mind/database', () => ({
+  memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   adminSettingsRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeCorpusActionRepository: {},

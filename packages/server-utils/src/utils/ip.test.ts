@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import type { Request } from 'express';
-import { getClientIp, truncateIp } from './ip';
+import { getClientIp, getClientNetwork, truncateIp } from './ip';
 
 // Build a minimal Request-like object for getClientIp. Only the fields the
 // resolver reads (headers, socket/connection.remoteAddress, ip) are populated.
@@ -273,6 +273,20 @@ describe('truncateIp', () => {
       // fe80::1 expands to fe80:0:0:0:0:0:0:1, truncated to /48
       expect(truncateIp('fe80::1')).toBe('fe80:0:0:0:0:0:0:0');
     });
+
+    it('truncates the IPv4 inside an IPv4-mapped address instead of zeroing it', () => {
+      expect(truncateIp('::ffff:203.0.113.42')).toBe('::ffff:203.0.113.0');
+      expect(truncateIp('::FFFF:203.0.113.0')).toBe('::FFFF:203.0.113.0');
+    });
+
+    it.each([
+      ['expanded mapped', '0:0:0:0:0:ffff:203.0.113.42', '0:0:0:0:0:ffff:203.0.113.0'],
+      ['translated', '::ffff:0:203.0.113.42', '::ffff:0:203.0.113.0'],
+      ['expanded translated', '0:0:0:0:ffff:0:203.0.113.42', '0:0:0:0:ffff:0:203.0.113.0'],
+    ])('truncates the IPv4 inside a %s address, idempotently', (_label, input, expected) => {
+      expect(truncateIp(input)).toBe(expected);
+      expect(truncateIp(expected)).toBe(expected);
+    });
   });
 
   describe('edge cases', () => {
@@ -287,5 +301,31 @@ describe('truncateIp', () => {
     it('handles malformed IPv4 gracefully', () => {
       expect(truncateIp('999.999.999')).toBe('999.999.999');
     });
+  });
+});
+
+describe('getClientNetwork', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reads the CloudFront viewer ASN and country', () => {
+    const req = mockReq({ headers: { 'cloudfront-viewer-asn': '16509', 'cloudfront-viewer-country': 'us' } });
+    expect(getClientNetwork(req)).toEqual({ asn: 16509, country: 'US' });
+  });
+
+  it('yields nulls when the distribution does not forward the headers', () => {
+    expect(getClientNetwork(mockReq({}))).toEqual({ asn: null, country: null });
+  });
+
+  it('rejects malformed values instead of guessing', () => {
+    const req = mockReq({ headers: { 'cloudfront-viewer-asn': 'AS16509', 'cloudfront-viewer-country': 'USA' } });
+    expect(getClientNetwork(req)).toEqual({ asn: null, country: null });
+  });
+
+  it('ignores the headers on a self-host, where no CloudFront overwrites them', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const req = mockReq({ headers: { 'cloudfront-viewer-asn': '16509', 'cloudfront-viewer-country': 'US' } });
+    expect(getClientNetwork(req)).toEqual({ asn: null, country: null });
   });
 });

@@ -1,3 +1,4 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 /**
  * Global Shortcut Handlers
  *
@@ -104,6 +105,7 @@ async function findUserBySlackId(slackUserId: string): Promise<IUserDocument | n
   const { User } = getSlackDb();
   const user = await (User as any).findOne({
     'slackSettings.slackUserId': slackUserId,
+    ...VERIFIED_SLACK_IDENTITY_FILTER,
   });
   return user;
 }

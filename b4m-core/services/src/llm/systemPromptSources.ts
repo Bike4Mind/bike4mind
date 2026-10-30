@@ -1,6 +1,7 @@
 import { IMessage, SystemPromptDetailSchema } from '@bike4mind/common';
 import type { z } from 'zod';
 import type { featureNames } from './ChatCompletionFeatures';
+import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 /**
  * The system/context stack a completion is assembled from, as data rather than as an inline array
@@ -27,8 +28,10 @@ export type PromptSourceId =
   | 'helpCenter'
   | 'abstention'
   | 'viewRegistry'
+  | 'viewRegistryAdmin'
   | 'replyChoices'
   | 'toolPrompt'
+  | 'toolContext'
   | 'agentDetection'
   | 'questMaster'
   | 'organizationPrompt'
@@ -52,13 +55,19 @@ export type PromptSourceId =
  * so changing this table changes both behavior and cache hit rate.
  */
 export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
-  'dateContext',
   'artifactEmission',
   'helpCenter',
   'abstention',
   'viewRegistry',
   'replyChoices',
   'toolPrompt',
+  // End of the deployment-wide run (SHAREABLE_PREFIX_SOURCES). Everything below varies per
+  // caller, including these first sources that WE author: the date is per timezone-day, the
+  // admin view appendix per role, the tool context per user/session, agent prompts per mention.
+  // Any of them ahead of the shared run would cut it short and force a cache write per user.
+  'dateContext',
+  'viewRegistryAdmin',
+  'toolContext',
   'agentDetection',
   // Moved behind the admin/hardcoded block above: this is `origin: 'user'` content that
   // varies per request, and in front of that block it split the deployment-wide shareable
@@ -222,6 +231,18 @@ export function markHistoryCacheAnchor(messages: IMessage[], lastHistoryMessage:
 }
 
 /**
+ * Sources we author ourselves (origin `hardcoded`/`admin`) whose text still varies by caller, so
+ * they can never sit in the shareable prefix. `origin` answers who wrote the text, not who shares
+ * it, which is why this is listed separately rather than inferred.
+ */
+export const PER_CALLER_AUTHORED_SOURCES: PromptSourceId[] = [
+  'dateContext',
+  'viewRegistryAdmin',
+  'agentDetection',
+  'recentImages',
+];
+
+/**
  * Sources billed on every normal turn, and therefore inventoried even when a gate excluded them:
  * buildAlwaysOnFloorDetails emits a row for each regardless (wasIncluded false,
  * exclusionReason 'disabled'), so anything else itemizing the stack has to do the same or the two
@@ -357,7 +378,11 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
   // Guidance we wrote. Each one degrades gracefully: the model still answers, with worse formatting,
   // weaker abstention, or no awareness of a product surface.
   toolPrompt: 30,
+  // Same band as the guidance it was split from; it carries reference-resolution context, but the
+  // turn history still holds the same entities if this is dropped.
+  toolContext: 30,
   viewRegistry: 31,
+  viewRegistryAdmin: 31,
   abstention: 32,
   artifactEmission: 33,
   helpCenter: 34,
@@ -434,12 +459,30 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
  * `server__tool` id (via `session.enabledTools`) keeps it while its unnamed siblings are withheld.
  *
  * Siblings below/above resolve the other promptMode-derived axes. Several more are still spelled out
- * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`,
- * `omitIdentityReminder`) - each has the same miss-a-site failure mode, and each should get a named
- * resolver here rather than a second inline derivation when a caller needs it on its own.
+ * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`) - each has the
+ * same miss-a-site failure mode, and each should get a named resolver here rather than a second
+ * inline derivation when a caller needs it on its own.
  */
 export function resolveSkipAutoOffers(body: { promptMode?: PromptMode; skipAutoOffers?: boolean }): boolean {
   return Boolean(body.promptMode) || body.skipAutoOffers === true;
+}
+
+/**
+ * How the adapters treat their model-identity line. `omitIdentityReminder`: `raw` promises an empty
+ * system parameter. `identityViaTool`: the `current_model_details` tool is offered, so the line is
+ * dropped while the adapter still sends tools, and comes back on any recursion that drops them.
+ * Read the FINAL offered list (after deny-list and the Ollama / non-tool-model trims), never the
+ * requested one, or a turn whose tool was stripped would have neither.
+ * `current_model_details` must stay in AUTO_ADDED_TOOL_NAMES (ChatCompletionProcess).
+ */
+export function resolveIdentityReminder(input: { promptMode?: PromptMode; offeredToolNames: readonly string[] }): {
+  omitIdentityReminder: boolean;
+  identityViaTool: boolean;
+} {
+  return {
+    omitIdentityReminder: input.promptMode === 'raw',
+    identityViaTool: input.offeredToolNames.includes(CURRENT_MODEL_DETAILS_TOOL_NAME),
+  };
 }
 
 /**
@@ -457,8 +500,10 @@ export const PROMPT_SOURCE_METADATA: Record<
   helpCenter: { origin: 'admin', name: 'help_center' },
   abstention: { origin: 'admin', name: 'abstention' },
   viewRegistry: { origin: 'hardcoded', name: 'view_registry' },
+  viewRegistryAdmin: { origin: 'hardcoded', name: 'view_registry_admin' },
   replyChoices: { origin: 'hardcoded', name: 'reply_choices' },
   toolPrompt: { origin: 'admin', name: 'tool_guidance' },
+  toolContext: { origin: 'session', name: 'tool_context' },
   agentDetection: { origin: 'hardcoded', name: 'agent_detection' },
   questMaster: { origin: 'session', name: 'quest_master' },
   organizationPrompt: { origin: 'org', name: 'organization_prompt' },
@@ -495,9 +540,9 @@ export const LAKE_CONTENT_LAYER_NAMES: string[] = LAKE_CONTENT_SOURCES.map(
 
 /**
  * The leading run of sources whose text is identical for every caller on this deployment -
- * `origin` of `hardcoded` or `admin`. Anything `user`/`session`/`org`/`project` ends the run,
- * because a prompt cache matches on a PREFIX: one per-caller block in front of shared content
- * makes that content unshareable.
+ * `origin` of `hardcoded` or `admin` and not in PER_CALLER_AUTHORED_SOURCES. Anything else ends
+ * the run, because a prompt cache matches on a PREFIX: one per-caller block in front of shared
+ * content makes that content unshareable.
  *
  * Derived from PROMPT_SOURCE_ORDER rather than hand-listed, so reordering a source cannot
  * silently widen or narrow the shared region. Note the run must be CONTIGUOUS from the start:
@@ -509,6 +554,7 @@ export const SHAREABLE_PREFIX_SOURCES: PromptSourceId[] = (() => {
   for (const source of PROMPT_SOURCE_ORDER) {
     const origin = PROMPT_SOURCE_METADATA[source].origin;
     if (origin !== 'hardcoded' && origin !== 'admin') break;
+    if (PER_CALLER_AUTHORED_SOURCES.includes(source)) break;
     shareable.push(source);
   }
   return shareable;

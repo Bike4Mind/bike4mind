@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useExperimentalFeatureSettings } from '@client/app/hooks/data/settings';
 
 /**
@@ -8,13 +8,16 @@ import { useExperimentalFeatureSettings } from '@client/app/hooks/data/settings'
  * cannot drift.
  *
  * Model (mirrors the proven HtmlArtifactViewer): the iframe is REMOUNTED via `iframeKey`
- * whenever the code/deps change - React artifacts already full-reload on each debounced
+ * whenever the code/deps/files change - React artifacts already full-reload on each debounced
  * edit today, so this is no UX regression and avoids warm-iframe React-root teardown.
  * On each (re)mount the sandbox posts `react-sandbox-ready`; we reply with the latest
- * `{ code, dependencies, mode }`. The payload is buffered in a ref so a ready signal that
+ * `{ code, dependencies, mode, files? }`. The payload is buffered in a ref so a ready signal that
  * fires before the effect re-runs still gets the current code (post-before-ready race).
  * `mode` is 'inert' (inline-script execution, no eval) when the EnableInertArtifactRender
- * flag is on, else 'eval' (Function constructor).
+ * flag is on, else 'eval' (Function constructor). `files` (sibling file name -> source) lets
+ * relative imports in `code` resolve; `dependencies` must then cover every file's npm imports.
+ * Pass `{}` rather than omitting it when the caller grouped the reply and found no siblings: the
+ * sandbox then names the unresolved import instead of rejecting multi-file artifacts outright.
  *
  * `event.source === iframeRef.current?.contentWindow` scopes messages to THIS iframe, so
  * two concurrently-mounted viewers never cross-talk (works without allow-same-origin).
@@ -33,17 +36,32 @@ interface UseReactArtifactSandboxResult {
   error: string | null;
 }
 
+interface SandboxPayload {
+  code: string;
+  dependencies: string[];
+  mode: 'inert' | 'eval';
+  files?: Record<string, string>;
+}
+
+/** Content key for `files`, so a new-but-equal object does not remount the sandbox; '' when absent. */
+function filesContentKey(files: Record<string, string> | undefined): string {
+  if (!files) return '';
+  return JSON.stringify(Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
 export function useReactArtifactSandbox(
   code: string | null | undefined,
-  dependencies: string[] = []
+  dependencies: string[] = [],
+  files?: Record<string, string>
 ): UseReactArtifactSandboxResult {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [iframeKey, setIframeKey] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const payloadRef = useRef<{ code: string; dependencies: string[]; mode: 'inert' | 'eval' } | null>(null);
+  const payloadRef = useRef<SandboxPayload | null>(null);
 
   const depsKey = dependencies.join(',');
+  const filesKey = useMemo(() => filesContentKey(files), [files]);
 
   // Flag: when on, execute via injected inline <script> ('unsafe-inline') instead
   // of new Function() ('unsafe-eval'). Defaults off -> today's eval path, byte-identical.
@@ -60,12 +78,12 @@ export function useReactArtifactSandbox(
       setIsLoading(false);
       return;
     }
-    payloadRef.current = { code, dependencies, mode: inertMode ? 'inert' : 'eval' };
+    payloadRef.current = { code, dependencies, mode: inertMode ? 'inert' : 'eval', ...(filesKey ? { files } : {}) };
     setError(null);
     setIsLoading(true);
     setIframeKey(k => k + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, depsKey, inertMode]);
+  }, [code, depsKey, filesKey, inertMode]);
 
   // Single message listener for the lifetime of the component: deliver code on ready,
   // surface sandbox errors. Scoped to this iframe via event.source.
@@ -76,15 +94,7 @@ export function useReactArtifactSandbox(
       if (!data || typeof data !== 'object') return;
       if (data.type === 'react-sandbox-ready') {
         if (!payloadRef.current) return;
-        iframeRef.current?.contentWindow?.postMessage(
-          {
-            type: 'react-artifact-render',
-            code: payloadRef.current.code,
-            dependencies: payloadRef.current.dependencies,
-            mode: payloadRef.current.mode,
-          },
-          '*'
-        );
+        iframeRef.current?.contentWindow?.postMessage({ type: 'react-artifact-render', ...payloadRef.current }, '*');
         setIsLoading(false);
       } else if (data.type === 'react-sandbox-error') {
         setError(typeof data.message === 'string' && data.message ? data.message : 'Error rendering component');

@@ -2,10 +2,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindById, mockFindOneAndUpdate, mockUpdateBodyParse } = vi.hoisted(() => ({
+const { mockFindById, mockFindOneAndUpdate, mockUpdateBodyParse, mockDecrypt } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindOneAndUpdate: vi.fn(),
   mockUpdateBodyParse: vi.fn(),
+  mockDecrypt: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -40,9 +41,9 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class extends Error {},
   ForbiddenError: class extends Error {},
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptEnvVariables: (v: unknown) => v,
-  decryptEnvVariables: (v: unknown) => v,
+  decryptEnvVariables: (v: unknown) => mockDecrypt(v),
 }));
 vi.mock('@server/validators/mcpServerValidators', () => ({
   mcpServerUpdateBodySchema: { safeParse: (...a: unknown[]) => mockUpdateBodyParse(...a) },
@@ -69,6 +70,7 @@ const setEnv = () => (mockFindOneAndUpdate.mock.calls[0][1] as { $set: { envVari
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockDecrypt.mockImplementation((value: unknown) => value);
   bodyWith([]);
   mockFindById.mockResolvedValue({
     id: SERVER_ID,
@@ -188,4 +190,23 @@ describe('PUT /api/mcp-servers/[id]', () => {
 
     await expect(runPut()).rejects.toThrow('MCP Server not found');
   });
+});
+
+it('replaces unreadable stored credentials without trying to decrypt them', async () => {
+  mockDecrypt.mockImplementation(() => {
+    throw new Error('Cannot decrypt stored token');
+  });
+  bodyWith([{ key: 'NOTION_ACCESS_TOKEN', value: 'fresh-token' }]);
+  await runPut();
+  expect(mockDecrypt).not.toHaveBeenCalled();
+  expect(setEnv()).toEqual([{ key: 'NOTION_ACCESS_TOKEN', value: 'fresh-token' }]);
+});
+
+it('does not overwrite unreadable credentials when a blank field asks to preserve them', async () => {
+  mockDecrypt.mockImplementation(() => {
+    throw new Error('Cannot decrypt stored token');
+  });
+  bodyWith([{ key: 'NOTION_ACCESS_TOKEN', value: '' }]);
+  await expect(runPut()).rejects.toThrow('Cannot decrypt');
+  expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
 });

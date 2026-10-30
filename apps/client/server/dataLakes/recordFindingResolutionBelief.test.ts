@@ -22,7 +22,9 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@server/memory/mementoLedgerMirror', () => ({ createLedgerAppendSession: h.createLedgerAppendSession }));
+vi.mock('@bike4mind/server-utils/memory/mementoLedgerMirror', () => ({
+  createLedgerAppendSession: h.createLedgerAppendSession,
+}));
 vi.mock('@bike4mind/server-utils/memory/mementoEmbedder', () => ({ createMementoEmbedder: h.createMementoEmbedder }));
 
 import { recordFindingResolutionBelief, composeFindingResolutionFact } from './recordFindingResolutionBelief';

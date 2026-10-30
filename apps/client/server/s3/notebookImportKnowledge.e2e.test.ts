@@ -244,7 +244,7 @@ describe('notebook import writes knowledge files', () => {
 
     // Import bytes are attacker-supplied, so they must not be pre-cleared. The row is left at the
     // schema default ('pending') and the import handler scans it out of band once the transaction
-    // commits (server/s3/moderateImportedKnowledgeFiles.ts). The file's storage key is surfaced on
+    // commits (packages/server-utils/src/s3/moderateImportedKnowledgeFiles.ts). The file's storage key is surfaced on
     // the result so the handler knows what to scan.
     expect((await FabFile.findOne({ userId: USER }))?.moderationStatus).toBe('pending');
     expect(result.importedKnowledgeFilePaths).toHaveLength(1);

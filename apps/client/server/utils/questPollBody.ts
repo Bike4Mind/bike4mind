@@ -97,6 +97,11 @@ export async function toQuestPollBody(
     // two states apart.
     attachmentNotices: quest.attachmentNotices,
     attachmentDelivery: quest.attachmentDelivery,
+    // Not viewer-redacted, for the same parity reason as attachmentNotices above: the whole quest
+    // (turnTiming included) already reaches every participant through
+    // GET /api/sessions/[id]/chat, and the record holds no prompt or reply text - only durations,
+    // counts, retry reasons and model/provider request ids, which that endpoint shows too.
+    turnTiming: quest.turnTiming,
     executionTracking: quest.promptMeta?.executionTracking,
   };
 }

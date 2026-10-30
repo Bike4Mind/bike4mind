@@ -15,6 +15,7 @@ import {
   type ProviderJobHandle,
   type ProviderOutput,
   type ProviderPollResult,
+  findInputImage,
   type ResolvedInputs,
   type VideoProvider,
   type VideoProviderContext,
@@ -63,15 +64,16 @@ const operationNameOf = (handle: ProviderJobHandle): string => {
 };
 
 const buildSubmitBody = (request: ValidatedVideoRequest, inputs: ResolvedInputs) => {
-  if (request.mode === 'image_to_video' && !inputs.inputImage) {
+  const firstFrame = findInputImage(inputs, 'first_frame');
+  if (request.mode === 'image_to_video' && !firstFrame) {
     throw new ProviderSubmitError('veo_missing_input_image', true, undefined, false);
   }
   const image =
-    request.mode === 'image_to_video' && inputs.inputImage
+    request.mode === 'image_to_video' && firstFrame
       ? {
           image: {
-            bytesBase64Encoded: inputs.inputImage.bytes.toString('base64'),
-            mimeType: inputs.inputImage.mimeType,
+            bytesBase64Encoded: firstFrame.bytes.toString('base64'),
+            mimeType: firstFrame.mimeType,
           },
         }
       : {};

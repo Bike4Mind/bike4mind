@@ -1,5 +1,5 @@
-import { RegInviteEvents, requireEnv } from '@bike4mind/common';
-import { IRegistrationInvite, RegInviteStatusType } from '@bike4mind/common';
+import { RegInviteEvents, escapeSlackLine, escapeSlackText, inboxAliasKey, requireEnv } from '@bike4mind/common';
+import { IRegistrationInvite, RegInviteSource, RegInviteStatusType } from '@bike4mind/common';
 import { registrationInviteRepository, User, userRepository } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { createRegInvite, generateCode } from '@server/managers/regInviteManager';
@@ -16,20 +16,26 @@ import { escape } from 'html-escaper';
 
 const CreateReferralRequestSchema = z.object({
   userName: z.string(),
-  friendEmail: z.array(z.string().email()),
+  friendEmail: z.array(z.string().email()).min(1),
   emailTitle: z.string(),
   emailBody: z.string(),
   tags: z.array(z.string()).optional(),
 });
+
+// Attaches a rejection handler at creation. Deliveries start mid-loop while the loop keeps
+// running, so an unobserved promise that rejects early would surface as an unhandled rejection.
+const observeOperation = async (operation: Promise<unknown>): Promise<PromiseSettledResult<unknown>> => {
+  const [outcome] = await Promise.allSettled([operation]);
+  return outcome;
+};
 
 const handler = baseApi().post(
   async (req: Request<unknown, unknown, z.infer<typeof CreateReferralRequestSchema>>, res) => {
     const newReferralData = CreateReferralRequestSchema.parse(req.body);
     const user = req.user;
     const { userName, emailTitle, emailBody } = newReferralData;
-    // Dedup before the quota guard below, not after - otherwise a duplicated address counts
-    // once against numReferralsAvailable but is still charged once per copy further down.
-    const friendEmail = Array.from(new Set(newReferralData.friendEmail));
+    // Dedup before reserveReferrals so a duplicated address is charged once.
+    const friendEmail = Array.from(new Set(newReferralData.friendEmail.map(e => e.trim().toLowerCase())));
     const userId = user.id;
 
     // Minting credit-bearing invite codes requires proof the sender's own email
@@ -39,6 +45,14 @@ const handler = baseApi().post(
     const hasOAuthProvider = (user.authProviders?.length ?? 0) > 0;
     if (!user.emailVerified && !hasOAuthProvider) {
       throw new BadRequestError('Please verify your email address before sending referral invites');
+    }
+
+    // An alias of the sender's own inbox would let one person redeem their own invite for the
+    // inviter reward. Refused before reserveReferrals so nothing is charged.
+    // Emailless OAuth accounts have no inbox to alias.
+    const senderInbox = user.email ? inboxAliasKey(user.email) : null;
+    if (senderInbox && friendEmail.some(target => inboxAliasKey(target) === senderInbox)) {
+      throw new BadRequestError('You cannot invite your own email address');
     }
 
     // Pre-resolve which targets already have an account, so the loop below can skip sending
@@ -57,9 +71,6 @@ const handler = baseApi().post(
           .lean<Array<{ email: string }>>()
       ).map(u => u.email)
     );
-    if (user.numReferralsAvailable < friendEmail.length) {
-      throw new BadRequestError('Not enough referrals available');
-    }
 
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
     // APP_URL is set per-deployment by infra; no brand fallback. (The prior
@@ -70,8 +81,8 @@ const handler = baseApi().post(
     const brand = process.env.APP_NAME || '';
     const logoUrl = getLogoUrl();
 
-    const notificationPromises: Promise<unknown>[] = [];
-    const emailPromises: Promise<unknown>[] = [];
+    const notificationPromises: Promise<PromiseSettledResult<unknown>>[] = [];
+    const emailPromises: { target: string; outcome: Promise<PromiseSettledResult<unknown>> }[] = [];
     const slackErrorMessages: string[] = [];
 
     // `sent` tracks genuine sends for the analytics counter; the caller instead sees
@@ -84,9 +95,15 @@ const handler = baseApi().post(
       user.regInvites = [];
     }
 
+    if (!(await userRepository.reserveReferrals(userId, friendEmail.length))) {
+      throw new BadRequestError('Not enough referrals available');
+    }
+
+    let refundCount = 0;
     for (const target of friendEmail) {
+      let hasUsableInvite = false;
       try {
-        // Already-account emails were resolved up front (drives the sendable guard above).
+        // Already-account emails were resolved up front.
         if (existingAccountEmails.has(target)) {
           // Reported to Slack only -- admin-side. The caller's response must not say which
           // addresses landed here (see `accepted` below).
@@ -96,29 +113,36 @@ const handler = baseApi().post(
 
         let inviteCode: string;
 
-        const existingInvite = await registrationInviteRepository.findOne({ email: target });
-        if (!existingInvite) {
+        const invites = await registrationInviteRepository.find({ email: target });
+        const now = new Date();
+        const isLive = (invite: IRegistrationInvite) =>
+          invite.status === RegInviteStatusType.open && !invite.used && (!invite.expiresAt || invite.expiresAt > now);
+        const ownLive = invites.find(invite => invite.userId === userId && isLive(invite));
+        const otherLive = invites.find(invite => invite.userId !== userId && isLive(invite));
+        if (ownLive) {
+          hasUsableInvite = true;
+          inviteCode = ownLive.code;
+        } else if (otherLive) {
+          // Someone else already invited this address; reusing their code would credit them while
+          // this sender is charged. Skipped silently like an existing account, so the response
+          // does not reveal it and the reservation stays spent.
+          slackErrorMessages.push(`Email ${target} already has an invite from another sender. Skipping invite.`);
+          continue;
+        } else {
           inviteCode = generateCode();
           const newRegInvite: IRegistrationInvite = {
             userId,
             email: target,
             code: inviteCode,
             status: RegInviteStatusType.open,
+            source: RegInviteSource.referral,
           };
           const savedInvite = await createRegInvite(newRegInvite);
-          try {
-            user.regInvites.push(savedInvite.id);
-            newInviteIds.push(savedInvite.id);
-          } catch (error) {
-            console.error(`Failed to add invite ID to user's regInvites for ${target}: ${error}`);
-          }
-        } else {
-          inviteCode = existingInvite.code;
+          hasUsableInvite = true;
+          newInviteIds.push(savedInvite.id);
+          user.regInvites.push(savedInvite.id);
         }
 
-        // Passwordless registration has no invite-code field, so the email links to
-        // the bare /register page - no `?code=` (dead copy the form can't consume).
-        // The invite record + code are still minted for referral tracking below.
         const finalBody = `
             <!DOCTYPE html>
             <html>
@@ -145,6 +169,7 @@ const handler = baseApi().post(
               <div class="content">
                 ${buildEmailLogoImg(brand, logoUrl)}
                 <p>${escape(emailBody)}</p>
+                <p>Invite code: <strong>${escape(inviteCode)}</strong></p>
                 <p><a href="${escape(registrationLink)}">Click here to register</a></p>
               </div>
             </body>
@@ -153,20 +178,22 @@ const handler = baseApi().post(
 
         // Queue the Slack notification; sent in a batch after the loop.
         if (getSettingsValue('EnableReferralToSlack', settings)) {
-          const slackMsg = `Referral sent by user ${userName}:${userId} to ${target} with ${inviteCode} and body ${finalBody}`;
-          notificationPromises.push(postMessageToSlack(slackMsg));
+          const slackMsg = `Referral sent by user ${escapeSlackLine(userName)}:${userId} to ${escapeSlackLine(target)} with ${inviteCode} and body ${escapeSlackText(finalBody)}`;
+          notificationPromises.push(observeOperation(postMessageToSlack(slackMsg)));
         }
 
         // Queue the invite email; sent in a batch after the loop.
         if (getSettingsValue('EnableReferralToEmail', settings)) {
-          console.log(emailBody, 'QQQ: Sending email to', target, `with body ${finalBody}`);
-          emailPromises.push(
-            EmailEvents.Send.publish({
-              to: target,
-              subject: emailTitle,
-              body: finalBody,
-            })
-          );
+          emailPromises.push({
+            target,
+            outcome: observeOperation(
+              EmailEvents.Send.publish({
+                to: target,
+                subject: emailTitle,
+                body: finalBody,
+              })
+            ),
+          });
         }
 
         sent.push(target);
@@ -175,31 +202,68 @@ const handler = baseApi().post(
         console.error(errorMessage);
         slackErrorMessages.push(errorMessage);
         failed.push(target);
+        if (!hasUsableInvite) refundCount++;
       }
     }
 
+    // No app-level retry of settleReferrals: the refund is a non-idempotent $inc, so retrying after
+    // an ambiguous failure (write applied, ack lost) would refund twice; retryWrites is off on DocumentDB.
+    // Settle before deciding the outcome, then await every delivery that already started. A
+    // settle failure is the only one that fails the request: the reservation has been charged
+    // and the caller must know. A delivery failure does not - the invite exists and the charge
+    // stands, so a 5xx would only invite a retry that charges the same addresses again.
+    const settlement = await observeOperation(userRepository.settleReferrals(userId, refundCount, newInviteIds));
+    const emailOutcomes = await Promise.all(emailPromises.map(delivery => delivery.outcome));
     await Promise.all(notificationPromises);
-    await Promise.all(emailPromises);
+
+    // Log the repair payload before reporting deliveries: a settle failure still has to leave
+    // behind which emails failed, and it is rethrown only after that report is out.
+    if (settlement.status === 'rejected') {
+      // The refund and invite ids never reached the user document; record them for repair.
+      console.error('Referral settlement failed', {
+        userId,
+        refundCount,
+        newInviteIds,
+        error: settlement.reason,
+      });
+    }
+
+    emailPromises.forEach((delivery, index) => {
+      const outcome = emailOutcomes[index];
+      if (outcome.status !== 'rejected') return;
+      const reason: unknown = outcome.reason;
+      const errorMessage = `Failed to deliver referral email to ${delivery.target}: ${
+        reason instanceof Error ? reason.message : reason
+      }`;
+      console.error(errorMessage);
+      slackErrorMessages.push(errorMessage);
+      failed.push(delivery.target);
+    });
 
     // Send accumulated error/skip messages to Slack as one batch.
     if (slackErrorMessages.length > 0) {
-      const slackMessage = slackErrorMessages.join('\n');
+      const slackMessage = escapeSlackText(slackErrorMessages.join('\n'));
       await postMessageToSlack(slackMessage);
+    }
+
+    if (settlement.status === 'rejected') {
+      throw settlement.reason;
     }
 
     // Everything that was not a hard processing failure is reported to the caller as sent,
     // in submission order so position cannot betray which addresses were skipped. The
-    // decrement matches, keeping the referrals-remaining counter free of the same signal.
+    // reservation includes skips, keeping the remaining quota free of the same signal.
     const failedSet = new Set(failed);
     const accepted = friendEmail.filter(email => !failedSet.has(email));
+    // `sent` gains a target before its delivery resolves, so a later email failure removes it.
+    const delivered = sent.filter(email => !failedSet.has(email));
 
-    await userRepository.recordReferrals(user.id, accepted.length, newInviteIds);
     await logEvent(
       {
         userId,
         type: RegInviteEvents.REFER_REGINVITE,
-        counterValue: sent.length,
-        metadata: { ids: user.regInvites, referredEmails: sent },
+        counterValue: delivered.length,
+        metadata: { ids: user.regInvites, referredEmails: delivered },
       },
       { ability: req.ability }
     );

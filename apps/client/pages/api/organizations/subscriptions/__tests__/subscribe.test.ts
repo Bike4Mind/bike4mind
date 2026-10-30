@@ -6,7 +6,7 @@ import {
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
 } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 // baseApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -47,7 +47,7 @@ vi.mock('@server/integrations/stripe/attachOrgStripeCustomer', () => ({
 // non-owner / admin / bad-id behaviour is pinned in server/utils/__tests__/orgAccess.test.ts.
 // Here it stands in for "the caller owns this org", and its rejection stands in for "they do not".
 const mockVerifyOrgOwner = vi.fn();
-vi.mock('@server/utils/orgAccess', () => ({
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
   verifyOrgOwner: (...args: unknown[]) => mockVerifyOrgOwner(...args),
 }));
 
@@ -86,7 +86,7 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockSessionsCreate = vi.fn();
 const mockCreateCustomer = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   createCustomer: (...args: unknown[]) => mockCreateCustomer(...args),
   CustomerType: { User: 'User', Organization: 'Organization' },
   stripe: {

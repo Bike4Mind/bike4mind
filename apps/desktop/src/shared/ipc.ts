@@ -1,3 +1,4 @@
+import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -7,7 +8,17 @@ import type {
   CookieImportResult,
   CookieImportState,
 } from './browserCookies';
+import type { ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
+import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
+import type {
+  ModelServerAddInput,
+  ModelServerMutationResult,
+  ModelServerProbeInput,
+  ModelServerProbeResult,
+  ModelServerUpdateInput,
+  ModelServerView,
+} from './modelServers';
 import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
@@ -19,7 +30,11 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatImageAction,
+  ChatImageActionResult,
+  ChatImageRef,
   ChatModelCatalog,
+  CreationTool,
   ChatMoveToBackgroundResult,
   ChatQueueEvent,
   ChatQueuedMessage,
@@ -45,7 +60,9 @@ import type {
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
+import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
+import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
 import type {
@@ -77,8 +94,27 @@ import type {
   TerminalsChangedEvent,
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
+import type {
+  CuratedCheckResult,
+  CuratedList,
+  CuratedListSettings,
+  CuratedPullResult,
+  HfTokenResult,
+  HfTokenStatus,
+  HubDetailResult,
+  HubSearchRequest,
+  HubSearchResult,
+  InstalledModelsResult,
+  MachineView,
+  ModelPull,
+  ModelPullRequest,
+  ModelPullResult,
+  ModelRemoveResult,
+  ModelRuntimeStatus,
+} from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LocalHistoryResult, LocalHistoryState } from './history';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -111,7 +147,17 @@ export const IPC_CHANNELS = {
   fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
   chatListSuggestionModels: 'chat:list-suggestion-models',
+  chatGetLocalContext: 'chat:get-local-context',
+  chatSetLocalContext: 'chat:set-local-context',
+  chatGetLocalContextFit: 'chat:get-local-context-fit',
+  chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSettleLocalModel: 'chat:settle-local-model',
+  chatSetSessionHistory: 'chat:set-session-history',
+  chatSearchHistory: 'chat:search-history',
+  chatClearHistory: 'chat:clear-history',
+  chatHistoryState: 'chat:history-state',
+  chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
@@ -128,11 +174,16 @@ export const IPC_CHANNELS = {
   chatListRecentFolders: 'chat:list-recent-folders',
   chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
+  chatWorkspaceChanges: 'chat:workspace-changes',
   chatAddContextDirectory: 'chat:add-context-directory',
   chatRemoveContextDirectory: 'chat:remove-context-directory',
   chatGetSession: 'chat:get-session',
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
+  chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
+  chatListWorktrees: 'chat:list-worktrees',
+  chatRemoveWorktrees: 'chat:remove-worktrees',
+  chatRevealWorktree: 'chat:reveal-worktree',
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
@@ -155,6 +206,8 @@ export const IPC_CHANNELS = {
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatImageAction: 'chat:image-action',
+  chatAttachImage: 'chat:attach-image',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -216,6 +269,15 @@ export const IPC_CHANNELS = {
   mcpReconnectServer: 'mcp:reconnect-server',
   /** main -> renderer push; a server changed state, which the renderer never polls for. */
   mcpServersChanged: 'mcp:servers-changed',
+  modelServersList: 'servers:list',
+  modelServersProbe: 'servers:probe',
+  modelServersAdd: 'servers:add',
+  modelServersUpdate: 'servers:update',
+  modelServersRemove: 'servers:remove',
+  modelServersCheck: 'servers:check',
+  modelServersProbedHardware: 'servers:probed-hardware',
+  /** main -> renderer push; a server was added, changed, or its health was rechecked. */
+  modelServersChanged: 'servers:changed',
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
@@ -226,13 +288,62 @@ export const IPC_CHANNELS = {
   permissionsGetState: 'permissions:get-state',
   permissionsSetRules: 'permissions:set-rules',
   permissionsSetSharing: 'permissions:set-sharing',
+  capabilitiesGetState: 'capabilities:get-state',
+  capabilitiesRevoke: 'capabilities:revoke',
+  /**
+   * Import from Claude, Settings only. No channel takes a path: folders and export files are
+   * picked through native dialogs in main, and the importer only ever reads them.
+   */
+  claudeImportGetState: 'claude:get-import-state',
+  claudeImportSetCodeSettings: 'claude:set-code-import',
+  claudeImportPickCodeFolder: 'claude:pick-code-folder',
+  claudeImportSyncCode: 'claude:sync-code',
+  claudeImportChatExport: 'claude:import-chat-export',
+  claudeImportSetWatchFolder: 'claude:set-watch-folder',
+  claudeImportRemove: 'claude:remove-imported',
+  /** main -> renderer push of the import state. */
+  claudeImportStateChanged: 'claude:import-state-changed',
+  /** main -> renderer push, batched: imported sessions were added or changed, so re-list. */
+  claudeImportedSessionsChanged: 'claude:imported-sessions-changed',
   updateGetState: 'update:get-state',
   updateCheck: 'update:check',
   updateDownload: 'update:download',
+  /** Hide the floating update notice for one version; main persists it. */
+  updateDismiss: 'update:dismiss',
   /** The one channel that can end this process. Main gates it on work in flight. */
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
   updateStateChanged: 'update:state-changed',
+  modelsGetStatus: 'models:get-status',
+  modelsListInstalled: 'models:list-installed',
+  modelsSearch: 'models:search',
+  modelsGetDetail: 'models:get-detail',
+  modelsListCurated: 'models:list-curated',
+  modelsGetCuratedPull: 'models:get-curated-pull',
+  modelsCheckCurated: 'models:check-curated',
+  /** Check now on the list itself: skips the 6 h throttle; the result arrives as modelsCuratedChanged. */
+  modelsCheckCuratedList: 'models:check-curated-list',
+  modelsCuratedSettings: 'models:curated-settings',
+  modelsCuratedSetEnabled: 'models:curated-set-enabled',
+  /** main -> renderer push; the curated list or its check status changed. */
+  modelsCuratedChanged: 'models:curated-changed',
+  modelsListPulls: 'models:list-pulls',
+  /** Starts a download; resolves when it finishes, fails or is cancelled. */
+  modelsPull: 'models:pull',
+  modelsCancelPull: 'models:cancel-pull',
+  /** Continues a pull paused by a dropped connection; resolves like `modelsPull`. */
+  modelsResumePull: 'models:resume-pull',
+  modelsDismissPull: 'models:dismiss-pull',
+  modelsRemove: 'models:remove',
+  /** Hugging Face sign-in: whether a token is saved, save one, forget it. None of them returns the token. */
+  modelsGetHfAccess: 'models:get-hf-access',
+  modelsSaveHfAccess: 'models:save-hf-access',
+  modelsClearHfAccess: 'models:clear-hf-access',
+  modelsHfAccessChanged: 'models:hf-access-changed',
+  /** main -> renderer push of every pull in flight or failed. */
+  modelsPullsChanged: 'models:pulls-changed',
+  /** main -> renderer push: a pull finished or a model was removed. */
+  modelsInstalledChanged: 'models:installed-changed',
   /**
    * Where the agent's browser should be drawn, if anywhere. Renderer -> main only: the view is
    * an overlay the renderer cannot see, so the renderer is the only thing that knows where the
@@ -469,12 +580,45 @@ export interface DesktopApi {
     /** Resolves when the check finishes; the OUTCOME arrives on onStateChanged. */
     check(): Promise<void>;
     download(): Promise<void>;
+    /** Hide the "update available" notice for this version only. Arrives back on onStateChanged. */
+    dismiss(version: string): Promise<void>;
     /**
      * Restart into the new version. Without `force` this reports what is still running and
      * does nothing, so the renderer can put that to the user before anything is lost.
      */
     install(force: boolean): Promise<UpdateInstallResult>;
     onStateChanged(listener: (state: UpdateState) => void): () => void;
+  };
+  /** The Models screen. `serverId` picks a saved model server; omitted means this computer. */
+  models: {
+    getStatus(serverId?: string): Promise<ModelRuntimeStatus>;
+    listInstalled(serverId?: string): Promise<InstalledModelsResult>;
+    search(request: HubSearchRequest): Promise<HubSearchResult>;
+    getDetail(repo: string, serverId?: string): Promise<HubDetailResult>;
+    listCurated(serverId?: string): Promise<CuratedList>;
+    getCuratedPull(entryId: string, buildId: string, serverId?: string): Promise<CuratedPullResult>;
+    /** Checks an installed curated build against its review again, after Ollama could not describe it. */
+    checkCurated(entryId: string, buildId: string, serverId?: string): Promise<CuratedCheckResult>;
+    /** Checks for a newer curated list now. */
+    checkCuratedList(): Promise<void>;
+    getCuratedSettings(): Promise<CuratedListSettings>;
+    setCuratedEnabled(enabled: boolean): Promise<CuratedListSettings>;
+    onCuratedChanged(listener: () => void): () => void;
+    listPulls(): Promise<ModelPull[]>;
+    pull(request: ModelPullRequest): Promise<ModelPullResult>;
+    cancelPull(key: string): Promise<void>;
+    resumePull(key: string): Promise<ModelPullResult>;
+    dismissPull(key: string): Promise<void>;
+    remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
+    /** Whether a Hugging Face token is saved; the token itself never comes back to the renderer. */
+    getHfToken(): Promise<HfTokenStatus>;
+    /** Saves the token once Hugging Face accepts it. */
+    setHfToken(token: string): Promise<HfTokenResult>;
+    clearHfToken(): Promise<HfTokenResult>;
+    onHfTokenChanged(listener: (status: HfTokenStatus) => void): () => void;
+    onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
+    /** Called with the id of the server (`local` for this computer) whose models changed. */
+    onInstalledChanged(listener: (serverId: string) => void): () => void;
   };
   auth: {
     getState(): Promise<AuthState>;
@@ -532,8 +676,22 @@ export interface DesktopApi {
     listModels(force?: boolean): Promise<ChatModelCatalog>;
     /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
     listSuggestionModels(): Promise<ChatModelCatalog>;
+    /** How local models size their context window; see @shared/localContextSetting. */
+    getLocalContext(): Promise<LocalContextSetting>;
+    setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
+    /** Which local models each fixed size may not fit, by the memory estimate. */
+    getLocalContextFit(): Promise<LocalContextFit>;
+    /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
+    listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    /** Device-local only: moves a conversation whose model is not installed to the pick a send would use. */
+    settleLocalModel(sessionId: string): Promise<{ session: ChatSessionSummary; notice?: string } | null>;
+    setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null>;
+    searchHistory(query: string): Promise<LocalHistoryResult[]>;
+    clearHistory(): Promise<LocalHistoryState>;
+    historyState(): Promise<LocalHistoryState>;
+    onHistoryChanged(listener: () => void): () => void;
     /** How hard this conversation's model should think. Null when the session is gone. */
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
@@ -567,6 +725,11 @@ export interface DesktopApi {
     /** Read a directory's branches, for the branch chip. */
     inspectProject(directory: string): Promise<ProjectInspection>;
     /**
+     * What this Code session's working directory has changed against its base branch, for the
+     * changes bar above the composer. Null when there is nothing to show or git cannot answer.
+     */
+    workspaceChanges(sessionId: string): Promise<WorkspaceChanges | null>;
+    /**
      * Share one more folder with this conversation: `path` when given (`/add-dir <path>`), the
      * folder picker otherwise. Allowed at any point in the session, a running turn included.
      */
@@ -575,7 +738,14 @@ export interface DesktopApi {
     /** Null when the session is gone (deleted in another window, or a stale id). */
     getSession(sessionId: string): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
-    deleteSession(sessionId: string): Promise<void>;
+    deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
+    inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
+    /** Checkouts under the repository's app worktree root, with the conversation that owns each. */
+    listWorktrees(directory: string): Promise<AppWorktree[]>;
+    /** Removes the named orphan checkouts, or every safe one when `paths` is omitted. */
+    removeWorktrees(directory: string, paths?: string[]): Promise<WorktreeSweepItem[]>;
+    /** Reveals a currently listed worktree in the file manager; false when it is not listed. */
+    revealWorktree(directory: string, path: string): Promise<boolean>;
     /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
@@ -647,6 +817,10 @@ export interface DesktopApi {
     readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
     /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
     discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
+    /** One image context menu item, run in main against a ref main resolves itself. Never rejects. */
+    imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
+    /** Add a thread image to this session's draft, through the same intake as a paste. */
+    attachImage(sessionId: string, image: ChatImageRef): Promise<AddAttachmentsResult>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.
@@ -845,6 +1019,22 @@ export interface DesktopApi {
     /** Subscribe to connection-state pushes; returns the unsubscribe. */
     onChanged(listener: (state: McpServersState) => void): () => void;
   };
+  /**
+   * Model servers on other machines, "This computer" first. A credential travels renderer -> main
+   * on probe, add and update, and never back: a view names only its kind. See @shared/modelServers.
+   */
+  modelServers: {
+    list(): Promise<ModelServerView[]>;
+    probe(input: ModelServerProbeInput): Promise<ModelServerProbeResult>;
+    add(input: ModelServerAddInput): Promise<ModelServerMutationResult>;
+    update(id: string, input: ModelServerUpdateInput): Promise<ModelServerMutationResult>;
+    remove(id: string): Promise<ModelServerMutationResult>;
+    /** Rechecks one server, or all of them when `id` is omitted. */
+    check(id?: string): Promise<ModelServerView[]>;
+    /** This computer's hardware as probed, before entered specs; null when the probe failed. */
+    probedHardware(): Promise<MachineView | null>;
+    onChanged(listener: (servers: ModelServerView[]) => void): () => void;
+  };
   /** User-made sidebar sections; see @shared/sidebarSections. */
   sidebar: {
     getSections(): Promise<SidebarSectionsState>;
@@ -867,6 +1057,28 @@ export interface DesktopApi {
     /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
     setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
     setSharing(share: boolean): Promise<PermissionsState>;
+  };
+  capabilities: {
+    getState(): Promise<CapabilityLedgerState>;
+    revoke(grantId: string): Promise<CapabilityLedgerState>;
+  };
+  claudeImport: {
+    getState(): Promise<ClaudeImportState>;
+    setCodeSettings(patch: {
+      enabled?: boolean;
+      includeSubagents?: boolean;
+      projects?: 'all' | string[];
+    }): Promise<ClaudeImportState>;
+    /** Opens a folder picker in main; `reset` goes back to the default folder instead. */
+    pickCodeFolder(reset: boolean): Promise<ClaudeImportState>;
+    syncCode(): Promise<ClaudeImportState>;
+    /** Opens a file picker in main for an export .zip or conversations.json. */
+    importChatExport(): Promise<ClaudeImportResult>;
+    /** Opens a folder picker in main; `clear` stops watching instead. */
+    setWatchFolder(clear: boolean): Promise<ClaudeImportState>;
+    remove(kind: 'claude-code' | 'claude-chat'): Promise<ClaudeRemoveResult>;
+    onStateChanged(listener: (state: ClaudeImportState) => void): () => void;
+    onSessionsChanged(listener: () => void): () => void;
   };
   pullRequests: {
     /**

@@ -4,6 +4,7 @@ import { ChatModels } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 vi.mock('./anthropicBackend', () => ({
+  ANTHROPIC_FEDERATED_KEY: Symbol('anthropic-federated-test'),
   AnthropicBackend: vi.fn(function (this: any, key: string) {
     this._mock = 'anthropic';
     this.key = key;
@@ -12,6 +13,7 @@ vi.mock('./anthropicBackend', () => ({
   }),
 }));
 vi.mock('./openaiBackend', () => ({
+  OPENAI_FEDERATED_KEY: Symbol('openai-federated-test'),
   OpenAIBackend: vi.fn(function (this: any, key: string) {
     this._mock = 'openai';
     this.key = key;
@@ -80,6 +82,9 @@ vi.mock('./bedrockBackend/deepseek', () => ({
 
 import {
   getLlmByModel,
+  withFederatedSharedKeys,
+  OPENAI_FEDERATED_KEY,
+  ANTHROPIC_FEDERATED_KEY,
   resetReplacedByOverlay,
   updateReplacedByOverlay,
   UnsupportedAdapterFamilyError,
@@ -117,6 +122,7 @@ describe('getLlmByModel', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('returns null when modelInfo is undefined', () => {
@@ -309,6 +315,38 @@ describe('getLlmByModel', () => {
     it('returns null for an unrecognized backend', () => {
       const modelInfo = makeModelInfo({ backend: 'voyageai' as ModelInfo['backend'] });
       expect(getLlmByModel({}, { modelInfo, logger })).toBeNull();
+    });
+  });
+
+  describe('trusted federated key provenance', () => {
+    it.each([
+      ['openai', undefined, OPENAI_FEDERATED_KEY],
+      ['openai', 'openai-chat', OPENAI_FEDERATED_KEY],
+      ['openai', 'openai-responses', OPENAI_FEDERATED_KEY],
+      ['anthropic', undefined, ANTHROPIC_FEDERATED_KEY],
+      ['anthropic', 'anthropic-messages', ANTHROPIC_FEDERATED_KEY],
+    ] as const)('selects federation only for marked %s / %s tables', (backend, adapterFamily, sentinel) => {
+      vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+      const modelInfo = makeModelInfo({ backend, adapterFamily });
+      const keys = { openai: 'federated', anthropic: 'federated' };
+      const marked = withFederatedSharedKeys(keys, { openai: true, anthropic: true });
+      const keyOf = (table: ApiKeyTable): unknown =>
+        (getLlmByModel(table, { modelInfo, logger }) as unknown as { key: unknown }).key;
+      expect(keyOf(marked)).toBe(sentinel);
+      expect(keyOf(keys)).toBe('federated');
+      expect(keyOf({ ...marked })).toBe('federated');
+
+      const userKeys = withFederatedSharedKeys(keys, { openai: false, anthropic: false });
+      expect(keyOf(userKeys)).toBe('federated');
+      const otherProviderShared = withFederatedSharedKeys(keys, {
+        openai: backend !== 'openai',
+        anthropic: backend !== 'anthropic',
+      });
+      expect(keyOf(otherProviderShared)).toBe('federated');
+
+      const missing = withFederatedSharedKeys({ ...keys }, { openai: true, anthropic: true });
+      delete (missing as ApiKeyTable)[backend];
+      expect(getLlmByModel(missing, { modelInfo, logger })).toBeNull();
     });
   });
 

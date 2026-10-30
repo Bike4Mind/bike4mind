@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -54,12 +54,15 @@ const h = vi.hoisted(() => ({
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
   hasOptiAccess: false,
+  eligibility: { canCreate: true, message: null } as { canCreate: boolean; message: string | null },
+  billingOrgs: [] as { id: string; name: string }[],
 }));
 
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
+  useApiKeyScopeEntitlements: () => ({ bypass: false, entitlements: new Set<string>() }),
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
@@ -74,7 +77,8 @@ vi.mock('@client/app/hooks/data/userApiKeys', () => ({
   useRotateUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
   useRevokeUserApiKey: () => ({ mutate: h.revokeMutate, isPending: false }),
   useDeleteUserApiKey: () => ({ mutate: h.deleteMutate, isPending: false }),
-  useBillingOrganizations: () => ({ data: [], isLoading: false }),
+  useBillingOrganizations: () => ({ data: h.billingOrgs, isLoading: false }),
+  useApiKeyEligibility: () => ({ data: h.eligibility }),
   useRotateCallbackSigningSecret: ({
     onSuccess,
   }: { onSuccess?: (result: RotateCallbackSigningSecretResponse) => void } = {}) => ({
@@ -184,6 +188,15 @@ describe('keyTestPath', () => {
     expect(keyTestPath([ApiKeyScope.AI_CHAT])).toBe('/api/v1/credits');
     expect(keyTestPath([ApiKeyScope.READ_PROJECTS])).toBe('/api/v1/projects');
     expect(keyTestPath([ApiKeyScope.WRITE_FILES])).toBeUndefined();
+  });
+});
+
+describe('UserApiKeysTab - key table scopes', () => {
+  it('shows the full scope so keys with different read scopes stay distinguishable', () => {
+    h.keys = [{ ...activeKey, scopes: [ApiKeyScope.SKILLS_READ, ApiKeyScope.READ_NOTEBOOKS] }];
+    renderTab();
+    expect(screen.getByText('skills:read')).toBeTruthy();
+    expect(screen.getByText('notebooks:read')).toBeTruthy();
   });
 });
 
@@ -363,6 +376,14 @@ describe('UserApiKeysTab - premium scopes', () => {
     h.createMutate.mockClear();
   });
 
+  it('names the routes open to every key once, apart from any scope', () => {
+    openScopeDocs();
+    expect(screen.getByTestId('api-keys-scopes-open-endpoints')).toHaveTextContent('GET /api/sessions');
+    expect(screen.getByTestId(`api-keys-scope-endpoints-${ApiKeyScope.READ_NOTEBOOKS}`)).not.toHaveTextContent(
+      /GET \/api\/sessions(,|$)/
+    );
+  });
+
   it('keeps the premium scopes out of the New-Key modal and its Full access preset without Opti access', () => {
     renderTab();
     fireEvent.click(screen.getByText('Create API Key'));
@@ -461,5 +482,158 @@ describe('UserApiKeysTab - premium scopes', () => {
     h.hasOptiAccess = true;
     openScopeDocs();
     for (const scope of PREMIUM) expect(screen.getByText(scope)).toBeInTheDocument();
+  });
+});
+
+describe('UserApiKeysTab - Bob scopes', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.createMutate.mockClear();
+  });
+
+  // Opens the New-Key modal, picks a preset (none keeps the Read-only default), and returns what it mints.
+  const mintScopes = (preset?: 'readwrite' | 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    // Joy puts a clickable Chip's onClick on its inner action button.
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Bob key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    return (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+  };
+
+  it('puts bob:read, and not bob:run, in the default Read-only selection', () => {
+    const scopes = mintScopes();
+    expect(scopes).toContain(ApiKeyScope.BOB_READ);
+    expect(scopes).not.toContain(ApiKeyScope.BOB_RUN);
+    expect(scopes).not.toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+  });
+
+  it('keeps bob:run out of Read & write, which still carries bob:read', () => {
+    const scopes = mintScopes('readwrite');
+    // A write scope proves the preset click took effect: without it this case reads like Read-only.
+    expect(scopes).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(scopes).toContain(ApiKeyScope.BOB_READ);
+    expect(scopes).not.toContain(ApiKeyScope.BOB_RUN);
+  });
+
+  it('adds bob:run only with Full access', () => {
+    const scopes = mintScopes('full');
+    expect(scopes).toContain(ApiKeyScope.BOB_READ);
+    expect(scopes).toContain(ApiKeyScope.BOB_RUN);
+  });
+});
+
+describe('UserApiKeysTab - skills:write', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.createMutate.mockClear();
+  });
+
+  const mintScopes = (preset?: 'readwrite' | 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Skills key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    return (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+  };
+
+  it('keeps skills:write out of the default Read-only selection', () => {
+    expect(mintScopes()).not.toContain(ApiKeyScope.SKILLS_WRITE);
+  });
+
+  it('keeps skills:write out of Read & write, despite its suffix', () => {
+    const readwrite = mintScopes('readwrite');
+    // A write scope proves the preset click took effect.
+    expect(readwrite).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(readwrite).not.toContain(ApiKeyScope.SKILLS_WRITE);
+  });
+
+  it('offers skills:write with Full access', () => {
+    expect(mintScopes('full')).toContain(ApiKeyScope.SKILLS_WRITE);
+  });
+
+  it('keeps skills:review out of the default Read-only selection', () => {
+    expect(mintScopes()).not.toContain(ApiKeyScope.SKILLS_REVIEW);
+  });
+
+  it('keeps skills:review out of Read & write', () => {
+    const readwrite = mintScopes('readwrite');
+    expect(readwrite).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(readwrite).not.toContain(ApiKeyScope.SKILLS_REVIEW);
+  });
+});
+
+describe('UserApiKeysTab - API key trust gate', () => {
+  const blocked = { canCreate: false, message: 'Verify your account to create API keys.' };
+
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.eligibility = { canCreate: true, message: null };
+    h.billingOrgs = [];
+    h.createMutate.mockClear();
+  });
+
+  const openModalAndName = () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('api-keys-create-btn'));
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Gated key' },
+    });
+  };
+
+  it('shows no alert and enables submit when the user can create keys', () => {
+    openModalAndName();
+
+    expect(screen.queryByTestId('api-key-trust-alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
+  });
+
+  it('explains the block on the tab and disables create when blocked and no organization can be billed', () => {
+    h.eligibility = blocked;
+    renderTab();
+
+    expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
+    expect(screen.getByTestId('api-keys-trust-notice')).toHaveTextContent(blocked.message);
+  });
+
+  it('shows no tab notice when the user can create keys', () => {
+    renderTab();
+
+    expect(screen.queryByTestId('api-keys-trust-notice')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api-keys-create-btn')).toBeEnabled();
+  });
+
+  it('keeps the main create button enabled and the notice hidden when blocked but an organization can be billed', () => {
+    h.eligibility = blocked;
+    h.billingOrgs = [{ id: 'org-1', name: 'Acme' }];
+    renderTab();
+
+    expect(screen.getByTestId('api-keys-create-btn')).toBeEnabled();
+    expect(screen.queryByTestId('api-keys-trust-notice')).not.toBeInTheDocument();
+  });
+
+  it('shows the alert with the org hint and disables submit while billing a personal account, then clears both on picking an org', async () => {
+    h.eligibility = blocked;
+    h.billingOrgs = [{ id: 'org-1', name: 'Acme' }];
+    openModalAndName();
+
+    const alert = screen.getByTestId('api-key-trust-alert');
+    expect(alert).toHaveTextContent(blocked.message);
+    expect(alert).toHaveTextContent('You can still create a key billed to an organization you manage.');
+    expect(screen.getByTestId('api-key-create-btn')).toBeDisabled();
+
+    fireEvent.click(within(screen.getByTestId('api-key-billing-select')).getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: /Acme/ }));
+
+    expect(screen.queryByTestId('api-key-trust-alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
   });
 });

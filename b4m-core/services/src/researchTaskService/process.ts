@@ -20,7 +20,7 @@ import {
   IOrganizationRepository,
   assertAuthOriginMatchesApiKey,
 } from '@bike4mind/common';
-import { NotFoundError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
+import { NotFoundError, BadRequestError } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import {
@@ -41,7 +41,6 @@ import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './util
 import { performDeepResearch } from '../llm/tools/implementation/deepResearch';
 import { CreateFabFileAdapters } from '../fabFileService';
 import type { ToolContext } from '../llm/tools/base/types';
-import { getEffectiveLLMApiKeys } from '../apiKeyService';
 
 type ResearchTaskProcessParameters = { id: string };
 
@@ -555,8 +554,6 @@ const processDeepResearch = async (
       progress: 0,
     });
 
-    const apiKeys = await getEffectiveLLMApiKeys(user.id, { db: adapters.db, getSettingsByNames });
-
     const toolContext: ToolContext = {
       userId: user.id,
       user: user,
@@ -604,8 +601,8 @@ const processDeepResearch = async (
       {
         maxDepth: researchTask.maxDepth || 7,
         duration: researchTask.duration || 4.5,
+        // Keep the worker's metered backend: passing keys here would replace it with raw OpenAI.
         model: llm.currentModel,
-        apiKeys,
       }
     );
 

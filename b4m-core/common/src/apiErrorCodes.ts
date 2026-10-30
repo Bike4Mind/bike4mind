@@ -1,8 +1,14 @@
 export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
+export const API_KEY_TRUST_REQUIRED_ERROR_CODE = 'api_key_trust_required';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
+export const MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE = 'model_requires_subscription';
 export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mismatch';
 export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
+export const TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE = 'token_rate_limit_exceeded';
+export const CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE = 'concurrency_limit_exceeded';
+export const OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE = 'output_budget_exhausted';
+export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -23,22 +29,34 @@ export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
 export const API_ERROR_CODES = [
   /** The user must revoke an active API key or wait for one to expire before minting another. */
   API_KEY_USER_CAP_ERROR_CODE,
+  /** The account is not yet trusted to mint (more) API keys; remediation is verifying email, waiting, purchasing or admin approval. */
+  API_KEY_TRUST_REQUIRED_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */
   AGENT_LIMIT_REACHED_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
   'insufficient_credits',
   /** The owner is solvent but this key hit its admin-set ceiling; remediation is raising the cap. */
   'spend_cap_exceeded',
+  /** A free-tier user spent their daily credit allowance; remediation is waiting for UTC midnight or upgrading. */
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   /** WE have no usable key for the provider. Do not confuse with the next one. */
   'provider_not_configured',
   /** The provider REFUSED the key we sent. */
   'provider_rejected',
   /** The `model` is not one this caller can use; remediation is choosing an id from GET /api/v1/models. */
   UNKNOWN_MODEL_ERROR_CODE,
+  /** The model is outside the free-tier allowlist; remediation is a paid plan or a model from GET /api/v1/models. */
+  MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   /** An organization-billed API key named a different billing organization; remediation is omitting it. */
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   /** A blocking request ran past its server-side deadline; the turn was ended and the body names it for polling. */
   REQUEST_TIMEOUT_ERROR_CODE,
+  /** The account's completions used up its tokens-per-minute allowance; a 429 with Retry-After. */
+  TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+  /** The account already has as many completions in flight as it may; a 429, retry once one finishes. */
+  CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
+  /** A reasoning model spent the caller's whole `max_tokens` thinking; remediation is raising it or omitting it. */
+  OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',
@@ -46,6 +64,7 @@ export const API_ERROR_CODES = [
   'unsupported_mode',
   'missing_input_image',
   'unexpected_input_image',
+  'unsupported_input_role',
   'unsupported_audio_option',
   'invalid_request',
   'model_disabled',
@@ -84,7 +103,9 @@ export const API_ERROR_CODES = [
   'org_storage_limit_exceeded',
   /** The file is larger than the platform's per-file size limit. */
   'file_too_large',
-  // Completions tool search (POST /api/ai/v1/completions); see COMPLETION_TOOL_ERROR_CODES.
+  // Completions request errors (POST /api/ai/v1/completions).
+  /** The selected model cannot continue a final assistant message. */
+  'assistant_prefill_unsupported',
   /** A tool search server tool, `tool_reference` or tool search block was sent for a model that cannot serve it here. */
   'tool_search_unsupported',
   /** Every tool had `defer_loading: true` and no server tool was sent, so nothing would be loaded. */
@@ -97,6 +118,14 @@ export const API_ERROR_CODES = [
   'tool_changes_unsupported',
   /** A tool change message was malformed or sat where the provider does not accept one. */
   'invalid_tool_change',
+  // Skill Market import conflicts (POST /api/v1/skills/market/listings/{id}/import); see
+  // SKILL_MARKET_IMPORT_ERROR_CODES in schemas/skillMarketPublic.ts.
+  /** A newer version was approved since the one the caller reviewed. */
+  'version_changed',
+  /** The caller edited their imported copy since importing it; retry with `overwrite`. */
+  'local_changes',
+  /** The caller already has a skill with that name; retry with another `name`. */
+  'name_taken',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

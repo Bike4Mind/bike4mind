@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { gearOverrideRepository, GearOverride } from '@bike4mind/database';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
 import { GEAR_DEFAULTS, GEAR_CREDITS_SCALE } from '@server/services/gears/catalog';
@@ -33,9 +33,11 @@ const PutSchema = z.object({
     .optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const overrides = await gearOverrideRepository.byKey();
     const gears = GEAR_DEFAULTS.map(def => {
       const o = overrides.get(def.key);
@@ -66,7 +68,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.status(200).json({ gears });
   })
   .put(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const parsed = PutSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
@@ -75,11 +76,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     if (!GEAR_DEFAULTS.some(d => d.key === key)) {
       return res.status(404).json({ error: `Unknown gear: ${key}` });
     }
+    const previous = await GearOverride.findOne({ key }).lean();
     const updated = await GearOverride.findOneAndUpdate(
       { key },
       { $set: { ...fields, updatedBy: String(req.user.id) } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     ).lean();
+    const previousFields: Record<string, unknown> = previous ?? {};
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.gear_override.updated',
+      target: { kind: 'settings', id: key, displayName: `${key} gear override` },
+      summary: `updated gear override ${key}`,
+      changes: Object.entries(fields)
+        .filter(([field, after]) => JSON.stringify(previousFields[field] ?? null) !== JSON.stringify(after))
+        .map(([field, after]) => ({ field: `${key}.${field}`, before: previousFields[field] ?? null, after })),
+    });
     return res.status(200).json({ override: updated });
   });
 

@@ -116,7 +116,7 @@ export const canManageMemberCreditBudgets = isOrgOwnerOrCurrentAdmin;
 
 /**
  * The owner-only tier: the billing owner or a platform admin, never a manager. The server enforces
- * it with `verifyOrgOwner` (apps/client/server/utils/orgAccess.ts) and the client's org tab gates
+ * it with `verifyOrgOwner` (packages/server-utils/src/utils/orgAccess.ts) and the client's org tab gates
  * (apps/client/app/routes/organizations/orgTabAccess.ts) run this same function.
  */
 export const isOrgOwnerOrPlatformAdmin = (
@@ -153,7 +153,7 @@ export type AdministrableOrg = {
  * `userId` and `adminUserIds` are declared as strings on the organization schema, so a strict
  * comparison is correct. Callers include `organizationService` `addMember` and `revokeAccess`
  * (b4m-core/services), the addUser route (apps/client/pages/api/organizations/[id]/addUser.ts),
- * `canManageOrg` in apps/client/server/utils/orgAccess.ts, and the client's Members tab
+ * `canManageOrg` in packages/server-utils/src/utils/orgAccess.ts, and the client's Members tab
  * (components/organizations/Member.tsx).
  */
 export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {

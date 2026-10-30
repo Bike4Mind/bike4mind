@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
 import type { ICompletionOptions, ICompletionResponseChunk, IMessage, ModelInfo } from '@bike4mind/common';
 import type { CompletionInfo } from '../types';
@@ -18,8 +19,8 @@ import MoonshotBedrockBackend from './moonshot';
  * half-finished answer was delivered as a complete one - no error, no retry, nothing greppable.
  *
  * The signal is the adapter's terminal event (`done`), which base.ts previously discarded.
- * stopReason cannot be used: it is absent on healthy turns for every adapter except deepseek and
- * moonshot, so keying on it would throw on healthy Claude traffic.
+ * stopReason cannot replace the terminal event: message_delta carries Claude's stop reason
+ * before message_stop, so a stream ending between them must still trigger the guard.
  *
  * @see BaseBedrockBackend.signalsStreamTermination
  */
@@ -97,6 +98,10 @@ const textChunk = (text: string, terminal = false) =>
   }) as unknown as ICompletionResponseChunk;
 
 describe('BaseBedrockBackend truncated-stream guard', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('throws when text was produced but no terminal event ever arrived', async () => {
     const body = streamBody([textChunk('half an answ')]);
     await expect(run(withBody(new TerminalSignallingBackend(), body))).rejects.toThrow(/TRUNCATED/);
@@ -136,27 +141,105 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     expect((err as Error).message).toMatch(/5 chars/);
   });
 
-  // The empty-stream case has its own, more actionable message (misrouted inference profile), so
-  // it must win rather than being reported as a truncation.
-  it('defers to the empty-response guard when nothing was produced at all', async () => {
-    const body = streamBody([]);
-    await expect(run(withBody(new TerminalSignallingBackend(), body))).rejects.toThrow(/EMPTY response/i);
-  });
-
-  /**
-   * The two post-loop guards need OPPOSITE handling, so their messages must stay textually
-   * distinguishable. A truncation is a transient transport failure and retry-once is right; an
-   * empty response is deterministic (in production it is the max-tool-calls cap path), and
-   * retrying it re-runs every tool call only to fail again. Since the retry decision is made by
-   * substring match on the message, letting "stream timeout" leak into the empty-response
-   * wording would silently convert a deterministic failure into an expensive retry loop.
-   */
-  it('keeps the empty-response message out of the stream-idle retry classification', async () => {
+  // Nothing produced and no terminal event is a stall before the first token, not a truncation:
+  // it is reported as EMPTY, worded so the stream-idle retry path still classifies it.
+  it('reports a stall before the first token as an EMPTY response the retry path classifies', async () => {
     const err = await run(withBody(new TerminalSignallingBackend(), streamBody([]))).catch((e: Error) => e);
     const message = (err as Error).message;
 
     expect(message).toMatch(/EMPTY response/i);
+    expect(message).toMatch(/stream timeout/);
+    expect(message).not.toContain('without a terminal event');
+    expect(message).toContain('If every call on this model is empty');
+  });
+
+  /**
+   * An empty stream that DID end with a terminal event needs OPPOSITE handling from a stall. It
+   * is deterministic (in production it is the max-tool-calls cap path), and retrying it re-runs
+   * every tool call only to fail again. Since the retry decision is made by substring match on
+   * the message, letting "stream timeout" leak into this wording would silently convert a
+   * deterministic failure into an expensive retry loop.
+   */
+  it('keeps an empty response that ended with a terminal event out of the retry classification', async () => {
+    const body = streamBody([{ terminal: true, choices: [] }]);
+    const err = await run(withBody(new TerminalSignallingBackend(), body)).catch((e: Error) => e);
+    const message = (err as Error).message;
+
+    expect(message).toMatch(/EMPTY response/i);
     expect(message).not.toMatch(/stream timeout/i);
+    expect(message).not.toContain('without a terminal event');
+    expect(message).toContain('If every call on this model is empty');
+  });
+
+  it('keeps a real Anthropic empty message (message_start + message_stop) out of the retry classification', async () => {
+    const body = streamBody([
+      { type: 'message_start', message: { usage: { input_tokens: 5, output_tokens: 1 } } },
+      { type: 'message_stop' },
+    ]);
+    // updateClientForModel swaps _bedrockRuntime per model, so stub the stream call itself.
+    const backend = new (class extends AnthropicBedrockBackend {
+      protected override async invokeModelStream() {
+        return { body };
+      }
+    })();
+    const err = await backend
+      .complete(ChatModels.CLAUDE_4_5_SONNET_BEDROCK, [{ role: 'user', content: 'hi' }], { stream: true }, cb)
+      .catch((e: Error) => e);
+    const message = (err as Error).message;
+
+    expect(message).toMatch(/EMPTY response/i);
+    expect(message).not.toMatch(/stream timeout/i);
+    expect(message).not.toContain('without a terminal event');
+  });
+
+  it('words a real Anthropic stall (message_start, no message_stop) so the retry path classifies it', async () => {
+    const body = streamBody([{ type: 'message_start', message: { usage: { input_tokens: 5, output_tokens: 1 } } }]);
+    const backend = new (class extends AnthropicBedrockBackend {
+      protected override async invokeModelStream() {
+        return { body };
+      }
+    })();
+    const err = await backend
+      .complete(ChatModels.CLAUDE_4_5_SONNET_BEDROCK, [{ role: 'user', content: 'hi' }], { stream: true }, cb)
+      .catch((e: Error) => e);
+    const message = (err as Error).message;
+
+    expect(message).toMatch(/stream timeout/);
+    expect(message).not.toContain('without a terminal event');
+  });
+
+  // The retry and fallback downstream log the failure at WARN, so this backend log is the ERROR
+  // signal a persistent misroute (every call empty) still raises.
+  it('logs a stalled empty stream at ERROR before it is retried', async () => {
+    const error = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => {});
+
+    await run(withBody(new TerminalSignallingBackend(), streamBody([]))).catch(() => {});
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0][1]).toMatchObject({ message: expect.stringContaining('EMPTY response') });
+  });
+
+  it('does not report an aborted empty stream as an EMPTY response', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const callback = vi.fn(cb);
+
+    await withBody(new TerminalSignallingBackend(), streamBody([])).complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'hi' }],
+      { stream: true, abortSignal: controller.signal } as Partial<ICompletionOptions>,
+      callback
+    );
+
+    for (const [text] of callback.mock.calls) expect(text.filter(Boolean)).toEqual([]);
+  });
+
+  it('still reports an empty stream when an abortSignal is present but un-aborted', async () => {
+    const controller = new AbortController();
+
+    await expect(
+      run(withBody(new TerminalSignallingBackend(), streamBody([])), { abortSignal: controller.signal })
+    ).rejects.toThrow(/EMPTY response/i);
   });
 
   /**

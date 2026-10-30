@@ -1,3 +1,4 @@
+import { dataLakeService } from '@bike4mind/services';
 import type { CitableFabFileFields, IFabFileRepository } from '@bike4mind/common';
 import { isRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 
@@ -91,5 +92,23 @@ export function createReachableSourcesResolver(deps: {
       }
     }
     return reachable;
+  };
+}
+
+/** Membership is checked on reads too, so a late extractor cannot revive a removed source. */
+export function createLakeMemberSourcesResolver(deps: {
+  fabfiles: Pick<IFabFileRepository, 'findAllByIds'>;
+  dataLakes: Pick<import('@bike4mind/common').IDataLakeRepository, 'findByDatalakeTag'>;
+}): (datalakeTag: string, sourceIds: string[]) => Promise<Set<string>> {
+  return async (datalakeTag, sourceIds) => {
+    if (!sourceIds.length) return new Set();
+    const lake = await deps.dataLakes.findByDatalakeTag(datalakeTag);
+    if (!lake) return new Set();
+    const files = await deps.fabfiles.findAllByIds(sourceIds);
+    return new Set(
+      files
+        .filter(file => !file.deletedAt && dataLakeService.lakeMembershipSignals(lake, file).inLake)
+        .map(file => file.id)
+    );
   };
 }

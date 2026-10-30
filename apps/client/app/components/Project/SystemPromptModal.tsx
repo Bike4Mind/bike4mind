@@ -13,7 +13,7 @@ import {
   Typography,
   Stack,
 } from '@mui/joy';
-import { truncate } from 'lodash';
+import truncate from 'lodash/truncate';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';

@@ -20,16 +20,14 @@ on:
       - '.github/scripts/generate-changeset.sh'
       - '.github/scripts/verify-changeset.sh'
       - '.github/workflows/semantic-pr-title.yml'
-  # Also run on the merge queue so the check reports there if it later becomes a
-  # required branch-protection check (see semantic-pr-title.yml for why a required
-  # check must run on merge_group).
-  merge_group:
-    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   check:
     if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - uses: actions/checkout@v6
 

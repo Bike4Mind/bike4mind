@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PrBinding, PrSnapshot } from '@shared/pullRequest';
+import type { PrBinding, PrSnapshot, PrSummaryEvent } from '@shared/pullRequest';
 import { desktopMergeReadiness } from './autoMerge';
 import { GhError } from './gh';
 import { PrMonitor } from './PrMonitor';
@@ -22,6 +22,7 @@ function setup(initial: PrSnapshot) {
   const store = tempStore();
   const fake = fakeGithub(initial);
   const out = collector();
+  const pushed: PrSummaryEvent[] = [];
   const monitor = new PrMonitor({
     store,
     github: fake.github,
@@ -33,10 +34,11 @@ function setup(initial: PrSnapshot) {
       startAutoFix: async () => ({ ok: false as const, busy: true, error: 'busy' }),
     },
     emit: out.emit,
+    emitSummary: event => pushed.push(event),
     logger: quietLogger,
     batchWindowMs: 0,
   });
-  return { store, fake, out, monitor };
+  return { store, fake, out, monitor, pushed };
 }
 
 describe('desktopMergeReadiness', () => {
@@ -188,7 +190,7 @@ describe('PrMonitor auto-merge on a merge-queue base (desktop enqueues)', () => 
   const armed: PrBinding = { ...bound, autoMerge: true, autoMergeMode: 'desktop' };
 
   it('enqueues on refresh, straight from that read, and never merges directly', async () => {
-    const { store, fake, out, monitor } = setup(queued());
+    const { store, fake, out, monitor, pushed } = setup(queued());
     await store.set(SESSION, armed);
     await monitor.refresh(SESSION);
     expect(fake.calls.filter(call => call.startsWith('enqueue:') || call.startsWith('merge:'))).toEqual([
@@ -200,6 +202,8 @@ describe('PrMonitor auto-merge on a merge-queue base (desktop enqueues)', () => 
       queued: { position: 1 },
       note: expect.stringMatching(/Queued to merge \(position 1\)/),
     });
+    // The read GitHub answered had no queue entry, so only the app's own enqueue turns the row amber.
+    expect(pushed[pushed.length - 1]?.summary?.state).toBe('queued');
     monitor.dispose();
   });
 

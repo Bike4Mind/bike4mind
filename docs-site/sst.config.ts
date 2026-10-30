@@ -11,16 +11,15 @@
  *
  * Stages:
  *   - production -> docs.bike4mind.com
- *   - dev is retired (no staging site); it stays in the retain/protect lists
- *     only so the leftover stage cannot be removed by accident.
+ *   There is no staging site; production is the only stage that is retained and protected.
  */
 
 export default $config({
   app(input) {
     return {
       name: 'bike4mind-docs',
-      removal: ['production', 'dev'].includes(input?.stage) ? 'retain' : 'remove',
-      protect: ['production', 'dev'].includes(input?.stage),
+      removal: input?.stage === 'production' ? 'retain' : 'remove',
+      protect: input?.stage === 'production',
       home: 'aws',
       providers: {
         aws: {

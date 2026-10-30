@@ -15,7 +15,7 @@ import {
   apiKeyService,
   creditService,
   dataLakeService,
-  isOperationalBillingEnabled,
+  memoizeOperationalBillingCheck,
   recordOperationalUsage,
   scopedSettingsService,
 } from '@bike4mind/services';
@@ -42,9 +42,10 @@ import {
 import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import type { RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import { getRequestMembershipOrgIds } from '@bike4mind/server-utils/dataLakes/requestMembership';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
@@ -225,7 +226,9 @@ export async function runLakeSemanticSearch(
   // check and still charges. Here it gates the check AND the charge in this one request
   // (see the `shouldBill &&` guard on the settlement below), so falling back to `false`
   // would hand out an unbilled search. A throw is the safer failure for that shape.
-  const shouldBill = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, req.logger);
+  // Request-scoped, so the pre-flight and every model's settlement below share one set of reads.
+  const billingCheck = memoizeOperationalBillingCheck({ adminSettings: adminSettingsRepository }, req.logger);
+  const billsEveryHolder = await billingCheck();
   const source = resolveRequestUsageSource(req);
 
   // Resolved once and reused by the settlement below, so the pre-flight and the charge
@@ -243,9 +246,15 @@ export async function runLakeSemanticSearch(
     billingOrg = resolvedOrg;
   } catch (billingErr) {
     // A refusal is the key's billing target, not a store failure - only the latter degrades.
-    if (billingErr instanceof BadRequestError && shouldBill) throw billingErr;
+    if (billingErr instanceof BadRequestError && billsEveryHolder) throw billingErr;
     req.logger?.warn('[semantic-search] failed to resolve user/organization for billing', billingErr);
   }
+
+  // The free-tier carve-out needs the holder, with the same plan resolver the settlement uses.
+  const shouldBill =
+    billingUser !== null &&
+    (billsEveryHolder ||
+      (await billingCheck({ user: billingUser, organization: billingOrg, activePlans: activePlanResolver })));
 
   // Gated on billing alone, not on the query having a price: unlike reserveRequestCredits, which
   // skips the check for a free request, a departed holder is refused here even on a zero-cost
@@ -502,7 +511,9 @@ export async function runLakeSemanticSearch(
                 creditTransactions: creditTransactionRepository,
                 users: userRepository,
                 organizations: organizationRepository,
+                activePlans: activePlanResolver,
               },
+              billingCheck,
               logger: req.logger,
             }
           );

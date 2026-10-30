@@ -245,6 +245,14 @@ describe('pinnedFetch - body cap and timeout', () => {
     await expectViolation(pinned({ maxBodyBytes: 1024 })(at('/declared-big')), 'size_cap');
   });
 
+  it('applies no cap when maxBodyBytes is Infinity', async () => {
+    const declared = await pinned({ maxBodyBytes: Infinity })(at('/declared-big'));
+    expect(declared.status).toBe(200);
+    await declared.body?.cancel();
+    const streamed = await pinned({ maxBodyBytes: Infinity })(at('/big'));
+    expect((await streamed.arrayBuffer()).byteLength).toBeGreaterThanOrEqual(TEN_MB);
+  });
+
   it('counts decoded bytes, so a small gzip body that inflates past the cap is refused', async () => {
     const response = await pinned({ maxBodyBytes: 1024 * 1024 })(at('/gzip-bomb'));
     await expectViolation(response.arrayBuffer(), 'size_cap');

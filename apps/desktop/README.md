@@ -33,15 +33,83 @@ pnpm --filter @bike4mind/desktop dev
 Starts the Vite dev server for the renderer, builds main and preload, and launches
 Electron against it with HMR.
 
-| Command | What it does |
-| --- | --- |
-| `pnpm dev` | Dev server + Electron, with HMR |
-| `pnpm build` | Bundles main, preload and renderer into `out/` |
-| `pnpm start` | Launches Electron against an existing `out/` build |
-| `pnpm typecheck` | `tsc` over both tsconfig projects |
-| `pnpm typecheck:fast` | `tsgo`, falling back to `tsc` |
-| `pnpm test` | vitest |
-| `pnpm package` | Installers for the host platform, into `release/` |
+| Command               | What it does                                       |
+| --------------------- | -------------------------------------------------- |
+| `pnpm dev`            | Dev server + Electron, with HMR                    |
+| `pnpm build`          | Bundles main, preload and renderer into `out/`     |
+| `pnpm start`          | Launches Electron against an existing `out/` build |
+| `pnpm typecheck`      | `tsc` over both tsconfig projects                  |
+| `pnpm typecheck:fast` | `tsgo`, falling back to `tsc`                      |
+| `pnpm test`           | vitest                                             |
+| `pnpm package`        | Installers for the host platform, into `release/`  |
+
+## Private and gated Hugging Face models
+
+In Models > Explore, choose Add token and enter a Hugging Face read token from
+[huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Desktop checks it
+before saving. Replace changes the token; Remove deletes it. The token is sent only to
+Hugging Face, and stays in the main process after you submit it.
+
+Desktop encrypts the saved token with the OS secret store. Without secure storage, including
+Linux's `basic_text` backend, it keeps the token only until you quit. The token row says
+whether it is saved for this run or across restarts.
+
+Ollama downloads the files itself using its own SSH key. For private or gated repos, grant
+your Hugging Face account access and register Ollama's public key (usually
+`~/.ollama/id_ed25519.pub`) at
+[huggingface.co/settings/keys](https://huggingface.co/settings/keys). The token checks Hub
+access; it does not give Ollama access. Desktop, CLI and MCP use `huggingface.co/...` for
+these pulls and recognize installed models under either Hugging Face hostname.
+
+Show abliterated models is off by default and is remembered on this computer across restarts.
+
+### Troubleshooting Hugging Face access
+
+- Token rejected: check that the token is complete, has not been revoked, and can read the repo.
+- Token cannot read the file: request gated access on the repo page, or grant the token access
+  to the private repo, then check again.
+- Ollama download refused: register Ollama's public key on the account with repo access.
+- Saved token could not be read: check access to Desktop's user-data folder, then select Retry.
+- Save or Remove failed: the previous token remains active. Resolve the storage error and retry.
+- Token missing after restart: check whether the token row said it was kept only until quit.
+
+## Images in conversations
+
+Right-click an image in a sent message or tool result to open its menu. From the keyboard,
+focus the image and press Shift+F10 or the context-menu key. Local images offer **Copy image**,
+**Save image...**, **Attach as context** for the next message, a **Copy** submenu for the image,
+file path or Markdown, and **Show in Finder** (File Explorer on Windows, folder on Linux).
+Draft attachment tiles have no context menu. Cancelling the save dialog leaves the image alone.
+
+A remote image linked in a Markdown reply offers only **Copy > Markdown**: it has no local file,
+and the desktop renderer does not load remote images.
+
+If an action fails, read the error notice. "That image is no longer available" means the stored
+file could not be found; paste or attach the original image again. If the clipboard cannot decode
+the image format, use **Save image...** instead. A failed attachment appears as a rejection above
+the composer, where it can be dismissed.
+
+## Chat costs
+
+The footer ring shows your personal credit balance as a percentage of your monthly personal
+plan allowance. Organization credit pools are separate. A balance above the allowance, for
+example after rollover or a top-up, fills the ring while the tooltip keeps the actual percentage.
+Accounts without a monthly personal allowance show the balance without a percentage.
+If the balance or allowance is unavailable, check that you are signed in and can reach the
+backend; older backends may not report an allowance. The separate Context panel shows context usage.
+
+Chat shows the credits reported by the server while a reply streams, after it finishes, and
+in the composer's usage details. Missing credit usage is left blank rather than shown as zero.
+
+In development (`pnpm dev`), Settings offers **Show dollar costs**, off by default. It switches
+the streaming cost and the composer's last-turn cost to the server's dollar figure, and adds
+dollars to the completed reply's tooltip. Completed replies keep their credit headline.
+The choice is saved locally. Production builds hide this setting and always display credits,
+even if a development run previously saved the dollar preference.
+
+If a cost is absent, the server may not have reported it yet; older replies may have no saved
+usage. The app does not estimate credits by converting dollars. A developer dollar display
+falls back to credits when the server reports no dollar figure.
 
 ## Suggested next prompt
 
@@ -58,19 +126,59 @@ the switch off or changing models clears the current hint and discards late answ
 previous choice. Ollama completion requests time out after 30 seconds; hosted requests after
 five. Loading the model list can add time before generation starts.
 
+## Local history and offline models
+
+Turn on **Local history** for a conversation to index its messages and visited browser pages
+on this device. The switch is in the browser pane's **...** menu (open the pane with the globe
+button in the conversation header); an icon in the header shows while it is on. Use **Search conversations** in the sidebar to search opted-in history while
+offline. Turning the switch off removes that conversation from the index. Settings -> General ->
+Local history -> **Clear local history** clears the current account's index; it does not delete
+the original conversations or disable future capture in opted-in sessions.
+
+Run Ollama locally on `127.0.0.1:11434` with a downloaded chat model, then choose that model
+in the model picker. From the signed-out screen, choose **Use local models**. These models
+send inference requests to the local daemon; cloud-backed Ollama models are excluded.
+Local requests use a 4,096-token context by default, capped at the model's supported window.
+To use a larger window, set `PARAMETER num_ctx 8192` (or another supported size) in the
+model's Ollama Modelfile; discovery and inference use the same explicit context size.
+Local Code sessions can still use network tools when permitted, so offline inference does not
+make tool execution offline.
+
+If a model is missing, check that Ollama is running at that address and the installed model
+supports chat, then refresh the model list. If history is missing, check the conversation's
+switch and the selected account. A clear or search error is shown in the interface; retry after
+resolving the reported problem. The search index is separate from the saved conversations.
+
+## Import from Claude
+
+Open Settings -> Import to enable Claude Code sync or select a claude.ai data export.
+Code sync reads `~/.claude/projects` by default and imports only sessions run inside a
+repository's `.claude/worktrees/<name>` directory. Use the folder picker to choose another
+transcript source and the project filter to narrow the imported repositories.
+
+For claude.ai, export your data from Claude's settings, then choose the downloaded ZIP or
+its `conversations.json`. You can also select a folder to watch for new exports. Reimporting
+an export updates changed conversations. Sending a message here makes the imported session
+your own copy, which later imports and removal of untouched imports leave alone.
+
+If nothing appears, check that you are signed in, sync is enabled, the selected source is
+readable, and the session ran in a Claude Code worktree. Review the Import page's error and
+failed counts, repair file permissions or select a complete export, then retry. The source
+files remain read-only throughout import.
+
 ## Packaging
 
 `electron-builder` assembles what `electron-vite build` put in `out/`; its config is
 [`electron-builder.yml`](./electron-builder.yml). Artifacts land in `release/`, which is
 gitignored.
 
-| Command | Produces |
-| --- | --- |
-| `pnpm package` | everything the host platform can build |
-| `pnpm package:mac` | `dmg` and `zip`, both for arm64 and x64 |
-| `pnpm package:win` | `nsis` installer, x64 |
-| `pnpm package:linux` | `AppImage`, x64 |
-| `pnpm package:dir` | an unpacked `.app`/directory, no installer - the fast loop |
+| Command              | Produces                                                   |
+| -------------------- | ---------------------------------------------------------- |
+| `pnpm package`       | everything the host platform can build                     |
+| `pnpm package:mac`   | `dmg` and `zip`, both for arm64 and x64                    |
+| `pnpm package:win`   | `nsis` installer, x64                                      |
+| `pnpm package:linux` | `AppImage`, x64                                            |
+| `pnpm package:dir`   | an unpacked `.app`/directory, no installer - the fast loop |
 
 The macOS `zip` is not redundant with the `dmg`. The dmg is the human-facing installer;
 the zip is the format a Squirrel.Mac auto-updater consumes, so it has to exist before
@@ -187,11 +295,25 @@ Desktop updates use only the dedicated repository's Latest release. Production r
 automation is unchanged. Keep source desktop release tags intact;
 changing the package version does not override existing release history.
 
-Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
-Without it, users must select their own backend. `DESKTOP_RELEASE_REPOSITORY` supplies the
+The hosted backend defaults to `https://app.bike4mind.com`; the repository variable
+`B4M_DEFAULT_API_URL` overrides it. `DESKTOP_RELEASE_REPOSITORY` supplies the
 dedicated public `owner/repo`; CI derives and bakes `B4M_UPDATE_FEED_URL` as its
 `https://github.com/<owner>/<repo>/releases/latest/download/` URL. Unset or source-repo
 destinations fail closed. PR builds have no signing credentials and are not published.
+
+For signed online Curated lists, set both source Actions variables
+`B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` to the same HTTPS `latest.json`
+URL. The first is baked into Desktop; the second is the release gate's expected URL.
+Leave both unset to keep the bundled list. A baked URL without the matching expected
+URL fails the release. Setting only `CURATED_PUBLIC_URL` leaves online updates off;
+the gate permits an empty baked URL. Production trusted keys must also be shipped
+before Desktop will fetch online lists.
+
+Local testing can build with `B4M_CURATED_DEV_KEYS=1` in the shell and use the runtime
+`B4M_CURATED_DEV_URL` override for a signed test list, including HTTP on loopback.
+The override is ignored in packaged apps and builds without test keys. Test-key
+builds use a separate cache directory and are rejected by `curated:check-build`;
+never enable the dev flag for a release.
 
 The validation job generates `latest-mac.yml` and `latest-linux.yml` from the actual
 installer bytes, with SHA-512 and size. ZIP blockmaps are mandatory; AppImage blockmaps
@@ -218,12 +340,14 @@ partial manifest. Published assets are not overwritten on retry.
    and omits `latest-mac.yml`. Linux metadata and updates remain enabled. Ad-hoc
    signing provides bundle integrity, not publisher identity or notarization.
    Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
-5. Merge through review, then inspect the first trusted run's signatures, notarization,
+5. When enabling online Curated lists, set `B4M_CURATED_MANIFEST_URL` and
+   `CURATED_PUBLIC_URL` together as described above; otherwise leave both unset.
+6. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
    `latest-linux.yml` downloads redirect successfully (also `latest-mac.yml` for
    the Developer ID path only). CI logs record
    publication and tag operations; organization audit-log retention is managed separately.
-6. Test two signed versions using a temporary installation and profile. Check, download,
+7. Test two signed versions using a temporary installation and profile. Check, download,
    and explicitly restart into the newer version. Never use a user's existing profile.
    Contract tests and local feed checks do not prove Squirrel.Mac signature acceptance.
 
@@ -283,18 +407,14 @@ GitHub Releases, then rerun the workflow on corrected `main` to publish a new ve
 
 ### Baking the backend URL
 
-`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is what makes
-**Production** selectable in the environment picker - `hostedAvailable()` in
-`src/main/auth/environment.ts` is false whenever it is empty, and the picker then reads
-"Production (not set in this build)". A packaged app inherits no shell environment, so
-there is nothing to read at runtime.
+`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is the
+**Production** entry in the environment picker. A packaged app inherits no shell
+environment, so there is nothing to read at runtime.
 
-**There is deliberately no fallback URL in source.** This repo is public and open-core;
-committing a hostname here would put it in every fork's bundle. The CLI has the same rule
-and the same shape (`packages/cli/tsdown.config.ts`, injected in `release.yaml` from a repo
-variable), so the two clients are branded the same way.
-
-Supply it per build, highest precedence first:
+When nothing supplies it, the build uses `https://app.bike4mind.com` (`PRODUCTION_API_URL` in
+`electron.vite.config.ts`), so every build signs in to production with nothing to type. The
+exception is `pnpm dev`, which bakes nothing and so starts on Local Dev (`http://localhost:3000`). A
+fork that runs its own backend overrides it, highest precedence first:
 
 ```bash
 B4M_DEFAULT_API_URL=https://your-backend.example pnpm package:mac
@@ -307,8 +427,7 @@ covers, at the root, for `.env` and `.env*.local` alike:
 B4M_DEFAULT_API_URL=https://your-backend.example
 ```
 
-Build with neither and the app ships with no hosted option at all, which is the correct
-state for an unbranded fork: Local Dev and a self-hosted URL still work.
+Local Dev and a self-hosted URL stay available from "Change server" on the sign-in card.
 
 ### Signing
 
@@ -323,11 +442,11 @@ Direct electron-builder invocations (including the trusted CI signing job) can u
 credentials from the environment. Local package scripts additionally require
 `DESKTOP_MAC_IDENTITY` to opt into a Developer ID identity:
 
-| Variable | Effect |
-| --- | --- |
-| `CSC_LINK` + `CSC_KEY_PASSWORD` | base64 `.p12` (or a file path) used on both platforms |
-| `WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` | Windows-only certificate, for a combined build |
-| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | notarization credentials |
+| Variable                                                   | Effect                                                |
+| ---------------------------------------------------------- | ----------------------------------------------------- |
+| `CSC_LINK` + `CSC_KEY_PASSWORD`                            | base64 `.p12` (or a file path) used on both platforms |
+| `WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD`                    | Windows-only certificate, for a combined build        |
+| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | notarization credentials                              |
 
 A "Developer ID Application" identity already in the login keychain is picked up with no
 variables at all. `hardenedRuntime` and `build/entitlements.mac.plist` are always on: they
@@ -349,7 +468,7 @@ change when they arrive - only the environment does.
 
 ### What ships, and what does not
 
-`dependencies` in this package's `package.json` is the *unbundled runtime* closure, not
+`dependencies` in this package's `package.json` is the _unbundled runtime_ closure, not
 everything the app imports. Vite bundles the renderer, so React, MUI Joy, Tanstack Router
 and the markdown stack are build-time only and live in `devDependencies`; electron-builder
 computes the packaged `node_modules` from `dependencies` alone, so leaving them there
@@ -357,7 +476,7 @@ shipped every one of them twice.
 
 The same rule is why `@bike4mind/utils` is bundled into main rather than externalized (see
 the `exclude` on `externalizeDepsPlugin` in `electron.vite.config.ts`). Main uses one
-subpath of it; the package *declares* six AWS SDK clients, openai, jimp, tiktoken, xlsx
+subpath of it; the package _declares_ six AWS SDK clients, openai, jimp, tiktoken, xlsx
 and mammoth, and electron-builder ships what is declared. Bundling that one subpath took
 `app.asar` from 257 MB to 42 MB.
 
@@ -389,7 +508,7 @@ one hand-written method per IPC channel rather than a generic `invoke(channel, .
 passthrough, because a passthrough would let renderer code reach every handler main ever
 registers. The OAuth device flow runs in **main** so tokens never enter the renderer, and
 the IPC contract in `src/shared/ipc.ts` states the invariant that channels may return auth
-*state* but never a token.
+_state_ but never a token.
 
 ## Chat and Code modes
 
@@ -402,14 +521,14 @@ Every conversation has a mode, chosen with the segmented control at the top of t
   group under the project in the sidebar.
 
 **Tools are not the difference.** Both modes carry the same file, shell and background-process
-tools. Code mode's distinction is *where* they run.
+tools. Code mode's distinction is _where_ they run.
 
 ### The chip row
 
 A Code session's grounding sits above the composer as a row of pills - the backend, the project
 directory, the branch paired with a worktree checkbox, and the folders granted for context -
 and every one of them is editable mid-session. It is a persistent surface rather than a setup
-step, because what it shows is where the *next* turn's commands will run.
+step, because what it shows is where the _next_ turn's commands will run.
 
 The first chip names the b4m backend (the environment from `src/main/auth/environment.ts`), not
 where the agent runs: the agent is this app's main process and has nowhere else to be, so a
@@ -424,46 +543,104 @@ repointing it past a live dev server would leave that server in a checkout the c
 longer claims. Both conditions clear on their own, so it is a wait rather than a dead end;
 `ChatService.project.test.ts` pins both the refusal and that it leaves the binding untouched.
 
-Moving to a *different* repository drops the branch and the context folders with it: a branch
+Moving to a _different_ repository drops the branch and the context folders with it: a branch
 name means nothing in a repository it does not belong to, and folders chosen as context for one
 codebase are not consent to read them alongside another.
 
 ### The workspace toggle is a git worktree
 
-Off, the session runs in the project directory. On, it runs in a git worktree for the chosen
-branch, following the layout in `~/.config/b4m/worktree.zsh`: worktrees live inside the
-project's own container directory (the parent of the shared git dir), one folder per branch,
-with `/` in the branch name written as `+`.
+Off, the session runs in the project directory. On, it runs in a git worktree of its own. The
+worktree lives in the app's own `.b4m` folder inside the project's container directory (the
+parent of the shared git dir), with `/` in the branch name written as `+`:
 
 ```
-<container>/.bare              the bare repo
-<container>/main               the main worktree
-<container>/fix+some-branch    one folder per branch
+<container>/.b4m/.gitignore         ignores everything in .b4m, so worktrees stay out of git status
+<container>/.b4m/worktrees/<branch> one folder per session branch, e.g. b4m+fix-login-3fa9c1
+<container>/.b4m/spare              a ready checkout that makes the next one fast (see below)
 ```
 
-That layout is reimplemented in `src/main/chat/project/workspace.ts` rather than shelled out
-to, because a packaged app cannot assume a personal shell function exists. Nothing ever writes
-to a `../` path, which would scatter folders that read as separate projects.
+The layout is reimplemented in `src/main/chat/project/workspace.ts` rather than shelled out
+to the user's `worktree` shell function (`~/.config/b4m/worktree.zsh`, still the source of the
+`+` folder convention and the default base), because a packaged app cannot assume a personal
+shell function exists. Nothing ever writes to a `../` path, which would scatter folders that
+read as separate projects, and the repository's own `.gitignore` is never touched. Keeping
+everything under `.b4m` also means a worktree can never collide with a folder the user made
+themselves, such as `<container>/main`.
 
-Three cases it handles rather than failing:
+**The chosen branch is a base, not a target.** The session gets a branch of its own, named
+`b4m/<slug>-<hex>` (the slug comes from the session title, the random suffix keeps two sessions
+from the same base apart), cut from the branch the user picked. A name that is not an existing
+branch names the session's own branch instead, cut from the default base. Either way the
+session is alone on its branch, so picking `main` never hands back the user's own checkout and
+the app never claims an isolation it did not get. The resolved path is shown under the session
+title whenever it differs from the project directory.
 
-- **The worktree already exists** - adopted, not recreated. A worktree registered for that
-  branch at some *other* path is adopted too, because git allows a branch in exactly one
-  worktree and `worktree add` would otherwise fail against it.
-- **The branch does not exist** - created from `origin/main` (then `origin/master`, then
-  `HEAD`), `--no-track`, matching the shell helper's default.
-- **The branch is the one the main checkout is on** - resolves *to* the main checkout, since
-  git permits nothing else. The resolved path is shown under the session title whenever it
-  differs from the project directory, so the app never claims an isolation it did not get.
+Cases it handles rather than failing:
 
-**Deleting a session never deletes its worktree.** A worktree can hold uncommitted work, and
-deleting a conversation must not be a way to lose code. Removing one stays a git operation the
-user performs themselves (`rmworktree <branch>`).
+- **The session already has its worktree** - reused, not recreated. Reuse is keyed only on the
+  session's _own_ branch, which is saved on the session and handed back on every later
+  resolution. A worktree some other tool registered for the base branch is never adopted.
+- **The branch does not exist yet** - for a `main` base (`main`, `origin/main`, or no base
+  picked while the checkout is on `main`) it is created from `origin/main` right after a
+  successful fetch, so local-only or diverged `main` commits never seed it; if that fetch fails
+  the session fails to prepare instead of starting from stale history. Local `main` is never
+  touched. Any other base is created from its remote-tracking ref once that is proven to
+  contain the local base, otherwise from the base itself. With no base picked it is the branch
+  `origin/HEAD` points at, then `origin/main`, then `origin/master`, then `HEAD`. Always
+  `--no-track`, so a later `git push` does not aim at the base. A repository without an
+  `origin` remote uses its local `main`.
+
+**An occupied path is refused, never adopted or cleared.** If the target folder is already a
+git worktree holding something else, or exists but is not a worktree, the session fails to
+prepare with a message naming the path. Move it with `git worktree move` (a plain `mv` leaves
+git pointing at a path that no longer exists), or pick a different branch.
+
+**A spare checkout makes starting fast.** After a worktree is cut in a repository, the app
+prepares one detached checkout in `.b4m/spare` shortly afterwards, so it does not compete with
+the new session's first moments. The next session moves it into place and switches it to the
+new branch, which rewrites only the files that differ - about 0.2s instead of the 1.3s a full
+checkout takes on this monorepo. It is bounded on every side: a repository gets one only after
+a worktree was cut in it during the current run, at most two repositories keep one (the least
+recently used goes first), an unused spare is removed after 30 minutes, and all of them are
+removed on quit. A spare left behind by a crash is recognized by its git metadata and original
+`HEAD`; one that has been changed, or that the app does not own, is left alone and no spare is
+made.
+
+**Deleting a session can also remove its worktree and branch.** The delete confirmation offers
+this only for an app-created checkout under `.b4m/worktrees` on a `b4m/` branch. It defaults on
+only when no other conversation (including archived ones) uses the directory or branch, the
+checkout has no uncommitted or untracked files, and its commits are preserved in its upstream
+or base branch. Ordinary ignored files do not prevent removal; nested worktrees and folders
+used by other conversations are kept. Running conversations must stop first; unsafe checkouts
+show the reason and are kept. Cleanup stops background processes, waits for terminal shells
+to exit and closes the browser, then rechecks safety and uses `git worktree remove` and
+`git branch -d`, without force. A shell that cannot be stopped keeps its checkout. New workspace
+bindings wait until cleanup finishes. Git refusals are shown in the dialog; the conversation is
+kept so you can retry or delete it without cleanup. Archiving, imported-session deletion and
+the agent's `session_delete` tool keep their worktrees.
+
+### Starting a session in a worktree
+
+A suggested task or approved `session_spawn` appears in the sidebar before git finishes,
+with "Preparing worktree..." in its row and chips. Its first turn waits for the checkout;
+messages sent while it prepares queue behind the initial task. New Code sessions with the
+worktree toggle on also wait for their checkout before running tools.
+
+If a spawned session cannot prepare its worktree, the app shows a failure toast and reports
+the failure to the parent conversation. An empty failed session is removed, and a suggested
+task returns to pending: start the card again after correcting the git or filesystem error.
+For a tool spawn, ask the parent to try `session_spawn` again.
+
+A failed session that accepted follow-up messages is kept. Its unsent task, follow-ups and
+attachments are saved in its transcript, and typed input returns to its open composer for
+retry. Relayed messages remain in the transcript. After correcting the startup error, retry
+in that conversation; its suggestion card stays started to avoid creating a duplicate.
+Deleting a session while it prepares cancels its launch without reporting a startup failure.
 
 ### Tools run in the session's working directory
 
 `ChatService.resolveToolScope` puts the session's working directory and its context
-directories at the *front* of the granted roots and passes the working directory on
+directories at the _front_ of the granted roots and passes the working directory on
 `ToolContext`. Everything downstream reads it: `bash_execute` and `bash_background` default
 their cwd to it, `resolveWithinRoots` resolves relative paths against it, and `glob_files` /
 `grep_search` anchor there.
@@ -471,7 +648,7 @@ their cwd to it, `resolveWithinRoots` resolves relative paths against it, and `g
 This is load-bearing. Before it, an ungrounded default fell back to `roots[0]` - the first
 folder the user ever granted. For a session bound to a worktree that is the main checkout, so
 commands would have run on the wrong branch while the UI said otherwise. `src/main/chat/tools/
-workingDirectory.test.ts` pins it by making the working directory the *second* root, so any
+workingDirectory.test.ts` pins it by making the working directory the _second_ root, so any
 regression to `roots[0]` fails.
 
 ### Session storage and migration
@@ -489,13 +666,20 @@ not a hand-written approximation.
 
 Adapted from Claude Code desktop's layout: primary nav, a **Pinned** section, then project
 groups with per-group actions (new session, search, settings) and a leading status dot per row
-- filled while a reply streams, hollow when idle. The dot is driven by a global subscription to
-main's stream events, not the open conversation, so a session replying in the background shows
-as running.
 
-Two of its entries have no counterpart here. **Artifacts** is dropped: desktop conversations are
-local and produce none. **Customize** maps onto the folder grants this app already had, which
-moved out of the account panel into the collapsible **More**.
+- filled while a reply streams or its worktree prepares, hollow when idle. The dot is driven by a
+  global subscription to main's stream events, not the open conversation, so a session replying in
+  the background shows as running.
+
+**Artifacts** opens a searchable grid of the artifacts created by this app across your machines.
+Thumbnails load as cards approach the viewport; select a card to view it or share its live link.
+Use Back or Escape to return to the grid. **Refresh** reloads the list and thumbnail bodies after
+an edit in the web app. Search, filters and counts cover the newest 100 artifacts at most.
+
+The library requires a signed-in account and network access. If the list or an opened artifact
+cannot load, its error offers **Try again**; sign in again if your session has expired.
+**Customize** maps onto the folder grants this app already had, which moved out of the account
+panel into the collapsible **More**.
 
 ## Authentication
 
@@ -534,8 +718,8 @@ token.
   HTTP client debug-logs request bodies.
 
 `B4M_DEFAULT_API_URL` is baked into the main bundle at build time (see the `define` block in
-`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown. Empty for an unbranded
-fork, which then has no Production option and must pick Local Dev or a custom URL.
+`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown, and falls back to
+`https://app.bike4mind.com` when no build supplies it (except in `pnpm dev`, which starts on Local Dev).
 
 Routing uses hash history. A packaged build loads the renderer over `file://`, which has no
 origin for the History API to push against, so hash history is the one mode that behaves
@@ -554,11 +738,11 @@ publishes no releases.
 Only https is accepted, plus http on the loopback so the check path can be exercised against a
 local static server. See `resolveFeedUrl` in `src/main/update/feed.ts`.
 
-| When | What |
-| --- | --- |
-| 15s after launch | The first check, deliberately behind the window, auth and model catalog |
-| Every 6 hours | Because this app is left running for days, so "on launch" alone is not enough |
-| The Customize row | On demand |
+| When              | What                                                                          |
+| ----------------- | ----------------------------------------------------------------------------- |
+| 15s after launch  | The first check, deliberately behind the window, auth and model catalog       |
+| Every 6 hours     | Because this app is left running for days, so "on launch" alone is not enough |
+| The Customize row | On demand                                                                     |
 
 Nothing downloads or installs itself. `autoDownload` and `autoInstallOnAppQuit` are both off:
 the user presses Download, and then Restart. An install asks main what is in flight first - a
@@ -597,13 +781,13 @@ internal renderer silently drops every gradient-filled path, which here is the e
 leaving four cyan dots on a blank canvas. Quick Look flattens onto white, so the script
 restores the transparent corners with a circular mask.
 
-| File | Consumed by |
-| --- | --- |
-| `build/icon.icns` | electron-builder, macOS app bundle |
-| `build/icon-mac.png` | macOS development Dock icon (1024x1024) |
-| `build/icon.ico` | electron-builder, Windows |
-| `build/icon.png` | electron-builder, Linux (512x512) |
-| `src/renderer/favicon.png` | the renderer's `<link rel="icon">` |
+| File                       | Consumed by                             |
+| -------------------------- | --------------------------------------- |
+| `build/icon.icns`          | electron-builder, macOS app bundle      |
+| `build/icon-mac.png`       | macOS development Dock icon (1024x1024) |
+| `build/icon.ico`           | electron-builder, Windows               |
+| `build/icon.png`           | electron-builder, Linux (512x512)       |
+| `src/renderer/favicon.png` | the renderer's `<link rel="icon">`      |
 
 macOS uses the full-size mark with its own blue gradient extended behind it, making the
 circular edge seamless with the rounded-square tile. The corner radius is 22% of the tile
@@ -631,13 +815,13 @@ Where the icon actually shows:
 **Electron 44 is required, and it is not a Node-version compromise.** The repo sets
 `engines: node >=24`, and Electron ships its own Node for the main process:
 
-| Electron | Bundled Node | Chromium |
-| --- | --- | --- |
-| 44.4.5 (used here) | **24.21.0** | 152 |
-| 43.7.5 | 24.21.0 | 150 |
-| 40.10.6 | 24.15.0 | 144 |
-| 39.8.10 | 22.22.1 | 142 |
-| 38 and earlier | 22.x | <= 140 |
+| Electron           | Bundled Node | Chromium |
+| ------------------ | ------------ | -------- |
+| 44.4.5 (used here) | **24.21.0**  | 152      |
+| 43.7.5             | 24.21.0      | 150      |
+| 40.10.6            | 24.15.0      | 144      |
+| 39.8.10            | 22.22.1      | 142      |
+| 38 and earlier     | 22.x         | <= 140   |
 
 Electron 40 was the first release to bundle Node 24, so **do not drop below Electron 40** or
 the main process stops satisfying the repo's stated Node floor. At Electron 44 there is
@@ -699,6 +883,23 @@ renderer drop both workarounds above and cut roughly a megabyte.
 
 ## Standing permission rules
 
+Settings -> Permissions also shows the local capability ledger: active grants for files,
+tools, browser origins, imported identity, project trust and credit-spending actions,
+followed by their 200 most recent audit events. Tool execution does not
+append audit events. The ledger uses an append-only local log; existing ledger files are
+migrated automatically. Conversation grants are visible only in the account that created
+them. Revoke removes the corresponding stored permission or
+conversation allowance immediately. A separate overlapping allow can still authorize a
+call; inspect the remaining grants and permission rules if a prompt does not reappear.
+Standing tool approvals end when the desktop restarts. Durable grants are migrated into
+the ledger, including folders shared with saved conversations when Settings loads.
+Imported browser identity remains separate from anonymous access.
+
+If the ledger cannot be loaded or a revoke fails, Settings displays the error. Check that
+the desktop's user-data directory is writable, then retry. A failed revoke must not be
+treated as confirmation that access ended. Invalid logs are quarantined for inspection;
+audit synchronization failures are logged and do not undo completed permission changes.
+
 Open Settings -> Permissions to add allow, ask, or deny rules for every project or one
 project. Rules use Claude Code syntax, for example `Bash(git status:*)`,
 `Read(~/notes/**)`, and `WebFetch(domain:docs.example.com)`. Deny takes precedence over
@@ -706,9 +907,14 @@ ask, and ask over allow. A shell command needs an allow for every subcommand.
 Native tool rules such as `request_directory` also apply to interactive tools:
 a deny refuses the call, while an allow still requires the tool's interactive response.
 
-The approval card's "Always, in every session" saves the displayed allow rules.
-Irreversible calls cannot save a standing allow. Settings also shows imported Claude
-Code sources read-only. Turn off "Use them here" to stop importing them. An untrusted
+The approval card's "Allow in this chat" remembers consent for this conversation.
+"Always allow" saves the displayed allow rules in Settings -> Permissions, and also
+answers waiting cards those rules cover. For web fetches, both buttons cover every site,
+including after a reply has read web content; the saved rule is `WebFetch`.
+Use a `WebFetch(domain:...)` rule in Settings for a narrower persistent allow.
+Irreversible calls cannot save a standing allow. Browser cards cannot save a rule.
+Settings also shows imported Claude Code sources read-only. Turn off "Use them here"
+to stop importing them. An untrusted
 project contributes ask and deny rules, but cannot grant itself an allow.
 
 If a permission source cannot be read or parsed, tool execution is refused rather than
@@ -716,3 +922,8 @@ dropping its restrictions. Check the path named in the error, repair the JSON or
 permissions, then retry. Claude Code sources reload when their settings change; after
 repairing the desktop rule file, retry the call. A failed Settings save displays an
 error and keeps the previously saved rules active.
+
+If "Always allow" reports that its rule could not be saved, consent still applies in
+this conversation. Retry the save in Settings -> Permissions before relying on it in
+another chat. To restore fetch approval cards, remove the saved `WebFetch` allow and
+start a new chat; existing conversation consent lasts for that conversation.

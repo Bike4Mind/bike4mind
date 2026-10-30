@@ -3,14 +3,39 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatSessionSummary, ChatSpawnSuggestion, ChatStreamEvent } from '@shared/chat';
+import {
+  awaitsWorktree,
+  type ChatSessionSummary,
+  type ChatSpawnSuggestion,
+  type ChatStreamEvent,
+  type ChatQueueEvent,
+} from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, MAX_CONCURRENT_SPAWNED } from './ChatService';
 import { SessionStore } from './SessionStore';
+import { AttachmentStore } from './AttachmentStore';
+import { MessageQueue } from './MessageQueue';
 import { git, listWorktrees } from './project/git';
-import { appWorktreeRoot } from './project/workspace';
+import { appWorktreeRoot, prefetchBase } from './project/workspace';
+import { DependencyInstaller } from './project/dependencyInstall';
+import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+
+// The real resolveWorkspace behind a gate, so a test can hold the worktree mid-cut and look at what
+// the session is meanwhile. Open by default.
+const gate = vi.hoisted(() => ({ hold: Promise.resolve() }));
+vi.mock('./project/workspace', async importOriginal => {
+  const actual = await importOriginal<typeof import('./project/workspace')>();
+  return {
+    ...actual,
+    prefetchBase: vi.fn(actual.prefetchBase),
+    resolveWorkspace: async (...args: Parameters<typeof actual.resolveWorkspace>) => {
+      await gate.hold;
+      return actual.resolveWorkspace(...args);
+    },
+  };
+});
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -36,6 +61,10 @@ describe('ChatService spawn placement', () => {
   let streams: PassThrough[];
   let container: string;
   let main: string;
+  let queue: MessageQueue;
+  let dependencies: DependencyInstaller;
+  let attachments: AttachmentStore;
+  let queueEvents: ChatQueueEvent[];
 
   /** A repository in the user's layout: a bare dir plus one folder per branch beside it. */
   async function repository(): Promise<void> {
@@ -58,6 +87,8 @@ describe('ChatService spawn placement', () => {
   }
 
   beforeEach(async () => {
+    vi.mocked(prefetchBase).mockClear();
+    gate.hold = Promise.resolve();
     await repository();
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-place-sessions-')), 'test-model');
     // Bound per test: a previous service replying late must not push into this test's events.
@@ -71,9 +102,20 @@ describe('ChatService spawn placement', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     post = boundPost;
+    queueEvents = [];
+    queue = new MessageQueue(event => queueEvents.push(event));
+    attachments = new AttachmentStore(await mkdtemp(join(tmpdir(), 'b4m-place-attachments-')), {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    });
+    dependencies = new DependencyInstaller(new BackgroundProcessRegistry({ output: () => {}, status: () => {} }));
+    vi.spyOn(dependencies, 'maybeStart').mockResolvedValue(undefined);
 
     service = new ChatService({
       store,
+      queue,
+      attachments,
+      dependencies,
       approvals: new ApprovalGate(),
       access: { list: async () => [] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
@@ -130,6 +172,30 @@ describe('ChatService spawn placement', () => {
       .filter(event => event.type === 'tool-end')
       .map(event => (event.type === 'tool-end' ? event.call : null))
       .filter(call => call?.name === 'session_spawn');
+  }
+
+  async function relayFromParent(parentId: string, targetId: string, text: string) {
+    await store.setApprovalMode(parentId, 'auto');
+    const stream = await vi.waitUntil(() => streams[1], { timeout: 5000, interval: 5 });
+    stream.write(
+      frame({
+        type: 'tool_use',
+        tools: [
+          {
+            id: 'relay-input',
+            name: 'session_send',
+            arguments: JSON.stringify({ session_id: targetId, message: text }),
+          },
+        ],
+      })
+    );
+    stream.write(frame('[DONE]'));
+    const ended = await vi.waitUntil(
+      () => events.find(event => event.type === 'tool-end' && event.call.id === 'relay-input'),
+      { timeout: 5000, interval: 5 }
+    );
+    if (ended.type !== 'tool-end') throw new Error('Relay did not settle');
+    return ended.call;
   }
 
   function awaitSettled(count: number) {
@@ -195,12 +261,36 @@ describe('ChatService spawn placement', () => {
     return (await store.list()).find(session => session.origin);
   }
 
+  /** The child's worktree, once the background half of the start has cut it. */
+  async function worktreeOf(branch: string): Promise<string> {
+    const path = join(appWorktreeRoot(container), branch.replace('/', '+'));
+    await vi.waitUntil(async () => (await child())?.project?.workingDirectory === path, {
+      timeout: 10000,
+      interval: 10,
+    });
+    return path;
+  }
+
+  function holdWorktrees(): () => void {
+    let release = () => {};
+    gate.hold = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    return release;
+  }
+
+  function seedPosted(text: string): boolean {
+    return post.mock.calls.some(call => String(call[1]?.messages?.[1]?.content ?? '').includes(text));
+  }
+
   it('gives the child a worktree of its own when the user starts it in one', async () => {
     const { parent, result } = await spawnWith({ placement: 'worktree', branch: 'agent/the-thing' });
 
     expect(result.ok).toBe(true);
+    await worktreeOf('agent/the-thing');
     expect((await child())?.project).toMatchObject({
-      branch: 'agent/the-thing',
+      branch: 'main',
+      workspaceBranch: 'agent/the-thing',
       workspace: true,
       workingDirectory: join(appWorktreeRoot(container), 'agent+the-thing'),
     });
@@ -219,6 +309,7 @@ describe('ChatService spawn placement', () => {
     await suggest();
 
     expect(await child()).toBeUndefined();
+    expect(prefetchBase).toHaveBeenCalledWith(main, 'main');
     expect(await listWorktrees(main)).toHaveLength(1);
     expect(settled()[0]?.status).toBe('done');
     expect(settled()[0]?.preview).toMatch(/Nothing has started/);
@@ -238,8 +329,9 @@ describe('ChatService spawn placement', () => {
 
     expect(result.ok).toBe(true);
     expect(events.some(event => event.type === 'done')).toBe(false);
+    await worktreeOf('agent/while-busy');
     expect((await child())?.project).toMatchObject({
-      branch: 'agent/while-busy',
+      workspaceBranch: 'agent/while-busy',
       workingDirectory: join(appWorktreeRoot(container), 'agent+while-busy'),
     });
     expect((await stat(join(appWorktreeRoot(container), 'agent+while-busy', 'README.md'))).isFile()).toBe(true);
@@ -314,18 +406,284 @@ describe('ChatService spawn placement', () => {
     expect(!result.ok && result.error).toMatch(/not a usable branch name/);
   });
 
-  it('leaves no half-made session when the worktree cannot be created', async () => {
+  it('shows the child before its worktree exists, and runs nothing until it does', async () => {
+    const release = holdWorktrees();
+    const { parent, result } = await spawnWith({ placement: 'worktree', branch: 'agent/early' });
+
+    expect(result.ok).toBe(true);
+    const early = await child();
+    expect(early?.project).toMatchObject({ workspace: true, workspaceBranch: 'agent/early', workingDirectory: main });
+    expect(early?.project && awaitsWorktree(early.project)).toBe(true);
+    expect((await service.getSession(early!.id))?.preparingWorkspace).toMatchObject({ base: 'main' });
+
+    // Busy while preparing, so neither the seed nor anything the user types can run in the
+    // repository folder the session is parked on.
+    expect(await service.send(early!.id, 'run ls')).toMatchObject({ ok: true, queued: true });
+    expect(seedPosted('do the thing')).toBe(false);
+
+    release();
+    const worktree = await worktreeOf('agent/early');
+    await vi.waitUntil(() => seedPosted(worktree), { timeout: 5000, interval: 5 });
+    expect((await service.getSession(early!.id))?.preparingWorkspace).toBeUndefined();
+    expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
+  });
+
+  it('does not launch or install after a preparing child is deleted', async () => {
+    const release = holdWorktrees();
+    await spawnWith({ placement: 'worktree', branch: 'agent/deleted' });
+    const spawned = await child();
+    if (!spawned) throw new Error('Child missing');
+    await service.deleteSession(spawned.id);
+
+    release();
+    await vi.waitUntil(
+      () => events.some(event => event.type === 'workspace' && event.sessionId === spawned.id && !event.running),
+      { timeout: 10000, interval: 5 }
+    );
+    await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 5000, interval: 5 });
+
+    expect(await store.get(spawned.id)).toBeNull();
+    expect(dependencies.maybeStart).not.toHaveBeenCalled();
+    expect(seedPosted('do the thing')).toBe(false);
+    expect(events.some(event => event.type === 'spawn-failed')).toBe(false);
+  });
+
+  it('keeps other turns blocked until a failed spawn has been removed', async () => {
+    await mkdir(join(appWorktreeRoot(container), 'agent+cleanup'), { recursive: true });
+    await writeFile(join(appWorktreeRoot(container), 'agent+cleanup', 'stray.txt'), 'not mine\n', 'utf8');
+    let releaseDelete = () => {};
+    const deletion = new Promise<void>(resolve => {
+      releaseDelete = resolve;
+    });
+    let deletingId: string | undefined;
+    const originalDelete = store.delete.bind(store);
+    vi.spyOn(store, 'delete').mockImplementation(async sessionId => {
+      deletingId = sessionId;
+      await deletion;
+      return originalDelete(sessionId);
+    });
+
+    const { parent } = await spawnWith({ placement: 'worktree', branch: 'agent/cleanup' });
+    await vi.waitUntil(() => deletingId, { timeout: 10000, interval: 5 });
+    if (!deletingId) throw new Error('Deletion did not start');
+
+    expect(service.isSessionBusy(deletingId)).toBe(true);
+    expect(await service.send(deletingId, 'must not run')).toMatchObject({ ok: false });
+    expect(seedPosted('must not run')).toBe(false);
+    const relay = await relayFromParent(parent.id, deletingId, 'must not relay');
+    expect(relay.status).toBe('error');
+    expect(queue.list(deletingId)).toEqual([]);
+    releaseDelete();
+    await vi.waitUntil(() => events.some(event => event.type === 'spawn-failed'), { timeout: 5000, interval: 5 });
+    expect(await store.get(deletingId)).toBeNull();
+    expect(queue.list(deletingId)).toEqual([]);
+  });
+
+  it('preserves queued input and attachment bytes when background startup fails', async () => {
+    const release = holdWorktrees();
+    const { parent, suggestion } = await spawnWith({ placement: 'worktree', branch: 'agent/preserve-input' });
+    const spawned = await child();
+    if (!spawned) throw new Error('Child missing');
+    const added = await attachments.add(spawned.id, [
+      { source: 'bytes', name: 'notes.txt', data: new Uint8Array(Buffer.from('keep these notes')) },
+    ]);
+    expect(added.attachments).toHaveLength(1);
+    expect(await service.send(spawned.id, 'also check these notes', added.attachments)).toMatchObject({
+      ok: true,
+      queued: true,
+    });
+    expect((await relayFromParent(parent.id, spawned.id, 'keep this relay')).status).toBe('done');
+    await mkdir(join(appWorktreeRoot(container), 'agent+preserve-input'), { recursive: true });
+    await writeFile(join(appWorktreeRoot(container), 'agent+preserve-input', 'stray.txt'), 'not mine\n', 'utf8');
+    release();
+    await vi.waitUntil(() => events.some(event => event.type === 'spawn-failed'), { timeout: 10000, interval: 5 });
+    await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 5000, interval: 5 });
+
+    const retained = await store.get(spawned.id);
+    expect(retained).not.toBeNull();
+    expect(retained?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: expect.stringContaining('also check these notes'),
+          attachments: added.attachments,
+        }),
+        expect.objectContaining({ content: expect.stringContaining('do the thing') }),
+      ])
+    );
+    expect(retained?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: 'keep this relay',
+          relay: expect.objectContaining({ fromSessionId: parent.id }),
+        }),
+      ])
+    );
+    const returned = queueEvents.findLast(event => event.sessionId === spawned.id && event.returned)?.returned;
+    expect(returned?.messages.map(message => message.text)).toEqual(['do the thing', 'also check these notes']);
+    expect(returned?.messages[1].attachments).toEqual(added.attachments);
+    expect(await attachments.read(spawned.id, added.attachments[0].id)).toEqual(Buffer.from('keep these notes'));
+    expect(queue.list(spawned.id)).toEqual([]);
+    expect(seedPosted('do the thing')).toBe(false);
+    expect(events.findLast(event => event.type === 'spawn-failed')).toMatchObject({
+      message: expect.stringMatching(/kept|retained/i),
+    });
+    expect((await store.get(parent.id))?.spawnSuggestions?.find(entry => entry.id === suggestion.id)?.status).toBe(
+      'started'
+    );
+  });
+
+  it('keeps accepted input queued if saving startup recovery fails', async () => {
+    const release = holdWorktrees();
+    await spawnWith({ placement: 'worktree', branch: 'agent/recovery-error' });
+    const spawned = await child();
+    if (!spawned) throw new Error('Child missing');
+    expect(await service.send(spawned.id, 'do not lose this')).toMatchObject({ ok: true, queued: true });
+    await mkdir(join(appWorktreeRoot(container), 'agent+recovery-error'), { recursive: true });
+    await writeFile(join(appWorktreeRoot(container), 'agent+recovery-error', 'stray.txt'), 'not mine\n', 'utf8');
+    const appendMessage = store.appendMessage.bind(store);
+    vi.spyOn(store, 'appendMessage').mockImplementation(async (sessionId, message) => {
+      if (sessionId === spawned.id) throw new Error('disk full');
+      return appendMessage(sessionId, message);
+    });
+    release();
+    await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 10000, interval: 5 });
+    expect(await store.get(spawned.id)).not.toBeNull();
+    expect(queue.list(spawned.id).map(message => message.text)).toEqual(['do not lose this']);
+    expect(queueEvents.some(event => event.sessionId === spawned.id && event.returned)).toBe(false);
+    expect(seedPosted('do the thing')).toBe(false);
+  });
+
+  it.each(['local', 'worktree'] as const)('reserves the seed ahead of other turns for a %s spawn', async placement => {
+    const parent = await parentSession();
+    await service.send(parent.id, 'go');
+    await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+    const suggestion = await suggest();
+    const originalGet = store.get.bind(store);
+    let releaseSeed = () => {};
+    const seedGate = new Promise<void>(resolve => {
+      releaseSeed = resolve;
+    });
+    let seedReading = false;
+    vi.spyOn(store, 'get').mockImplementation(async sessionId => {
+      const session = await originalGet(sessionId);
+      const workspaceReady =
+        placement === 'local' ||
+        events.some(event => event.type === 'workspace' && event.sessionId === sessionId && !event.running);
+      if (session?.origin && workspaceReady && !seedReading) {
+        seedReading = true;
+        await seedGate;
+      }
+      return session;
+    });
+
+    const result = await start(
+      parent,
+      suggestion,
+      placement === 'worktree' ? { placement, branch: 'agent/seed-first' } : { placement }
+    );
+    expect(result.ok).toBe(true);
+    await vi.waitUntil(() => seedReading, { timeout: 10000, interval: 5 });
+    const spawned = (await store.list()).find(session => session.origin);
+    if (!spawned) throw new Error('Child missing');
+
+    expect(service.isSessionBusy(spawned.id)).toBe(true);
+    expect(await service.send(spawned.id, 'user follow-up')).toMatchObject({ ok: true, queued: true });
+    expect(
+      await service.startAutomaticTurn(spawned.id, 'automatic follow-up', {
+        kind: 'auto-fix',
+        prUrl: 'https://github.com/example/project/pull/1',
+        prNumber: 1,
+        summary: 'check failed',
+      })
+    ).toMatchObject({ ok: false, busy: true });
+    expect(seedPosted('user follow-up')).toBe(false);
+
+    releaseSeed();
+    await vi.waitUntil(() => seedPosted('do the thing'), { timeout: 10000, interval: 5 });
+    expect((await store.get(spawned.id))?.messages[0]?.content).toContain('do the thing');
+    expect(queue.list(spawned.id)[0]?.text).toBe('user follow-up');
+  });
+
+  it('holds the concurrency cap while its sessions are still preparing', async () => {
+    const release = holdWorktrees();
+    const parent = await parentSession();
+    await service.send(parent.id, 'go');
+    await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: Array.from({ length: MAX_CONCURRENT_SPAWNED + 1 }, (_unused, index) => ({
+          id: `call-${index}`,
+          name: 'session_spawn',
+          arguments: JSON.stringify({ prompt: `task ${index}`, title: `Cap ${index}` }),
+        })),
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    const suggestions = await vi.waitUntil(
+      () => {
+        const latest = events.findLast(event => event.type === 'spawn-suggestions');
+        const pending = latest?.type === 'spawn-suggestions' ? latest.suggestions : [];
+        return pending.length === MAX_CONCURRENT_SPAWNED + 1 ? pending : undefined;
+      },
+      { timeout: 5000, interval: 5 }
+    );
+
+    const results = await Promise.all(
+      suggestions.map((suggestion, index) =>
+        start(parent, suggestion, { placement: 'worktree', branch: `agent/cap-${index}` })
+      )
+    );
+
+    expect(results.filter(result => result.ok)).toHaveLength(MAX_CONCURRENT_SPAWNED);
+    expect(results.find(result => !result.ok)).toMatchObject({
+      error: expect.stringMatching(/already running, which is the limit/),
+    });
+    expect((await store.list()).filter(session => session.origin)).toHaveLength(MAX_CONCURRENT_SPAWNED);
+    release();
+  });
+
+  it('removes a session whose worktree cannot be created, and says so to the user and the parent', async () => {
     // Something already at the path that git does not know as a worktree: resolveWorkspace refuses
-    // it rather than clobbering it, and that refusal has to land BEFORE a session exists.
+    // it rather than clobbering it, and the session that was shown for it has to go again.
     await mkdir(join(appWorktreeRoot(container), 'agent+blocked'), { recursive: true });
     await writeFile(join(appWorktreeRoot(container), 'agent+blocked', 'stray.txt'), 'not mine\n', 'utf8');
 
-    const { result } = await spawnWith({ placement: 'worktree', branch: 'agent/blocked' });
+    const { parent, suggestion, result } = await spawnWith({ placement: 'worktree', branch: 'agent/blocked' });
 
+    expect(result.ok).toBe(true);
+    const failed = await vi.waitUntil(() => events.find(event => event.type === 'spawn-failed'), {
+      timeout: 10000,
+      interval: 10,
+    });
+    expect(failed).toMatchObject({
+      sessionId: parent.id,
+      title: 'The thing',
+      message: expect.stringMatching(/could not be created/),
+    });
     expect(await child()).toBeUndefined();
-    expect(!result.ok && result.error).toMatch(/could not be created/);
+    await vi.waitUntil(
+      async () =>
+        (await store.get(parent.id))?.spawnSuggestions?.find(entry => entry.id === suggestion.id)?.status === 'pending',
+      { timeout: 5000, interval: 10 }
+    );
     // Untouched, which is the other half of refusing rather than adopting.
     expect(await readFile(join(appWorktreeRoot(container), 'agent+blocked', 'stray.txt'), 'utf8')).toBe('not mine\n');
+
+    // The parent hears it once its own turn is over, as it hears every child.
+    const round = await vi.waitUntil(() => streams[1], { timeout: 5000, interval: 5 });
+    round.write(frame({ type: 'content', text: 'ok' }));
+    round.write(frame('[DONE]'));
+    await vi.waitUntil(
+      () =>
+        events.some(
+          event =>
+            event.type === 'message' &&
+            event.sessionId === parent.id &&
+            /could not start and was removed/.test(event.message.content)
+        ),
+      { timeout: 5000, interval: 10 }
+    );
   });
 
   it('keeps the approval-mode ceiling and the depth count on a child in its own worktree', async () => {
@@ -353,7 +711,7 @@ describe('ChatService spawn placement', () => {
     const { suggestion } = await startOn(parent, { placement: 'worktree', branch: 'agent/from-parent' });
 
     expect(suggestion.base).toBe('feat/parent');
-    const worktree = join(appWorktreeRoot(container), 'agent+from-parent');
+    const worktree = await worktreeOf('agent/from-parent');
     expect(await head(worktree)).toBe(tip);
   });
 
@@ -370,7 +728,7 @@ describe('ChatService spawn placement', () => {
     const { suggestion } = await startOn(created.session, { placement: 'worktree', branch: 'agent/from-worktree' });
 
     expect(suggestion.base).toBe(parentBranch);
-    expect(await head(join(appWorktreeRoot(container), 'agent+from-worktree'))).toBe(tip);
+    expect(await head(await worktreeOf('agent/from-worktree'))).toBe(tip);
     expect(await head(main)).not.toBe(tip);
   });
 
@@ -391,7 +749,7 @@ describe('ChatService spawn placement', () => {
     const { suggestion } = await startOn(created.session, { placement: 'worktree', branch: 'agent/detached' });
 
     expect(suggestion.base).toBe('origin/main');
-    expect(await head(join(appWorktreeRoot(container), 'agent+detached'))).toBe(remoteTip);
+    expect(await head(await worktreeOf('agent/detached'))).toBe(remoteTip);
   });
 
   it('records the prefilled branch and the base, and a dismissal starts nothing', async () => {

@@ -151,7 +151,7 @@ export function arityPrefix(tokens: readonly string[]): string[] {
   return tokens.slice(0, 1);
 }
 
-const PACKAGE_VALUE_OPTIONS = ['--filter', '-F', '-C', '--dir', '--prefix'];
+export const PACKAGE_VALUE_OPTIONS = ['--filter', '-F', '-C', '--dir', '--prefix'];
 
 const VALUE_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   pnpm: PACKAGE_VALUE_OPTIONS,

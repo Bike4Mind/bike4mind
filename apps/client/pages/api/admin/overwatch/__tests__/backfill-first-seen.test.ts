@@ -16,15 +16,31 @@ function wrapHandler(fn: (req: unknown, res: any) => Promise<unknown>) {
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const mock: { _post?: (req: unknown, res: unknown) => Promise<unknown>; post: (fn: unknown) => typeof mock } = {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const mock: {
+      _post?: (req: unknown, res: unknown) => Promise<unknown>;
+      use: (fn: (req: unknown, res: unknown, next: () => void) => void) => typeof mock;
+      post: (fn: unknown) => typeof mock;
+    } = {
+      use: function (fn) {
+        middlewares.push(fn);
+        return mock;
+      },
       post: function (fn: unknown) {
-        mock._post = wrapHandler(fn as (req: unknown, res: unknown) => Promise<unknown>);
+        const handlerFn = fn as (req: unknown, res: unknown) => Promise<unknown>;
+        mock._post = wrapHandler(async (req, res) => {
+          for (const middleware of middlewares) middleware(req, res, () => undefined);
+          return handlerFn(req, res);
+        });
         return mock;
       },
     };
     return mock;
   },
 }));
+
+const mockAudit = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 // User.find(...).sort().skip().limit().lean() - chainable query that resolves to the staged docs.
 let usersBatch: Array<{ _id: { toString: () => string }; createdAt: unknown }> = [];
@@ -43,7 +59,7 @@ vi.mock('@bike4mind/database', () => ({
   OverwatchUserFirstSeen: { bulkWrite: (...a: unknown[]) => mockBulkWrite(...a) },
 }));
 
-vi.mock('@server/analytics/pseudonymize', () => ({
+vi.mock('@bike4mind/server-utils/analytics/pseudonymize', () => ({
   pseudonymizeUserId: (id: string) => `pseudo:${id}`,
 }));
 
@@ -68,6 +84,7 @@ function doc(id: string, createdAt: unknown) {
 describe('/api/admin/overwatch/backfill-first-seen', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockAudit.mockResolvedValue(null);
     usersBatch = [];
     mockBulkWrite.mockResolvedValue({ upsertedCount: 0, modifiedCount: 0 });
     (Config as Record<string, string>).OVERWATCH_PSEUDONYM_SALT = 'test-salt';
@@ -111,6 +128,32 @@ describe('/api/admin/overwatch/backfill-first-seen', () => {
     expect(ops[0].updateOne.filter).toEqual({ productId: 'bike4mind', userId: 'pseudo:a' });
     expect(ops[0].updateOne.update.$min).toEqual({ firstSeenDate: '2026-01-15' });
     expect(ops[0].updateOne.upsert).toBe(true);
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][0]).toBe(req);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.overwatch.first_seen_backfilled',
+      target: { kind: 'system', id: 'overwatch-first-seen-backfill' },
+      summary: 'backfilled first-seen dates for 2 of 2 users',
+      details: { skip: 0, processed: 2, upserted: 2 },
+    });
+    expect(mockBulkWrite.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('counts only changed records in the audit headline', async () => {
+    usersBatch = [doc('a', new Date('2026-01-15T10:00:00Z')), doc('b', '2026-02-20T00:00:00Z')];
+    mockBulkWrite.mockResolvedValue({ upsertedCount: 0, modifiedCount: 1 });
+    const { req, res } = makeReq({ skip: 0 });
+    await (handler as any)._post(req, res);
+
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({ summary: 'backfilled first-seen dates for 1 of 2 users' });
+  });
+
+  it('does not audit an empty batch', async () => {
+    usersBatch = [];
+    const { req, res } = makeReq({ skip: 0 });
+    await (handler as any)._post(req, res);
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it('skips docs with a missing/unparseable createdAt instead of throwing', async () => {

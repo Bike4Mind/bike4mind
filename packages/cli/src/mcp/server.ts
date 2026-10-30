@@ -1,6 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { B4mApiClient } from './b4mApiClient.js';
 import { registerTools } from './tools.js';
+import { registerSolverTools } from './solverTools.js';
+import { localModelToolsDeps, registerModelTools, type ModelToolsDeps } from './modelTools.js';
 import { registerResources } from './resources.js';
 import { registerPrompts } from './prompts.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
@@ -21,9 +23,10 @@ export interface BuildServerOptions {
  * network - only tool/resource *calls* and prompt listing/gets hit the API - so a
  * server built with an unreachable endpoint still advertises its full capability set.
  */
-export function buildMcpServer(options: BuildServerOptions): McpServer {
-  const client = new B4mApiClient(options.baseURL, options.configStore, options.apiKey);
-
+export function buildMcpServer(
+  options: BuildServerOptions,
+  client = new B4mApiClient(options.baseURL, options.configStore, options.apiKey)
+): McpServer {
   const server = new McpServer(
     { name: 'bike4mind', version: options.version },
     { capabilities: { tools: {}, resources: {}, prompts: {} } }
@@ -33,5 +36,34 @@ export function buildMcpServer(options: BuildServerOptions): McpServer {
   registerResources(server, client);
   registerPrompts(server, client);
 
+  return server;
+}
+
+/**
+ * {@link buildMcpServer} plus the tools only an authenticated, entitled caller gets, which the server
+ * reports at startup, and the local model tools. Stdio only: the HTTP transport trusts anything that
+ * can reach its socket, so it uses the plain builder and never offers these.
+ */
+export async function buildStdioMcpServer(
+  options: BuildServerOptions,
+  modelTools: ModelToolsDeps = localModelToolsDeps(options.configStore)
+): Promise<McpServer> {
+  const client = new B4mApiClient(options.baseURL, options.configStore, options.apiKey);
+  const server = buildMcpServer(options, client);
+  await registerSolverTools(server, client);
+  registerModelTools(server, modelTools);
+  return server;
+}
+
+/**
+ * `mcp serve --local`: only the local model tools, which need the model runtime and Hugging Face but
+ * never a Bike4Mind backend, so it builds no API client. Stdio only, like {@link buildStdioMcpServer}.
+ */
+export function buildLocalMcpServer(
+  options: Pick<BuildServerOptions, 'configStore' | 'version'>,
+  modelTools: ModelToolsDeps = localModelToolsDeps(options.configStore)
+): McpServer {
+  const server = new McpServer({ name: 'bike4mind', version: options.version }, { capabilities: { tools: {} } });
+  registerModelTools(server, modelTools);
   return server;
 }

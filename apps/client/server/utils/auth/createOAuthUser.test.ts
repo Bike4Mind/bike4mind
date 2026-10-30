@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { PENDING_FREE_CREDITS_TAG, usernameSchema, USERNAME_MAX_LENGTH } from '@bike4mind/common';
+import { isReservedUsername, PENDING_FREE_CREDITS_TAG, usernameSchema, USERNAME_MAX_LENGTH } from '@bike4mind/common';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 
 const mockCreate = vi.fn();
+const mockFindSetting = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: { create: (...args: unknown[]) => mockCreate(...args) },
+  adminSettingsRepository: { findBySettingName: (...args: unknown[]) => mockFindSetting(...args) },
 }));
 
 const oauthCredentials = { strategy: 'google', id: 'sub-1' };
@@ -12,6 +14,7 @@ const oauthCredentials = { strategy: 'google', id: 'sub-1' };
 describe('createUniqueOAuthUser', () => {
   beforeEach(() => {
     mockCreate.mockReset();
+    mockFindSetting.mockReset().mockResolvedValue(null);
     mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
   });
 
@@ -30,6 +33,30 @@ describe('createUniqueOAuthUser', () => {
     expect(doc).not.toHaveProperty('email');
     expect(doc).not.toHaveProperty('emailVerified');
     expect(doc).not.toHaveProperty('emailVerifiedAt');
+  });
+
+  it('snapshots staging only for a newly created credit-eligible account', async () => {
+    mockFindSetting.mockImplementation(async (name: string) => ({
+      settingValue: {
+        stagedSignupGrantEnabled: 'true',
+        signupGrantCredits: '12',
+        verifiedUnlockCredits: '28',
+      }[name],
+    }));
+    await createUniqueOAuthUser({
+      name: 'Pat',
+      baseUsername: 'pat',
+      email: 'pat@example.test',
+      oauthCredentials,
+      pendingFreeCredits: true,
+    });
+    expect(mockCreate.mock.calls[0][0].signupGrant).toMatchObject({
+      stage: 'pending_email',
+      signupCredits: 12,
+      unlockCredits: 28,
+    });
+    await createUniqueOAuthUser({ name: 'Pat', baseUsername: 'pat', email: null, oauthCredentials });
+    expect(mockCreate.mock.calls[1][0]).not.toHaveProperty('signupGrant');
   });
 
   it('tags the account pending-free-credits only when asked', async () => {
@@ -75,6 +102,23 @@ describe('deriveOAuthUsername', () => {
 
   it('falls back to a generated handle when every source is empty after sanitizing', () => {
     expect(deriveOAuthUsername(null, '***', null)).toMatch(/^user-[0-9a-f]{8}$/);
+  });
+
+  it('never yields the reserved test-persona prefix, from any source', () => {
+    expect(deriveOAuthUsername('persona-bot', 'Pat Doe', null)).toBe('bot');
+    expect(deriveOAuthUsername(null, 'Persona-Pat', null)).toBe('Pat');
+    expect(deriveOAuthUsername(null, '', 'persona-pat@example.com')).toBe('pat');
+    expect(deriveOAuthUsername('persona-', 'PERSONA-', 'persona-@example.com')).toMatch(/^user-[0-9a-f]{8}$/);
+    for (const name of ['persona-x', '  persona-y', 'PERSONA-persona-z']) {
+      expect(isReservedUsername(deriveOAuthUsername(null, name, null))).toBe(false);
+    }
+  });
+
+  it('keeps the retry suffixes off a stripped base unreserved', () => {
+    const base = deriveOAuthUsername(null, 'persona-pat', null);
+    for (const candidate of [base, `${base} 2`, `${base}-abcdef`]) {
+      expect(isReservedUsername(candidate)).toBe(false);
+    }
   });
 
   it('leaves room for the longest retry suffix within the length cap', () => {

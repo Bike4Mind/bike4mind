@@ -188,14 +188,16 @@ describe('composerPlaceholder', () => {
 
 describe('the `/` menu', () => {
   it('opens on a slash typed into an empty composer', () => {
-    expect(skillQuery('/')).toBe('');
+    expect(skillQuery('/')?.query).toBe('');
     expect(matchCommands('', 'code').map(command => command.name)).toEqual(['clear', 'compact', 'pr', 'add-dir']);
   });
 
-  // A slash mid-sentence is punctuation, and a path is a path. Either opening a menu would mean
-  // dismissing one to carry on typing an ordinary message.
-  it('does not open on a slash that is not the first character', () => {
-    expect(skillQuery('fix /clear')).toBeNull();
+  // A path is a path, and a command only runs as the whole draft: one picked mid-sentence would
+  // throw the sentence away. A skill mid-sentence is fine, so the token is found, just not offered
+  // commands.
+  it('offers commands only for a token that is the whole draft', () => {
+    expect(skillQuery('fix /clear')?.wholeDraft).toBe(false);
+    expect(skillQuery('/clear')?.wholeDraft).toBe(true);
     expect(skillQuery('see src/clear.ts')).toBeNull();
   });
 

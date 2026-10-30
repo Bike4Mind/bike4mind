@@ -27,11 +27,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: vi.fn() }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
 vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
   readRefreshCookie: () => 'cookie-refresh-token',
+  readAdminReturnCookie: () => null,
   setRefreshCookie: (...a: unknown[]) => mockSetCookie(...a),
 }));
 vi.mock('@server/auth/tokenGenerator', () => ({

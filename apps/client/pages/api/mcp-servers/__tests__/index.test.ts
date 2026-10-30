@@ -2,14 +2,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFind, mockFindOne, mockUpdate, mockCreate, mockInvoke, mockCreateBodyParse } = vi.hoisted(() => ({
-  mockFind: vi.fn(),
-  mockFindOne: vi.fn(),
-  mockUpdate: vi.fn(),
-  mockCreate: vi.fn(),
-  mockInvoke: vi.fn(),
-  mockCreateBodyParse: vi.fn(() => ({ success: true })),
-}));
+const { mockFind, mockFindOne, mockUpdate, mockCreate, mockInvoke, mockCreateBodyParse, mockEncrypt } = vi.hoisted(
+  () => ({
+    mockFind: vi.fn(),
+    mockFindOne: vi.fn(),
+    mockUpdate: vi.fn(),
+    mockCreate: vi.fn(),
+    mockInvoke: vi.fn(),
+    mockCreateBodyParse: vi.fn(() => ({ success: true })),
+    mockEncrypt: vi.fn((vars: unknown) => vars),
+  })
+);
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -48,8 +51,8 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({ EnableMCPServer: true })),
   getSettingsValue: (key: string, map: Record<string, unknown>) => map[key],
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
-  encryptEnvVariables: (v: unknown) => v,
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+  encryptEnvVariables: mockEncrypt,
   decryptEnvVariables: (v: unknown) => v,
 }));
 vi.mock('@server/validators/mcpServerValidators', () => ({
@@ -263,5 +266,43 @@ describe('POST /api/mcp-servers', () => {
     const res = await runPost();
 
     expect(res._getJSONData()).not.toHaveProperty('connectionError');
+  });
+
+  // The ciphertext is bound to (user, row, field). If the id used to encrypt differs from the `_id`
+  // the row is stored under, every stored variable is undecryptable for the life of the record.
+  it('binds the stored ciphertext to the row id it persists', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => server(doc));
+    mockUpdate.mockResolvedValue(server());
+    mockInvoke.mockResolvedValue([]);
+    mockCreateBodyParse.mockReturnValue({
+      success: true,
+      data: { name: 'linkedin', envVariables: [{ key: 'LINKEDIN_ACCESS_TOKEN', value: 'token-1' }] },
+    });
+
+    await runPost();
+
+    const [, owner] = mockEncrypt.mock.calls[0] as [unknown, { userId: string; id: string }];
+    const created = mockCreate.mock.calls[0][0] as { _id: string };
+    expect(owner).toMatchObject({ userId: 'u1', name: 'linkedin' });
+    // Pin the type: without it, a route that stops minting an id still passes, both sides undefined.
+    expect(owner.id).toEqual(expect.any(String));
+    expect(created._id).toBe(owner.id);
+  });
+
+  it('binds a reconnect to the existing row id', async () => {
+    mockFindOne.mockResolvedValue(server());
+    mockUpdate.mockResolvedValue(server());
+    mockInvoke.mockResolvedValue([]);
+    mockCreateBodyParse.mockReturnValue({
+      success: true,
+      data: { name: 'notion', envVariables: [{ key: 'NOTION_ACCESS_TOKEN', value: 'token-1' }] },
+    });
+
+    await runPost();
+
+    const [, owner] = mockEncrypt.mock.calls[0] as [unknown, { id: string }];
+    expect(owner.id).toBe('s1');
+    expect(mockUpdate.mock.calls[0][0]).toMatchObject({ id: 's1' });
   });
 });

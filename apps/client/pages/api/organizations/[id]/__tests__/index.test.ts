@@ -59,8 +59,8 @@ const update = vi.hoisted(() =>
 );
 const credits = vi.hoisted(() => ({
   findById: vi.fn(async () => ({ id: 'org1', name: 'Acme', userId: 'owner1', currentCredits: 100 })),
-  addCredits: vi.fn(async () => undefined),
-  subtractCredits: vi.fn(async () => undefined),
+  addCreditsWithLedgerRow: vi.fn(async () => ({ creditHolder: {}, creditTransactionId: 'tx-add' })),
+  subtractCreditsWithLedgerRow: vi.fn(async () => ({ creditHolder: {}, creditTransactionId: 'tx-sub' })),
   recordAdminAction: vi.fn(async () => null),
   withTransaction: vi.fn(async (fn: () => Promise<unknown>) => fn()),
 }));
@@ -70,13 +70,20 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   organizationService: { get, update },
-  creditService: { addCredits: credits.addCredits, subtractCredits: credits.subtractCredits },
+  creditService: {
+    addCreditsWithLedgerRow: credits.addCreditsWithLedgerRow,
+    subtractCreditsWithLedgerRow: credits.subtractCreditsWithLedgerRow,
+  },
 }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: credits.findById } }));
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
   integrationRequestRepository: {},
+  dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
   partnerSignupRuleRepository: {},
   userRepository: {},
   withTransaction: credits.withTransaction,
@@ -88,7 +95,9 @@ vi.mock('@server/utils/adminAudit', () => ({
   recordAdminActionFromRequest: credits.recordAdminAction,
 }));
 vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
-vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
+vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
+  SubscriptionOwnerType: { Organization: 'organization' },
+}));
 
 import '@pages/api/organizations/[id]/index';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -199,16 +208,25 @@ describe('PUT /api/organizations/[id] - admin credit edit', () => {
     const { req, res } = putAsAdmin({ name: 'renamed', currentCredits: 150, creditReason: 'goodwill grant' });
     await mockRefs.putHandler!(req, res);
     expect(credits.withTransaction).toHaveBeenCalledTimes(1);
-    expect(credits.addCredits).toHaveBeenCalledTimes(1);
+    expect(credits.addCreditsWithLedgerRow).toHaveBeenCalledTimes(1);
     expect(credits.recordAdminAction).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('links the credit audit entry to the ledger row it wrote', async () => {
+    const { req, res } = putAsAdmin({ currentCredits: 150, creditReason: 'goodwill grant' });
+    await mockRefs.putHandler!(req, res);
+    expect(credits.recordAdminAction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'org.credits.adjusted', related: { creditTransactionId: 'tx-add' } })
+    );
   });
 
   it('propagates a failing profile update out of the transaction after the credit edit', async () => {
     update.mockRejectedValueOnce(new Error('profile write failed'));
     const { req, res } = putAsAdmin({ name: 'renamed', currentCredits: 150, creditReason: 'goodwill grant' });
     await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('profile write failed');
-    expect(credits.addCredits).toHaveBeenCalledTimes(1);
+    expect(credits.addCreditsWithLedgerRow).toHaveBeenCalledTimes(1);
     expect(credits.withTransaction).toHaveBeenCalledTimes(1);
   });
 
@@ -223,8 +241,8 @@ describe('PUT /api/organizations/[id] - admin credit edit', () => {
     const { req, res } = putAsAdmin({ currentCredits, creditReason: 'goodwill grant' });
     await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ name: 'ZodError' });
     expect(credits.withTransaction).not.toHaveBeenCalled();
-    expect(credits.addCredits).not.toHaveBeenCalled();
-    expect(credits.subtractCredits).not.toHaveBeenCalled();
+    expect(credits.addCreditsWithLedgerRow).not.toHaveBeenCalled();
+    expect(credits.subtractCreditsWithLedgerRow).not.toHaveBeenCalled();
     expect(credits.recordAdminAction).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
@@ -233,8 +251,8 @@ describe('PUT /api/organizations/[id] - admin credit edit', () => {
     const { req, res } = putAsAdmin({ currentCredits: -5, creditReason: 'goodwill grant' });
     await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ name: 'ZodError' });
     expect(credits.withTransaction).not.toHaveBeenCalled();
-    expect(credits.addCredits).not.toHaveBeenCalled();
-    expect(credits.subtractCredits).not.toHaveBeenCalled();
+    expect(credits.addCreditsWithLedgerRow).not.toHaveBeenCalled();
+    expect(credits.subtractCreditsWithLedgerRow).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
 });

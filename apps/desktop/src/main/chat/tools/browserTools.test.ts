@@ -26,7 +26,21 @@ function fakePage(start = ''): BrowserPage & { url: string; events: string[] } {
       return { url, title: 'Home', status: 200 };
     }),
     back: vi.fn(async () => undefined),
-    snapshot: vi.fn(async () => ({ url: page.url, title: 'Home', text: '[1] button "Add"', truncated: false })),
+    snapshot: vi.fn(async () => ({
+      url: page.url,
+      title: 'Home',
+      text: '[1] button "Add"',
+      truncated: false,
+      model: {
+        url: page.url,
+        title: 'Home',
+        capturedAt: '2026-10-24T12:00:00.000Z',
+        blocks: [],
+        actions: [{ ref: '1', kind: 'click' as const, element: 'button', label: 'Add' }],
+        claims: [],
+        truncated: false,
+      },
+    })),
     click: vi.fn(async () => 'Add'),
     scroll: vi.fn(async () => 'Pricing plans'),
     fill: vi.fn(async () => 'filled "x"'),
@@ -183,6 +197,12 @@ describe('browser tools', () => {
       askInAuto: true,
       askInFull: true,
     });
+
+    const imported = contextFor(fakePage('https://app.example.com/inbox'), ['app.example.com']);
+    expect(await browserEvaluate.approval!({ expression: '1' }, imported.context)).toMatchObject({
+      key: 'browser-script-as-you:https://app.example.com',
+      askInFull: true,
+    });
   });
 
   /**
@@ -233,7 +253,10 @@ describe('browser tools', () => {
     const result = await browserClick.run({ ref: '[1]' }, contextFor(page).context);
     expect(page.click).toHaveBeenCalledWith('1');
     expect(page.settle).toHaveBeenCalled();
-    expect(result).toMatch(/^Clicked \[1\] Add\.\nPage: Home - http:\/\/localhost:3080\/app\n\n\[1\] button "Add"$/);
+    expect(result).toMatch(
+      /^Clicked \[1\] Add\.\nPage: Home - http:\/\/localhost:3080\/app\n\n\[1\] button "Add"\n\nTyped page model:\n\{/
+    );
+    expect(result).toContain('"actions":[{"ref":"1","kind":"click","element":"button","label":"Add"}]');
   });
 
   it('fills and optionally submits', async () => {
@@ -532,6 +555,15 @@ describe('reading a page that carries the user imported cookies', () => {
       title: page.url.startsWith(MAIL) ? 'Inbox (3) - jude' : 'Home',
       text: page.url.startsWith(MAIL) ? 'From: bank - your code is 123456' : '[1] button "Add"',
       truncated: false,
+      model: {
+        url: page.url,
+        title: page.url.startsWith(MAIL) ? 'Inbox (3) - jude' : 'Home',
+        capturedAt: '2026-10-24T12:00:00.000Z',
+        blocks: [],
+        actions: [],
+        claims: [],
+        truncated: false,
+      },
     }));
     return page;
   }
@@ -573,6 +605,17 @@ describe('reading a page that carries the user imported cookies', () => {
 
     const standing = signedIn(page, { isStanding: key => key === `browser-open-as-you:${MAIL}` }).context;
     expect(await browserSnapshot.run({}, standing)).toContain('123456');
+  });
+
+  it('does not read the signed-in page on a plain script approval for its origin', async () => {
+    const page = pageThatReads(INBOX);
+    const once = signedIn(page, { approvedKey: `browser-script:${MAIL}` }).context;
+    expect(await browserSnapshot.run({}, once)).not.toContain('123456');
+    const standing = signedIn(page, { isStanding: key => key === `browser-script:${MAIL}` }).context;
+    expect(await browserSnapshot.run({}, standing)).not.toContain('123456');
+
+    const asYou = signedIn(page, { isStanding: key => key === `browser-script-as-you:${MAIL}` }).context;
+    expect(await browserSnapshot.run({}, asYou)).toContain('123456');
   });
 
   it('withholds a page a localhost url redirected to, naming only its origin', async () => {

@@ -5,22 +5,22 @@ import {
   sessionRepository,
   questRepository,
   fabFileRepository,
-  creditTransactionRepository,
   userRepository,
   organizationRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { secureParameters } from '@bike4mind/utils';
-import { notebookCurationService } from '@bike4mind/services';
-import { CurationOptions } from '@bike4mind/common';
+import { meterCompletionBackend, notebookCurationService } from '@bike4mind/services';
+import { CreditHolderType, type CurationOptions } from '@bike4mind/common';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
-import { NotebookCurationEvents } from '@server/utils/eventBus';
+import { NotebookCurationBillingSchema, NotebookCurationEvents } from '@server/utils/eventBus';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { createHash } from 'crypto';
 import { createNotebookCommit } from './notebookCurationCommit';
+import { createCompletionMeter, createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 export const CurateNotebookPayload = z.object({
   sessionId: z.string(),
@@ -37,6 +37,7 @@ export const CurateNotebookPayload = z.object({
     .optional(),
   exportFormat: z.enum(['markdown', 'txt', 'html']).optional(),
   customNotebookName: z.string().optional(),
+  billing: NotebookCurationBillingSchema.optional(),
 });
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
@@ -52,6 +53,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     artifactTypes,
     exportFormat,
     customNotebookName,
+    billing,
   } = secureParameters(JSON.parse(body), CurateNotebookPayload);
 
   logger.updateMetadata({
@@ -127,6 +129,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   };
 
   let committed = false;
+  let creditsCharged = 0;
   try {
     // Create LLM service adapter if executive summary is requested
     let llmService: any = undefined;
@@ -135,13 +138,38 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.info('Initializing LLM service for executive summary generation...');
       try {
         // Get operations model with initialized LLM backend
-        const { OperationsModelService } = await import('@client/services/operationsModelService');
+        const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
         const { llm, modelInfo } = await OperationsModelService.getOperationsModel();
 
-        // Create adapter that matches the LLMContext interface
-        llmService = {
-          complete: llm.complete.bind(llm),
-        };
+        // Every summary call is reserved and settled against the user's billing owner (org seat when
+        // present); the operations model runs on the platform key.
+        const meter = billing
+          ? createRequestCompletionMeter(
+              {
+                user,
+                logger,
+                headers: {},
+                usageSource: billing.source,
+                apiKeyInfo: billing.apiKeyId
+                  ? {
+                      keyId: billing.apiKeyId,
+                      billingOwnerType: billing.organizationId ? CreditHolderType.Organization : CreditHolderType.User,
+                      organizationId: billing.organizationId ?? undefined,
+                    }
+                  : undefined,
+              },
+              'notebook curation',
+              { sessionId, systemModel: true, organizationId: billing.organizationId }
+            )
+          : createCompletionMeter(user, logger, 'notebook curation', { sessionId, systemModel: true });
+        llmService = meterCompletionBackend(
+          { complete: llm.complete.bind(llm) },
+          async (...args) => {
+            const metered = await meter(...args);
+            return { ...metered, settle: async usage => (creditsCharged += await metered.settle(usage)) };
+          },
+          modelInfo
+        );
 
         // Store the model ID to pass to the curation service
         llmModelId = modelInfo.id;
@@ -187,7 +215,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       chatHistoryRepository: questRepository, // Quests are the chat history items
       fabFileRepository,
       fileStorageService: storageAdapter,
-      creditTransactionRepository,
       userRepository,
       organizationRepository,
       adminSettingsRepository,
@@ -233,7 +260,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       includeResearch: includeAll || artifactSet.has('DEEP_RESEARCH'),
       // IMAGE maps to includeImages
       includeImages: includeAll || artifactSet.has('IMAGE'),
-      tokenBudget: curationType === 'executive_summary' ? 100 : 100, // Base cost (LLM tokens added separately)
       exportFormat: exportFormat || 'markdown',
       customNotebookName,
     };
@@ -279,7 +305,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       artifactCount: result.artifactCount,
       messageCount: result.messageCount,
       tokensProcessed: result.tokensProcessed,
-      tokensDeducted: result.tokensDeducted,
+      tokensDeducted: creditsCharged,
     });
 
     committed = true;
@@ -292,7 +318,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       percentage: 100,
       message: 'Curation completed successfully!',
       curatedFileId: result.curatedFileId,
-      tokensDeducted: result.tokensDeducted,
+      tokensDeducted: creditsCharged,
     });
 
     // Publish completion event with actual values used (not undefined)

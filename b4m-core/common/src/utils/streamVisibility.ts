@@ -1,3 +1,5 @@
+import { parseClaudeModelId } from '../claudeModelId';
+import { isClaudeModelId } from '../models';
 import type { AdapterFamily } from '../types/entities/ModelCatalogTypes';
 
 /**
@@ -228,6 +230,8 @@ export const REASONING_CHANNEL_BY_ADAPTER_FAMILY: Record<AdapterFamily, Reasonin
   ollama: 'always',
   'bedrock-deepseek': 'always',
   'bedrock-moonshot': 'always',
+  // Converse reasoningContent is wrapped in the markers inline, like bedrock-deepseek.
+  'bedrock-converse': 'always',
   // Not text completion at all - image, embedding and credential-only families. They cannot
   // back a chat agent, so they are refused rather than described.
   bfl: 'always',
@@ -248,4 +252,107 @@ export function inlinesReasoningIntoText(adapterFamily: string | null | undefine
   if (!adapterFamily) return true;
   const channel = REASONING_CHANNEL_BY_ADAPTER_FAMILY[adapterFamily as AdapterFamily];
   return channel === undefined || channel === 'always';
+}
+
+/**
+ * How much model reasoning a caller is shown. `raw` forwards it as the provider sent it, `summary`
+ * forwards it only from models whose provider returns a summary in place of the raw trace, and
+ * `none` forwards none. Chosen per account tier by the thinkingVisibility* admin settings.
+ */
+export const THINKING_VISIBILITY_LEVELS = ['raw', 'summary', 'none'] as const;
+export type ThinkingVisibility = (typeof THINKING_VISIBILITY_LEVELS)[number];
+
+export function isThinkingVisibility(value: unknown): value is ThinkingVisibility {
+  return typeof value === 'string' && (THINKING_VISIBILITY_LEVELS as readonly string[]).includes(value);
+}
+
+/**
+ * Whether the model's provider returns summarized (or empty) thinking rather than the raw trace.
+ * Claude 4 and later do on every API path; Claude 3.x and the reasoning_content providers do not.
+ */
+export function providerSummarizesReasoning(modelId: string): boolean {
+  const parsed = parseClaudeModelId(modelId);
+  return parsed !== null && parsed.major >= 4;
+}
+
+/** Whether reasoning from `modelId` must be kept from a caller holding `visibility`. */
+export function withholdsReasoning(visibility: ThinkingVisibility, modelId: string): boolean {
+  if (visibility === 'raw') return false;
+  if (visibility === 'summary') return !providerSummarizesReasoning(modelId);
+  return true;
+}
+
+/**
+ * Reasoning channel of a model row: its adapter family's entry, else inferred from its backend the
+ * way getLlmByModel dispatches (a bare Claude id reads as one of the two Claude adapters).
+ * Anything unrecognised reads as `always`, so callers fail closed.
+ */
+export function reasoningChannelOf(model: { id: string; backend?: string; adapterFamily?: string }): ReasoningChannel {
+  if (model.adapterFamily) {
+    return REASONING_CHANNEL_BY_ADAPTER_FAMILY[model.adapterFamily as AdapterFamily] ?? 'always';
+  }
+  if (model.backend === 'anthropic') return 'opt-in';
+  if ((model.backend === undefined || model.backend === 'bedrock') && isClaudeModelId(model.id)) return 'opt-in';
+  if (model.backend === 'openai' || model.backend === 'gemini') return 'never';
+  return 'always';
+}
+
+export interface ReasoningWithholder {
+  /** The part of one streamed chunk the caller may see; reasoning is dropped. */
+  visible(text: string, channel?: StreamChannel): string;
+  /** Text held back as a possible split marker; call once when the stream ends. */
+  flush(): string;
+}
+
+/**
+ * Stateful filter over one stream's chunks, in arrival order; create one per provider call.
+ *
+ * Opt-in families separate reasoning by the frame's channel tag, so only tagged frames and bare
+ * marker frames are dropped and the answer is never parsed: a reply may mention `<think>` itself.
+ * Families that inline reasoning untagged are parsed by depth with the same rule as
+ * visibleReplyText, holding back a trailing partial marker until the next chunk resolves it.
+ */
+export function createReasoningWithholder(reasoningChannel: ReasoningChannel): ReasoningWithholder {
+  if (reasoningChannel !== 'always') {
+    return {
+      visible(text: string, channel?: StreamChannel): string {
+        if (!text || reasoningChannel === 'never') return text;
+        const trimmed = text.trim();
+        return channel === 'reasoning' || trimmed === THINK_OPEN_TAG || trimmed === THINK_CLOSE_TAG ? '' : text;
+      },
+      flush: () => '',
+    };
+  }
+
+  let depth = 0;
+  let pending = '';
+  const scan = (text: string): string => {
+    let visible = '';
+    for (const token of text.split(THINK_TAG_TOKENS)) {
+      if (token === THINK_OPEN_TAG) {
+        depth += 1;
+      } else if (token === THINK_CLOSE_TAG) {
+        if (depth > 0) depth -= 1;
+        else visible += token;
+      } else if (depth === 0) {
+        visible += token;
+      }
+    }
+    return visible;
+  };
+  return {
+    visible(text: string, channel?: StreamChannel): string {
+      if (!text) return text;
+      const combined = pending + text;
+      const holdLength = partialMarkerSuffixLength(combined);
+      pending = combined.slice(combined.length - holdLength);
+      const visible = scan(combined.slice(0, combined.length - holdLength));
+      return channel === 'reasoning' ? '' : visible;
+    },
+    flush(): string {
+      const rest = pending;
+      pending = '';
+      return rest ? scan(rest) : '';
+    },
+  };
 }

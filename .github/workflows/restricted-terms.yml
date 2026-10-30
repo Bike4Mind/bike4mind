@@ -24,7 +24,7 @@ on:
     branches: [main]
   # Reports on the merge queue too, so this can become a required check (see
   # semantic-pr-title.yml). A merge group was already checked as a PR, so the
-  # step is skipped there and the job passes.
+  # job is skipped there (passing, and taking no runner slot).
   merge_group:
     branches: [main]
 
@@ -42,26 +42,25 @@ jobs:
     name: Restricted terms
     # Public repo only: the check exists to keep terms out of public logs and
     # history, and the secret is set here alone.
-    if: github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind')
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    if: >-
+      github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind') &&
+      github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       # Under pull_request_target the default ref is the base branch, never the
       # PR head. Only the script is fetched.
       - uses: actions/checkout@v6
-        if: github.event_name != 'merge_group'
         with:
           persist-credentials: false
           sparse-checkout: scripts/check-restricted-terms.mjs
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-node@v6
-        if: github.event_name != 'merge_group'
         with:
           node-version: '24'
 
       - name: Check for restricted terms
-        if: github.event_name != 'merge_group'
         env:
           RESTRICTED_TERMS: ${{ secrets.RESTRICTED_TERMS }}
           GITHUB_TOKEN: ${{ github.token }}

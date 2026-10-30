@@ -25,8 +25,8 @@ import { join, relative } from 'node:path';
  *     declaration form, so a rogue copy that skips the allowlist cannot quietly coexist.
  *
  * WHAT IT DOES NOT CATCH - do not read a green run as proof of correct wiring:
- *   - construction outside `apps/client/pages`, `apps/client/server` and `apps/workers/src` (e.g. `b4m-core`,
- *     `packages/cli`), or inside `premium-generated`, which overlays hydrate and which is skipped.
+ *   - construction outside `apps/client/pages`, `apps/client/server`, `apps/workers/src` and
+ *     `packages/server-utils/src` (e.g. `b4m-core`, `packages/cli`), or inside `premium-generated`, which overlays hydrate and which is skipped.
  *   - a site that aliases the import (`ChatCompletionProcess as CCP`), subclasses it, or builds it
  *     through a wrapper, since the scan matches the literal `new ChatCompletionProcess(`.
  *   - whether the resolver, once passed, actually returns anything useful at runtime.
@@ -43,8 +43,8 @@ const CLIENT_ROOT = join(__dirname, '..');
  */
 const INTENTIONAL_OMISSIONS = new Set<string>([]);
 
-// Relative to CLIENT_ROOT; handlers moved into apps/workers keep their call sites.
-const SCAN_DIRS = ['pages', 'server', '../workers/src'];
+// Relative to CLIENT_ROOT; code moved into apps/workers or packages/server-utils keeps its call sites.
+const SCAN_DIRS = ['pages', 'server', '../workers/src', '../../packages/server-utils/src'];
 const SKIP_DIRS = new Set(['node_modules', '.next', '.open-next', '.sst', '__tests__', 'premium-generated']);
 
 /** The key as an object PROPERTY - shorthand (`loadSystemPromptById,`) or explicit (`x: fn`). */

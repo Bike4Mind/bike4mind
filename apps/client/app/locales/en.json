@@ -135,6 +135,7 @@
       "noPermission": "You do not have permission to access this notebook.",
       "invalidRequest": "Invalid request. Please try again.",
       "tooManyRequests": "Too many requests. Please wait a moment and try again.",
+      "dailyFreeLimitReached": "You have reached today's free-tier credit limit. It resets at midnight UTC, or upgrade your plan to keep going.",
       "serverError": "Server error. Please try again later.",
       "networkError": "Failed to send message. Please check your connection.",
       "sendFailed": "Failed to send message. Please try again."
@@ -233,8 +234,6 @@
     "rateLimitRetryNow": "That request did not go through. Please try again.",
     "rateLimitedSupport": "Still stuck? Contact support and we will help you sign in.",
     "retryIn": "Try again in {{time}}",
-    "passwordlessHint": "Sign-in is passwordless. We will email you a one-time code.",
-    "noPasswordNeeded": "No password needed for email sign-in. We email you a fresh code each time.",
     "codeSentTo": "We sent a code to <email>{{email}}</email>",
     "emailRequired": "Email is required",
     "enterEmail": "Enter your email address",
@@ -243,7 +242,9 @@
     "resendCode": "Resend code",
     "createAccount": "Create Account",
     "accountExists": "An account with this email already exists. Please sign in.",
-    "registrationClosed": "Sign-ups are currently closed. Contact your administrator to request access.",
+    "registrationClosed": "Sign-ups are invite-only right now. Join the waitlist to request an invite.",
+    "joinWaitlist": "Join the waitlist",
+    "noInviteCode": "No invite code?",
     "back": "Back",
     "redirectingToProvider": "Redirecting to your organization's login...",
     "email": "Email",
@@ -254,7 +255,7 @@
     "showPassword": "Show password",
     "enterEmailOrUsername": "Enter email or username",
     "enterPassword": "Enter password",
-    "signInOrCreate": "Enter your email and we'll send a one-time code to sign in or create an account.",
+    "signInOrCreate": "Enter your email and we'll send a one-time code to sign in or create an account. No password required.",
     "justAMoment": "Just a moment...",
     "fieldErrors": {
       "invalidUsername": "Invalid username",
@@ -763,5 +764,10 @@
     "menuTooltip": "Integrations like Google Drive and Slack, plus API keys for your own code",
     "sections": "Connections sections",
     "title": "Connections"
+  },
+  "desktopApp": {
+    "dismissSuggestion": "Dismiss desktop app suggestion",
+    "getTheApp": "Get the desktop app",
+    "tryTheApp": "Try the desktop app"
   }
 }

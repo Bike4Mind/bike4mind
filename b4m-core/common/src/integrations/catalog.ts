@@ -20,7 +20,6 @@ export const INTEGRATION_IDS = [
   'mcp-cli',
   'atlassian',
   'notion',
-  'google-calendar',
   'slack',
   'email',
   'linkedin',
@@ -169,17 +168,6 @@ export const INTEGRATION_CATALOG: Record<IntegrationId, IntegrationDefinition> =
         flag: 'EnableMCPServer',
         mcpServer: McpServerName.Notion,
       },
-    ],
-  },
-  'google-calendar': {
-    name: 'Google Calendar',
-    description: 'Book briefing calls into open slots on a shared Bike4Mind calendar, not your own.',
-    category: 'productivity',
-    logo: 'google-calendar',
-    stage: 'beta',
-    flag: 'enableGoogleCalendar',
-    capabilities: [
-      { id: 'calendar-booking', label: 'Book briefings on a shared calendar', kind: 'notifications', stage: 'beta' },
     ],
   },
   slack: {

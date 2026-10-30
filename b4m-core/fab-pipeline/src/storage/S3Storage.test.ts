@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { Readable } from 'stream';
 import { describe, it, expect, vi } from 'vitest';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { S3Storage } from './S3Storage';
 
 /**
@@ -35,6 +35,67 @@ describe('S3Storage.upload', () => {
       requestTimeout: 300000,
       abortSignal: controller.signal,
     });
+  });
+});
+
+describe('S3Storage ranged reads on empty objects', () => {
+  const setup = () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    return { storage, send: vi.spyOn(client, 'send') };
+  };
+  const s3Error = (name: string, httpStatusCode: number) =>
+    Object.assign(new Error(name), { name, $metadata: { httpStatusCode } });
+
+  it('downloadRange returns an empty buffer when S3 answers 416 InvalidRange', async () => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error('InvalidRange', 416));
+
+    const result = await storage.downloadRange('uploads/__init__.py', 4100);
+
+    expect(result).toEqual(Buffer.alloc(0));
+  });
+
+  it('downloadRange returns the ranged bytes for a non-empty object', async () => {
+    const { storage, send } = setup();
+    send.mockResolvedValue({ Body: Readable.from([Buffer.from('abc')]) });
+
+    await expect(storage.downloadRange('uploads/a.txt', 4100)).resolves.toEqual(Buffer.from('abc'));
+  });
+
+  it.each([
+    ['AccessDenied', 403],
+    ['SlowDown', 503],
+  ])('downloadRange still propagates %s', async (name, status) => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error(name, status));
+
+    await expect(storage.downloadRange('uploads/a.txt', 4100)).rejects.toMatchObject({ name });
+  });
+
+  it('getPreview returns an empty string when S3 answers 416 InvalidRange', async () => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error('InvalidRange', 416));
+
+    await expect(storage.getPreview('uploads/__init__.py')).resolves.toBe('');
+  });
+
+  it.each([
+    ['only the error name matches', 'InvalidRange', 400],
+    ['only the HTTP status matches', 'RequestedRangeNotSatisfiable', 416],
+  ])('treats a range error as empty when %s', async (_case, name, status) => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error(name, status));
+
+    await expect(storage.downloadRange('uploads/__init__.py', 4100)).resolves.toEqual(Buffer.alloc(0));
+    await expect(storage.getPreview('uploads/__init__.py')).resolves.toBe('');
+  });
+
+  it('getPreview still propagates other S3 errors', async () => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error('AccessDenied', 403));
+
+    await expect(storage.getPreview('uploads/a.txt')).rejects.toMatchObject({ name: 'AccessDenied' });
   });
 });
 
@@ -78,5 +139,49 @@ describe('S3Storage upload input handling', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('S3Storage.deletePrefix', () => {
+  const setup = () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    return { storage, send: vi.spyOn(client, 'send') };
+  };
+
+  it('lists every page under the prefix and deletes each key, returning the count', async () => {
+    const { storage, send } = setup();
+    send.mockImplementation(async (command: unknown) => {
+      if (command instanceof ListObjectsV2Command) {
+        return command.input.ContinuationToken
+          ? { Contents: [{ Key: 'thumbs/a1/c.webp' }], IsTruncated: false }
+          : {
+              Contents: [{ Key: 'thumbs/a1/a.webp' }, { Key: 'thumbs/a1/b.webp' }],
+              IsTruncated: true,
+              NextContinuationToken: 't2',
+            };
+      }
+      return {};
+    });
+
+    await expect(storage.deletePrefix('thumbs/a1/')).resolves.toBe(3);
+
+    const lists = send.mock.calls
+      .map(([c]) => c)
+      .filter(c => c instanceof ListObjectsV2Command) as ListObjectsV2Command[];
+    expect(lists.map(c => c.input)).toEqual([
+      { Bucket: 'test-bucket', Prefix: 'thumbs/a1/', ContinuationToken: undefined },
+      { Bucket: 'test-bucket', Prefix: 'thumbs/a1/', ContinuationToken: 't2' },
+    ]);
+    const deletes = send.mock.calls
+      .map(([c]) => c)
+      .filter(c => c instanceof DeleteObjectCommand) as DeleteObjectCommand[];
+    expect(deletes.map(c => c.input.Key)).toEqual(['thumbs/a1/a.webp', 'thumbs/a1/b.webp', 'thumbs/a1/c.webp']);
+  });
+
+  it.each(['', '/', 'thumbs/', 'thumbs', 'thumbs/a1', '//a1/'])('refuses the unscoped prefix %j', async prefix => {
+    const { storage, send } = setup();
+    await expect(storage.deletePrefix(prefix)).rejects.toThrow('unscoped prefix');
+    expect(send).not.toHaveBeenCalled();
   });
 });

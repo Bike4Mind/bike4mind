@@ -1,7 +1,10 @@
 import { FC } from 'react';
 import { Chip } from '@mui/joy';
 import { ResearchTaskStatus } from '@bike4mind/common';
-import { CheckCircle, Schedule, Error, AccessTime } from '@mui/icons-material';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import Schedule from '@mui/icons-material/Schedule';
+import Error from '@mui/icons-material/Error';
+import AccessTime from '@mui/icons-material/AccessTime';
 
 interface TaskStatusBadgeProps {
   status: ResearchTaskStatus;

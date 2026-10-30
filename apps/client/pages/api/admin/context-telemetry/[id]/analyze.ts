@@ -1,8 +1,8 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest, adminSettingsRepository } from '@bike4mind/database';
 import { z } from 'zod';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import {
@@ -13,6 +13,7 @@ import {
   type HistoricalBaselines,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import {
   computeHistoricalBaselines,
   generateRuleBasedAnalysis,
@@ -31,12 +32,11 @@ const paramsSchema = z.object({
     .transform(v => v === 'true'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const logger = new Logger({ metadata: { service: 'ContextTelemetryAnalyze' } });
     const { id, force } = paramsSchema.parse(req.query);
 
@@ -183,6 +183,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         `[ContextTelemetry] Failed to cache analysis: ${cacheErr instanceof Error ? cacheErr.message : cacheErr}`
       );
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.context_telemetry.analyzed',
+      target: { kind: 'system', id, displayName: `Context telemetry for quest ${id}` },
+      summary: `analyzed context telemetry for quest ${id}`,
+      details: { questId: id, analysisSource, forced: force },
+    });
 
     res.json({
       id,

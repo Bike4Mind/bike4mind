@@ -9,9 +9,10 @@
  * without `ai:generate` is a 403 before any credit hold, and each error maps to the
  * CONVENTIONS.md status table.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 const mocks = vi.hoisted(() => ({
   validate: vi.fn(),
@@ -32,6 +33,11 @@ const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   createSession: vi.fn(),
   signVoiceSessionToken: vi.fn(),
+  assertModelAdmission: vi.fn(),
+}));
+
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ assert: mocks.assertModelAdmission, admits: async () => true }),
 }));
 
 const RESERVED_CREDITS = 100;
@@ -46,6 +52,12 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it.
   ...(await orig<Record<string, unknown>>()),
@@ -141,6 +153,7 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
+import { adminSettingsRepository } from '@bike4mind/database';
 import voicesHandler from '../voices';
 import sessionsHandler from '../sessions';
 import endHandler from '../sessions/[id]/end';
@@ -205,6 +218,7 @@ function settings(overrides: Record<string, string> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.assertModelAdmission.mockReset().mockResolvedValue(undefined);
   mocks.userFindById.mockResolvedValue({ ...JWT_USER });
   mocks.rateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
   settings();
@@ -222,6 +236,10 @@ beforeEach(() => {
   mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
   mocks.signVoiceSessionToken.mockReturnValue('signed-session-token');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('legacy /api/voice/v2 aliases', () => {
@@ -320,6 +338,30 @@ describe('GET /api/v1/voice/voices', () => {
 describe('POST /api/v1/voice/sessions', () => {
   const fireSessions = (opts: { apiKey?: string | null; body?: Record<string, unknown> } = {}) =>
     fire(sessionsHandler, { url: '/api/v1/voice/sessions', body: { sessionId: SESSION_ID }, ...opts });
+
+  it('refuses a paid-only transport before reserving credits or provisioning', async () => {
+    mocks.assertModelAdmission.mockRejectedValueOnce(
+      new ForbiddenError('Paid plan required', { errorCode: 'model_requires_subscription' })
+    );
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'model_requires_subscription' });
+    expect(mocks.assertModelAdmission).toHaveBeenCalledExactlyOnceWith('elevenlabs');
+    expect(mocks.incrementCredits).not.toHaveBeenCalled();
+    expect(mocks.openVoiceHold).not.toHaveBeenCalled();
+    expect(mocks.createTransportSession).not.toHaveBeenCalled();
+  });
+
+  it('reads all voice and credit settings directly before provisioning', async () => {
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.getSettingsMap).toHaveBeenCalledExactlyOnceWith(
+      { adminSettings: adminSettingsRepository },
+      { names: ['voiceV2Enabled', 'enforceCredits', 'elevenLabsServerApiKey'], skipCache: true }
+    );
+  });
 
   it('rejects a key lacking ai:generate (403) before taking a credit hold', async () => {
     validateWithScopes([ApiKeyScope.READ_FILES]);
@@ -559,6 +601,7 @@ describe('POST /api/v1/voice/sessions', () => {
 
   it('drops the realtime marker of a prior realtime hold that had no reserve', async () => {
     // enforceCredits off when the realtime call opened: no reserve, so the prior hold is never claimed.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     settings({ enforceCredits: 'false' });
     const priorStartedAt = new Date(Date.now() - 60_000);
     mocks.findByIdAndUserId.mockResolvedValue({

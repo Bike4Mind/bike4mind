@@ -66,7 +66,7 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   decryptSecret: (...args: unknown[]) => mockDecryptSecret(...args),
 }));
 
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreFixSuccessMessage: (...args: unknown[]) => mockPostSreFixSuccessMessage(...args),
   postSreFixFailureMessage: (...args: unknown[]) => mockPostSreFixFailureMessage(...args),
   postSreAlreadyFixedMessage: (...args: unknown[]) => mockPostSreAlreadyFixedMessage(...args),

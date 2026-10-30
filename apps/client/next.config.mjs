@@ -3,6 +3,7 @@
 import { globSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { buildRemoteImagePatterns } from './config/remoteImagePatterns.mjs';
 
 // Service Worker (Serwist):
 // - Using @serwist/turbopack with route handler at app/serwist/[path]/route.ts
@@ -32,22 +33,6 @@ const HELP_EMBEDDINGS = './app/generated/help-embeddings.json';
 
 const selfHostResolveAlias = process.env.B4M_SELF_HOST === 'true' ? { sst: '@bike4mind/resource' } : {};
 
-// NEXT_PUBLIC_CDN_URL is an absolute URL on deployed stages, but on personal
-// `sst dev` stages it is the relative local file-proxy base ('/api/app-files/serve'),
-// which is same-origin and needs no remote-image pattern. Only derive a hostname
-// when it parses as an absolute URL; otherwise fall back to the default CDN host.
-const cdnImageHostname = (() => {
-  const cdn = process.env.NEXT_PUBLIC_CDN_URL;
-  if (cdn && /^https?:\/\//i.test(cdn)) {
-    try {
-      return new URL(cdn).hostname;
-    } catch {
-      // not a parseable absolute URL — fall through to default
-    }
-  }
-  return 'files.dev.bike4mind.com';
-})();
-
 /** @type {import("next").NextConfig} */
 // isolated-vm is a native addon loaded through `createRequire(...)` inside
 // @bike4mind/agents, which keeps it out of every Lambda that never touches the
@@ -71,7 +56,10 @@ const cdnImageHostname = (() => {
 const ISOLATED_VM_PREBUILDS = (() => {
   const pkgDir = path.dirname(createRequire(import.meta.url).resolve('isolated-vm'));
   const pattern = path.posix.join(
-    path.relative(import.meta.dirname, pkgDir).split(path.sep).join('/'),
+    path
+      .relative(import.meta.dirname, pkgDir)
+      .split(path.sep)
+      .join('/'),
     'prebuilds/linux-*/isolated-vm.abi*.glibc.node'
   );
   // Fail the build rather than the request. Getting this wrong disables every
@@ -262,46 +250,8 @@ const nextConfig = {
 
   pageExtensions: ['ts', 'tsx', 'js', 'jsx'],
   images: {
-    remotePatterns: [
-      {
-        // Generated Images bucket:
-        protocol: 'https',
-        // Example: pr535-groktool-buckets-generatedimagesbucket064ab0-zw27yiznd2ig.s3.us-east-2.amazonaws.com
-        // Example: dev-groktool-buckets-generatedimagesbucket.s3.us-east.amazonaws.com
-        hostname:
-          process.env.GENERATED_IMAGES_BUCKET_NAME ||
-          '*-groktool-buckets-generatedimagesbucket*.s3.us-east-2.amazonaws.com',
-      },
-      {
-        // fab files bucket:
-        protocol: 'https',
-        // Example: pr535-groktool-buckets-fabfilesbucket.s3.us-east-2.amazonaws.com
-        // Example: dev-groktool-buckets-fabfilesbucket.s3.us-east.amazonaws.com
-        hostname: process.env.FAB_FILES_BUCKET_NAME || '*-groktool-buckets-fabfilesbucket*.s3.us-east-2.amazonaws.com',
-      },
-      {
-        // app files bucket (for logos, etc.):
-        protocol: 'https',
-        // Example: bike4mind-millions-appfilesbucketbucket-kfmksobd.s3.us-east-2.amazonaws.com
-        hostname: process.env.APP_FILES_BUCKET_NAME || '*-appfilesbucket*.s3.us-east-2.amazonaws.com',
-      },
-      {
-        // cdn url
-        protocol: 'https',
-        hostname: cdnImageHostname,
-      },
-      {
-        // GitHub user avatars (used by B4M Pi team activity)
-        protocol: 'https',
-        hostname: 'avatars.githubusercontent.com',
-      },
-      {
-        // GitHub profile avatars (used by B4M Pi insights team profiles)
-        // Historical analysis stores URLs as github.com/username.png
-        protocol: 'https',
-        hostname: 'github.com',
-      },
-    ],
+    remotePatterns: buildRemoteImagePatterns(process.env),
+    maximumRedirects: 0,
   },
   // Turbopack is the default in Next.js 16
   turbopack: {

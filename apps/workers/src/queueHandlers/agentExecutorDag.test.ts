@@ -93,6 +93,7 @@ vi.mock('@bike4mind/database', () => ({
 const {
   buildDagResumeReport,
   clampMaxIterationsForOverCapAggregationWake,
+  clampMaxIterationsForUnrunnableAggregationWake,
   isDagAggregationWake,
   makeDagDispatcher,
   onDagNodeTerminal,
@@ -290,6 +291,49 @@ describe('clampMaxIterationsForOverCapAggregationWake', () => {
       clampMaxIterationsForOverCapAggregationWake({
         isAggregationOnlyWake: true,
         isOverCap: false,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(25);
+  });
+});
+
+describe('clampMaxIterationsForUnrunnableAggregationWake', () => {
+  it('caps to the next iteration when the wake is aggregation-only and its model is not runnable', () => {
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: true,
+        isRunnable: false,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(8);
+  });
+
+  it('never raises the ceiling above the original maxIterations', () => {
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: true,
+        isRunnable: false,
+        maxIterations: 5,
+        iterationIndex: 20,
+      })
+    ).toBe(5);
+  });
+
+  it('leaves maxIterations untouched when the model is runnable or the wake is not aggregation-only', () => {
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: true,
+        isRunnable: true,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(25);
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: false,
+        isRunnable: false,
         maxIterations: 25,
         iterationIndex: 7,
       })
@@ -551,6 +595,28 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
     );
     await make([]).createNode(args);
     expect(Object.keys(createMock.mock.calls[1][0] as Record<string, unknown>)).not.toContain('scopeDeniedTools');
+  });
+
+  it('carries a withheld admin role onto the node row, and omits the key otherwise', async () => {
+    createMock.mockClear();
+    const make = (adminRoleWithheld?: boolean) =>
+      makeDagDispatcher({
+        connectionId: 'c1',
+        nodeDefaults: { ...nodeDefaultsBase, adminRoleWithheld },
+        logger: silentLogger,
+      });
+    const args = {
+      parentExecutionId: 'p1',
+      node,
+      thoroughness: 'quick' as const,
+      agentName: 'worker',
+      model: 'm1',
+      maxIterations: 3,
+    };
+    await make(true).createNode(args);
+    expect(createMock).toHaveBeenLastCalledWith(expect.objectContaining({ adminRoleWithheld: true }));
+    await make(undefined).createNode(args);
+    expect(Object.keys(createMock.mock.calls[1][0] as Record<string, unknown>)).not.toContain('adminRoleWithheld');
   });
 
   it('copies the parent permission lists onto the node row', async () => {

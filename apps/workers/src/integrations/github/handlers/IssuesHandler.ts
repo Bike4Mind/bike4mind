@@ -1,3 +1,4 @@
+import { findVerifiedGitHubAccounts } from '@bike4mind/slack';
 /**
  * GitHub Webhook - Issues Event Handler
  *
@@ -26,8 +27,11 @@ import {
   buildIssueClosedBlocks,
   buildIssueAssignedBlocks,
 } from '@bike4mind/slack';
-import { webhookSubscriptionRepository, User } from '@bike4mind/database';
-import { dispatchIssueToSre, syncSreIssueStateFromWebhook } from '@server/integrations/github/sreWebhookDispatch';
+import { webhookSubscriptionRepository } from '@bike4mind/database';
+import {
+  dispatchIssueToSre,
+  syncSreIssueStateFromWebhook,
+} from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import { emptyNotifyResult, mergeNotifyResults, toHandlerResult } from './notifyResultUtils';
 
 export class IssuesHandler implements GitHubEventHandler {
@@ -141,19 +145,13 @@ export class IssuesHandler implements GitHubEventHandler {
         } else {
           // Get the GitHub usernames of subscribers
           const subscriberUserIds = issueSubscribers.map(sub => sub.userId);
-          const users = await User.find({
-            _id: { $in: subscriberUserIds },
-            'slackSettings.githubNotifications.githubUsername': { $exists: true, $ne: '' },
-            'slackSettings.githubNotifications.enabled': true,
-          })
-            .select('slackSettings.githubNotifications.githubUsername')
-            .lean<Array<{ slackSettings?: { githubNotifications?: { githubUsername?: string } } }>>();
+          const accounts = await findVerifiedGitHubAccounts({ userIds: subscriberUserIds });
 
           // Get GitHub usernames and filter out:
           // - The issue author (self-notification prevention)
           // - Already-notified assignees (deduplication)
-          const targetGitHubUsernames = users
-            .map(u => u.slackSettings?.githubNotifications?.githubUsername)
+          const targetGitHubUsernames = accounts
+            .map(account => account.metadata?.githubLogin)
             .filter(
               (username): username is string =>
                 username !== undefined &&

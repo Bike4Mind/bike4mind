@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Chip, Tooltip } from '@mui/joy';
-import { Warning as WarningIcon } from '@mui/icons-material';
+import WarningIcon from '@mui/icons-material/Warning';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import {
   FallbackInfo,

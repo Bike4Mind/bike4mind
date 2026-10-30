@@ -10,8 +10,8 @@ name: SST / infra preview gate
 # that as a required check it reports success on unrelated PRs instead of
 # hanging pending. The `labeled`/`unlabeled` triggers re-evaluate the moment the
 # deployer adds/removes the label. It also fires on `merge_group` (main uses a
-# merge queue): the detection step is gated to `pull_request`, so the queue run
-# is a no-op that still reports the required check green.
+# merge queue): the job is skipped there, which reports the required check as
+# passing without taking a runner slot.
 
 on:
   pull_request:
@@ -39,12 +39,11 @@ permissions:
 jobs:
   preview-gate:
     name: preview gate
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    # merge_group has no pull_request context to check.
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - name: Require a preview for sst / infra changes
-        # merge_group has no pull_request context; skipping here still reports
-        # the required check as passed, so the merge queue is not blocked.
-        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -130,7 +129,8 @@ jobs:
           echo "This PR touches sst / infra ($reason); a preview deploy is required."
 
           # The deployer adds `preview-deployed` on a successful preview deploy.
-          if gh api "repos/$REPO/issues/$PR/labels" -q '.[].name' | grep -qx 'preview-deployed'; then
+          preview_labels=$(gh api "repos/$REPO/issues/$PR/labels" -q '.[].name')
+          if grep -qx 'preview-deployed' <<< "$preview_labels"; then
             echo "Found 'preview-deployed' label -> a preview has been deployed. Gate satisfied."
             exit 0
           fi

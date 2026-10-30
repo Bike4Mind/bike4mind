@@ -1,9 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { ConflictError, NotFoundError, BadRequestError, isOAuthClientIdShape } from '@bike4mind/common';
+import {
+  ConflictError,
+  NotFoundError,
+  BadRequestError,
+  isOAuthClientIdShape,
+  FEDERATED_ADMIN_STATUS_SCOPE,
+} from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { OAuthClientModel, oauthClientRepository } from './OAuthClientModel';
 import {
+  addOAuthClientOptInScopes,
   createOAuthClient,
   generateOAuthClientId,
   listOAuthClients,
@@ -123,6 +130,7 @@ describe('createOAuthClient', () => {
       audience: client.clientId,
     });
     expect(client.allowedScopes).toEqual(['openid', 'email', 'profile', 'ai:generate', 'me:read']);
+    expect(client.allowedScopes).not.toContain(FEDERATED_ADMIN_STATUS_SCOPE);
   });
 
   it('applies the same federated shape rules as the seed script', async () => {
@@ -327,5 +335,75 @@ describe('listOAuthClients', () => {
     expect(serialized).not.toContain('clientSecretHash');
     expect(serialized).not.toContain(first.clientSecret);
     expect(serialized).not.toContain(second.clientSecret);
+  });
+});
+
+describe('addOAuthClientOptInScopes', () => {
+  const federated = {
+    ...base,
+    federatedIdp: {
+      subjectSource: 'sub' as const,
+      issuer: 'https://b4m.example.test',
+      jwksUri: 'https://b4m.example.test/api/oauth/jwks',
+    },
+  };
+
+  it('adds the scope once and is a no-op on rerun', async () => {
+    const { client } = await createOAuthClient(federated);
+
+    const first = await addOAuthClientOptInScopes(client.clientId, [FEDERATED_ADMIN_STATUS_SCOPE]);
+    const second = await addOAuthClientOptInScopes(client.clientId, [FEDERATED_ADMIN_STATUS_SCOPE]);
+
+    const expected = [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE];
+    expect(first.allowedScopes).toEqual(expected);
+    expect(second.allowedScopes).toEqual(expected);
+    const stored = await OAuthClientModel.findOne({ clientId: client.clientId }).lean();
+    expect(stored?.allowedScopes).toEqual(expected);
+  });
+
+  it('rejects a scope that is not opt-in without touching the client', async () => {
+    const { client } = await createOAuthClient(federated);
+    await expect(addOAuthClientOptInScopes(client.clientId, ['admin:all'])).rejects.toBeInstanceOf(BadRequestError);
+    const stored = await OAuthClientModel.findOne({ clientId: client.clientId }).lean();
+    expect(stored?.allowedScopes).toEqual(client.allowedScopes);
+  });
+
+  it('rejects an empty list', async () => {
+    const { client } = await createOAuthClient(federated);
+    await expect(addOAuthClientOptInScopes(client.clientId, [])).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it('rejects a non-federated client and leaves its scopes alone', async () => {
+    const { client } = await createOAuthClient(base);
+    await expect(addOAuthClientOptInScopes(client.clientId, [FEDERATED_ADMIN_STATUS_SCOPE])).rejects.toBeInstanceOf(
+      BadRequestError
+    );
+    const stored = await OAuthClientModel.findOne({ clientId: client.clientId }).lean();
+    expect(stored?.allowedScopes).not.toContain(FEDERATED_ADMIN_STATUS_SCOPE);
+  });
+
+  it('rejects a first-party federated client, which the grant gate would not hold to consent', async () => {
+    const { client } = await createOAuthClient({ ...federated, clientType: 'first-party' });
+    await expect(addOAuthClientOptInScopes(client.clientId, [FEDERATED_ADMIN_STATUS_SCOPE])).rejects.toBeInstanceOf(
+      BadRequestError
+    );
+    const stored = await OAuthClientModel.findOne({ clientId: client.clientId }).lean();
+    expect(stored?.allowedScopes).not.toContain(FEDERATED_ADMIN_STATUS_SCOPE);
+  });
+
+  it('rejects a legacy federated client stored without a clientType', async () => {
+    const { client } = await createOAuthClient(federated);
+    await OAuthClientModel.collection.updateOne({ clientId: client.clientId }, { $unset: { clientType: '' } });
+    await expect(addOAuthClientOptInScopes(client.clientId, [FEDERATED_ADMIN_STATUS_SCOPE])).rejects.toBeInstanceOf(
+      BadRequestError
+    );
+    const stored = await OAuthClientModel.collection.findOne({ clientId: client.clientId });
+    expect(stored?.allowedScopes).not.toContain(FEDERATED_ADMIN_STATUS_SCOPE);
+  });
+
+  it('throws NotFoundError for an unknown clientId', async () => {
+    await expect(
+      addOAuthClientOptInScopes('b4m_missing_00000000', [FEDERATED_ADMIN_STATUS_SCOPE])
+    ).rejects.toBeInstanceOf(NotFoundError);
   });
 });

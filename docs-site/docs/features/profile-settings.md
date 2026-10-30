@@ -109,7 +109,7 @@ The **Application Settings** area of the Settings tab has a **Notebooks** card a
 - **Curate** - Open notebook curation
 
 **Knowledge Files card:**
-- **Export All** - Download all your knowledge files
+- **Export All** - Download all your knowledge files as a zip. The zip holds the extracted text of each file, not the original files: images are not included, and very long files are shortened. When anything is shortened or left out, the zip includes a `README.txt` that names it.
 
 **Delete all:** The **Danger zone** section at the bottom of the Settings tab has two buttons, **Delete all notebooks** and **Delete all knowledge files**. Each asks you to confirm and cannot be undone. Export first if you want a copy.
 

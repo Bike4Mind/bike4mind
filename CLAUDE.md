@@ -36,7 +36,7 @@ Verify before pushing: `pnpm turbo:typecheck && pnpm turbo:test && pnpm lint:che
 ## Project structure
 
 - **`apps/client`** — Next.js app: a Tanstack-Router SPA plus the Pages-API backend (`pages/api/*`). Next.js is used only for the API routes; all client routing is Tanstack Router.
-- **`apps/workers`** - background workers moving out of `apps/client`: the EventBridge handlers (`src/events`), the scheduled cron handlers and triage SQS workers (`src/cron`), the preview data syncer (`src/jobs`), the inbound email parser and analyzer (`src/emailIngestion`), the comms/ops, data-lake pipeline, What's New, image generation, generation job, quest export, lake ingest, agent executor and Slack quest processor queue handlers (`src/queueHandlers`), the S3 upload-complete handlers (`src/s3`), the database migrator, seeder and preview cleaner (`src/database`), the image processor (`src/media`), the CLI tools Lambda (`src/cli`), the security alert processor and attack-simulation runner (`src/security`), the self-host worker runner (`src/selfhost`), and the self-host agent executor (`src/agentExecutor`). Shared server code is moving into `packages/server-utils`; until a file has moved, workers import it from `apps/client/server/*` through an interim `@server/*` alias. The dependency is one-way: `apps/client` must never import `apps/workers` (lint-enforced).
+- **`apps/workers`** - background workers moving out of `apps/client`: the EventBridge handlers (`src/events`), the scheduled cron handlers and triage SQS workers (`src/cron`), the preview data syncer (`src/jobs`), the inbound email parser and analyzer (`src/emailIngestion`), the comms/ops, data-lake pipeline, What's New, image generation, generation job, quest export, lake ingest, agent executor and Slack quest processor queue handlers (`src/queueHandlers`), the S3 upload-complete handlers (`src/s3`), the database migrator, seeder and preview cleaner (`src/database`), the image processor (`src/media`), the CLI tools Lambda (`src/cli`), the MCP call Lambda (`src/mcp`), the security alert processor, attack-simulation runner and cloud security scan (`src/security`), the deep-agent wake handler (`src/deepAgent`), the self-host worker runner (`src/selfhost`), and the self-host agent executor (`src/agentExecutor`). Shared server code is moving into `packages/server-utils`; until a file has moved, workers import it from `apps/client/server/*` through an interim `@server/*` alias. The dependency is one-way: `apps/client` must never import `apps/workers` (lint-enforced).
 - **`docs-site/`** - the public Docusaurus site for docs.bike4mind.com. Every merge to `main` that touches it auto-deploys to production, so everything in it is published. Read [`docs-site/CLAUDE.md`](./docs-site/CLAUDE.md) before editing.
 - **`packages/cli`** — interactive CLI + ReAct agent.
 - **`b4m-core/*`** — the engine, published as `@bike4mind/*` packages (`common`, `utils`, `agents`, `services`, `llm-adapters`, `db-core`, etc.). Core packages live at `b4m-core/<name>` and are symlinked into `node_modules/@bike4mind/<name>`.
@@ -133,6 +133,7 @@ userSchema.index({ organizationId: 1, createdAt: -1 });   // performance indexes
 - **MUI Joy** (`@mui/joy`) is the primary UI library; use `@mui/system` utilities (`styled`, `keyframes`) for advanced styling.
 - **Do not install or use `@emotion`.**
 - Styled components: `styled('div')(...)` with proper TypeScript types.
+- **Admin UI** (`apps/client/app/components/admin/**`) follows [`DESIGN_GUIDE.md`](./apps/client/app/components/admin/DESIGN_GUIDE.md): page anatomy, the action/save model, shared components and copy rules.
 
 ## Theme mode guidelines
 
@@ -150,6 +151,20 @@ userSchema.index({ organizationId: 1, createdAt: -1 });   // performance indexes
 - Add/expose one by following [`b4m-core/common/src/api-contract/README.md`](./b4m-core/common/src/api-contract/README.md); copy the reference (`chat.contract.ts` + `apps/client/pages/api/chat.ts`).
 - The contract must also satisfy [`CONVENTIONS.md`](./b4m-core/common/src/api-contract/CONVENTIONS.md) (shared error envelope, status table, scope + version rules). Most of it is gated by `assertContractConventions.ts` at spec-generation time, so a violation fails the build.
 - Never call `.openapi()` in a shared schema/contract file (crashes the runtime handler); no `.catch()`/top-level `.transform()` in a public request schema (fail-quiet + not OpenAPI-representable).
+
+## Infrastructure principles
+
+Guardrails for new serverless resources in `infra/`:
+
+1. Default Lambdas to **non-VPC**; add VPC only when reaching private resources.
+2. One queue per (consumer, retry-policy) pair - merge duplicates with a discriminator field.
+3. EventBridge for fan-out and cross-domain notifications; SQS for work queues.
+4. Every async target gets a DLQ (Lambda async, SQS, EventBridge rules).
+5. Cron is a smell for *triggering*; acceptable for *cleanup/reconciliation*.
+6. Per-dev stages bill 24/7 - design for teardown.
+7. Memory tuning beats consolidation for cost - use Lambda Power Tuning on hot paths.
+
+Agent continuation queue depth limits (self-dispatch): a warning tier (`CHECKPOINT_DEPTH_WARNING`) and a hard stop (`MAX_CHECKPOINT_DEPTH`), both defined in `apps/workers/src/queueHandlers/agentExecutor.checkpointDepth.ts`.
 
 ## Dependency management
 

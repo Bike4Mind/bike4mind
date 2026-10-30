@@ -11,6 +11,12 @@ Bike4Mind supports a wide range of state-of-the-art AI models for text generatio
 
 > **Model Availability:** Model availability is managed at the organizational level by your administrator. If you don't see a model or provider listed below in your model selector, it may be disabled for your organization or restricted to certain user roles. Contact your organization administrator to request access to additional models or providers.
 
+## Choosing a model
+
+Each provider lists current models first. Expand **Older models** at the bottom of a provider group to select a superseded model. Search includes older models even when their group is collapsed, and clearing the search restores the group's previous state.
+
+If your session or agent already uses an older model, its selected card stays visible without expanding the group. Older models also remain available in your Favorites and Recommended sections. Models that are no longer available are still hidden.
+
 ## Supported Text Models
 
 Bike4Mind offers 60+ AI models. The lists below cover everything currently offered; your model picker shows exactly what is enabled for your organization.
@@ -123,8 +129,10 @@ Claude Sonnet 4 (direct Anthropic API) and Gemini 2.5 Flash have already been re
 GPT-Image-1 and Grok Imagine (Quality) are retiring on 2026-10-23 and 2026-11-02.
 
 ### Video
-- **Veo 3.1 Fast** (Google)
+- **Gemini Omni Flash** (Google)
 - **Grok Imagine Video 1.5** (xAI)
+
+Veo 3.1 Fast was retired by Google on 2026-10-22 and no longer accepts new jobs; use Gemini Omni Flash instead. Clips already made with it stay in your history.
 
 ## Speech-to-Text Models
 

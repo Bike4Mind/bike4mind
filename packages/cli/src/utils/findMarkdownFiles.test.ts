@@ -90,6 +90,90 @@ describe('findMarkdownFiles', () => {
     expect(found).toEqual([]);
   });
 
+  describe('stopAtSkillFile', () => {
+    const write = async (relative: string, content = '# doc') => {
+      await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+      await fs.writeFile(path.join(root, relative), content);
+    };
+
+    it('returns only SKILL.md from a skill folder and does not walk below it', async () => {
+      await write('brag/SKILL.md');
+      await write('brag/README.md');
+      await write('brag/slim.md');
+      await write('brag/references/step-1-inspect.md');
+      await write('brag/scripts/nested/deep/notes.md');
+
+      const found = await findMarkdownFiles(root, undefined, { stopAtSkillFile: true });
+
+      expect(found).toEqual([path.join(root, 'brag', 'SKILL.md')]);
+    });
+
+    it('still finds loose commands and skills nested under a plain grouping folder', async () => {
+      await write('legacy.md');
+      await write('frontend/component.md');
+      await write('synced/bucket/pdf/SKILL.md');
+      await write('synced/bucket/pdf/reference.md');
+
+      const found = await findMarkdownFiles(root, undefined, { stopAtSkillFile: true });
+
+      expect(found.sort()).toEqual(
+        [
+          path.join(root, 'legacy.md'),
+          path.join(root, 'frontend', 'component.md'),
+          path.join(root, 'synced', 'bucket', 'pdf', 'SKILL.md'),
+        ].sort()
+      );
+    });
+
+    it('does not treat the scanned root as a skill folder', async () => {
+      await write('SKILL.md');
+      await write('other.md');
+
+      const found = await findMarkdownFiles(root, undefined, { stopAtSkillFile: true });
+
+      expect(found.sort()).toEqual([path.join(root, 'SKILL.md'), path.join(root, 'other.md')].sort());
+    });
+
+    it('recognises a lowercase skill.md', async () => {
+      await write('ship/skill.md');
+      await write('ship/guide.md');
+
+      const found = await findMarkdownFiles(root, undefined, { stopAtSkillFile: true });
+
+      expect(found).toEqual([path.join(root, 'ship', 'skill.md')]);
+    });
+
+    it('yields nothing from a skill folder whose SKILL.md escapes the containment root', async () => {
+      await fs.writeFile(path.join(store, 'SKILL.md'), '# evil');
+      await write('evil/README.md');
+      await fs.symlink(path.join(store, 'SKILL.md'), path.join(root, 'evil', 'SKILL.md'));
+
+      const found = await findMarkdownFiles(root, root, { stopAtSkillFile: true });
+
+      expect(found).toEqual([]);
+    });
+
+    it('keeps a folder with a broken SKILL.md link from leaking its supporting docs', async () => {
+      await write('ship/references/guide.md');
+      await fs.symlink(path.join(store, 'gone.md'), path.join(root, 'ship', 'SKILL.md'));
+
+      const found = await findMarkdownFiles(root, undefined, { stopAtSkillFile: true });
+
+      expect(found).toEqual([]);
+    });
+
+    it('lists every .md when the option is off', async () => {
+      await write('brag/SKILL.md');
+      await write('brag/references/tones.md');
+
+      const found = await findMarkdownFiles(root);
+
+      expect(found.sort()).toEqual(
+        [path.join(root, 'brag', 'SKILL.md'), path.join(root, 'brag', 'references', 'tones.md')].sort()
+      );
+    });
+  });
+
   // A hostile clone's project skills/commands/agents dir must not follow a
   // symlink out of the checkout; global dirs (no containment root) still may.
   describe('containmentRoot', () => {

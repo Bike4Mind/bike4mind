@@ -4,7 +4,7 @@ import type { PromptScenario } from './ai-latency-helpers';
 
 createAiLatencySuite({
   prompts: config.prompts as PromptScenario[],
-  describeLabel: 'Run 3 simple prompts explicitly targeting tools',
+  describeLabel: 'Run simple prompts explicitly targeting tools',
   // 15 * TEST = 900s: the image prompt sends and renders under the image-generation budget
   // (generation runs during the stream), which the prior 600s cap could not cover.
   timeoutMultiplier: 15,

@@ -22,9 +22,8 @@ vi.mock('@client/app/hooks/data/user', () => ({
 vi.mock('@client/app/hooks/data/invites', () => ({
   useShareDocument: () => ({ mutate: mocks.mutate, isPending: false }),
 }));
-vi.mock('lodash', async importOriginal => ({
-  ...(await importOriginal<typeof import('lodash')>()),
-  debounce: <F,>(fn: F) => fn,
+vi.mock('lodash/debounce', () => ({
+  default: <F,>(fn: F) => fn,
 }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
 vi.mock('react-i18next', () => ({

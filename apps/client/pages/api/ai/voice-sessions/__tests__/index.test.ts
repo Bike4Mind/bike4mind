@@ -1,3 +1,12 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { ForbiddenError } from '@bike4mind/utils';
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: vi.fn(async () => ({
+    assert: vi.fn(async (_modelId: string) => {}),
+    admits: vi.fn(async (_modelId: string) => true),
+  })),
+}));
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -15,6 +24,7 @@ const mockCreateSession = vi.fn();
 const mockGetSession = vi.fn();
 const mockClaimVoiceHold = vi.fn();
 const mockOpenVoiceHold = vi.fn();
+const { mockGetSettingsMap } = vi.hoisted(() => ({ mockGetSettingsMap: vi.fn(async () => ({})) }));
 
 vi.mock('axios', () => ({
   default: {
@@ -57,7 +67,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   const flags: Record<string, unknown> = { enableVoiceSession: true, enforceCredits: true };
   return {
     ...actual,
-    getSettingsMap: async () => ({}),
+    getSettingsMap: mockGetSettingsMap,
     getSettingsValue: (name: string, _settings: unknown, fallback?: unknown) => flags[name] ?? fallback,
   };
 });
@@ -113,6 +123,20 @@ afterEach(() => {
  * never reach the client as a 401.
  */
 describe('POST /api/ai/voice-sessions upstream failures', () => {
+  it('refuses free-tier realtime voice before session creation or provider provisioning', async () => {
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw new ForbiddenError('paid plan required', { errorCode: 'model_requires_subscription' });
+    });
+    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const { res } = await callRoute();
+    expect(res._getStatusCode()).toBe(403);
+    expect(assertAdmission).toHaveBeenCalledWith('gpt-realtime-1.5');
+    expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }));
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockOpenVoiceHold).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
   it.each([401, 403, 429, 500])('answers a coded 502, not the upstream %i', async upstreamStatus => {
     mockPost.mockRejectedValueOnce({ isAxiosError: true, response: { status: upstreamStatus, data: { error: 'x' } } });
 
@@ -469,5 +493,26 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
       priorStartedAt,
       expect.objectContaining({ voiceReservedCredits: expect.any(Number), realtime: true })
     );
+  });
+});
+
+// The handler reads these keys off one map. Under skipCache an unlisted key comes back absent
+// and silently reverts to its coded default - for voiceSessionTranscriptionModel that is
+// whisper-1, so a missing name would quietly downgrade every session's transcription.
+describe('POST /api/ai/voice-sessions - admin settings read', () => {
+  it('names every setting it reads and bypasses the process cache', async () => {
+    await callRoute({ sessionId: 'session-1' });
+
+    expect(mockGetSettingsMap).toHaveBeenCalledWith(expect.anything(), {
+      names: [
+        'enableVoiceSession',
+        'voiceSessionAiVoice',
+        'voiceSessionVadType',
+        'voiceSessionVadEagerness',
+        'voiceSessionTranscriptionModel',
+        'enforceCredits',
+      ],
+      skipCache: true,
+    });
   });
 });

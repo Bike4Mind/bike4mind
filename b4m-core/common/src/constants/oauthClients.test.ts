@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
+  FEDERATED_ADMIN_STATUS_SCOPE,
   LEGACY_DEVICE_CLIENT_ID,
   OAUTH_DEVICE_CLIENT_IDS,
   clientIdFromAuthorizeRedirect,
   isOAuthClientIdShape,
   isOAuthSourceTag,
+  nonOptInScopes,
   oauthClientDisplayName,
   oauthClientSourceSlug,
 } from './oauthClients';
@@ -100,5 +102,15 @@ describe('isOAuthSourceTag', () => {
 
   it.each(['acme:pro', 'opensource:x', 'source', 'vip'])('ignores %p', tag => {
     expect(isOAuthSourceTag(tag)).toBe(false);
+  });
+});
+
+describe('nonOptInScopes', () => {
+  it('returns only the entries that cannot be granted opt-in', () => {
+    expect(nonOptInScopes([FEDERATED_ADMIN_STATUS_SCOPE, 'admin:all'])).toEqual(['admin:all']);
+  });
+
+  it('returns an empty list for empty input', () => {
+    expect(nonOptInScopes([])).toEqual([]);
   });
 });

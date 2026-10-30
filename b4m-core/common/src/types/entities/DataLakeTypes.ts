@@ -3,6 +3,7 @@ import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { ILakeUsageSummary } from './UsageEventTypes';
 import type { LakeManageRung } from './LakeConfigChangeEventTypes';
+import type { ApiKeyCompletionSource } from '../analytics';
 
 // ── Data Lake Status ────────────────────────────────────────────────────────
 
@@ -1277,6 +1278,12 @@ export interface IDataLakeBatch {
 
   /** Opted into background AI tag suggestion at batch-create time. Never true in append mode. */
   wantsTaxonomy?: boolean;
+  /** Payer captured at upload admission; absent on legacy/server-created batches. Null bills the user. */
+  taxonomyBilling?: {
+    organizationId: string | null;
+    apiKeyId?: string;
+    source?: ApiKeyCompletionSource;
+  };
   /** Background AI-tagging phase; see `TaxonomyStatus`. */
   taxonomyStatus?: TaxonomyStatus;
   /** When the current 'queued'/'analyzing'/'applying' phase started - the stuck-job reconciler's cutoff clock. */

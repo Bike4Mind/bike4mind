@@ -109,7 +109,7 @@ describe('GET /api/v1/models', () => {
     expect(ListModelsResponseSchema.safeParse(body).success).toBe(true);
     expect(body.data.map((model: { id: string }) => model.id)).toEqual(['gpt-image-1', 'model-a', 'model-c']);
     expect(body.next_cursor).toBeNull();
-    expect(getCallerModelList).toHaveBeenCalledWith('u1', logger);
+    expect(getCallerModelList).toHaveBeenCalledWith({ id: 'u1' }, logger);
   });
 
   it('omits speech-to-text models, which no public endpoint can serve', async () => {
@@ -212,7 +212,7 @@ describe('GET /api/v1/models', () => {
     });
   });
 
-  it('publishes native tool search and tool changes only on the Claude models that take them', async () => {
+  it('publishes tool and assistant prefill capabilities for every model', async () => {
     getCallerModelList.mockResolvedValue({
       models: [
         textModel(ChatModels.CLAUDE_5_5_OPUS),
@@ -233,20 +233,24 @@ describe('GET /api/v1/models', () => {
     const body = res._getJSONData();
     expect(ListModelsResponseSchema.safeParse(body).success).toBe(true);
     const byId = Object.fromEntries(
-      body.data.map((row: { id: string; supports_tool_search: boolean; supports_tool_changes: boolean }) => [
-        row.id,
-        [row.supports_tool_search, row.supports_tool_changes],
-      ])
+      body.data.map(
+        (row: {
+          id: string;
+          supports_tool_search: boolean;
+          supports_tool_changes: boolean;
+          supports_assistant_prefill: boolean;
+        }) => [row.id, [row.supports_tool_search, row.supports_tool_changes, row.supports_assistant_prefill]]
+      )
     );
     expect(byId).toEqual({
-      [ChatModels.CLAUDE_5_5_OPUS]: [true, true],
-      [ChatModels.CLAUDE_5_SONNET]: [true, false],
-      [ChatModels.CLAUDE_4_1_OPUS]: [false, false],
-      [ChatModels.CLAUDE_4_8_OPUS_BEDROCK]: [true, true],
-      [ChatModels.CLAUDE_4_SONNET_BEDROCK]: [false, false],
-      [ChatModels.GPT5_5]: [false, false],
-      [ChatModels.GEMINI_2_5_PRO]: [false, false],
-      [ImageModels.GPT_IMAGE_1]: [false, false],
+      [ChatModels.CLAUDE_5_5_OPUS]: [true, true, false],
+      [ChatModels.CLAUDE_5_SONNET]: [true, false, false],
+      [ChatModels.CLAUDE_4_1_OPUS]: [false, false, true],
+      [ChatModels.CLAUDE_4_8_OPUS_BEDROCK]: [true, true, false],
+      [ChatModels.CLAUDE_4_SONNET_BEDROCK]: [false, false, true],
+      [ChatModels.GPT5_5]: [false, false, true],
+      [ChatModels.GEMINI_2_5_PRO]: [false, false, true],
+      [ImageModels.GPT_IMAGE_1]: [false, false, true],
     });
   });
 

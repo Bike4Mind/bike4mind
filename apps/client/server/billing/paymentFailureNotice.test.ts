@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
-import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const mocks = vi.hoisted(() => ({
   findOrg: vi.fn(),
@@ -18,7 +18,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: mocks.findOrg },
   userRepository: { findById: mocks.findUser },
 }));
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: { invoices: { retrieve: mocks.retrieveInvoice } },
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mocks.emitMetric }));

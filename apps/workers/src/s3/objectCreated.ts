@@ -1,7 +1,7 @@
 import { adminSettingsRepository, dataLakeBatchRepository, FabFile, User, withTransaction } from '@bike4mind/database';
 import { isMediaOnlyMimeType, isStorageCharged } from '@bike4mind/common';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
-import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
+import { isUntrackedFabFileKey } from '@bike4mind/server-utils/s3/untrackedFabFileKey';
 import {
   claimModerationScan,
   recordLandedObject,
@@ -11,7 +11,7 @@ import {
   type ModerationVerdictPatch,
 } from '@server/s3/moderationScan';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
-import { admitLandedUpload } from '@server/s3/uploadSizeGate';
+import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
 import { recordRejectedUploadBatch } from '@server/s3/recordRejectedUploadBatch';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { completedBatchStatus, finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';

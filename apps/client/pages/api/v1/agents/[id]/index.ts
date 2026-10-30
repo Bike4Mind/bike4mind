@@ -10,31 +10,14 @@ import { deleteAgentContract, getAgentContract, IAgent, updateAgentContract } fr
 import { agentRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validateAgentUpdate } from '@server/utils/agentValidation';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
+import { findOwnedAgent } from '@server/agents/v1AgentRoute';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { deleteAgent } from '@server/agents/deleteAgent';
 import { toPublicAgent } from '@server/agents/toPublicAgent';
 import { toV1AgentError, v1FieldLabel } from '@server/agents/v1AgentErrors';
-
-// Named so every agent id shares one bucket per method instead of one per pathname.
-const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user, req), windowMs: 60 * 1000, bucket });
-
-// A malformed or unknown id, a soft-deleted agent and a system/org agent all come back null or
-// ownerless from findById, so assertAgentAccess answers 404 for every one of them.
-async function findOwnedAgent(id: string, userId: string) {
-  const agent = await agentRepository.findById(id);
-  try {
-    assertAgentAccess(agent, userId, 'own');
-    return agent;
-  } catch (error) {
-    if (error instanceof ForbiddenError) throw new NotFoundError('Agent not found');
-    throw error;
-  }
-}
 
 const getRoute = nextRouteForContract(getAgentContract, {
   rateLimit: perUserRateLimit('GET /api/v1/agents/[id]'),
@@ -66,7 +49,7 @@ const updateRoute = nextRouteForContract(updateAgentContract, {
   const reset = (['preferredModel', 'temperature', 'maxTokens'] as const).filter(field => fields[field] === null);
   const changes: Partial<IAgent> = Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null));
   try {
-    validateAgentUpdate(changes, v1FieldLabel);
+    await validateAgentUpdate(changes, req.user, v1FieldLabel, req.logger);
   } catch (error) {
     throw toV1AgentError(error);
   }

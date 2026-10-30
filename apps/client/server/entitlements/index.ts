@@ -34,7 +34,8 @@ import {
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
-import type { IUserDocument } from '@bike4mind/common';
+import { getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
+import { PAID_PLAN_ENTITLEMENT_KEY, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -58,6 +59,8 @@ export interface EntitlementUser {
   /** Granting a domain entitlement requires BOTH (verified-email gate). */
   email?: string | null;
   emailVerified?: boolean | null;
+  /** Set by a credit purchase (and by an admin credit grant); unlocks `plan:paid` like a subscription. */
+  lastCreditsPurchasedAt?: Date | null;
 }
 
 /** Projects an authenticated `IUserDocument` onto the fields `getUserEntitlements` reads. */
@@ -68,6 +71,7 @@ export function toEntitlementUser(user: IUserDocument): EntitlementUser {
     isAdmin: user.isAdmin,
     email: user.email,
     emailVerified: user.emailVerified,
+    lastCreditsPurchasedAt: user.lastCreditsPurchasedAt,
   };
 }
 
@@ -120,7 +124,16 @@ export async function getUserEntitlements(
   // Implications run last, over the union of every source, so an implying key
   // confers the same keys whether it came from a tag, domain, partner rule or
   // subscription. Must stay the only place they are applied for gating.
-  return applyImpliedEntitlements(keys);
+  const resolved = applyImpliedEntitlements(keys);
+  // `plan:paid` unlocks paid-only models (the free-tier gate in modelAdmission.ts), so it comes from
+  // the subscription ladder or a credit purchase alone, never from a passthrough tag or any other source
+  // above. An admin comps it with an `admin_grant` subscription row, which the ladder read honors, or
+  // with any positive single-user credit adjustment, which stamps the purchase field (adminUpdate.ts).
+  // A purchase is "ever bought", the same signal hasPaidStanding (userApiKeyService/trust.ts) reads:
+  // a refund or dispute does not clear the stamp.
+  const withoutPaidPlan = resolved.filter(key => key !== PAID_PLAN_ENTITLEMENT_KEY);
+  const holdsPaidPlan = Boolean(user.lastCreditsPurchasedAt) || getHighestLadderTier(activeSubscriptions) !== undefined;
+  return holdsPaidPlan ? [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY] : withoutPaidPlan;
 }
 
 /**

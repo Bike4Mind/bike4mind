@@ -1,13 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SNSEvent } from 'aws-lambda';
-import { handler } from './dlqAlarmToSlack';
 
-vi.mock('sst', () => ({
-  Resource: {
-    SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: 'https://hooks.slack.example/webhook' },
-    App: { stage: 'dev' },
-  },
+const resource = vi.hoisted(() => ({
+  SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: 'https://hooks.slack.example/webhook' },
+  SLACK_ALARMS_WEBHOOK_URL: undefined as { value: string } | undefined,
+  App: { stage: 'dev' },
 }));
+
+vi.mock('sst', () => ({ Resource: resource }));
+
+import { handler } from './dlqAlarmToSlack';
 
 const makeEvent = (message: string): SNSEvent => ({
   Records: [
@@ -34,7 +36,7 @@ const makeEvent = (message: string): SNSEvent => ({
 
 const alarmPayload = (state: string) =>
   JSON.stringify({
-    AlarmName: 'test-alarm',
+    AlarmName: 'bike4mind-dev-test-alarm',
     AlarmDescription: 'Test alarm description',
     NewStateValue: state,
     NewStateReason: 'Threshold crossed',
@@ -45,24 +47,37 @@ describe('dlqAlarmToSlack handler', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    resource.SLACK_ALARMS_WEBHOOK_URL = undefined;
     fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
     vi.stubGlobal('fetch', fetchMock);
   });
 
-  it('posts to Slack when alarm transitions to ALARM state', async () => {
+  it('posts an explained message when alarm transitions to ALARM state', async () => {
     await handler(makeEvent(alarmPayload('ALARM')));
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('https://hooks.slack.example/webhook');
     expect(init.method).toBe('POST');
     const body = JSON.parse(init.body as string);
-    expect(body.text).toContain('test-alarm');
-    expect(body.text).toContain('Test alarm description');
+    expect(body.text).toContain('Test alarm');
+    expect(JSON.stringify(body.blocks)).toContain(':small_blue_diamond: dev alarm: Test alarm');
+    expect(JSON.stringify(body.attachments)).toContain('Test alarm description');
+    expect(JSON.stringify(body.attachments)).toContain('bike4mind-dev-test-alarm');
   });
 
-  it('suppresses OK (resolved) transitions to reduce channel noise', async () => {
+  it('posts a resolved message when the alarm returns to OK', async () => {
     await handler(makeEvent(alarmPayload('OK')));
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.text).toBe(':white_check_mark: Resolved: Test alarm');
+    expect(body.blocks).toBeUndefined();
+    expect(body.attachments[0].color).toBe('#2EB67D');
+  });
+
+  it('posts to the alarms channel when SLACK_ALARMS_WEBHOOK_URL is set', async () => {
+    resource.SLACK_ALARMS_WEBHOOK_URL = { value: 'https://hooks.slack.example/alarms' };
+    await handler(makeEvent(alarmPayload('ALARM')));
+    expect(fetchMock.mock.calls[0][0]).toBe('https://hooks.slack.example/alarms');
   });
 
   it('suppresses INSUFFICIENT_DATA transitions', async () => {
@@ -72,6 +87,11 @@ describe('dlqAlarmToSlack handler', () => {
 
   it('skips records with non-JSON SNS message payloads', async () => {
     await handler(makeEvent('not-json'));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('skips JSON payloads that are not alarms', async () => {
+    await handler(makeEvent(JSON.stringify({ hello: 'world' })));
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

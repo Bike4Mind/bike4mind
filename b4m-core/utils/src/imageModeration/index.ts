@@ -1,8 +1,11 @@
 import {
   RekognitionClient,
   DetectModerationLabelsCommand,
+  ImageTooLargeException,
   InvalidImageFormatException,
+  InvalidParameterException,
 } from '@aws-sdk/client-rekognition';
+import { imageSize } from 'image-size';
 import { Logger } from '@bike4mind/observability';
 import { imagePixelCount, MAX_IMAGE_PIXELS } from '../imageResize';
 import { extractAnimationFrames } from './animatedFrames';
@@ -43,6 +46,9 @@ const MAX_ATTEMPTS = 3;
  */
 const MAX_INLINE_IMAGE_BYTES = 4.5 * 1024 * 1024;
 
+/** Rekognition rejects any image with a side over this, however few bytes it takes. */
+const MAX_REKOGNITION_DIMENSION_PX = 10000;
+
 /** Frames of one animated image moderated at once. */
 const FRAME_CONCURRENCY = 5;
 
@@ -81,7 +87,8 @@ export class ImageModerationBlockedError extends Error {
  * Deliberately distinct from both `ImageModerationBlockedError` (a confirmed explicit-
  * content match, with `labels`) and a bare `Error` (a transient/retryable failure like
  * throttling): this is a deterministic, non-retryable "we structurally cannot scan this"
- * outcome. The caller (`moderateUploadedFile`) maps it to a terminal 'blocked' verdict
+ * outcome. Also thrown when Rekognition rejects the image as invalid or too large (a validation
+ * error that no retry can fix). The caller (`moderateUploadedFile`) maps it to a terminal 'blocked' verdict
  * instead of rethrowing for S3 to redeliver forever - an unscannable image must fail closed
  * (not served) rather than get stuck 'pending' indefinitely.
  */
@@ -109,7 +116,7 @@ export class RekognitionImageModerationService implements ImageModerationService
   }
 
   /**
-   * Downscale buffers that exceed Rekognition's inline 5 MB limit so the check still runs.
+   * Downscale buffers that exceed Rekognition's inline 5 MB or 10000px limit so the check still runs.
    *
    * Split into two try/catches deliberately: a `Jimp.read()` failure means jimp
    * could not even decode the format - the SAME condition `transcodeToJpeg`'s catch below
@@ -130,10 +137,12 @@ export class RekognitionImageModerationService implements ImageModerationService
    * rather than silently skip, which is the safe direction.
    */
   private async fitForInlineDetection(bytes: Buffer): Promise<Buffer> {
-    if (bytes.length <= MAX_INLINE_IMAGE_BYTES) return bytes;
+    const dims = imageDimensions(bytes);
+    const tooTall = dims !== null && Math.max(dims.width, dims.height) > MAX_REKOGNITION_DIMENSION_PX;
+    if (bytes.length <= MAX_INLINE_IMAGE_BYTES && !tooTall) return bytes;
     // Reject a decompression bomb before jimp materializes the bitmap: a compressible file can
     // declare a huge canvas. Fail-closed (block) is the safe direction for moderation.
-    const pixels = imagePixelCount(bytes);
+    const pixels = dims && dims.width * dims.height;
     if (pixels !== null && pixels > MAX_IMAGE_PIXELS) {
       throw new UnsupportedImageFormatError(
         `Image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS}-pixel decode limit`
@@ -161,7 +170,7 @@ export class RekognitionImageModerationService implements ImageModerationService
         await image.resize({ w: Math.floor(width * scale), h: Math.floor(height * scale) }).getBuffer('image/jpeg')
       );
       this.logger.warn(
-        `[ImageModeration] image ${bytes.length}B exceeded inline limit; downscaled to ${resized.length}B for moderation`
+        `[ImageModeration] image ${bytes.length}B exceeded inline byte/dimension limit; downscaled to ${resized.length}B for moderation`
       );
       return resized;
     } catch (err) {
@@ -278,6 +287,11 @@ export class RekognitionImageModerationService implements ImageModerationService
           }
         }
 
+        if (err instanceof ImageTooLargeException || err instanceof InvalidParameterException) {
+          // Deterministic validation rejection: retrying cannot succeed and would leave the file pending.
+          throw new UnsupportedImageFormatError(`Rekognition rejected the image (${err.name}): ${err.message}`);
+        }
+
         lastError = err;
         this.logger.warn(
           `[ImageModeration] Rekognition attempt ${attempt}/${MAX_ATTEMPTS} failed: ${(err as Error).message}`
@@ -288,5 +302,14 @@ export class RekognitionImageModerationService implements ImageModerationService
     throw new Error(
       `[ImageModeration] moderation unavailable after ${MAX_ATTEMPTS} attempts: ${(lastError as Error)?.message}`
     );
+  }
+}
+
+function imageDimensions(bytes: Buffer): { width: number; height: number } | null {
+  try {
+    const { width, height } = imageSize(bytes);
+    return typeof width === 'number' && typeof height === 'number' ? { width, height } : null;
+  } catch {
+    return null;
   }
 }

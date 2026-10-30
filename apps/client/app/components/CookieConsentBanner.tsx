@@ -164,37 +164,38 @@ export function CookieConsentBanner() {
         flexWrap: 'wrap',
       }}
     >
-      {/* textColor is explicit because a bare body-sm resolves to text.tertiary, which this
-          theme defines at 50% alpha - 2.23:1 light and 4.35:1 dark on this surface, under WCAG AA. */}
-      <Typography level="body-sm" textColor="text.primary" sx={{ flex: 1, minWidth: 200 }}>
-        {managing ? (
-          <>
-            <Typography component="span" fontWeight="lg" textColor="inherit">
-              Cookie settings.
-            </Typography>{' '}
-            You are currently {current === 'granted' ? 'allowing' : 'declining'} {cookieKinds} cookies.
-            {current === 'granted' && ' Declining reloads the page so the change takes effect right away.'}
-          </>
-        ) : (
-          <>
-            {/* brand externalized */}
-            We use cookies to understand how you use {APP_NAME || 'this app'} and to improve your experience. By
-            clicking &ldquo;Accept&rdquo;, you consent to our use of {cookieKinds} cookies.
-          </>
-        )}
-      </Typography>
+      <Box sx={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+        <Typography level="title-sm" textColor="text.primary">
+          {managing ? 'Cookie settings' : 'Cookies'}
+        </Typography>
+        {/* text.tertiary clears WCAG AA on this surface: about 5.1:1 light and 7.5:1 dark. */}
+        <Typography level="body-sm" textColor="text.tertiary" sx={{ fontSize: '13px' }}>
+          {managing ? (
+            <>
+              You are currently {current === 'granted' ? 'allowing' : 'declining'} {cookieKinds} cookies.
+              {current === 'granted' && ' Declining reloads the page so the change takes effect right away.'}
+            </>
+          ) : (
+            <>
+              {/* brand externalized */}
+              We use cookies to understand how you use {APP_NAME || 'this app'} and to improve your experience. By
+              clicking &ldquo;Accept&rdquo;, you consent to our use of {cookieKinds} cookies.
+            </>
+          )}
+        </Typography>
+      </Box>
       <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
-        {/* Focus lands where a stray Enter does least: Cancel when managing, Decline on the first-run ask. */}
+        {/* Focus lands where a stray Enter does least: Close when managing, Decline on the first-run ask. */}
         {managing && (
           <Button
-            variant="plain"
+            variant="outlined"
             color="neutral"
             size="sm"
             onClick={closeSettings}
             ref={firstActionRef}
-            data-testid="cookie-consent-cancel-btn"
+            data-testid="cookie-consent-close-btn"
           >
-            Cancel
+            Close
           </Button>
         )}
         <Button

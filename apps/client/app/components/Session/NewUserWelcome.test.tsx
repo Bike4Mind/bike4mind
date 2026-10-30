@@ -4,6 +4,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ModelAnswerCost } from '@client/app/utils/creditEstimate';
+import type { SignupGrant } from '@bike4mind/common';
+import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 
 const { state, sendPrompt, setChatInputValue, logEvent } = vi.hoisted(() => ({
   state: {
@@ -14,6 +16,8 @@ const { state, sendPrompt, setChatInputValue, logEvent } = vi.hoisted(() => ({
     liveBalance: null as number | null,
     enforceCredits: true,
     hasComposer: true,
+    emailVerified: true,
+    signupGrant: undefined as SignupGrant | undefined,
     answerCost: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 } as ModelAnswerCost | null,
   },
   sendPrompt: vi.fn(() => Promise.resolve(true)),
@@ -22,7 +26,14 @@ const { state, sendPrompt, setChatInputValue, logEvent } = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'user-1', emailVerified: true, tags: [] } }),
+  useUser: () => ({
+    currentUser: {
+      id: 'user-1',
+      emailVerified: state.emailVerified,
+      signupGrant: state.signupGrant,
+      tags: state.emailVerified ? [] : [PENDING_FREE_CREDITS_TAG],
+    },
+  }),
 }));
 vi.mock('@client/app/hooks/data/sessions', () => ({
   useGetOwnSessions: () => ({
@@ -71,6 +82,8 @@ describe('NewUserWelcome', () => {
     state.liveBalance = null;
     state.enforceCredits = true;
     state.hasComposer = true;
+    state.emailVerified = true;
+    state.signupGrant = undefined;
     state.answerCost = { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 };
     sendPrompt.mockClear();
     setChatInputValue.mockClear();
@@ -155,6 +168,23 @@ describe('NewUserWelcome', () => {
     state.answerCost = null;
     renderWelcome();
     expect(screen.getByTestId('new-user-welcome-credits')).toBeInTheDocument();
+    expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
+  });
+
+  it('does not promise the maximum staged credits or answers before the tranche is assessed', () => {
+    state.balance = 0;
+    state.emailVerified = false;
+    state.signupGrant = {
+      stage: 'pending_email',
+      signupCredits: 10000,
+      unlockCredits: 20000,
+      creditsReleased: 0,
+      nextCondition: 'email_verification',
+    };
+    renderWelcome();
+    expect(screen.getByTestId('new-user-welcome-credits')).toHaveTextContent(
+      'Verify your email to unlock up to 10,000 credits now. The rest unlocks all at once when you subscribe, or all at once when you verify a card.'
+    );
     expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
   });
 

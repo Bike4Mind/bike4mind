@@ -35,6 +35,20 @@ export const FILES_READ_OR_WRITE_SCOPES: ApiKeyScope[] = [...FILES_READ_SCOPES, 
  */
 export const FILES_WRITE_OR_GENERATE_SCOPES: ApiKeyScope[] = [...FILES_WRITE_SCOPES, ApiKeyScope.AI_GENERATE];
 
+/**
+ * createFabFile's gate: a release-notes:write key may upload only an admin's What's New media there,
+ * which the handler narrows to; see isReleaseNotesOnlyUpload.
+ */
+export const FILES_WRITE_OR_RELEASE_NOTES_SCOPES: ApiKeyScope[] = [
+  ...FILES_WRITE_SCOPES,
+  ApiKeyScope.RELEASE_NOTES_WRITE,
+];
+
+/** True for an API key that reached a files door through release-notes:write rather than files:write. */
+export function isReleaseNotesOnlyUpload(req: ScopedRequest): boolean {
+  return !!req.apiKeyInfo && !holdsApiKeyScope(req, FILES_WRITE_SCOPES);
+}
+
 export const FILES_READ_OR_WRITE_OR_GENERATE_SCOPES: ApiKeyScope[] = [
   ...FILES_READ_OR_WRITE_SCOPES,
   ApiKeyScope.AI_GENERATE,

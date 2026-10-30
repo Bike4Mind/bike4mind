@@ -2,10 +2,17 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { PathAccessDenied } from './paths';
-import { MAX_FILE_READ_OUTPUT_CHARS, MAX_TOOL_OUTPUT_CHARS, outputCapFor, type ToolContext } from './types';
+import { MAX_TOOL_IMAGE_BYTES } from './toolImages';
+import {
+  MAX_FILE_READ_OUTPUT_CHARS,
+  MAX_TOOL_OUTPUT_CHARS,
+  outputCapFor,
+  type PreparedImage,
+  type ToolContext,
+} from './types';
 
 describe('file tools', () => {
   let root: string;
@@ -111,6 +118,90 @@ describe('file tools', () => {
     it('describes a binary file instead of dumping it', async () => {
       await writeFile(join(root, 'blob.dat'), Buffer.from([1, 0, 2, 3]));
       await expect(fileRead.run({ path: join(root, 'blob.dat') }, context)).resolves.toMatch(/binary file/);
+    });
+
+    describe('images', () => {
+      const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)]);
+      const gif = Buffer.concat([Buffer.from('GIF89a', 'latin1'), Buffer.alloc(32)]);
+
+      function imageContext(vision: boolean, prepared: PreparedImage | null) {
+        const shown: { bytes: Buffer; mimeType: string }[] = [];
+        const prepare = vi.fn((_bytes: Buffer, _type: string, _max: number) => prepared);
+        const reported: ToolContext = {
+          ...context,
+          images: { vision, prepare },
+          report: { image: (bytes: Buffer, mimeType: string) => shown.push({ bytes, mimeType }) } as never,
+        };
+        return { reported, shown, prepare };
+      }
+
+      it('shows the model a PNG, downscaled, and says what it was', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        const small = Buffer.from('small');
+        const { reported, shown, prepare } = imageContext(true, {
+          bytes: small,
+          mediaType: 'image/jpeg',
+          width: 1568,
+          height: 980,
+          sourceWidth: 2880,
+          sourceHeight: 1800,
+        });
+        const result = await fileRead.run({ path: join(root, 'shot.png') }, reported);
+        expect(shown).toEqual([{ bytes: small, mimeType: 'image/jpeg' }]);
+        expect(prepare.mock.calls[0][2]).toBe(MAX_TOOL_IMAGE_BYTES);
+        expect(result).toContain('is a PNG image');
+        expect(result).toContain('2880x1800, shown to you at 1568x980');
+        expect(result).toContain('in this reply only');
+      });
+
+      it('knows an image by its bytes, not its name', async () => {
+        await writeFile(join(root, 'fake.png'), 'not an image at all');
+        const { reported, shown } = imageContext(true, null);
+        await expect(fileRead.run({ path: join(root, 'fake.png') }, reported)).resolves.toBe('1\tnot an image at all');
+        expect(shown).toEqual([]);
+      });
+
+      it('says so instead of sending an image the model cannot read', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        const { reported, shown, prepare } = imageContext(false, null);
+        const result = await fileRead.run({ path: join(root, 'shot.png') }, reported);
+        expect(result).toMatch(/not shown: the current model does not accept images/);
+        expect(shown).toEqual([]);
+        expect(prepare).not.toHaveBeenCalled();
+      });
+
+      it('refuses a PNG that does not decode rather than send it', async () => {
+        await writeFile(join(root, 'broken.png'), png);
+        const { reported, shown } = imageContext(true, null);
+        await expect(fileRead.run({ path: join(root, 'broken.png') }, reported)).resolves.toMatch(
+          /not shown: it could not be decoded/
+        );
+        expect(shown).toEqual([]);
+      });
+
+      it('sends a GIF the decoder cannot read as it is, while it fits', async () => {
+        await writeFile(join(root, 'spinner.gif'), gif);
+        const { reported, shown } = imageContext(true, null);
+        await expect(fileRead.run({ path: join(root, 'spinner.gif') }, reported)).resolves.toMatch(/is a GIF image/);
+        expect(shown).toEqual([{ bytes: gif, mimeType: 'image/gif' }]);
+      });
+
+      it('describes an image in text outside a conversation', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        await expect(fileRead.run({ path: join(root, 'shot.png') }, context)).resolves.toMatch(
+          /is a PNG image .*not shown/
+        );
+      });
+
+      it('keeps the path check for an image', async () => {
+        const outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-outside-')));
+        await writeFile(join(outside, 'shot.png'), png);
+        const { reported, shown } = imageContext(true, null);
+        await expect(fileRead.run({ path: join(outside, 'shot.png') }, reported)).rejects.toBeInstanceOf(
+          PathAccessDenied
+        );
+        expect(shown).toEqual([]);
+      });
     });
 
     it('says when the offset is past the end', async () => {

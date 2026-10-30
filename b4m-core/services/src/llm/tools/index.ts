@@ -13,6 +13,7 @@ import { wolframAlphaTool } from './implementation/wolfram_alpha';
 import { mathTool } from './implementation/math';
 import { mermaidChartTool } from './implementation/mermaidChart';
 import { currentDateTimeTool } from './implementation/currentDateTime';
+import { currentModelDetailsTool } from './implementation/currentModelDetails';
 import { deepResearchTool } from './implementation/deepResearch';
 import { B4MLLMTools, PremiumOverlayToolName } from '@bike4mind/common';
 import { promptEnhancementTool } from './implementation/promptEnhancement';
@@ -116,6 +117,7 @@ export const b4mTools = {
   math_evaluate: mathTool,
   mermaid_chart: mermaidChartTool,
   current_datetime: currentDateTimeTool,
+  current_model_details: currentModelDetailsTool,
   deep_research: deepResearchTool,
   prompt_enhancement: promptEnhancementTool,
   recharts: rechartsTool,

@@ -1,4 +1,5 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
+import { resolveToolBillingOrganization } from '../../base/resolveToolBillingOrganization';
 import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
 import { hasLakeArms } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import {
@@ -385,7 +386,15 @@ async function recordEmbeddingUsage(
         costUsd: getEmbeddingModelCost(embeddingModel, queryTokens),
         source: 'system',
       },
-      { db: { usageEvents: context.db.usageEvents, adminSettings: context.db.adminSettings }, logger: context.logger }
+      {
+        db: {
+          usageEvents: context.db.usageEvents,
+          adminSettings: context.db.adminSettings,
+          ...context.db.operationalBilling,
+        },
+        billingCheck: context.operationalBillingCheck,
+        logger: context.logger,
+      }
     );
   } catch (recordErr) {
     context.logger.warn(`📚 [semantic] failed to record embedding usage for ${embeddingModel}:`, recordErr);
@@ -412,10 +421,7 @@ async function recordAllEmbeddingUsage(
 ): Promise<void> {
   let organization: Awaited<ReturnType<NonNullable<ToolContext['db']['organizations']>['findById']>> | null = null;
   try {
-    organization =
-      context.user.organizationId && context.db.organizations
-        ? await context.db.organizations.findById(context.user.organizationId)
-        : null;
+    organization = await resolveToolBillingOrganization(context);
   } catch (orgErr) {
     context.logger.warn('📚 [semantic] failed to resolve organization for embedding usage recording:', orgErr);
     return;

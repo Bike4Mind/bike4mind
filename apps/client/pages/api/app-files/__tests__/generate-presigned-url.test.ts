@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   s3ClientConfigs: [] as unknown[],
-  putObjectInputs: [] as { ContentType?: string; ContentLength?: number }[],
+  putObjectInputs: [] as { Key?: string; ContentType?: string; ContentLength?: number }[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -31,12 +31,10 @@ vi.mock('@server/utils/browserUploadUrl', () => ({
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import handler from '../generate-presigned-url';
 
-const invoke = (body: unknown) => {
+const invoke = async (body: unknown) => {
   const json = vi.fn();
-  return (handler as (req: unknown, res: unknown) => Promise<void>)(
-    { user: { id: 'u1' }, ability: {}, body },
-    { json }
-  );
+  await (handler as (req: unknown, res: unknown) => Promise<void>)({ user: { id: 'u1' }, ability: {}, body }, { json });
+  return json.mock.calls[0]?.[0] as { fileKey: string };
 };
 
 describe('POST /api/app-files/generate-presigned-url - S3 client config', () => {
@@ -44,6 +42,24 @@ describe('POST /api/app-files/generate-presigned-url - S3 client config', () => 
     // Without this, getSignedUrl signs in a checksum of the empty sign-time body, which then
     // mismatches whatever the browser actually PUTs.
     expect(h.s3ClientConfigs[0]).toMatchObject({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+  });
+});
+
+describe('POST /api/app-files/generate-presigned-url - key derivation', () => {
+  it('builds the upload key server-side and ignores a client path', async () => {
+    h.putObjectInputs.length = 0;
+    const res = await invoke({
+      fileName: 'logo.png',
+      mimeType: 'image/png',
+      fileSize: 10,
+      path: 'public/../assets',
+    });
+    const key = h.putObjectInputs.at(-1)?.Key;
+    expect(key).toMatch(/^[0-9a-f-]{36}\.png$/);
+    expect(key).not.toContain('public');
+    expect(key).not.toContain('..');
+    expect(key).not.toContain('/');
+    expect(res.fileKey).toBe(key);
   });
 });
 

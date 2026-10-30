@@ -15,7 +15,7 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockList = vi.fn();
 const mockIsStripeConfigured = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   isStripeConfigured: () => mockIsStripeConfigured(),
   stripe: { paymentIntents: { list: (...args: unknown[]) => mockList(...args) } },
 }));

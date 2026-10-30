@@ -33,7 +33,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: h.orgFindById } }));
 vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({ getGitHubLakeAppConfig: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
+  getGitHubLakeAppConfig: vi.fn(),
+}));
 // resolveConnectableLake is the REAL one: it is the connect route's org gate, and stubbing it would
 // leave the POST refusal for an appointed admin unproven.
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', async importOriginal => {

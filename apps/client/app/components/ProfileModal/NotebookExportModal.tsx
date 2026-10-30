@@ -18,7 +18,7 @@ import {
   Select,
   Option,
 } from '@mui/joy';
-import { CloudDownload } from '@mui/icons-material';
+import CloudDownload from '@mui/icons-material/CloudDownload';
 import { toast } from 'sonner';
 import { ContextHelpButton } from '@client/app/components/help';
 import { api } from '@client/app/contexts/ApiContext';

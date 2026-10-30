@@ -2,10 +2,10 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { createLlmReviewStep, runReviewWake } from '@bike4mind/server-utils/deepAgent/reviewWake';
-import { bridgeReviewToSession } from '@server/deepAgent/missionSessionBridge';
+import { bridgeReviewToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 
 /**
@@ -23,7 +23,8 @@ const ReviewInput = z.object({
   modelId: z.string().optional(),
 });
 
-const handler = baseApi()
+// SPA-only and not credit-metered, so it stays off the API-key surface.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: process.env.NODE_ENV === 'development' ? 30 : 10, windowMs: 60 * 1000 }))
   .post(async (req: Request, res: Response) => {
     const hasAccess =

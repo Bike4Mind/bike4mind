@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
+  Button,
   Typography,
   Radio,
   Stack,
@@ -14,13 +15,11 @@ import {
   IconButton,
   Tooltip,
 } from '@mui/joy';
-import {
-  Chat as ChatIcon,
-  Image as ImageIcon,
-  Videocam as VideoIcon,
-  StarRounded,
-  StarBorderRounded,
-} from '@mui/icons-material';
+import ChatIcon from '@mui/icons-material/Chat';
+import ImageIcon from '@mui/icons-material/Image';
+import VideoIcon from '@mui/icons-material/Videocam';
+import StarRounded from '@mui/icons-material/StarRounded';
+import StarBorderRounded from '@mui/icons-material/StarBorderRounded';
 import ClearIcon from '@mui/icons-material/Clear';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -719,6 +718,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     new Set(['Recommended', 'Favorites', 'OpenAI', 'Anthropic'])
   );
 
+  const [expandedOlderBackends, setExpandedOlderBackends] = useState<Set<string>>(new Set());
+
   // Memoize backend logos to prevent unnecessary re-renders and network requests
   const backendLogos = useMemo(() => {
     const logos: Record<string, string | null> = {};
@@ -764,120 +765,93 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     [favoriteModelIds, storedRecommendedIds, defaultModelId]
   );
 
-  const { filteredModels, hiddenPinnedModels, maxContextWindow, maxTokens, modelsByBackend, modelsByBackendAndType } =
-    useMemo(() => {
-      // Start with accessible models instead of all models
-      let availableModels: ModelInfo[] = [];
+  const { filteredModels, hiddenPinnedModels, maxContextWindow, maxTokens, modelsByBackend } = useMemo(() => {
+    // Start with accessible models instead of all models
+    let availableModels: ModelInfo[] = [];
 
-      if (showAllModels) {
-        availableModels = accessibleModels;
-      } else if (modelFilter === 'video') {
-        availableModels = accessibleVideoModels;
-      } else {
-        availableModels = imageModel ? accessibleImageModels : accessibleTextModels;
-      }
+    if (showAllModels) {
+      availableModels = accessibleModels;
+    } else if (modelFilter === 'video') {
+      availableModels = accessibleVideoModels;
+    } else {
+      availableModels = imageModel ? accessibleImageModels : accessibleTextModels;
+    }
 
-      // Filter out excluded models
-      const withoutExcluded = availableModels.filter(m => !EXCLUDED_MODEL_IDS.includes(m.id));
+    // Filter out excluded models
+    const withoutExcluded = availableModels.filter(m => !EXCLUDED_MODEL_IDS.includes(m.id));
 
-      // Filter out deprecated models (e.g., models with deprecationDate in the past)
-      const withoutDeprecated = withoutExcluded.filter(m => !isModelDeprecated(m));
+    // Filter out deprecated models (e.g., models with deprecationDate in the past)
+    const withoutDeprecated = withoutExcluded.filter(m => !isModelDeprecated(m));
 
-      // Bedrock profiles, dated snapshots and unavailable rows collapse to one usable row per model.
-      const deduped = dedupeModelsForPicker(withoutDeprecated, preferredModelIds, model);
+    // Bedrock profiles, dated snapshots and unavailable rows collapse to one usable row per model.
+    const deduped = dedupeModelsForPicker(withoutDeprecated, preferredModelIds, model);
 
-      const searchLower = debouncedSearchQuery.toLowerCase();
-      const matchesSearch = (candidate: ModelInfo) =>
-        !searchLower ||
-        candidate.name.toLowerCase().includes(searchLower) ||
-        !!candidate.description?.toLowerCase().includes(searchLower);
-      const searchFiltered = deduped.filter(matchesSearch);
+    const searchLower = debouncedSearchQuery.toLowerCase();
+    const matchesSearch = (candidate: ModelInfo) =>
+      !searchLower ||
+      candidate.name.toLowerCase().includes(searchLower) ||
+      !!candidate.description?.toLowerCase().includes(searchLower);
+    const searchFiltered = deduped.filter(matchesSearch);
 
-      // Pinned sections can still show their exact ids when an enabled active twin wins the
-      // provider row. Keep their own access, availability and search filters in step.
-      const hiddenPinnedModels = withoutDeprecated.filter(
-        candidate =>
-          preferredModelIds.has(String(candidate.id)) &&
-          !deduped.includes(candidate) &&
-          (!candidate.disabled || candidate.id === model) &&
-          matchesSearch(candidate)
-      );
+    // Pinned sections can still show their exact ids when an enabled active twin wins the
+    // provider row. Keep their own access, availability and search filters in step.
+    const hiddenPinnedModels = withoutDeprecated.filter(
+      candidate =>
+        preferredModelIds.has(String(candidate.id)) &&
+        !deduped.includes(candidate) &&
+        (!candidate.disabled || candidate.id === model) &&
+        matchesSearch(candidate)
+    );
 
-      // Group models by backend for accordion view
-      const grouped = searchFiltered.reduce(
-        (acc, model) => {
-          const backend = getModelBackend(model);
-          if (!acc[backend]) {
-            acc[backend] = [];
-          }
-          acc[backend].push(model);
-          return acc;
-        },
-        {} as Record<string, ModelInfo[]>
-      );
+    // Group models by backend for accordion view
+    const grouped = searchFiltered.reduce(
+      (acc, model) => {
+        const backend = getModelBackend(model);
+        if (!acc[backend]) {
+          acc[backend] = [];
+        }
+        acc[backend].push(model);
+        return acc;
+      },
+      {} as Record<string, ModelInfo[]>
+    );
 
-      // Sort within each backend by curated rank, then recency (see modelRanking.ts)
-      Object.keys(grouped).forEach(backend => {
-        grouped[backend] = sortModelsForPicker(grouped[backend]);
-      });
+    // Sort within each backend by curated rank, then recency (see modelRanking.ts)
+    Object.keys(grouped).forEach(backend => {
+      grouped[backend] = sortModelsForPicker(grouped[backend]);
+    });
 
-      // Group models by backend and then by type for "All Models" view
-      const groupedByBackendAndType = searchFiltered.reduce(
-        (acc, model) => {
-          const backend = getModelBackend(model);
-          // Ensure consistent type categorization
-          const type = model.type === 'image' ? 'image' : model.type === 'video' ? 'video' : 'text';
+    // Flatten the sorted models
+    const sorted = sortBackendsByPriority(Object.keys(grouped)).flatMap(backend => grouped[backend]);
 
-          if (!acc[backend]) {
-            acc[backend] = { text: [], image: [], video: [] };
-          }
+    // Find maximum values
+    let maxCtx = 0;
+    let maxTok = 0;
 
-          // Only add the model to the appropriate type section
-          acc[backend][type].push(model);
-          return acc;
-        },
-        {} as Record<string, { text: ModelInfo[]; image: ModelInfo[]; video: ModelInfo[] }>
-      );
+    searchFiltered.forEach(m => {
+      if (m.contextWindow > maxCtx) maxCtx = m.contextWindow;
+      if (m.max_tokens > maxTok) maxTok = m.max_tokens;
+    });
 
-      // Sort models within each backend and type by capability
-      Object.keys(groupedByBackendAndType).forEach(backend => {
-        groupedByBackendAndType[backend].text = sortModelsForPicker(groupedByBackendAndType[backend].text);
-        groupedByBackendAndType[backend].image = sortModelsForPicker(groupedByBackendAndType[backend].image);
-        groupedByBackendAndType[backend].video = sortModelsForPicker(groupedByBackendAndType[backend].video);
-      });
-
-      // Flatten the sorted models
-      const sorted = sortBackendsByPriority(Object.keys(grouped)).flatMap(backend => grouped[backend]);
-
-      // Find maximum values
-      let maxCtx = 0;
-      let maxTok = 0;
-
-      searchFiltered.forEach(m => {
-        if (m.contextWindow > maxCtx) maxCtx = m.contextWindow;
-        if (m.max_tokens > maxTok) maxTok = m.max_tokens;
-      });
-
-      return {
-        filteredModels: sorted,
-        hiddenPinnedModels,
-        maxContextWindow: maxCtx,
-        maxTokens: maxTok,
-        modelsByBackend: grouped,
-        modelsByBackendAndType: groupedByBackendAndType,
-      };
-    }, [
-      imageModel,
-      accessibleModels,
-      accessibleTextModels,
-      accessibleImageModels,
-      accessibleVideoModels,
-      modelFilter,
-      debouncedSearchQuery,
-      showAllModels,
-      preferredModelIds,
-      model,
-    ]);
+    return {
+      filteredModels: sorted,
+      hiddenPinnedModels,
+      maxContextWindow: maxCtx,
+      maxTokens: maxTok,
+      modelsByBackend: grouped,
+    };
+  }, [
+    imageModel,
+    accessibleModels,
+    accessibleTextModels,
+    accessibleImageModels,
+    accessibleVideoModels,
+    modelFilter,
+    debouncedSearchQuery,
+    showAllModels,
+    preferredModelIds,
+    model,
+  ]);
 
   // Auto-expand the selected model's backend when it changes
   useEffect(() => {
@@ -1138,6 +1112,87 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           </Box>
           {renderModelCards(bedrock)}
         </Box>
+      </Box>
+    );
+  };
+
+  const renderProviderTypes = (backend: string, cards: ModelInfo[], section: string) => (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {(
+        [
+          ['text', 'Text Models', ChatIcon],
+          ['image', 'Image Generation Models', ImageIcon],
+          ['video', 'Video Generation Models', VideoIcon],
+        ] as const
+      ).map(([type, label, Icon]) => {
+        const typeModels = cards.filter(candidate =>
+          type === 'text' ? candidate.type !== 'image' && candidate.type !== 'video' : candidate.type === type
+        );
+        if (typeModels.length === 0) return null;
+        return (
+          <Box key={type}>
+            <Typography
+              level="h4"
+              sx={{
+                color: 'text.primary50',
+                fontSize: '14px',
+                fontWeight: '400',
+                mt: '8px',
+                ml: '8px',
+                mb: 2,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+              }}
+            >
+              <Icon sx={{ fontSize: '14px', color: 'text.primary50' }} />
+              {label}
+            </Typography>
+            {renderProviderModels(backend, typeModels, section === 'current' ? type : `${section}-${type}`)}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+
+  const renderProviderContent = (backend: string) => {
+    const cards = modelsByBackend[backend];
+    const currentModels = cards.filter(candidate => !candidate.isSuperseded);
+    const olderModels = cards.filter(candidate => candidate.isSuperseded);
+    const olderExpanded = !!debouncedSearchQuery || expandedOlderBackends.has(backend);
+    const selectedOlderModels = olderModels.filter(candidate => candidate.id === model);
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {currentModels.length > 0 && renderProviderTypes(backend, currentModels, 'current')}
+        {olderModels.length > 0 && (
+          <Box data-testid={`older-models-section-${backend}`}>
+            <Button
+              variant="plain"
+              color="neutral"
+              data-testid={`older-models-toggle-${backend}`}
+              disabled={!!debouncedSearchQuery}
+              aria-expanded={olderExpanded}
+              aria-controls={`older-models-content-${backend}`}
+              endDecorator={<ExpandMoreIcon sx={{ transform: olderExpanded ? 'rotate(180deg)' : 'none' }} />}
+              onClick={() =>
+                setExpandedOlderBackends(previous => {
+                  const next = new Set(previous);
+                  if (next.has(backend)) next.delete(backend);
+                  else next.add(backend);
+                  return next;
+                })
+              }
+            >
+              Older models ({olderModels.length})
+            </Button>
+            <Box id={`older-models-content-${backend}`} hidden={!olderExpanded}>
+              {olderExpanded && renderProviderTypes(backend, olderModels, 'older')}
+            </Box>
+            {!olderExpanded && selectedOlderModels.length > 0 && (
+              <Box sx={{ mt: 2 }}>{renderModelCards(selectedOlderModels)}</Box>
+            )}
+          </Box>
+        )}
       </Box>
     );
   };
@@ -1556,88 +1611,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   }}
                 />
               </AccordionSummary>
-              <AccordionDetails>
-                {expandedBackends.has(backend) &&
-                  (modelsByBackendAndType[backend] ? (
-                    // Always show text/image sections within each backend
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      {/* Text Models Section */}
-                      {modelsByBackendAndType[backend].text && modelsByBackendAndType[backend].text.length > 0 && (
-                        <Box>
-                          <Typography
-                            level="h4"
-                            sx={{
-                              color: 'text.primary50',
-                              fontSize: '14px',
-                              fontWeight: '400',
-                              mt: '8px',
-                              ml: '8px',
-                              mb: 2,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 1,
-                            }}
-                          >
-                            <ChatIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
-                            Text Models
-                          </Typography>
-                          {renderProviderModels(backend, modelsByBackendAndType[backend].text, 'text')}
-                        </Box>
-                      )}
-
-                      {/* Image Generation Models Section */}
-                      {modelsByBackendAndType[backend].image && modelsByBackendAndType[backend].image.length > 0 && (
-                        <Box>
-                          <Typography
-                            level="h4"
-                            sx={{
-                              color: 'text.primary50',
-                              fontSize: '14px',
-                              fontWeight: '400',
-                              mt: '8px',
-                              ml: '8px',
-                              mb: 2,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 1,
-                            }}
-                          >
-                            <ImageIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
-                            Image Generation Models
-                          </Typography>
-                          {renderProviderModels(backend, modelsByBackendAndType[backend].image, 'image')}
-                        </Box>
-                      )}
-
-                      {/* Video Generation Models Section */}
-                      {modelsByBackendAndType[backend].video && modelsByBackendAndType[backend].video.length > 0 && (
-                        <Box>
-                          <Typography
-                            level="h4"
-                            sx={{
-                              color: 'text.primary50',
-                              fontSize: '14px',
-                              fontWeight: '400',
-                              mt: '8px',
-                              ml: '8px',
-                              mb: 2,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 1,
-                            }}
-                          >
-                            <VideoIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
-                            Video Generation Models
-                          </Typography>
-                          {renderProviderModels(backend, modelsByBackendAndType[backend].video, 'video')}
-                        </Box>
-                      )}
-                    </Box>
-                  ) : (
-                    // Fallback to normal single-type view if grouping data is not available
-                    renderProviderModels(backend, modelsByBackend[backend], 'all')
-                  ))}
-              </AccordionDetails>
+              <AccordionDetails>{expandedBackends.has(backend) && renderProviderContent(backend)}</AccordionDetails>
             </Accordion>
           ))}
         </Box>

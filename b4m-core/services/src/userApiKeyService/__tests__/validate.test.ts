@@ -534,3 +534,27 @@ describe('validateUserApiKey - SHA-256 digest fast path', () => {
     expect(result).not.toHaveProperty('keyHash');
   });
 });
+
+describe('validation admin provisioning provenance', () => {
+  it('projects the persisted admin actor on raw-key and by-id verification', async () => {
+    const { key, adapters, getStored } = await mintLegacyKey();
+    const stored = getStored()!;
+    stored.metadata.createdByUserId = 'admin-provisioner';
+    expect(await validateUserApiKey(key, adapters)).toMatchObject({
+      isValid: true,
+      createdByUserId: 'admin-provisioner',
+    });
+    const byIdAdapters = {
+      db: { userApiKeys: { ...adapters.db.userApiKeys, findById: vi.fn().mockResolvedValue(stored) } },
+    };
+    expect(await validateUserApiKeyById(stored.id, byIdAdapters)).toMatchObject({
+      isValid: true,
+      createdByUserId: 'admin-provisioner',
+    });
+  });
+
+  it('leaves self-service keys without an admin exemption', async () => {
+    const { key, adapters } = await mintLegacyKey();
+    expect((await validateUserApiKey(key, adapters)).createdByUserId).toBeUndefined();
+  });
+});

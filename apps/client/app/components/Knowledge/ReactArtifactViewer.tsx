@@ -7,6 +7,8 @@ import {
   Alert,
   CircularProgress,
   Tabs,
+  TabList,
+  Tab,
   TabPanel,
   Stack,
   Button,
@@ -14,7 +16,9 @@ import {
   ModalDialog,
   ModalClose,
   Divider,
+  Tooltip,
   useTheme,
+  type ButtonProps,
 } from '@mui/joy';
 import { type ReactArtifact } from '@bike4mind/common';
 import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
@@ -26,13 +30,11 @@ import 'prismjs/components/prism-javascript';
 import 'prismjs/components/prism-jsx';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-tsx';
-import {
-  Save as SaveIcon,
-  Undo as UndoIcon,
-  Lock as LockIcon,
-  LockOpen as UnlockIcon,
-  Warning as WarningIcon,
-} from '@mui/icons-material';
+import SaveIcon from '@mui/icons-material/Save';
+import UndoIcon from '@mui/icons-material/Undo';
+import LockIcon from '@mui/icons-material/Lock';
+import UnlockIcon from '@mui/icons-material/LockOpen';
+import WarningIcon from '@mui/icons-material/Warning';
 import { gray, whiteAlpha } from '@client/app/utils/themes/colors';
 import { ArtifactVersionDropdown } from '@client/app/components/artifacts';
 import { toast } from 'sonner';
@@ -48,13 +50,31 @@ import {
 import { getSelectedArtifactVersion, setSelectedArtifactVersion } from '@client/app/hooks/useSessionLayout';
 import { useExperimentalFeatureSettings } from '@client/app/hooks/data/settings';
 import { useReactArtifactSandbox } from '@client/app/hooks/useReactArtifactSandbox';
+import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
 
 interface ReactArtifactViewerProps {
   artifact: ReactArtifact;
+  /**
+   * Multi-file role from the reply. An entry previews with its sibling files and lists them as
+   * read-only file tabs; a sibling opens as read-only code, since it cannot render on its own.
+   */
+  group?: ReactArtifactGroupRole;
   onError?: (error: string) => void;
   onSave?: (updatedContent: string) => Promise<any>;
   onSaveSuccess?: () => void;
 }
+
+// At or below this toolbar width (the side panel beside the chat), action buttons drop their labels.
+const COMPACT_TOOLBAR_MAX_WIDTH_PX = 720;
+
+/** A toolbar action whose label collapses to its icon on a narrow toolbar; the tooltip and accessible name keep it. */
+const ToolbarButton = ({ label, ...props }: ButtonProps & { label: string }) => (
+  <Tooltip title={label} disableInteractive>
+    <Button size="sm" aria-label={label} {...props}>
+      <span className="react-artifact-viewer-toolbar-label">{label}</span>
+    </Button>
+  </Tooltip>
+);
 
 const DisabledPreviewMessage = () => (
   <Alert color="warning" sx={{ m: 2, height: '100%', display: 'flex', alignItems: 'center' }}>
@@ -71,8 +91,22 @@ const DisabledPreviewMessage = () => (
   </Alert>
 );
 
-const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onError, onSave, onSaveSuccess }) => {
+const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({
+  artifact,
+  group,
+  onError,
+  onSave,
+  onSaveSuccess,
+}) => {
   const theme = useTheme();
+  const isSibling = group?.role === 'sibling';
+  const entryGroup = group?.role === 'entry' ? group : undefined;
+  const siblingFiles = entryGroup?.siblings ?? [];
+  const canEdit = !!onSave && !isSibling;
+  // 0 is the entry's own (editable) code; i > 0 is siblingFiles[i - 1], shown read-only.
+  const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+  const selectedSibling = selectedFileIndex > 0 ? siblingFiles[selectedFileIndex - 1] : undefined;
+  const selectedSiblingSource = selectedSibling ? entryGroup?.files[selectedSibling.identifier] : undefined;
   const [error, setError] = useState<string | null>(null);
   // Check if React viewer is enabled via admin settings
   const { data: experimentalSettingsWithDefaults } = useExperimentalFeatureSettings();
@@ -210,14 +244,21 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
   // Check if this is a legacy artifact ID
   const isLegacyArtifact = !artifact.id.startsWith('artifact_');
 
+  // The host's optimistic save update keeps the pre-save artifact.version, so the version a save
+  // returned stands for as long as the artifact still carries the content that was saved.
+  const [lastSave, setLastSave] = useState<{ version: number; content: string } | null>(null);
+
   // Update currentVersion when artifact changes (but not when viewing a different version)
   useEffect(() => {
-    const artifactVersion = artifact.version;
+    const artifactVersion =
+      lastSave && lastSave.content === artifact.content
+        ? Math.max(lastSave.version, artifact.version ?? 0)
+        : artifact.version;
     // Don't reset version if user is actively viewing a different version
     if (artifactVersion && artifactVersion !== currentVersion && !isViewingDifferentVersion) {
       setCurrentVersion(artifactVersion);
     }
-  }, [artifact, currentVersion, isViewingDifferentVersion]);
+  }, [artifact, currentVersion, isViewingDifferentVersion, lastSave]);
 
   // Update editableCode when artifact content changes (but not when in edit mode or viewing a different version)
   useEffect(() => {
@@ -248,10 +289,11 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
     }
   }, [isEditMode]);
 
-  // Validate the artifact content
+  // Validate the artifact content. A sibling is a module, not a component, so it needs no default export.
   const validation = useMemo(() => {
+    if (isSibling) return { isValid: true, errors: [] };
     return validateArtifactContent(artifact.type, editableCode);
-  }, [editableCode, artifact.type]);
+  }, [editableCode, artifact.type, isSibling]);
 
   useEffect(() => {
     if (!validation.isValid) {
@@ -268,27 +310,29 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
 
   const memoizedDependencies = useMemo(() => {
     const metadataDeps = artifact.metadata?.dependencies || [];
+    // The sandbox loads every file's npm imports up front, not just the entry's.
+    const groupDeps = entryGroup?.dependencies ?? [];
 
     const codeDeps = codeImportDependencies(editableCode);
 
     // Combine and deduplicate (avoid spread on Set for TS compatibility)
-    const combinedDeps = [...metadataDeps, ...codeDeps];
+    const combinedDeps = [...metadataDeps, ...groupDeps, ...codeDeps];
     const uniqueDepsSet = new Set(combinedDeps);
     const allDeps = Array.from(uniqueDepsSet);
     return allDeps;
-  }, [artifact.metadata?.dependencies, editableCode]);
+  }, [artifact.metadata?.dependencies, entryGroup?.dependencies, editableCode]);
 
   // Debounce preview input: feed code+deps to the sandbox 1s after edits settle (matches the
   // prior blob-regeneration debounce), only when the viewer is enabled and the code is valid.
   const [preview, setPreview] = useState<{ code: string; deps: string[] } | null>(null);
   useEffect(() => {
-    if (!validation.isValid || !isReactViewerEnabled) {
+    if (!validation.isValid || !isReactViewerEnabled || isSibling) {
       setPreview(null);
       return;
     }
     const timeoutId = setTimeout(() => setPreview({ code: editableCode, deps: memoizedDependencies }), 1000);
     return () => clearTimeout(timeoutId);
-  }, [editableCode, memoizedDependencies, validation.isValid, isReactViewerEnabled]);
+  }, [editableCode, memoizedDependencies, validation.isValid, isReactViewerEnabled, isSibling]);
 
   // React artifacts render in the dedicated /api/react-artifact-sandbox route - its own
   // per-route CSP carries 'unsafe-eval', so the app CSP stays clean. The iframe
@@ -300,7 +344,7 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
     src: reactSandboxSrc,
     isLoading: reactPreviewLoading,
     error: reactRuntimeError,
-  } = useReactArtifactSandbox(preview?.code ?? null, preview?.deps ?? []);
+  } = useReactArtifactSandbox(preview?.code ?? null, preview?.deps ?? [], entryGroup?.files);
   useEffect(() => {
     if (reactRuntimeError) onError?.(reactRuntimeError);
   }, [reactRuntimeError, onError]);
@@ -338,28 +382,32 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
     }
 
     setIsSaving(true);
+    const savedCode = editableCode;
     try {
-      const result = await onSave(editableCode);
+      const result = await onSave(savedCode);
       // Don't update editableCode here; the parent re-renders with the updated artifact.
 
-      // Update the current version if a new version was created.
+      // Select the saved version, which is now the latest, even when an older one was being viewed.
       // Handle both {version: number} and {artifact: {version: number}} response formats
       const newVersion = result?.artifact?.version ?? result?.version;
-      if (newVersion && typeof newVersion === 'number' && newVersion !== currentVersion) {
+      if (newVersion && typeof newVersion === 'number') {
+        setLastSave({ version: newVersion, content: savedCode });
         setCurrentVersion(newVersion);
-        saveArtifactVersionToLocalStorage(artifact.id, newVersion, editableCode);
+        setIsViewingDifferentVersion(false);
+        setSelectedArtifactVersion(artifact.id, undefined);
+        saveArtifactVersionToLocalStorage(artifact.id, newVersion, savedCode);
       }
 
       saveArtifactToLocalStorage({
         id: artifact.id,
         type: artifact.type,
         title: artifact.title,
-        content: editableCode,
+        content: savedCode,
         version: newVersion || currentVersion,
         metadata: artifact.metadata,
       });
 
-      setHasChanges(false);
+      setOriginalCode(savedCode);
 
       onSaveSuccess?.();
     } catch (error) {
@@ -428,7 +476,7 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
           minHeight: 0,
         }}
       >
-        {isLegacyArtifact && (
+        {isLegacyArtifact && !isSibling && (
           <Alert color="warning" sx={{ mx: 2, mt: 2, mb: 1 }}>
             <Typography level="body-sm">
               This is a legacy artifact. It will be migrated to the new system when you save it.
@@ -462,7 +510,7 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
         )}
         <Tabs
           className="react-artifact-viewer-tabs"
-          value={activeTab}
+          value={isSibling ? tabPanelValues.code : activeTab}
           onChange={(_event: React.SyntheticEvent | null, newValue: number | string | null) => {
             if (newValue !== null) {
               setActiveTab(newValue as number);
@@ -482,65 +530,93 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
           }}
         >
           <Box
+            className="react-artifact-viewer-header"
+            data-testid="react-artifact-viewer-header"
             sx={{
               borderBottom: '1px solid',
               borderColor: 'divider',
               px: 2,
               py: 1,
               display: 'flex',
+              flexWrap: 'wrap',
               justifyContent: 'space-between',
               alignItems: 'center',
+              gap: 1,
               flexShrink: 0,
+              containerType: 'inline-size',
+              // globals.css sets `min-width: 0` on everything, so without this the tabs and buttons
+              // squeeze into each other instead of wrapping onto another row.
+              '& > .react-artifact-viewer-tab-list, & .react-artifact-viewer-toolbar > *': { flexShrink: 0 },
+              [`@container (max-width: ${COMPACT_TOOLBAR_MAX_WIDTH_PX}px)`]: {
+                '& .react-artifact-viewer-toolbar-label, & .artifact-version-dropdown-history-text, & .artifact-version-dropdown-label':
+                  { display: 'none' },
+                '& .react-artifact-viewer-toolbar .MuiButton-root': { '--Button-gap': '0px' },
+                '& .artifact-version-dropdown-button': { minWidth: 'auto' },
+              },
             }}
           >
-            <ArtifactModeTabs
-              className="react-artifact-viewer-tab-list"
-              previewValue={tabPanelValues.preview}
-              codeValue={tabPanelValues.code}
-              previewTestId="react-artifact-preview-tab"
-              codeTestId="react-artifact-code-tab"
-            />
+            {group?.role === 'sibling' ? (
+              <Typography
+                level="body-sm"
+                startDecorator={<LockIcon sx={{ fontSize: 16 }} />}
+                sx={{ color: 'text.tertiary' }}
+                data-testid="react-artifact-viewer-used-by-label"
+              >
+                Used by {group.entryTitle}
+              </Typography>
+            ) : (
+              <ArtifactModeTabs
+                className="react-artifact-viewer-tab-list"
+                previewValue={tabPanelValues.preview}
+                codeValue={tabPanelValues.code}
+                previewTestId="react-artifact-preview-tab"
+                codeTestId="react-artifact-code-tab"
+              />
+            )}
 
-            <Stack className="react-artifact-viewer-toolbar" direction="row" spacing={1} alignItems="center">
-              {onSave && !isEditMode && (
-                <Button
+            <Stack
+              className="react-artifact-viewer-toolbar"
+              direction="row"
+              spacing={1}
+              useFlexGap
+              flexWrap="wrap"
+              alignItems="center"
+              justifyContent="flex-end"
+              sx={{ ml: 'auto' }}
+            >
+              {canEdit && !isEditMode && (
+                <ToolbarButton
                   className="react-artifact-viewer-edit-toggle view-only"
-                  size="sm"
+                  label="Enable Edit Mode"
                   variant="outlined"
                   color="neutral"
                   startDecorator={<UnlockIcon />}
                   onClick={() => setShowEditWarningModal(true)}
-                >
-                  Enable Edit Mode
-                </Button>
+                />
               )}
 
-              {onSave && isEditMode && (
+              {canEdit && isEditMode && (
                 <>
-                  <Button
+                  <ToolbarButton
                     className="react-artifact-viewer-edit-toggle editing"
-                    size="sm"
+                    label="Lock"
                     variant="outlined"
                     color="warning"
                     startDecorator={<LockIcon />}
                     onClick={() => setIsEditMode(false)}
-                  >
-                    Lock
-                  </Button>
-                  <Button
+                  />
+                  <ToolbarButton
                     className="react-artifact-viewer-revert-button"
-                    size="sm"
+                    label="Revert"
                     variant="outlined"
                     color="neutral"
                     startDecorator={<UndoIcon />}
                     onClick={handleRevert}
                     disabled={!hasChanges}
-                  >
-                    Revert
-                  </Button>
-                  <Button
+                  />
+                  <ToolbarButton
                     className="react-artifact-viewer-save-button"
-                    size="sm"
+                    label={!isPersisted ? 'Save to Database' : 'Save'}
                     variant="solid"
                     color={!isPersisted ? 'success' : 'primary'}
                     startDecorator={<SaveIcon />}
@@ -551,9 +627,7 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
                     }}
                     disabled={(!hasChanges && isPersisted) || isSaving}
                     loading={isSaving}
-                  >
-                    {!isPersisted ? 'Save to Database' : 'Save'}
-                  </Button>
+                  />
                 </>
               )}
 
@@ -566,7 +640,7 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
           </Box>
 
           {/* Status bar */}
-          {onSave && (hasChanges || !isPersisted || isViewingDifferentVersion) && (
+          {canEdit && (hasChanges || !isPersisted || isViewingDifferentVersion) && (
             <Box
               sx={{
                 px: 2,
@@ -602,6 +676,39 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
                   </Typography>
                 )}
               </Stack>
+            </Box>
+          )}
+
+          {siblingFiles.length > 0 && activeTab === tabPanelValues.code && (
+            <Box
+              className="react-artifact-viewer-file-tabs"
+              data-testid="react-artifact-file-tabs"
+              sx={{ px: 2, borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0, overflowX: 'auto' }}
+            >
+              {/* Picks which file the Code panel shows; Preview always runs the entry with every file. */}
+              <Tabs
+                value={selectedFileIndex}
+                onChange={(_event, value) => setSelectedFileIndex(typeof value === 'number' ? value : 0)}
+                sx={{ bgcolor: 'transparent' }}
+              >
+                <TabList size="sm" sx={{ minHeight: 'auto' }}>
+                  <Tab value={0} data-testid="react-artifact-entry-file-tab" sx={{ py: 0.5, minHeight: 'auto' }}>
+                    <Typography level="body-sm">{artifact.title}</Typography>
+                  </Tab>
+                  {siblingFiles.map((file, index) => (
+                    <Tab
+                      key={file.identifier}
+                      value={index + 1}
+                      data-testid={`react-artifact-sibling-file-tab-${file.identifier}`}
+                      sx={{ py: 0.5, minHeight: 'auto' }}
+                    >
+                      <Typography level="body-sm" startDecorator={<LockIcon sx={{ fontSize: 14 }} />}>
+                        {file.title}
+                      </Typography>
+                    </Tab>
+                  ))}
+                </TabList>
+              </Tabs>
             </Box>
           )}
 
@@ -670,6 +777,7 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
           >
             <Box
               className="react-artifact-viewer-code-container"
+              data-testid="react-artifact-code-panel"
               sx={{
                 flex: 1,
                 position: 'absolute',
@@ -695,7 +803,14 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
                 },
               }}
             >
-              {onSave && isEditMode ? (
+              {selectedSiblingSource !== undefined ? (
+                <HighlightedCode
+                  code={selectedSiblingSource}
+                  language="typescript"
+                  customStyle={{ minHeight: '100%' }}
+                  showLineNumbers
+                />
+              ) : canEdit && isEditMode ? (
                 <Box
                   sx={{
                     width: '100%',

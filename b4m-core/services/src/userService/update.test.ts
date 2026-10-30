@@ -11,6 +11,7 @@ import {
   ConflictError,
   IUserDocument,
   IUserRepository,
+  RESERVED_USERNAME_MESSAGE,
   USERNAME_RULES_MESSAGE,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
@@ -444,7 +445,7 @@ describe('updateUser', () => {
     ).rejects.toThrow('User not found');
   });
 
-  it('strips `tags` from a non-admin self-update — cannot self-assign access-control tags (#9342)', async () => {
+  it('strips `tags` from a non-admin self-update \u2014 cannot self-assign access-control tags (#9342)', async () => {
     // A non-admin updating their own profile must not be able to set `tags`, which
     // feed the entitlement registry (tag->key passthrough) and dev-bypass gates.
     // `tags` was removed from updateUserSchema, so secureParameters drops it here.
@@ -491,7 +492,7 @@ describe('updateUser', () => {
   });
 
   it('strips `photoUrl` from a self-update - cannot point the profile photo at a foreign S3 key', async () => {
-    // photoUrl is an S3 key that upload-photo.ts later dereferences for deletion. A self-set
+    // photoUrl is an S3 key that confirm-photo.ts later dereferences for deletion. A self-set
     // value could target a file the caller does not own; it was removed from updateUserSchema,
     // so secureParameters drops it here while leaving any pre-existing value untouched.
     const user = {
@@ -713,6 +714,69 @@ describe('updateUser username changes', () => {
 
     expect(repository.existsOtherUserWithUsername).not.toHaveBeenCalled();
     expect(repository.update).toHaveBeenCalledTimes(1);
+  });
+
+  describe('reserved username prefix', () => {
+    const syntheticDomains = (domains: string) => ({
+      findBySettingName: vi.fn(async (name: string) =>
+        name === 'syntheticUserEmailDomains' ? { settingValue: domains } : null
+      ),
+    });
+    const runWith = (
+      repository: ReturnType<typeof buildRepository>,
+      params: UpdateUserParameters,
+      adminSettings?: ReturnType<typeof syntheticDomains>
+    ) =>
+      updateUser('user-name', params, {
+        db: { users: repository as unknown as IUserRepository, adminSettings: adminSettings as never },
+      });
+
+    it.each(['persona-me', 'PERSONA-me', 'p\u00e9rsona-me', '\u3164persona-me'])(
+      'rejects a change to %j with a 400 and writes nothing',
+      async username => {
+        const repository = buildRepository(buildUser('oldname'));
+
+        const error = await runWith(repository, { username }, syntheticDomains('')).catch((caught: unknown) => caught);
+
+        expect(error).toBeInstanceOf(BadRequestError);
+        expect((error as BadRequestError).message).toBe(RESERVED_USERNAME_MESSAGE);
+        expect(repository.update).not.toHaveBeenCalled();
+      }
+    );
+
+    it('rejects it when the route supplies no settings to check', async () => {
+      const repository = buildRepository({ ...buildUser('oldname'), email: 'me@test.example', emailVerified: true });
+
+      await expect(run(repository, { username: 'persona-me' })).rejects.toThrow(RESERVED_USERNAME_MESSAGE);
+    });
+
+    it('allows it for a verified email on a configured synthetic test domain', async () => {
+      const repository = buildRepository({
+        ...buildUser('persona-old'),
+        email: 'me@test.example',
+        emailVerified: true,
+      });
+
+      await runWith(repository, { username: 'persona-new' }, syntheticDomains('test.example'));
+
+      expect(repository.update.mock.calls[0][0].username).toBe('persona-new');
+    });
+
+    it('rejects it for an unverified email on a synthetic test domain', async () => {
+      const repository = buildRepository({ ...buildUser('oldname'), email: 'me@test.example', emailVerified: false });
+
+      await expect(runWith(repository, { username: 'persona-new' }, syntheticDomains('test.example'))).rejects.toThrow(
+        RESERVED_USERNAME_MESSAGE
+      );
+    });
+
+    it('leaves an existing reserved username alone on an unrelated save', async () => {
+      const repository = buildRepository(buildUser('persona-legacy'));
+
+      await run(repository, { username: 'persona-legacy', name: 'Renamed' });
+
+      expect(repository.update).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

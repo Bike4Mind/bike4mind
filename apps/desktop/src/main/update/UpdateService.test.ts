@@ -166,3 +166,71 @@ describe('UpdateService.install', () => {
     expect(port.install).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('UpdateService notice support', () => {
+  function noticeHarness(memory: { stored?: string | null; failWrite?: boolean } = {}) {
+    let stored = memory.stored ?? null;
+    const dismissed = {
+      read: vi.fn(async () => stored),
+      record: vi.fn(async (version: string) => {
+        if (memory.failWrite) throw new Error('EACCES');
+        stored = version;
+      }),
+    };
+    const log = vi.fn();
+    const pushed: UpdateState[] = [];
+    const service = new UpdateService({
+      currentVersion: '1.0.0',
+      updater: {
+        check: vi.fn(async () => {
+          throw new Error('getaddrinfo ENOTFOUND');
+        }),
+        download: vi.fn(async () => undefined),
+        install: vi.fn(),
+      },
+      busy: () => QUIET,
+      prepareQuit: async () => undefined,
+      onChanged: state => pushed.push(state),
+      releaseUrl: version => `https://example.test/releases/${version}`,
+      dismissed,
+      log,
+    });
+    return { service, dismissed, log, pushed, stored: () => stored };
+  }
+
+  it('attaches the release page for the offered version', () => {
+    const { service } = noticeHarness();
+    expect(service.snapshot().releaseUrl).toBeNull();
+    service.apply({ type: 'available', version: '1.1.0', at: 1 });
+    expect(service.snapshot().releaseUrl).toBe('https://example.test/releases/1.1.0');
+  });
+
+  it('persists a dismissal and pushes it to the renderer', async () => {
+    const { service, pushed, stored } = noticeHarness();
+    await service.dismiss('1.1.0');
+    expect(stored()).toBe('1.1.0');
+    expect(service.snapshot().dismissedVersion).toBe('1.1.0');
+    expect(pushed.at(-1)?.dismissedVersion).toBe('1.1.0');
+  });
+
+  it('restores the dismissal from a previous launch', async () => {
+    const { service, pushed } = noticeHarness({ stored: '1.1.0' });
+    await service.restoreDismissed();
+    expect(service.snapshot().dismissedVersion).toBe('1.1.0');
+    expect(pushed).toHaveLength(1);
+  });
+
+  it('still hides the notice for this run when the file cannot be written, and logs it', async () => {
+    const { service, log } = noticeHarness({ failWrite: true });
+    await expect(service.dismiss('1.1.0')).resolves.toBeUndefined();
+    expect(service.snapshot().dismissedVersion).toBe('1.1.0');
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
+  });
+
+  it('logs a failed check instead of surfacing it', async () => {
+    const { service, log } = noticeHarness();
+    await service.check();
+    expect(service.snapshot().status).toBe('unreachable');
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('ENOTFOUND'));
+  });
+});

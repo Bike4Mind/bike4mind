@@ -1,24 +1,13 @@
 import { cacheRepository } from '@bike4mind/database';
 
-/**
- * Per-artifact passphrase lockout for the public gate (issue #383 Tier 2).
- *
- * Sits alongside the coarse per-IP rate limit on POST /api/publish/gate/passphrase:
- * the IP limit throttles a single client across ALL gated artifacts, while this
- * counts WRONG passphrases against ONE artifact and locks that artifact's gate for
- * the rest of a fixed window once the count reaches MAX_ATTEMPTS. Together they are
- * the acceptance's "rate-limit per token + IP; temporary lockout after N wrong attempts".
- *
- * The cache key is namespaced with `pp` so a future Tier 3 (domain) gate throttle
- * gets its own bucket and passphrase failures can never cross-lock a different mode.
- */
+/** Fixed-window failures per artifact and viewer, independent of other viewers. */
 
 /** Wrong attempts against one artifact before its gate locks (inclusive). */
 export const PASSPHRASE_LOCKOUT_MAX_ATTEMPTS = 5;
 /** Fixed window the lock and the failure count live in. */
 export const PASSPHRASE_LOCKOUT_WINDOW_MS = 15 * 60_000;
 
-const keyFor = (publicId: string) => `publish-gate-pp-lock:${publicId}`;
+const keyFor = (publicId: string, viewerId: string) => `publish-gate-pp-lock:${publicId}:${viewerId}`;
 
 export interface LockState {
   locked: boolean;
@@ -34,8 +23,8 @@ const remainingMs = (expiresAt?: Date | null): number =>
  * passphrase for the remainder of the window. Never mutates the counter, so
  * hammering a locked gate cannot extend the lock.
  */
-export async function checkLock(publicId: string): Promise<LockState> {
-  const doc = await cacheRepository.findByKey(keyFor(publicId));
+export async function checkLock(publicId: string, viewerId: string): Promise<LockState> {
+  const doc = await cacheRepository.findByKey(keyFor(publicId, viewerId));
   if (!doc) return { locked: false, retryAfterMs: 0 };
   const count = (doc.result as { count?: number })?.count ?? 0;
   const expired = doc.expiresAt.getTime() <= Date.now();
@@ -48,9 +37,9 @@ export async function checkLock(publicId: string): Promise<LockState> {
  * fixed-window primitive so the window opens on the first failure and closes
  * deterministically WINDOW_MS later (a stream of failures cannot slide it forward).
  */
-export async function recordFailure(publicId: string): Promise<LockState> {
+export async function recordFailure(publicId: string, viewerId: string): Promise<LockState> {
   const { success, count, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-    keyFor(publicId),
+    keyFor(publicId, viewerId),
     PASSPHRASE_LOCKOUT_MAX_ATTEMPTS,
     PASSPHRASE_LOCKOUT_WINDOW_MS
   );
@@ -61,6 +50,6 @@ export async function recordFailure(publicId: string): Promise<LockState> {
 }
 
 /** Clear the counter after a correct passphrase so a returning viewer starts fresh. */
-export async function clear(publicId: string): Promise<void> {
-  await cacheRepository.deleteByKey(keyFor(publicId));
+export async function clear(publicId: string, viewerId: string): Promise<void> {
+  await cacheRepository.deleteByKey(keyFor(publicId, viewerId));
 }

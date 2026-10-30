@@ -17,12 +17,12 @@ import { type MigrationFile } from './index';
  * unique build.
  *
  * autoIndex at scale: the new compound index is built by Mongoose autoIndex on the
- * first app boot after deploy, NOT here. On DocumentDB an index build runs in the
- * FOREGROUND and holds a collection-level lock for its duration, so on a large
- * DataLake collection that first boot can stall writes noticeably. If the collection
+ * first app boot after deploy, NOT here. The build is fire-and-forget (a
+ * failure is silent) and scans the collection, so on a large
+ * DataLake collection that first boot can be slow and noisy. If the collection
  * is large, build it out-of-band before the deploy (createIndex on
  * { organizationId: 1, slug: 1 }, unique, off-peak) so autoIndex finds it already
- * present; on a small collection the one-time foreground build is fine.
+ * present; on a small collection the one-time build is fine.
  *
  * Manual rollback runbook: down() is intentionally a no-op (recreating the global
  * unique slug_1 would fail the moment two orgs share a slug). To actually revert:

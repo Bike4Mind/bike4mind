@@ -224,3 +224,40 @@ describe('PromptMetaInspector redirect reporting', () => {
     expect(copiedMarkdown()).not.toContain('Redirected from');
   });
 });
+
+describe('PromptMetaInspector turn timing', () => {
+  beforeEach(() => {
+    usePromptMetaInspector.getState().setPromptMeta(null);
+  });
+
+  it('shows the spliced turnTiming record, one row per retry', () => {
+    show({
+      turnTiming: {
+        queueMs: 120,
+        contextBuildMs: 2400,
+        semaphoreWaitMs: 0,
+        totalMs: 415_000,
+        retries: [
+          { reason: 'stream_idle_timeout', delayMs: 3500, model: 'model-a', at: new Date() },
+          { reason: 'rate_limit', status: 429, requestId: 'req_1', delayMs: 2000, model: 'model-a', at: new Date() },
+        ],
+        fallbackHops: 1,
+      },
+    } as Partial<PromptMeta>);
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    const details = screen.getByTestId('turn-timing-details');
+    expect(details.textContent).toContain('Total: 6m 55s');
+    expect(details.textContent).toContain('Fallback hops: 1');
+    const retries = screen.getAllByTestId('turn-timing-retry');
+    expect(retries[0].textContent).toContain('response stalled on model-a');
+    expect(retries[1].textContent).toContain('HTTP 429 - req_1');
+  });
+
+  it('says so when the reply predates turn timing', () => {
+    show({});
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('turn-timing-details').textContent).toContain('Not recorded for this reply.');
+  });
+});

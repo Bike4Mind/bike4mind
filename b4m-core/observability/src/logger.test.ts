@@ -123,6 +123,44 @@ describe('Logger.parseArgs metadata placement', () => {
     expect(entry.message).toBe('pipeline failed');
   });
 
+  it('logs the cause of an undici-style fetch failure, including its code', () => {
+    const cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET', syscall: 'read' });
+    const entry = captureJson('error', l =>
+      l.error({ err: new TypeError('fetch failed', { cause }) }, 'Quest processing failed')
+    );
+    const err = entry.err as { message: string; cause: { code: string; message: string; syscall: string } };
+    expect(err.message).toBe('fetch failed');
+    expect(err.cause).toMatchObject({ code: 'ECONNRESET', message: 'read ECONNRESET', syscall: 'read' });
+  });
+
+  it('logs the cause of an Error passed as a leading argument', () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND host'), { code: 'ENOTFOUND' });
+    const entry = captureJson('error', l => l.error(new TypeError('fetch failed', { cause }), 'while saving'));
+    expect(entry.message).toContain('ENOTFOUND');
+  });
+
+  it('serializes a cause chain in the replacer, capping depth and cutting cycles', () => {
+    const replace = (value: unknown) => JSON.parse(JSON.stringify(value, Logger['errorReplacer']));
+
+    const chain = Array.from({ length: 10 }, (_, i) => new Error(`level-${i}`));
+    chain.forEach((error, i) => {
+      if (i < chain.length - 1) error.cause = chain[i + 1];
+    });
+    let depth = 0;
+    for (let node = replace(chain[0]); typeof node === 'object'; node = node.cause) depth++;
+    expect(depth).toBeLessThan(chain.length);
+
+    const a = new Error('a');
+    const b = new Error('b', { cause: a });
+    a.cause = b;
+    expect(replace(a).cause.cause).toBe('[Truncated]');
+  });
+
+  it('keeps a non-Error cause as is', () => {
+    const entry = captureJson('error', l => l.error({ err: new Error('boom', { cause: 'plain reason' }) }, 'failed'));
+    expect((entry.err as { cause: unknown }).cause).toBe('plain reason');
+  });
+
   it('lets call metadata override instance metadata regardless of position', () => {
     expect(captureJson('warn', l => l.warn({ context: 'override' }, 'msg')).context).toBe('override');
   });
@@ -221,4 +259,75 @@ describe('Logger.globalInstance lazy construction', () => {
     FreshLogger.info('x');
     expect(spy).toHaveBeenCalledWith('x');
   });
+});
+
+describe('log redaction', () => {
+  it.each([
+    { logInJson: true, prettyPrint: false },
+    { logInJson: false, prettyPrint: true },
+    { logInJson: false, prettyPrint: false },
+  ])('redacts provider payloads in every output format: %j', options => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logger = new Logger({ ...options, metadata: { body: { password: 'password-canary' } } });
+    const error = Object.assign(new Error('context length exceeded'), {
+      isAxiosError: true,
+      config: { headers: { Authorization: 'Bearer key-canary', 'xi-api-key': 'xi-canary' }, data: 'request-canary' },
+      response: { data: 'response-canary' },
+    });
+    logger
+      .withMetadata({ message: 'user-message-canary', messages: [{ content: 'conversation-canary' }] })
+      .error('Provider failed', { error });
+    const output = JSON.stringify(spy.mock.calls);
+    for (const secret of [
+      'password-canary',
+      'key-canary',
+      'xi-canary',
+      'request-canary',
+      'response-canary',
+      'conversation-canary',
+      'user-message-canary',
+    ]) {
+      expect(output).not.toContain(secret);
+    }
+    // The provider's own reason survives: without it an incident log cannot tell a context-length
+    // failure from a throttled one.
+    expect(output).toContain('context length exceeded');
+    expect(output).toContain('Provider failed');
+  });
+});
+
+it('keeps the provider error reason and status but withholds the response payload', () => {
+  const error = Object.assign(new Error('context length exceeded'), {
+    status: 400,
+    headers: { 'x-request-id': 'request-1' },
+    error: { message: 'nested-payload-canary' },
+  });
+  const entry = captureJson('error', logger => logger.error('Provider request failed', { error }));
+  expect(JSON.stringify(entry)).not.toContain('nested-payload-canary');
+  expect(entry.error).toMatchObject({
+    name: 'Error',
+    message: 'context length exceeded',
+    status: 400,
+    requestId: 'request-1',
+  });
+});
+
+it('reads a status out of an AWS SDK metadata block', () => {
+  const error = Object.assign(new Error('Rate exceeded'), { $metadata: { httpStatusCode: 429, requestId: 'aws-1' } });
+  const entry = captureJson('error', logger => logger.error('AWS call failed', { error }));
+  expect(entry.error).toMatchObject({ message: 'Rate exceeded', status: 429, requestId: 'aws-1' });
+});
+
+it('redacts preview aliases and tool results', () => {
+  const entry = captureJson('error', logger =>
+    logger.error('Request failed', {
+      resultPreview: 'result-canary',
+      rawResponsePreview: 'response-canary',
+      resultSnippet: 'snippet-canary',
+      result: 'tool-canary',
+    })
+  );
+  const output = JSON.stringify(entry);
+  for (const value of ['result-canary', 'response-canary', 'snippet-canary', 'tool-canary'])
+    expect(output).not.toContain(value);
 });

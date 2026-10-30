@@ -71,8 +71,6 @@ export type { BuildSystemPromptOptions, ParsedDataLakeCommand, DataLakeSubcomman
 export { generateHelpMessage } from './tools/slackbotHelp';
 export { listCuratedFiles, getCuratedFiles } from './tools/listCuratedFiles';
 export type { ListCuratedFilesParams, ListCuratedFilesResult } from './tools/listCuratedFiles';
-export { shareCuratedFile } from './tools/shareCuratedFile';
-export type { ShareCuratedFileParams, ShareCuratedFileResult } from './tools/shareCuratedFile';
 export { notebookNew } from './tools/notebookNew';
 export type { NotebookNewParams, NotebookNewResult } from './tools/notebookNew';
 export { notebookStatus } from './tools/notebookStatus';
@@ -96,6 +94,7 @@ export {
   verifyOrgSlackConnectStateToken,
   buildOrgSlackOAuthUrl,
 } from './org-slack-helpers';
+export type { SystemSlackAppCredentials } from './org-slack-helpers';
 
 // ─── User Link Helpers ───────────────────────────────────────────────────────
 export {
@@ -141,6 +140,7 @@ export { TARGET_SYSTEM_AGENT_MAP } from './constants/routing';
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 export { handleChannelCommand } from './handlers/channel-manager';
+export type { ChannelCommandUser, ChannelCommandResponse } from './handlers/channel-manager';
 export {
   handleGlobalShortcut,
   handleCreateNotebookSubmission,
@@ -328,3 +328,6 @@ export {
   SLACK_USER_ERROR_MESSAGE_PATTERNS,
 } from './slack-export-errors';
 export type { SlackUserValidationError, SlackErrorType, SlackErrorMetadata } from './slack-export-errors';
+
+export { resolveNotificationDestination } from './notificationDestination';
+export { findVerifiedGitHubAccounts } from './github/verifiedIdentity';

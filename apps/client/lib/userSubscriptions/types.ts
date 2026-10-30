@@ -1,6 +1,6 @@
 import { IBaseRepository, IMongoDocument, SettingKey } from '@bike4mind/common';
 import Stripe from 'stripe';
-import type { ISubscription, SubscriptionSource } from '@client/lib/subscriptions/types';
+import type { ISubscription, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 export enum SubscriptionPlanInterval {
   Monthly = 'monthly',

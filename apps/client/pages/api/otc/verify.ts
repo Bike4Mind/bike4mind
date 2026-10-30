@@ -1,7 +1,9 @@
+import { signupProtection } from '@server/auth/signupProtection';
 import {
   AuthEvents,
   HTTPError,
   InternalServerError,
+  TooManyRequestsError,
   UnprocessableEntityError,
   isOAuthClientIdShape,
   redactUserSecretsForSelf,
@@ -18,10 +20,19 @@ import {
   oauthClientRepository,
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
+import { withTransaction } from '@bike4mind/db-core';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
 import { isPartnerDomainSignupAllowed } from '@server/utils/auth/partnerSignupBypass';
 import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
+import {
+  BOOTSTRAP_ADMIN_EMAIL_ENV,
+  claimBootstrapAdmin,
+  configuredBootstrapAdminEmail,
+  releaseBootstrapAdminClaim,
+  resolveBootstrapAdmin,
+} from '@server/utils/auth/bootstrapAdmin';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
+import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
@@ -30,11 +41,15 @@ import {
   ipSubject,
   otcCounterLimit,
   reserveOtcEmailBudget,
+  reserveOtcRegistrationDomainBudget,
 } from '@server/utils/otcLimits';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
+import { recordLoginEvent, readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
+import { assertSignupNetworkWithinLimits } from '@server/auth/signupNetworkLimits';
+import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -52,6 +67,7 @@ interface PendingTokenPayload {
   attempts: number;
   exp: number;
   jti: string;
+  challengeVerified?: unknown;
 }
 
 const MAX_PENDING_OTC_ATTEMPTS = 5;
@@ -67,9 +83,14 @@ const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, a
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
-  .use(otcCounterLimit({ bucket: 'verify-ip', ...OTC_LIMITS.verify.perIp, subject: ipSubject }))
+  .use(otcCounterLimit({ bucket: 'verify-ip', window: OTC_LIMITS.verify.perIp, subject: ipSubject }))
   .post(async (req, res) => {
     const { email, code, username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
+    const parsedInviteCode = z.string().trim().optional().safeParse(req.body.inviteCode);
+    if (!parsedInviteCode.success) {
+      return res.status(400).json({ error: 'Invalid invite code' });
+    }
+    const inviteCode = parsedInviteCode.data;
 
     if (!email || !code) {
       return res.status(400).json({ error: 'Email and code are required' });
@@ -138,7 +159,12 @@ const handler = baseApi({ auth: false })
       // (no existence lookup has happened yet).
       const nextAttempts = attempts + 1;
       const updatedToken = jwt.sign(
-        { email: tokenPayload.email, attempts: nextAttempts, jti: newNonce },
+        {
+          email: tokenPayload.email,
+          attempts: nextAttempts,
+          jti: newNonce,
+          challengeVerified: tokenPayload.challengeVerified === true ? true : null,
+        },
         Config.JWT_SECRET,
         { algorithm: 'HS256', expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)) }
       );
@@ -171,6 +197,24 @@ const handler = baseApi({ auth: false })
       }
       if (existingUser.isBanned) {
         return res.status(403).json({ error: 'This account has been suspended.' });
+      }
+
+      // A configured bootstrap admin whose account was created but never promoted (a write failed
+      // after creation) is promoted on this sign-in, so the install is not left without an admin.
+      if (
+        process.env.B4M_SELF_HOST === 'true' &&
+        !existingUser.isAdmin &&
+        normalizedEmail === configuredBootstrapAdminEmail() &&
+        (await userRepository.count({ isAdmin: true })) === 0
+      ) {
+        try {
+          await userRepository.update({ id: existingUser.id, isAdmin: true });
+          existingUser.isAdmin = true;
+          req.logger.info('Self-host bootstrap: configured admin promoted on sign-in', { userId: existingUser.id });
+        } catch (err) {
+          // Best-effort like the verified flag below: the nonce is already rotated, and the next sign-in retries.
+          req.logger.warn('Self-host bootstrap: sign-in promotion failed', { userId: existingUser.id, err });
+        }
       }
 
       // OTC proves email ownership - mark verified on first successful sign-in.
@@ -251,6 +295,7 @@ const handler = baseApi({ auth: false })
         }
       );
       setRefreshCookie(res, refreshToken);
+      await recordLoginEvent({ req, userId: existingUser.id, method: 'otc' });
       const tokens = { accessToken };
       const ip = getClientIp(req);
 
@@ -303,9 +348,14 @@ const handler = baseApi({ auth: false })
 
     // --- NEW USER REGISTRATION ---
     // Reached only after a correct code, so this is enumeration-safe.
-    // A fresh self-host install admits its first account and promotes it to admin below.
-    const isBootstrapUser = process.env.B4M_SELF_HOST === 'true' && (await userRepository.count({})) === 0;
-    const partnerDomainAllowed = !isBootstrapUser && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
+    // A fresh self-host install admits its bootstrap account and promotes it to admin below.
+    const isSelfHost = process.env.B4M_SELF_HOST === 'true';
+    const bootstrap = resolveBootstrapAdmin({
+      isSelfHost,
+      userCount: isSelfHost ? await userRepository.count({}) : 0,
+      email: normalizedEmail,
+      bootstrapEmail: configuredBootstrapAdminEmail(),
+    });
 
     // If no username was supplied, this is a login attempt for an email with no account:
     // signal the client to collect a username and finish registration inline. The code is
@@ -314,66 +364,124 @@ const handler = baseApi({ auth: false })
     // registration in one continuous flow with NO second OTC email (same pattern as the
     // wrong-code re-issue above). Only reachable post-verification, so it leaks nothing.
     if (!username || typeof username !== 'string') {
-      const registrationToken = jwt.sign({ email: tokenPayload.email, attempts, jti: newNonce }, Config.JWT_SECRET, {
-        algorithm: 'HS256',
-        expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)),
-      });
+      const partnerAllowed = !bootstrap.eligible && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
+      const registrationToken = jwt.sign(
+        {
+          email: tokenPayload.email,
+          attempts,
+          jti: newNonce,
+          challengeVerified: tokenPayload.challengeVerified === true ? true : null,
+        },
+        Config.JWT_SECRET,
+        {
+          algorithm: 'HS256',
+          expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)),
+        }
+      );
       return res.status(200).json({
         registrationRequired: true,
-        registrationAllowed: isBootstrapUser || partnerDomainAllowed || (await isOpenRegistrationAllowed()),
+        registrationAllowed: bootstrap.eligible || partnerAllowed || (await isOpenRegistrationAllowed()),
         email: normalizedEmail,
         pendingToken: registrationToken,
       });
     }
+
+    // Only the claim winner is the bootstrap user; anyone else registers under the normal rules.
+    let bootstrapClaimId: string | null = null;
+    let domainBudget: Awaited<ReturnType<typeof reserveOtcRegistrationDomainBudget>> | undefined;
 
     // Register + finalize (email-verified state, deferred free-credit grant) in one
     // service call. registerViaOTC grants credits BEFORE dropping the pending tag, so
     // a grant failure leaves a retry breadcrumb rather than losing credits.
     let newUser: Awaited<ReturnType<typeof userService.registerViaOTC>>;
     try {
-      newUser = await userService.registerViaOTC(
-        {
-          username: username.trim(),
-          email: normalizedEmail,
-          name: username.trim(),
-          password: '',
-          // P0-B abuse gate: registerUser rejects creation unless these are present and
-          // current, so a new OTC account is gated at creation just like the credentials path. The
-          // client collects both before submitting (register form, or the inline username step).
-          acceptedPolicyVersion,
-          ageAttestation,
-          sourceClientId: parseSourceClientId(req.body.sourceClientId),
-          metadata: req.body.clientData
-            ? {
-                loginTime: new Date(),
-                userAgent: req.body.clientData.userAgent || 'Unknown',
-                browser: req.body.clientData.browser || 'Unknown',
-                operatingSystem: req.body.clientData.operatingSystem || 'Unknown',
-                deviceType: req.body.clientData.deviceType || 'Desktop',
-                screenResolution: req.body.clientData.screenResolution || 'Unknown',
-                viewportSize: req.body.clientData.viewportSize || 'Unknown',
-                colorDepth: req.body.clientData.colorDepth || 0,
-                pixelDepth: req.body.clientData.pixelDepth || 0,
-                devicePixelRatio: req.body.clientData.devicePixelRatio || 1,
-                ip: getClientIp(req),
-              }
-            : undefined,
-        },
-        {
-          db: {
-            users: userRepository,
-            adminSettings: adminSettingsRepository,
-            registrationInvites: registrationInviteRepository,
-            subscribers: subscriberRepository,
-            creditTransactions: creditTransactionRepository,
-            oauthClients: oauthClientRepository,
-            creditLots: creditLotRepository,
+      // Inside the try so a claim or lookup failure still re-issues the token (the nonce is spent).
+      bootstrapClaimId = bootstrap.eligible ? await claimBootstrapAdmin() : null;
+      const partnerDomainAllowed =
+        bootstrapClaimId === null && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
+      const signupNetwork = readNetworkMeta(req);
+      // The network caps are for anonymous self-serve signups; a partner rule or the bootstrap
+      // claim is an admin's authorization, as for enterprise SSO.
+      if (bootstrapClaimId === null && !partnerDomainAllowed) {
+        await assertSignupNetworkWithinLimits(signupNetwork, req.logger);
+      }
+      // A self-host install's staff all share one fresh domain, and a partner domain is one an
+      // admin already vouched for, so neither is capped (see OTC_REGISTER_DOMAIN_BUDGETS).
+      domainBudget =
+        isSelfHost || partnerDomainAllowed ? undefined : await reserveOtcRegistrationDomainBudget(normalizedEmail);
+      if (domainBudget && 'retryAfter' in domainBudget) {
+        res.setHeader('Retry-After', String(domainBudget.retryAfter));
+        throw new TooManyRequestsError('Too many new accounts on this email domain. Please try again later.');
+      }
+      const register = () =>
+        userService.registerViaOTC(
+          {
+            username: username.trim(),
+            email: normalizedEmail,
+            name: username.trim(),
+            password: '',
+            inviteCode,
+            // P0-B abuse gate: registerUser rejects creation unless these are present and
+            // current, so a new OTC account is gated at creation just like the credentials path. The
+            // client collects both before submitting (register form, or the inline username step).
+            acceptedPolicyVersion,
+            ageAttestation,
+            sourceClientId: parseSourceClientId(req.body.sourceClientId),
+            metadata: req.body.clientData
+              ? {
+                  loginTime: new Date(),
+                  userAgent: req.body.clientData.userAgent || 'Unknown',
+                  browser: req.body.clientData.browser || 'Unknown',
+                  operatingSystem: req.body.clientData.operatingSystem || 'Unknown',
+                  deviceType: req.body.clientData.deviceType || 'Desktop',
+                  screenResolution: req.body.clientData.screenResolution || 'Unknown',
+                  viewportSize: req.body.clientData.viewportSize || 'Unknown',
+                  colorDepth: req.body.clientData.colorDepth || 0,
+                  pixelDepth: req.body.clientData.pixelDepth || 0,
+                  devicePixelRatio: req.body.clientData.devicePixelRatio || 1,
+                  ip: getClientIp(req),
+                }
+              : undefined,
           },
-          logger: req.logger,
-          skipInviteCheck: isBootstrapUser || partnerDomainAllowed,
-        }
-      );
+          {
+            db: {
+              users: userRepository,
+              signupProtection,
+              adminSettings: adminSettingsRepository,
+              registrationInvites: registrationInviteRepository,
+              subscribers: subscriberRepository,
+              creditTransactions: creditTransactionRepository,
+              oauthClients: oauthClientRepository,
+              creditLots: creditLotRepository,
+            },
+            logger: req.logger,
+            skipInviteCheck: bootstrapClaimId !== null || partnerDomainAllowed,
+            signupMeta: {
+              ...signupNetwork,
+              capturedAt: new Date(),
+              challengeVerified: tokenPayload.challengeVerified === true ? true : null,
+            },
+            collectRiskSignals: createSignupGrantRiskCollector(signupNetwork),
+            emitRiskBand: async band => {
+              req.logger.info(`signup-grant-assessed-${band}`);
+            },
+          }
+        );
+      // Roll back the losing account when concurrent signups redeem one single-use invite.
+      newUser = inviteCode
+        ? await userService.refundBudgetOnFailure(() => withTransaction(register, { logger: req.logger }))
+        : await register();
     } catch (err) {
+      if (bootstrapClaimId) {
+        await releaseBootstrapAdminClaim(bootstrapClaimId).catch(releaseErr =>
+          req.logger.error('Self-host bootstrap claim release failed', releaseErr)
+        );
+      }
+      if (domainBudget && 'refund' in domainBudget) {
+        await domainBudget
+          .refund()
+          .catch(refundErr => req.logger.error('OTC registration domain budget refund failed', refundErr));
+      }
       // Registration failed AFTER the single-use nonce was rotated above, so the token the
       // client is holding can never validate again - without a re-issue every retry dies as a
       // generic "Invalid code." Re-issue with the rotated nonce so the user can fix
@@ -381,9 +489,15 @@ const handler = baseApi({ auth: false })
       // even though the code was correct: the username is attacker-varying input, and an
       // uncapped re-issue would let one proven code probe username existence indefinitely.
       // Post-code-proven, so the specific error message leaks nothing about email existence.
-      const nextAttempts = attempts + 1;
+      // A network-cap refusal is not attacker-varying input, so it does not spend an attempt.
+      const nextAttempts = err instanceof TooManyRequestsError ? attempts : attempts + 1;
       const reissuedToken = jwt.sign(
-        { email: tokenPayload.email, attempts: nextAttempts, jti: newNonce },
+        {
+          email: tokenPayload.email,
+          attempts: nextAttempts,
+          jti: newNonce,
+          challengeVerified: tokenPayload.challengeVerified === true ? true : null,
+        },
         Config.JWT_SECRET,
         { algorithm: 'HS256', expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)) }
       );
@@ -398,8 +512,15 @@ const handler = baseApi({ auth: false })
       throw new InternalServerError('Registration failed. Please try again.', { pendingToken: reissuedToken });
     }
 
+    const isBootstrapUser = bootstrapClaimId !== null;
+
     // Promote the self-host bootstrap account so the instance has an admin from day one.
     if (isBootstrapUser && newUser?.id) {
+      if (bootstrap.unconfigured) {
+        req.logger.warn(
+          `Self-host bootstrap admin email is not configured; set ${BOOTSTRAP_ADMIN_EMAIL_ENV} to choose the first admin. Promoting the first registered user instead.`
+        );
+      }
       const promoted = await userRepository.update({ id: newUser.id, isAdmin: true });
       if (promoted) newUser = promoted;
       req.logger.info('Self-host bootstrap: first registered user promoted to admin', { userId: newUser.id });
@@ -428,6 +549,9 @@ const handler = baseApi({ auth: false })
       type: AuthEvents.REGISTER,
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
+    await recordSignupNetwork({ req, userId: newUser.id, method: 'otc' });
+    // After recordSignupNetwork so the datacenter signal sees the stored signup network.
+    await refreshSignupRiskScore(newUser.id, req.logger);
     // Funnel floor (server/analytics/funnel.ts): keep the consented touches on the user so later
     // stages stay joinable to the door, then report the stages OTC completes in one step - the
     // code proved the email, and registerViaOTC plus the domain grant above seeded the credits.
@@ -465,6 +589,7 @@ const handler = baseApi({ auth: false })
       }
     );
     setRefreshCookie(res, registrationSession.refreshToken);
+    await recordLoginEvent({ req, userId: newUser.id, method: 'otc-registration' });
     return respond(res, otcRegistrationResponseSchema, {
       user: redactUserSecretsForSelf(newUser),
       accessToken: registrationSession.accessToken,

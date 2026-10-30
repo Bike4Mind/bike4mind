@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 /**
  * GET /api/subscriptions/Organization/:ownerId previously resolved the caller-supplied ownerId
@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const verifyOrgMemberOrManager = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgMemberOrManager }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgMemberOrManager }));
 
 // A regression to the bare repository lookup would make the gate assertions below silently
 // vacuous - the mocked gate simply would not be reached - so the old path is mocked to throw.

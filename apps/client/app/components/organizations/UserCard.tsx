@@ -182,7 +182,11 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
             Revoke Access
           </MenuItem>
         )}
-        {!isOwner && canLeave && <MenuItem onClick={handleLeaveOrganization}>Leave Team</MenuItem>}
+        {!isOwner && canLeave && (
+          <MenuItem onClick={handleLeaveOrganization} data-testid="organization-user-card-leave">
+            Leave Team
+          </MenuItem>
+        )}
       </Menu>
     </Dropdown>
   );
@@ -209,6 +213,8 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     return (
       <Box
         className="organization-user-card-container"
+        data-testid="organization-user-card"
+        data-user-id={user.id}
         sx={theme => ({
           borderRadius: '8px',
           border: '1px solid',
@@ -245,6 +251,8 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   return (
     <Box
       className="organization-user-card-container"
+      data-testid="organization-user-card"
+      data-user-id={user.id}
       sx={theme => ({
         borderRadius: '8px',
         display: 'grid',

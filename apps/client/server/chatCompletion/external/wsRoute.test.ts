@@ -2,15 +2,24 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
-import { BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
-import { checkRateLimit, verifyJwtToken } from '@server/cli/auth';
+import { ApiKeyScope, BadRequestError, CliCompletionChunkAction, TooManyRequestsError } from '@bike4mind/common';
+import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { Connection } from '@bike4mind/database/social';
 import { sendToConnection } from '@server/websocket/utils';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
+}));
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -29,10 +38,10 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: {},
   organizationRepository: {},
-  userApiKeyRepository: {},
+  userApiKeyRepository: { findById: vi.fn().mockResolvedValue(null) },
 }));
 
 // No registered connection by default, so the handler answers 400 right after authentication and
@@ -55,6 +64,17 @@ vi.mock('sst', () => ({
   Resource: { App: { stage: 'test' }, websocket: { managementEndpoint: 'wss://example.test' } },
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
+const mockLogApiKeyUsage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
+  ApiKeyUsageManager: { logUsage: mockLogApiKeyUsage },
+}));
+
+const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: mockAdmitApiKeyCompletion,
+  NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
+}));
 
 import { registerWsCompletionRoutes } from './wsRoute';
 
@@ -83,6 +103,7 @@ afterAll(
 
 beforeEach(() => {
   vi.mocked(checkRateLimit).mockResolvedValue(undefined);
+  mockAdmitApiKeyCompletion.mockResolvedValue({ release: quotaRelease });
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -103,12 +124,50 @@ function postAs(headers: Record<string, string>) {
 describe('JWT rate limiting', () => {
   it('hands the calling client to the rate limiter, so its own cap applies', async () => {
     expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(400);
+    expect(verifyJwtToken).toHaveBeenCalledWith('jwt', { requireApiAccess: true });
     expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'desktop', { client: 'b4m-desktop/0.1.0' });
   });
 
   it('answers 401 when the limiter rejects', async () => {
     vi.mocked(checkRateLimit).mockRejectedValue(new Error('Rate limit exceeded.'));
     expect((await postAs({ 'user-agent': 'b4m-cli/1.0.0' })).status).toBe(401);
+  });
+});
+
+describe('API-key auth failures', () => {
+  it('answers 503 with Retry-After and no driver text when the database is unreachable, without consulting JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('5');
+    const body = await response.json();
+    expect(body).toEqual({ error: 'Authentication temporarily unavailable' });
+    expect(JSON.stringify(body)).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+    expect(vi.mocked(verifyJwtToken)).not.toHaveBeenCalled();
+  });
+
+  it('answers 500 with a fixed message for an unexpected key-check failure', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(toApiKeyAuthError(new Error('boom')));
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Authentication failed' });
+    expect(vi.mocked(verifyJwtToken)).not.toHaveBeenCalled();
+  });
+
+  it('answers 401 for an unknown key and an invalid JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(new Error('Invalid authorization token'));
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: 'Authentication failed' });
   });
 });
 
@@ -208,7 +267,7 @@ describe('completion analytics', () => {
     expect((await postAs({ 'user-agent': 'b4m-desktop/1.2.3' })).status).toBe(202);
     await Promise.all(tracked);
     expect(vi.mocked(executeCompletion)).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'desktop', userId: 'u1' })
+      expect.objectContaining({ source: 'desktop', userId: 'u1', getThinkingVisibility: resolveThinkingVisibility })
     );
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
   });
@@ -245,6 +304,147 @@ describe('completion analytics', () => {
         finalTurnUsage: turnUsage,
         finalCreditsUsed: 7,
       })
+    );
+  });
+});
+
+describe('admin role on the reloaded owner', () => {
+  type ScopeActor = (<U extends { isAdmin?: boolean }>(actor: U) => U) | undefined;
+  const runAs = async (scopes?: ApiKeyScope[]): Promise<ScopeActor> => {
+    if (scopes) vi.mocked(verifyApiKey).mockResolvedValueOnce({ userId: 'u1', keyId: 'k1', scopes } as never);
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+    return vi.mocked(executeCompletion).mock.calls[0][0].scopeActor;
+  };
+
+  it('withholds an admin owner role for a key without the admin scope', async () => {
+    const scopeActor = await runAs([ApiKeyScope.AI_CHAT]);
+    expect(scopeActor?.({ isAdmin: true }).isAdmin).toBe(false);
+  });
+
+  it('keeps the role for a key with the admin scope', async () => {
+    expect(await runAs([ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN])).toBeUndefined();
+  });
+
+  it('keeps the role for a JWT session', async () => {
+    expect(await runAs()).toBeUndefined();
+  });
+});
+
+describe('untrusted owner quotas', () => {
+  const asKey = () =>
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [],
+      billingOwnerType: 'User',
+      ownerUntrusted: true,
+    } as never);
+
+  it('admits an API-key completion with a slot and frees it once the background completion ends', async () => {
+    asKey();
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+
+    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith({
+      owner: 'u1',
+      ownerUntrusted: true,
+      billingOwnerType: 'User',
+      holdSlot: true,
+    });
+    expect(quotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('frees the slot when the background completion fails', async () => {
+    asKey();
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockRejectedValueOnce(new Error('boom'));
+    vi.mocked(logCompletionAnalytics).mockResolvedValueOnce(undefined);
+
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+
+    expect(quotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers a refused quota with a 429, its errorCode and Retry-After, without starting the completion', async () => {
+    asKey();
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    mockAdmitApiKeyCompletion.mockRejectedValueOnce(
+      new TooManyRequestsError('Concurrency limit exceeded', { errorCode: 'concurrency_limit_exceeded', retryAfter: 3 })
+    );
+
+    const response = await postAs({});
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('3');
+    expect(await response.json()).toMatchObject({ errorCode: 'concurrency_limit_exceeded' });
+    expect(executeCompletion).not.toHaveBeenCalled();
+  });
+
+  it('does not apply them to a JWT session', async () => {
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+    expect(mockAdmitApiKeyCompletion).not.toHaveBeenCalled();
+  });
+});
+
+it('answers a retryable server error when the live JWT access check is unavailable', async () => {
+  vi.mocked(verifyJwtToken).mockRejectedValueOnce(
+    toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED'), { name: 'MongoNetworkError' }))
+  );
+  const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+  expect(response.status).toBe(503);
+  expect(response.headers.get('retry-after')).toBe('5');
+  expect(await response.json()).toEqual({ error: 'Authentication temporarily unavailable' });
+  expect(executeCompletion).not.toHaveBeenCalled();
+});
+
+describe('daily cap billing target', () => {
+  it.each([undefined, 'team-org'])('uses the completion billing target %s', async organizationId => {
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      organizationId,
+    } as never);
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', billingOrganizationId: organizationId })
+    );
+    expect(executeCompletion).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: organizationId }));
+  });
+});
+
+describe('API key usage counting', () => {
+  it('logs one usage row for an API key request', async () => {
+    mockLogApiKeyUsage.mockClear();
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+    } as never);
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+
+    expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1);
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ keyId: 'k1', userId: 'u1', endpoint: '/api/ai/v1/ws-completions', statusCode: 202 })
     );
   });
 });

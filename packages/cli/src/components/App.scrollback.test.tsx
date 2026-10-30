@@ -181,7 +181,12 @@ describe('App does not clobber scrollback while thinking', () => {
   });
 
   it('never erases scrollback with queued messages taking rows', async () => {
-    useCliStore.setState({ messageQueue: ['first queued message', 'second queued message'] });
+    useCliStore.setState({
+      messageQueue: [
+        { text: 'first queued message', kind: 'steer' },
+        { text: 'second queued message', kind: 'followUp' },
+      ],
+    });
 
     const instance = renderApp();
     await runTurn(GROWING_TURN);

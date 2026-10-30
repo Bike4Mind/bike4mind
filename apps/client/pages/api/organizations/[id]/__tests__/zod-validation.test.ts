@@ -27,8 +27,8 @@ const update = vi.hoisted(() => vi.fn(async () => ({ id: 'org1', userId: 'u1', n
 const credit = vi.hoisted(() => ({
   events: [] as string[],
   findById: vi.fn(),
-  addCredits: vi.fn(),
-  subtractCredits: vi.fn(),
+  addCreditsWithLedgerRow: vi.fn(),
+  subtractCreditsWithLedgerRow: vi.fn(),
   recordAdminActionFromRequest: vi.fn(),
   parseAdminActionReason: vi.fn((value: unknown) => {
     if (typeof value !== 'string' || value.trim().length < 5) throw new Error('reason required');
@@ -37,7 +37,10 @@ const credit = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   organizationService: { update, get: vi.fn() },
-  creditService: { addCredits: credit.addCredits, subtractCredits: credit.subtractCredits },
+  creditService: {
+    addCreditsWithLedgerRow: credit.addCreditsWithLedgerRow,
+    subtractCreditsWithLedgerRow: credit.subtractCreditsWithLedgerRow,
+  },
 }));
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: {
@@ -51,6 +54,10 @@ vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
   partnerSignupRuleRepository: {},
+  dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
   userRepository: {},
   withTransaction: async (fn: any) => {
     credit.events.push('tx:start');
@@ -70,7 +77,7 @@ vi.mock('@server/utils/adminAudit', () => ({
 }));
 vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
 vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
-vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));
+vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));
 
 import '@pages/api/organizations/[id]/index';
 
@@ -130,11 +137,13 @@ describe('PUT /api/organizations/[id] -- admin credit edit', () => {
     vi.clearAllMocks();
     credit.events.length = 0;
     credit.findById.mockResolvedValue({ id: 'org-123', userId: 'owner-1', name: 'Acme', currentCredits: 1000 });
-    credit.addCredits.mockImplementation(async () => {
-      credit.events.push('addCredits');
+    credit.addCreditsWithLedgerRow.mockImplementation(async () => {
+      credit.events.push('addCreditsWithLedgerRow');
+      return { creditHolder: {}, creditTransactionId: 'tx-add' };
     });
-    credit.subtractCredits.mockImplementation(async () => {
-      credit.events.push('subtractCredits');
+    credit.subtractCreditsWithLedgerRow.mockImplementation(async () => {
+      credit.events.push('subtractCreditsWithLedgerRow');
+      return { creditHolder: {}, creditTransactionId: 'tx-sub' };
     });
     credit.recordAdminActionFromRequest.mockImplementation(async () => {
       credit.events.push('record');
@@ -150,7 +159,7 @@ describe('PUT /api/organizations/[id] -- admin credit edit', () => {
     const { req, res } = makeReq({ currentCredits: '1500', creditReason: 'Goodwill for the outage' }, 'org-123', true);
     await mockRefs.putHandler!(req, res);
 
-    expect(credit.addCredits).toHaveBeenCalledWith(
+    expect(credit.addCreditsWithLedgerRow).toHaveBeenCalledWith(
       expect.objectContaining({
         ownerId: 'org-123',
         ownerType: 'Organization',
@@ -167,6 +176,7 @@ describe('PUT /api/organizations/[id] -- admin credit edit', () => {
         reason: 'Goodwill for the outage',
         details: expect.objectContaining({ credits: 500 }),
         changes: [{ field: 'currentCredits', before: 1000, after: 1500 }],
+        related: { creditTransactionId: 'tx-add' },
       })
     );
     expect(update.mock.calls[0][1]).not.toHaveProperty('currentCredits');
@@ -176,29 +186,39 @@ describe('PUT /api/organizations/[id] -- admin credit edit', () => {
     const { req, res } = makeReq({ currentCredits: 800, creditReason: 'Reverse a duplicate grant' }, 'org-123', true);
     await mockRefs.putHandler!(req, res);
 
-    expect(credit.subtractCredits).toHaveBeenCalledWith(
+    expect(credit.subtractCreditsWithLedgerRow).toHaveBeenCalledWith(
       expect.objectContaining({ credits: 200, type: 'generic_deduct' }),
       expect.anything()
     );
     expect(credit.recordAdminActionFromRequest).toHaveBeenCalledWith(
       req,
-      expect.objectContaining({ details: expect.objectContaining({ credits: -200 }) })
+      expect.objectContaining({
+        details: expect.objectContaining({ credits: -200 }),
+        related: { creditTransactionId: 'tx-sub' },
+      })
     );
-    expect(credit.events).toEqual(['tx:start', 'findById', 'subtractCredits', 'record', 'update', 'tx:end']);
+    expect(credit.events).toEqual([
+      'tx:start',
+      'findById',
+      'subtractCreditsWithLedgerRow',
+      'record',
+      'update',
+      'tx:end',
+    ]);
   });
 
   it('reads the balance inside the transaction so a retry recomputes the delta', async () => {
     const { req, res } = makeReq({ currentCredits: 1500, creditReason: 'Goodwill for the outage' }, 'org-123', true);
     await mockRefs.putHandler!(req, res);
 
-    expect(credit.events).toEqual(['tx:start', 'findById', 'addCredits', 'record', 'update', 'tx:end']);
+    expect(credit.events).toEqual(['tx:start', 'findById', 'addCreditsWithLedgerRow', 'record', 'update', 'tx:end']);
   });
 
   it('refuses a balance change without a reason and moves nothing', async () => {
     const { req, res } = makeReq({ currentCredits: 1500 }, 'org-123', true);
     await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('reason required');
 
-    expect(credit.addCredits).not.toHaveBeenCalled();
+    expect(credit.addCreditsWithLedgerRow).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
 
@@ -206,8 +226,8 @@ describe('PUT /api/organizations/[id] -- admin credit edit', () => {
     const { req, res } = makeReq({ name: 'Acme', currentCredits: 1000 }, 'org-123', true);
     await mockRefs.putHandler!(req, res);
 
-    expect(credit.addCredits).not.toHaveBeenCalled();
-    expect(credit.subtractCredits).not.toHaveBeenCalled();
+    expect(credit.addCreditsWithLedgerRow).not.toHaveBeenCalled();
+    expect(credit.subtractCreditsWithLedgerRow).not.toHaveBeenCalled();
     expect(credit.recordAdminActionFromRequest).not.toHaveBeenCalled();
     expect(update).toHaveBeenCalledOnce();
   });

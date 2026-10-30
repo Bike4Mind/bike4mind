@@ -14,7 +14,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/embedCors', () => ({ embedCors: () => () => {} }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 const mockVerifyEmbedSessionToken = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/embedSessionToken', () => ({ verifyEmbedSessionToken: mockVerifyEmbedSessionToken }));
@@ -29,6 +29,8 @@ const mockRepo = vi.hoisted(() => ({ getMessages: vi.fn(), deleteConversation: v
 vi.mock('@bike4mind/database', () => ({ embedConversationRepository: mockRepo }));
 
 import '../history';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const CLAIMS = {
   keyId: 'key-1',
@@ -50,7 +52,11 @@ async function call(method: RequestMethod, headers: Record<string, string> = { a
   const { req, res } = createMocks({ method, headers: { host: 'app.example.com', ...headers } });
   (req as unknown as { logger: object }).logger = { warn: vi.fn() };
   await handlers[method](req, res);
-  return { status: res._getStatusCode(), body: res._getData() ? res._getJSONData() : undefined };
+  return {
+    status: res._getStatusCode(),
+    body: res._getData() ? res._getJSONData() : undefined,
+    headers: res._getHeaders(),
+  };
 }
 
 beforeEach(() => {
@@ -103,8 +109,65 @@ describe('/api/embed/history', () => {
     expect(mockRepo.deleteConversation).not.toHaveBeenCalled();
   });
 
+  it('answers 503 with Retry-After and no driver text when the database is unreachable', async () => {
+    mockVerifyEmbedKeyById.mockRejectedValue(
+      toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }))
+    );
+    for (const method of ['GET', 'DELETE'] as const) {
+      const { status, body, headers } = await call(method);
+      expect(status).toBe(503);
+      expect(body.error).toBe('server_error');
+      expect(headers['retry-after']).toBe('5');
+      expect(JSON.stringify(body)).not.toMatch(/ECONNREFUSED|10\.0\.0\.1/);
+    }
+    expect(mockRepo.deleteConversation).not.toHaveBeenCalled();
+  });
+
+  it('answers 500 server_error for an unexpected key-check failure', async () => {
+    mockVerifyEmbedKeyById.mockRejectedValue(toApiKeyAuthError(new Error('boom')));
+    const { status, body } = await call('GET');
+    expect(status).toBe(500);
+    expect(body.error).toBe('server_error');
+  });
+
+  it('answers 401 for a token whose key is unknown', async () => {
+    mockVerifyEmbedKeyById.mockRejectedValue(new UnauthorizedError('Invalid or expired embed key'));
+    const { status, body } = await call('GET');
+    expect(status).toBe(401);
+    expect(body.error).toBe('unauthorized');
+  });
+
   it('refuses an origin outside the key allow-list', async () => {
     const { status } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'https://evil.example.com' });
     expect(status).toBe(403);
+  });
+
+  it('denies an opaque origin when the key restricts origins', async () => {
+    const { status, body } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'null' });
+    expect(status).toBe(403);
+    expect(body.error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('denies an opaque origin when the key has no allowed origins', async () => {
+    mockVerifyEmbedKeyById.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
+    const { status, body } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'null' });
+    expect(status).toBe(403);
+    expect(body.error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('serves a request without an Origin header when the key has no allowed origins', async () => {
+    mockVerifyEmbedKeyById.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
+    const { status } = await call('GET', { authorization: 'Bearer eyJ.tok' });
+    expect(status).toBe(200);
+  });
+
+  it('serves an origin on the key allow-list', async () => {
+    const { status } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'https://host.example.com' });
+    expect(status).toBe(200);
+  });
+
+  it('still serves a request that carries no Origin header', async () => {
+    const { status } = await call('GET', { authorization: 'Bearer eyJ.tok' });
+    expect(status).toBe(200);
   });
 });

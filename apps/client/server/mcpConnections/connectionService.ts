@@ -21,8 +21,8 @@ import {
 } from '@bike4mind/common';
 import { mcpConnectionRepository } from '@bike4mind/database';
 import { RemoteMcpError } from '@bike4mind/mcp/remote';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import type {
   McpConnectionApiKeyBody,
   McpConnectionCreateBody,
@@ -46,8 +46,11 @@ import {
 
 export interface ConnectionActor {
   id: string;
-  /** The selected org pointer; stamped on a new connection only when the user is a member. */
-  organizationId?: string | null;
+  /**
+   * The selected org pointer; stamped on a new connection only when the user is a member. On
+   * `req.user` this is the user document's ObjectId, not a string.
+   */
+  organizationId?: string | { toString(): string } | null;
 }
 
 const userOwner = (userId: string): McpConnectionOwner => ({ ownerType: 'user', ownerKey: userId });
@@ -227,8 +230,9 @@ export async function createUserConnection(
   const prepared = prepareConnectionUrl(body.url, context.network);
   assertPolicyAllows(actor, context, { urlHost: prepared.urlHost }, body.auth.kind, prepared.url, 'connection_created');
 
-  const organizationId =
-    actor.organizationId && context.organizationIds.includes(actor.organizationId) ? actor.organizationId : undefined;
+  // String() first: the membership ids are strings, so an ObjectId pointer never matched them.
+  const selectedOrgId = actor.organizationId ? String(actor.organizationId) : undefined;
+  const organizationId = selectedOrgId && context.organizationIds.includes(selectedOrgId) ? selectedOrgId : undefined;
   const base = {
     ownerType: 'user' as const,
     ownerKey: actor.id,

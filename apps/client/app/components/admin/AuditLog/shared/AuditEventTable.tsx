@@ -1,22 +1,11 @@
-import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Sheet,
-  Stack,
-  Table,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import { Box, Button, Chip, IconButton, Link, Stack, Tooltip, Typography } from '@mui/joy';
 import FilterAltOutlinedIcon from '@mui/icons-material/FilterAltOutlined';
 import type { AuditEntry, AuditTarget } from '@bike4mind/common';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
-import { activateOnKey } from './activateOnKey';
+import { DataTable, EmptyState, ErrorState, type DataColumn } from '../../shared';
 import { AuditActorLabel } from './AuditActorLabel';
 import { AuditSeverityChip } from './AuditSeverityChip';
+import { auditTargetHref } from './auditTargetHref';
 
 export type AuditEventTableProps = {
   entries: AuditEntry[];
@@ -24,30 +13,23 @@ export type AuditEventTableProps = {
   hasMore: boolean;
   isFetchingMore: boolean;
   onLoadMore(): void;
+  onRetry?(): void;
   onSelectEntry(entry: AuditEntry): void;
-  /** Omitted = actor is not clickable. */
   onFilterActor?(actorUserId: string): void;
-  /** Omitted = target is not clickable. */
   onFilterTarget?(target: { kind: AuditTarget['kind']; id: string }): void;
   emptyMessage?: string;
-  /** Set when the query behind `entries` failed; replaces the rows and the empty state. */
   errorMessage?: string;
-  /** Prefix for every data-testid, so two tables on one page stay distinguishable. */
   testIdPrefix?: string;
+  pageResetKey?: string;
 };
 
-const COLUMN_COUNT = 6;
-
-type FilterButtonProps = { testId: string; label: string; onClick(): void };
-
-const FilterButton: React.FC<FilterButtonProps> = ({ testId, label, onClick }) => (
+const FilterButton = ({ testId, label, onClick }: { testId: string; label: string; onClick(): void }) => (
   <Tooltip title={label}>
     <IconButton
       size="sm"
       variant="plain"
       aria-label={label}
       data-testid={testId}
-      // The row itself opens the drawer; a filter click must not.
       onClick={event => {
         event.stopPropagation();
         onClick();
@@ -58,43 +40,54 @@ const FilterButton: React.FC<FilterButtonProps> = ({ testId, label, onClick }) =
   </Tooltip>
 );
 
-const AuditRow: React.FC<
-  { entry: AuditEntry; testIdPrefix: string } & Pick<
-    AuditEventTableProps,
-    'onSelectEntry' | 'onFilterActor' | 'onFilterTarget'
-  >
-> = ({ entry, testIdPrefix, onSelectEntry, onFilterActor, onFilterTarget }) => {
-  const occurredAt = new Date(entry.occurredAt);
-  const { userId } = entry.actor;
-
-  return (
-    <tr
-      data-testid={`${testIdPrefix}-row-${entry.id}`}
-      onClick={() => onSelectEntry(entry)}
-      tabIndex={0}
-      onKeyDown={activateOnKey(() => onSelectEntry(entry))}
-      style={{ cursor: 'pointer' }}
-    >
-      <td>
-        <Tooltip title={occurredAt.toLocaleString()}>
+export const AuditEventTable: React.FC<AuditEventTableProps> = ({
+  entries,
+  isLoading,
+  hasMore,
+  isFetchingMore,
+  onLoadMore,
+  onRetry,
+  onSelectEntry,
+  onFilterActor,
+  onFilterTarget,
+  emptyMessage = 'No audit events found',
+  errorMessage,
+  testIdPrefix = 'audit-table',
+  pageResetKey,
+}) => {
+  const retry = onRetry ?? onLoadMore;
+  const columns: DataColumn<AuditEntry>[] = [
+    {
+      id: 'time',
+      label: 'Time',
+      render: entry => (
+        <Tooltip title={new Date(entry.occurredAt).toUTCString()}>
           <Typography level="body-sm" noWrap>
-            {relativeTimeFormat(occurredAt)}
+            {relativeTimeFormat(new Date(entry.occurredAt))}
           </Typography>
         </Tooltip>
-      </td>
-      <td>
+      ),
+    },
+    {
+      id: 'actor',
+      label: 'Actor',
+      render: entry => (
         <Stack direction="row" spacing={0.5} alignItems="center">
           <AuditActorLabel actor={entry.actor} />
-          {onFilterActor && userId && (
+          {onFilterActor && entry.actor.userId && (
             <FilterButton
               testId={`${testIdPrefix}-actor-filter-btn`}
               label="Filter by this actor"
-              onClick={() => onFilterActor(userId)}
+              onClick={() => onFilterActor(entry.actor.userId!)}
             />
           )}
         </Stack>
-      </td>
-      <td>
+      ),
+    },
+    {
+      id: 'summary',
+      label: 'Summary',
+      render: entry => (
         <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
           <Typography level="body-sm">{entry.summary}</Typography>
           {entry.source !== 'admin' && (
@@ -103,152 +96,92 @@ const AuditRow: React.FC<
             </Chip>
           )}
           {entry.backfilled && (
-            <Chip size="sm" variant="outlined" color="neutral" data-testid={`${testIdPrefix}-backfilled-chip`}>
+            <Chip size="sm" variant="outlined" data-testid={`${testIdPrefix}-backfilled-chip`}>
               Backfilled
             </Chip>
           )}
         </Stack>
-      </td>
-      <td>
-        <Stack direction="row" spacing={0.5} alignItems="center">
-          <Typography level="body-sm" noWrap>
-            {entry.target.displayName}
-          </Typography>
-          {onFilterTarget && (
-            <FilterButton
-              testId={`${testIdPrefix}-target-filter-btn`}
-              label="Filter by this target"
-              onClick={() => onFilterTarget({ kind: entry.target.kind, id: entry.target.id })}
-            />
-          )}
-        </Stack>
-      </td>
-      <td>
-        <Typography
-          level="body-sm"
-          title={entry.reason}
-          sx={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-        >
-          {entry.reason ?? ''}
-        </Typography>
-      </td>
-      <td>
-        <AuditSeverityChip severity={entry.severity} />
-      </td>
-    </tr>
-  );
-};
+      ),
+    },
+    {
+      id: 'target',
+      label: 'Target',
+      render: entry => {
+        const href = auditTargetHref(entry.target);
+        return (
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            {href ? (
+              <Link href={href} data-testid={`${testIdPrefix}-target-link`}>
+                {entry.target.displayName}
+              </Link>
+            ) : (
+              <Typography level="body-sm">{entry.target.displayName}</Typography>
+            )}
+            {onFilterTarget && (
+              <FilterButton
+                testId={`${testIdPrefix}-target-filter-btn`}
+                label="Filter by this target"
+                onClick={() => onFilterTarget({ kind: entry.target.kind, id: entry.target.id })}
+              />
+            )}
+          </Stack>
+        );
+      },
+    },
+    {
+      id: 'reason',
+      label: 'Reason',
+      render: entry => <Typography level="body-sm">{entry.reason || 'No reason recorded'}</Typography>,
+    },
+    { id: 'severity', label: 'Severity', render: entry => <AuditSeverityChip severity={entry.severity} /> },
+  ];
 
-const FullWidthRow: React.FC<{ testId: string; children: React.ReactNode }> = ({ testId, children }) => (
-  <tr data-testid={testId}>
-    <td colSpan={COLUMN_COUNT}>{children}</td>
-  </tr>
-);
-
-type BodyProps = Pick<
-  AuditEventTableProps,
-  'entries' | 'isLoading' | 'onSelectEntry' | 'onFilterActor' | 'onFilterTarget' | 'errorMessage'
-> & { emptyMessage: string; testIdPrefix: string };
-
-const AuditTableBody: React.FC<BodyProps> = ({
-  entries,
-  isLoading,
-  errorMessage,
-  emptyMessage,
-  testIdPrefix,
-  ...rowProps
-}) => {
-  if (errorMessage) {
+  if (errorMessage)
     return (
-      <FullWidthRow testId={`${testIdPrefix}-error-row`}>
-        <Alert color="danger" variant="soft" data-testid={`${testIdPrefix}-error`} sx={{ my: 1 }}>
-          {errorMessage}
-        </Alert>
-      </FullWidthRow>
-    );
-  }
-  if (isLoading && entries.length === 0) {
-    return (
-      <FullWidthRow testId={`${testIdPrefix}-loading`}>
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
-          <CircularProgress size="sm" aria-label="Loading audit events" />
-        </Box>
-      </FullWidthRow>
-    );
-  }
-  if (entries.length === 0) {
-    return (
-      <FullWidthRow testId={`${testIdPrefix}-empty`}>
-        <Typography level="body-sm" textAlign="center" sx={{ py: 3 }}>
-          {emptyMessage}
-        </Typography>
-      </FullWidthRow>
-    );
-  }
-  return (
-    <>
-      {entries.map(entry => (
-        <AuditRow key={entry.id} entry={entry} testIdPrefix={testIdPrefix} {...rowProps} />
-      ))}
-    </>
-  );
-};
-
-export const AuditEventTable: React.FC<AuditEventTableProps> = ({
-  entries,
-  isLoading,
-  hasMore,
-  isFetchingMore,
-  onLoadMore,
-  onSelectEntry,
-  onFilterActor,
-  onFilterTarget,
-  emptyMessage = 'No audit events found',
-  errorMessage,
-  testIdPrefix = 'audit-table',
-}) => (
-  <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
-    <Table
-      hoverRow
-      stickyHeader
-      data-testid={testIdPrefix}
-      sx={{ '& tbody tr:focus-visible': { outline: '2px solid', outlineColor: 'primary.500', outlineOffset: -2 } }}
-    >
-      <thead>
-        <tr>
-          <th style={{ width: 120 }}>Time</th>
-          <th>Actor</th>
-          <th>Summary</th>
-          <th>Target</th>
-          <th>Reason</th>
-          <th style={{ width: 100 }}>Severity</th>
-        </tr>
-      </thead>
-      <tbody>
-        <AuditTableBody
-          entries={entries}
-          isLoading={isLoading}
-          errorMessage={errorMessage}
-          emptyMessage={emptyMessage}
-          testIdPrefix={testIdPrefix}
-          onSelectEntry={onSelectEntry}
-          onFilterActor={onFilterActor}
-          onFilterTarget={onFilterTarget}
-        />
-      </tbody>
-    </Table>
-    {hasMore && !errorMessage && (
-      <Box sx={{ display: 'flex', justifyContent: 'center', p: 1.5 }}>
-        <Button
-          variant="outlined"
-          color="neutral"
-          loading={isFetchingMore}
-          onClick={onLoadMore}
-          data-testid={`${testIdPrefix}-load-more-btn`}
-        >
-          Load more
-        </Button>
+      <Box data-testid={`${testIdPrefix}-error`}>
+        <ErrorState message={errorMessage} onRetry={retry} />
       </Box>
-    )}
-  </Sheet>
-);
+    );
+
+  return (
+    <Stack spacing={1} data-testid={isLoading && entries.length === 0 ? `${testIdPrefix}-loading` : undefined}>
+      <DataTable
+        rows={entries}
+        columns={columns}
+        getRowId={entry => entry.id}
+        label="Audit events"
+        testId={testIdPrefix}
+        rowTestId={entry => `${testIdPrefix}-row-${entry.id}`}
+        loading={isLoading && entries.length === 0}
+        onRetry={retry}
+        onRowActivate={onSelectEntry}
+        pageResetKey={pageResetKey}
+        empty={
+          <Box data-testid={`${testIdPrefix}-empty`}>
+            <EmptyState
+              title={emptyMessage}
+              action={
+                <Button variant="outlined" onClick={retry} data-testid={`${testIdPrefix}-refresh-btn`}>
+                  Refresh events
+                </Button>
+              }
+            />
+          </Box>
+        }
+      />
+      {hasMore && (
+        <Stack direction="row" justifyContent="center" spacing={1} alignItems="center">
+          <Typography level="body-sm">More events are available.</Typography>
+          <Button
+            variant="outlined"
+            loading={isFetchingMore}
+            onClick={onLoadMore}
+            data-testid={`${testIdPrefix}-load-more-btn`}
+          >
+            Load more
+          </Button>
+        </Stack>
+      )}
+    </Stack>
+  );
+};

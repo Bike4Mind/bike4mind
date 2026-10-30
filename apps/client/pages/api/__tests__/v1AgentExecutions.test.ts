@@ -13,8 +13,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { AgentExecutionAckSchema, AgentExecutionStatusResponseSchema, ApiKeyScope } from '@bike4mind/common';
 
-const { mockStart, mockLoadTrace } = vi.hoisted(() => ({
+const { mockStart, mockLoadTrace, mockResolveCallerDefaultModel } = vi.hoisted(() => ({
   mockStart: vi.fn(),
+  mockResolveCallerDefaultModel: vi.fn(async (model: string) => model),
   mockLoadTrace: vi.fn(),
 }));
 
@@ -41,17 +42,25 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: mockStart }));
 vi.mock('@server/utils/loadAgentExecutionTrace', () => ({ loadAgentExecutionTrace: mockLoadTrace }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
+// The quota itself is covered by v1/agent-executions/__tests__/index.quota.test.ts.
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: async () => ({ release: async () => {} }),
+}));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: async () => ({}), getSettingsValue: () => 'claude-opus-5' }));
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
   resolveDefaultChatModel: async () => ({ model: 'default-model' }),
   isChatModelUsable: () => true,
+}));
+// Passthrough: the free-tier default fallback has its own tests (server/utils/callerModelList.test.ts).
+vi.mock('@server/utils/callerModelList', () => ({
+  resolveCallerDefaultModel: (...a: unknown[]) => mockResolveCallerDefaultModel(...a),
 }));
 
 const { default: startHandler } = await import('@pages/api/v1/agent-executions/index');
@@ -136,6 +145,18 @@ describe('POST /api/v1/agent-executions', () => {
     expect(res._getJSONData().model).toBe('default-model');
   });
 
+  it('starts on the caller-specific default model when it differs from the deployment default', async () => {
+    mockResolveCallerDefaultModel.mockResolvedValueOnce('allowlisted-model');
+    const { req, res } = post({ session_id: 's1', message: 'go' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(req, res);
+
+    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith('default-model', req.user, logger);
+    expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({ model: 'allowlisted-model' }), logger);
+    expect(res._getJSONData().model).toBe('allowlisted-model');
+  });
+
   it('omits quest_id when the dispatch-time Quest write failed', async () => {
     mockStart.mockResolvedValue({ ok: true, executionId: 'exec1' });
     const { req, res } = post({ session_id: 's1', message: 'go' });
@@ -215,6 +236,37 @@ describe('POST /api/v1/agent-executions', () => {
     const error = await (startHandler as any)(req, res).catch((err: unknown) => err);
 
     expect(error).toMatchObject({ statusCode: 400, message: 'key is stale' });
+  });
+
+  it('forwards confidence_overrides for the service to authorize', async () => {
+    const { req, res } = post({ session_id: 's1', message: 'go', confidence_overrides: [0.9, 0.1] });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(req, res);
+
+    expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({ confidenceOverrides: [0.9, 0.1] }), logger);
+  });
+
+  it('maps confidence_overrides_forbidden to a 403', async () => {
+    mockStart.mockResolvedValue({ ok: false, reason: 'confidence_overrides_forbidden', message: 'admins only' });
+    const { req, res } = post({ session_id: 's1', message: 'go', confidence_overrides: [0.1] });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const error = await (startHandler as any)(req, res).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({ statusCode: 403, message: 'admins only' });
+  });
+
+  it.each([
+    ['a score above 1', [1.5]],
+    ['a negative score', [-0.1]],
+    ['an empty script', []],
+  ])('rejects confidence_overrides with %s before dispatching anything', async (_label, confidence_overrides) => {
+    const { req, res } = post({ session_id: 's1', message: 'go', confidence_overrides });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect((startHandler as any)(req, res)).rejects.toThrow();
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("forwards an org-billed key's billing fields so startAgentExecution can bill its org", async () => {
@@ -307,6 +359,63 @@ describe('GET /api/v1/agent-executions/{id}', () => {
       created_at: '2026-08-24T00:00:00.000Z',
       updated_at: '2026-08-24T00:01:00.000Z',
     });
+  });
+
+  it('strips think spans from the answer and the final_answer step, leaving thought steps raw', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      answer: '<think>weighing options</think>The answer is 4.',
+      steps: [
+        { type: 'thought' as const, content: '<think>raw reasoning</think>', metadata: { timestamp: 1, iteration: 0 } },
+        { type: 'final_answer' as const, content: '<think>weighing options</think>The answer is 4.' },
+      ],
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(AgentExecutionStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.answer).toBe('The answer is 4.');
+    expect(body.steps).toEqual([
+      { type: 'thought', content: '<think>raw reasoning</think>', iteration: 0 },
+      { type: 'final_answer', content: 'The answer is 4.' },
+    ]);
+  });
+
+  it('drops the empty <think></think> pair a run with redacted reasoning leaves at the start', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      answer: '<think></think>\n\ndone',
+      steps: [{ type: 'final_answer' as const, content: '<think></think>\n\ndone' }],
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(body.answer).toBe('done');
+    expect(body.steps[0].content).toBe('done');
+  });
+
+  it('publishes an empty string, not null, when the stored answer is only reasoning', async () => {
+    mockLoadTrace.mockResolvedValue({
+      ...trace,
+      answer: '<think>truncated',
+      steps: [{ type: 'final_answer' as const, content: '<think>truncated' }],
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (getHandler as any)(req, res);
+
+    const body = res._getJSONData();
+    expect(AgentExecutionStatusResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.status).toBe('completed');
+    expect(body.answer).toBe('');
+    expect(body.steps[0].content).toBe('');
   });
 
   it('publishes the failure reason so a failed run is not an opaque null answer', async () => {

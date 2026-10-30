@@ -3,6 +3,7 @@ import {
   ModelRecordWrite,
   normalizeAggregatorKey,
   type FieldGroup,
+  type ICatalogContributor,
   type IModelCatalogRowInput,
   type IModelDiscoveryState,
   type ModelRecord,
@@ -76,6 +77,19 @@ export interface LifecycleSignalsInput {
   contributions: readonly SourceContribution[];
   /** Sources whose parser row count shifted: every docs-derived signal of theirs is dropped. */
   droppedDocsSources?: ReadonlySet<string>;
+  /**
+   * Models the catalog held when the run started. An aggregator sunset of one of
+   * these needs corroboration; a model the run itself introduces does not. Absent
+   * means every model counts as held, the fail-closed reading.
+   */
+  catalogModelIds?: ReadonlySet<string>;
+}
+
+/** An aggregator sunset or date-only announcement withheld for operator review. */
+export interface AggregatorSunsetSignal {
+  modelId: string;
+  source: string;
+  lifecycle: Partial<NonNullable<ModelRecord['lifecycle']>>;
 }
 
 export interface LifecycleSignals {
@@ -90,12 +104,20 @@ export interface LifecycleSignals {
   /** Every docs lifecycle row this run, allowed through or not; the suggestion channel reads it. */
   docs: Map<string, DocsLifecycleSignal>;
   /**
-   * Provider name per model a PROVIDER reported this run in a non-sunset status with no
-   * deprecationDate. Docs-tier claims count: catalogWrite only lets this remove a future date.
+   * Provider names, in registration order, per model a PROVIDER reported this run in a non-sunset
+   * status with no deprecationDate. Docs-tier claims count: catalogWrite only lets this remove a future date.
    * A docs page that lags a deprecation announcement can therefore outrank an aggregator's
    * future date until the page catches up.
    */
-  providerUndated: Map<string, string>;
+  providerUndated: Map<string, string[]>;
+  /**
+   * Aggregator dates and sunsets withheld from the overlay: one aggregator alone may not
+   * deprecate a model the catalog already holds, because the field overlay lets
+   * it win whenever the provider lists the model without a lifecycle. Only a
+   * provider sunset or both aggregators agreeing writes a sunset status. Date-only
+   * announcements remain queue items, even when more than one aggregator repeats them.
+   */
+  aggregatorSunsets: Map<string, AggregatorSunsetSignal>;
 }
 
 /**
@@ -105,20 +127,42 @@ export interface LifecycleSignals {
  * source that forgets to declare a typed feed loses a transition rather than
  * hiding a model on a parse artifact.
  */
-export function planLifecycleSignals({ contributions, droppedDocsSources }: LifecycleSignalsInput): LifecycleSignals {
+export function planLifecycleSignals({
+  contributions,
+  droppedDocsSources,
+  catalogModelIds,
+}: LifecycleSignalsInput): LifecycleSignals {
   const ordered = providersFirst(contributions);
 
   const typedSunsets = new Set<string>();
+  const providerSunsets = new Set<string>();
+  const aggregatorSunsetSources = new Map<string, Set<string>>();
   for (const contribution of ordered) {
     for (const record of contribution.records) {
       const status = record.patch?.lifecycle?.status;
-      if (evidenceOf(record) === 'typed' && status && LIFECYCLE_SUNSET_STATUSES.has(status))
-        typedSunsets.add(record.modelId);
+      if (!status || !LIFECYCLE_SUNSET_STATUSES.has(status)) continue;
+      const typed = evidenceOf(record) === 'typed';
+      if (typed) typedSunsets.add(record.modelId);
+      if (contribution.kind === 'provider') {
+        // A provider's own deprecations page corroborates too, on the same terms
+        // a docs row is itself corroborated: terminal status, parser not shifted.
+        const docsCounts = TERMINAL_STATUSES.has(status) && !droppedDocsSources?.has(contribution.name);
+        if (typed || docsCounts) providerSunsets.add(record.modelId);
+      } else if (typed) {
+        const sources = aggregatorSunsetSources.get(record.modelId) ?? new Set<string>();
+        sources.add(contribution.name);
+        aggregatorSunsetSources.set(record.modelId, sources);
+      }
     }
   }
+  const aggregatorSunsetCorroborated = (modelId: string): boolean =>
+    (catalogModelIds !== undefined && !catalogModelIds.has(modelId)) ||
+    providerSunsets.has(modelId) ||
+    (aggregatorSunsetSources.get(modelId)?.size ?? 0) >= 2;
 
   const docs = new Map<string, DocsLifecycleSignal>();
-  const providerUndated = new Map<string, string>();
+  const aggregatorSunsets = new Map<string, AggregatorSunsetSignal>();
+  const providerUndated = new Map<string, string[]>();
   const sanitized = ordered.map(contribution => ({
     ...contribution,
     records: contribution.records.map(record => {
@@ -132,10 +176,23 @@ export function planLifecycleSignals({ contributions, droppedDocsSources }: Life
         contribution.kind === 'provider' &&
         lifecycle.status !== undefined &&
         !LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status) &&
-        lifecycle.deprecationDate === undefined &&
-        !providerUndated.has(record.modelId)
+        lifecycle.deprecationDate === undefined
       ) {
-        providerUndated.set(record.modelId, contribution.name);
+        providerUndated.set(record.modelId, [...(providerUndated.get(record.modelId) ?? []), contribution.name]);
+      }
+      const claimsSunsetStatus = lifecycle.status !== undefined && LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status);
+      const dateOnlyClaim =
+        !claimsSunsetStatus && (lifecycle.deprecationDate !== undefined || lifecycle.retirementDate !== undefined);
+      const uncorroboratedSunset = claimsSunsetStatus && !aggregatorSunsetCorroborated(record.modelId);
+      if (typed && contribution.kind === 'aggregator' && (dateOnlyClaim || uncorroboratedSunset)) {
+        if (!aggregatorSunsets.has(record.modelId)) {
+          aggregatorSunsets.set(record.modelId, {
+            modelId: record.modelId,
+            source: contribution.name,
+            lifecycle: { ...lifecycle },
+          });
+        }
+        return withoutLifecycle(record);
       }
       if (typed) return record;
       // Dates with no status are an announcement, and a parsed page announcing
@@ -161,7 +218,7 @@ export function planLifecycleSignals({ contributions, droppedDocsSources }: Life
     }),
   }));
 
-  return { contributions: sanitized, docs, providerUndated };
+  return { contributions: sanitized, docs, providerUndated, aggregatorSunsets };
 }
 
 export interface ParserRowShift {
@@ -249,6 +306,8 @@ export interface LifecyclePlanInput {
   resolvedInForce?: ReadonlyMap<string, ResolvedCatalogRecord>;
   /** Docs signals from planLifecycleSignals, keyed by model. */
   docs: ReadonlyMap<string, DocsLifecycleSignal>;
+  /** Uncorroborated aggregator sunsets from planLifecycleSignals, keyed by model. */
+  aggregatorSunsets?: ReadonlyMap<string, AggregatorSunsetSignal>;
   /** planAbsence's missed ids: the only models the absence protocol can graduate. */
   missed: readonly string[];
   /**
@@ -269,6 +328,12 @@ export interface LifecyclePlanInput {
    * Absent for a model whose only row is the seed, which keeps backing it.
    */
   priorDiscoveryGroups?: ReadonlyMap<string, readonly FieldGroup[]>;
+  /**
+   * Contributors on that same superseded row, per model, kept by the graduation row it replaces.
+   * Blanket-crediting `discovery` would tell the read path discovery invented a disable a provider
+   * declared; the `availability` credit is the one the read path interprets.
+   */
+  priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
   autoRemap: DiscoveryAutoRemapPolicy;
   operatorOwnedModelIds: ReadonlySet<string>;
   runStartedAt: Date;
@@ -352,6 +417,7 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
   }
 
   for (const signal of docsSuggestions(input, sunsetting)) suggestions.push(signal);
+  for (const signal of aggregatorSuggestions(input, sunsetting)) suggestions.push(signal);
 
   const rows = input.catalogPlan.rows.map(row => {
     const replacedBy = applied.get(row.modelId);
@@ -404,7 +470,15 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
       patch: record,
       ownedGroups,
       effectiveFrom: input.runStartedAt,
-      contributors: ownedGroups.map(group => ({ group, source: DISCOVERY_CONTRIBUTOR })),
+      // The same rule the folded branch applies: a group the superseded row already carried keeps
+      // the source credited for it.
+      contributors: ownedGroups.map(
+        group =>
+          input.priorContributors?.get(entry.modelId)?.find(credit => credit.group === group) ?? {
+            group,
+            source: DISCOVERY_CONTRIBUTOR,
+          }
+      ),
       note: `${ABSENCE_NOTE_PREFIX}${input.runStartedAt.toISOString()}`,
       runId: input.runId,
     });
@@ -673,6 +747,43 @@ function docsSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): L
     });
   }
   return suggestions;
+}
+
+/** Aggregator claims withheld by planLifecycleSignals, including delayed picker hides. */
+function aggregatorSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): LifecycleSuggestion[] {
+  const suggestions: LifecycleSuggestion[] = [];
+  for (const signal of input.aggregatorSunsets?.values() ?? []) {
+    if (sunsetting.has(signal.modelId)) continue;
+    const existing = input.resolvedInForce.get(signal.modelId);
+    if (!existing || matchesLifecycleClaim(existing, signal.lifecycle)) continue;
+
+    suggestions.push({
+      modelId: signal.modelId,
+      // A date-only claim must say 'active' outright: a model with no held
+      // lifecycle would otherwise default to 'deprecated' on accept, hiding it now.
+      status: signal.lifecycle.status ?? lifecycleOf(existing)?.status ?? 'active',
+      deprecationDate: signal.lifecycle.deprecationDate,
+      retirementDate: signal.lifecycle.retirementDate,
+      replacedBy: signal.lifecycle.replacedBy,
+      source: signal.source,
+      detail:
+        signal.lifecycle.status === undefined || !LIFECYCLE_SUNSET_STATUSES.has(signal.lifecycle.status)
+          ? `${signal.source} announces lifecycle dates without a sunset status; an aggregator date alone may not hide the model`
+          : `${signal.source} reports this model as ${signal.lifecycle.status}; ` +
+            'no provider and no second aggregator corroborates it, so one aggregator alone may not hide the model',
+    });
+  }
+  return suggestions;
+}
+
+function matchesLifecycleClaim(
+  resolved: ResolvedCatalogRecord,
+  lifecycle: AggregatorSunsetSignal['lifecycle']
+): boolean {
+  const held = lifecycleOf(resolved);
+  return (['status', 'deprecationDate', 'retirementDate'] as const).every(
+    field => lifecycle[field] === undefined || held?.[field] === lifecycle[field]
+  );
 }
 
 function describeRemap(remap: RemapDecision, modelId: string, autoRemap: DiscoveryAutoRemapPolicy): string {

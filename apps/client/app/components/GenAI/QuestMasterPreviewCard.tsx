@@ -1,6 +1,7 @@
 import { useGetQuestMasterPlan } from '@client/app/hooks/data/quests';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
-import { OpenInFull as OpenInViewerIcon, AutoAwesome as QuestIcon } from '@mui/icons-material';
+import OpenInViewerIcon from '@mui/icons-material/OpenInFull';
+import QuestIcon from '@mui/icons-material/AutoAwesome';
 import { Box, Card, IconButton, Skeleton, Stack, Tooltip, Typography } from '@mui/joy';
 import React, { memo } from 'react';
 import QuestExportMenu from './QuestExportMenu';

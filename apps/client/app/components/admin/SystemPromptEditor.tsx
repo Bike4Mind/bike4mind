@@ -22,18 +22,16 @@ import {
   Box,
   Divider,
 } from '@mui/joy';
-import {
-  Edit as EditIcon,
-  Refresh as RefreshIcon,
-  Save as SaveIcon,
-  Search as SearchIcon,
-  ChatBubble as PromptIcon,
-  Visibility as VisibilityIcon,
-  Add as AddIcon,
-  History as HistoryIcon,
-  Warning as WarningIcon,
-  DeleteOutline as DeleteIcon,
-} from '@mui/icons-material';
+import EditIcon from '@mui/icons-material/Edit';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import SaveIcon from '@mui/icons-material/Save';
+import SearchIcon from '@mui/icons-material/Search';
+import PromptIcon from '@mui/icons-material/ChatBubble';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import AddIcon from '@mui/icons-material/Add';
+import HistoryIcon from '@mui/icons-material/History';
+import WarningIcon from '@mui/icons-material/Warning';
+import DeleteIcon from '@mui/icons-material/DeleteOutline';
 import {
   useSystemPrompts,
   useUpdateSystemPrompt,

@@ -3,10 +3,11 @@ import { ModelBackend } from '@bike4mind/common';
 /**
  * Per-backend credentials as the caller's effective key table resolved them. A
  * missing or null value means "this caller has no key for that backend"; the
- * literal 'expired' sentinel is a key that getLlmByModel rejects loudly.
+ * literal 'expired' sentinel is a key that getLlmByModel rejects loudly. Only direct OpenAI and
+ * Anthropic credentials accept trusted symbols; factories reject unrecognized symbols.
  */
 export type ApiKeyTable = {
-  [key in ModelBackend]?: string | null;
+  [key in ModelBackend]?: string | null | (key extends ModelBackend.OpenAI | ModelBackend.Anthropic ? symbol : never);
 };
 
 /**
@@ -148,7 +149,11 @@ const listingKindOf = (backend: string) =>
  * invariant SELF_HOST.md states - only providers with a key appear in the picker -
  * is what a keyless BFL has to honor too.
  */
-export function resolveListingKey(backend: ModelBackend, ctx: BackendGateContext): string | null {
+export function resolveListingKey<Backend extends ModelBackend>(
+  backend: Backend,
+  ctx: BackendGateContext
+): NonNullable<ApiKeyTable[Backend]> | null;
+export function resolveListingKey(backend: ModelBackend, ctx: BackendGateContext): string | symbol | null {
   if (backend === ModelBackend.LocalImage) {
     const envUrl = ctx.isSelfHost ? process.env.IMAGE_GEN_BASE_URL : undefined;
     return ctx.apiKeys?.[ModelBackend.LocalImage] || envUrl || null;

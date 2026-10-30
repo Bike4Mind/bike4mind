@@ -189,3 +189,36 @@ describe('GearsPage open card', () => {
     expect(state.mutate.mock.calls[0][0]).toBe('mementos');
   });
 });
+
+describe('GearsPage pending reward explanations', () => {
+  const pendingCases = [
+    { reason: 'unverified', message: 'Verify your email to claim 250 credits.' },
+    { reason: 'too_new', message: 'Claimable for 250 credits once your account is 7 days old.' },
+    {
+      reason: 'reward_check',
+      message: 'Once someone else opens your artifact link while signed in, you can claim 250 credits.',
+    },
+  ] as const;
+
+  it.each(pendingCases)('explains $reason in the card grid', async ({ reason, message }) => {
+    state.gears = [gear('mementos', 'skill', { unlocked: true, rewardPending: true, pendingReason: reason })];
+    renderPage();
+    await openTab(/Explore Features/);
+    expect(screen.getByTestId('gear-pending-note-mementos')).toHaveTextContent(message);
+    expect(screen.queryByTestId('gear-claim-mementos')).not.toBeInTheDocument();
+  });
+
+  describe.each([false, true])('detail with mobile=%s', isMobile => {
+    it.each(pendingCases)('keeps the $reason explanation when opened', async ({ reason, message }) => {
+      state.isMobile = isMobile;
+      state.gears = [gear('mementos', 'skill', { unlocked: true, rewardPending: true, pendingReason: reason })];
+      renderPage();
+      await openTab(/Explore Features/);
+      await userEvent.click(screen.getByTestId('gear-card-mementos'));
+      const detail = within(screen.getByTestId('gear-detail-mementos'));
+      expect(detail.getByTestId('gear-pending-note-mementos')).toHaveTextContent(message);
+      expect(detail.queryByTestId('gear-claim-mementos')).not.toBeInTheDocument();
+      expect(detail.queryByTestId('gear-detail-claim-mementos')).not.toBeInTheDocument();
+    });
+  });
+});

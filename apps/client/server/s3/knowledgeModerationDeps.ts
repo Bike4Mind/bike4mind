@@ -4,7 +4,7 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { moderateUploadedFile } from '@bike4mind/server-utils/s3/moderateUploadedFile';
-import type { ModerateImportedKnowledgeFilesArgs } from '@server/s3/moderateImportedKnowledgeFiles';
+import type { ModerateImportedKnowledgeFilesArgs } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
 import type { Types } from 'mongoose';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 

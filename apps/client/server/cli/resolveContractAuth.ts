@@ -1,4 +1,5 @@
 import { type EndpointContract, ForbiddenError } from '@bike4mind/common';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 import { verifyApiKey, verifyJwtToken, type ApiKeyInfo, type VerifiedUser } from './auth';
 
 export type ContractAuthResult =
@@ -17,7 +18,8 @@ export type ContractAuthResult =
  *
  * @throws when the request cannot be authenticated per the contract's auth mode; a
  * {@link ForbiddenError} for an authenticated-but-forbidden caller (when no other
- * credential succeeds), so the transport can 403.
+ * credential succeeds), so the transport can 403; a 5xx HTTPError when the API-key check
+ * itself failed (see toApiKeyAuthError), so the transport can 503/500.
  */
 export async function resolveContractAuth(
   headers: Record<string, string | undefined>,
@@ -26,7 +28,7 @@ export async function resolveContractAuth(
   const bearer = headers.authorization?.replace('Bearer ', '');
 
   if (contract.auth === 'jwtOnly') {
-    const user = await verifyJwtToken(bearer);
+    const user = await verifyJwtToken(bearer, { requireApiAccess: true });
     return { method: 'jwt', userId: user.id, user };
   }
 
@@ -40,12 +42,17 @@ export async function resolveContractAuth(
       });
       return { method: 'apiKey', userId: apiKeyInfo.userId, apiKeyInfo };
     } catch (keyError) {
+      // The key check itself failed (database unreachable): the caller should retry, not be
+      // re-judged by the JWT path, whose 401 would read as a bad credential.
+      if (isAuthInfraFailure(keyError)) throw keyError;
       // No valid API key - fall through to JWT (a valid-but-rate-limited key never
       // reaches here; verifyApiKey does not rate-limit, so success returns above).
       try {
-        const user = await verifyJwtToken(bearer);
+        const user = await verifyJwtToken(bearer, { requireApiAccess: true });
         return { method: 'jwt', userId: user.id, user };
       } catch (jwtError) {
+        // A session lookup outage is retryable even when a second supplied key is forbidden.
+        if (isAuthInfraFailure(jwtError)) throw jwtError;
         // Both failed: a recognised key whose owner is forbidden (suspended, disputed)
         // is the more useful answer than the JWT's 401.
         throw keyError instanceof ForbiddenError ? keyError : jwtError;

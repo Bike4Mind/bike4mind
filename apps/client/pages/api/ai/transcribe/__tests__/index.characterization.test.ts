@@ -42,12 +42,46 @@ vi.mock('@aws-sdk/client-s3', () => ({
   },
 }));
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'test-bucket' } } }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
   getEffectiveApiKeyByBackend: mockGetApiKey,
 }));
+// Stands in for the real hold (creditPreflight.hold.test.ts covers it): settle writes the ledger
+// row through subtractCredits and, like the real one, logs rather than throws when that write fails.
+const { fakeHold } = vi.hoisted(() => ({
+  fakeHold: (
+    subtract: (...a: unknown[]) => unknown,
+    args: { userId: string; logger: { error: (...a: unknown[]) => void } }
+  ) => ({
+    settle: async (credits: number, entry: Record<string, unknown>) => {
+      try {
+        await subtract({ ...entry, ownerId: args.userId, credits }, {});
+      } catch (err) {
+        args.logger.error('settlement failed', { err });
+      }
+      return credits;
+    },
+    release: async () => undefined,
+  }),
+}));
+
 vi.mock('@server/utils/creditPreflight', () => ({
   assertPreflightCredits: async () => undefined,
+  holdPreflightCredits: async ({
+    req,
+    requiredCredits,
+    featureLabel,
+  }: {
+    req: { user: { id: string }; logger: Parameters<typeof fakeHold>[1]['logger'] };
+    requiredCredits: number;
+    featureLabel: string;
+  }) =>
+    fakeHold(mockSubtractCredits, {
+      userId: req.user.id,
+      estimatedCredits: requiredCredits,
+      featureLabel,
+      logger: req.logger,
+    }),
   InsufficientCreditsPreflightError: class extends Error {},
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -77,7 +111,7 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
 function post(body: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user: { id: 'u1' }, logger });
+  Object.assign(req, { user: { id: 'u1' }, receivedAt: new Date(), logger });
   return { req, res };
 }
 
@@ -116,7 +150,13 @@ describe('POST /api/ai/transcribe', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ text: 'hello world' });
-    expect(mockOpenAI).toHaveBeenCalledWith(KEY, 'audio/mpeg', { backend: 'openai', id: 'whisper-1' }, 'sk-test');
+    expect(mockOpenAI).toHaveBeenCalledWith(
+      KEY,
+      'audio/mpeg',
+      { backend: 'openai', id: 'whisper-1' },
+      'sk-test',
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) })
+    );
     expect(mockSubtractCredits).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'speech_to_text_usage', ownerId: 'u1', model: 'openai' }),
       expect.anything()
@@ -132,7 +172,11 @@ describe('POST /api/ai/transcribe', () => {
     await call(req, res);
 
     expect(res._getJSONData()).toEqual({ text: 'hello aws' });
-    expect(mockAWS).toHaveBeenCalledWith(KEY, 'audio/mpeg');
+    expect(mockAWS).toHaveBeenCalledWith(
+      KEY,
+      'audio/mpeg',
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) })
+    );
   });
 
   it('still returns the text when billing fails', async () => {

@@ -44,7 +44,7 @@ describe('Users tab params', () => {
   const usersSearch = {
     tab: 'users',
     page: 2,
-    limit: 20,
+    limit: 50,
     sort: 'name',
     order: 'asc',
     org: ['Acme'],
@@ -72,6 +72,15 @@ describe('Users tab params', () => {
       tags: undefined,
       userId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
     });
+  });
+
+  it('keeps the default page when every view param is invalid, so the URL still describes a view', () => {
+    expect(parseAdminSearch({ tab: 'users', limit: 7, sort: 'bogus' })).toMatchObject({
+      page: 1,
+      limit: undefined,
+      sort: undefined,
+    });
+    expect(parseAdminSearch({ tab: 'users', userId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }).page).toBeUndefined();
   });
 
   it('never accepts the free-text search', () => {
@@ -125,6 +134,99 @@ describe('Feedback tab params', () => {
 
     const switched = adminSearchForTab(feedbackSearch, 'users');
     for (const key of Object.keys(feedbackSearch).filter(key => key !== 'tab')) {
+      expect(switched[key as keyof typeof switched], key).toBeUndefined();
+    }
+  });
+});
+
+describe('Webhook Audit Logs and Model Logs tab params', () => {
+  const webhookSearch = {
+    tab: 'webhook-audit-logs',
+    webhookRange: '30d',
+    webhookRepo: 'acme/widgets',
+    webhookEvent: 'push',
+    webhookStatus: 'failed',
+    webhookSource: 'org',
+    webhookDeliveryId: '8f1c2e40-1d2b-11ef-9a3c-5b1e2d3c4f5a',
+  };
+  const modelLogsSearch = {
+    tab: 'model-logs',
+    modelLogsPage: 2,
+    modelLogsLimit: 25,
+    modelLogsFrom: '2026-09-01',
+    modelLogsTo: '2026-09-30',
+    modelLogsModel: 'gpt-4',
+  };
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(
+      parseAdminSearch({ webhookRange: '1y', webhookDeliveryId: '../x', modelLogsLimit: '25', modelLogsFrom: 'soon' })
+    ).toMatchObject({
+      webhookRange: undefined,
+      webhookDeliveryId: undefined,
+      modelLogsLimit: 25,
+      modelLogsFrom: undefined,
+    });
+  });
+
+  it('never accepts the model logs free-text search', () => {
+    expect(parseAdminSearch({ search: 'my prompt' })).not.toHaveProperty('search');
+  });
+
+  it.each([
+    ['webhook-audit-logs', webhookSearch, 'model-logs'],
+    ['model-logs', modelLogsSearch, 'webhook-audit-logs'],
+  ] as const)('keeps %s params on their tab and drops them on a switch away', (slug, search, otherSlug) => {
+    expect(adminSearchForTab(search, slug)).toMatchObject(search);
+
+    const switched = adminSearchForTab(search, otherSlug);
+    for (const key of Object.keys(search).filter(key => key !== 'tab')) {
+      expect(switched[key as keyof typeof switched], key).toBeUndefined();
+    }
+  });
+});
+
+describe('Organizations tab params', () => {
+  const organizationsSearch = {
+    tab: 'organizations',
+    orgsPage: 2,
+    orgsLimit: 20,
+    orgsSort: 'createdAt',
+    orgsOrder: 'desc',
+    orgsPersonal: false,
+    orgId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+  };
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(
+      parseAdminSearch({ orgsPage: '2', orgsLimit: 7, orgsSort: 'credits', orgsPersonal: 'true', orgId: '../x' })
+    ).toMatchObject({
+      orgsPage: 2,
+      orgsLimit: undefined,
+      orgsSort: undefined,
+      orgsPersonal: true,
+      orgId: undefined,
+    });
+  });
+
+  it('keeps the default page when every view param is invalid, so the URL still describes a view', () => {
+    expect(parseAdminSearch({ tab: 'organizations', orgsSort: 'credits', orgsLimit: 7 })).toMatchObject({
+      orgsPage: 1,
+      orgsLimit: undefined,
+      orgsSort: undefined,
+    });
+    expect(parseAdminSearch({ tab: 'organizations', orgId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }).orgsPage).toBeUndefined();
+  });
+
+  it('drops an invalid orgs view param on another tab instead of adding a default page', () => {
+    expect(parseAdminSearch({ tab: 'users', orgsSort: 'credits' }).orgsPage).toBeUndefined();
+  });
+
+  it('keeps them on the organizations tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(organizationsSearch, 'organizations')).toMatchObject(organizationsSearch);
+
+    const switched = adminSearchForTab(organizationsSearch, 'users');
+    for (const key of Object.keys(organizationsSearch).filter(key => key !== 'tab')) {
       expect(switched[key as keyof typeof switched], key).toBeUndefined();
     }
   });

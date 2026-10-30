@@ -100,7 +100,8 @@ export async function findTransferableOrgArtifacts(ownerId: string): Promise<Tra
  * artifacts, so that is what lets it re-run this and finish the job. Idempotent: the child sweep
  * covers ALL of the owner's artifacts, and a clean re-run changes nothing.
  * Stored bundle objects in S3 are left in place; nothing serves them once the row is deleted.
- * CDN invalidation is the caller's job (see apps/client/server/services/publish/purgeUserPublishedArtifacts.ts).
+ * The owner-only thumbnail record is cleared with the row; deleting the thumbnail objects and the
+ * CDN invalidation are the caller's job (see apps/client/server/services/publish/purgeUserPublishedArtifacts.ts).
  */
 export async function purgeOwnerPublishedArtifacts(
   ownerId: string,
@@ -147,7 +148,7 @@ async function purgeMatchingPublishedArtifacts(
   if (live.length > 0) {
     await PublishedArtifact.updateMany(
       { _id: { $in: live.map(a => a._id) }, deletedAt: null },
-      { $set: { deletedAt: now, deletedBy } }
+      { $set: { deletedAt: now, deletedBy }, $unset: { thumbnail: 1 } }
     );
   }
 

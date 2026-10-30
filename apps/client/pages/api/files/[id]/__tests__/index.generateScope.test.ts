@@ -3,12 +3,14 @@ import { ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 /**
  * A key holding ai:generate without files:read may read back only a file it staged itself, and only
- * the fields the upload-then-poll flow needs. PUT and DELETE keep requiring files:write.
+ * the fields the upload-then-poll flow needs. The same key may DELETE that staged file - own, live,
+ * marked - but nothing else. PUT keeps requiring files:write.
  */
 const h = vi.hoisted(() => ({
   getFabFile: vi.fn(),
   generateSignedUrl: vi.fn(),
   findById: vi.fn(),
+  deleteFileForUser: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -24,11 +26,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/files/deleteFileForUser', () => ({ deleteFileForUser: h.deleteFileForUser }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(), getMetadata: vi.fn() }),
 }));
 vi.mock('@server/dataLakes', () => ({ grantingLakes: vi.fn(), resolveAccessibleLakes: vi.fn() }));
-vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({ recomputeStatsForLakeTags: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags', () => ({ recomputeStatsForLakeTags: vi.fn() }));
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),
@@ -45,7 +48,11 @@ vi.mock('@bike4mind/database', async importOriginal => ({
 }));
 vi.mock('@bike4mind/services', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services')>()),
-  fabFilesService: { getFabFile: h.getFabFile, generateSignedUrl: h.generateSignedUrl },
+  fabFilesService: {
+    getFabFile: h.getFabFile,
+    generateSignedUrl: h.generateSignedUrl,
+    toPublicDeleteAction: (action: string) => action,
+  },
 }));
 
 import handler from '../index';
@@ -66,12 +73,16 @@ const makeReq = (overrides: Record<string, unknown> = {}, query: Record<string, 
 });
 const makeRes = () => {
   const json = vi.fn();
-  return { json, res: { json } as never };
+  const status = vi.fn();
+  const res: Record<string, unknown> = { json, status };
+  status.mockReturnValue(res);
+  return { json, status, res: res as never };
 };
 
 const markedFile = (extra: Record<string, unknown> = {}) => ({
   id: FILE_ID,
   userId: 'u1',
+  deletedAt: null,
   fileName: 'secret-name.png',
   filePath: 'k.png',
   tags: [{ name: 't', strength: 1 }],
@@ -86,6 +97,7 @@ beforeEach(() => {
     moderationStatus: 'clean',
     fileUrl: 'https://signed.example/f',
   }));
+  h.deleteFileForUser.mockResolvedValue('deleted');
 });
 
 describe('GET /api/files/:id - ai:generate-only key', () => {
@@ -161,11 +173,86 @@ describe('GET /api/files/:id - callers that keep today behaviour', () => {
   });
 });
 
-describe('PUT and DELETE /api/files/:id - ai:generate-only key', () => {
-  it.each([['PUT'], ['DELETE']])('%s still needs files:write', async method => {
-    const err = await route(makeReq({ method, body: { fileName: 'x.png' } }), makeRes().res).catch(e => e);
+describe('PUT /api/files/:id - ai:generate-only key', () => {
+  it('still needs files:write', async () => {
+    const err = await route(makeReq({ method: 'PUT', body: { fileName: 'x.png' } }), makeRes().res).catch(e => e);
     expect(err).toBeInstanceOf(ForbiddenError);
     expect(err.message).toMatch(/files:write is required/);
     expect(h.findById).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/files/:id - ai:generate-only key', () => {
+  it('deletes its own marked staging file', async () => {
+    h.findById.mockResolvedValue(markedFile());
+    const { res, json } = makeRes();
+    await route(makeReq({ method: 'DELETE' }), res);
+    expect(h.findById).toHaveBeenCalledWith(FILE_ID);
+    expect(h.deleteFileForUser).toHaveBeenCalledTimes(1);
+    expect(h.deleteFileForUser).toHaveBeenCalledWith(expect.objectContaining({ method: 'DELETE' }), FILE_ID);
+    expect(json).toHaveBeenCalledWith({ msg: 'Fab file deleted', action: 'deleted' });
+  });
+
+  it.each([
+    ['an own file with no marker', markedFile({ sourceMetadata: undefined })],
+    ['a marked file owned by another user', markedFile({ userId: 'u2' })],
+    ['an already soft-deleted marked file', markedFile({ deletedAt: new Date() })],
+    ['a missing file', null],
+  ])('403s %s without reaching the delete', async (_name, file) => {
+    h.findById.mockResolvedValue(file);
+    const err = await route(makeReq({ method: 'DELETE' }), makeRes().res).catch(e => e);
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect(err.message).toMatch(/files:write is required/);
+    expect(h.findById).toHaveBeenCalledWith(FILE_ID);
+    expect(h.deleteFileForUser).not.toHaveBeenCalled();
+  });
+
+  it('still 404s a malformed id before any file load', async () => {
+    const { res, json, status } = makeRes();
+    await route(makeReq({ method: 'DELETE' }, { id: 'nope' }), res);
+    expect(status).toHaveBeenCalledWith(404);
+    expect(json).toHaveBeenCalledWith({ msg: 'File not found' });
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.deleteFileForUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/files/:id - callers that keep today behaviour', () => {
+  it('lets a files:write key delete an unmarked file without consulting the marker', async () => {
+    const { res, json } = makeRes();
+    await route(makeReq({ method: 'DELETE', apiKeyInfo: { keyId: 'k', scopes: ['files:write'] } }), res);
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.deleteFileForUser).toHaveBeenCalledTimes(1);
+    expect(h.deleteFileForUser).toHaveBeenCalledWith(expect.anything(), FILE_ID);
+    expect(json).toHaveBeenCalledWith({ msg: 'Fab file deleted', action: 'deleted' });
+  });
+
+  it('lets a key holding both files:write and ai:generate delete without consulting the marker', async () => {
+    const { res, json } = makeRes();
+    await route(makeReq({ method: 'DELETE', apiKeyInfo: { keyId: 'k', scopes: ['files:write', 'ai:generate'] } }), res);
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.deleteFileForUser).toHaveBeenCalledTimes(1);
+    expect(h.deleteFileForUser).toHaveBeenCalledWith(expect.anything(), FILE_ID);
+    expect(json).toHaveBeenCalledWith({ msg: 'Fab file deleted', action: 'deleted' });
+  });
+
+  it('lets a JWT caller delete without consulting the marker', async () => {
+    const { res, json } = makeRes();
+    await route(makeReq({ method: 'DELETE', apiKeyInfo: undefined }), res);
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.deleteFileForUser).toHaveBeenCalledTimes(1);
+    expect(h.deleteFileForUser).toHaveBeenCalledWith(expect.anything(), FILE_ID);
+    expect(json).toHaveBeenCalledWith({ msg: 'Fab file deleted', action: 'deleted' });
+  });
+
+  it('still 403s a files:read-only key before any file load', async () => {
+    const err = await route(
+      makeReq({ method: 'DELETE', apiKeyInfo: { keyId: 'k', scopes: ['files:read'] } }),
+      makeRes().res
+    ).catch(e => e);
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect(err.message).toMatch(/files:write is required/);
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.deleteFileForUser).not.toHaveBeenCalled();
   });
 });

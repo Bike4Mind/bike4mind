@@ -1,12 +1,14 @@
 import React from 'react';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { TRUNCATED_FINISH_REASON } from '@bike4mind/common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getThemeConfig } from '../../utils/themes';
-import { parseArtifactsWithFallback } from '../../utils/artifactParser';
+import { parseArtifactsWithFallback, type ParsedArtifact } from '../../utils/artifactParser';
+import { useStreamingArtifactPersistence } from '../../hooks/useStreamingArtifactPersistence';
 import {
   classifyGeneratedFiles,
   createCodeComponent,
@@ -14,6 +16,7 @@ import {
   ReplyCompleteContext,
 } from './PromptReplies';
 import PromptReplies from './PromptReplies';
+import type { ReactArtifactGroupRole } from '../../utils/reactArtifactGroup';
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 
@@ -39,6 +42,39 @@ vi.mock('@client/app/hooks/useMessageEditMode', () => {
   const state = { editingMessageId: undefined, editTarget: undefined, clearEdit: vi.fn() };
   return { useMessageEditMode: (selector: (s: typeof state) => unknown) => selector(state) };
 });
+
+// Stands in for the id resolver's no-row-yet path: the card shows the id it would mint from the
+// index it was handed, which is what has to match the row persistence writes.
+vi.mock('./artifacts/ArtifactRenderer', async () => {
+  const { generateCompleteArtifactId, getArtifactTimestamp } =
+    await vi.importActual<typeof import('../../utils/artifactParser')>('../../utils/artifactParser');
+  return {
+    default: ({
+      artifact,
+      index,
+      messageId,
+      reactGroup,
+    }: {
+      artifact: ParsedArtifact;
+      index: number;
+      messageId: string;
+      reactGroup?: ReactArtifactGroupRole;
+    }) => (
+      <div
+        data-testid={`artifact-card-${artifact.identifier}`}
+        data-sibling-files={reactGroup?.role === 'entry' ? Object.keys(reactGroup.files).join(',') : ''}
+      >
+        {generateCompleteArtifactId(artifact.type, artifact.identifier ?? '', getArtifactTimestamp(messageId), index)}
+      </div>
+    ),
+  };
+});
+
+const { persistArtifactsMock } = vi.hoisted(() => ({ persistArtifactsMock: vi.fn(() => Promise.resolve()) }));
+vi.mock('@client/app/utils/artifactPersistence', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  persistArtifacts: persistArtifactsMock,
+}));
 
 describe('retrieval-floor banner wiring in a rendered reply', () => {
   const appTheme = extendTheme({ ...getThemeConfig() });
@@ -71,6 +107,64 @@ describe('retrieval-floor banner wiring in a rendered reply', () => {
       citables: [{ id: 'https://example.com/doc', type: 'web_url', title: 'Doc' }],
     });
     expect(screen.queryByTestId('retrieval-floor-warning')).toBeNull();
+  });
+});
+
+describe('retrieval-coverage notice wiring in a rendered reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+
+  const renderReply = (reply: string, { partial = true, showSyntaxHighlight = false } = {}) =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{
+              id: 'coverage-quest',
+              sessionId: 'session-1',
+              type: 'message',
+              timestamp: new Date('2026-01-01T00:00:00Z'),
+              prompt: 'What does the library say?',
+              reply,
+              questMasterReply: reply,
+              status: 'done',
+              promptMeta: {
+                finishReason: TRUNCATED_FINISH_REASON,
+                ...(partial
+                  ? { retrievalCoverage: { partial: true, reasons: ['Some documents could not be searched.'] } }
+                  : {}),
+              },
+            }}
+            showSyntaxHighlight={showSyntaxHighlight}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+  it.each(['', '<think>Searching the library</think>'])(
+    'keeps the notice when the reply has no visible answer: %j',
+    reply => {
+      renderReply(reply);
+
+      expect(screen.getByTestId('reply-truncated-warning')).toBeInTheDocument();
+      expect(screen.getByTestId('retrieval-coverage-warning')).toBeInTheDocument();
+    }
+  );
+
+  it.each([false, true])('places the notice after the answer with syntax highlighting %s', showSyntaxHighlight => {
+    renderReply('The library answer.', { showSyntaxHighlight });
+
+    const answer = screen.getByText('The library answer.');
+    const notice = screen.getByTestId('retrieval-coverage-warning');
+    expect(answer.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(notice.querySelector('details')).not.toHaveAttribute('open');
+  });
+
+  it('keeps an empty reply without partial coverage free of a body or coverage notice', () => {
+    renderReply('', { partial: false });
+
+    expect(screen.queryByTestId('retrieval-coverage-warning')).toBeNull();
+    expect(screen.queryByTestId('ai-response-body')).toBeNull();
   });
 });
 
@@ -593,5 +687,111 @@ describe('reply UI side effects: live only on first arrival', () => {
     const { rerender } = render(reply(id, 'running'));
     rerender(reply(id, 'done'));
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('artifact card ids agree with the rows persistence writes', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const questId = 'artifact-ids-quest';
+  const stopwatch =
+    '<artifact identifier="Stopwatch" type="application/vnd.ant.react" title="Stopwatch">\n' +
+    'export default function Stopwatch() { return null; }\n</artifact>';
+  const app =
+    '<artifact identifier="App" type="application/vnd.ant.react" title="App">\n' +
+    'import Stopwatch from "./Stopwatch";\nexport default function App() { return <Stopwatch />; }\n</artifact>';
+  const board = '<artifact identifier="board" type="application/vnd.ant.chess" title="Board">no position</artifact>';
+  const midStream = `Here is the timer:\n\n${stopwatch}\n\nAnd the app that uses it:`;
+  const finished = `${midStream}\n\n${app}\n\nAnd a board:\n\n${board}`;
+
+  const reply = (questMasterReply: string, status: string) => (
+    <QueryClientProvider client={new QueryClient()}>
+      <CssVarsProvider theme={appTheme}>
+        <PromptReplies
+          messageData={{ id: questId, sessionId: 'session-1', questMasterReply, status } as never}
+          onSendMessage={async () => {}}
+        />
+      </CssVarsProvider>
+    </QueryClientProvider>
+  );
+
+  const persistedIds = async (replyText: string) => {
+    persistArtifactsMock.mockClear();
+    const { result } = renderHook(() => useStreamingArtifactPersistence());
+    result.current.persistArtifactsFromQuest({ id: questId, sessionId: 'session-1', replies: [replyText] });
+    await waitFor(() => expect(persistArtifactsMock).toHaveBeenCalledTimes(1));
+    const [rows] = persistArtifactsMock.mock.calls[0] as unknown as [{ id: string; identifier?: string }[]];
+    return Object.fromEntries(rows.map(row => [row.identifier, row.id]));
+  };
+
+  it('gives each finished card the id its row is saved under, chess included in the count', async () => {
+    const { rerender } = render(reply(midStream, 'running'));
+    // Mid-stream the earlier artifact is the only one parsed, so it sits at index 0 - not the
+    // index it ends up with. That id is provisional; the resolver must not keep it.
+    const midStreamId = screen.getByTestId('artifact-card-Stopwatch').textContent;
+
+    rerender(reply(finished, 'done'));
+    const rows = await persistedIds(finished);
+
+    expect(screen.getByTestId('artifact-card-App')).toHaveTextContent(rows.App);
+    expect(screen.getByTestId('artifact-card-Stopwatch')).toHaveTextContent(rows.Stopwatch);
+    expect(midStreamId).not.toBe(rows.Stopwatch);
+  });
+
+  it.each(['', '\n\n', ' \t\n'])(
+    'keeps entry offsets stable through a sibling stream with leading whitespace %j',
+    prefix => {
+      const { rerender } = render(reply(`${prefix}${app}`, 'running'));
+      const entryCard = screen.getByTestId('artifact-card-App');
+      expect(entryCard).toHaveAttribute('data-sibling-files', '');
+
+      const partialSibling = '<artifact identifier="Stopwatch" type="application/vnd.ant.react" title="Stopwatch">';
+      rerender(reply(`${prefix}${app}\n\n${partialSibling}`, 'running'));
+      expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+
+      rerender(reply(`${prefix}${app}\n\n${stopwatch}`, 'done'));
+      expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+      expect(entryCard).toHaveAttribute('data-sibling-files', 'Stopwatch');
+    }
+  );
+
+  it('keeps an earlier entry mounted when a later opening tag is cut off at completion', () => {
+    const prefix = '\n\n';
+    const { rerender } = render(reply(`${prefix}${app}`, 'running'));
+    const entryCard = screen.getByTestId('artifact-card-App');
+    const partialReply = `${prefix}${app}\n\n<artifact identifier="Stopwatch"`;
+
+    rerender(reply(partialReply, 'running'));
+    expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+    rerender(reply(partialReply, 'done'));
+    expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+  });
+});
+
+describe('empty fences in a reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('draws and copies empty fences without the word undefined', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const { container } = render(
+      <CssVarsProvider theme={appTheme}>
+        <ReplyCompleteContext.Provider value>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: createCodeComponent() }}>
+            {'```\n```\n\n```ts\n```'}
+          </ReactMarkdown>
+        </ReplyCompleteContext.Provider>
+      </CssVarsProvider>
+    );
+
+    const codes = container.querySelectorAll('pre code');
+    expect(codes).toHaveLength(2);
+    codes.forEach(code => expect(code.textContent).toBe(''));
+    expect(container.textContent).not.toContain('undefined');
+    screen.getAllByTestId('code-block-copy-btn').forEach(button => fireEvent.click(button));
+    await waitFor(() => expect(writeText.mock.calls).toEqual([[''], ['']]));
   });
 });

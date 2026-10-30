@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
+import { AdminSettings, withTransaction } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { ApiKeyScope, SpeechToTextModels } from '@bike4mind/common';
@@ -47,8 +49,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     try {
       const config = UpdateOperationsModelSchema.parse(req.body);
 
-      // Update the configuration
-      await OperationsModelService.updateOperationsModel(config);
+      await withTransaction(async () => {
+        const existing = await AdminSettings.findOne({ settingName: 'operationsModel' }).lean();
+        await OperationsModelService.updateOperationsModel(config);
+        await recordAdminSettingChange(req, {
+          settingName: 'operationsModel',
+          before: existing?.settingValue ?? null,
+          after: config,
+        });
+      });
 
       // Get speech model info from list for response
       const speechModels = [

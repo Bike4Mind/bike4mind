@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import bcrypt from 'bcryptjs';
 
 // Mock all external dependencies before importing the route handler.
@@ -69,6 +69,17 @@ vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
   grantIndividualAdminSubscription: vi.fn(),
 }));
 
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: vi.fn(),
+  recordLoginEvent: vi.fn(),
+  readNetworkMeta: vi.fn(() => ({})),
+}));
+// The per-network signup caps are covered in signupNetworkLimits.test.ts and pages/api/otc/__tests__/verify.test.ts.
+vi.mock('@server/auth/signupNetworkLimits', () => ({
+  assertSignupNetworkWithinLimits: vi.fn().mockResolvedValue(undefined),
+  createSignupRiskCollector: vi.fn(() => vi.fn()),
+}));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
@@ -268,17 +279,18 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(mockFindByEmail).not.toHaveBeenCalled();
   });
 
-  describe('re-issued pending tokens keep the same payload shape', () => {
+  describe.each([true, null, undefined])('reissued token payload shape (%s)', challengeVerified => {
     const signedPayloads = () => mockJwtSign.mock.calls.map(([payload]) => payload as Record<string, unknown>);
     const expectPayloadShape = () => {
       expect(signedPayloads().length).toBeGreaterThan(0);
       for (const payload of signedPayloads()) {
-        expect(Object.keys(payload).sort()).toEqual(['attempts', 'email', 'jti']);
+        expect(Object.keys(payload).sort()).toEqual(['attempts', 'challengeVerified', 'email', 'jti']);
+        expect(payload.challengeVerified).toBe(challengeVerified === true ? true : null);
       }
     };
 
     beforeEach(() => {
-      mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash' }));
+      mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash', challengeVerified }));
       mockFindByEmail.mockResolvedValue(null);
     });
 
@@ -508,10 +520,13 @@ describe('/api/otc/verify — enumeration resistance', () => {
     mockJwtVerify.mockReturnValue(validToken());
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockUserHasMFA.mockReturnValue(false);
-    // enforceMFA = true for this call only - vi.clearAllMocks() clears calls, not
-    // implementations, so a non-Once override here would leak into every later test.
+    // enforceMFA = true for this call only. Keyed on the setting name because the OTC limit
+    // settings are read first; vi.clearAllMocks() keeps implementations, so restore it after.
     const { getSettingsValue } = await import('@bike4mind/utils');
-    vi.mocked(getSettingsValue).mockReturnValueOnce(true);
+    vi.mocked(getSettingsValue).mockImplementation(key => key === 'enforceMFA');
+    onTestFinished(() => {
+      vi.mocked(getSettingsValue).mockReturnValue(false);
+    });
     mockJwtSign.mockReturnValue('mfa-setup-access-token');
     mockFindByEmail.mockResolvedValue({
       id: 'u2',

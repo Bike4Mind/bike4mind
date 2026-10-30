@@ -28,6 +28,12 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
+vi.mock('@server/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it.
   ...(await orig<Record<string, unknown>>()),
@@ -85,7 +91,7 @@ vi.mock('@server/auth/issueSession', () => ({
 }));
 
 // The per-user throttle is backed by the `caches` collection; this test has no Mongo.
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
   rateLimit: () => (_req: any, _res: any, next: any) => next(),
 }));

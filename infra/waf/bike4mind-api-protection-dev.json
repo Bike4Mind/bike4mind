@@ -54,6 +54,61 @@
       }
     },
     {
+      "Name": "AWS-AWSManagedRulesAnonymousIpList",
+      "Priority": 1,
+      "Statement": {
+        "ManagedRuleGroupStatement": {
+          "VendorName": "AWS",
+          "Name": "AWSManagedRulesAnonymousIpList",
+          "RuleActionOverrides": [
+            {
+              "Name": "AnonymousIPList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            },
+            {
+              "Name": "HostingProviderIPList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            }
+          ],
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/otc/",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "OverrideAction": {
+        "None": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "AWS-AWSManagedRulesAnonymousIpList"
+      }
+    },
+    {
       "Name": "emergency-ip-block",
       "Priority": 2,
       "Statement": {
@@ -121,11 +176,202 @@
       }
     },
     {
-      "Name": "api-rate-limit",
+      "Name": "otc-send-rate-limit",
       "Priority": 4,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 10000,
+          "Limit": 20,
+          "EvaluationWindowSec": 600,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "AndStatement": {
+              "Statements": [
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/api/otc/send",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "NotStatement": {
+                    "Statement": {
+                      "IPSetReferenceStatement": {
+                        "ARN": "PLACEHOLDER_RATE_EXEMPT_IPSET_ARN"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "otc-send-rate-limit"
+      }
+    },
+    {
+      "Name": "credits-read-rate-limit",
+      "Priority": 5,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 50,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "AndStatement": {
+              "Statements": [
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "GET",
+                    "FieldToMatch": {
+                      "Method": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "NONE"
+                      }
+                    ],
+                    "PositionalConstraint": "EXACTLY"
+                  }
+                },
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/api/v1/credits",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "NotStatement": {
+                    "Statement": {
+                      "IPSetReferenceStatement": {
+                        "ARN": "PLACEHOLDER_RATE_EXEMPT_IPSET_ARN"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "credits-read-rate-limit"
+      }
+    },
+    {
+      "Name": "otc-send-asn-rate-limit",
+      "Priority": 6,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 100,
+          "EvaluationWindowSec": 600,
+          "AggregateKeyType": "CUSTOM_KEYS",
+          "CustomKeys": [
+            {
+              "ASN": {}
+            }
+          ],
+          "ScopeDownStatement": {
+            "AndStatement": {
+              "Statements": [
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "/api/otc/send",
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "URL_DECODE"
+                      },
+                      {
+                        "Priority": 1,
+                        "Type": "NORMALIZE_PATH"
+                      },
+                      {
+                        "Priority": 2,
+                        "Type": "LOWERCASE"
+                      }
+                    ],
+                    "PositionalConstraint": "STARTS_WITH"
+                  }
+                },
+                {
+                  "NotStatement": {
+                    "Statement": {
+                      "IPSetReferenceStatement": {
+                        "ARN": "PLACEHOLDER_RATE_EXEMPT_IPSET_ARN"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "otc-send-asn-rate-limit"
+      }
+    },
+    {
+      "Name": "api-rate-limit",
+      "Priority": 7,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 5000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -154,7 +400,17 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -164,7 +420,7 @@
     },
     {
       "Name": "AWS-AWSManagedRulesCommonRuleSet",
-      "Priority": 5,
+      "Priority": 8,
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
@@ -320,7 +576,7 @@
     },
     {
       "Name": "AWS-AWSManagedRulesSQLiRuleSet",
-      "Priority": 6,
+      "Priority": 9,
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
@@ -468,7 +724,7 @@
     },
     {
       "Name": "AWS-AWSManagedRulesKnownBadInputsRuleSet",
-      "Priority": 7,
+      "Priority": 10,
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
@@ -586,7 +842,7 @@
     },
     {
       "Name": "AWS-AWSManagedRulesAdminProtectionRuleSet",
-      "Priority": 8,
+      "Priority": 11,
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
@@ -612,11 +868,25 @@
     },
     {
       "Name": "AWS-AWSManagedRulesAmazonIpReputationList",
-      "Priority": 9,
+      "Priority": 12,
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
-          "Name": "AWSManagedRulesAmazonIpReputationList"
+          "Name": "AWSManagedRulesAmazonIpReputationList",
+          "RuleActionOverrides": [
+            {
+              "Name": "AWSManagedIPReputationList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            },
+            {
+              "Name": "AWSManagedReconnaissanceList",
+              "ActionToUse": {
+                "Count": {}
+              }
+            }
+          ]
         }
       },
       "OverrideAction": {
@@ -630,10 +900,10 @@
     },
     {
       "Name": "static-asset-rate-limit",
-      "Priority": 10,
+      "Priority": 13,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 50000,
+          "Limit": 20000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -806,7 +1076,17 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -816,10 +1096,10 @@
     },
     {
       "Name": "register-rate-limit",
-      "Priority": 11,
+      "Priority": 14,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 1000,
+          "Limit": 500,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -848,7 +1128,17 @@
         }
       },
       "Action": {
-        "Block": {}
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
       },
       "VisibilityConfig": {
         "SampledRequestsEnabled": true,
@@ -858,10 +1148,10 @@
     },
     {
       "Name": "api-rate-limit-prod-shadow",
-      "Priority": 12,
+      "Priority": 15,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 2000,
+          "Limit": 1000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -900,10 +1190,10 @@
     },
     {
       "Name": "ai-route-rate-limit-prod-shadow",
-      "Priority": 13,
+      "Priority": 16,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 300,
+          "Limit": 100,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -942,10 +1232,10 @@
     },
     {
       "Name": "register-rate-limit-prod-shadow",
-      "Priority": 14,
+      "Priority": 17,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 100,
+          "Limit": 30,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -984,10 +1274,10 @@
     },
     {
       "Name": "image-rate-limit-prod-shadow",
-      "Priority": 15,
+      "Priority": 18,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 1000,
+          "Limit": 500,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -1026,10 +1316,10 @@
     },
     {
       "Name": "default-rate-limit-prod-shadow",
-      "Priority": 16,
+      "Priority": 19,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 5000,
+          "Limit": 2000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -1216,10 +1506,10 @@
     },
     {
       "Name": "static-asset-rate-limit-prod-shadow",
-      "Priority": 17,
+      "Priority": 20,
       "Statement": {
         "RateBasedStatement": {
-          "Limit": 50000,
+          "Limit": 20000,
           "EvaluationWindowSec": 300,
           "AggregateKeyType": "IP",
           "ScopeDownStatement": {
@@ -1398,6 +1688,634 @@
         "SampledRequestsEnabled": true,
         "CloudWatchMetricsEnabled": true,
         "MetricName": "static-asset-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "otc-verify-rate-limit-prod-shadow",
+      "Priority": 21,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 30,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/otc/verify",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "otc-verify-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "api-key-create-rate-limit-prod-shadow",
+      "Priority": 22,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 20,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "AndStatement": {
+              "Statements": [
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "POST",
+                    "FieldToMatch": {
+                      "Method": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "NONE"
+                      }
+                    ],
+                    "PositionalConstraint": "EXACTLY"
+                  }
+                },
+                {
+                  "OrStatement": {
+                    "Statements": [
+                      {
+                        "ByteMatchStatement": {
+                          "SearchString": "/api/user-api-keys",
+                          "FieldToMatch": {
+                            "UriPath": {}
+                          },
+                          "TextTransformations": [
+                            {
+                              "Priority": 0,
+                              "Type": "URL_DECODE"
+                            },
+                            {
+                              "Priority": 1,
+                              "Type": "NORMALIZE_PATH"
+                            },
+                            {
+                              "Priority": 2,
+                              "Type": "LOWERCASE"
+                            }
+                          ],
+                          "PositionalConstraint": "EXACTLY"
+                        }
+                      },
+                      {
+                        "ByteMatchStatement": {
+                          "SearchString": "/api/user-api-keys/",
+                          "FieldToMatch": {
+                            "UriPath": {}
+                          },
+                          "TextTransformations": [
+                            {
+                              "Priority": 0,
+                              "Type": "URL_DECODE"
+                            },
+                            {
+                              "Priority": 1,
+                              "Type": "NORMALIZE_PATH"
+                            },
+                            {
+                              "Priority": 2,
+                              "Type": "LOWERCASE"
+                            }
+                          ],
+                          "PositionalConstraint": "EXACTLY"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "api-key-create-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "credits-rate-limit-prod-shadow",
+      "Priority": 23,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 100,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/v1/credits",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "Action": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "credits-rate-limit-prod-shadow"
+      }
+    },
+    {
+      "Name": "otc-verify-rate-limit",
+      "Priority": 24,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 30,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/otc/verify",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "Action": {
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "otc-verify-rate-limit"
+      }
+    },
+    {
+      "Name": "api-key-create-rate-limit",
+      "Priority": 25,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 20,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "AndStatement": {
+              "Statements": [
+                {
+                  "ByteMatchStatement": {
+                    "SearchString": "POST",
+                    "FieldToMatch": {
+                      "Method": {}
+                    },
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "NONE"
+                      }
+                    ],
+                    "PositionalConstraint": "EXACTLY"
+                  }
+                },
+                {
+                  "OrStatement": {
+                    "Statements": [
+                      {
+                        "ByteMatchStatement": {
+                          "SearchString": "/api/user-api-keys",
+                          "FieldToMatch": {
+                            "UriPath": {}
+                          },
+                          "TextTransformations": [
+                            {
+                              "Priority": 0,
+                              "Type": "URL_DECODE"
+                            },
+                            {
+                              "Priority": 1,
+                              "Type": "NORMALIZE_PATH"
+                            },
+                            {
+                              "Priority": 2,
+                              "Type": "LOWERCASE"
+                            }
+                          ],
+                          "PositionalConstraint": "EXACTLY"
+                        }
+                      },
+                      {
+                        "ByteMatchStatement": {
+                          "SearchString": "/api/user-api-keys/",
+                          "FieldToMatch": {
+                            "UriPath": {}
+                          },
+                          "TextTransformations": [
+                            {
+                              "Priority": 0,
+                              "Type": "URL_DECODE"
+                            },
+                            {
+                              "Priority": 1,
+                              "Type": "NORMALIZE_PATH"
+                            },
+                            {
+                              "Priority": 2,
+                              "Type": "LOWERCASE"
+                            }
+                          ],
+                          "PositionalConstraint": "EXACTLY"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Action": {
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "api-key-create-rate-limit"
+      }
+    },
+    {
+      "Name": "credits-rate-limit",
+      "Priority": 26,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 100,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/v1/credits",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "Action": {
+        "Block": {
+          "CustomResponse": {
+            "ResponseCode": 429,
+            "ResponseHeaders": [
+              {
+                "Name": "retry-after",
+                "Value": "300"
+              }
+            ]
+          }
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "credits-rate-limit"
+      }
+    },
+    {
+      "Name": "AWS-AWSManagedRulesACFPRuleSet",
+      "Priority": 27,
+      "Statement": {
+        "ManagedRuleGroupStatement": {
+          "VendorName": "AWS",
+          "Name": "AWSManagedRulesACFPRuleSet",
+          "ManagedRuleGroupConfigs": [
+            {
+              "AWSManagedRulesACFPRuleSet": {
+                "CreationPath": "/api/otc/verify",
+                "RegistrationPagePath": "/api/otc/verify",
+                "EnableRegexInPath": false,
+                "RequestInspection": {
+                  "PayloadType": "JSON",
+                  "UsernameField": {
+                    "Identifier": "/email"
+                  },
+                  "PasswordField": {
+                    "Identifier": "/code"
+                  }
+                }
+              }
+            }
+          ],
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "SearchString": "/api/otc/",
+              "FieldToMatch": {
+                "UriPath": {}
+              },
+              "TextTransformations": [
+                {
+                  "Priority": 0,
+                  "Type": "URL_DECODE"
+                },
+                {
+                  "Priority": 1,
+                  "Type": "NORMALIZE_PATH"
+                },
+                {
+                  "Priority": 2,
+                  "Type": "LOWERCASE"
+                }
+              ],
+              "PositionalConstraint": "STARTS_WITH"
+            }
+          }
+        }
+      },
+      "OverrideAction": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "AWS-AWSManagedRulesACFPRuleSet"
+      }
+    },
+    {
+      "Name": "block-forged-waf-forwarding-headers",
+      "Priority": 28,
+      "Statement": {
+        "OrStatement": {
+          "Statements": [
+            {
+              "ByteMatchStatement": {
+                "SearchString": "1",
+                "FieldToMatch": {
+                  "SingleHeader": {
+                    "Name": "x-amzn-waf-x-waf-anon-ip"
+                  }
+                },
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "NONE"
+                  }
+                ],
+                "PositionalConstraint": "EXACTLY"
+              }
+            },
+            {
+              "ByteMatchStatement": {
+                "SearchString": "1",
+                "FieldToMatch": {
+                  "SingleHeader": {
+                    "Name": "x-amzn-waf-x-waf-bot-signal"
+                  }
+                },
+                "TextTransformations": [
+                  {
+                    "Priority": 0,
+                    "Type": "NONE"
+                  }
+                ],
+                "PositionalConstraint": "EXACTLY"
+              }
+            }
+          ]
+        }
+      },
+      "Action": {
+        "Block": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "block-forged-waf-forwarding-headers"
+      }
+    },
+    {
+      "Name": "AWS-AWSManagedRulesBotControlRuleSet",
+      "Priority": 30,
+      "Statement": {
+        "ManagedRuleGroupStatement": {
+          "VendorName": "AWS",
+          "Name": "AWSManagedRulesBotControlRuleSet",
+          "ManagedRuleGroupConfigs": [
+            {
+              "AWSManagedRulesBotControlRuleSet": {
+                "InspectionLevel": "COMMON"
+              }
+            }
+          ],
+          "ScopeDownStatement": {
+            "NotStatement": {
+              "Statement": {
+                "OrStatement": {
+                  "Statements": [
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/_next/static/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/_next/image",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "URL_DECODE"
+                          },
+                          {
+                            "Priority": 1,
+                            "Type": "NORMALIZE_PATH"
+                          },
+                          {
+                            "Priority": 2,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "OverrideAction": {
+        "Count": {}
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "AWS-AWSManagedRulesBotControlRuleSet"
+      }
+    },
+    {
+      "Name": "forward-anon-ip-label",
+      "Priority": 31,
+      "Statement": {
+        "LabelMatchStatement": {
+          "Scope": "LABEL",
+          "Key": "awswaf:managed:aws:anonymous-ip-list:AnonymousIPList"
+        }
+      },
+      "Action": {
+        "Count": {
+          "CustomRequestHandling": {
+            "InsertHeaders": [
+              {
+                "Name": "x-waf-anon-ip",
+                "Value": "1"
+              }
+            ]
+          }
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "forward-anon-ip-label"
+      }
+    },
+    {
+      "Name": "forward-bot-signal-label",
+      "Priority": 32,
+      "Statement": {
+        "LabelMatchStatement": {
+          "Scope": "NAMESPACE",
+          "Key": "awswaf:managed:aws:bot-control:bot:"
+        }
+      },
+      "Action": {
+        "Count": {
+          "CustomRequestHandling": {
+            "InsertHeaders": [
+              {
+                "Name": "x-waf-bot-signal",
+                "Value": "1"
+              }
+            ]
+          }
+        }
+      },
+      "VisibilityConfig": {
+        "SampledRequestsEnabled": true,
+        "CloudWatchMetricsEnabled": true,
+        "MetricName": "forward-bot-signal-label"
       }
     }
   ],

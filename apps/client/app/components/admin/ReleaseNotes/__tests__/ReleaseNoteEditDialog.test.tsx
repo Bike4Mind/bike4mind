@@ -10,6 +10,9 @@ const { mockPatch } = vi.hoisted(() => ({ mockPatch: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: mockPatch, put: vi.fn() },
 }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useConfig: () => ({ data: { fabfileBucketName: 'fab-bucket' } }),
+}));
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
 }));
@@ -61,5 +64,83 @@ describe('ReleaseNoteEditDialog', () => {
       summary: 'Summary',
       items: [second, { category: 'new', text: 'Dark mode', importance: 2, sourcePrs: [] }],
     });
+  });
+
+  const renderDialog = (value: AdminReleaseNote) =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <ReleaseNoteEditDialog note={value} onClose={vi.fn()} />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+  it('sends the video when one is pasted', async () => {
+    mockPatch.mockResolvedValue({ data: note });
+    renderDialog(note);
+
+    fireEvent.change(screen.getByTestId('modal-video-landscape-video-input'), {
+      target: { value: 'https://d111.cloudfront.net/wide.mp4' },
+    });
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    expect(mockPatch.mock.calls[0][1]).toMatchObject({
+      video: expect.objectContaining({ landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' }),
+    });
+  });
+
+  it('sends null when the stored video is cleared', async () => {
+    mockPatch.mockResolvedValue({ data: note });
+    renderDialog({ ...note, video: { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' } });
+
+    fireEvent.click(screen.getByTestId('modal-video-landscape-video-clear-btn'));
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    expect(mockPatch.mock.calls[0][1]).toMatchObject({ video: null });
+  });
+
+  it('blocks saving a video on a disallowed host', () => {
+    renderDialog(note);
+
+    fireEvent.change(screen.getByTestId('modal-video-landscape-video-input'), {
+      target: { value: 'https://evil.example.com/wide.mp4' },
+    });
+
+    expect(screen.getByTestId('release-note-edit-save-btn')).toBeDisabled();
+  });
+  const stillNote = {
+    ...note,
+    image: { landscapeUrl: 'https://d111.cloudfront.net/s.png', portraitUrl: null },
+  } as AdminReleaseNote;
+
+  it('sends null for the image once it is removed', async () => {
+    mockPatch.mockResolvedValue({ data: note });
+    renderDialog(stillNote);
+
+    expect(screen.getByText('Still image attached (16:9 and 9:16)')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('release-note-edit-remove-image-btn'));
+    expect(screen.getByTestId('release-note-edit-image-status')).toHaveTextContent('Still image is removed on save');
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    expect(mockPatch).toHaveBeenCalledWith('/api/admin/release-notes/n1', expect.objectContaining({ image: null }));
+  });
+
+  it('sends no image key when the still is untouched', async () => {
+    mockPatch.mockResolvedValue({ data: note });
+    renderDialog(stillNote);
+
+    fireEvent.click(screen.getByTestId('release-note-edit-save-btn'));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    expect('image' in mockPatch.mock.calls[0][1]).toBe(false);
+  });
+
+  it('shows no still row for a note without an image', () => {
+    renderDialog({ ...note, image: null } as AdminReleaseNote);
+
+    expect(screen.queryByTestId('release-note-edit-remove-image-btn')).toBeNull();
   });
 });

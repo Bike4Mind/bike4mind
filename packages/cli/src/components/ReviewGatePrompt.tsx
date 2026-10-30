@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import type { ReviewGateResponse } from '../tools/reviewGateTool';
-import { escapeTerminalControlChars } from './PermissionPrompt';
+import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
 
 export interface ReviewGatePromptProps {
   description: string;
@@ -122,14 +122,14 @@ export function ReviewGatePrompt({ description, options, recommendation, onRespo
       </Box>
 
       <Box marginTop={1}>
-        <Text>{escapeTerminalControlChars(description)}</Text>
+        <Text>{escapeTerminalControlChars(description, { keepBidiMarks: true })}</Text>
       </Box>
 
       {recommendation && (
         <Box marginTop={1} flexDirection="column">
           <Text bold>Recommendation:</Text>
           <Box paddingLeft={2}>
-            <Text dimColor>{escapeTerminalControlChars(recommendation)}</Text>
+            <Text dimColor>{escapeTerminalControlChars(recommendation, { keepBidiMarks: true })}</Text>
           </Box>
         </Box>
       )}
@@ -140,7 +140,7 @@ export function ReviewGatePrompt({ description, options, recommendation, onRespo
           <Box paddingLeft={2} flexDirection="column">
             {options.map((opt, idx) => (
               <Text key={idx} dimColor>
-                • {escapeTerminalControlChars(opt)}
+                • {escapeTerminalControlChars(opt, { keepBidiMarks: true })}
               </Text>
             ))}
           </Box>

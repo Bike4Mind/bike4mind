@@ -36,6 +36,8 @@ const tagMocks = vi.hoisted(() => ({
   findAllByUserId: vi.fn(),
   findOrCreateByNameAndUserId: vi.fn(),
 }));
+const unlockFromOrgInvite = vi.hoisted(() => vi.fn().mockResolvedValue({ creditsGranted: 0 }));
+vi.mock('@server/credits/orgInviteUnlock', () => ({ unlockSignupGrantFromOrgInvite: unlockFromOrgInvite }));
 vi.mock('@bike4mind/services', () => ({ sharingService: { acceptInvite } }));
 vi.mock('@bike4mind/database', () => ({
   // accept.ts adapters + inviteManager's module-load imports
@@ -159,5 +161,56 @@ describe('POST /api/invites/[id]/accept - file tag transfer', () => {
     await acceptFileInvite();
 
     expect(tagMocks.findOrCreateByNameAndUserId).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Accepting an Organization invite releases the staged signup grant. A credits failure must leave
+ * the membership intact, and no other invite type may trigger the release.
+ */
+describe('POST /api/invites/[id]/accept - signup grant unlock', () => {
+  const accept = (type: string, apiKeyInfo?: object) => {
+    acceptInvite.mockResolvedValueOnce({
+      id: 'inv1',
+      type,
+      documentId: 'doc1',
+      recipients: { pending: [], accepted: ['me@x.com'], refused: [] },
+    });
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    (req as any).ability = {};
+    (req as any).logger = { error: vi.fn() };
+    if (apiKeyInfo) (req as any).apiKeyInfo = apiKeyInfo;
+    return { req, res, done: mockRefs.postHandler!(req, res) };
+  };
+
+  beforeEach(() => unlockFromOrgInvite.mockClear());
+
+  it('releases the grant for an Organization invite', async () => {
+    await accept('Organization').done;
+    expect(unlockFromOrgInvite).toHaveBeenCalledWith('u1', 'inv1');
+  });
+
+  it('does not release the grant when an API key accepts the invite', async () => {
+    const { res, done } = accept('Organization', { keyId: 'key1' });
+    await done;
+    expect(res._getStatusCode()).toBe(200);
+    expect(unlockFromOrgInvite).not.toHaveBeenCalled();
+  });
+
+  it('does not release the grant for a Session invite', async () => {
+    await accept('Session').done;
+    expect(unlockFromOrgInvite).not.toHaveBeenCalled();
+  });
+
+  it('still accepts the invite and logs when the release fails', async () => {
+    unlockFromOrgInvite.mockRejectedValueOnce(new Error('ledger down'));
+    const { req, res, done } = accept('Organization');
+    await done;
+    expect(res._getStatusCode()).toBe(200);
+    expect((req as any).logger.error).toHaveBeenCalledWith(
+      'Organization invite signup grant remains pending',
+      expect.any(Error)
+    );
   });
 });

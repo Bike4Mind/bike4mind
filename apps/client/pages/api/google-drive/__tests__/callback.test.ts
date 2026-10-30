@@ -23,7 +23,7 @@ vi.mock('@bike4mind/database', () => ({
   orgGoogleDriveConnectionRepository: {},
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (v: string) => `enc:${v}`,
   decryptToken: (v: string) => v,
 }));
@@ -49,8 +49,8 @@ vi.mock('@server/integrations/google/drive/common', async importOriginal => {
 import callbackHandler from '@pages/api/google-drive/callback';
 import errorHandler from '@server/middlewares/errorHandler';
 import { getTokens } from '@server/integrations/google/drive/common';
-import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { createStateToken } from '@server/auth/jwtStateStore';
+import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { createStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { GOOGLE_DRIVE_STATE_OPTIONS } from '@server/integrations/google/drive/common';
 

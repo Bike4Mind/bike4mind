@@ -11,8 +11,8 @@ import { type MigrationFile } from './index';
  * and not fine on a widely-shared tag.
  *
  * Declared on the schema too, but a request-path index on a collection this size belongs in a
- * migration rather than being left to autoIndex: prod runs DocumentDB, where the build takes a
- * foreground lock, and autoIndex would take it lazily on a cold boot of whichever Lambda touches
+ * migration rather than being left to autoIndex: autoIndex builds are fire-and-forget (a
+ * failure is silent) and would start lazily on a cold boot of whichever Lambda touches
  * the collection first. Same rationale as 20260814000001_ensure-fabfile-userid-tagname-index and
  * 20260902000000_ensure-quest-retrieval-index.
  *

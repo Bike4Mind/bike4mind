@@ -4,6 +4,39 @@
 
 This directory contains the core business logic services for the B4M application. Each service is organized into its own module and follows specific patterns for consistency and maintainability.
 
+## Media admission adapter migration
+
+`ImageGenerationService`, `ImageEditService`, `CreateVideoJobDeps` and
+`CreateMusicJobDeps` require an `assertModelAdmission` callback. The image services accept
+`(user: string | IUserDocument, modelId, adminRoleWithheld?)`; their workers pass the loaded user.
+Video/music job callbacks accept `(userId: string, modelId, adminRoleWithheld?)`.
+Implement it with the shared `createModelAdmission` rule and the caller's current
+entitlements. Preserve a withheld admin role when the third argument is true; it
+is trusted caller metadata, never a request-body option. Propagate refusals before reserving credits or dispatching provider
+work. Image services check both invocation and queue execution.
+
+The Free-Tier Model Gate now applies to all model IDs, including media. Add approved
+media IDs to `freeTierAllowedModels` in Admin Settings to offer them to free accounts;
+the default list contains text models only. Conversational voice uses the billing
+identifier `elevenlabs`; its text reasoning model must also be allowed. A refusal
+uses `model_requires_subscription`. Check the allowlist and the account's paid-plan
+entitlement when diagnosing an unexpected refusal; plan-read outages return a
+retryable error instead of an upgrade prompt.
+
+Media tool hosts must supply `getEntitlements: () => Promise<string[]>` through
+`ToolBuilderConfig`, `ToolBuilderDeps` or `generateTools`' object argument. Proactive message
+adapters require the same callback. Resolve the executing user's current entitlements and let
+read failures reject; `entitlementKeys` remains a retrieval snapshot, not a model admission
+source. A missing or failed resolver returns a retryable refusal when plan verification is needed.
+
+## Internal user notes migration
+
+`userService.adminUpdateUser` no longer accepts `userNotes`. Existing inline notes
+remain read-only; remove that field from service calls. In the web application,
+use the JWT-only `/api/admin/users/<userId>/notes` routes for versioned note
+creation and edits. Reads require `support:read`, writes require `users:moderate`,
+and impersonated sessions cannot write notes. These routes are not API-key endpoints.
+
 ## Workspace session settings migration
 
 `IChatCompletionServiceOptions` and the adapters for `forkSession`, `snipSession`,
@@ -12,6 +45,147 @@ host's contributed `WorkspaceSessionSettingsTable`, or `{}` when the host has no
 contributions. Omitting the table is a configuration error rather than an opt-out.
 
 `createSession` keeps this adapter optional for existing workspace-specific callers.
+
+## Staged signup grants and assessment
+
+`userService.evaluateSignupRisk` is a pure, server-owned evaluator exported from
+`@bike4mind/services`. `releaseSignupTranche` runs it inside the grant transaction,
+using the private `signupGrantRiskPolicy` setting (disabled by default).
+For example, explicit disablement preserves a caller's validated entitlement:
+
+```typescript
+import { userService } from '@bike4mind/services';
+
+const decision = userService.evaluateSignupRisk({ enabled: false }, {}, signupCredits);
+```
+
+`userService.assessSignupGrant` takes policy, observation, atomic-commit, and
+band-telemetry adapters. The commit adapter must persist the assessment and grant
+changes atomically and return the stored winner on retries. Callers remain
+responsible for existing-account, paid, and staff exemptions; this helper does
+not implement them. The staged engine enrolls only newly created eligible accounts;
+existing accounts and explicit invite allocations retain their legacy grant path.
+
+`releaseSignupTranche` persists `signupGrantAssessment`, the ledger, balance, and
+released stage atomically. Every positive payout also claims the same canonical-inbox
+entitlement used by legacy default grants inside that transaction. An inbox already
+claimed by another account receives no payout; zero-credit tranches wait until the
+first positive unlock to claim. A failed payout rolls the claim back for retry.
+The assessment is admin-only and excluded from self,
+public, and WebSocket responses. `collectRiskSignals`, when supplied by a trusted
+server integration, receives the persisted user. Without it, only persisted signup
+datacenter metadata is known; other observations remain unknown, never clean.
+An invalid policy or missing required observation releases zero initial credits.
+
+`unlockSignupGrant` accepts server-owned validators. A validator may return `true`
+to authorize the configured maximum, `false` to refuse, or
+`{ cumulativeCredits }` for an identity-specific cumulative entitlement bounded by
+the account's snapshotted signup plus unlock credits. The engine grants only
+`max(0, cumulativeCredits - creditsReleased)`. A validator may also return
+`{ unlockedOrgId }` to authorize the maximum and record the vouching organization
+on the grant; the org invite validator reserves a slot on the organization inside
+the payout transaction, capped at its current `seats`. Its durable lifetime counter
+survives account deletion and rolls back with a failed payout, so seat churn and
+concurrent unlocks cannot exceed the cap. Replays, weaker evidence, and
+different reasons cannot stack grants. Stronger evidence can release the remaining
+delta. Grant stage records money released, not current identity trust or revocation.
+Identity consumers own verification, identity deduplication, and revocation.
+
+Activity qualifies on server-accrued heartbeat time, not chat turns: the client pings
+`/api/users/active-session` while the app is open and in use, the server accrues the gap
+between pings into `signupGrant.activity` for the current UTC day, and the day's drip pays
+once that reaches `signupGrantActivityMinActiveSeconds`. The drip pays only from the unlock
+pool. The first-party eligibility-check endpoint and Billing status provide a retryable
+path that pays when the accrued time already qualifies.
+For PR preview testing, the admin switch `signupGrantActivityPreviewTestMode` (default off)
+replaces UTC earning days with fixed five-minute windows. Only `pr<number>` stages honor it;
+production, staging and personal stages always use UTC days. Active time starts again in every
+window, and payouts still respect the unlock pool, lifetime cap, shared UTC daily budget and
+held-tranche priority. The heartbeat response tells the browser when the next window opens.
+
+To test, enable the switch in Admin Settings > Credits System > Users, set the active-time
+minimum to 60 seconds, and reload a fresh staged test account's tab. Stay active through
+several windows and verify one payout per window, then stop at the configured lifetime cap.
+Turning the switch off restores daily earning; a day already paid in test mode stays paid.
+A settings change needs a tab reload to discard the browser's previous next-earning time.
+
+Organization invitation unlocks have their own `signupGrantOrgInviteEnabled` rollout
+flag, disabled by default. Each organization can unlock at most its seat count
+over its lifetime; removing a member or deleting a recipient account does not
+replenish this budget. When enabled, Billing checks also retry persisted
+accepted organization invitations, so a failed credit release after successful
+acceptance remains recoverable after the invite leaves the pending inbox, even when
+activity unlocks are disabled.
+Card and phone integrations must supply their own trusted validators; declaring a
+reason does not enable a verification flow. Admin releases require an audit writer.
+The admin HTTP route rejects grants to the acting admin or their original account
+under impersonation, matching the existing credit-adjustment policy.
+
+If a grant is held with `status: 'unavailable'`, check for the `[signup-risk]`
+assessment warning and inspect policy validity. A thrown observation collector
+instead warns that the grant remains pending for retry and rolls back the tranche;
+a transient infrastructure failure never becomes a permanent assessment.
+Missing required observations instead appear in the decision's `missing` array.
+Telemetry failures warn after commit and do not fail the grant. Diagnostics
+contain no raw policy, network observations, or collector error contents.
+
+The web integration supplies network counts, blocked/disposable domain observations
+(including refreshed lists), and prior canonical-inbox entitlement collisions.
+Collision means another account already claimed that inbox's default grant, not
+merely that an alias account exists. The unique entitlement claim remains the
+concurrency guard. Domain lookup failures keep the assessment pending for retry.
+Only a real, server-verified Turnstile pass is carried through signed OTC tokens
+or browser-bound OAuth state and stored in `signupMeta` before the first grant.
+Skipped checks, public test secrets, fail-open outages and legacy accounts leave
+the challenge observation unknown. OTC proof is single-use (the pending token is
+consumed), but OAuth proof is per-flow: the signed state is not consumed, so a
+callback that replays the same state within its 5-minute TTL is stamped with the
+same pass. Weight OAuth proof accordingly. Account-age, first-key and early-spend signals
+remain in the separate young-account rescorer; future activity cannot be known at
+the initial grant.
+
+Admins can find zero-credit assessments through Users > High risk (the Risk filter),
+then inspect the signup assessment's score, matched signals and missing observations
+on the user profile. The existing signup grant unlock action requires an audit
+reason and admin access. It releases the configured maximum, including
+the verification tranche; it is not an initial-tranche-only override. The separate
+young-account risk review queue does not replace this grant assessment surface.
+
+### Private cohort replay
+
+Run the same pure grant evaluator against privately labeled observations before
+enabling or tuning a production policy:
+
+```bash
+pnpm --filter @bike4mind/scripts exec tsx src/replaySignupRisk.ts /private/path/signup-risk.json
+```
+
+The input has `policy` (an enabled `signupRiskPolicySchema` policy) and a `samples`
+array. Each sample has `cohort` (`suspected` or `legitimate`), `signupCredits` and
+`signals` (the observations understood by `evaluateSignupRisk`). Use observations
+available at grant time, anchor network windows at signup, and leave unavailable
+facts absent or null. Do not substitute zero for missing historical counts or
+infer a challenge pass from a successful signup. Keep labels independent of the
+candidate policy to avoid evaluating it against its own decisions.
+
+The command performs no database writes and prints only aggregate band and
+missing-observation counts for each cohort. Keep input files, actual weights,
+sample identities and calibration results outside this public repository. Compare
+the suspected cohort's reduced/review share and the legitimate cohort's full share
+against privately agreed acceptance targets. Synthetic tests establish behavior,
+not real-world accuracy; a private replay is still required for that claim.
+
+Before enabling staging, retire existing quest subscriptions, restart subscriber
+fanout, and reconnect clients so every live stream uses the new private-field
+exclusions. Fanout persists subscription projections and does not rebuild an
+already-running stream when its projection changes; a pre-deployment stream can
+otherwise include activity provenance. Keep staging disabled until this rollout
+step is complete.
+
+`authEventRepository.recentDistinctSignups` in `@bike4mind/database` only accepts
+windows within the retained history and ending no later than the current time.
+Unavailable network metadata and saturated scans return `null`, not a clean zero;
+query failures propagate so the collector can treat them as unavailable.
 
 ## Directory Structure
 
@@ -114,8 +288,8 @@ describe('serviceModule - operation', () => {
   // 4. Test cases using Arrange-Act-Assert (AAA) pattern
   it('should handle successful operation', async () => {
     // Arrange
-    const params = { /* valid parameters */ };
-    const expectedResult = { /* expected outcome */ };
+    const params = {/* valid parameters */};
+    const expectedResult = {/* expected outcome */};
     // Configure mock return values: (mockRepo.someMethod as Mock).mockResolvedValueOnce(expectedResult);
 
     // Act
@@ -128,11 +302,12 @@ describe('serviceModule - operation', () => {
 
   it('should handle validation errors', async () => {
     // Arrange
-    const invalidParams = { /* invalid parameters */ };
+    const invalidParams = {/* invalid parameters */};
 
     // Act & Assert
-    await expect(operation(userId, invalidParams, adapters))
-      .rejects.toThrow(/* Optional: Specific error type or message */);
+    await expect(operation(userId, invalidParams, adapters)).rejects.toThrow(
+      /* Optional: Specific error type or message */
+    );
   });
 
   // Add more tests for other scenarios (error handling, edge cases, access control)
@@ -237,16 +412,12 @@ import { someOperation } from '@b4m-core/services';
 import { Repository } from 'models';
 
 router.post('/endpoint', async (req, res) => {
-  const result = await someOperation(
-    req.user.id,
-    req.body,
-    {
-      db: {
-        repository: Repository
-      }
-    }
-  );
-  
+  const result = await someOperation(req.user.id, req.body, {
+    db: {
+      repository: Repository,
+    },
+  });
+
   res.json(result);
 });
 ```

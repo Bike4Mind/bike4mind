@@ -9,6 +9,7 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   bedrockClientConfig,
   estimateStreamedOutputTokens,
+  TOOL_SEARCH_BLOCK_TYPES,
   type ModelInfo,
   type TurnUsage,
 } from '@bike4mind/common';
@@ -60,6 +61,31 @@ const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
 // error once per recursion depth, and the outer entries would describe a request that never failed.
 // The innermost catch sees the failing payload, so it logs and the rest stay quiet.
 const loggedErrors = new WeakSet<Error>();
+
+/**
+ * Message for a stream that produced no text and no tool call. A stall (no terminal event from an
+ * adapter that signals one) carries "stream timeout" so isStreamIdleTimeoutError in
+ * services/src/llm/llmErrorPredicates.ts retries it once then falls back; it must not say "without a
+ * terminal event", which isTruncatedStreamError reads as a mid-stream truncation. Any other empty
+ * stream is deterministic (the max-tool-calls cap) and must match neither.
+ */
+export function bedrockEmptyResponseMessage(model: string, region: string, stalled: boolean): string {
+  const profileHint =
+    `If every call on this model is empty, a "global." cross-region inference profile served from a ` +
+    `region that does not host it does the same - try the "us." variant, or confirm the model/profile ` +
+    `is granted in ${region}.`;
+  if (stalled) {
+    return (
+      `[BaseBedrockBackend] stream timeout - model "${model}" in region ${region} returned an EMPTY ` +
+      `response (no text, no tool call) and no terminal event. Usually a stalled Bedrock socket ` +
+      `before the first token. ${profileHint}`
+    );
+  }
+  return (
+    `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${region} ` +
+    `(no text, no tool call, no output tokens). ${profileHint}`
+  );
+}
 
 /**
  * The subset of @smithy's NodeHttp2HandlerOptions that BEDROCK_REQUEST_HANDLER sets. Declared
@@ -278,6 +304,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         {
           ...options,
           tools: undefined,
+          providerTools: undefined,
           // Defensive parity with the OpenAI/Anthropic backends: reset tool_choice on
           // recursion. Bedrock doesn't send request-side tool_choice, so this is a no-op
           // today, but it keeps the recursion invariant uniform across backends.
@@ -302,11 +329,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // the same Anthropic Messages API as anthropicBackend.ts and rejects any tool block when
     // `tools` is absent regardless of pairing. Mirrors the same proactive strip added there;
     // the reactive count-mismatch warning below only logs, it never stripped this case either.
-    if (!options.tools?.length) {
+    if (!options.tools?.length && !options.providerTools?.length) {
       const hasToolBlocks = messagesWithFormat.some(
         m =>
           Array.isArray(m.content) &&
-          m.content.some((b: { type?: string }) => b.type === 'tool_use' || b.type === 'tool_result')
+          m.content.some(
+            (b: { type?: string }) =>
+              b.type === 'tool_use' || b.type === 'tool_result' || TOOL_SEARCH_BLOCK_TYPES.has(b.type ?? '')
+          )
       );
       if (hasToolBlocks) {
         Logger.globalInstance.warn(
@@ -327,12 +357,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // the reactive ValidationException catches below remain the safety net for those cases.
     const contextWindow = this.getModelContextWindow(model);
     if (contextWindow > 0) {
-      const baseOutputTokens = this.getEffectiveMaxOutputTokens(options);
+      const baseOutputTokens = this.getEffectiveMaxOutputTokens(options, model);
       // Extended thinking reserves additional tokens on top of max_tokens in the actual payload.
       const thinkingBudget = options.thinking?.budget_tokens ?? 0;
       const reservedOutputTokens = baseOutputTokens + thinkingBudget;
       const maxInputTokens = contextWindow - reservedOutputTokens;
-      let estimatedInputTokens = Math.ceil(input.body.length / 4);
+      let estimatedInputTokens = this.estimateInputTokens(input.body);
 
       if (estimatedInputTokens > maxInputTokens) {
         // Graceful degradation: rather than failing the completion outright,
@@ -364,7 +394,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           prunedMessages = next;
           formattedMessages = this.formatMessages(prunedMessages);
           input = this.getPayload(model, formattedMessages, options);
-          estimatedInputTokens = Math.ceil(input.body.length / 4);
+          estimatedInputTokens = this.estimateInputTokens(input.body);
         }
 
         if (estimatedInputTokens > maxInputTokens) {
@@ -495,6 +525,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // the old code returned silently, so the chat had nothing to render and hung until the client
         // timed out (~2 min). Track real output so we can fail LOUD instead. See the guard after the loop.
         let emittedTextChars = 0;
+        // A turn the server-run tool search paused (pause_turn) can hold nothing but provider blocks.
+        let emittedProviderBlocks = 0;
         // This round's visible answer text (no reasoning), for shouldEndTurnAfterTools.
         let streamedRoundText = '';
         // @see signalsStreamTermination - only meaningful for adapters that opt in.
@@ -523,6 +555,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               cacheWriteTokens = Math.max(cacheWriteTokens, choice.usage?.cache_creation_input_tokens || 0);
             });
 
+            for (const { providerBlock } of chunk?.providerBlocks ?? []) {
+              emittedProviderBlocks++;
+              await callback([], { ...buildCompletionInfo(), providerBlock });
+            }
+
             // While a tool is being streamed, only choices an adapter explicitly marked as prose are
             // forwarded; everything else is dropped as before, so adapters that never set the flag
             // behave exactly as they always did.
@@ -550,23 +587,19 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         }
         const modelDoneAt = Date.now();
 
-        // FAIL LOUD on an empty completion. No text AND no tool call means the model produced nothing a
-        // user or the pipeline can use - almost always a misrouted inference profile (a "global." model
-        // served from a region that does not host it) or an unavailable model. Returning silently makes
-        // the chat hang with no output and no error; throwing surfaces a clear, actionable message. Token
-        // count is deliberately NOT part of the condition: an empty response can still report phantom
-        // usage, and a real assistant turn ALWAYS has text or a tool call, so this cannot false-positive.
-        // Ordering note: a stall that lands BEFORE the first token also arrives here with zero
-        // output and no terminal event, so it is reported as EMPTY rather than TRUNCATED and
-        // misses the retry below. That is deliberate, not an oversight - a misrouted "global."
-        // profile produces literally the same observable (no chunks, no terminal event), so the
-        // two are indistinguishable at this layer and the more actionable message should win.
-        if (emittedTextChars === 0 && !func.some(f => f.name)) {
+        // FAIL LOUD on an empty completion: no text and no tool call (token counts can be phantom).
+        // Aborted requests are excluded, as in the TRUNCATED guard below. A stall (no terminal event)
+        // gets the retried wording; a single call cannot tell it from a misrouted profile, so a
+        // persistent misroute also retries then falls back. The retry is turn-level, so a stall on a
+        // later tool round re-runs the earlier rounds, as TRUNCATED does. See bedrockEmptyResponseMessage.
+        if (
+          emittedTextChars === 0 &&
+          emittedProviderBlocks === 0 &&
+          !func.some(f => f.name) &&
+          !options.abortSignal?.aborted
+        ) {
           throw new Error(
-            `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${this._options.region} ` +
-              `(no text, no tool call, no output tokens). A "global." cross-region inference profile served ` +
-              `from a region that does not host it does exactly this - try the "us." variant, or confirm the ` +
-              `model/profile is granted in ${this._options.region}.`
+            bedrockEmptyResponseMessage(model, this._options.region, this.signalsStreamTermination && !sawTerminalEvent)
           );
         }
 
@@ -586,7 +619,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         //
         // Worded to include "stream timeout" on purpose: that is the substring
         // ChatCompletionProcess's isStreamIdleTimeoutError matches, which buys the existing
-        // retry-once-then-fallback path. Keep the phrase if you reword this. Note it is NOT in
+        // retry-once-then-fallback path. Keep the phrase if you reword this, and keep "without a
+        // terminal event" in sync with isTruncatedStreamError in llmErrorPredicates.ts. Note it is NOT in
         // logToSlackClassify's skip list and does not satisfy isAbortError, so a genuine
         // truncation logs at ERROR and is alert-visible - deliberate, since a truncated answer
         // that survived a retry and a provider fallback is worth seeing.
@@ -864,6 +898,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         const json = new TextDecoder().decode(response.body);
         const { chunk } = this.translateChunk(model, JSON.parse(json));
         if (chunk?.stopReason) stopReason = chunk.stopReason;
+        const providerBlocks = chunk?.providerBlocks ?? [];
         const streamedText: string[] = [];
         chunk?.choices.forEach(choice => {
           // Accumulate: a whole-message response can carry several choices at one index (prose
@@ -876,6 +911,22 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         cacheReadTokens = chunk?.choices[0].usage?.cache_read_input_tokens || 0;
         cacheWriteTokens = chunk?.choices[0].usage?.cache_creation_input_tokens || 0;
 
+        // Provider blocks go out at their place in the text, so a caller echoing them keeps the response order.
+        const emitResponseText = async (text: string[]) => {
+          if (providerBlocks.length === 0) {
+            await callback(text, buildCompletionInfo());
+            return;
+          }
+          const whole = text.join('');
+          let from = 0;
+          for (const { providerBlock, textOffset } of providerBlocks) {
+            if (textOffset > from) await callback([whole.slice(from, textOffset)], buildCompletionInfo());
+            from = Math.max(from, textOffset);
+            await callback([], { ...buildCompletionInfo(), providerBlock });
+          }
+          await callback([whole.slice(from)], buildCompletionInfo());
+        };
+
         // Collect EVERY tool call, not just the first. A provider that emits
         // parallel calls returns one TOOL_USE choice per call, and the old
         // `.find()` silently dropped all but the first with no result message.
@@ -885,12 +936,15 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
         if (toolChoices.length > 0) {
           // Track tool usage (including ID for history reconstruction, allow empty parameters)
-          for (const { tool } of toolChoices) {
-            if (tool.name) toolsUsed.push({ name: tool.name, arguments: tool.parameters || '{}', id: tool.id });
-          }
+          const recordToolCalls = () => {
+            for (const { tool } of toolChoices) {
+              if (tool.name) toolsUsed.push({ name: tool.name, arguments: tool.parameters || '{}', id: tool.id });
+            }
+          };
 
           // Check if we should execute tools or just report them
           if (options.executeTools !== false) {
+            recordToolCalls();
             const executable = toolChoices
               .map(tc => tc.tool)
               .filter(tool => tool.id && tool.name && options.tools?.some(o => o.toolSchema.name === tool.name));
@@ -906,7 +960,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               // The text-only send below is never reached on this branch, so a turn's intro text
               // ("Here's the second chart:") goes out here. On a chained call `callback` is the
               // guard's buffering callback, so emitArtifact still flushes it ahead of the artifact.
-              if (streamedText.some(Boolean)) await callback(streamedText, buildCompletionInfo());
+              if (streamedText.some(Boolean) || providerBlocks.length > 0) await emitResponseText(streamedText);
 
               // Execute each resolved call and push its result, so the model sees
               // every tool it invoked on the recursive turn, then recurse once.
@@ -1010,13 +1064,15 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             Logger.globalInstance.log('[BaseBedrockBackend] executeTools=false, passing tool calls to callback');
             // Same as the executing branch above: the text-only send below is never reached, so
             // intro text sharing this chunk with the reported tool call goes out here.
-            if (streamedText.some(Boolean)) await callback(streamedText, buildCompletionInfo());
+            // Recorded after the text, as when streaming: each send carrying toolsUsed is its own tool_use frame.
+            if (streamedText.some(Boolean) || providerBlocks.length > 0) await emitResponseText(streamedText);
+            recordToolCalls();
             await callback([null], buildCompletionInfo());
             return; // Exit after passing tools
           }
         }
 
-        await callback(streamedText, buildCompletionInfo());
+        await emitResponseText(streamedText);
       }
     } catch (error) {
       // Log detailed error information
@@ -1150,8 +1206,13 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
   }
 
   /** Output reservation must match any provider-specific limit applied to the payload. */
-  protected getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>): number {
+  protected getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>, _model?: string): number {
     return typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
+  }
+
+  /** Provider payloads may contain binary data that is not tokenized as text. */
+  protected estimateInputTokens(body: string): number {
+    return Math.ceil(body.length / 4);
   }
 
   /**

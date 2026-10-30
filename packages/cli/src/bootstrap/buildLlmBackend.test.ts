@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
-import { buildLlmBackend, resolveModelInfo, type BuildLlmBackendDeps } from './buildLlmBackend.js';
+import {
+  attachOllama,
+  buildLlmBackend,
+  resolveHeadlessModel,
+  resolveModelInfo,
+  type BuildLlmBackendDeps,
+} from './buildLlmBackend.js';
 import { createMockConfig } from '../test-utils/mocks.js';
 
 const model = (id: string) => ({ id }) as ModelInfo;
@@ -144,6 +150,153 @@ describe('buildLlmBackend — Ollama multiplexing', () => {
     expect(res.llm).toBe(multi);
     expect(startupLog.some(l => l.includes('Ollama'))).toBe(true);
     expect(res.modelInfo.id).toBe('m1');
+  });
+
+  it('uses the host saved by `b4m models` when no flag or env names one', async () => {
+    vi.stubEnv('B4M_OLLAMA_HOST', '');
+    try {
+      const { deps } = makeDeps();
+      const config = createMockConfig({ defaultModel: 'ollama1', ollamaHost: 'http://127.0.0.1:11500' });
+      const res = await buildLlmBackend(makeInput({ config, apiClient: fakeApiClient({}) }), deps);
+
+      expect(deps.createOllamaBackend).toHaveBeenCalledWith('http://127.0.0.1:11500');
+      expect(res.modelInfo.id).toBe('ollama1');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  const downOllama = () =>
+    ({
+      currentModel: 'none',
+      getModelInfo: vi.fn(async () => {
+        throw new TypeError('fetch failed');
+      }),
+    }) as never;
+
+  it('starts on the server models alone and says Ollama is unreachable when its listing rejects', async () => {
+    const ollama = downOllama();
+    const { deps } = makeDeps({ createOllamaBackend: vi.fn(() => ollama) });
+    const startupLog: string[] = [];
+
+    const res = await buildLlmBackend(
+      makeInput({ apiClient: fakeApiClient({}), startupLog, ollamaHost: 'http://localhost:11434' }),
+      deps
+    );
+
+    expect(deps.createMultiBackend).toHaveBeenCalledWith(expect.anything(), ollama, [model('m1')], [], 'm1');
+    expect(startupLog.some(l => l.includes('Ollama at http://localhost:11434 is unreachable: fetch failed'))).toBe(
+      true
+    );
+    expect(startupLog.some(l => l.includes('ollama pull'))).toBe(false);
+    expect(res.modelInfo.id).toBe('m1');
+  });
+
+  it('names an unreachable Ollama when neither the server nor Ollama has models', async () => {
+    const { deps } = makeDeps({
+      createServerBackend: vi.fn(() => fakeBackend([])),
+      createOllamaBackend: vi.fn(downOllama),
+    });
+
+    const build = buildLlmBackend(
+      makeInput({ apiClient: fakeApiClient({}), ollamaHost: 'http://localhost:11434' }),
+      deps
+    );
+
+    await expect(build).rejects.toThrow('Ollama at http://localhost:11434 is unreachable: fetch failed');
+    await expect(build).rejects.not.toThrow('ollama pull');
+  });
+
+  it('keeps the pull hint when Ollama answers with no models', async () => {
+    const { deps } = makeDeps({ createOllamaBackend: vi.fn(() => fakeBackend([])) });
+    const startupLog: string[] = [];
+
+    await buildLlmBackend(
+      makeInput({ apiClient: fakeApiClient({}), startupLog, ollamaHost: 'http://localhost:11434' }),
+      deps
+    );
+
+    expect(startupLog.some(l => l.includes('No models found in Ollama at http://localhost:11434'))).toBe(true);
+    expect(startupLog.some(l => l.includes('unreachable'))).toBe(false);
+  });
+
+  it('stops waiting on a saved host that never answers and starts on the server models', async () => {
+    vi.stubEnv('B4M_OLLAMA_HOST', '');
+    try {
+      const hung = { currentModel: 'none', getModelInfo: () => new Promise<never>(() => undefined) } as never;
+      const { deps } = makeDeps({ createOllamaBackend: vi.fn(() => hung) });
+      const startupLog: string[] = [];
+      const config = createMockConfig({ defaultModel: 'm1', ollamaHost: 'gpu-box' });
+
+      const res = await buildLlmBackend(
+        makeInput({ config, apiClient: fakeApiClient({}), startupLog, ollamaListingTimeoutMs: 20 }),
+        deps
+      );
+
+      expect(deps.createOllamaBackend).toHaveBeenCalledWith('http://gpu-box:11434');
+      expect(startupLog.some(l => l.includes('Ollama at http://gpu-box:11434 is unreachable: no answer within'))).toBe(
+        true
+      );
+      expect(res.modelInfo.id).toBe('m1');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('attachOllama', () => {
+  it('lists the server models alone when no Ollama host is configured', async () => {
+    vi.stubEnv('B4M_OLLAMA_HOST', '');
+    try {
+      const { deps } = makeDeps();
+      const server = fakeBackend([model('m1')]);
+      const res = await attachOllama(server, createMockConfig({ defaultModel: 'm1' }), {}, deps);
+      expect(res).toMatchObject({ llm: server, models: [model('m1')], ollamaHost: null, warnings: [] });
+      expect(deps.createOllamaBackend).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('resolveHeadlessModel', () => {
+  const HOST = 'http://127.0.0.1:11434';
+  const listed = { ollamaHost: HOST, ollamaListingFailed: false };
+
+  it('uses the default model when it is listed', () => {
+    expect(resolveHeadlessModel([model('a'), model('b')], { defaultModel: 'b' }, listed)).toEqual({
+      modelInfo: model('b'),
+      warning: null,
+    });
+  });
+
+  it('refuses to switch away from the model `b4m models use` chose', () => {
+    const config = { defaultModel: 'qwen2.5:0.5b', localDefaultModel: 'qwen2.5:0.5b' };
+    expect(() => resolveHeadlessModel([model('hosted')], config, listed)).toThrow(
+      /Model "qwen2\.5:0\.5b" is not available from the server or from Ollama at http:\/\/127\.0\.0\.1:11434/
+    );
+  });
+
+  it('refuses to switch away from any default when Ollama could not list its models', () => {
+    expect(() =>
+      resolveHeadlessModel([model('hosted')], { defaultModel: 'mine' }, { ...listed, ollamaListingFailed: true })
+    ).toThrow(/Model "mine" is not available/);
+  });
+
+  it('falls back with a warning from a hosted default the server no longer offers', () => {
+    const config = { defaultModel: 'retired-hosted', localDefaultModel: 'qwen2.5:0.5b' };
+    expect(resolveHeadlessModel([model('a')], config, listed)).toEqual({
+      modelInfo: model('a'),
+      warning: 'Model "retired-hosted" is not available; using "a".',
+    });
+  });
+
+  it('falls back silently, as before, without an Ollama host', () => {
+    const none = { ollamaHost: null, ollamaListingFailed: false };
+    expect(resolveHeadlessModel([model('a')], { defaultModel: 'gone' }, none)).toEqual({
+      modelInfo: model('a'),
+      warning: null,
+    });
   });
 });
 

@@ -3,7 +3,7 @@ import { EmailEvents } from '@server/utils/eventBus';
 import mailer from '@server/utils/mailer';
 
 export const handler = withEventContext(async (event, logger) => {
-  const { to, subject, body, attachments } = EmailEvents.Send.schema.parse(event.properties);
+  const { to, subject, body, attachments, category } = EmailEvents.Send.schema.parse(event.properties);
 
   logger.updateMetadata({
     to,
@@ -11,9 +11,21 @@ export const handler = withEventContext(async (event, logger) => {
     attachmentCount: attachments?.length || 0,
   });
 
-  const emailData: any = {
+  const emailData: {
+    subject: string;
+    html: string;
+    headers?: Record<string, string>;
+    attachments?: {
+      filename: string;
+      content: Buffer;
+      contentType: string;
+    }[];
+  } = {
     subject,
     html: body,
+    ...(category === 'otc' && process.env.OTC_SES_CONFIGURATION_SET
+      ? { headers: { 'X-SES-CONFIGURATION-SET': process.env.OTC_SES_CONFIGURATION_SET } }
+      : {}),
   };
 
   // If attachments are provided, convert base64 strings back to buffers

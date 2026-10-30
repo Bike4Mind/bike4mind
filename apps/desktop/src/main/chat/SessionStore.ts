@@ -1,6 +1,7 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { z } from 'zod';
 import type {
   ChatApprovalMode,
   ChatMessage,
@@ -13,7 +14,10 @@ import type {
   ReasoningEffortSetting,
 } from '@shared/chat';
 import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import type { WorkspaceOwner } from '@shared/worktreeRemoval';
+import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
 import { storedReasoningEffortSetting } from './reasoningEffort';
+import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
@@ -83,6 +87,65 @@ export interface CreateOptions {
   approvalMode?: ChatApprovalMode;
   /** A spawned session's copy of its parent's session-scoped grants; see ChatSession.grantedDirectories. */
   grantedDirectories?: string[];
+  /** A name chosen up front, locked exactly as `rename` locks one. */
+  title?: string;
+}
+
+/**
+ * Sidebar summaries keyed by each file's size and mtime, kept beside the sessions so listing
+ * does not re-read and re-parse every transcript on every refresh. Not a `.json` name, so
+ * `list` never mistakes it for a session.
+ */
+const SUMMARY_INDEX = '.summary-index';
+const SUMMARY_INDEX_VERSION = 1;
+/** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
+const SESSION_WRITES = '.session-writes';
+const LIST_READ_CONCURRENCY = 16;
+
+interface IndexedSummary {
+  size: number;
+  mtimeMs: number;
+  summary: ChatSessionSummary;
+}
+
+interface SummaryIndexFile {
+  version: number;
+  /** The launch defaults baked into every summary; a change invalidates them all. */
+  defaults: string;
+  entries: Record<string, IndexedSummary>;
+}
+
+/** Whether an import wrote its copy, preserved a continuation, or respected conversation/workspace deletion. */
+export type PutImportedOutcome = 'written' | 'forked' | 'removed';
+
+/** The guarded removal result, decided while holding the session's write lock. */
+export type DeleteImportedOutcome = 'removed' | 'forked' | 'missing';
+
+/** An import ran into an account switch: what it holds belongs to the account it started in. */
+export class ImportScopeChangedError extends Error {
+  constructor() {
+    super('the signed-in account changed during the import');
+  }
+}
+
+/** True once anything other than the importer has written a message into an imported session. */
+export function isForkedImport(session: ChatSession): boolean {
+  if (!session.importOrigin) return false;
+  return !!session.importOrigin.forkedAt || session.messages.some(message => !isImportedMessageId(message.id));
+}
+
+/** Whether a binding's repository and checkout are both still directories; other errors surface. */
+async function projectOnDisk(project: ChatProject): Promise<boolean> {
+  for (const path of new Set([project.directory, project.workingDirectory])) {
+    try {
+      if (!(await stat(path)).isDirectory()) return false;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+      throw error;
+    }
+  }
+  return true;
 }
 
 function summarize(session: ChatSession): ChatSessionSummary {
@@ -190,7 +253,7 @@ export interface ApprovalModeMemory {
  * directly in `baseDirectory`, which is what a test that does not care builds and what every
  * install before this looked like on disk.
  */
-export class SessionStore {
+export class SessionStore implements SessionWritesStore {
   /** One preparation - the mkdir, and the legacy migration - per scope directory, not per call. */
   private readonly prepared = new Map<string, Promise<string>>();
 
@@ -203,6 +266,21 @@ export class SessionStore {
    * the reply is still appending is exactly that overlap.
    */
   private readonly writes = new Map<string, Promise<unknown>>();
+
+  /** Import bindings and service cleanup share a lease, always outside the per-session lock. */
+  private workspaceBindings: Promise<void> = Promise.resolve();
+
+  withWorkspaceBindings<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.workspaceBindings.then(operation);
+    this.workspaceBindings = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  /** Per scope directory; see SUMMARY_INDEX. */
+  private readonly summaryIndexes = new Map<string, Promise<Map<string, IndexedSummary>>>();
 
   constructor(
     private readonly baseDirectory: string,
@@ -259,7 +337,7 @@ export class SessionStore {
 
     let preparing = this.prepared.get(directory);
     if (!preparing) {
-      preparing = this.prepare(directory);
+      preparing = this.prepare(directory, !scope.local);
       this.prepared.set(directory, preparing);
     }
     this.lastDirectory = await preparing;
@@ -273,9 +351,9 @@ export class SessionStore {
    * the scope prepared after this one finds none. Nothing marks it as done, because an empty
    * base directory IS done - a marker could only ever come to disagree with the files.
    */
-  private async prepare(directory: string): Promise<string> {
+  private async prepare(directory: string, adoptLegacy: boolean): Promise<string> {
     await mkdir(directory, { recursive: true });
-    await migrateLegacySessions(this.baseDirectory, directory);
+    if (adoptLegacy) await migrateLegacySessions(this.baseDirectory, directory);
     return directory;
   }
 
@@ -312,7 +390,8 @@ export class SessionStore {
       id: randomUUID(),
       // Left untitled even for a Code session: the project name is already the group header it
       // sits under, so the row itself is still best named after the first thing asked.
-      title: UNTITLED,
+      title: options.title ? deriveTitle(options.title) : UNTITLED,
+      ...(options.title ? { titleLocked: true } : {}),
       model: model || this.defaultModel,
       createdAt: now,
       updatedAt: now,
@@ -328,12 +407,43 @@ export class SessionStore {
     return summarize(session);
   }
 
+  /** Capture identity before an asynchronous operation that must not cross accounts. */
+  scopeKey(): string | null {
+    if (!this.scope) return 'default';
+    const scope = this.scope();
+    return scope ? sessionScopeKey(scope) : null;
+  }
+
   async get(id: string): Promise<ChatSession | null> {
     const directory = await this.directoryFor(false);
     return directory ? this.read(directory, id) : null;
   }
 
-  /** Newest first. A file that no longer parses is skipped, not fatal - one bad file must not hide the rest. */
+  /**
+   * The directory an import started under `scopeKey` may use: that account's, and only while it
+   * is still the one signed in. Unlike a turn's tail, an import has no claim on the folder last
+   * resolved; it would file one account's history under another.
+   */
+  private async importDirectory(scopeKey: string | undefined): Promise<string> {
+    if (this.scope && scopeKey !== undefined) {
+      const current = this.scope();
+      if (!current || sessionScopeKey(current) !== scopeKey) throw new ImportScopeChangedError();
+    }
+    const directory = await this.directoryFor(false);
+    if (!directory) throw new Error('cannot import while no account is signed in');
+    return directory;
+  }
+
+  /** `get` for the importer; see importDirectory. */
+  async getImported(id: string, scopeKey?: string): Promise<ChatSession | null> {
+    return this.read(await this.importDirectory(scopeKey), id);
+  }
+
+  /**
+   * Newest first. A file that no longer parses is skipped, not fatal - one bad file must not hide the rest.
+   *
+   * Only files whose size or mtime changed since the last listing are read; see SUMMARY_INDEX.
+   */
   async list(): Promise<ChatSessionSummary[]> {
     const directory = await this.directoryFor(true);
     if (!directory) return [];
@@ -346,22 +456,148 @@ export class SessionStore {
       throw err;
     }
 
-    const sessions = await Promise.all(
-      entries
-        .filter(name => name.endsWith('.json'))
-        .map(async name => {
-          try {
-            return await this.read(directory, name.slice(0, -'.json'.length));
-          } catch {
-            return null;
+    const index = await this.summaryIndex(directory);
+    const ids = entries.filter(name => name.endsWith('.json')).map(name => name.slice(0, -'.json'.length));
+    let changed = false;
+    const sessions: (ChatSessionSummary | null)[] = new Array(ids.length).fill(null);
+    let next = 0;
+    const worker = async () => {
+      while (next < ids.length) {
+        const position = next++;
+        const id = ids[position];
+        try {
+          const info = await stat(this.filePath(directory, id));
+          const cached = index.get(id);
+          if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
+            sessions[position] = cached.summary;
+            continue;
           }
-        })
-    );
+          const session = await this.read(directory, id);
+          if (!session) continue;
+          const summary = summarize(session);
+          index.set(id, { size: info.size, mtimeMs: info.mtimeMs, summary });
+          changed = true;
+          sessions[position] = summary;
+        } catch {
+          sessions[position] = null;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(LIST_READ_CONCURRENCY, ids.length) }, worker));
+
+    const present = new Set(ids);
+    for (const id of index.keys()) {
+      if (!present.has(id)) {
+        index.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) await this.saveSummaryIndex(directory, index);
 
     return sessions
-      .filter((session): session is ChatSession => session !== null)
-      .map(summarize)
+      .filter((session): session is ChatSessionSummary => session !== null)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  /** Only workspace bindings cross account scopes; conversation contents stay private. */
+  async workspaceProjectsExcept(sessionId: string): Promise<ChatProject[]> {
+    return (await this.workspaceOwnersExcept(sessionId)).flatMap(owner => (owner.project ? [owner.project] : []));
+  }
+
+  /** Folder references cross scopes for preservation; titles stay within the current scope. */
+  async workspaceOwnersExcept(sessionId: string): Promise<WorkspaceOwner[]> {
+    const currentDirectory = await this.directoryFor(false);
+    if (!currentDirectory) throw new Error('No conversation scope is available');
+    const entries = await readdir(this.baseDirectory, { withFileTypes: true });
+    if (entries.some(entry => entry.isSymbolicLink())) throw new Error('Cannot verify linked conversation storage');
+    const directories = [
+      this.baseDirectory,
+      ...entries
+        .filter(entry => entry.isDirectory())
+        .map(entry => join(this.baseDirectory, assertScopeKey(entry.name))),
+    ];
+    const owners: WorkspaceOwner[] = [];
+    const directorySchema = z.string().min(1).refine(isAbsolute);
+    const schema = z.object({
+      project: z
+        .object({ contextDirectories: z.array(directorySchema).optional() })
+        .passthrough()
+        .nullish(),
+      grantedDirectories: z.array(directorySchema).optional(),
+      title: z.unknown().optional(),
+    });
+    for (const directory of directories) {
+      for (const name of await readdir(directory)) {
+        if (!name.endsWith('.json')) continue;
+        if (directory === currentDirectory && name === `${sessionId}.json`) continue;
+        const record = schema.parse(JSON.parse(await readFile(join(directory, name), 'utf8')));
+        const project = record.project == null ? undefined : normalizeProject(record.project);
+        if (project === null) throw new Error('Cannot verify all conversation workspaces');
+        const directories = [
+          ...(project ? [project.directory, project.workingDirectory, ...project.contextDirectories] : []),
+          ...(record.grantedDirectories ?? []),
+        ];
+        if (directories.length === 0) continue;
+        owners.push({
+          ...(project ? { project } : {}),
+          directories: [...new Set(directories)],
+          title:
+            directory === currentDirectory
+              ? (typeof record.title === 'string' && record.title.trim()) || UNTITLED
+              : 'Another conversation',
+        });
+      }
+    }
+    return owners;
+  }
+
+  private summaryIndex(directory: string): Promise<Map<string, IndexedSummary>> {
+    let loading = this.summaryIndexes.get(directory);
+    if (!loading) {
+      loading = this.loadSummaryIndex(directory);
+      this.summaryIndexes.set(directory, loading);
+    }
+    return loading;
+  }
+
+  private summaryDefaults(): string {
+    return JSON.stringify([this.defaultModel, this.defaultReasoningEffort]);
+  }
+
+  private async loadSummaryIndex(directory: string): Promise<Map<string, IndexedSummary>> {
+    const index = new Map<string, IndexedSummary>();
+    try {
+      const parsed = JSON.parse(await readFile(join(directory, SUMMARY_INDEX), 'utf8')) as Partial<SummaryIndexFile>;
+      if (parsed.version !== SUMMARY_INDEX_VERSION || parsed.defaults !== this.summaryDefaults()) return index;
+      for (const [id, entry] of Object.entries(parsed.entries ?? {})) {
+        if (!isValidSessionId(id) || !entry?.summary || typeof entry.size !== 'number') continue;
+        // 'full' is scoped to the launch that chose it (see normalizeApprovalMode), so a summary
+        // carrying it from an earlier run is stale by definition.
+        if (entry.summary.approvalMode === 'full') continue;
+        index.set(id, entry);
+      }
+    } catch {
+      // Missing or unreadable: every file is read once and the index is rebuilt.
+    }
+    return index;
+  }
+
+  private async saveSummaryIndex(directory: string, index: Map<string, IndexedSummary>): Promise<void> {
+    const file: SummaryIndexFile = {
+      version: SUMMARY_INDEX_VERSION,
+      defaults: this.summaryDefaults(),
+      entries: Object.fromEntries(index),
+    };
+    const path = join(directory, SUMMARY_INDEX);
+    // Two listings can save at once; a shared temp name would let one rename the other's half-write.
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify(file), 'utf8');
+      await rename(temporary, path);
+    } catch {
+      // A cache: failing to save it costs the next listing a re-read, nothing more.
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
   }
 
   /**
@@ -411,6 +647,24 @@ export class SessionStore {
       session.updatedAt = new Date().toISOString();
       return true;
     });
+  }
+
+  async setHistoryEnabled(
+    id: string,
+    enabled: boolean,
+    expectedScope = this.scopeKey(),
+    isCurrentOperation: () => boolean = () => true
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        if (enabled) session.historyEnabled = true;
+        else delete session.historyEnabled;
+        return true;
+      },
+      expectedScope,
+      isCurrentOperation
+    );
   }
 
   /**
@@ -612,43 +866,132 @@ export class SessionStore {
   }
 
   /** Grant one more folder to a Code session alone. No-op for a Chat session, which has no project. */
-  async addContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      if (!session.project) return null;
-      if (session.project.contextDirectories.includes(directory)) return false;
-      session.project.contextDirectories.push(directory);
-      return true;
-    });
+  async addContextDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        if (!session.project) return null;
+        if (session.project.contextDirectories.includes(directory)) return false;
+        session.project.contextDirectories.push(directory);
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**
    * Grant a folder to this conversation alone, for a session with no project to hold it as a
    * context directory. Reached only from a folder the user shared: a `request_directory` card they clicked, the picker, or `/add-dir`.
    */
-  async addGrantedDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      const granted = session.grantedDirectories ?? [];
-      if (granted.includes(directory)) return false;
-      session.grantedDirectories = [...granted, directory];
-      return true;
-    });
+  async addGrantedDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const granted = session.grantedDirectories ?? [];
+        if (granted.includes(directory)) return false;
+        session.grantedDirectories = [...granted, directory];
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**
    * Take a folder back from this conversation, whichever list it was granted into: a session's
    * chips draw both, and one remove control must revoke either.
    */
-  async removeContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      const granted = session.grantedDirectories ?? [];
-      if (!session.project && !granted.includes(directory)) return null;
-      if (session.project) {
-        session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
-      }
-      const kept = granted.filter(entry => entry !== directory);
-      if (kept.length > 0) session.grantedDirectories = kept;
-      else delete session.grantedDirectories;
-      return true;
+  async removeContextDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const granted = session.grantedDirectories ?? [];
+        if (!granted.includes(directory) && !session.project?.contextDirectories.includes(directory)) return null;
+        if (session.project) {
+          session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
+        }
+        const kept = granted.filter(entry => entry !== directory);
+        if (kept.length > 0) session.grantedDirectories = kept;
+        else delete session.grantedDirectories;
+        return true;
+      },
+      expectedScope
+    );
+  }
+
+  /**
+   * Create or replace a session the Claude importer built, unless the user has continued it
+   * here - then it is left exactly as it is and marked forked, so a later sync can never
+   * overwrite a desktop turn. Workspace deletion also wins over a binding derived before it.
+   */
+  async putImported(
+    session: ChatSession,
+    scopeKey?: string,
+    options: { mustExist?: boolean } = {}
+  ): Promise<PutImportedOutcome> {
+    return this.withWorkspaceBindings(() =>
+      this.serialize(session.id, async () => {
+        const directory = await this.importDirectory(scopeKey);
+        const existing = await this.read(directory, session.id);
+        // A deletion while the importer was reading wins over its stale snapshot.
+        if (options.mustExist && !existing) return 'removed';
+        if (existing && (!existing.importOrigin || isForkedImport(existing))) {
+          if (existing.importOrigin && !existing.importOrigin.forkedAt) {
+            existing.importOrigin = { ...existing.importOrigin, forkedAt: new Date().toISOString() };
+            await this.write(directory, existing);
+          }
+          return 'forked';
+        }
+        // The user's own choices on the row outlive a re-sync of its content: anything the import
+        // does not set (granted folders, a remote link) rides along, and these it does set lose.
+        const kept: Partial<ChatSession> = existing
+          ? {
+              ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
+              // Same repository only: a project the importer now derives differently is not the user's.
+              ...(existing.project && existing.project.directory === session.project?.directory
+                ? { project: existing.project }
+                : {}),
+              model: existing.model,
+              approvalMode: existing.approvalMode,
+              reasoningEffort: existing.reasoningEffort,
+            }
+          : {};
+        const imported = { ...existing, ...session, ...kept };
+        // A carried-over binding whose checkout has since been removed (the normal end of a
+        // worktree) yields to the importer's fresh one, which projectFor already checked.
+        // Answering 'removed' here would freeze the copy for good: callers read it as deleted.
+        if (imported.project && imported.project !== session.project && !(await projectOnDisk(imported.project))) {
+          if (session.project) imported.project = session.project;
+          else delete imported.project;
+        }
+        // Only a fresh binding gone under the lease means workspace cleanup won the race.
+        if (imported.project && !(await projectOnDisk(imported.project))) return 'removed';
+        await this.write(directory, imported);
+        return 'written';
+      })
+    );
+  }
+
+  /** Recheck ownership and continuation at the delete sink, in the captured account directory. */
+  async deleteImported(id: string, scopeKey: string): Promise<DeleteImportedOutcome> {
+    return this.serialize(id, async () => {
+      const directory = await this.importDirectory(scopeKey);
+      const session = await this.read(directory, id);
+      if (!session || !session.importOrigin) return 'missing';
+      if (isForkedImport(session)) return 'forked';
+      await rm(this.filePath(directory, id), { force: true });
+      return 'removed';
     });
   }
 
@@ -663,6 +1006,36 @@ export class SessionStore {
       if (!directory) return;
       await rm(this.filePath(directory, id), { force: true });
     });
+  }
+
+  async loadSessionWrites(id: string): Promise<unknown> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return null;
+    try {
+      return JSON.parse(await readFile(this.sessionWritesPath(directory, id), 'utf8')) as unknown;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  async saveSessionWrites(id: string, writes: StoredSessionWrites): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return;
+    const path = this.sessionWritesPath(directory, id);
+    await mkdir(join(directory, SESSION_WRITES), { recursive: true });
+    const temporary = `${path}.tmp`;
+    await writeFile(temporary, JSON.stringify(writes), 'utf8');
+    await rename(temporary, path);
+  }
+
+  async deleteSessionWrites(id: string): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (directory) await rm(this.sessionWritesPath(directory, id), { force: true });
+  }
+
+  private sessionWritesPath(directory: string, id: string): string {
+    return join(directory, SESSION_WRITES, basename(this.filePath(directory, id)));
   }
 
   /**
@@ -696,6 +1069,9 @@ export class SessionStore {
 
     session.messages.push(message);
     session.updatedAt = new Date().toISOString();
+    if (session.importOrigin && !session.importOrigin.forkedAt && !isImportedMessageId(message.id)) {
+      session.importOrigin = { ...session.importOrigin, forkedAt: session.updatedAt };
+    }
     await this.write(directory, session);
     return session;
   }
@@ -731,14 +1107,18 @@ export class SessionStore {
    */
   private async mutate(
     id: string,
-    change: (session: ChatSession) => boolean | null
+    change: (session: ChatSession) => boolean | null,
+    expectedScope?: string | null,
+    isCurrentOperation: () => boolean = () => true
   ): Promise<ChatSessionSummary | null> {
     return this.serialize(id, async () => {
+      if (!isCurrentOperation() || (expectedScope !== undefined && this.scopeKey() !== expectedScope)) return null;
       const directory = await this.directoryFor(false);
       if (!directory) return null;
       const session = await this.read(directory, id);
       if (!session) return null;
 
+      if (!isCurrentOperation() || (expectedScope !== undefined && this.scopeKey() !== expectedScope)) return null;
       const outcome = change(session);
       if (outcome === null) return null;
       if (outcome) await this.write(directory, session);
@@ -774,6 +1154,7 @@ export class SessionStore {
     // in a later version must not make an existing conversation unreadable.
     const project = normalizeProject(parsed.project);
     const origin = normalizeOrigin(parsed.origin);
+    const importOrigin = normalizeImportOrigin(parsed.importOrigin);
     const suggestions = normalizeSuggestions(parsed.spawnSuggestions);
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
@@ -804,7 +1185,9 @@ export class SessionStore {
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),
+      ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
       ...(origin ? { origin } : {}),
+      ...(importOrigin ? { importOrigin } : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       ...(typeof parsed.remoteSessionId === 'string' ? { remoteSessionId: parsed.remoteSessionId } : {}),
       ...(suggestions.length > 0 ? { spawnSuggestions: suggestions } : {}),

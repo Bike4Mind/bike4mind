@@ -63,7 +63,7 @@ vi.mock('sst', () => ({
   Resource: { App: { stage: 'dev' } },
 }));
 
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreTimeoutSummaryMessage: vi.fn().mockResolvedValue(undefined),
 }));
 

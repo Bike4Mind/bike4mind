@@ -161,6 +161,15 @@ describe('CompletionStreamEventSchema provider_block', () => {
 });
 
 describe('CompletionRequestSchema', () => {
+  it('rejects an empty messages array', () => {
+    const result = CompletionRequestSchema.safeParse({ model: 'claude-sonnet-4-5-20250929', messages: [] });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ code: 'too_small', path: ['messages'], minimum: 1 }),
+    ]);
+  });
+
   it('parses a minimal request', () => {
     const out = CompletionRequestSchema.parse({
       model: 'claude-sonnet-4-5-20250929',
@@ -518,6 +527,7 @@ describe('CompletionSseErrorEventSchema', () => {
     for (const code of [
       'insufficient_credits',
       'spend_cap_exceeded',
+      'invalid_request',
       'provider_error',
       'provider_rejected',
       'content_blocked',
@@ -536,9 +546,11 @@ describe('CompletionSseErrorEventSchema', () => {
     expect([...QUEST_ERROR_CODES]).toEqual(['insufficient_credits', 'spend_cap_exceeded']);
     expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([
       ...QUEST_ERROR_CODES,
+      'invalid_request',
       'provider_error',
       'provider_rejected',
       'content_blocked',
+      'output_budget_exhausted',
     ]);
   });
 });

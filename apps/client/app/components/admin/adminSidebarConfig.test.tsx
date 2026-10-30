@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { AdminTab, SIDEBAR_SECTIONS, SIDEBAR_EXPANDED_STORAGE_KEY, findSectionKeyForTab } from './adminSidebarConfig';
+import {
+  AdminTab,
+  SIDEBAR_COLLAPSED_STORAGE_KEY,
+  SIDEBAR_MORE_STORAGE_KEY,
+  SIDEBAR_MORE_THRESHOLD,
+  SIDEBAR_MORE_VISIBLE,
+  SIDEBAR_SECTIONS,
+  findSectionKeyForTab,
+  splitSectionItems,
+} from './adminSidebarConfig';
 
 const allItems = SIDEBAR_SECTIONS.flatMap(section => section.items);
 
@@ -22,6 +31,22 @@ describe('SIDEBAR_SECTIONS', () => {
   it('gives every section a stable, unique key', () => {
     const keys = SIDEBAR_SECTIONS.map(s => s.key);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('uses the redesigned section keys and sentence-case labels, in order', () => {
+    expect(SIDEBAR_SECTIONS.map(s => [s.key, s.label])).toEqual([
+      ['overview', 'Overview'],
+      ['people', 'People'],
+      ['money', 'Money'],
+      ['trust', 'Trust and safety'],
+      ['ai', 'AI'],
+      ['platform', 'Platform'],
+      ['settings', 'Settings'],
+    ]);
+  });
+
+  it('lists Dashboard as the first Overview item', () => {
+    expect(SIDEBAR_SECTIONS[0].items[0].tab).toBe(AdminTab.Dashboard);
   });
 
   it('gives every item a non-empty label and icon', () => {
@@ -50,20 +75,26 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(gatedByTab.size).toBe(2);
   });
 
-  it('only badges the Subscribers tab', () => {
-    const badged = allItems.filter(i => i.badge);
-    expect(badged).toHaveLength(1);
-    expect(badged[0].tab).toBe(AdminTab.Subscribers);
-    expect(badged[0].badge).toBe('waitingSubscribers');
+  it('only badges the Waitlist and Subscriptions tabs', () => {
+    const badged = allItems.filter(i => i.badge).map(i => [i.tab, i.badge]);
+    expect(badged).toEqual([
+      [AdminTab.Waitlist, 'waitingSubscribers'],
+      [AdminTab.Subscriptions, 'newSubscriptions'],
+    ]);
   });
 });
 
 describe('findSectionKeyForTab', () => {
   it('returns the owning section key for a tab', () => {
-    expect(findSectionKeyForTab(AdminTab.Users)).toBe('userOps');
-    expect(findSectionKeyForTab(AdminTab.SecretsRotation)).toBe('security');
-    expect(findSectionKeyForTab(AdminTab.SreAgent)).toBe('reliability');
-    expect(findSectionKeyForTab(AdminTab.WorldTime)).toBe('generalOps');
+    expect(findSectionKeyForTab(AdminTab.Dashboard)).toBe('overview');
+    expect(findSectionKeyForTab(AdminTab.Users)).toBe('people');
+    expect(findSectionKeyForTab(AdminTab.Waitlist)).toBe('people');
+    expect(findSectionKeyForTab(AdminTab.EmailMarketing)).toBe('people');
+    expect(findSectionKeyForTab(AdminTab.CreditAnalytics)).toBe('money');
+    expect(findSectionKeyForTab(AdminTab.SecretsRotation)).toBe('trust');
+    expect(findSectionKeyForTab(AdminTab.LLMDashboard)).toBe('ai');
+    expect(findSectionKeyForTab(AdminTab.SreAgent)).toBe('platform');
+    expect(findSectionKeyForTab(AdminTab.AdminSettings)).toBe('settings');
   });
 
   it('resolves every referenced tab to exactly one section', () => {
@@ -85,9 +116,48 @@ describe('findSectionKeyForTab', () => {
   });
 });
 
-describe('SIDEBAR_EXPANDED_STORAGE_KEY', () => {
-  it('is a stable, namespaced localStorage key', () => {
-    expect(SIDEBAR_EXPANDED_STORAGE_KEY).toBe('admin-sidebar-expanded-sections');
+describe('sidebar storage keys and More limits', () => {
+  it('uses stable, namespaced localStorage keys', () => {
+    expect(SIDEBAR_COLLAPSED_STORAGE_KEY).toBe('admin-sidebar-collapsed');
+    expect(SIDEBAR_MORE_STORAGE_KEY).toBe('admin-sidebar-more-sections');
+  });
+
+  it('shows fewer items than the threshold that triggers More', () => {
+    expect(SIDEBAR_MORE_VISIBLE).toBeLessThan(SIDEBAR_MORE_THRESHOLD);
+  });
+});
+
+describe('splitSectionItems', () => {
+  const people = SIDEBAR_SECTIONS.find(section => section.key === 'people')!.items;
+  const short = people.slice(0, SIDEBAR_MORE_THRESHOLD);
+
+  it('returns every item of a section at or under the threshold', () => {
+    expect(splitSectionItems(short, null, false)).toEqual({ shown: short, hiddenCount: 0 });
+  });
+
+  it('cuts a long collapsed section to the visible head and counts the rest', () => {
+    const { shown, hiddenCount } = splitSectionItems(people, AdminTab.Users, false);
+
+    expect(shown).toEqual(people.slice(0, SIDEBAR_MORE_VISIBLE));
+    expect(hiddenCount).toBe(people.length - SIDEBAR_MORE_VISIBLE);
+  });
+
+  it('returns everything when expanded', () => {
+    expect(splitSectionItems(people, null, true)).toEqual({ shown: people, hiddenCount: 0 });
+  });
+
+  it('appends an active item past the cut and decrements the hidden count', () => {
+    const tail = people[SIDEBAR_MORE_VISIBLE + 1];
+    const { shown, hiddenCount } = splitSectionItems(people, tail.tab, false);
+
+    expect(shown).toEqual([...people.slice(0, SIDEBAR_MORE_VISIBLE), tail]);
+    expect(hiddenCount).toBe(people.length - SIDEBAR_MORE_VISIBLE - 1);
+  });
+
+  it('does not duplicate an active item already in the visible head', () => {
+    const { shown } = splitSectionItems(people, people[0].tab, false);
+
+    expect(shown).toHaveLength(SIDEBAR_MORE_VISIBLE);
   });
 });
 

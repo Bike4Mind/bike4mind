@@ -26,6 +26,7 @@ import {
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { requestDirectory } from './requestDirectoryTool';
+import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
 import { skillTool } from './skillTool';
 import { todoWrite } from './todoTool';
@@ -141,6 +142,7 @@ const BY_NAME = new Map(
     ...HOST_TOOLS,
     ...SUGGESTION_TOOLS,
     ...BROWSER_TOOLS,
+    screenCapture,
     ...MEMORY_TOOLS,
     ...SKILL_TOOLS,
     askUser,
@@ -152,6 +154,18 @@ const BY_NAME = new Map(
 
 export function findTool(name: string): ToolDefinition | undefined {
   return BY_NAME.get(name);
+}
+
+/**
+ * The generation tool names toolsForRequest declares for the same `media` and `video` inputs, for
+ * the blank chat's suggestions. Read off the same constants so the two cannot disagree.
+ */
+export function offeredMediaToolNames(options: { media: boolean; video?: readonly VideoModel[] }): string[] {
+  if (!options.media) return [];
+  return [
+    ...MEDIA_TOOLS.map(tool => tool.schema.name),
+    ...(options.video?.length ? [generateVideoTool.schema.name] : []),
+  ];
 }
 
 /**
@@ -191,6 +205,11 @@ export function toolsForRequest(options: {
   modelId?: string;
   /** A hidden browser for this session. Every conversation gets one; it needs no project. */
   browser?: boolean;
+  /**
+   * The app can see other apps' windows. Like the browser it needs no folder or project: it reads
+   * the user's screen, which is gated per capture rather than by a grant.
+   */
+  screen?: boolean;
   /** A resolved memory store. Needs a project, which is what the store is keyed on. */
   memory?: boolean;
   /** A skill catalog for this session. No folder grant needed; a global skill is the user's own file. */
@@ -230,6 +249,7 @@ export function toolsForRequest(options: {
     ...(options.host ? HOST_TOOLS : []),
     ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
     ...(options.browser ? BROWSER_TOOLS : []),
+    ...(options.screen ? [screenCapture] : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
     ...(options.web ? WEB_TOOLS : []),

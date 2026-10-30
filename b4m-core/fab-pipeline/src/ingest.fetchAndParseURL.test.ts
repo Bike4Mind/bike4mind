@@ -17,6 +17,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   WEBSITE_URL: 'https://example.test',
 }));
 
+import { BadRequestError, UrlBlockedError } from '@bike4mind/common';
 import { fetchAndParseURL } from './ingest';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent } from './ssrfProtection';
 
@@ -42,6 +43,12 @@ describe('fetchAndParseURL redirect handling', () => {
     // The first hop was fetched (it is a legitimate public address); the metadata endpoint was NOT.
     expect(axiosGet).toHaveBeenCalledTimes(1);
     expect(axiosGet.mock.calls[0][0]).toBe(PUBLIC_URL);
+  });
+
+  it('surfaces a blocked URL as a BadRequestError so it answers 400, not 500', async () => {
+    const err = await fetchAndParseURL(METADATA_URL, { logger }).catch(e => e);
+    expect(err).toBeInstanceOf(UrlBlockedError);
+    expect(err).toBeInstanceOf(BadRequestError);
   });
 
   it('BLOCKS a redirect to a private network address', async () => {

@@ -8,7 +8,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SubscriptionCallbackFunction } from '../hooks/useCollection';
 import { useWebsocket } from '@/app/contexts/WebsocketContext';
-import { uniqBy } from 'lodash';
+import uniqBy from 'lodash/uniqBy';
 
 type CacheTimestamp = Date | string | number;
 

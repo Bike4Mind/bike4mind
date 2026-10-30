@@ -23,6 +23,40 @@ export const GENERATED_ASSET_GENERATOR_TAG: Record<GeneratedAssetGenerator, stri
 };
 
 /**
+ * How an input FabFile fed a generation; the trail view labels each lineage edge with it. Must stay a superset of
+ * VIDEO_INPUT_ROLES (video/types.ts): the video store step copies each input's role through unchanged.
+ */
+export const GENERATED_ASSET_LINEAGE_ROLES = [
+  'first_frame',
+  'last_frame',
+  'reference',
+  'style',
+  'extend_of',
+  'variation_of',
+  'edit_source',
+  'mask',
+] as const;
+
+export type GeneratedAssetLineageRole = (typeof GENERATED_ASSET_LINEAGE_ROLES)[number];
+
+/** One FabFile a generated asset was made from. Lowercase hex only: an uppercase id would slip past string-equality guards. */
+export const GeneratedAssetLineageEntrySchema = z.object({
+  fileId: z.string().regex(/^[0-9a-f]{24}$/),
+  jobId: z.string().min(1).optional(),
+  role: z.enum(GENERATED_ASSET_LINEAGE_ROLES),
+});
+
+export type GeneratedAssetLineageEntry = z.infer<typeof GeneratedAssetLineageEntrySchema>;
+
+export const GENERATED_ASSET_MAX_LINEAGE_ENTRIES = 16;
+
+/**
+ * Cap on the stored generation request, in UTF-8 bytes of its JSON. sourceMetadata rides every metadata-only
+ * file listing (METADATA_ONLY_PROJECTION does not drop it), so this bounds listing payloads.
+ */
+export const GENERATED_ASSET_MAX_STORED_REQUEST_BYTES = 16_384;
+
+/**
  * What produced a generated file, stamped as `sourceMetadata.generation` on its FabFile. The notebook link
  * (`sessionId`, `questId`) stays at the top of `sourceMetadata`, where listBySession and the session-delete
  * cascade already read it.
@@ -52,6 +86,8 @@ export const GeneratedAssetMetadataSchema = z.object({
   languageCode: z.string().optional(),
   /** Sound effects: how closely the provider followed the prompt, 0-1. */
   promptInfluence: z.number().min(0).max(1).optional(),
+  /** The validated generation request, built server-side. Never secrets or signed URLs. */
+  request: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type GeneratedAssetMetadata = z.infer<typeof GeneratedAssetMetadataSchema>;

@@ -25,7 +25,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: { recordLakeAccessEvent },
 }));
 vi.mock('@server/dataLakes', () => ({ resolveAccessibleLakes, grantingLakes }));
-vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
+vi.mock('@bike4mind/server-utils/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => new S3Storage('files-bucket', 'us-east-2'),
 }));

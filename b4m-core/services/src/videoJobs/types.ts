@@ -1,5 +1,7 @@
 import type {
+  GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
+  GenerationJobDelivery,
   GenerationJobSource,
   IGenerationJobDocumentOf,
   IGenerationJobRepository,
@@ -37,6 +39,7 @@ export type VideoJobDeps = {
     bytes: Buffer;
     contentType: string;
     generation: GeneratedAssetMetadata & { jobId: string };
+    derivedFrom?: GeneratedAssetLineageEntry[];
     /** A chat-made job's quest; the save links the file to its notebook, which scopes the grants that notebook mints. */
     questId?: string;
     signal: AbortSignal;
@@ -62,16 +65,18 @@ export type VideoJobDeps = {
 };
 
 export type CreateVideoJobDeps = VideoJobDeps & {
+  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
 };
 
 export type CreateVideoJobInput = {
-  user: { id: string; organizationId: string | null };
+  user: { id: string; organizationId: string | null; adminRoleWithheld?: boolean };
   /** Untrusted: parsed and validated by createVideoJob. */
   request: unknown;
   source: GenerationJobSource;
   idempotencyKey?: string;
   questId?: string;
+  delivery?: GenerationJobDelivery;
 };
 
 export type CreateVideoJobErrorCode =
@@ -83,7 +88,9 @@ export type CreateVideoJobErrorCode =
   | 'input_image_not_found'
   | 'idempotency_key_reused'
   // Never returned by createVideoJob itself: the agent-mode per-run cap (agentExecutor.videoToolConfig.ts).
-  | 'clip_limit_reached';
+  | 'clip_limit_reached'
+  // Never returned by createVideoJob itself: the voice turn was stopped before the job started (voiceVideoToolConfig.ts).
+  | 'turn_cancelled';
 
 export type CreateVideoJobResult =
   | { ok: true; job: IGenerationJobDocumentOf<'video'>; created: boolean }

@@ -12,6 +12,11 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => null }));
 vi.mock('./AdminOperationsModelSetting', () => ({ AdminOperationsModelSetting: () => null }));
+vi.mock('./AdminTurnstileStatusNotice', () => ({
+  AdminTurnstileStatusNotice: ({ enabled }: { enabled: boolean }) => (
+    <div data-testid="admin-turnstile-notice" data-enabled={String(enabled)} />
+  ),
+}));
 vi.mock('./ScopedOverridesByScope', () => ({ ScopedOverridesByScope: () => null }));
 vi.mock('./AdminLogoUpload', () => ({ default: () => null }));
 vi.mock('./AdminGenerationModelsSetting', () => ({
@@ -34,12 +39,18 @@ vi.mock('./AdminStringListSettingField', () => ({
 type SearchRecord = Record<string, unknown>;
 const router = vi.hoisted(() => ({ search: {} as Record<string, unknown>, navigate: vi.fn() }));
 vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => ({ state: { location: { pathname: '/admin', search: router.search } }, navigate: router.navigate }),
   useSearch: () => router.search,
   useNavigate: () => router.navigate,
 }));
 
-import AdminSettingsTab from './AdminSettingsTab';
-import { SEARCH_TERM_URL_DEBOUNCE_MS } from './useAdminSettingsSearchParams';
+import AdminSettingsTab, { GROWTH_PRICING_ONLY_KEYS } from './AdminSettingsTab';
+import { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
+import { AdminTab } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
+import { SEARCH_TERM_URL_DEBOUNCE_MS } from './shared/useAdminListUrlState';
+import { AdminCommandPalette } from './shared/AdminCommandPalette';
 
 /** The search the component's most recent navigate would produce from `previous`. */
 const lastWrittenSearch = (previous: SearchRecord) => {
@@ -68,6 +79,7 @@ const findTab = (category: string) =>
 
 const aiTab = findTab(settingsMap.videoGeneration.category);
 const securityTab = findTab(settingsMap.ImageModerationReviewerEmails.category);
+const usersTab = findTab(settingsMap.turnstileEnabled.category);
 
 // The section comes from the URL, so seed it rather than click a tab: the mocked navigate does not
 // write the search back.
@@ -91,6 +103,19 @@ beforeEach(() => {
 });
 
 describe('AdminSettingsTab URL state', () => {
+  it('focuses the real settings search with /', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <div data-admin-surface>
+          <AdminCommandPalette />
+          <AdminSettingsTab />
+        </div>
+      </CssVarsProvider>
+    );
+    fireEvent.keyDown(document.body, { key: '/' });
+    expect(screen.getByTestId('admin-settings-search-input')).toHaveFocus();
+  });
+
   const sections = Object.values(SETTING_TABS);
   const [firstSection, secondSection] = sections;
   const isSelected = (id: string) =>
@@ -212,6 +237,19 @@ describe('AdminSettingsTab recommended models setting', () => {
   });
 });
 
+describe('AdminSettingsTab Turnstile notice', () => {
+  it.each([
+    ['true', 'true'],
+    ['false', 'false'],
+    [true, 'true'],
+    [false, 'false'],
+  ])('passes enabled for a saved turnstileEnabled of %j', (saved, expected) => {
+    serverSettings = [{ settingName: 'turnstileEnabled', settingValue: saved }];
+    renderTab(usersTab);
+    expect(screen.getByTestId('admin-turnstile-notice').getAttribute('data-enabled')).toBe(expected);
+  });
+});
+
 describe('AdminSettingsTab reviewer emails setting', () => {
   it('renders the string-list editor with the stored reviewers and no generic card', () => {
     serverSettings = [{ settingName: 'ImageModerationReviewerEmails', settingValue: '["reviewer@example.com"]' }];
@@ -272,5 +310,51 @@ describe('AdminSettingsTab field default value', () => {
     renderAiTab();
 
     expect(passedDefault('forcedRetrievalSpreadFloorPct')).toBe(settingsMap.forcedRetrievalSpreadFloorPct.defaultValue);
+  });
+});
+
+describe('AdminSettingsTab Credits System group', () => {
+  const renderCreditsTab = () => renderTab(findTab(settingsMap.billOperationalUsage.category));
+
+  it('lists only keys the Growth and Pricing tab edits', () => {
+    const growthPricingKeys = new Set<string>(GROWTH_PRICING_SECTIONS.flatMap(section => section.keys));
+    for (const key of GROWTH_PRICING_ONLY_KEYS) expect(growthPricingKeys.has(key), key).toBe(true);
+  });
+
+  it('renders no editor for the Growth and Pricing keys and keeps the rest of the group', () => {
+    renderCreditsTab();
+
+    for (const key of GROWTH_PRICING_ONLY_KEYS) {
+      expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
+    }
+    for (const key of ['billOperationalUsage', 'blockDisposableEmails', 'syntheticUserEmailDomains']) {
+      expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
+    }
+    expect(screen.getByTestId('string-list-setting-blockedEmailDomains')).toBeTruthy();
+  });
+
+  it('links to the Growth and Pricing tab', () => {
+    useAdminModal.getState().setActiveTab(AdminTab.AdminSettings);
+    renderCreditsTab();
+
+    fireEvent.click(screen.getByTestId('admin-settings-credits-growth-pricing-link'));
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.GrowthPricing);
+  });
+
+  it('points a search for a Growth and Pricing key to that tab', () => {
+    useAdminModal.getState().setActiveTab(AdminTab.AdminSettings);
+    router.search = { tab: 'admin-settings', q: 'price per credit' };
+    renderSettings();
+
+    expect(screen.queryByTestId('generic-setting-pricePerCredit')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-settings-search-growth-pricing-link'));
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.GrowthPricing);
+  });
+
+  it('shows no Growth and Pricing pointer for an unrelated search', () => {
+    router.search = { tab: 'admin-settings', q: 'slack' };
+    renderSettings();
+
+    expect(screen.queryByTestId('admin-settings-search-growth-pricing-hint')).toBeNull();
   });
 });

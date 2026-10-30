@@ -55,9 +55,11 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/queueHandlers/notebookCuration.ts',
   'apps/workers/src/emailIngestion/emailParser.ts',
   'apps/client/server/s3/notebookImportComplete.ts',
-  'apps/client/server/utils/saveGeneratedAssetToFiles.ts',
+  'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts',
   'apps/client/server/slack/dataLakeIngestDeps.ts',
   'apps/client/server/dataLakes/proposalAdmissionDeps.ts',
+  // Uploads a freshly generated avatar under a new filename and creates a new FabFile row; a first write.
+  'apps/client/server/agents/authoring/generateAgentAvatar.ts',
   'apps/client/server/files/createPresignedUpload.ts',
   // Its upload writes the FabFile it has just created through createFabFile (a first write). It is ALSO
   // listed in ADAPTER_WIRING_SITES on purpose: line ~248 reaches a real rewrite through updateFabFile.
@@ -70,10 +72,13 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/utils/cacheExternalImage.ts',
   'apps/client/server/utils/generatedAudioDelivery.ts',
   'apps/client/server/utils/mailer/emailAttachments.ts',
-  'apps/client/server/services/whatsNewDistribution.ts',
   'apps/client/server/generationJobs/wiring.ts',
+  // Posts a clip to Slack (SlackClient.uploadFile); it writes no FabFile bytes.
+  'apps/client/server/generationJobs/slackJobDelivery.ts',
   'apps/workers/src/queueHandlers/orgFeedbackSummary.ts',
   'apps/workers/src/queueHandlers/questExport.ts',
+  // Stages HTML and stores published-artifact thumbnails; neither upload rewrites FabFile content.
+  'apps/workers/src/queueHandlers/publishThumbnail.ts',
 ]);
 
 /**
@@ -125,9 +130,11 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
       'apps/client/pages/api/fabfiles',
       'apps/client/pages/api/files',
       'apps/client/server',
+      'packages/server-utils/src',
       'apps/workers/src',
       'b4m-core/services/src/fabFileService',
       'b4m-core/services/src/researchTaskService',
+      'packages/server-utils/src',
     ];
     const found: string[] = [];
     searchRoots.forEach(root => walkTs(root, rel => UPLOAD_PATTERN.test(read(rel)) && found.push(rel)));
@@ -208,6 +215,7 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
     const known = new Set([...REWRITE_SITES, ...ADAPTER_WIRING_SITES, ...CHARGED_ELSEWHERE]);
     const found: string[] = [];
     walkTs('apps/client/server', rel => REWRITE_SERVICE_CALL.test(stripComments(read(rel))) && found.push(rel));
+    walkTs('packages/server-utils/src', rel => REWRITE_SERVICE_CALL.test(stripComments(read(rel))) && found.push(rel));
     walkTs('apps/client/pages', rel => REWRITE_SERVICE_CALL.test(stripComments(read(rel))) && found.push(rel));
     walkTs('apps/workers/src', rel => REWRITE_SERVICE_CALL.test(stripComments(read(rel))) && found.push(rel));
 

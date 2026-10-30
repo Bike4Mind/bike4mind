@@ -1,10 +1,10 @@
 import { BadRequestError } from '@bike4mind/utils';
-import { SubscriptionSource, resolveSubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionSource, resolveSubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionPlanSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
 import { SubscriptionPlanInterval } from '@client/lib/userSubscriptions/types';
 import { getSubscriptionPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 import { rethrowStripeRejection } from '@server/integrations/stripe/errors';
-import { stripe } from '@server/integrations/stripe/stripe';
+import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { subscriptionRepository } from '@server/models/Subscription';

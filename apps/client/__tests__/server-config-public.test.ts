@@ -1,5 +1,11 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { TURNSTILE_SECRET_KEY: 'configured-test-secret' },
+  isDeployedStage: () => false,
+}));
 
 // Mock only the repositories; settingsMap (zod parsing) stays real so the
 // boolean/string/missing setting-value handling is exercised for real.
@@ -54,6 +60,15 @@ describe('/api/settings/serverConfigPublic — self-host first-user bootstrap', 
     return JSON.parse(res._getData()) as { allowOpenRegistration: boolean };
   };
 
+  it('propagates a Turnstile settings lookup failure instead of advertising protection as disabled', async () => {
+    delete process.env.B4M_SELF_HOST;
+    mockFindBySettingName.mockImplementation(async (name: string) => {
+      if (name === 'turnstileEnabled') throw new Error('settings unavailable');
+      return null;
+    });
+    await expect(run()).rejects.toThrow('settings unavailable');
+  });
+
   it('reports closed registration outside self-host even with zero users', async () => {
     delete process.env.B4M_SELF_HOST;
     mockUserCount.mockResolvedValue(0);
@@ -85,7 +100,9 @@ describe('/api/settings/serverConfigPublic — self-host first-user bootstrap', 
 
   it('honors an explicitly enabled allowOpenRegistration setting without counting users', async () => {
     process.env.B4M_SELF_HOST = 'true';
-    mockFindBySettingName.mockResolvedValue({ settingValue: true });
+    mockFindBySettingName.mockImplementation(async (name: string) =>
+      name === 'allowOpenRegistration' ? { settingValue: true } : null
+    );
 
     const body = await run();
 

@@ -20,7 +20,8 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
     return fn;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: vi.fn(async () => 30) }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (opts: { bucket?: string }) => (h.rateLimitOpts.push(opts), vi.fn()),
 }));
 vi.mock('@bike4mind/database', () => ({

@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { systemPromptRepository } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
 import { z } from 'zod';
 
@@ -15,17 +15,16 @@ const UpdateSystemPromptSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(
     /**
      * GET /api/admin/system-prompts/[promptId]
      * Get a single system prompt by promptId
      */
     async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { promptId } = req.query as { promptId: string };
 
       if (typeof promptId !== 'string') {
@@ -77,10 +76,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
      * Create or update a system prompt
      */
     async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { promptId } = req.query as { promptId: string };
 
       if (typeof promptId !== 'string') {
@@ -111,11 +106,37 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           req.user?.name || 'Admin'
         );
 
+        if (!updated) {
+          return res.status(404).json({
+            error: 'Prompt not found',
+            message: `System prompt with ID "${promptId}" not found`,
+          });
+        }
+
         if (validated.enabled !== undefined && validated.enabled !== updated?.enabled) {
           await systemPromptRepository.toggleEnabled(promptId, validated.enabled);
         }
 
         const final = await systemPromptRepository.findByPromptId(promptId);
+
+        const changedFields = (
+          ['name', 'description', 'content', 'category', 'tags', 'variables', 'enabled'] as const
+        ).filter(
+          field =>
+            validated[field] !== undefined && JSON.stringify(validated[field]) !== JSON.stringify(existing[field])
+        );
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.system_prompt.updated',
+          target: { kind: 'settings', id: promptId, displayName: final?.name ?? existing.name },
+          summary:
+            changedFields.length === 0
+              ? `re-saved system prompt ${promptId} with no changes`
+              : `updated system prompt ${promptId}`,
+          changes: (['name', 'category', 'enabled'] as const)
+            .filter(field => changedFields.includes(field))
+            .map(field => ({ field, before: existing[field], after: validated[field] })),
+          details: { changedFields, fromVersion: existing.version, toVersion: final?.version },
+        });
 
         return res.status(200).json({
           success: true,
@@ -141,6 +162,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           lastUpdatedByName: req.user?.name || 'Admin',
         });
 
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.system_prompt.created',
+          target: { kind: 'settings', id: promptId, displayName: newPrompt.name },
+          summary: `created system prompt ${promptId}`,
+          details: { category: newPrompt.category, enabled: newPrompt.enabled, version: newPrompt.version },
+        });
+
         return res.status(201).json({
           success: true,
           data: {
@@ -161,10 +189,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
      * deleting them here would be ambiguous, since the row would reappear as a code entry.
      */
     async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { promptId } = req.query as { promptId: string };
 
       if (typeof promptId !== 'string') {
@@ -207,6 +231,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           message: `System prompt with ID "${promptId}" not found`,
         });
       }
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.system_prompt.deleted',
+        target: { kind: 'settings', id: promptId, displayName: dbPrompt.name },
+        summary: `deleted system prompt ${promptId}`,
+        details: { deletedVersion: dbPrompt.version, historyPreserved: result.historyPreserved },
+      });
 
       return res.status(200).json({
         success: true,

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { InternalServerError } from '@bike4mind/common';
 import { MfaAttemptRejectedError } from '@bike4mind/auth/mfaService';
+import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
 const { mockFindWithSecrets, mockRecordFailed, mockVerifyMFA, mockCompleteMfaLogin } = vi.hoisted(() => ({
   mockFindWithSecrets: vi.fn(),
@@ -41,6 +42,11 @@ vi.mock('@server/auth/completeMfaLogin', () => ({
   completeMfaLogin: (...a: unknown[]) => mockCompleteMfaLogin(...a),
 }));
 
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  redactUserSecretsForSelf: (user: unknown) => user,
+}));
+
 import handler from '../verify';
 
 const run = () => {
@@ -64,6 +70,16 @@ describe('POST /api/auth/mfa/verify - response boundary', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ verified: true, accessToken: 'tok', deviceRemembered: false });
     expect(mockRecordFailed).not.toHaveBeenCalled();
+  });
+
+  it('strips secrets and undeclared fields from the user in the response', async () => {
+    mockVerifyMFA.mockResolvedValue({ user: { id: 'u1', ...secretUserFields() } });
+    mockCompleteMfaLogin.mockResolvedValue({ accessToken: 'tok', deviceRemembered: false });
+    const { res, promise } = run();
+    await promise;
+    const body = res._getJSONData();
+    expect(body.accessToken).toBe('tok');
+    expectSelfUserStripped(body.user, body, 'u1');
   });
 
   it('surfaces a schema failure after a successful login as a 500 without booking a failed MFA attempt', async () => {

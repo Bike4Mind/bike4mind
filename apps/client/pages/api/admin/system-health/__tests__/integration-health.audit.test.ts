@@ -1,0 +1,168 @@
+// @vitest-environment node
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createMocks } from 'node-mocks-http';
+
+type Handler = (req: unknown, res: unknown) => Promise<unknown>;
+
+const h = vi.hoisted(() => ({
+  handlers: {} as Record<string, Handler>,
+  audit: vi.fn(),
+  runProbe: vi.fn(),
+  runAllProbes: vi.fn(),
+  getOverride: vi.fn(),
+  setOverride: vi.fn(),
+  clearCache: vi.fn(),
+  resetBreaker: vi.fn(),
+  flush: vi.fn(),
+}));
+
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    const chain: Record<string, unknown> = { use: () => chain };
+    for (const method of ['get', 'post', 'put']) {
+      chain[method] = (fn: Handler) => {
+        h.handlers[method] = fn;
+        return chain;
+      };
+    }
+    return chain;
+  },
+}));
+vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
+vi.mock('@bike4mind/database', () => ({
+  INTEGRATION_HEALTH_INTEGRATIONS: ['github', 'slack'],
+  integrationHealthCheckRepository: {},
+  integrationCircuitOverrideRepository: { getOverride: h.getOverride, setOverride: h.setOverride },
+}));
+vi.mock('@bike4mind/server-utils/services/integrationHealthService', () => ({
+  getHealthSummary: vi.fn(),
+  runProbe: h.runProbe,
+  runAllProbes: h.runAllProbes,
+}));
+vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
+  getStatus: vi.fn(),
+  clearCache: h.clearCache,
+}));
+vi.mock('@bike4mind/server-utils/services/mcpCircuitBreakers', () => ({
+  flushBreakerMetrics: h.flush,
+  getAllBreakerStates: vi.fn(),
+  resetBreaker: h.resetBreaker,
+}));
+
+await import('../integration-health');
+
+const call = async (method: 'post' | 'put', body: Record<string, unknown>) => {
+  const { req, res } = createMocks({ method: method.toUpperCase() as 'POST' | 'PUT', body });
+  (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+  await h.handlers[method](req, res);
+  return { req, res };
+};
+
+const probeResult = (integration: string) => ({
+  integration,
+  status: 'healthy',
+  latencyMs: 12,
+  statusCode: 200,
+  checkedAt: new Date(),
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.audit.mockResolvedValue(null);
+  h.flush.mockResolvedValue(undefined);
+});
+
+describe('integration-health admin audit', () => {
+  it('records a single-integration probe', async () => {
+    h.runProbe.mockResolvedValue(probeResult('github'));
+
+    const { req } = await call('post', { integration: 'github' });
+
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][0]).toBe(req);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'system_health.integration_probe_run',
+      target: { kind: 'system', id: 'integration-health' },
+      details: { integration: 'github', status: 'healthy' },
+    });
+    expect(h.runProbe.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('records a probe of all integrations', async () => {
+    h.runAllProbes.mockResolvedValue([probeResult('github'), probeResult('slack')]);
+
+    await call('post', {});
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'system_health.integration_probe_run',
+      details: {
+        integrations: [
+          { integration: 'github', status: 'healthy' },
+          { integration: 'slack', status: 'healthy' },
+        ],
+      },
+    });
+  });
+
+  it('records a circuit breaker override after it takes effect', async () => {
+    h.getOverride.mockResolvedValue({ integration: 'slack', mode: 'auto' });
+    h.setOverride.mockResolvedValue({ integration: 'slack', mode: 'force_block', setBy: 'admin-1', reason: 'outage' });
+
+    const { res } = await call('put', { integration: 'slack', mode: 'force_block', reason: 'outage' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'system_health.integration_override_set',
+      target: { kind: 'settings', id: 'slack' },
+      reason: 'outage',
+      changes: [{ field: 'mode', before: 'auto', after: 'force_block' }],
+      details: { integration: 'slack', mode: 'force_block' },
+    });
+    expect(h.clearCache.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('records a first override as changing from the default auto mode', async () => {
+    h.getOverride.mockResolvedValue(null);
+    h.setOverride.mockResolvedValue({ integration: 'slack', mode: 'force_open', setBy: 'admin-1' });
+
+    await call('put', { integration: 'slack', mode: 'force_open' });
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      changes: [{ field: 'mode', before: 'auto', after: 'force_open' }],
+    });
+  });
+
+  it('records the previous mode when an existing override is cleared back to auto', async () => {
+    h.getOverride.mockResolvedValue({ integration: 'slack', mode: 'force_block' });
+    h.setOverride.mockResolvedValue({ integration: 'slack', mode: 'auto', setBy: 'admin-1' });
+
+    await call('put', { integration: 'slack', mode: 'auto' });
+
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      changes: [{ field: 'mode', before: 'force_block', after: 'auto' }],
+    });
+  });
+
+  it('does not audit a probe that fails', async () => {
+    h.runProbe.mockRejectedValue(new Error('probe down'));
+
+    await expect(call('post', { integration: 'github' })).rejects.toThrow('probe down');
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('does not audit an override whose write fails', async () => {
+    h.getOverride.mockResolvedValue(null);
+    h.setOverride.mockRejectedValue(new Error('write failed'));
+
+    await expect(call('put', { integration: 'slack', mode: 'force_block' })).rejects.toThrow('write failed');
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('does not audit a rejected override', async () => {
+    await expect(call('put', { integration: 'slack', mode: 'bogus' })).rejects.toThrow();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+});

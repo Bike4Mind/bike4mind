@@ -2,6 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { IFabFileRepository, IProjectRepository, IUserRepository, isImageServeable } from '@bike4mind/common';
 import { NotFoundError, secureParameters, BaseStorage } from '@bike4mind/utils';
 import { z } from 'zod';
+import { hasUsableCachedUrl, signedUrlExpiresAt } from '../fabFileService/get';
 
 const listProjectFilesSchema = z.object({
   projectId: z.string(),
@@ -48,12 +49,12 @@ export const listFiles = async (
           return file;
         }
 
-        // Only generate URL if filePath exists and URL is missing or expired
-        if (file.filePath && (!file.fileUrl || !file.fileUrlExpireAt || file.fileUrlExpireAt < new Date())) {
+        // Only generate URL if filePath exists and the cached one is missing or near expiry
+        if (file.filePath && !hasUsableCachedUrl(file)) {
           try {
             const expiresIn = 3600; // 1 hour
             file.fileUrl = await adapters.storage!.getSignedUrl(file.filePath, 'get', { expiresIn });
-            file.fileUrlExpireAt = new Date(Date.now() + expiresIn * 1000);
+            file.fileUrlExpireAt = signedUrlExpiresAt(file.fileUrl, expiresIn);
 
             await adapters.db.files.update({
               id: file.id,

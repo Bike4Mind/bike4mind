@@ -9,12 +9,18 @@
  *   for 3 consecutive 60s evaluation periods (3 min) before firing
  * - Message age: any message older than 1 hour (3600s) triggers alarm
  *   (single evaluation period — the 1hr threshold already provides built-in delay)
+ * - Missing data: 'ignore', which holds the current state, so a range with no SQS datapoint
+ *   cannot resolve a firing alarm to OK and re-page on the next point. The age alarms score
+ *   IF(visible > 0, age, 0) because SQS stops publishing the age metric on an empty queue;
+ *   the known residuals are documented at the age alarms below.
  *
  * Stage-gated: Only deployed to `dev` and `production` stages.
  * Set ENABLE_MONITORING=true to opt in for other stages.
  */
 
 import { secrets } from './secrets';
+import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
+import { businessMetricAlertsDLQ } from './businessMetricAlerts';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
   fabFileVectorizeQueueDLQ,
@@ -32,6 +38,7 @@ import {
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
   questExportQueueDLQ,
+  publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
@@ -53,12 +60,27 @@ import {
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueueDLQ,
+  contributedQueues,
 } from './queues';
-import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
+import {
+  telemetryAlertDeadLetter,
+  sessionEnrichmentDeadLetter,
+  billingEventsDeadLetter,
+  emailEventsDeadLetter,
+  notebookEventsDeadLetter,
+  completionEventsDeadLetter,
+} from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
-import { isMonitoredStage as _isMonitoredStage, buildDlqAlarmSpecs } from '@bike4mind/infra';
+import {
+  isMonitoredStage as _isMonitoredStage,
+  bindDlqAlarmDimensions,
+  buildDlqAgeMetricQueries,
+  buildDlqAlarmSpecs,
+} from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
+import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -68,6 +90,9 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
  * Subscribe once to receive alerts from all 28 DLQs.
  */
 export const dlqAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('DlqAlarmTopic') : undefined;
+
+/** Email-only topic (OPS_ALERT_EMAIL) that does not depend on the Slack forwarding Lambda. */
+export const oobAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('OobAlarmTopic') : undefined;
 
 /**
  * Wire DLQ alarm SNS topic → Slack.
@@ -99,11 +124,13 @@ if (isMonitoredStage) {
     ),
   });
 
+  const mentionArgs = alarmSlackMentionFunctionArgs();
   dlqAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
-      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
-      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...mentionArgs.environment },
+      permissions: mentionArgs.permissions,
     },
     {
       transform: {
@@ -119,7 +146,6 @@ if (isMonitoredStage) {
   // Routes to a dedicated SNS topic with a direct email subscription instead.
   // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
   // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
-  const oobAlarmTopic = new sst.aws.SnsTopic('OobAlarmTopic');
   if (process.env.OPS_ALERT_EMAIL) {
     // retainOnDelete: the AWS provider cannot destroy a PendingConfirmation subscription.
     // If OPS_ALERT_EMAIL is unset on a later deploy before the confirmation link is clicked,
@@ -130,7 +156,7 @@ if (isMonitoredStage) {
     new aws.sns.TopicSubscription(
       'OobAlarmTopicEmailSub',
       {
-        topic: oobAlarmTopic.arn,
+        topic: oobAlarmTopic!.arn,
         protocol: 'email',
         endpoint: process.env.OPS_ALERT_EMAIL,
       },
@@ -150,7 +176,7 @@ if (isMonitoredStage) {
   new aws.cloudwatch.MetricAlarm('DlqAlarmHandlerDlqMessages', {
     name: `${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-messages`,
     alarmDescription:
-      'DlqAlarmHandlerDlq has messages -- the alarm-to-Slack Lambda is failing; check SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
+      'DlqAlarmHandlerDlq has messages -- the alarm-to-Slack Lambda is failing; check SLACK_ALARMS_WEBHOOK_URL, SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
     metricName: 'ApproximateNumberOfMessagesVisible',
@@ -158,9 +184,9 @@ if (isMonitoredStage) {
     period: 60,
     statistic: 'Maximum',
     threshold: 0,
-    treatMissingData: 'notBreaching',
+    treatMissingData: 'ignore',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-    alarmActions: [oobAlarmTopic.arn],
+    alarmActions: [oobAlarmTopic!.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
   });
 
@@ -172,14 +198,12 @@ if (isMonitoredStage) {
       'DlqAlarmHandlerDlq oldest message exceeds 1 hour -- the alarm-to-Slack Lambda has been failing for an extended period.',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
-    metricName: 'ApproximateAgeOfOldestMessage',
-    namespace: 'AWS/SQS',
-    period: 60,
-    statistic: 'Maximum',
     threshold: 3600,
-    treatMissingData: 'notBreaching',
-    dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-    alarmActions: [oobAlarmTopic.arn],
+    treatMissingData: 'ignore',
+    // Same IF(visible > 0, age, 0) metric math as the fleet age alarms; see
+    // b4m-core/infra/src/dlqAlarmSpecs.ts for why and its residuals.
+    metricQueries: buildDlqAgeMetricQueries(60, { QueueName: dlqAlarmHandlerDlq.name }),
+    alarmActions: [oobAlarmTopic!.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
   });
 }
@@ -362,6 +386,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: githubLakeRevokeQueueDLQ,
   },
   {
+    label: 'publish-thumbnail',
+    displayName: 'Published Artifact Thumbnail',
+    application: 'PublishedArtifacts',
+    sourceQueue: 'publishThumbnailQueue',
+    queue: publishThumbnailQueueDLQ,
+  },
+  {
     label: 'generation-job',
     displayName: 'Generation Job',
     application: 'GenerationJob',
@@ -486,21 +517,35 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
   },
 ];
 
+// Contributed pairs follow the core descriptors, so adding one appends dashboard widgets
+// rather than moving the existing ones.
+const ALARMED_DLQS: InfraDlqDescriptor[] = [
+  ...DLQ_DESCRIPTORS,
+  ...Object.values(contributedQueues).map(({ spec, dlq }) => ({
+    label: spec.label,
+    displayName: spec.displayName,
+    application: spec.application,
+    sourceQueue: spec.name,
+    queue: dlq,
+  })),
+];
+
 // --- Alarm creation ---
 
 /**
  * Creates the standard pair of CloudWatch alarms (message count + message age) for a DLQ,
- * wired to the shared dlqAlarmTopic. Shared by the DLQ_DESCRIPTORS loop below and by any
+ * wired to the shared dlqAlarmTopic. Shared by the ALARMED_DLQS loop below and by any
  * alarm-only DLQ (one with no DLQ_REGISTRY/admin-replay counterpart — see fabFileModerationDLQ).
  * `sourceQueue` is omitted: this function only alarms on the DLQ itself and never needs it.
  */
 function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
   // Alarm names, thresholds, and tags come from the shared spec builder; only the
   // resource-bound pieces (queue dimensions, SNS actions) are wired here.
+  const dimensions = { QueueName: dlq.queue.nodes.queue.name };
   for (const spec of buildDlqAlarmSpecs(dlq, { appName: $app.name, stage: $app.stage })) {
     new aws.cloudwatch.MetricAlarm(spec.resourceName, {
       ...spec.args,
-      dimensions: { QueueName: dlq.queue.nodes.queue.name },
+      ...bindDlqAlarmDimensions(spec, dimensions),
       alarmActions: [dlqAlarmTopic!.arn],
       okActions: [dlqAlarmTopic!.arn],
     });
@@ -508,8 +553,26 @@ function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
 }
 
 if (isMonitoredStage) {
-  for (const dlq of DLQ_DESCRIPTORS) {
+  for (const dlq of ALARMED_DLQS) {
     createDlqAlarms(dlq);
+  }
+
+  if (youngAccountSpendAlertDeadLetter) {
+    createDlqAlarms({
+      label: 'young-account-spend-alert',
+      displayName: 'Young Account Spend Alert',
+      application: 'Signup',
+      queue: youngAccountSpendAlertDeadLetter.queue,
+    });
+  }
+
+  if (signupGrantHeldReleaseDeadLetter) {
+    createDlqAlarms({
+      label: 'signup-grant-held-release',
+      displayName: 'Signup Grant Held Release',
+      application: 'Signup',
+      queue: signupGrantHeldReleaseDeadLetter.queue,
+    });
   }
 
   // FabFile Moderation DLQ — deliberately NOT added to DLQ_DESCRIPTORS above.
@@ -529,24 +592,53 @@ if (isMonitoredStage) {
     queue: fabFileModerationDLQ,
   });
 
-  // Telemetry Alert rule DLQ - alarm-only for the same reason as fabFileModerationDLQ:
-  // it backs the EventBridge telemetry-alert rule target (see infra/eventBus.ts), not an
-  // sst.aws.Queue `.subscribe()` consumer, so there is no source queue for the admin
-  // "replay" UI to re-enqueue into (recovery is re-emitting the event onto the bus).
+  // Event bus dead letters - alarm-only for the same reason: they back EventBridge rule
+  // targets and their Lambdas' async-invoke failures, not a queue consumer, so there is no
+  // source queue to replay into (see infra/eventBusDeadLetter.ts).
   createDlqAlarms({
     label: 'telemetry-alert-rule',
     displayName: 'Telemetry Alert Rule',
     application: 'TelemetryAlerts',
-    queue: telemetryAlertRuleDLQ,
+    queue: telemetryAlertDeadLetter.queue,
   });
-
-  // Session enrichment DLQ - alarm-only for the same reason: it backs the session.* rule
-  // targets and their Lambdas' async-invoke failures (see infra/eventBus.ts), not a queue consumer.
   createDlqAlarms({
     label: 'session-enrichment',
     displayName: 'Session Enrichment',
     application: 'SessionEnrichment',
-    queue: sessionEnrichmentDLQ,
+    queue: sessionEnrichmentDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'billing-events',
+    displayName: 'Billing Events',
+    application: 'Billing',
+    queue: billingEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'email-events',
+    displayName: 'Email Events',
+    application: 'Email',
+    queue: emailEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'notebook-events',
+    displayName: 'Notebook Events',
+    application: 'NotebookCuration',
+    queue: notebookEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'completion-events',
+    displayName: 'Completion Events',
+    application: 'Completions',
+    queue: completionEventsDeadLetter.queue,
+  });
+}
+
+if (businessMetricAlertsDLQ && dlqAlarmTopic) {
+  createDlqAlarms({
+    label: 'business-metric-alerts',
+    displayName: 'Business Metric Alerts',
+    application: 'Analytics',
+    queue: businessMetricAlertsDLQ,
   });
 }
 
@@ -555,12 +647,12 @@ if (isMonitoredStage) {
 export let dlqHealthDashboard: aws.cloudwatch.Dashboard | undefined;
 
 if (isMonitoredStage) {
-  const dlqNames = DLQ_DESCRIPTORS.map(d => d.queue.nodes.queue.name);
+  const dlqNames = ALARMED_DLQS.map(d => d.queue.nodes.queue.name);
 
   const dashboardBody = $util
     .all([$util.all(dlqNames), aws.getRegionOutput().name, aws.getCallerIdentityOutput().accountId])
     .apply(([names, region, accountId]) => {
-      const alarmArns = DLQ_DESCRIPTORS.flatMap(d => [
+      const alarmArns = ALARMED_DLQS.flatMap(d => [
         `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-${d.label}-messages`,
         `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-${d.label}-age`,
       ]);
@@ -587,7 +679,7 @@ if (isMonitoredStage) {
       ];
 
       // Per-DLQ metric widgets: 2 per row, message count + age on dual Y axes
-      DLQ_DESCRIPTORS.forEach((dlq, idx) => {
+      ALARMED_DLQS.forEach((dlq, idx) => {
         const queueName = names[idx];
         const row = Math.floor(idx / 2);
         const col = idx % 2;

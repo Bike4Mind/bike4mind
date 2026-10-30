@@ -79,6 +79,12 @@ export const PublishSourceSchema = z.object({
    * backward compatible: existing drafts omit it and finalize serves their bytes unchanged.
    */
   artifactType: ArtifactTypeSchema.optional(),
+  /**
+   * Set on a multi-file React publish: the identifiers of the sibling artifacts the entry imports.
+   * The upload is then a JSON `{ entry, files }` body (apps/client/app/utils/reactArtifactPublish.ts),
+   * and a refresh re-reads each sibling by these identifiers within the entry artifact's session.
+   */
+  reactSiblings: z.array(z.string().min(1).max(200)).max(50).optional(),
 });
 export type PublishSource = z.infer<typeof PublishSourceSchema>;
 
@@ -97,6 +103,10 @@ export const ArtifactVersionMetaSchema = z.object({
   publishedBy: z.string(),
   size: z.object({ totalBytes: z.int().nonnegative(), fileCount: z.int().nonnegative() }),
   sha256Index: z.string(),
+  /** Byte length of this version's index.html, the only file archived to `versions/{sha256Index}.html`
+   *  once the version is replaced (`size` is the whole bundle). Counts toward the owner's storage
+   *  quota while the version is not current. Absent on entries recorded before it was tracked. */
+  indexBytes: z.int().nonnegative().optional(),
 });
 export type ArtifactVersionMeta = z.infer<typeof ArtifactVersionMetaSchema>;
 
@@ -153,14 +163,20 @@ export const PUBLISH_LIMITS = {
 /**
  * Cumulative per-owner publish quotas, distinct from the
  * per-bundle `PUBLISH_LIMITS` above. These cap how much a single user (or a
- * single organization scope) may host in aggregate, bounding both storage cost
- * and the abuse/phishing-hosting surface.
+ * single organization scope) may host in aggregate.
+ *
+ * The byte cap is the cost guard. There is deliberately no page-count cap: a
+ * count adds nothing to the byte bound, and it stops the heaviest sharers.
+ * Abuse (phishing hosting) is handled per page by report and takedown, not by
+ * a lifetime quota. How often a user may publish is `PUBLISH_RATE_LIMITS`
+ * below; API-key callers are additionally metered per key by `apiKeyRateLimit`.
  *
  * Enforcement is aggregate-on-read: at publish time we sum `size.totalBytes`
- * and count active rows for the owner, then compare against these caps. Two
+ * plus archived page versions (see `ArtifactVersionMetaSchema.indexBytes`)
+ * for the owner's active rows, then compare against these caps. Two
  * concurrent publishes can each read stale usage and both pass, so the true
  * ceiling may be briefly exceeded by roughly one in-flight bundle. That
- * overshoot is acceptable for a cost/abuse guard (it is not a billing
+ * overshoot is acceptable for a cost guard (it is not a billing
  * boundary); a hard limit would require transactional reservation.
  *
  * `user` caps apply to every artifact a user owns (by `ownerId`), regardless of
@@ -168,21 +184,58 @@ export const PUBLISH_LIMITS = {
  * an organization scope (`tier: 'organization'`, `scopeId: <orgId>`). A publish
  * into an org scope is checked against BOTH ladders.
  *
- * Values are deliberately generous (a cost/abuse backstop, not a product
- * limit) and are intended to be tunable.
+ * Values are deliberately generous and are intended to be tunable.
  */
 export const PUBLISH_QUOTAS = {
   user: {
-    maxArtifacts: 100,
     maxTotalBytes: 500 * 1024 * 1024, // 500 MB
   },
   org: {
-    maxArtifacts: 1000,
     maxTotalBytes: 5 * 1024 * 1024 * 1024, // 5 GB
   },
 } as const;
 
 export type PublishQuotaScope = keyof typeof PUBLISH_QUOTAS;
+
+/**
+ * Per-user daily publish allowance: how many publish actions one user may take in any rolling
+ * `windowMs`, counted across the publish write routes (upload-url, reply, fabfile, revise,
+ * restore). finalize is not counted, since every draft it promotes came from a counted upload-url.
+ * An action that fails or is refused after it was counted, before anything is published, is
+ * handed back, except that a revise attempt that reaches the model keeps its count. Accounts younger than `newAccount.maxAgeMs` (by the user's `createdAt`) get the lower
+ * `newAccount.maxActions`. API-key callers count toward the key owner's allowance. Admins are
+ * exempt. Enforced by apps/client/server/services/publish/publishRateLimit.ts.
+ */
+export const PUBLISH_RATE_LIMITS = {
+  windowMs: 24 * 60 * 60 * 1000, // rolling 24 hours
+  maxActions: 200,
+  newAccount: {
+    maxAgeMs: 7 * 24 * 60 * 60 * 1000, // 7 days
+    maxActions: 20,
+  },
+} as const;
+
+/** Error `code` on the 429 a publish write route answers once `PUBLISH_RATE_LIMITS` is used up. */
+export const PUBLISH_RATE_LIMITED = 'publish_rate_limited';
+
+/**
+ * A wait in words: whole minutes (rounded up, never zero) up to an hour, then "about N hours"
+ * (rounded to the nearest hour). The exact wait travels separately as `Retry-After` seconds.
+ */
+export function formatPublishWait(retryAfterSeconds: number): string {
+  const seconds = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : 0;
+  if (seconds > 60 * 60) {
+    const hours = Math.round(seconds / (60 * 60));
+    return `about ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  }
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+}
+
+/** The user-facing `PUBLISH_RATE_LIMITED` refusal: the server's 429 `error`, and any client fallback. */
+export function publishRateLimitMessage(retryAfterSeconds: number): string {
+  return `You've published a lot today. Try again in ${formatPublishWait(retryAfterSeconds)}.`;
+}
 
 export const ALLOWED_MIME_PREFIXES: readonly string[] = ['image/', 'font/', 'audio/', 'video/'];
 export const ALLOWED_MIME_EXACT: readonly string[] = [
@@ -195,6 +248,9 @@ export const ALLOWED_MIME_EXACT: readonly string[] = [
   'application/wasm',
   'application/manifest+json',
   'application/xml',
+  // Every non-page bundle file is served as an attachment, so admitting a document type
+  // here never lets the browser render that file on the app origin.
+  'application/pdf',
   'application/octet-stream',
 ];
 

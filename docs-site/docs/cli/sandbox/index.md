@@ -19,7 +19,7 @@ The sandbox is currently in beta. It works well for most development workflows, 
 | Platform | Runtime | Binary | Status |
 |----------|---------|--------|--------|
 | macOS | Seatbelt | `sandbox-exec` (built-in) | Supported |
-| Linux | Bubblewrap | `bwrap` (install via package manager) | Supported |
+| Linux | Bubblewrap | `bwrap` (install via package manager); `socat` for network filtering | Supported |
 | Windows | Not supported | — | — |
 
 ## Quick Start
@@ -37,9 +37,10 @@ That's it. Once enabled, all bash commands are wrapped in an OS-level sandbox th
 ### Filesystem
 
 - **Writes** are restricted to your current working directory and `/tmp`
-- **Sensitive paths** are blocked for both read and write: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.env`, `/etc/shadow`, `/etc/passwd`
-- **Common config reads** are allowed: `~/.gitconfig`, `~/.npmrc`, `~/.node_modules`
-- All filesystem restrictions are [configurable](./configuration.md#filesystem-configuration)
+- **Sensitive paths** are blocked for both read and write, including SSH keys, cloud credentials, CLI configuration, and package registry credentials. See the [default denied paths](./configuration.md#deniedpaths).
+- **Common config reads** are allowed: `~/.gitconfig` and `~/.node_modules`
+- **Project configuration** in `.bike4mind` and Git metadata in `.git` are read-only, including when writes outside the working directory are enabled. Git operations that update metadata require a trusted operation outside the sandbox.
+- Configure read access and general write restrictions in the [filesystem configuration](./configuration.md#filesystem-configuration).
 
 ### Network (Opt-in)
 
@@ -79,6 +80,7 @@ You can customize this list via the `excludedCommands` config option. Setting `a
 - **No CPU/memory limits** — no cgroup or resource isolation.
 - **No process tree isolation** — child processes inherit sandbox restrictions on macOS but are not namespaced.
 - **Excluded commands bypass the sandbox** — docker, podman, and watchman run without restrictions unless you set `allowUnsandboxedCommands: false`.
+- **No container engine access from sandboxed commands** - container engine sockets (Docker, Podman, Colima, Lima, Rancher Desktop, OrbStack) are unreachable unless you set `allowContainerSockets: true`.
 - **Platform-dependent** — Seatbelt and Bubblewrap have different granularity and enforcement mechanisms.
 
 ## Next Steps

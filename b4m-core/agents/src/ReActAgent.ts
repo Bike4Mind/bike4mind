@@ -5,8 +5,12 @@ import {
   type MessageContent,
   type ICacheStrategy,
   type TurnUsage,
+  type ReasoningWithholder,
+  createReasoningWithholder,
+  reasoningChannelOf,
+  withholdsReasoning,
 } from '@bike4mind/common';
-import type { ICompletionOptionTools, CompletionInfo } from '@bike4mind/llm-adapters';
+import type { ICompletionOptionTools, CompletionInfo, ToolResultScore } from '@bike4mind/llm-adapters';
 import { isContextLimitError } from './errors';
 import { isJsonObjectString, isPlainObject, isRepaired, repairTranscript } from './transcript';
 import type {
@@ -34,6 +38,7 @@ import {
   type ToolUseInfo,
 } from './toolParallelizer';
 import { RepeatedCallGuard, repeatedCallWarning, repeatedCallBlockedObservation } from './repeatedCallGuard';
+import { usableEvidenceConfidence } from './iterationConfidence';
 
 /**
  * Placeholder tool_result content for a tool_use that never ran because the run
@@ -160,13 +165,18 @@ function buildToolResultsNudge(feedback: string | null): string {
   return feedback ? `${TOOL_RESULTS_NUDGE}\n\n${feedback}` : TOOL_RESULTS_NUDGE;
 }
 
-/** Calls the host's feedback drain. A failing drain is logged and treated as empty - it must never fail the run. */
+/**
+ * Calls the host's feedback drain. A failing drain is logged and treated as empty - it must never fail the run.
+ * A cancelled run is not drained: whatever the host has queued stays with the host instead of being handed to a
+ * run that will never send it.
+ */
 async function drainHostFeedback(
   drain: AgentRunOptions['drainFeedback'],
   phase: FeedbackDrainPhase,
-  logger: AgentContext['logger']
+  logger: AgentContext['logger'],
+  signal: AbortSignal | undefined
 ): Promise<string | null> {
-  if (!drain) return null;
+  if (!drain || signal?.aborted) return null;
   try {
     return (await drain(phase))?.trim() || null;
   } catch (error) {
@@ -289,6 +299,12 @@ export class ReActAgent extends EventEmitter {
   private iterationToolFailed: boolean[] = [];
   /** Ids of calls `executeToolWithQueueFallback` saw fail; drained by `takeToolFailure`. */
   private failedToolCallIds = new Set<string>();
+  /**
+   * What a call's tool itself returned, before the agent appended any notice; drained by
+   * `takeToolOutput`. Only these reach a tool's `validateResult` - text the agent wrote
+   * (circuit breaker, cancellation, deferred-tool hint) never does.
+   */
+  private toolOutputs = new Map<string, string>();
 
   // --- State for runIteration() / checkpoint support ---
   /** Conversation history, promoted from run()-local to instance for checkpoint/resume */
@@ -526,6 +542,7 @@ export class ReActAgent extends EventEmitter {
         const processedToolIds = new Set<string>(); // Track which tool calls we've already processed
         let hadToolCalls = false; // Track if this iteration had any tool calls
         let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
+        const reasoningWithholder = this.createReasoningWithholder();
 
         // Drop the previous iteration's workflow reminder BEFORE trimming so
         // it is never counted as an iteration boundary and never stacks; a
@@ -586,7 +603,8 @@ export class ReActAgent extends EventEmitter {
             },
             async (texts, completionInfo) => {
               // Collect text chunks and emit deltas for live token streaming
-              for (const text of texts) {
+              for (const rawText of texts) {
+                const text = this.visibleText(reasoningWithholder, rawText, completionInfo?.channel);
                 if (text) {
                   currentText += text;
                   this.emit('text_delta', { delta: text, iteration: iterationIndex });
@@ -711,7 +729,8 @@ export class ReActAgent extends EventEmitter {
                       this.emitObservationStep(
                         toolUse.name,
                         observation,
-                        isFailedResult(result) || this.takeToolFailure(toolUse)
+                        isFailedResult(result) || this.takeToolFailure(toolUse),
+                        this.takeToolOutput(toolUse)
                       );
                     }
                   } else {
@@ -735,13 +754,19 @@ export class ReActAgent extends EventEmitter {
                         this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
                       }
 
-                      this.emitObservationStep(toolUse.name, observation, this.takeToolFailure(toolUse));
+                      this.emitObservationStep(
+                        toolUse.name,
+                        observation,
+                        this.takeToolFailure(toolUse),
+                        this.takeToolOutput(toolUse)
+                      );
                     }
                   }
                 }
               }
             }
           );
+          currentText += this.flushHeldText(reasoningWithholder, iterationIndex);
         } catch (completionError) {
           if (!reactiveCompactionAttempted && options.onContextLimit && isContextLimitError(completionError)) {
             reactiveCompactionAttempted = true;
@@ -784,7 +809,7 @@ export class ReActAgent extends EventEmitter {
         // tool_use blocks assembled, terminating tool-using runs at iteration 1.
         const finalFeedback =
           !hadToolCalls && currentText.trim() && iterations < maxIterations
-            ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger)
+            ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger, options.signal)
             : null;
         if (finalFeedback) {
           this.reopenAnswerWithFeedback(messages, currentText.trim(), finalFeedback);
@@ -853,7 +878,12 @@ export class ReActAgent extends EventEmitter {
         // After tools complete, nudge the agent to provide the final answer
         // This prevents the agent from forgetting the user's specific requirements (e.g., "list in detail")
         if (!iterationComplete && hadToolCalls) {
-          const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger);
+          // Drained only when another request will carry it: the host treats a drain as delivery.
+          const requestFollows =
+            iterations < maxIterations && !(maxTotalTokens !== undefined && this.totalTokens >= maxTotalTokens);
+          const feedback = requestFollows
+            ? await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger, options.signal)
+            : null;
           messages.push({ role: 'user', content: buildToolResultsNudge(feedback) });
         }
 
@@ -1031,6 +1061,33 @@ BEHAVIOR GUIDELINES:
 - Only ask for clarification after exhausting reasonable attempts
 
 Remember: You are an autonomous AGENT. Act independently and solve problems proactively.`;
+  }
+
+  /** One filter per provider call, or null when the caller may see all of this model's reasoning. */
+  private createReasoningWithholder(): ReasoningWithholder | null {
+    return withholdsReasoning(this.context.thinkingVisibility ?? 'raw', this.context.model)
+      ? createReasoningWithholder(
+          reasoningChannelOf({
+            id: this.context.model,
+            backend: this.context.modelBackend,
+            adapterFamily: this.context.modelAdapterFamily,
+          })
+        )
+      : null;
+  }
+
+  private visibleText(
+    withholder: ReasoningWithholder | null,
+    text: string | null | undefined,
+    channel: CompletionInfo['channel']
+  ): string | null | undefined {
+    return withholder && text ? withholder.visible(text, channel) : text;
+  }
+
+  private flushHeldText(withholder: ReasoningWithholder | null, iteration: number): string {
+    const held = withholder?.flush() ?? '';
+    if (held) this.emit('text_delta', { delta: held, iteration });
+    return held;
   }
 
   /** Live text is requested only for a listening view; without one, the backend keeps full retry. */
@@ -1312,6 +1369,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       this.confidenceLog = [];
       this.resetIterationConfidences();
       this.failedToolCallIds.clear();
+      this.toolOutputs.clear();
       this.lastStopReason = undefined;
       this.iterations = 0;
       this.repeatedCallGuard.reset();
@@ -1410,6 +1468,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const gatedToolCalls: GatedToolCall[] = [];
       let hadToolCalls = false;
       let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
+      const reasoningWithholder = this.createReasoningWithholder();
       const iterStartInputTokens = this.totalInputTokens;
       const iterStartOutputTokens = this.totalOutputTokens;
       // Pre-call baselines for the assign-not-add fold in the stream callback below.
@@ -1440,7 +1499,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           cacheStrategy,
         },
         async (texts, completionInfo) => {
-          for (const text of texts) {
+          for (const rawText of texts) {
+            const text = this.visibleText(reasoningWithholder, rawText, completionInfo?.channel);
             if (text) {
               currentText += text;
               this.emit('text_delta', { delta: text, iteration: iterationIndex });
@@ -1567,7 +1627,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                     const obsStep = this.buildObservationStep(
                       toolUse.name,
                       observation,
-                      isFailedResult(result) || this.takeToolFailure(toolUse)
+                      isFailedResult(result) || this.takeToolFailure(toolUse),
+                      this.takeToolOutput(toolUse)
                     );
                     iterationSteps.push(obsStep);
                   }
@@ -1594,7 +1655,12 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                       observation = await this.executeToolWithQueueFallback(toolUse);
                       this.appendToolMessages(this.messages, toolUse, observation, thinkingBlocks);
                     }
-                    const obsStep = this.buildObservationStep(toolUse.name, observation, this.takeToolFailure(toolUse));
+                    const obsStep = this.buildObservationStep(
+                      toolUse.name,
+                      observation,
+                      this.takeToolFailure(toolUse),
+                      this.takeToolOutput(toolUse)
+                    );
                     iterationSteps.push(obsStep);
                   }
                 }
@@ -1603,12 +1669,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           }
         }
       );
+      currentText += this.flushHeldText(reasoningWithholder, iterationIndex);
 
       // Final-answer decision deferred from the streaming callback. See the
       // matching comment in `run()` for full rationale.
       const finalFeedback =
         !hadToolCalls && currentText.trim() && this.iterations < maxIterations
-          ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger)
+          ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger, options.signal)
           : null;
       if (finalFeedback) {
         iterationSteps.push(this.reopenAnswerWithFeedback(this.messages, currentText.trim(), finalFeedback));
@@ -1674,7 +1741,12 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
 
       // Add nudge for next iteration if tools were called but no final answer
       if (!iterationComplete && hadToolCalls) {
-        const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger);
+        // Drained only when another request will carry it: the host treats a drain as delivery.
+        const requestFollows =
+          this.iterations < maxIterations && !(maxTotalTokens !== undefined && this.totalTokens >= maxTotalTokens);
+        const feedback = requestFollows
+          ? await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger, options.signal)
+          : null;
         this.messages.push({ role: 'user', content: buildToolResultsNudge(feedback) });
       }
 
@@ -1846,11 +1918,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * Build an observation step, score confidence, push to steps, and emit.
    * Returns the step for callers that need to collect iteration steps.
    */
-  private buildObservationStep(toolName: string, observation: string, toolFailed = false): AgentStep {
-    const confidence = this.scoreToolResult(toolName, observation);
-    const confidenceSource: 'deterministic' | 'default' = observation.startsWith('Error:')
-      ? 'deterministic'
-      : 'default';
+  private buildObservationStep(
+    toolName: string,
+    observation: string,
+    toolFailed = false,
+    toolOutput?: string
+  ): AgentStep {
+    const { confidence, source: confidenceSource } = this.scoreToolResult(toolName, observation, toolOutput);
 
     this.confidenceLog.push({ toolName, confidence, source: confidenceSource, timestamp: Date.now() });
     this.iterationConfidences.push(confidence);
@@ -1876,30 +1950,45 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   /**
    * Create and emit an observation step, scoring confidence for the result
    */
-  private emitObservationStep(toolName: string, observation: string, toolFailed = false): void {
-    this.buildObservationStep(toolName, observation, toolFailed);
+  private emitObservationStep(toolName: string, observation: string, toolFailed = false, toolOutput?: string): void {
+    this.buildObservationStep(toolName, observation, toolFailed, toolOutput);
   }
 
   /**
-   * Score the confidence of a tool result.
-   * Deterministic scoring for errors; default stub (0.7) for everything else.
-   * This is the extension point for tool-level score functions.
+   * Score the confidence of a tool result. A thrown tool's `Error:` observation is always 0.1;
+   * otherwise the tool's own `validateResult` judges `toolOutput` (the raw output, absent when
+   * the agent wrote the observation itself), and anything it has no opinion on gets a default
+   * from the observation's shape.
    */
-  private scoreToolResult(toolName: string, result: string): number {
-    // Deterministic: errors get low confidence
+  private scoreToolResult(
+    toolName: string,
+    result: string,
+    toolOutput?: string
+  ): { confidence: number; source: 'deterministic' | 'heuristic' | 'default' } {
     if (result.startsWith('Error:')) {
-      return 0.1;
+      return { confidence: 0.1, source: 'deterministic' };
     }
-    // Deterministic: empty results are suspicious
-    if (!result || result.trim().length === 0) {
-      return 0.3;
+    const validated = toolOutput === undefined ? undefined : this.validateToolResult(toolName, toolOutput);
+    if (validated) return validated;
+    if (result.trim().length === 0) {
+      return { confidence: 0.3, source: 'deterministic' };
     }
-    // Stub phase: all non-error tool results get a fixed 0.7 confidence score.
-    // Intentional - real confidence signals (tool-specific validators, LLM
-    // self-reported certainty, output schema conformance) will replace this
-    // when the confidence calibration system is built. The 0.7 baseline keeps
-    // the confidence gate functional without triggering false pauses.
-    return 0.7;
+    // Baseline for a non-empty result nothing has judged: above the gate threshold, so an
+    // unvalidated tool never pauses a run on its own.
+    return { confidence: 0.7, source: 'default' };
+  }
+
+  /** The tool's own validator verdict, clamped to 0-1; a throwing validator is logged and ignored. */
+  private validateToolResult(toolName: string, result: string): ToolResultScore | undefined {
+    const validateResult = this.context.tools.find(t => t.toolSchema.name === toolName)?.validateResult;
+    if (!validateResult) return undefined;
+    try {
+      const score = validateResult(result);
+      return score && { ...score, confidence: Math.min(1, Math.max(0, score.confidence)) };
+    } catch (error) {
+      this.context.logger.warn(`Result validator for tool "${toolName}" threw; using the default score`, error);
+      return undefined;
+    }
   }
 
   /**
@@ -1980,14 +2069,14 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     };
     const observation = await this.executeToolWithQueueFallback(toolUse);
     this.replaceLastToolResultObservation(call.id, observation);
-    this.buildObservationStep(call.name, observation, this.takeToolFailure(toolUse));
+    this.buildObservationStep(call.name, observation, this.takeToolFailure(toolUse), this.takeToolOutput(toolUse));
     return observation;
   }
 
   /**
-   * Read and clear the average confidence of every observation pushed since the
+   * Read and clear the iteration confidence of the observations pushed since the
    * last call (or the last `runIteration()`, whichever is more recent) - `null`
-   * if nothing has been scored yet.
+   * if nothing has been scored yet or every scored call failed.
    *
    * Exists for the approval-replay path: `executeGatedToolCall` pushes onto
    * `iterationConfidences` the same way an ordinary tool call does, but that
@@ -2000,20 +2089,30 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * have gotten - resetting `iterationConfidences` here is a no-op for the next
    * `runIteration()`, which resets it again anyway.
    *
-   * Scores from calls that failed to run (`toolFailed`) are left out, matching the
-   * web executor's iteration gate (`evaluateConfidenceGate`); `null` when every
-   * scored call failed.
+   * Aggregated by `usableEvidenceConfidence`, the rule the web executor's iteration
+   * gate (`evaluateConfidenceGate`) also uses: the strongest score among calls that
+   * ran; `null` when every scored call failed.
    */
   takeIterationConfidence(): number | null {
-    const scores = this.iterationConfidences.filter((_, i) => !this.iterationToolFailed[i]);
+    const calls = this.iterationConfidences.map((confidence, i) => ({
+      confidence,
+      toolFailed: this.iterationToolFailed[i],
+    }));
     this.resetIterationConfidences();
-    if (scores.length === 0) return null;
-    return scores.reduce((a, b) => a + b, 0) / scores.length;
+    return usableEvidenceConfidence(calls);
   }
 
   private resetIterationConfidences(): void {
     this.iterationConfidences = [];
     this.iterationToolFailed = [];
+  }
+
+  /** The raw output `executeToolWithQueueFallback` recorded for this call, read once. */
+  private takeToolOutput(toolUse: ToolUseInfo): string | undefined {
+    const id = getToolId(toolUse);
+    const output = this.toolOutputs.get(id);
+    this.toolOutputs.delete(id);
+    return output;
   }
 
   /** True (once) when `executeToolWithQueueFallback` recorded this call as failed. */
@@ -2090,6 +2189,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const params = this.parseToolArguments(toolUse.arguments);
       const result = await tool.toolFn(params);
       observation = typeof result === 'string' ? result : JSON.stringify(result);
+      this.toolOutputs.set(getToolId(toolUse), observation);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       observation = `Error: ${message}`;

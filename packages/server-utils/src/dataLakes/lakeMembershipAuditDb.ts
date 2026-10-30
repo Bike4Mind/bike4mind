@@ -1,4 +1,4 @@
-import { lakeMembershipChangeEventRepository } from '@bike4mind/database';
+import { lakeMembershipChangeEventRepository, memoryLedgerRepository } from '@bike4mind/database';
 
 /**
  * The audit half of every lake MEMBERSHIP-write service's `db` adapters, mirroring
@@ -16,5 +16,6 @@ import { lakeMembershipChangeEventRepository } from '@bike4mind/database';
  * them at once.
  */
 export const lakeMembershipAuditDb = Object.freeze({
+  memoryLedger: memoryLedgerRepository,
   lakeMembershipChangeEvents: lakeMembershipChangeEventRepository,
 });

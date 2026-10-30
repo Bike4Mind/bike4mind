@@ -1,6 +1,7 @@
 import {
   isVideoModelEnabled,
   usdToCredits,
+  VIDEO_INPUT_ROLES,
   VIDEO_MODEL_CATALOG,
   VIDEO_MODEL_IDS,
   type VideoModel,
@@ -26,6 +27,10 @@ export const toPublicVideoModel = (id: VideoModelId): VideoModel => {
     display_name: caps.displayName,
     provider: caps.provider,
     modes: [...caps.modes],
+    input_roles: VIDEO_INPUT_ROLES.flatMap(role => {
+      const accepted = caps.inputs[role];
+      return accepted ? [{ role, max: accepted.max }] : [];
+    }),
     duration:
       duration.kind === 'range'
         ? { kind: 'range', min: duration.min, max: duration.max, step: duration.step }

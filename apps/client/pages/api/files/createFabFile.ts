@@ -1,5 +1,13 @@
 import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
-import { CreateFabFileRequestInputType, FabFileSourceType, FileEvents, Permission } from '@bike4mind/common';
+import { z } from 'zod';
+import {
+  CreateFabFileRequestInputType,
+  FabFileSourceType,
+  FileEvents,
+  MODAL_MEDIA_PREFIX,
+  Permission,
+  createdFabFileResponseSchema,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   dataLakeBatchRepository,
@@ -12,22 +20,50 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import { getFileExtension } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
-import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import {
+  FILES_WRITE_OR_RELEASE_NOTES_SCOPES,
+  FILES_WRITE_SCOPES,
+  isReleaseNotesOnlyUpload,
+} from '@server/files/fileScopes';
+import { getS3Url } from '@client/app/utils/s3Url';
+import { Resource } from 'sst';
+import { persistedIsAdmin, requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
 
 // No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
 // and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object
 // would escape the storage charge, size check and moderation. Server-side callers still set it.
-const createFabFileSchema = fabFilesService.createFabFileSchema.omit({ prefix: true });
+const createFabFileSchema = fabFilesService.createFabFileSchema
+  .omit({ prefix: true })
+  .extend({ purpose: z.literal('modal-media').optional() });
 
-const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
+// The What's New media a release-notes key may upload, each type with the extensions that store as it.
+// The stored type and key extension come from the file name, so checking the claim alone admits page.html.
+const RELEASE_NOTES_MEDIA_EXTENSIONS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['video/mp4', ['mp4']],
+  ['image/jpeg', ['jpg', 'jpeg']],
+  ['image/png', ['png']],
+  ['image/webp', ['webp']],
+]);
+const isReleaseNotesMedia = (params: { mimeType: string; fileName: string }) =>
+  RELEASE_NOTES_MEDIA_EXTENSIONS.get(params.mimeType)?.includes(getFileExtension(params.fileName)) ?? false;
+
+// The admin What's New media upload (AdminModalVideoFields) lands under the shared modal prefix, chosen
+// here, not by the caller. mp4 stays off the global allowlist (non-image uploads skip the content
+// scan), so only that admin upload admits it.
+const isModalVideo = (params: { mimeType?: string | null; fileName: string }) =>
+  params.mimeType === 'video/mp4' && getFileExtension(params.fileName) === 'mp4';
+
+const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
   .use((req, res, next) => {
     if (!req.ability?.can(Permission.create, FabFile)) {
       throw new BadRequestError('Unauthorized');
@@ -38,7 +74,32 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
     asyncHandler<unknown, unknown, CreateFabFileRequestInputType>(async (req, res) => {
       const { user } = req;
 
-      const params = createFabFileSchema.parse(req.body);
+      const parsed = createFabFileSchema.parse(req.body);
+      const releaseNotesOnly = isReleaseNotesOnlyUpload(req);
+      // A release-notes key arrives with the owner's admin role withheld; it still counts when the owner is an admin.
+      const adminModalMedia =
+        (!!user.isAdmin || (releaseNotesOnly && persistedIsAdmin(user))) && parsed.purpose === 'modal-media';
+      if (!adminModalMedia && releaseNotesOnly) {
+        throw new ForbiddenError("This API key may only upload What's New media; files:write is required", {
+          required_scopes: FILES_WRITE_SCOPES,
+        });
+      }
+      if (releaseNotesOnly && !isReleaseNotesMedia(parsed)) {
+        throw new ForbiddenError(
+          `This API key may only upload ${[...RELEASE_NOTES_MEDIA_EXTENSIONS.keys()].join(', ')}, named with a matching extension`
+        );
+      }
+      // A release-notes key gets only the fields a What's New video or poster needs.
+      const base = releaseNotesOnly
+        ? {
+            fileName: parsed.fileName,
+            mimeType: parsed.mimeType,
+            fileSize: parsed.fileSize,
+            type: parsed.type,
+            ...(parsed.public !== undefined && { public: parsed.public }),
+          }
+        : parsed;
+      const params = adminModalMedia ? { ...base, prefix: MODAL_MEDIA_PREFIX } : base;
 
       // NOTE: unlike the presign siblings (generate-presigned-url.ts) we do NOT reject executable
       // upload types (html/xhtml/svg) here. Those siblings write to appFilesBucket, which IS routed
@@ -103,7 +164,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           db: {
             adminSettings: adminSettingsRepository,
             fabFiles: FabFile,
-            users: User,
+            users: requesterScopedUsers(req, User),
             organizations: organizationRepository,
             dataLakes: dataLakeRepository,
             // The service re-gates the lake tag internally, so its inputs must stay at least as
@@ -141,6 +202,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           // org rungs need the actor's administered-org set, which the service cannot read off a
           // user document.
           administeredOrgIds: ctx.administeredOrgIds,
+          ...(adminModalMedia && isModalVideo(params) && { mimeTypePrecedence: 'claim-first' as const }),
         });
       });
 
@@ -156,7 +218,15 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         result.presignedUrl = resolveBrowserUploadUrl(result.id, result.presignedUrl);
       }
 
-      return res.json(await signBrowserFileResponse(result));
+      const signed = await signBrowserFileResponse(result);
+      // Same URL the admin form builds (AdminModalVideoFields), so API-key callers need no bucket name.
+      return respond(
+        res,
+        createdFabFileResponseSchema,
+        adminModalMedia && result.filePath
+          ? { ...signed, mediaUrl: getS3Url({ bucket: Resource.fabFileBucket.name, key: result.filePath }) }
+          : signed
+      );
     })
   );
 

@@ -71,6 +71,14 @@ const mcpModelWrite = (...args: unknown[]) => {
   return Promise.resolve({ ...mcpServerDoc(), toJSON: mcpServerDoc });
 };
 
+// Audit writers are covered by each route's own tests; stubbed so this file does not depend on which routes record.
+// Partial mock: handlers also import pure helpers (definedKeys, parseAdminActionReason) from here.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+  recordAdminActionForActor: vi.fn().mockResolvedValue(null),
+}));
+
 // The mcp-servers write methods check the MCP admin flag; on here so body validation decides.
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: () => Promise.resolve() }));
 
@@ -122,7 +130,7 @@ vi.mock('@bike4mind/database/content', () => ({
   ResearchLinkCategory: { findByIdAndUpdate: writeSpy, findByIdAndDelete: () => found() },
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptEnvVariables: (v: unknown) => v,
   decryptEnvVariables: (v: unknown) => v,
 }));

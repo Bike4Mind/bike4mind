@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from 'express';
 import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
+import { hasModelCatalogProvider } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { registerInternalRoutes } from './internal/route';
@@ -121,6 +122,20 @@ export function createApp() {
   return app;
 }
 
+/**
+ * connectDB wires the model catalog onto the llm-adapters instance its own (ESM) graph loads. A
+ * second instance in this process (see esmWorkspacePackages.mjs) leaves completions without the
+ * catalog and price overlays, so DB-only models fail as unknown. Exported for tests.
+ */
+export function checkModelCatalogWired(logger: Pick<Logger, 'error'>): boolean {
+  if (hasModelCatalogProvider()) return true;
+  logger.error(
+    'Model catalog provider is not wired on the llm-adapters instance completions read; ' +
+      'catalog-only models will fail as unknown and billing falls back to adapter prices'
+  );
+  return false;
+}
+
 async function main() {
   // Crash-safety for a long-running process: one request's mid-stream EPIPE / orphaned undici
   // rejection must NOT take Node's default uncaughtException path and kill the whole container
@@ -147,6 +162,7 @@ async function main() {
   connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger)
     .then(() => {
       bootLogger.info('MongoDB connected at boot');
+      checkModelCatalogWired(bootLogger);
     })
     .catch(err =>
       bootLogger.error('MongoDB connection failed at boot', {

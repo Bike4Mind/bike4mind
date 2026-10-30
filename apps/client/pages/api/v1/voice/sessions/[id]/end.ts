@@ -10,7 +10,7 @@ import { endVoiceSessionContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { settleVoiceHold } from '@server/voice/settleVoiceHold';
+import { settleVoiceHold } from '@bike4mind/server-utils/voice/settleVoiceHold';
 
 const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, res) => {
   const sessionId = req.validatedParams.id;

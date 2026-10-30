@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createUser } from './create';
-import { IUser } from '@bike4mind/common';
+import { IUser, RESERVED_USERNAME_MESSAGE } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 
-describe('createUser — hasUsablePassword', () => {
+describe('createUser \u2014 hasUsablePassword', () => {
   let mockAdapters: any;
 
   beforeEach(() => {
@@ -129,5 +130,55 @@ describe('createUser emailless account', () => {
     db.users.findByUsernameOrEmail.mockResolvedValue({ username: 'taken', email: null });
 
     await expect(createUser({ username: 'taken' }, { db: db as any })).rejects.toThrow('Username already in use');
+  });
+});
+
+describe('createUser - reserved username prefix', () => {
+  const makeAdapters = () => ({
+    db: {
+      users: {
+        findByUsernameOrEmail: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockImplementation(async (user: Omit<IUser, 'id'>) => ({ ...user, id: 'new-user-id' })),
+      },
+    },
+  });
+
+  it.each(['persona-seed', 'Persona-Seed', '\u0440ersona-seed'])(
+    'refuses %j unless the caller opts in',
+    async username => {
+      const adapters = makeAdapters();
+
+      const error = await createUser({ username, email: 'seed@example.com' }, adapters).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect((error as Error).message).toBe(RESERVED_USERNAME_MESSAGE);
+      expect(adapters.db.users.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('creates it for an admin or test-only caller that passes allowReservedUsername', async () => {
+    const adapters = makeAdapters();
+
+    const user = await createUser(
+      { username: 'persona-seed', email: 'seed@example.com', allowReservedUsername: true },
+      adapters
+    );
+
+    expect(user.username).toBe('persona-seed');
+  });
+});
+
+describe('createUser storage allocation', () => {
+  it.each([
+    [{}, 1000, null],
+    [{ storageLimit: 2500 }, 2500, 2500],
+    [{ storageLimit: 0 }, 0, 0],
+    [{ storageLimitOverride: 2000, planStorageLimit: 5000 }, 2000, 2000],
+    [{ storageLimitOverride: null, planStorageLimit: 5000 }, 5000, null],
+  ])('persists the effective limit and explicit override for %j', async (record, limit, override) => {
+    const db = makeDb();
+    const created = await createUser({ username: 'quotauser', record }, { db });
+    expect(created.storageLimit).toBe(limit);
+    expect(created.storageLimitOverride).toBe(override);
   });
 });

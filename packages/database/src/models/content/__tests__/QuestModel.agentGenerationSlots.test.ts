@@ -77,4 +77,21 @@ describe('QuestModel agent generation slots', () => {
     expect(await questRepository.claimAgentGenerationSlot(quest.id, 'video', 1)).toBe(false);
     expect(await questRepository.claimAgentGenerationSlot(quest.id, 'music', 1)).toBe(false);
   });
+
+  describe('claimVoiceVideoStart', () => {
+    it('claims and increments on a running quest', async () => {
+      const quest = await createQuest();
+      expect(await questRepository.claimVoiceVideoStart(quest.id)).toBe(true);
+      const readBack = await Quest.findById(quest.id).lean();
+      expect(readBack?.agentVideoClipsClaimed).toBe(1);
+    });
+
+    it('refuses and leaves the counter unset on a stopped quest', async () => {
+      const quest = await createQuest();
+      await Quest.updateOne({ _id: quest.id }, { $set: { status: 'stopped' } });
+      expect(await questRepository.claimVoiceVideoStart(quest.id)).toBe(false);
+      const readBack = await Quest.findById(quest.id).lean();
+      expect(readBack?.agentVideoClipsClaimed).toBeUndefined();
+    });
+  });
 });

@@ -1,7 +1,10 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
+import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import {
   CliCompletionRequestAction,
   buildCompletionStreamEvent,
+  HTTPError,
   IMessage,
   type CompletionSource,
   type TurnUsage,
@@ -28,7 +31,11 @@ import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { withWebSocketContext, sendToConnection } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { cliCompletionErrorFields } from '@server/utils/errorSanitization';
-import { TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
+import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
+import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
 
@@ -37,8 +44,10 @@ const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or J
  * The message is built by the limiter itself, so it is passed through as-is: sanitizeErrorMessage matches
  * a lowercase "rate limit" and would turn "Rate limit exceeded" into a generic internal error.
  */
-function rateLimitOrAuthError(requestId: string, error: unknown) {
-  if (error instanceof TooManyRequestsError) {
+function authFailureFrame(requestId: string, error: unknown) {
+  // A rate limit or a failed auth check (database unreachable) is retryable: relay its message and
+  // retryAfter rather than the bad-credential message.
+  if (error instanceof TooManyRequestsError || error instanceof ForbiddenError || isAuthInfraFailure(error)) {
     const retryAfter = error.additionalInfo?.retryAfter;
     return {
       action: 'cli_completion_error' as const,
@@ -102,6 +111,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       method: 'WS',
     });
   } catch (apiKeyError) {
+    // The key check itself failed (database unreachable): report that, not a JWT verdict.
+    if (isAuthInfraFailure(apiKeyError)) {
+      logger.error('[CLI_WS] API key check failed', { error: apiKeyError.message });
+      await sendToConnection(connectionId, endpoint, authFailureFrame(requestId, apiKeyError));
+      return { statusCode: 200 };
+    }
     // A present-but-rate-limited key reports its own limit rather than falling through to JWT.
     if (apiKeyInfo) {
       if (!(apiKeyError instanceof TooManyRequestsError)) {
@@ -110,11 +125,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
           error: apiKeyError instanceof Error ? apiKeyError.message : String(apiKeyError),
         });
       }
-      await sendToConnection(connectionId, endpoint, rateLimitOrAuthError(requestId, apiKeyError));
+      await sendToConnection(connectionId, endpoint, authFailureFrame(requestId, apiKeyError));
       return { statusCode: 200 };
     }
     try {
-      const user = await verifyJwtToken(accessToken);
+      const user = await verifyJwtToken(accessToken, { requireApiAccess: true });
       userId = user.id;
       logger.info('[CLI_WS] Authenticated via JWT', { userId });
       await checkRateLimit(userId, source);
@@ -124,7 +139,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
           error: jwtError instanceof Error ? jwtError.message : String(jwtError),
         });
       }
-      await sendToConnection(connectionId, endpoint, rateLimitOrAuthError(requestId, jwtError));
+      await sendToConnection(connectionId, endpoint, authFailureFrame(requestId, jwtError));
       return { statusCode: 200 };
     }
   }
@@ -149,10 +164,31 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
   }
 
+  let quota = NO_COMPLETION_QUOTA;
   try {
+    if (apiKeyInfo) {
+      quota = await admitApiKeyCompletion({
+        owner: userId,
+        ownerUntrusted: apiKeyInfo.ownerUntrusted,
+        billingOwnerType: apiKeyInfo.billingOwnerType,
+        holdSlot: true,
+      });
+    }
+
+    // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+    await checkFreeTierDailySpendCap({
+      userId,
+      userRepository,
+      billingOrganizationId: apiKeyInfo?.organizationId,
+      usageEventRepository,
+      logger,
+    });
+
     // Execute completion - same function as SSE handler
     // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays
     await executeCompletion({
+      getEntitlements: getUserEntitlements,
+      getThinkingVisibility: resolveThinkingVisibility,
       creditHolds: createCompletionCreditHolds(logger),
       userId,
       model,
@@ -167,6 +203,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         organizations: organizationRepository,
       },
       apiKeyInfo: apiKeyInfoForCompletion,
+      scopeActor: actorScopeForKey(apiKeyInfo),
       // Org-billed API keys settle to the org's shared pool.
       billingOrganizationId: apiKeyInfo?.organizationId,
       requestId,
@@ -222,7 +259,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       logger: logger as unknown as Logger,
     });
   } catch (error) {
-    logger.error('[CLI_WS] Completion error:', error);
+    const level = error instanceof HTTPError && error.statusCode < 500 ? 'warn' : 'error';
+    logger[level]('[CLI_WS] Completion error:', error);
 
     // Send error to client
     await sendToConnection(connectionId, endpoint, {
@@ -247,6 +285,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       logger: logger as unknown as Logger,
     });
+  } finally {
+    await quota.release();
   }
 
   return { statusCode: 200 };

@@ -1,4 +1,15 @@
-import { evaluateTier1Secrets, formatTier1DeployFailure, type Tier1SecretStatus } from '@bike4mind/infra';
+import {
+  describeDroppedContributions,
+  evaluateTier1Secrets,
+  formatTier1DeployFailure,
+  partitionContributed,
+  type Tier1SecretStatus,
+} from '@bike4mind/infra';
+import {
+  contributedInfraResources,
+  coreEnvNames,
+  coreResourceNames,
+} from './premium-generated/infraResources.generated';
 import { PRODUCTION_STAGES } from './constants';
 
 export const secrets = {
@@ -7,6 +18,7 @@ export const secrets = {
   JWT_SECRET: new sst.Secret('JWT_SECRET', 'my-secret-placeholder-value'),
   SLACK_WEBHOOK_URL: new sst.Secret('SLACK_WEBHOOK_URL', 'not-configured'),
   SLACK_ERROR_REPORTING_WEBHOOK_URL: new sst.Secret('SLACK_ERROR_REPORTING_WEBHOOK_URL', 'not-configured'),
+  SLACK_ALARMS_WEBHOOK_URL: new sst.Secret('SLACK_ALARMS_WEBHOOK_URL', 'not-configured'),
   GOOGLE_CLIENT_ID: new sst.Secret('GOOGLE_CLIENT_ID', 'not-configured'),
   GOOGLE_CLIENT_SECRET: new sst.Secret('GOOGLE_CLIENT_SECRET', 'not-configured'),
   GITHUB_CLIENT_ID: new sst.Secret('GITHUB_CLIENT_ID', 'not-configured'),
@@ -39,6 +51,8 @@ export const secrets = {
   // Anthropic Admin API key for billing/spend reconciliation (cost_report endpoint).
   // Requires an admin-scoped key from console.anthropic.com.
   ANTHROPIC_ADMIN_API_KEY: new sst.Secret('ANTHROPIC_ADMIN_API_KEY', 'not-configured'),
+  // Cloudflare Turnstile secret key; the check stays off until a real value is set.
+  TURNSTILE_SECRET_KEY: new sst.Secret('TURNSTILE_SECRET_KEY', 'not-configured'),
   GEMINI_API_KEY: new sst.Secret('GEMINI_API_KEY', 'not-configured'),
   // Deployment-level provider keys for model discovery (spec 5.7). Discovery has
   // no user, so its only other source is the admin demo-key tier, which exists
@@ -70,7 +84,9 @@ export const secrets = {
   // Secret encryption key for encrypting secrets stored in database (AES-256-GCM)
   // Generate with: openssl rand -hex 32
   SECRET_ENCRYPTION_KEY: new sst.Secret('SECRET_ENCRYPTION_KEY', 'my-secret-placeholder-value'),
-  // Previous encryption key for key rotation — set this to the old key when rotating
+  // Wraps memory principal keys; generate once (openssl rand -hex 32) and never rotate in place
+  MEMORY_KEY_SECRET: new sst.Secret('MEMORY_KEY_SECRET', 'not-configured'),
+  // Previous encryption key for key rotation - set this to the old key when rotating
   SECRET_ENCRYPTION_KEY_PREVIOUS: new sst.Secret('SECRET_ENCRYPTION_KEY_PREVIOUS', 'not-configured'),
   // Shared-secret bearer authenticating the frontend's internal /process dispatch to the
   // always-on ChatCompletion service (see server/utils/dispatchQuest.ts +
@@ -115,11 +131,6 @@ export const secrets = {
   // Secret for Active Defense (in-product attack simulation) ingest endpoint.
   // Set per stage: sst secret set SECOPS_ATTACK_SIMULATION_INGEST_TOKEN <value> --stage <stage>
   SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: new sst.Secret('SECOPS_ATTACK_SIMULATION_INGEST_TOKEN', 'not-configured'),
-  // What's New distribution URL for fork/staging environments to sync modals from production
-  // Only set this for non-production environments (dev, staging, forks)
-  // Production generates modals and doesn't need this
-  // Preview environments use placeholder - runtime checks for valid https:// URL
-  WHATS_NEW_DISTRIBUTION_URL: new sst.Secret('WHATS_NEW_DISTRIBUTION_URL', 'not-configured'),
   // Identifies main/source deployments (bike4mind staging + production)
   // Set to 'true' on main staging (dev stage) and main production to enable source-only features
   // Fork deployments should NOT have this set (defaults to 'false')
@@ -138,8 +149,8 @@ export const secrets = {
   // Generate with: openssl genrsa 2048 | base64 | tr -d '\n'
   // If not set, an ephemeral key is generated at runtime (dev only — NOT safe for production).
   OAUTH_RSA_PRIVATE_KEY: new sst.Secret('OAUTH_RSA_PRIVATE_KEY', 'not-configured'),
-  // Shared secret for E2E test endpoints (/api/test/create-user, /api/test/cleanup)
-  // Set per stage: sst secret set E2E_CLEANUP_SECRET <value> --stage <stage>
+  // Header secret for the E2E test endpoints (/api/test/*). The deployer seeds a per-tier value
+  // on every deploy; local stages: sst secret set E2E_CLEANUP_SECRET <value> --stage <stage>
   E2E_CLEANUP_SECRET: new sst.Secret('E2E_CLEANUP_SECRET', 'not-configured'),
   // Feature flag for the break-glass emergency-login endpoint.
   // Endpoint returns 404 by default — set to 'true' to activate during an OAuth outage.
@@ -202,7 +213,42 @@ export const secrets = {
   QA_ALARM_SLACK_WEBHOOKS: new sst.Secret('QA_ALARM_SLACK_WEBHOOKS', 'not-configured'),
 };
 
-export const allSecrets = Object.values(secrets);
+// Without core names, nothing stops a contribution from shadowing a core resource or env var.
+if ((coreResourceNames === null || coreEnvNames === null) && contributedInfraResources.secrets.length > 0) {
+  throw new Error(
+    '[infra] core resource names unknown (codegen ran without infra/); refusing to register contributed secrets. ' +
+      'Re-run pnpm codegen with infra/ present.'
+  );
+}
+
+const contributedSecretPartition = partitionContributed(
+  contributedInfraResources.secrets,
+  spec => spec.name,
+  new Set([...(coreResourceNames ?? []), ...(coreEnvNames ?? []), ...Object.keys(secrets)])
+);
+for (const line of describeDroppedContributions('contributed secret', contributedSecretPartition)) {
+  console.warn(`[infra] ${line}`);
+}
+
+// Overlay-declared secrets, keyed by their verbatim name so a secret that moves here from
+// the core list above keeps its resource name and stored value.
+export const contributedSecrets: Record<string, sst.Secret> = Object.fromEntries(
+  contributedSecretPartition.registered.map(spec => [
+    spec.name,
+    new sst.Secret(spec.name, spec.placeholder ?? 'not-configured'),
+  ])
+);
+
+/** Plain env vars for the contributed secrets that asked for one (linking alone only sets SST_RESOURCE_*). */
+export function contributedSecretEnvironment() {
+  return Object.fromEntries(
+    contributedSecretPartition.registered
+      .filter(spec => spec.env)
+      .map(spec => [spec.name, contributedSecrets[spec.name].value])
+  );
+}
+
+export const allSecrets = [...Object.values(secrets), ...Object.values(contributedSecrets)];
 
 /**
  * Value the stage will actually run with, read the same way sst.Secret reads it

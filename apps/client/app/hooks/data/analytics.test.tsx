@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockPost = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: mockPost } }));
 
-import { useLogPoliciesShown } from './analytics';
+import { useLogEvent, useLogPoliciesShown } from './analytics';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <QueryClientProvider client={new QueryClient({ defaultOptions: { mutations: { retry: false } } })}>
@@ -38,6 +39,22 @@ describe('useLogPoliciesShown', () => {
       expect(warning).toHaveBeenCalledWith('Policy interstitial analytics logging failed:', error);
     } finally {
       warning.mockRestore();
+    }
+  });
+});
+
+describe('support access analytics', () => {
+  it('does not attribute support navigation to customer activity', async () => {
+    mockPost.mockReset();
+    useAccessToken.setState({ impersonating: true });
+    try {
+      const { result } = renderHook(() => useLogEvent(), { wrapper });
+      await act(async () => {
+        await result.current.mutateAsync({ type: 'test' } as Parameters<typeof result.current.mutateAsync>[0]);
+      });
+      expect(mockPost).not.toHaveBeenCalled();
+    } finally {
+      useAccessToken.setState({ impersonating: false });
     }
   });
 });

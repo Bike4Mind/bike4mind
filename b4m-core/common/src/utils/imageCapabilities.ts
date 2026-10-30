@@ -7,7 +7,7 @@ import {
 } from '../schemas/openai';
 import {
   IMAGES_PER_EDIT_REQUEST,
-  MAX_REFERENCE_IMAGES,
+  getMaxReferenceImages,
   isBflImageModel,
   isBflUltraImageModel,
   isExtendedGptImageQuality,
@@ -130,7 +130,7 @@ export function getImageModelCapabilities(model: ImageModels): ImageModelCapabil
       seed: isBflImageModel(model),
       qualities: resolveQualities(model),
       maxImages: requiresImageInput(model) ? IMAGES_PER_EDIT_REQUEST : MAX_IMAGES_PER_REQUEST,
-      maxReferenceImages: isGPTImageModel(model) ? MAX_REFERENCE_IMAGES : 0,
+      maxReferenceImages: getMaxReferenceImages(model),
       edit: supportsImageEdit(model),
       requiresInputImage: requiresImageInput(model),
     },

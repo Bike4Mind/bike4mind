@@ -11,7 +11,9 @@ import {
 import { getSettingsByNames } from '@bike4mind/utils';
 import { resolveEffectiveEmbeddingModel } from '@bike4mind/server-utils/embeddings/effectiveEmbeddingModel';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { isTurnstileSecretConfigured } from '@bike4mind/server-utils/utils/turnstile';
 import { Resource } from 'sst';
+import { resolveWhatsNewUpstreamOrigin } from '@server/utils/deploymentMediaOrigins';
 
 export { isLocalImageBackendAvailable, isLocalEmbedderAvailable, type ToolAvailability };
 
@@ -41,6 +43,8 @@ export type ServerConfig = {
   cdnUrl: string;
   /** Inbound-email recipient domain (e.g. "@app.<domain>"); empty when unconfigured. */
   platformEmailDomain: string;
+  /** Origin of the upstream What's New feed (WHATS_NEW_FEED_URL), whose note media stays cross-origin; '' when unset. */
+  whatsNewUpstreamOrigin: string;
   /** Per-request availability of key-gated tools, for the tools picker. */
   toolAvailability: ToolAvailability;
   /**
@@ -57,6 +61,8 @@ export type ServerConfig = {
    * and nothing to fall back to). Clients must treat that as "unknown" and not as a model name.
    */
   effectiveEmbeddingModel: string;
+  /** False when no Turnstile secret is provisioned, so the admin toggle is a no-op. Boolean only; never the secret. */
+  turnstileSecretConfigured: boolean;
 };
 
 // Get Admin Settings - requires authentication
@@ -113,8 +119,10 @@ const handler = baseApi({ auth: true }).get(
       cdnUrl: process.env.NEXT_PUBLIC_CDN_URL || '',
       // Inbound-email recipient domain, externalized for open-core; no brand fallback.
       platformEmailDomain: process.env.PLATFORM_EMAIL_DOMAIN || '',
+      whatsNewUpstreamOrigin: resolveWhatsNewUpstreamOrigin(process.env.WHATS_NEW_FEED_URL),
       toolAvailability,
       effectiveEmbeddingModel,
+      turnstileSecretConfigured: isTurnstileSecretConfigured(Config.TURNSTILE_SECRET_KEY),
     };
 
     return res.json(config);

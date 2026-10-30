@@ -120,20 +120,14 @@ Each team member opts in to receive notifications by subscribing to the organiza
 
 ### Step 1: Connect Your Slack Account
 
-1. Go to **Settings** → **Integrations** → **Slack Integration**
-2. Enter your **Slack Member ID** and save
+1. Go to **Profile > Integrations > Slack Integration**.
+2. Click **Connect with Slack**, select your workspace, and approve the connection.
 
-:::info Finding Your Slack Member ID
-In Slack, click your profile picture → **Profile** → click the **three dots** (more actions) → **Copy member ID**.
-:::
+### Step 2: Connect Your GitHub Account
 
-### Step 2: Set Your GitHub Username
-
-1. Go to **Settings** → **Integrations** → **GitHub Integration**
-2. Enter your **GitHub username** exactly as it appears on GitHub (case-insensitive)
-3. Save
-
-This maps your GitHub activity to your Slack account. Without this, notifications can't find you.
+1. Go to **Profile > Integrations > GitHub Integration**.
+2. Connect GitHub and approve the connection.
+3. Your verified GitHub login appears in notification settings.
 
 ### Step 3: Subscribe to the Organization
 
@@ -239,16 +233,16 @@ Check these in order:
 
 1. **Org webhook enabled?** Organization page → Webhooks tab → Enabled toggle must be ON
 2. **Subscription enabled?** Settings → Integrations → Webhook Subscriptions → Enabled toggle must be ON
-3. **GitHub username correct?** Settings → Integrations → GitHub Integration → Must match your GitHub username exactly
+3. **GitHub connected?** Profile > Integrations > GitHub Integration > Reconnect if your login changed
 4. **Notification toggles on?** Same section → Toggle must be ON for the event type you expect
-5. **Slack connected?** Settings → Integrations → Slack Integration → Slack Member ID must be set
+5. **Slack connected?** Profile > Integrations > Slack Integration > Connect with Slack must be complete
 6. **Are you the target?** Check delivery history — "skipped" means you weren't the intended recipient
 
 ### All Events Show "Skipped"
 
 This usually means one of:
 
-- **GitHub username mismatch** — Your configured username doesn't match how GitHub identifies you in webhooks
+- **GitHub connection needs refreshing** - Reconnect GitHub to update your verified login
 - **Self-notification** — You're seeing events you triggered yourself
 - **Not a notification target** — The events are for other team members (PR reviews for different PRs, etc.)
 
@@ -302,3 +296,11 @@ Check if you have **CI Passed** enabled in your notification preferences. It's d
 - [Organization Slack Integration](./org-slack-self-service.md) — Org-level Slack workspace setup
 - [Slack AI Model Configuration](./slack-model-config.md) — Configure AI models per channel and org
 - [Organizations & Teams](./organizations-teams.md) — Manage your organization
+
+## Verified Accounts and Destinations
+
+Connect both GitHub and Slack in **Profile > Integrations**. Notifications use your connected GitHub login.
+
+For a channel destination, you must belong to that channel in your connected Slack workspace. Membership is checked when you save and again before delivery. Leave the channel fields empty to receive DMs at your verified Slack account.
+
+If notifications stop after you leave a channel, choose a channel you belong to or switch to DMs. If your Slack connection predates workspace verification, reconnect with **Connect with Slack**. If channel verification fails, ask an administrator to check that the bot can read channel membership and has access to the destination.

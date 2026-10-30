@@ -99,8 +99,24 @@ export type IChoiceEnd = IChoiceEndStop | IChoiceEndComplete | IChoiceEndToolUse
 
 export type IChoice = IChoiceStream | IChoiceEnd;
 
+/**
+ * A tool's own judgment of one of its results, fed to the agent confidence gate.
+ * `deterministic` when the tool recognizes a result it produced itself (a known failure
+ * message, a schema failure); `heuristic` when it is inferring quality from the content.
+ */
+export type ToolResultScore = {
+  /** 0-1; the agent gate pauses a run when an iteration's average falls below its threshold. */
+  confidence: number;
+  source: 'deterministic' | 'heuristic';
+};
+
+/** Returns `undefined` for a result it has no opinion on, deferring to the agent's default scoring. */
+export type ToolResultValidator = (result: string) => ToolResultScore | undefined;
+
 export interface ICompletionOptionTools {
   toolFn: (parameters?: unknown, apiKey?: string) => Promise<string>;
+  /** Scores this tool's results for the agent confidence gate (ReActAgent.scoreToolResult). */
+  validateResult?: ToolResultValidator;
   toolSchema: {
     name: string;
     description: string;
@@ -139,6 +155,17 @@ export interface ICompletionOptionTools {
   endsTurnAfterText?: boolean;
 }
 
+/**
+ * Receives the timing a backend observes inside one chat turn. Both calls are synchronous
+ * and must not throw - a telemetry fault must never fail the completion.
+ */
+export interface TurnTelemetrySink {
+  /** Time spent waiting for a provider concurrency slot before one API request, in ms. */
+  onSemaphoreWait: (waitMs: number) => void;
+  /** A retry the backend scheduled for a failed API request, before its backoff sleep. */
+  onRetry: (event: { error: Error; delayMs: number; model: string }) => void;
+}
+
 export interface ICompletionOptions {
   maxTokens?: number;
   temperature?: number;
@@ -161,7 +188,7 @@ export interface ICompletionOptions {
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];
   /**
-   * Provider-run tools sent verbatim after `tools` (direct Anthropic only; see completionsSupportsToolSearch).
+   * Provider-run tools sent verbatim after `tools` (Claude adapters only; see completionsSupportsToolSearch).
    * Never executed locally: their blocks come back as CompletionInfo.providerBlock.
    */
   providerTools?: ToolSearchServerTool[];
@@ -173,6 +200,17 @@ export interface ICompletionOptions {
    * set and no system messages, the request carries no system parameter at all.
    */
   omitIdentityReminder?: boolean;
+  /**
+   * The current_model_details tool carries the model identity for this call, so the identity line
+   * is left out while `tools` is non-empty. Separate from `omitIdentityReminder` because adapter
+   * recursions that drop `tools` must bring the line back, whereas a raw turn never gets it.
+   */
+  identityViaTool?: boolean;
+  /**
+   * Registry display name (ModelInfo.name) of the model serving THIS call, used in the identity
+   * reminder. Set per hop so a fallback names the fallback model; unset keeps the raw-id wording.
+   */
+  modelDisplayName?: string;
   /**
    * Controls which tool the model should use.
    * - 'auto': Model decides whether to call a tool (default)
@@ -217,6 +255,8 @@ export interface ICompletionOptions {
   anthropicEffort?: AnthropicEffort;
   _internal?: {
     toolCallCount?: number; // Internal counter for tracking recursive tool calls (do not set manually)
+    /** Set by anthropicBackend when a turn starts from another provider's tool history; keeps thinking off for its remaining rounds. */
+    thinkingSuppressed?: boolean;
     /** Epoch ms of the first round of this chat turn; set once, carried through recursive tool rounds (timing logs only). */
     requestStartedAt?: number;
     /** Per-request override for the recursive tool-call ceiling (defaults to DEFAULT_MAX_TOOL_CALLS).
@@ -283,12 +323,9 @@ export interface ICompletionOptions {
      * level calls `flush()`. Internal - do not set manually.
      */
     artifactGuard?: {
-      // info is `any` here (matching LooseCompletionCallback in toolStreamingHelper.ts) because
-      // the four backends' own completion-callback types differ in whether info is required
-      // (Anthropic, Gemini, OpenAI) or optional (Bedrock) - structurally incompatible with each
-      // other in both directions, so a single shared field type has to accept every one of them.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
-      callback: (text: (string | null | undefined)[], info: any) => Promise<void>;
+      // Method signature on purpose: bivariant params let a backend callback with required or
+      // optional `info` fit here and back (LooseCompletionCallback in toolStreamingHelper.ts reuses it).
+      callback(text: (string | null | undefined)[], info?: CompletionInfo): Promise<void>;
       emitArtifact: (results: string[], info: CompletionInfo) => Promise<void>;
       markDelivered: (markup: string) => void;
       flush: () => Promise<void>;
@@ -299,6 +336,12 @@ export interface ICompletionOptions {
      * Internal - do not set manually.
      */
     downgradedToolChoice?: DowngradedToolChoice;
+    /**
+     * Per-turn timing sink, set by ChatCompletionProcess and threaded unchanged through recursive
+     * tool rounds so every round's semaphore wait and transport retry lands on one turn record.
+     * Anthropic and OpenAI only so far. Internal - do not set manually.
+     */
+    turnTelemetry?: TurnTelemetrySink;
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;
@@ -357,6 +400,11 @@ export interface ICompletionResponseChunk {
    * complete() derives stopReason from the raw provider response leave this unset.
    */
   stopReason?: string;
+  /**
+   * Provider-run blocks to surface as CompletionInfo.providerBlock, in response order. A stream chunk's blocks
+   * go out where they arrive; `textOffset` places each one within a whole-message chunk's text.
+   */
+  providerBlocks?: Array<{ providerBlock: ProviderBlock; textOffset: number }>;
 }
 
 export type CompletionCallback = (done: boolean, chunk?: ICompletionResponseChunk) => Promise<void>;

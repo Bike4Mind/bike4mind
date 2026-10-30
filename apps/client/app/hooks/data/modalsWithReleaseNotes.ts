@@ -4,21 +4,34 @@ import type { IModalDocument, PublicReleaseNote } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { releaseNoteToModal } from '@client/app/components/modals/releaseNoteSlides';
+import { localizeMediaRouteUrls } from '@client/app/components/modals/whatsNewSlideMedia';
 import { useGetModals } from './modals';
+import { useConfig } from './settings';
 
 const RELEASE_NOTE_SLIDE_LIMIT = 5;
 
 /** Latest published release notes as What's New slides. Failures are silent: the slider still has its modals. */
 export function useReleaseNoteSlides() {
   const currentUser = useUser(s => s.currentUser);
+  const config = useConfig();
+  // Waits for the config, which names the upstream origin whose media must not be localized; a failed
+  // config read localizes everything.
+  const upstreamOrigin = config.data?.whatsNewUpstreamOrigin ?? '';
   return useQuery({
-    queryKey: ['whats-new', 'release-note-slides', RELEASE_NOTE_SLIDE_LIMIT],
-    enabled: !!currentUser,
+    queryKey: ['whats-new', 'release-note-slides', RELEASE_NOTE_SLIDE_LIMIT, upstreamOrigin],
+    enabled: !!currentUser && !config.isLoading,
     queryFn: async () => {
       const { data } = await api.get<{ data: PublicReleaseNote[] }>(
         `/api/v1/whats-new?limit=${RELEASE_NOTE_SLIDE_LIMIT}`
       );
-      return (data?.data ?? []).map(releaseNoteToModal);
+      return (data?.data ?? []).map(note => {
+        const modal = releaseNoteToModal(note);
+        return {
+          ...modal,
+          video: modal.video ? localizeMediaRouteUrls(modal.video, upstreamOrigin) : modal.video,
+          stillImage: modal.stillImage ? localizeMediaRouteUrls(modal.stillImage, upstreamOrigin) : modal.stillImage,
+        };
+      });
     },
     staleTime: 1000 * 60 * 5,
     retry: 1,

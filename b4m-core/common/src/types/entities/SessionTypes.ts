@@ -139,9 +139,69 @@ export interface IAttachmentDelivery {
   droppedIds: string[];
 }
 
+/**
+ * Why a turn's LLM call was retried. Timeouts we raise ourselves are classified ahead of
+ * overload so they never read as a provider fault (older backends worded them "may be
+ * overloaded"). Must stay in sync with classifyTurnRetryReason in @bike4mind/services.
+ */
+export const TURN_RETRY_REASONS = [
+  'stream_idle_timeout',
+  'stream_truncated',
+  'request_timeout',
+  'rate_limit',
+  'overloaded',
+  'server_error',
+  'transport',
+  'tool_pairing',
+  'other',
+] as const;
+export type TurnRetryReason = (typeof TURN_RETRY_REASONS)[number];
+
+/**
+ * Cap on the retries persisted per turn. A pathological turn stops growing the quest record
+ * here, so a full list means "at least this many" - the UI renders it as "50+".
+ */
+export const MAX_RECORDED_TURN_RETRIES = 50;
+
+/** One retry of the LLM call, recorded at the moment the retry was scheduled. */
+export interface ITurnRetry {
+  reason: TurnRetryReason;
+  /** HTTP status of the failed attempt, when the error carried one. */
+  status?: number;
+  /** The provider's Retry-After, in ms. */
+  retryAfterMs?: number;
+  /** The provider's request id for the failed attempt - what a provider support ticket needs. */
+  requestId?: string;
+  /** Backoff before the next attempt, in ms. */
+  delayMs: number;
+  model: string;
+  at: Date;
+}
+
+/**
+ * Where one turn's wall-clock time went, persisted so a slow reply can be diagnosed from the
+ * quest instead of from logs. All durations are ms. TTFB/TTFVT live in
+ * `promptMeta.performance` (firstChunkTime/firstTokenTime) and the final model in `fallbackInfo`,
+ * so neither is repeated here.
+ */
+export interface ITurnTiming {
+  /** Turn started (the quest's timestamp) to processing started: request handling plus queue delay. */
+  queueMs: number;
+  /** Processing started to the first LLM request: context, history, data sources, tools. */
+  contextBuildMs?: number;
+  /** Summed wait for a provider concurrency slot, across every tool round. */
+  semaphoreWaitMs: number;
+  /** Turn started to the reply completing (or the turn failing). Unset while it is running. */
+  totalMs?: number;
+  retries: ITurnRetry[];
+  /** Models switched to after the requested one failed. */
+  fallbackHops: number;
+}
+
 export interface IChatHistoryItem {
   id?: string;
   sessionId: string;
+  signupActivity?: { userId: string; turnId: string; startedAt: Date };
   conversationItemId?: string;
   openaiMessageId?: string;
   claudeMessageId?: string;
@@ -410,6 +470,9 @@ export interface IChatHistoryItem {
    * produces no notices at all; that case is exactly the one nothing else records.
    */
   attachmentDelivery?: IAttachmentDelivery;
+
+  /** Where this turn's time went - see {@link ITurnTiming}. Absent on turns that predate it. */
+  turnTiming?: ITurnTiming;
 
   /**
    * Navigation intents from the navigate_view tool.

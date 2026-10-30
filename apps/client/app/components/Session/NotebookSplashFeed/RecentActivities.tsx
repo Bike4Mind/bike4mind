@@ -12,7 +12,7 @@ import {
 import { useGetRecentActivities } from '@client/app/hooks/data/user';
 import { Box, CircularProgress, Typography, Tooltip } from '@mui/joy';
 import { brandAlpha } from '@client/app/utils/themes/colors';
-import { ANALYTICS_EVENTS } from '@server/types/analytics';
+import { ANALYTICS_EVENTS } from '@bike4mind/server-utils/types/analytics/index';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';

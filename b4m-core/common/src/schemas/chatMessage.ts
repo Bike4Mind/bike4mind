@@ -10,7 +10,7 @@ import { passthroughShape } from './responseShape';
  * - `embedding`: the message's search vector, internal to retrieval and heavy on list reads.
  * - `slackNotification`: the Slack thread the reply is posted back to.
  */
-export const CHAT_MESSAGE_WITHHELD_FIELDS = ['callback', 'embedding', 'slackNotification'] as const;
+export const CHAT_MESSAGE_WITHHELD_FIELDS = ['callback', 'embedding', 'slackNotification', 'signupActivity'] as const;
 
 type ChatMessageResponseField = Exclude<keyof IChatHistoryItemDocument, (typeof CHAT_MESSAGE_WITHHELD_FIELDS)[number]>;
 
@@ -59,6 +59,7 @@ const CHAT_MESSAGE_RESPONSE_FIELDS = {
   pendingAction: true,
   attachmentNotices: true,
   attachmentDelivery: true,
+  turnTiming: true,
   navigationIntents: true,
   suggestedChoices: true,
   attachmentList: true,

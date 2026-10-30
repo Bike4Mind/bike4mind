@@ -7,10 +7,20 @@ import {
 } from '@bike4mind/common';
 import type { OverwatchUtm } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { pseudonymizeUserId } from './pseudonymize';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { laneMetadata } from './lane';
+import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 
 const NOT_CONFIGURED = 'not-configured';
 const EMIT_TIMEOUT_MS = 2_000;
+
+/**
+ * Counted once per failed emit that asked for `reportFailure` (the billing events). A warning only
+ * reaches someone already reading the logs; infra/alarms.ts alarms on this count, so an ingest
+ * outage or a bad key does not drop billing events unnoticed. The namespace, name and Stage
+ * dimension must match that alarm exactly.
+ */
+export const INGEST_FAILURE_METRIC = { namespace: 'Lumina5/Analytics', name: 'IngestEmitFailed' } as const;
 
 /** The product this app reports as. Its key is OVERWATCH_INGEST_KEY. */
 export const HOST_PRODUCT_ID = 'bike4mind';
@@ -77,6 +87,8 @@ export interface EmitOptions {
   pseudoUserId: string;
   sessionId: string;
   userType: 'subscriber' | 'free';
+  /** A test persona or test-domain account: its event is stamped with the synthetic lane (lane.ts). */
+  isSynthetic?: boolean;
   referrer?: string;
   utm?: OverwatchUtm;
 }
@@ -89,7 +101,9 @@ export interface VisitEmitOptions {
 }
 
 /**
- * One event per active user per day: the signal DAU is counted from.
+ * One event per active user per day: the signal DAU is counted from. A synthetic user's is marked
+ * with the synthetic lane rather than dropped, so persona activity can be told apart from real
+ * activity instead of being counted as one.
  */
 export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
   return postEvent({
@@ -98,7 +112,7 @@ export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
     event: 'active',
     ...(opts.referrer !== undefined && { referrer: opts.referrer }),
     ...(opts.utm !== undefined && { utm: opts.utm }),
-    metadata: { userType: opts.userType },
+    metadata: { userType: opts.userType, ...laneMetadata(opts) },
   });
 }
 
@@ -150,7 +164,8 @@ export interface ProductEventOptions {
 
 /**
  * One event under any product this deployment serves. Fire-and-forget like the emits above: no-op
- * when that product has no key, never throws, and bounded by the same 2s timeout.
+ * when that product has no key, never throws, and bounded by the same 2s timeout, plus one metric
+ * write when a `reportFailure` emit fails.
  */
 export async function emitProductEvent(opts: ProductEventOptions): Promise<void> {
   if (!isAnalyticsConfigured(opts.productId)) return;
@@ -203,6 +218,7 @@ async function postEvent(
   if (!url || !key) return;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), EMIT_TIMEOUT_MS);
+  let failed = false;
 
   try {
     const res = await fetch(url, {
@@ -219,6 +235,7 @@ async function postEvent(
       // refusing to follow redirects is the only thing preventing key replay to another host.
       redirect: 'manual',
     });
+    failed = res.type === 'opaqueredirect' || res.status >= 300;
 
     if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
       // redirect: 'manual' surfaces a 3xx as an opaque-redirect response (status 0), which never
@@ -242,10 +259,19 @@ async function postEvent(
     // Lambda instance that day and whose single emit fails is simply absent from DAU for that day.
     // Acceptable for best-effort telemetry; high-traffic users self-heal across instances.
   } catch {
+    failed = true;
     if (reportFailure) {
       console.warn('[b4m-analytics] ingest request failed', { productId });
     }
   } finally {
     clearTimeout(timer);
+  }
+
+  if (failed && reportFailure) {
+    // emitMetric swallows its own failures; the catch keeps this emit's never-throws contract
+    // from resting on that.
+    await emitMetric(INGEST_FAILURE_METRIC.namespace, INGEST_FAILURE_METRIC.name, 1, { Stage: Config.STAGE }).catch(
+      () => {}
+    );
   }
 }

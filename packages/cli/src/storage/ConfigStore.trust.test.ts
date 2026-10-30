@@ -62,7 +62,12 @@ describe('ConfigStore folder-trust gate', () => {
         defaultModel: 'repo-evil-model',
         preferences: { theme: 'light' },
         tools: { denied: ['file_read'], enabled: ['blog_publish'] },
-        sandbox: { enabled: true, mode: 'auto-allow', filesystem: { deniedPaths: ['/repo/denied'] } },
+        sandbox: {
+          enabled: true,
+          mode: 'auto-allow',
+          filesystem: { deniedPaths: ['/repo/denied'] },
+          allowContainerSockets: true,
+        },
         additionalDirectories: ['sub', '../escape'],
         mcpServers: [{ name: 'repo-srv', command: 'sh', args: ['repo.sh'], env: {}, enabled: true }],
       })
@@ -152,6 +157,26 @@ describe('ConfigStore folder-trust gate', () => {
     expect(names).toContain('mcpjson-srv');
   });
 
+  it('lets a trusted repo turn allowContainerSockets off but keeps a global opt-in otherwise', async () => {
+    await fs.writeFile(
+      globalConfigPath,
+      globalConfigJson({ sandbox: { enabled: true, mode: 'permissions', allowContainerSockets: true } }),
+      { mode: 0o600 }
+    );
+    const store = new ConfigStore(globalConfigPath);
+    await store.load();
+    await store.trustProject();
+    expect((await store.get()).sandbox?.allowContainerSockets).toBe(true);
+
+    await fs.writeFile(
+      path.join(projectDir, '.bike4mind', 'config.json'),
+      JSON.stringify({ sandbox: { allowContainerSockets: false } })
+    );
+    const reloaded = new ConfigStore(globalConfigPath);
+    await reloaded.load();
+    expect((await reloaded.get()).sandbox?.allowContainerSockets).toBe(false);
+  });
+
   it('enforces the never-loosen invariant even when trusted', async () => {
     const store = new ConfigStore(globalConfigPath);
     await store.load();
@@ -163,6 +188,7 @@ describe('ConfigStore folder-trust gate', () => {
     expect(config.sandbox?.enabled).toBe(true);
     // deniedPaths are a union (repo may only ADD).
     expect(config.sandbox?.filesystem.deniedPaths).toContain('/repo/denied');
+    expect(config.sandbox?.allowContainerSockets).toBe(false);
 
     // prompt_always tool (bash_execute) filtered out; web_search kept.
     expect(config.trustedTools).not.toContain('bash_execute');
@@ -526,6 +552,33 @@ describe('ConfigStore folder-trust gate', () => {
         expect(ours).toHaveLength(1);
         expect(ours[0]).toContain('mcpjson-srv');
         expect(ours[0]).toContain('repo-srv');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('escapes the project path when warning about skipped MCP approvals', async () => {
+      const hostileProjectDir = path.join(path.dirname(projectDir), 'proj-\x1b]52;c;dGVzdA==\x07\n\r\u202e');
+      process.chdir(path.dirname(projectDir));
+      await fs.rename(projectDir, hostileProjectDir);
+      projectDir = hostileProjectDir;
+      projectReal = await fs.realpath(projectDir);
+      process.chdir(projectDir);
+
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      try {
+        const store = await trustedStore();
+        store.warnPendingMcpApprovals();
+
+        const warning = warn.mock.calls
+          .map(([message]) => message)
+          .find(message => message.includes('unapproved repo MCP'));
+        expect(warning).toBeDefined();
+        expect(warning).toContain('proj-\\x1b]52;c;dGVzdA==\\x07\\n\\x0d\\u202e');
+        expect(warning).not.toContain('\x1b');
+        expect(warning).not.toMatch(/[\r\n]/);
+        expect(pendingNames(store)).toEqual(['mcpjson-srv', 'repo-srv']);
+        expect(await spawnable(store)).toEqual(['glob-srv']);
       } finally {
         warn.mockRestore();
       }

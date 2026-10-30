@@ -44,20 +44,20 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => (h.gatedFlags.push(flag), () => {}),
 }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
 // common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: take the real
 // isTerminalDriveGrantError from its Config-free module instead.
 vi.mock('@server/integrations/google/drive/common', async () => ({
   getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
   isTerminalDriveGrantError: (
-    await vi.importActual<typeof import('@server/integrations/google/drive/driveGrantErrors')>(
-      '@server/integrations/google/drive/driveGrantErrors'
+    await vi.importActual<typeof import('@bike4mind/server-utils/integrations/google/drive/driveGrantErrors')>(
+      '@bike4mind/server-utils/integrations/google/drive/driveGrantErrors'
     )
   ).isTerminalDriveGrantError,
 }));
 // Keep isValidDriveFolderId real (the folder-id validation runs for real); mock only the Drive calls.
-vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
+vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/integrations/google/drive/driveClient')>();
   return {
     ...actual,
     createDriveClient: h.createDriveClient,
@@ -65,7 +65,7 @@ vi.mock('@server/integrations/google/drive/driveClient', async importOriginal =>
     probeConnectedFolder: h.probeConnectedFolder,
   };
 });
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ isEncrypted: h.isEncrypted }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'queue-url' } } }));

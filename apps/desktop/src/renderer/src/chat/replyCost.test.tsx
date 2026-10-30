@@ -46,12 +46,12 @@ describe('the cost on a reply', () => {
 
   const costs = () => Array.from(container.querySelectorAll('[data-testid="chat-message-cost"]'));
 
-  it('states the credits the reply spent, with the split and the dollar behind it', () => {
+  it('states the credits the reply spent, with token details and no dollars', () => {
     render([message('m1', { usage: { inputTokens: 1200, outputTokens: 300, creditsUsed: 54, usdCost: 0.027 } })]);
 
     const row = costs()[0];
     expect(row?.textContent).toBe('54 credits');
-    expect(row?.getAttribute('title')).toBe('1.2k new input, 300 output\n$0.03');
+    expect(row?.getAttribute('title')).toBe('1.2k new input, 300 output');
   });
 
   // jsdom cannot hover, so the half worth pinning is that the turn's rule reached this row at

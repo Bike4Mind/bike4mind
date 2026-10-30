@@ -29,6 +29,11 @@ const contents = vi.hoisted(() => {
     load: (_url: string): Promise<void> => Promise.resolve(),
     script: (): Promise<unknown> => Promise.resolve(null),
     capture: (..._args: unknown[]): Promise<unknown> => Promise.resolve({ isEmpty: () => true }),
+    /** The DevTools protocol, shared by every contents: what a command answers, and who attached. */
+    cdp: (_method: string, _params?: unknown): Promise<unknown> => Promise.reject(new Error('no DevTools')),
+    debuggerAttached: false,
+    attaches: 0,
+    detaches: 0,
     emit(event: string, ...args: unknown[]) {
       for (const handler of state.handlers.get(event) ?? []) handler({}, ...args);
     },
@@ -74,6 +79,19 @@ vi.mock('electron', () => {
       },
       executeJavaScript: () => contents.script(),
       capturePage: (...args: unknown[]) => contents.capture(...args),
+      debugger: {
+        isAttached: () => contents.debuggerAttached,
+        attach: () => {
+          if (contents.debuggerAttached) throw new Error('Another debugger is already attached');
+          contents.debuggerAttached = true;
+          contents.attaches += 1;
+        },
+        detach: () => {
+          contents.debuggerAttached = false;
+          contents.detaches += 1;
+        },
+        sendCommand: (method: string, params?: unknown) => contents.cdp(method, params),
+      },
       stop: () => {
         contents.stops += 1;
         contents.loadingMainFrame = false;
@@ -97,14 +115,28 @@ vi.mock('electron', () => {
     return made;
   };
   return {
+    /** Like Electron: a destroyed window throws on `contentView`, and destroy() emits 'closed' at once. */
     BrowserWindow: class {
       private destroyed = false;
-      contentView = { addChildView: () => undefined, removeChildView: () => undefined };
+      private readonly own = new Map<string, Handler[]>();
+      readonly children = new Set<unknown>();
+      private readonly view = {
+        addChildView: (child: unknown) => void this.children.add(child),
+        removeChildView: (child: unknown) => void this.children.delete(child),
+      };
+      get contentView() {
+        if (this.destroyed) throw new TypeError('Object has been destroyed');
+        return this.view;
+      }
       isDestroyed = () => this.destroyed;
       destroy = () => {
+        if (this.destroyed) return;
         this.destroyed = true;
+        for (const handler of this.own.get('closed') ?? []) handler();
       };
-      on = () => undefined;
+      on = (event: string, handler: Handler) => {
+        this.own.set(event, [...(this.own.get(event) ?? []), handler]);
+      };
     },
     WebContentsView: class {
       webContents: ReturnType<typeof makeContents> | undefined = makeContents(this);
@@ -116,6 +148,15 @@ vi.mock('electron', () => {
       setVisible = (visible: boolean) => {
         this.visible = visible;
       };
+    },
+    /** A PNG "decodes" to an image that remembers its bytes, at a Retina viewport. */
+    nativeImage: {
+      createFromBuffer: (bytes: Buffer) => ({
+        isEmpty: () => bytes.length === 0,
+        getSize: () => ({ width: 2560, height: 1600 }),
+        resize: ({ width }: { width: number }) => ({ toPNG: () => Buffer.from(`${bytes.toString()}@${width}`) }),
+        toPNG: () => bytes,
+      }),
     },
     session: {
       fromPartition: () => ({
@@ -141,6 +182,7 @@ vi.mock('./cookies/CookieImporter', () => ({
 const { BrowserWindow } = await import('electron');
 const { BrowserManager, NO_PAGE } = await import('./BrowserManager');
 const { MAX_BROWSER_TABS } = await import('@shared/browserTabs');
+const { resolveAddress } = await import('@shared/browserUrl');
 
 const never = <T>() => new Promise<T>(() => undefined);
 
@@ -209,7 +251,16 @@ describe('BrowserManager page deadlines', () => {
 
   it('stops a load holding a snapshot past the deadline, which lets the snapshot run', async () => {
     const page = await openPage();
-    const snap = { url: 'u', title: 't', text: 'partial page', truncated: false };
+    const model = {
+      url: 'u',
+      title: 't',
+      capturedAt: '2026-10-24T12:00:00.000Z',
+      blocks: [],
+      actions: [],
+      claims: [],
+      truncated: false,
+    };
+    const snap = { url: 'u', title: 't', text: 'partial page', truncated: false, model };
     contents.script = () => heldBehindLoad(snap);
 
     const reading = page.snapshot(1000);
@@ -258,13 +309,16 @@ describe('BrowserManager page deadlines', () => {
     });
   });
 
-  it('bounds a screenshot of a page that never paints', async () => {
+  it('bounds a screenshot of a page that never paints, and lets go of the debugger it attached', async () => {
     const page = await openPage();
-    contents.capture = () => never();
+    contents.cdp = () => never();
+    contents.detaches = 0;
 
     const capturing = expect(page.screenshot()).rejects.toThrow(/did not paint a frame to capture within 15 seconds/);
     await vi.advanceTimersByTimeAsync(15_000);
     await capturing;
+    expect(contents.debuggerAttached).toBe(false);
+    expect(contents.detaches).toBe(1);
   });
 
   it('lists every frame a screenshot would show, the top one first', async () => {
@@ -560,6 +614,195 @@ describe('BrowserManager tabs', () => {
   });
 });
 
+describe('BrowserManager when a page outlives its hidden host', () => {
+  type Manager = InstanceType<typeof BrowserManager>;
+  type Window = InstanceType<typeof BrowserWindow> & { children: Set<unknown> };
+  type Page = { host: Window & { destroyed: boolean }; view: { visible: boolean } };
+  const parts = (page: unknown) => page as Page;
+  const shown = (manager: Manager) => (manager as unknown as { shown: unknown }).shown;
+  const bounds = { x: 1440, y: 40, width: 560, height: 760 };
+
+  let states: BrowserPaneState[];
+  let manager: Manager;
+  let window: Window;
+  let baseline = 0;
+  const nth = (n: number) => contents.made[baseline + n - 1];
+  const lastState = () => states.at(-1)!;
+  const context = () => manager.context('s', async () => undefined);
+
+  /** What the url bar sends for typed text that is not an address. */
+  const search = (text: string) => {
+    const resolved = resolveAddress(text);
+    if (!resolved.ok) throw new Error(resolved.error);
+    return manager.navigate('s', resolved.url);
+  };
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.url = '';
+    contents.loads = [];
+    contents.script = () => Promise.resolve(null);
+    // Google answers a search by redirecting to itself with a session parameter, which aborts
+    // the first load after it already committed.
+    contents.load = url => {
+      contents.url = `${url}&sei=abc`;
+      contents.emit('did-navigate', contents.url, 200);
+      return Promise.reject(new Error(`ERR_ABORTED (-3) loading '${url}'`));
+    };
+    baseline = contents.made.length;
+    states = [];
+    manager = new BrowserManager((_sessionId, state) => states.push(state));
+    window = new BrowserWindow() as Window;
+  });
+
+  it('shows an address-bar search in the pane', async () => {
+    manager.setPane(window, 's', bounds);
+
+    const state = await search('electron object has been destroyed');
+
+    expect(contents.loads).toEqual([
+      { id: nth(1).id, url: 'https://www.google.com/search?q=electron%20object%20has%20been%20destroyed' },
+    ]);
+    expect(state).toMatchObject({ url: expect.stringContaining('google.com/search?q='), error: '', activeTabId: 1 });
+    const page = shown(manager);
+    expect(window.children.has(parts(page).view)).toBe(true);
+  });
+
+  it('drops the tab cleanly when its host is closed under it, and the next search opens a new one', async () => {
+    manager.setPane(window, 's', bounds);
+    await search('first search');
+    const page = parts(shown(manager));
+
+    expect(() => page.host.destroy()).not.toThrow();
+
+    expect(nth(1).isDestroyed()).toBe(true);
+    expect(window.children.has(page.view)).toBe(false);
+    expect(shown(manager)).toBeUndefined();
+    expect(lastState()).toEqual(NO_PAGE);
+    expect(() => manager.setPane(window, null, null)).not.toThrow();
+    expect(() => manager.setPane(window, 's', bounds)).not.toThrow();
+
+    await expect(search('second search')).resolves.toMatchObject({ activeTabId: 2, tabs: [{ id: 2 }] });
+    expect(window.children.has(parts(shown(manager)).view)).toBe(true);
+  });
+
+  it('does not throw when the page fires events after its host is gone and before its contents are', async () => {
+    manager.setPane(window, 's', bounds);
+    await search('a search');
+    // Electron destroys closed contents on a later task, so they still emit in between.
+    const page = parts(shown(manager));
+    const first = Object.assign(nth(1), { close: () => undefined });
+
+    page.host.destroy();
+
+    for (const event of ['did-stop-loading', 'did-navigate', 'page-title-updated', 'did-start-loading']) {
+      expect(() => first.fire(event, {}, 'https://www.google.com/', 200)).not.toThrow();
+    }
+    expect(shown(manager)).toBeUndefined();
+    expect(() => first.destroy()).not.toThrow();
+    expect(lastState()).toEqual(NO_PAGE);
+  });
+
+  it('parks, shows and closes a page whose host died without saying so, and keeps serving the pane', async () => {
+    manager.setPane(window, 's', bounds);
+    await search('a search');
+    const broken = parts(shown(manager));
+    // Destroyed with no 'closed' delivered: every placement still has to hold up.
+    broken.host.destroyed = true;
+
+    expect(() => manager.setPane(window, null, null)).not.toThrow();
+    expect(window.children.has(broken.view)).toBe(false);
+    expect(() => manager.setPane(window, 's', bounds)).not.toThrow();
+    expect(shown(manager)).toBeUndefined();
+    expect(() => manager.setPane(window, 's', null)).not.toThrow();
+    await expect(manager.tab('s', 'new')).resolves.toMatchObject({ activeTabId: 2 });
+    await expect(manager.tab('s', 'select', 1)).resolves.toMatchObject({ activeTabId: 1 });
+
+    await expect(manager.tab('s', 'close', 1)).resolves.toMatchObject({ activeTabId: 2, tabs: [{ id: 2 }] });
+    expect(nth(1).isDestroyed()).toBe(true);
+    await expect(search('after the broken tab')).resolves.toMatchObject({ activeTabId: 2, error: '' });
+  });
+
+  it('closes the hidden host of a page that closed itself', async () => {
+    await search('a search');
+    const page = parts(await context().page());
+
+    nth(1).destroy();
+
+    expect(page.host.isDestroyed()).toBe(true);
+    expect(manager.context('s', async () => undefined).tabs()).toEqual([]);
+  });
+
+  it('logs a placement failure once, answers the request anyway, and recovers on the next one', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await search('a search');
+      const page = (await context().page()) as unknown as { showIn: () => void };
+      const showIn = vi.spyOn(page, 'showIn').mockImplementation(() => {
+        throw new TypeError('Object has been destroyed');
+      });
+
+      expect(manager.setPane(window, 's', bounds)).toMatchObject({ activeTabId: 1 });
+      expect(manager.setPane(window, 's', { ...bounds, width: 600 })).toMatchObject({ activeTabId: 1 });
+      expect(() => nth(1).fire('did-stop-loading')).not.toThrow();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/^BROWSER: could not place the page: TypeError: Object has been destroyed/);
+
+      showIn.mockRestore();
+      manager.setPane(window, 's', bounds);
+      expect(shown(manager)).toBe(page);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each(['hide', 'switch'] as const)('retries parking after a failed pane %s', async action => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      manager.setPane(window, 's', bounds);
+      await search('a search');
+      const page = await context().page();
+      const park = vi.spyOn(page as unknown as { park: () => void }, 'park').mockImplementationOnce(() => {
+        throw new Error('placement failed');
+      });
+
+      const hide = () => manager.setPane(window, action === 'hide' ? null : 'other', bounds);
+      expect(hide).not.toThrow();
+      expect(window.children.has(parts(page).view)).toBe(true);
+
+      expect(hide).not.toThrow();
+      expect(park).toHaveBeenCalledTimes(2);
+      expect(window.children.has(parts(page).view)).toBe(false);
+      expect(shown(manager)).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('parks a partially placed page when the next request switches conversations', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await search('a search');
+      const page = await context().page();
+      const view = parts(page).view as { visible: boolean; setBounds: (bounds: unknown) => void };
+      vi.spyOn(view, 'setBounds').mockImplementationOnce(() => {
+        throw new Error('bounds failed after attaching');
+      });
+
+      expect(() => manager.setPane(window, 's', bounds)).not.toThrow();
+      expect(window.children.has(view)).toBe(true);
+
+      manager.setPane(window, 'other', bounds);
+      expect(window.children.has(view)).toBe(false);
+      expect(shown(manager)).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe('BrowserManager holding the pane for an overlay', () => {
   type Manager = InstanceType<typeof BrowserManager>;
   type View = { visible: boolean; bounds: unknown };
@@ -664,5 +907,313 @@ describe('BrowserManager holding the pane for an overlay', () => {
     manager.setPane(window, 'other', null);
     expect(shown(manager)).toBeUndefined();
     expect(view(page)).toMatchObject({ visible: true, bounds: { x: 0, y: 0, width: 1280, height: 800 } });
+  });
+});
+
+describe('BrowserManager screenshots', () => {
+  const SURFACE_ERROR = 'Current display surface not available for capture';
+  const bounds = { x: 1440, y: 40, width: 560, height: 760 };
+  const frame = {
+    isEmpty: () => false,
+    getSize: () => ({ width: 1120, height: 1520 }),
+    toPNG: () => Buffer.from('pane'),
+  };
+  const png = (text: string) => ({ data: Buffer.from(text).toString('base64') });
+
+  let manager: InstanceType<typeof BrowserManager>;
+  let window: InstanceType<typeof BrowserWindow>;
+  let cdp: ReturnType<typeof vi.fn<(method: string, params?: unknown) => Promise<unknown>>>;
+  const page = () => manager.context('s', async () => undefined).page();
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.url = 'https://example.com/';
+    contents.debuggerAttached = false;
+    contents.attaches = 0;
+    contents.detaches = 0;
+    contents.capture = () => Promise.resolve(frame);
+    cdp = vi.fn(() => Promise.resolve(png('devtools')));
+    contents.cdp = cdp;
+    manager = new BrowserManager();
+    window = new BrowserWindow();
+  });
+
+  it('draws a parked page through DevTools, which needs no display surface, at the tool viewport', async () => {
+    const capture = vi.fn(() => Promise.reject(new Error(SURFACE_ERROR)));
+    contents.capture = capture;
+
+    await expect((await page()).screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect(capture).not.toHaveBeenCalled();
+    expect(cdp).toHaveBeenCalledWith('Page.captureScreenshot', { format: 'png' });
+    expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+    expect(contents.debuggerAttached).toBe(false);
+  });
+
+  it('captures a page on screen in the pane as before, without the debugger', async () => {
+    const tab = await page();
+    manager.setPane(window, 's', bounds);
+
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('pane'));
+    expect(cdp).not.toHaveBeenCalled();
+    expect(contents.attaches).toBe(0);
+  });
+
+  it('falls back to DevTools when the pane has no surface or an empty frame to read', async () => {
+    const tab = await page();
+    manager.setPane(window, 's', bounds);
+
+    contents.capture = () => Promise.reject(new Error(SURFACE_ERROR));
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    contents.capture = () => Promise.resolve({ isEmpty: () => true });
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect(contents.detaches).toBe(2);
+  });
+
+  it('never calls capturePage on a held page, which would put it back on screen', async () => {
+    const tab = await page();
+    manager.setPane(window, 's', bounds);
+    manager.setPane(window, 's', null);
+    const capture = vi.fn(() => Promise.resolve(frame));
+    contents.capture = capture;
+
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it('says what to do instead when neither capture works, rather than passing on the Chromium error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      contents.capture = () => Promise.reject(new Error(SURFACE_ERROR));
+      contents.cdp = () => Promise.reject(new Error('Target closed'));
+
+      const failure = await tab.screenshot().catch((err: Error) => err);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toMatch(/^Could not capture a screenshot of this page\. browser_snapshot/);
+      expect((failure as Error).message).not.toContain(SURFACE_ERROR);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(SURFACE_ERROR));
+      expect(contents.debuggerAttached).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('says the page rendered nothing when DevTools draws an empty frame', async () => {
+    contents.cdp = () => Promise.resolve({ data: '' });
+    await expect((await page()).screenshot()).rejects.toThrow('The page rendered nothing to capture yet.');
+  });
+
+  /** Each DevTools command waits for its own answer, in the order they were sent. */
+  const heldCommands = () => {
+    const answers: Array<(result: unknown) => void> = [];
+    contents.cdp = () => new Promise(resolve => answers.push(resolve));
+    return answers;
+  };
+
+  it('does not start an abandoned fallback while a retry is using the debugger', async () => {
+    vi.useFakeTimers();
+    try {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      let answer: (image: unknown) => void = () => undefined;
+      contents.capture = () => new Promise(resolve => (answer = resolve));
+
+      const timedOut = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await timedOut;
+
+      // The retry is mid-DevTools capture when the abandoned capturePage comes back empty.
+      const answers = heldCommands();
+      contents.capture = () => Promise.reject(new Error(SURFACE_ERROR));
+      const retry = tab.screenshot();
+      await vi.advanceTimersByTimeAsync(0);
+      answer({ isEmpty: () => true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(answers).toHaveLength(1);
+
+      answers[0](png('retry'));
+      await expect(retry).resolves.toEqual(Buffer.from('retry@1280'));
+      expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+      expect(contents.debuggerAttached).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['empty', 'rejected'])('does not attach after a timed-out pane capture returns %s', async outcome => {
+    vi.useFakeTimers();
+    try {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      let finish: () => void = () => undefined;
+      contents.capture = () =>
+        new Promise((resolve, reject) => {
+          finish = () => (outcome === 'empty' ? resolve({ isEmpty: () => true }) : reject(new Error(SURFACE_ERROR)));
+        });
+      const timedOut = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await timedOut;
+      finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cdp).not.toHaveBeenCalled();
+      expect(contents.attaches).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a later capture alive when the first times out and finishes late', async () => {
+    vi.useFakeTimers();
+    try {
+      const tab = await page();
+      const answers = heldCommands();
+      const first = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const second = tab.screenshot();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await first;
+      expect(contents.debuggerAttached).toBe(true);
+      expect(contents.detaches).toBe(0);
+      answers[0](png('late'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(contents.debuggerAttached).toBe(true);
+      answers[1](png('second'));
+      await expect(second).resolves.toEqual(Buffer.from('second@1280'));
+      expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])('keeps late cleanup out of a new capture (external debugger: %s)', async external => {
+    vi.useFakeTimers();
+    try {
+      contents.debuggerAttached = external;
+      const tab = await page();
+      const answers = heldCommands();
+      const first = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await first;
+      expect(contents.debuggerAttached).toBe(external);
+      expect(contents.detaches).toBe(external ? 0 : 1);
+
+      const retry = tab.screenshot();
+      answers[0](png('late'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(contents.debuggerAttached).toBe(true);
+      answers[1](png('retry'));
+      await expect(retry).resolves.toEqual(Buffer.from('retry@1280'));
+      expect(contents.debuggerAttached).toBe(external);
+      expect(contents.attaches).toBe(external ? 0 : 2);
+      expect(contents.detaches).toBe(external ? 0 : 2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets two screenshots from one round share the debugger, detaching after the last', async () => {
+    const tab = await page();
+    const answers = heldCommands();
+    const first = tab.screenshot();
+    const second = tab.screenshot();
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+
+    answers[0](png('first'));
+    await expect(first).resolves.toEqual(Buffer.from('first@1280'));
+    expect(contents.debuggerAttached).toBe(true);
+    answers[1](png('second'));
+    await expect(second).resolves.toEqual(Buffer.from('second@1280'));
+    expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+  });
+
+  it('uses a debugger something else attached, and leaves it attached', async () => {
+    contents.debuggerAttached = true;
+
+    await expect((await page()).screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 0, detaches: 0 });
+    expect(contents.debuggerAttached).toBe(true);
+  });
+});
+
+describe('BrowserManager snapshot indexing', () => {
+  const snapshot = {
+    url: 'https://example.com/',
+    title: 'Example',
+    text: 'moon',
+    truncated: false,
+    model: {
+      url: 'https://example.com/',
+      title: 'Example',
+      capturedAt: '2026-10-24T12:00:00.000Z',
+      blocks: [{ id: 'b1', kind: 'text', text: 'moon' }],
+      actions: [],
+      claims: [],
+      truncated: false,
+    },
+  };
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.loadingMainFrame = false;
+    contents.script = () => Promise.resolve(snapshot);
+  });
+
+  it('passes the validated snapshot and owning session identity to the indexer', async () => {
+    const index = vi.fn();
+    const manager = new BrowserManager(undefined, undefined, index);
+    const first = await manager.context('first', async () => undefined).page();
+    const second = await manager.context('second', async () => undefined).page();
+    const parsed = await first.snapshot(1000);
+    expect(index).toHaveBeenLastCalledWith('first', parsed);
+    expect(index.mock.calls[0][1]).toBe(parsed);
+    await second.snapshot(1000);
+    expect(index).toHaveBeenLastCalledWith('second', snapshot);
+    manager.closeAll();
+  });
+
+  it.each(['synchronous', 'asynchronous'])('reports %s indexing failures without losing the snapshot', async kind => {
+    const error = new Error('history disk failure');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const manager = new BrowserManager(undefined, undefined, () => {
+        if (kind === 'synchronous') throw error;
+        return Promise.reject(error);
+      });
+      const page = await manager.context('first', async () => undefined).page();
+      await expect(page.snapshot(1000)).resolves.toEqual(snapshot);
+      expect(warn).toHaveBeenCalledWith('BROWSER: could not index page snapshot:', error);
+      manager.closeAll();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not send an invalid snapshot to the indexer', async () => {
+    const index = vi.fn();
+    const manager = new BrowserManager(undefined, undefined, index);
+    const page = await manager.context('first', async () => undefined).page();
+    contents.script = () => Promise.resolve({ ...snapshot, model: { ...snapshot.model, capturedAt: 'invalid' } });
+    await expect(page.snapshot(1000)).rejects.toThrow();
+    expect(index).not.toHaveBeenCalled();
+    manager.closeAll();
+  });
+
+  it('ignores a late snapshot from a closed tab even if the same session reopened', async () => {
+    const index = vi.fn();
+    const manager = new BrowserManager(undefined, undefined, index);
+    const page = await manager.context('first', async () => undefined).page();
+    let finish: (value: typeof snapshot) => void = () => undefined;
+    contents.script = () =>
+      new Promise(resolve => {
+        finish = resolve;
+      });
+    const pending = page.snapshot(1000);
+    manager.closeAll();
+    await manager.context('first', async () => undefined).page();
+    finish(snapshot);
+    await pending;
+    expect(index).not.toHaveBeenCalled();
+    manager.closeAll();
   });
 });

@@ -1,29 +1,30 @@
 import { Request, Response } from 'express';
 import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   integrationHealthCheckRepository,
   integrationCircuitOverrideRepository,
   INTEGRATION_HEALTH_INTEGRATIONS,
 } from '@bike4mind/database';
 import type { IntegrationName, CircuitBreakerMode } from '@bike4mind/database';
-import { getHealthSummary, runAllProbes, runProbe } from '@server/services/integrationHealthService';
+import { getHealthSummary, runAllProbes, runProbe } from '@bike4mind/server-utils/services/integrationHealthService';
 import { getStatus, clearCache } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
-import { flushBreakerMetrics, getAllBreakerStates, resetBreaker } from '@server/services/mcpCircuitBreakers';
+import {
+  flushBreakerMetrics,
+  getAllBreakerStates,
+  resetBreaker,
+} from '@bike4mind/server-utils/services/mcpCircuitBreakers';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordIntegrationProbe } from '@server/utils/integrationProbeAudit';
 
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
-
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const { integration, history } = req.query;
     const logger = new Logger();
 
@@ -73,8 +74,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const { integration } = req.body;
     const logger = new Logger();
 
@@ -85,6 +84,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
 
       const result = await runProbe(integration as IntegrationName);
+
+      await recordIntegrationProbe(req, result);
 
       return res.json({
         status: result.status,
@@ -99,6 +100,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     // Probe all integrations
     const results = await runAllProbes(logger);
 
+    await recordIntegrationProbe(req, results);
+
     return res.json({
       results: results.map(r => ({
         integration: r.integration,
@@ -111,8 +114,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     });
   })
   .put(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const { integration, mode, reason } = req.body;
 
     if (!integration || !INTEGRATION_HEALTH_INTEGRATIONS.includes(integration as IntegrationName)) {
@@ -124,6 +125,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError(`Invalid mode: ${mode}. Must be one of: ${validModes.join(', ')}`);
     }
 
+    const previous = await integrationCircuitOverrideRepository.getOverride(integration as IntegrationName);
     const override = await integrationCircuitOverrideRepository.setOverride({
       integration: integration as IntegrationName,
       mode: mode as CircuitBreakerMode,
@@ -139,6 +141,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       resetBreaker(integration as string);
       await flushBreakerMetrics();
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'system_health.integration_override_set',
+      target: {
+        kind: 'settings',
+        id: override.integration,
+        displayName: `Circuit breaker override for ${override.integration}`,
+      },
+      summary: `set circuit breaker mode for ${override.integration} to ${override.mode}`,
+      reason: override.reason,
+      changes: [{ field: 'mode', before: previous?.mode ?? 'auto', after: override.mode }],
+      details: { integration: override.integration, mode: override.mode },
+    });
 
     return res.json({
       integration: override.integration,

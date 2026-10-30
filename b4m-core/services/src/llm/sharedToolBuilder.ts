@@ -12,6 +12,7 @@ import {
   resolveToolArtifactType,
   type IChatHistoryItemDocument,
   type ModelInfo,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
 import { type BaseStorage } from '@bike4mind/utils';
 import {
@@ -27,6 +28,7 @@ import type {
   SubagentHandoffSignal,
   SubagentToolPermissions,
 } from './agents/ServerSubagentOrchestrator';
+import type { ModelAdmission } from './modelAdmission';
 import { b4mTools, generateTools, type LlmTools } from './tools/index';
 import type { ToolContext } from './tools/base/types';
 import type { ToolDefinition } from './tools/base/types';
@@ -41,6 +43,7 @@ import type { MinimalSessionRepository } from '../conversationContextService/typ
 import { notifyToolFinish } from './toolFinishObserver';
 import { extractMcpPendingAction, type McpPendingAction } from './mcpPendingAction';
 import { JIRA_LIST_ATTACHMENTS, CONFLUENCE_LIST_ATTACHMENTS } from '@bike4mind/mcp/atlassian/constants';
+import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,6 +57,8 @@ export interface ToolBuilderDeps {
   db: ToolContext['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
+  /** Resolve current plan access lazily; failures must reach model admission. */
+  getEntitlements?: () => Promise<string[]>;
   /** The turn's active organization, forwarded to the tool context (see ToolContext.organizationId). */
   organizationId?: ToolContext['organizationId'];
   /** How the turn was authenticated, forwarded to the tool context (see ToolContext.authOrigin). */
@@ -96,12 +101,23 @@ export interface ToolBuilderDeps {
   imageProcessorLambdaName?: string;
   llm: ICompletionBackend;
   model?: string;
+  /** See `ToolContext.servingModel`. */
+  servingModel?: ToolContext['servingModel'];
   precomputed?: {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
   };
+  /**
+   * The models a delegated subagent may run on, when narrower than `precomputed.models`
+   * (which also prices media and tool usage, so it stays the full catalog). The Agent
+   * Executor and the chat path pass the user's runnable models here; a subagent pinned to any
+   * other model falls back to the parent's (see `ServerSubagentOrchestrator.resolveAgentRuntime`).
+   */
+  subagentModels?: ModelInfo[];
   apiKeyTable?: ApiKeyTable;
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller, applied by every subagent this run spawns. */
+  thinkingVisibility?: ThinkingVisibility;
   agentStore?: ServerAgentStore;
   /** Session repository for entity extraction (optional - skipped if not provided) */
   sessionRepository?: MinimalSessionRepository;
@@ -167,12 +183,25 @@ export interface ToolBuilderDeps {
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
 
   /**
+   * Returns true when the payer cannot cover a subagent's first iteration on the given model;
+   * forwarded like `checkMemberCreditCap`. Set by the agent executor when credits are enforced
+   * (see `ServerOrchestratorDeps.checkInsufficientCredits`).
+   */
+  checkInsufficientCredits?: (model: string) => boolean | Promise<boolean>;
+
+  /**
    * The run's tool-permission lists, set only by the agent executor (whose parent gate
    * uses the same lists). Forwarded to `delegate_to_agent` and `coordinate_task` so a
    * child's tool calls are classified like the parent's; see
    * `ServerOrchestratorDeps.toolPermissions`. Omitted by ungated callers.
    */
   toolPermissions?: SubagentToolPermissions;
+
+  /**
+   * The user's model admission, forwarded to `delegate_to_agent` and `coordinate_task` so an
+   * in-process subagent's model is admitted; see `ServerOrchestratorDeps.modelAdmission`.
+   */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
 }
 
 /**
@@ -187,12 +216,10 @@ export interface ToolBuilderCallbacks {
   onStatusUpdate: (changes: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;
 
   /** Called before a tool executes (e.g., credit validation for image tools) */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onToolStart: (toolName: string, data: any) => Promise<void>;
+  onToolStart: (toolName: string, data: unknown) => Promise<void>;
 
   /** Called after a tool finishes (e.g., deep research state, image paths) */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onToolFinish: (toolName: string, data: any) => Promise<void>;
+  onToolFinish: (toolName: string, data: unknown) => Promise<void>;
 
   /** Called when navigate_view extracts navigation intents */
   onNavigationIntents?: (intents: unknown[]) => Promise<void>;
@@ -234,12 +261,16 @@ export interface ToolBuilderCallbacks {
   /** Quest (turn) id, for lake-access audit rows to join back to their turn - see
    * ToolContext['questId']'s own doc comment for the agent-mode caveat. */
   questId?: string;
+  slackDestination?: ToolContext['slackDestination'];
 
   /** See ToolContext['numberCitables']; the chat path supplies it for indexed-citation sessions. */
   numberCitables?: ToolContext['numberCitables'];
 
-  /** Called when delegate_to_agent accumulates credits; meta carries cost attribution when resolvable */
-  onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
+  /**
+   * Bills a delegation's spend that no tracker bills (see `DelegateToAgentToolDeps.onCredits`);
+   * meta carries cost attribution when resolvable.
+   */
+  onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void | Promise<void>;
 
   /** Called when a subagent completes with telemetry */
   onSubagentTelemetry?: (telemetry: unknown) => void;
@@ -284,8 +315,7 @@ export interface BuildSharedToolsOptions {
    */
   sessionDisabledTools?: readonly string[];
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  config?: { [key in LlmTools]?: any };
+  config?: { [key in LlmTools]?: unknown };
   agentOnlyMcpServers?: string[];
   getAbortSignal?: () => AbortSignal | undefined;
   externalTools?: Record<string, ToolDefinition>;
@@ -296,6 +326,11 @@ export interface BuildSharedToolsOptions {
    * from the schema sent to the model instead of reaching it and then throwing or refusing.
    */
   toolAvailability?: ToolAvailability;
+  /**
+   * Applied to the tools handed to in-process subagents (`parentTools`), before the denylist.
+   * Callers pass the same wrapper they apply to the array this function returns for the parent.
+   */
+  wrapChildTools?: (tools: ICompletionOptionTools[]) => ICompletionOptionTools[];
 }
 
 /** Namespaced `server__tool` ids of the only tools whose `_attachmentList` result is trusted. */
@@ -358,6 +393,7 @@ export function buildSharedTools(
     model,
     imageProcessorLambdaName,
     entitlementKeys,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -383,6 +419,7 @@ export function buildSharedTools(
     logger,
     {
       db,
+      getEntitlements,
       retrievalFilter,
       kbScope,
       inlinedAttachmentIds,
@@ -398,6 +435,8 @@ export function buildSharedTools(
       authOrigin,
       apiKeyId,
       questId: callbacks.questId,
+      requestConfirmation: callbacks.onPendingAction,
+      slackDestination: callbacks.slackDestination,
       numberCitables: callbacks.numberCitables,
       decide: deps.decide,
       getAbortSignal,
@@ -425,7 +464,8 @@ export function buildSharedTools(
     callbacks.sessionId,
     undefined, // codeMinifier - CLI-only (web-tree-sitter); server path has no minifier
     deps.precomputed?.models,
-    deps.onToolLlmUsage
+    deps.onToolLlmUsage,
+    deps.servingModel
   );
 
   // The tool is inert without a usable config, so the config itself is the availability signal.
@@ -511,13 +551,15 @@ export function buildSharedTools(
     const isAgentOnly = agentOnlyMcpServers.includes(serverName);
 
     for (const item of serverTools) {
-      // artifactType and endsTurnAfterText are dropped: an MCP server is untrusted output and must
-      // not unlock artifact markup or cut the model's follow-up round short.
+      // artifactType, endsTurnAfterText and validateResult are dropped: an MCP server is untrusted
+      // output and must not unlock artifact markup, cut the model's follow-up round short, or
+      // score its own results past the agent confidence gate.
       const {
         name,
         toolFn: originalToolFn,
         artifactType: _ignored,
         endsTurnAfterText: _ignoredEndsTurn,
+        validateResult: _ignoredValidator,
         ...rest
       } = item;
       // Denied by name, not by server: a session may forbid one tool of a server it otherwise
@@ -574,9 +616,15 @@ export function buildSharedTools(
   // delegate tool's closure below, so it never appears in the array this function returns and a
   // denylist applied to that array cannot reach it. Without this, a session-forbidden tool stays
   // callable by a dispatched subagent - the same loophole the delegate gate exists to close.
-  const parentTools = [...tools, ...agentOnlyMcpTools].filter(tool => !deniedToolNames.has(tool.toolSchema.name));
+  // current_model_details is bound to the parent's serving model, so a subagent on another model
+  // must not inherit it (its adapter keeps its own identity line).
+  const childTools = [...tools, ...agentOnlyMcpTools];
+  const parentTools = (options.wrapChildTools ? options.wrapChildTools(childTools) : childTools).filter(
+    tool => !deniedToolNames.has(tool.toolSchema.name) && tool.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME
+  );
 
-  const subagentModelInfo = deps.precomputed?.models.find(m => m.id === model);
+  const subagentModels = deps.subagentModels ?? deps.precomputed?.models;
+  const subagentModelInfo = subagentModels?.find(m => m.id === model);
   const subagentLlm = getLlmByModel(deps.apiKeyTable!, {
     modelInfo: subagentModelInfo,
     logger,
@@ -593,10 +641,8 @@ export function buildSharedTools(
     logger,
     parentTools,
     getSignal: getAbortSignal,
-    onCredits: callbacks.onSubagentCredits
-      ? (credits: number, meta?: SubagentUsageMeta) => callbacks.onSubagentCredits!(credits, meta)
-      : undefined,
-    availableModels: deps.precomputed?.models,
+    onCredits: callbacks.onSubagentCredits,
+    availableModels: subagentModels,
     onStatusUpdate: callbacks.onSubagentStatusUpdate
       ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
       : undefined,
@@ -604,6 +650,7 @@ export function buildSharedTools(
       ? (telemetry: unknown) => callbacks.onSubagentTelemetry!(telemetry)
       : undefined,
     thinking: deps.thinking,
+    thinkingVisibility: deps.thinkingVisibility,
     agentStore: deps.agentStore,
     apiKeyTable: deps.apiKeyTable ?? undefined,
     tracker: callbacks.subagentTracker,
@@ -612,7 +659,9 @@ export function buildSharedTools(
     depth: deps.depth,
     optInTools: deps.optInTools,
     checkMemberCreditCap: deps.checkMemberCreditCap,
+    checkInsufficientCredits: deps.checkInsufficientCredits,
     toolPermissions: deps.toolPermissions,
+    modelAdmission: deps.modelAdmission,
   });
   tools.push(delegateTool);
 
@@ -626,11 +675,13 @@ export function buildSharedTools(
       logger,
       parentTools,
       getSignal: getAbortSignal,
-      availableModels: deps.precomputed?.models,
+      availableModels: subagentModels,
+      onCredits: callbacks.onSubagentCredits,
       onStatusUpdate: callbacks.onSubagentStatusUpdate
         ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
         : undefined,
       thinking: deps.thinking,
+      thinkingVisibility: deps.thinkingVisibility,
       agentStore: deps.agentStore,
       apiKeyTable: deps.apiKeyTable ?? undefined,
       tracker: callbacks.subagentTracker,
@@ -641,7 +692,9 @@ export function buildSharedTools(
       dagHandoffSignal: deps.dagHandoffSignal,
       optInTools: deps.optInTools,
       checkMemberCreditCap: deps.checkMemberCreditCap,
+      checkInsufficientCredits: deps.checkInsufficientCredits,
       toolPermissions: deps.toolPermissions,
+      modelAdmission: deps.modelAdmission,
     });
     tools.push(coordinateTool);
   }

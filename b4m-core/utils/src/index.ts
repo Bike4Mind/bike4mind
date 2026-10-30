@@ -63,6 +63,7 @@ export * from './toolEchoMatcher';
 export * from './retrievalExclusion';
 export * from './validation';
 export * from './slack';
+export * from './errorLogSlackMessage';
 export * from './cacheKeys';
 export * from './pagination';
 export * from './settings';
@@ -84,11 +85,13 @@ export type { ImageEditResponse } from './imageGeneration';
 export * from './voiceGeneration';
 export * from './soundGeneration';
 export * from './musicGeneration';
+export * from './providerRateLimitError';
 export * from './analytics';
 export * from './user';
 export * from './pricing';
 export * from './functionQueueRunner';
 export * from './fabfile';
+export * from './signedUrlExpiry';
 export * from './office/officeEdit';
 export * from './artifactParser';
 // NOT barrel-exported on purpose: `artifactElision` is reached only via the
@@ -107,7 +110,7 @@ export {
   getRetryAfterMs,
   calculateRetryDelay,
 } from '@bike4mind/common';
-export type { RetryOptions, RetryResult } from '@bike4mind/common';
+export type { RetryEvent, RetryOptions, RetryResult } from '@bike4mind/common';
 export * from './circuitBreaker';
 export * from './rateLimitHeaders';
 export * from './voiceHistory';

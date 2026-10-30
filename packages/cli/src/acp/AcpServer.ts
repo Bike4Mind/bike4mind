@@ -19,7 +19,6 @@
 import { randomUUID } from 'crypto';
 import { Mutex } from 'async-mutex';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import { createToolSearchTool } from '@bike4mind/agents';
 import type { AgentStep, AgentResult, ConversationMessage, ReActAgent } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 
@@ -39,6 +38,7 @@ import { buildLlmBackend } from '../bootstrap/buildLlmBackend.js';
 import { buildSandbox } from '../bootstrap/buildSandbox.js';
 import { buildSupportingStores } from '../bootstrap/buildSupportingStores.js';
 import { buildAgent } from '../bootstrap/buildAgent.js';
+import { buildToolSearch } from '../bootstrap/buildToolSearch.js';
 import type { InteractionMode } from '../bootstrap/types.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { NotifyingLlmBackend } from '../llm/NotifyingLlmBackend.js';
@@ -556,7 +556,7 @@ export class AcpServer {
     await this.mergeRemoteSkills(config, apiClient);
 
     const startupLog: string[] = [];
-    const { llm, wsManager, modelInfo } = await buildLlmBackend({ config, apiClient, tokenGetter, startupLog });
+    const { llm, wsManager, models, modelInfo } = await buildLlmBackend({ config, apiClient, tokenGetter, startupLog });
 
     const permissionManager = new PermissionManager(
       new ToolCatalog(),
@@ -597,26 +597,22 @@ export class AcpServer {
         onGroupCompletion: () => {},
       });
 
+    const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
+    const { llm: toolSearchLlm, toolSearchTool } = buildToolSearch({
+      llm,
+      models,
+      registry: deferredToolRegistry,
+      logger,
+      agentToolsRef,
+    });
+
     const llmWithFallback: ICompletionBackend =
       config.fallbackModels && config.fallbackModels.length > 0
-        ? new FallbackLlmBackend(llm, config.fallbackModels, (from, to, error) =>
+        ? new FallbackLlmBackend(toolSearchLlm, config.fallbackModels, (from, to, error) =>
             logger.debug(`[acp] Model "${from}" failed (${error.message}); falling back to "${to}"`)
           )
-        : llm;
+        : toolSearchLlm;
     const notifyingLlm = new NotifyingLlmBackend(llmWithFallback, backgroundManager);
-
-    const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
-    const toolSearchTool =
-      deferredToolRegistry.size() > 0
-        ? createToolSearchTool({
-            registry: deferredToolRegistry,
-            logger,
-            toolListAccessor: () => {
-              if (!agentToolsRef.current) throw new Error('tool_search invoked before agent context was wired');
-              return agentToolsRef.current;
-            },
-          })
-        : null;
 
     const cliTools = this.buildCliTools({
       config,

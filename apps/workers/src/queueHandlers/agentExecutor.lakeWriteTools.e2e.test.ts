@@ -25,7 +25,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { buildSharedTools } from '@bike4mind/services/llm';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { makeToolBuilderDeps, makeToolBuilderCallbacks } from './toolBuilderDeps.fixture';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

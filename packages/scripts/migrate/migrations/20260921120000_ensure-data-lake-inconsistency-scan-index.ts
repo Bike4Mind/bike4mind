@@ -13,8 +13,8 @@ import { type MigrationFile } from './index';
  * fleet-wide scan pays a blocking top-k sort over all active lakes - and unlike the caller-facing
  * route this runs unattended, so nobody is watching the latency it would spend. Migration rather
  * than autoIndex for the reasons the sibling ensure-*-index migrations give: `mongo.ts` fires
- * autoIndex without awaiting it, so a failed build is silent, and on DocumentDB a build takes a
- * foreground collection lock - taken by whichever Lambda cold-boots first, i.e. a user's request.
+ * autoIndex without awaiting it, so a failed build is silent, and the build would start on
+ * whichever Lambda cold-boots first, i.e. a user's request.
  *
  * BACKFILL. `inconsistencyReport` now stores the run's summary and never its findings, because a
  * finding carries a 240-char excerpt of each source document and the purge-time sweeps that

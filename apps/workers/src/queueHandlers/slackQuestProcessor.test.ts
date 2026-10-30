@@ -51,7 +51,7 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   publishTelemetryAlertCallback: vi.fn(),
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: () => 'xoxb-decrypted',
 }));
 
@@ -96,6 +96,13 @@ vi.mock('@bike4mind/database', async () => {
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 
 describe('slackQuestProcessor getStaticOptions', () => {
+  it('wires the shared operational billing adapter into tool execution', async () => {
+    const { getStaticOptions } = await import('./slackQuestProcessor');
+    const { operationalBillingAdapters } = await import('@server/billing/operationalBilling');
+
+    expect(getStaticOptions().db.operationalBilling).toBe(operationalBillingAdapters);
+  }, 120_000);
+
   it('wires the save_content_to_data_lake audit adapters', async () => {
     // The handler's transitive import graph (services + database + slack) is heavy enough
     // that resolving it inside a test can exceed the default timeout.

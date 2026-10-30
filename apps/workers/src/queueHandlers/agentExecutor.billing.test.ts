@@ -18,6 +18,11 @@ import {
   type BillingCounters,
   type IterationBillingEffects,
   type PendingToolUsage,
+  lastRequestInputTokens,
+  nextIterationCredits,
+  uncoveredIterationCredits,
+  buildInProcessBalanceCheck,
+  readPayerBalance,
 } from './agentExecutor.billing';
 import { ChatModels, type ModelInfo } from '@bike4mind/common';
 import { GeminiBackend } from '@bike4mind/llm-adapters';
@@ -215,6 +220,185 @@ describe('billIteration (#657 context-window guard)', () => {
     expect(counters).toMatchObject({ cumulativeCost: 100, inputTokens: 100 });
   });
 
+  it('zero-priced model: records a zero-cost usage event and billing record, and advances counters', async () => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(100, { output: 20 }),
+      counters,
+      modelInfo: makeModelInfo(1000, 0),
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'ok', costUsd: 0, creditsCharged: 0, inputTokens: 100, outputTokens: 20 })
+    );
+    expect(spies.addIterationBilling).toHaveBeenCalledWith(
+      expect.objectContaining({ iteration: 1, inputTokens: 100, outputTokens: 20, credits: 0 })
+    );
+    expect(spies.sendProgress).toHaveBeenCalledWith(0, 1);
+    expect(counters).toMatchObject({ cumulativeCost: 0, inputTokens: 100, outputTokens: 20 });
+  });
+
+  it('zero-priced model: the next iteration records only its own tokens', async () => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+    const bill = (iterationIndex: number, totals: ReturnType<typeof checkpoint>) =>
+      billIteration({
+        iterationIndex,
+        checkpoint: totals,
+        counters,
+        modelInfo: makeModelInfo(1000, 0),
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
+
+    await bill(1, checkpoint(100, { output: 20 }));
+    await bill(2, checkpoint(150, { output: 30 }));
+
+    expect(spies.recordUsageEvent).toHaveBeenCalledTimes(2);
+    expect(spies.recordUsageEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ inputTokens: 50, outputTokens: 10 })
+    );
+    expect(spies.addIterationBilling).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ iteration: 2, inputTokens: 50, outputTokens: 10, credits: 0 })
+    );
+    expect(counters).toMatchObject({ inputTokens: 150, outputTokens: 30 });
+  });
+
+  it.each([{ output: 20 }, { cacheRead: 30 }, { cacheWrite: 40 }])(
+    'zero-priced model: settles an isolated token delta %j',
+    async totals => {
+      const counters = makeCounters();
+      const { effects, spies } = makeEffects();
+      const nextCheckpoint = checkpoint(0, totals);
+
+      await billIteration({
+        iterationIndex: 1,
+        checkpoint: nextCheckpoint,
+        counters,
+        modelInfo: makeModelInfo(1000, 0),
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
+
+      expect(spies.deductCredits).not.toHaveBeenCalled();
+      expect(spies.recordUsageEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          inputTokens: 0,
+          outputTokens: nextCheckpoint.totalOutputTokens,
+          cachedInputTokens: nextCheckpoint.totalCacheReadTokens,
+          cacheWriteTokens: nextCheckpoint.totalCacheWriteTokens,
+          costUsd: 0,
+          creditsCharged: 0,
+        })
+      );
+      expect(spies.addIterationBilling).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          inputTokens: 0,
+          outputTokens: nextCheckpoint.totalOutputTokens,
+          cacheReadTokens: nextCheckpoint.totalCacheReadTokens,
+          cacheWriteTokens: nextCheckpoint.totalCacheWriteTokens,
+          credits: 0,
+        })
+      );
+      expect(counters).toEqual({
+        cumulativeCost: 0,
+        inputTokens: 0,
+        outputTokens: nextCheckpoint.totalOutputTokens,
+        cacheReadTokens: nextCheckpoint.totalCacheReadTokens,
+        cacheWriteTokens: nextCheckpoint.totalCacheWriteTokens,
+      });
+    }
+  );
+
+  it.each([
+    checkpoint(100, { output: 20, cacheRead: 30, cacheWrite: 40 }),
+    checkpoint(99, { output: 21, cacheRead: 30, cacheWrite: 40 }),
+    checkpoint(101, { output: 19, cacheRead: 30, cacheWrite: 40 }),
+    checkpoint(101, { output: 20, cacheRead: 29, cacheWrite: 40 }),
+    checkpoint(101, { output: 20, cacheRead: 30, cacheWrite: 39 }),
+  ])('zero-priced model: ignores unchanged or regressing totals %j', async nextCheckpoint => {
+    const counters = makeCounters({ inputTokens: 100, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 40 });
+    const initialCounters = { ...counters };
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 2,
+      checkpoint: nextCheckpoint,
+      counters,
+      modelInfo: makeModelInfo(1000, 0),
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.recordUsageEvent).not.toHaveBeenCalled();
+    expect(spies.addIterationBilling).not.toHaveBeenCalled();
+    expect(spies.sendProgress).not.toHaveBeenCalled();
+    expect(counters).toEqual(initialCounters);
+  });
+
+  it('zero-priced model: resumes from persisted billing without recounting tokens', async () => {
+    const modelInfo = makeModelInfo(1000, 0);
+    const records: Parameters<typeof reseedCounters>[0][number][] = [];
+    const { effects, spies } = makeEffects();
+    effects.addIterationBilling = async record => {
+      records.push(record);
+    };
+    const bill = (counters: BillingCounters, iterationIndex: number, totals: ReturnType<typeof checkpoint>) =>
+      billIteration({
+        iterationIndex,
+        checkpoint: totals,
+        counters,
+        modelInfo,
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
+
+    await bill(makeCounters(), 1, checkpoint(100, { output: 20, cacheRead: 30, cacheWrite: 40 }));
+    const resumedCounters = reseedCounters(records, modelInfo);
+    await bill(resumedCounters, 2, checkpoint(150, { output: 30, cacheRead: 35, cacheWrite: 45 }));
+
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.recordUsageEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        inputTokens: 50,
+        outputTokens: 10,
+        cachedInputTokens: 5,
+        cacheWriteTokens: 5,
+        creditsCharged: 0,
+      })
+    );
+    expect(records[1]).toMatchObject({
+      inputTokens: 50,
+      outputTokens: 10,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 5,
+      credits: 0,
+    });
+    expect(resumedCounters).toEqual({
+      cumulativeCost: 0,
+      inputTokens: 150,
+      outputTokens: 30,
+      cacheReadTokens: 35,
+      cacheWriteTokens: 45,
+    });
+  });
+
   it('sub-credit settlement: skips the ledger deduction but still records COGS + billing', async () => {
     const counters = makeCounters();
     // usdToCredits rounds a small delta to 0 credits.
@@ -277,6 +461,41 @@ describe('billIteration (#630 tool-internal spend fold)', () => {
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     ...overrides,
+  });
+
+  it.each([{ inputTokens: 10 }, { outputTokens: 5 }])('records zero-cost tool-only usage %j', async usage => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(0),
+      counters,
+      modelInfo: makeModelInfo(1000),
+      model: 'test-model',
+      startTime: 0,
+      toolUsage: tool(usage),
+      effects,
+    });
+
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.recordUsageEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        ...usage,
+        costUsd: 0,
+        creditsCharged: 0,
+      })
+    );
+    expect(spies.addIterationBilling).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        credits: 0,
+      })
+    );
+    expect(counters).toEqual(makeCounters());
   });
 
   it('folds tool USD into the charge; charge + usage event carry agent+tool tokens, billing record stays agent-only', async () => {
@@ -1018,5 +1237,224 @@ describe('settleSubagentMediaUsage', () => {
     await expect(settleSubagentMediaUsage(pendingWith(0.04), effects)).rejects.toThrow('db down');
     expect(effects.recordAuditCredits).not.toHaveBeenCalled();
     expect(effects.recordUsageEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('nextIterationCredits', () => {
+  const model = {
+    id: 'm',
+    max_tokens: 64_000,
+    contextWindow: 200_000,
+    pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+  } as unknown as ModelInfo;
+
+  it('prices a full reservation-sized reply even before the first request', () => {
+    expect(nextIterationCredits(model, 0)).toBeGreaterThan(0);
+  });
+
+  it('grows with the size of the last request the run sent', () => {
+    expect(nextIterationCredits(model, 150_000)).toBeGreaterThan(nextIterationCredits(model, 0));
+  });
+
+  it('reads the last request, cached tokens included, and 0 before any', () => {
+    expect(lastRequestInputTokens(undefined)).toBe(0);
+    expect(
+      lastRequestInputTokens([
+        { inputTokens: 10, outputTokens: 1 },
+        { inputTokens: 100, outputTokens: 1, cacheReadInputTokens: 20, cacheCreationInputTokens: 5 },
+      ])
+    ).toBe(125);
+  });
+});
+
+// The per-iteration gate in `processExecution` and in-process subagent admission both stop on this.
+describe('uncoveredIterationCredits', () => {
+  const model = {
+    id: 'm',
+    max_tokens: 64_000,
+    contextWindow: 200_000,
+    pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+  } as unknown as ModelInfo;
+
+  it('returns the credits the next iteration needs when the balance is short of them', () => {
+    const required = nextIterationCredits(model, 150_000);
+    expect(uncoveredIterationCredits(required - 0.01, model, 150_000)).toBe(required);
+  });
+
+  it('lets an iteration the balance exactly covers run', () => {
+    const required = nextIterationCredits(model, 150_000);
+    expect(uncoveredIterationCredits(required, model, 150_000)).toBeUndefined();
+  });
+
+  it('stops a balance that covers a small request once the run has grown past it', () => {
+    const balance = nextIterationCredits(model, 0);
+    expect(uncoveredIterationCredits(balance, model, 0)).toBeUndefined();
+    expect(uncoveredIterationCredits(balance, model, 150_000)).toBe(nextIterationCredits(model, 150_000));
+  });
+});
+
+describe('buildInProcessBalanceCheck', () => {
+  const model = {
+    id: 'm',
+    max_tokens: 64_000,
+    contextWindow: 200_000,
+    pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+  } as unknown as ModelInfo;
+
+  it('is absent when credits are not enforced', () => {
+    expect(buildInProcessBalanceCheck(false, [model], vi.fn())).toBeUndefined();
+  });
+
+  it("refuses a subagent whose first iteration the payer's live balance cannot cover", async () => {
+    const loadBalance = vi.fn().mockResolvedValue(nextIterationCredits(model, 0) - 0.01);
+    const check = buildInProcessBalanceCheck(true, [model], loadBalance)!;
+
+    await expect(check('m')).resolves.toBe(true);
+    expect(loadBalance).toHaveBeenCalledTimes(1);
+  });
+
+  it('admits a subagent the balance covers', async () => {
+    const check = buildInProcessBalanceCheck(true, [model], vi.fn().mockResolvedValue(100_000))!;
+
+    await expect(check('m')).resolves.toBe(false);
+  });
+
+  it('admits a model it cannot price without reading the balance', async () => {
+    const loadBalance = vi.fn();
+    const check = buildInProcessBalanceCheck(true, [model], loadBalance)!;
+
+    await expect(check('unknown')).resolves.toBe(false);
+    expect(loadBalance).not.toHaveBeenCalled();
+  });
+});
+
+describe('readPayerBalance', () => {
+  it('uses the live org wallet for org-billed admission even when the personal wallet is funded', async () => {
+    const organizations = {
+      findById: vi.fn().mockResolvedValueOnce({ currentCredits: 1 }).mockResolvedValueOnce({ currentCredits: 100_000 }),
+    };
+    const users = { findById: vi.fn().mockResolvedValue({ currentCredits: 100_000 }) };
+    const payer = { organizationId: 'org-1', userId: 'user-1' };
+    const model = { ...makeModelInfo(200_000), pricing: { 200000: { input: 0.000003, output: 0.000015 } } };
+    const check = buildInProcessBalanceCheck(true, [model], () => readPayerBalance(payer, { organizations, users }))!;
+
+    await expect(check('test-model')).resolves.toBe(true);
+    // Pin routing separately from pricing: the next call must observe the newly funded org.
+    users.findById.mockResolvedValue({ currentCredits: 0 });
+    await expect(check('test-model')).resolves.toBe(false);
+    expect(organizations.findById).toHaveBeenCalledWith('org-1');
+    expect(users.findById).not.toHaveBeenCalled();
+  });
+
+  it('uses the personal wallet only when no organization pays', async () => {
+    const organizations = { findById: vi.fn().mockResolvedValue({ currentCredits: 100_000 }) };
+    const users = { findById: vi.fn().mockResolvedValue({ currentCredits: 2 }) };
+
+    await expect(readPayerBalance({ userId: 'user-1' }, { organizations, users })).resolves.toBe(2);
+    expect(users.findById).toHaveBeenCalledWith('user-1');
+    expect(organizations.findById).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the payer disappeared and propagates an unreadable wallet', async () => {
+    const organizations = {
+      findById: vi.fn().mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('wallet unavailable')),
+    };
+    const users = { findById: vi.fn() };
+    const payer = { organizationId: 'org-1', userId: 'user-1' };
+
+    await expect(readPayerBalance(payer, { organizations, users })).resolves.toBe(0);
+    await expect(readPayerBalance(payer, { organizations, users })).rejects.toThrow('wallet unavailable');
+    expect(users.findById).not.toHaveBeenCalled();
+  });
+});
+
+describe('billIteration (UsageEvent price stamp)', () => {
+  const perM = (usd: number) => usd / 1_000_000;
+  const tiered = {
+    ...makeModelInfo(1_048_576),
+    priceSource: 'catalog',
+    priceRowId: 'price-row-9',
+    pricing: {
+      200_000: { input: perM(2), output: perM(12) },
+      1_048_576: { input: perM(4), output: perM(18) },
+    },
+  } as ModelInfo;
+
+  const billOnce = async (cp: BillingCheckpoint, modelInfo: ModelInfo = tiered) => {
+    const { effects, spies } = makeEffects();
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: cp,
+      counters: makeCounters(),
+      modelInfo,
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+    return spies.recordUsageEvent.mock.calls[0]?.[0];
+  };
+
+  it('stamps the catalog source, row id and tier of a single-request iteration, with no turnUsage', async () => {
+    const event = await billOnce(checkpoint(150_000, { output: 1_000 }));
+    expect(event).toMatchObject({ priceSource: 'catalog', priceRowId: 'price-row-9' });
+    expect(event.rates).toMatchObject({ tierKey: 200_000, input: perM(2), output: perM(12) });
+    expect(event).not.toHaveProperty('turnUsage');
+  });
+
+  it('puts an iteration whose prompt is 200,001 tokens on the upper tier', async () => {
+    const event = await billOnce(checkpoint(200_001, { output: 1 }));
+    expect(event.rates).toMatchObject({ tierKey: 1_048_576, input: perM(4), output: perM(18) });
+  });
+
+  it('stamps the literal source for a model the catalog never priced', async () => {
+    const literal = { ...tiered, priceSource: undefined, priceRowId: undefined } as ModelInfo;
+    const event = await billOnce(checkpoint(1_000, { output: 10 }), literal);
+    expect(event.priceSource).toBe('literal');
+    expect(event).not.toHaveProperty('priceRowId');
+  });
+
+  it('writes turnUsage for a bill covering several requests, one entry per priced turn', async () => {
+    const event = await billOnce({
+      ...checkpoint(350_000, { output: 2_000 }),
+      turnUsage: [
+        { inputTokens: 150_000, outputTokens: 1_000 },
+        { inputTokens: 200_000, outputTokens: 1_000 },
+      ],
+    });
+    expect(event.turnUsage).toEqual([
+      { inputTokens: 150_000, outputTokens: 1_000, tierKey: 200_000 },
+      { inputTokens: 200_000, outputTokens: 1_000, tierKey: 200_000 },
+    ]);
+    expect(event.rates).toMatchObject({ tierKey: 200_000 });
+  });
+
+  it('carries the largest turn tier in rates when turns straddle the boundary', async () => {
+    const event = await billOnce({
+      ...checkpoint(280_000, { output: 2_000 }),
+      turnUsage: [
+        { inputTokens: 80_000, outputTokens: 1_000 },
+        { inputTokens: 200_000, outputTokens: 1_000, cacheReadInputTokens: 0 },
+      ],
+    });
+    expect(event.turnUsage.map((turn: { tierKey: number }) => turn.tierKey)).toEqual([200_000, 200_000]);
+
+    const crossing = await billOnce({
+      ...checkpoint(280_001, { output: 2_000 }),
+      turnUsage: [
+        { inputTokens: 80_000, outputTokens: 1_000 },
+        { inputTokens: 200_001, outputTokens: 1_000 },
+      ],
+    });
+    expect(crossing.turnUsage.map((turn: { tierKey: number }) => turn.tierKey)).toEqual([200_000, 1_048_576]);
+    expect(crossing.rates).toMatchObject({ tierKey: 1_048_576 });
+  });
+
+  it('stamps nothing on the zeroed anomaly marker a guard trip records', async () => {
+    const event = await billOnce({ ...checkpoint(2_000_000, { output: 1 }) }, {
+      ...tiered,
+      contextWindow: 1_000,
+    } as ModelInfo);
+    expect(event).toMatchObject({ status: 'error', costUsd: 0 });
+    expect(event).not.toHaveProperty('priceSource');
   });
 });

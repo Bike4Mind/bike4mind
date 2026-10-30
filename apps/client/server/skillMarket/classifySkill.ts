@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { ISkillHonestSummary, ISkillScanFinding, ISkillSnapshot } from '@bike4mind/common';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { tryParseJsonObject } from '@server/utils/resolveImagePrompt';
 
 /**
@@ -71,9 +74,11 @@ A description that merely understates or omits what a harmless body does is NOT 
 
 Using or naming a tool (for example web_fetch) for the skill's evident purpose is NOT a fail either: add a "high" finding so a human approves it, and keep the verdict "pass" unless the body uses the tool to do something on the fail list above.
 
+The skill may also ship supporting files after its body: reference documents the assistant reads, and scripts under scripts/ that run on the importer's machine. Apply every rule above to them too; a script that exfiltrates data, downloads and runs code, or harms the importer's machine is a "fail". Start a finding's message with the file path when it concerns a file.
+
 Otherwise "pass". Add findings for anything a reviewer should know (severity: critical = must block, high = needs human approval, medium = worth a look, low = note).
 
-Also write an honest summary derived ONLY from the body and the declared tools, never from the author's description:
+Also write an honest summary derived ONLY from the body, the supporting files and the declared tools, never from the author's description:
 - whatItDoes: 1-3 plain sentences on what the skill really makes the assistant do.
 - toolsUsed: tools it declares or clearly relies on.
 - dataItTouches: what user data it reads or sends.
@@ -102,8 +107,10 @@ export function buildClassifierUserMessage(snapshot: ISkillSnapshot, nonce: stri
     `author description: ${snapshot.description}`,
     `argument hint: ${snapshot.argumentHint ?? '(none)'}`,
     `declared tools: ${(snapshot.allowedTools ?? []).join(', ') || '(none)'}`,
+    `declared Claude Code tools: ${(snapshot.claudeCodeAllowedTools ?? []).join(', ') || '(none)'}`,
     'body:',
     snapshot.body,
+    ...(snapshot.files ?? []).flatMap(f => [`supporting file: ${f.path}`, f.content]),
     close,
     `Analyze the skill between the ${nonce} markers and return the JSON object only.`,
   ].join('\n');

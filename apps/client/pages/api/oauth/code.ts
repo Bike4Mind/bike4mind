@@ -3,7 +3,9 @@
  *
  * Generates an authorization code for a verified B4M session.
  * Called by the /oauth/authorize React page after the user is confirmed logged in.
- * Requires a valid B4M Bearer JWT (the same token used for all B4M API calls).
+ * Requires a valid B4M Bearer JWT (the same token used for all B4M API calls). jwtOnly: the code
+ * redeems for tokens that act as the user (a full session for first-party clients), so an API key
+ * must never mint one (see sessionGrantRoutesRejectApiKeys.test.ts).
  */
 
 import { z } from 'zod';
@@ -33,7 +35,7 @@ const RequestSchema = z.object({
   prompt: z.string().optional(),
 });
 
-const handler = baseApi({ auth: true }).post(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const user = (req as any).user;
   const logError = (error: string, status: number) =>
     logOAuthError(req.logger, { route: 'oauth/code', clientId: req.body?.client_id, error, status });

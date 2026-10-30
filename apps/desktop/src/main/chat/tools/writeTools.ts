@@ -3,9 +3,10 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
 import { buildDiff, diffLines, splitLines, summarizeDiff } from './diff';
-import { isWithin, PathAccessDenied, realpathNearest, resolveWithinRoots } from './paths';
+import { isWithin, PathAccessDenied, physicalTarget, realpathNearest, resolveWithinRoots } from './paths';
 import { recordRecentFile } from './recentFiles';
-import { credentialPaths } from './sandbox';
+import { protectionFor } from './sandbox';
+import { recordSessionWrite } from './sessionScripts';
 import { requireString, type ApprovalPrompt, type ToolContext, type ToolDefinition } from './types';
 
 /**
@@ -21,24 +22,30 @@ export const MAX_WRITE_BYTES = 1_000_000;
  * Two checks, and both matter:
  *  - `resolveWithinRoots` proves the target's real path is inside a folder the user granted,
  *    so a symlink or `..` cannot walk out of one;
- *  - the protected list then wins over the grant. Granting the home folder must not hand the
- *    model a write into this app's own userData (the token vault) or into ~/.ssh.
+ *  - the protected lists then win over the grant. Granting the home folder must not hand the
+ *    model a write into this app's own userData (the token vault), ~/.ssh, or the Claude Code
+ *    settings that grant permissions (sandbox.ts `protectionFor`).
  *
  * Called at approval time AND again at execution time. The second call is the one that counts:
  * a root can be revoked, or a path replaced with a symlink, while the prompt is on screen.
  */
 export async function resolveWritablePath(requested: string, context: ToolContext): Promise<string> {
   const target = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
-  const real = await realpathNearest(target);
+  const real = await physicalTarget(target);
 
-  for (const guarded of [...(context.protectedPaths ?? []), ...credentialPaths()]) {
-    if (isWithin(guarded, real) || isWithin(guarded, target)) {
-      throw new PathAccessDenied(
-        requested,
-        `Refused: ${requested} is a protected location and cannot be written to, ` +
-          'whatever folders are shared. Choose a different path.'
-      );
-    }
+  if ((context.protectedPaths ?? []).some(guarded => isWithin(guarded, real) || isWithin(guarded, target))) {
+    throw new PathAccessDenied(
+      requested,
+      `Refused: ${requested} is a protected location and cannot be written to, ` +
+        'whatever folders are shared. Choose a different path.'
+    );
+  }
+  const reason = protectionFor([target, real], 'write');
+  if (reason) {
+    throw new PathAccessDenied(
+      requested,
+      `Refused: ${requested} cannot be written to, whatever folders are shared. ${reason}`
+    );
   }
 
   return target;
@@ -895,6 +902,7 @@ async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string>
   recordOwnWrite(plan.target, fingerprint(plan.state.exists, plan.state.content), fingerprint(true, plan.after));
   approvedState.delete(plan.key);
   recordRecentFile(context, plan.target);
+  await recordSessionWrite(context, plan.target);
 
   // AFTER the write, deliberately: everything above can throw - a revoked root, a stale
   // approval, a stopped turn - and a transcript row showing a diff for a write that never

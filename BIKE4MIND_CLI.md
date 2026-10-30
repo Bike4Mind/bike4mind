@@ -90,9 +90,9 @@ b4m
 
 Notes for the self-host path:
 
-- **Port.** The Docker stack serves the app on `3000` by default (`--dev` is a *different* target — the dev server on `3001`). If you remapped the host port (`APP_HOST_PORT` in `.env.selfhost`), use that port in `--api-url`.
+- **Port.** The Docker stack serves the app on `3000` by default (`--dev` is a _different_ target — the dev server on `3001`). If you remapped the host port (`APP_HOST_PORT` in `.env.selfhost`), use that port in `--api-url`.
 - **Models.** Only models for providers you configured a key for appear — or your local Ollama models. See [Local models with Ollama](./SELF_HOST.md#local-models-with-ollama-no-api-keys). To surface a host-native Ollama in the picker without editing config, launch with `b4m --ollama-host http://localhost:11434`.
-- **Credits — you don't need them.** Self-host sets `B4M_SELF_HOST=true`, which defaults the **Enforce Credits** admin setting **off**, so usage is never metered: you don't grant yourself credits or top up (`/usage` just shows enforcement is disabled). Your only cost is your own LLM provider bill. An admin *can* turn on **Enforce Credits** (Admin → Settings → Credits) if you want to meter users on your instance.
+- **Credits — you don't need them.** Self-host sets `B4M_SELF_HOST=true`, which defaults the **Enforce Credits** admin setting **off**, so usage is never metered: you don't grant yourself credits or top up (`/usage` just shows enforcement is disabled). Your only cost is your own LLM provider bill. An admin _can_ turn on **Enforce Credits** (Admin → Settings → Credits) if you want to meter users on your instance.
 - **Streaming.** The self-host stack includes the realtime WebSocket gateway (the `ws` and `subscriber-fanout` services), so chat replies stream token-by-token and live document updates arrive without a refresh - the same experience as the hosted app, with no AWS API Gateway. See [what you get](./SELF_HOST.md#what-you-get-and-dont).
 
 ## Pointing at any deployment (AWS, staging, …)
@@ -106,13 +106,13 @@ b4m --reset-api      # go back to the built-in default
 
 ## Switching between environments
 
-| Action | Command |
-| --- | --- |
-| Hosted production | `b4m --prod` |
-| Local dev server (`:3001`) | `b4m --dev` (alias `--local`) |
-| Self-host / custom URL | `b4m --api-url <url>` or in-session `/set-api <url>` |
-| Reset to default | `b4m --reset-api` or `/reset-api` |
-| Show current target | `/api-info` |
+| Action                     | Command                                              |
+| -------------------------- | ---------------------------------------------------- |
+| Hosted production          | `b4m --prod`                                         |
+| Local dev server (`:3001`) | `b4m --dev` (alias `--local`)                        |
+| Self-host / custom URL     | `b4m --api-url <url>` or in-session `/set-api <url>` |
+| Reset to default           | `b4m --reset-api` or `/reset-api`                    |
+| Show current target        | `/api-info`                                          |
 
 Each environment keeps its **own cached login**, so hopping between your hosted account and your self-hosted stack does not force repeated re-authentication. A bare `b4m` always reopens whichever environment you last selected.
 
@@ -125,31 +125,38 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 
 ## Serve Bike4Mind as an MCP server (`b4m mcp serve`)
 
-`b4m mcp serve` turns your Bike4Mind backend into a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP client (Claude Desktop, editors, other agents) can drive your notebooks, chat, and files, and use your Briefcase prompts. This is the opposite direction from `b4m mcp add`, which attaches external MCP servers *into* the CLI.
+`b4m mcp serve` turns your Bike4Mind backend into a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP client (Claude Desktop, editors, other agents) can drive your notebooks, chat, and files, use your Briefcase prompts, and read websites with Bob. This is the opposite direction from `b4m mcp add`, which attaches external MCP servers _into_ the CLI.
 
 ### Tools, resources and prompts
 
-| Tool | Does | Scope |
-| --- | --- | --- |
-| `list_notebooks` | List your notebooks (sessions) | `notebooks:read` |
-| `get_notebook` | Fetch one notebook by id | `notebooks:read` |
-| `create_notebook` | Create a notebook (optionally in a project, or grounded in a data lake via `dataLakeId`) | `notebooks:write` |
-| `rename_notebook` | Rename a notebook | `notebooks:write` |
-| `clone_notebook` | Clone a notebook into a new one (rate-limited to 10 per minute) | `notebooks:write` |
-| `delete_notebook` | Permanently delete a notebook; requires `confirm: true` | `notebooks:write` |
-| `list_projects` | List the projects you can access, including shared ones | `projects:read` |
-| `get_project` | Fetch one project by id | `projects:read` |
-| `create_project` | Create a project (`name` and `description` required; optional `sessionIds`/`fileIds`); pass its id as `projectId` to `create_notebook` | `projects:write` |
-| `send_message` | Send a chat message and wait for the reply (sends progress for a `progressToken`, cancel stops the turn on the server); returns its cited sources (`citables`), and fails on an errored or stopped turn | `ai:chat` |
-| `search_knowledge_base` | Semantic search across your notebooks | `notebooks:read` |
-| `list_lakes` | List the data lakes you can reach (cursor-paged via `nextCursor`) | `datalake:read` |
-| `list_files` | Search your files | `files:read` |
-| `get_file` | File metadata plus a signed download URL | `files:read` |
-| `generate_sound_effect` | Generate a sound effect from a text description | `ai:generate` |
-| `generate_image` | Generate an image from a text prompt and return its quest id, file names, and URLs | `ai:generate` |
-| `text_to_speech` | Synthesize speech from text; return a saved file URL or inline audio | `ai:generate` |
-| `create_artifact` | Create a private artifact (`type`, `title`, `content` required; optional `description`, `notebookId`, `projectId`, `tags`); a written document goes in `type: 'html'` | `notebooks:write` |
-| `publish_artifact` | Publish an artifact you own to a shareable `/p/...` link; republishing updates the existing page and keeps its visibility unless `visibility` (`public` or `private`) is passed, and a first publish is `public` | `files:write` |
+| Tool                    | Does                                                                                                                                                                                                             | Scope             |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `list_notebooks`        | List your notebooks (sessions)                                                                                                                                                                                   | `notebooks:read`  |
+| `get_notebook`          | Fetch one notebook by id                                                                                                                                                                                         | `notebooks:read`  |
+| `create_notebook`       | Create a notebook (optionally in a project, or grounded in a data lake via `dataLakeId`)                                                                                                                         | `notebooks:write` |
+| `rename_notebook`       | Rename a notebook                                                                                                                                                                                                | `notebooks:write` |
+| `clone_notebook`        | Clone a notebook into a new one (rate-limited to 10 per minute)                                                                                                                                                  | `notebooks:write` |
+| `delete_notebook`       | Permanently delete a notebook; requires `confirm: true`                                                                                                                                                          | `notebooks:write` |
+| `list_projects`         | List the projects you can access, including shared ones                                                                                                                                                          | `projects:read`   |
+| `get_project`           | Fetch one project by id                                                                                                                                                                                          | `projects:read`   |
+| `create_project`        | Create a project (`name` and `description` required; optional `sessionIds`/`fileIds`); pass its id as `projectId` to `create_notebook`                                                                           | `projects:write`  |
+| `send_message`          | Send a chat message and wait for the reply (sends progress for a `progressToken`, cancel stops the turn on the server); returns its cited sources (`citables`), and fails on an errored or stopped turn          | `ai:chat`         |
+| `search_knowledge_base` | Semantic search across your notebooks                                                                                                                                                                            | `notebooks:read`  |
+| `list_lakes`            | List the data lakes you can reach (cursor-paged via `nextCursor`)                                                                                                                                                | `datalake:read`   |
+| `list_files`            | Search your files                                                                                                                                                                                                | `files:read`      |
+| `get_file`              | File metadata plus a signed download URL                                                                                                                                                                         | `files:read`      |
+| `generate_sound_effect` | Generate a sound effect from a text description                                                                                                                                                                  | `ai:generate`     |
+| `generate_image`        | Generate an image from a text prompt and return its quest id, file names, and URLs                                                                                                                               | `ai:generate`     |
+| `text_to_speech`        | Synthesize speech from text; return a saved file URL or inline audio                                                                                                                                             | `ai:generate`     |
+| `create_artifact`       | Create a private artifact (`type`, `title`, `content` required; optional `description`, `notebookId`, `projectId`, `tags`); a written document goes in `type: 'html'`                                            | `notebooks:write` |
+| `publish_artifact`      | Publish an artifact you own to a shareable `/p/...` link; republishing updates the existing page and keeps its visibility unless `visibility` (`public` or `private`) is passed, and a first publish is `public` | `files:write`     |
+| `bob_read_site`         | Have Bob read a site and wait for the report (Markdown, in-app and published links); spends the key owner's credits and publishes the report                                                                     | `bob:run`         |
+| `bob_compare_sites`     | Have Bob read your site and another side by side; returns the summary and each side's links (`includeReports` adds both reports). Spends two runs' credits                                                       | `bob:run`         |
+| `bob_recheck`           | Re-scan one check of a Bob report (`runId`, `checkId`) against the live site; costs no credits and adds the reading to that report                                                                               | `bob:run`         |
+| `get_bob_report`        | Fetch one Bob run: its status, its progress while reading, and the report once it is ready                                                                                                                       | `bob:read`        |
+| `get_bob_comparison`    | Fetch one Bob comparison: its status, the summary and each side's status and links                                                                                                                               | `bob:read`        |
+| `list_bob_reports`      | List your recent finished Bob runs and comparisons, newest first, each with its `kind` and in-app `appUrl`                                                                                                       | `bob:read`        |
+| `bob_runs_left`         | The Bob runs you can start now, when the next one frees up, and whether credits cover a full read                                                                                                                | `bob:read`        |
 
 `text_to_speech` accepts `text` and optional provider, voice, model, format, and voice settings. It uses the scoped `/api/ai/tts` route and spends generation credits. Set `preview: true` to skip saving a copy. The result takes one of three shapes:
 
@@ -163,28 +170,39 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 
 `publish_artifact` uploads the artifact's raw content and the server renders the page, so the result matches a publish from the app's Share flow. An artifact you already published, from the app or from this tool, is updated in place at its existing link. It returns `{ publicId, url, visibility }`, where `url` is absolute. The publish routes require no API-key scope today, so `files:write` is advisory.
 
+The `bob_*` tools read websites with Bob, where a panel of synthetic personas reads a site and reports where visitors get lost. The instance must serve Bob. Unlike most tools here, Bob's routes enforce their scopes: `bob:read` reads the key owner's runs, comparisons, recent reports and runs left, and `bob:run` starts a read, a comparison or a re-check and can read them back too. A 403 names the scope to grant.
+
+- **Spending and publishing** - `bob_read_site` and `bob_compare_sites` bill the key owner, as a run started in the app does, and publish each report as them. `organizationId` picks the account that pays: an organization id, or `null` for the personal account; omit it for the home organization. A comparison counts as two runs.
+- **Waiting** - both wait up to `waitSeconds` (default 600, at most 900; a read takes about 1 to 5 minutes). For a `progressToken` they send progress on every poll, with Bob's count of done and total in the message. When the wait runs out, the result is not an error: it carries the `runId` (or `comparisonId`) and a note, and `get_bob_report` (or `get_bob_comparison`) reads it back later. Cancelling the call stops the waiting, not Bob's read.
+- **Results** - the result is a JSON summary (`status`, `appUrl`, `publishedUrl`, `visibility`, and the run's `error` when it failed) followed by the report as its own Markdown text block. Links are the API base URL plus the paths Bob returns. A failed read is an error carrying Bob's reason; a comparison fails only when neither site could be read.
+- **Refusals** - a refused start (the daily limit, credits) is an error in Bob's own words. `bob_recheck` costs no credits and publishes nothing new: it adds the reading to the existing report. It is rate-limited per run and per check, and a refusal says how long to wait. `checkId` is the id the report shows in backticks beside each check.
+
 It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 
-| Resource | Lists / reads | Scope |
-| --- | --- | --- |
-| `b4m://notebook/{id}` | Your notebooks (sessions) | `notebooks:read` |
-| `b4m://file/{id}` | File metadata plus a signed download URL | `files:read` |
-| `b4m://project/{id}` | Your projects | `projects:read` |
+| Resource              | Lists / reads                              | Scope            |
+| --------------------- | ------------------------------------------ | ---------------- |
+| `b4m://notebook/{id}` | Your notebooks (sessions)                  | `notebooks:read` |
+| `b4m://file/{id}`     | File metadata plus a signed download URL   | `files:read`     |
+| `b4m://project/{id}`  | Your projects                              | `projects:read`  |
 | `b4m://artifact/{id}` | Artifact metadata plus its current content | none (see below) |
 
 Alongside those, `b4m://agent-quest` is a single fixed-URI resource (nothing to list) holding the manifest for **The Open Door**, the onboarding quest for agents. It is the one resource that needs no credentials and makes no API call - the document is served straight from the CLI, because completing the quest is how an agent earns a key in the first place. The same manifest is published over plain HTTP at `/api/agent-quest/manifest`, and each of its steps carries a `status`: only an `available` step has an `endpoint` to call.
 
 For a lake-grounded answer, chain `list_lakes` -> `create_notebook { dataLakeId }` -> `send_message { notebookId }`; the reply comes back with its `citables`. Unlike most tools here, the data-lake routes do enforce their scopes, the instance must have data lakes enabled, and a key used with a lake must be bound to it.
 
-Resource *listing* is capped at 100 entries per template and takes no paging arguments. A listing that fails (for example, a key without `projects:read`) degrades to an empty list for that template only, so the other three still enumerate. Because an empty list can therefore also mean an auth failure and not just an empty account, the underlying error is written to the server's stderr; under stdio transport your MCP host captures that stream (for example Claude Desktop's `~/Library/Logs/Claude/mcp-server-*.log`), so check it there if a resource picker comes back unexpectedly empty. There is no `artifacts:*` API-key scope, so an artifact 403 carries no scope recommendation.
+Resource _listing_ is capped at 100 entries per template and takes no paging arguments. A listing that fails (for example, a key without `projects:read`) degrades to an empty list for that template only, so the other three still enumerate. Because an empty list can therefore also mean an auth failure and not just an empty account, the underlying error is written to the server's stderr; under stdio transport your MCP host captures that stream (for example Claude Desktop's `~/Library/Logs/Claude/mcp-server-*.log`), so check it there if a resource picker comes back unexpectedly empty. There is no `artifacts:*` API-key scope, so an artifact 403 carries no scope recommendation.
 
 It also serves your **Briefcase** prompt catalog as MCP prompts, so a client's prompt picker (for example Claude Desktop's) offers the same one-click prompts as the in-app launcher. Each prompt is named by its id and titled by its display name. A `prompts/get` resolves the template's `{{placeholders}}`: the clock keys (`currentDate`, `currentTime`, `currentDateTime`, `currentYear`) are filled in automatically, and `userName`, `userEmail`, `userRole` and `organization` are optional arguments you supply. A placeholder left unsupplied stays as written. The instance must have the **Enable Briefcase** admin setting on (off by default). With it off, or on any other listing failure, the prompt list comes back empty and the error goes to stderr, the same as resources do. An API key sees the shared system prompts only. Your personal prompts are listed only under `b4m login`. Because a login caller's catalog fetch is a CSRF-protected POST, the origin of the endpoint the CLI resolves (see Auth and endpoint below) must equal the instance's `APP_URL`; if they differ (a split-origin deployment), a login caller's prompt list comes back empty, while API-key callers are CSRF-exempt and unaffected. A prompt that the app runs with specific tools (web search, say) arrives as plain text; your MCP client runs it with whatever tools it has.
 
-The **Scope** column in both tables is the *recommended* key configuration for that tool or resource, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope.
+The **Scope** column in both tables is the _recommended_ key configuration for that tool or resource, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope. The Bob tools and the data-lake routes are the exceptions: they do enforce theirs.
 
 ### Auth and endpoint
 
-Listing tools needs no credentials; tool *calls* hit the API and authenticate. Precedence:
+Over stdio only, when your account is entitled to OptiHashi and the key carries `optihashi:read` and `optihashi:compute`, the server also offers `optihashi_solvers` (the runnable families, solvers and limits) and `optihashi_solve` (a free, bounded classical solver race). With an API key, the CLI first reads that key's own scopes (it can list its owner's keys) and offers the tools only when it holds both; a failed lookup also leaves them unlisted. The solve input schema is fetched from your instance once at startup (a 5 second discovery budget; any failure leaves the tools unlisted). Restart the session to pick up changes to its family ids, solver ids or limits; `optihashi_solvers` fetches the current roster on every call. No paid compute is exposed, and HTTP mode never offers them.
+
+If the solver tools are missing, check the account entitlement, both key scopes and API connectivity, then restart the MCP session. A failed discovery keeps them hidden for that session, even if connectivity recovers.
+
+Listing the regular tools needs no credentials; tool _calls_ hit the API and authenticate. Precedence:
 
 - **Auth**: `--api-key` > `B4M_API_KEY` env var > the CLI's stored login (`b4m login`).
 - **Endpoint**: `B4M_API_URL` env var > `--api-url` > the CLI's configured backend.
@@ -196,7 +214,11 @@ Create a key in the app under **Settings > API Keys** with the scopes for the to
 - **stdio (default)**: `b4m mcp serve`. For local clients like Claude Desktop that spawn the process and speak JSON-RPC over stdin/stdout.
 - **streamable HTTP**: `b4m mcp serve --http --port 7000`. A stateless endpoint at `http://127.0.0.1:<port>/mcp` for clients that connect over HTTP.
 
-HTTP mode binds **loopback only** (`127.0.0.1`) by design: it has no per-request auth of its own, so it must not be exposed on a routable interface. There is no flag to change the bind address. Only the `/mcp` path is served (any other path is a 404).
+HTTP mode binds **loopback only** (`127.0.0.1`) and requires an `Authorization: Bearer <token>` header on every request. The token is `--token`, else `B4M_MCP_TOKEN`, else generated at startup and printed to stderr. There is no flag to change the bind address. Only the `/mcp` path is served (any other path is a 404).
+
+### Local model tools only (`--local`)
+
+`b4m mcp serve --local` serves only the local model tools (`models_list`, `models_search`, `models_pull`, `models_remove`) and needs no Bike4Mind backend, key or login: they talk to your local Ollama, the Ollama registry and Hugging Face. It ignores any configured endpoint and offers none of the tools, resources or prompts above, and says so in one line on stderr. It is stdio only; `--local` with `--http` is an error, and so is `--local` with `--dev` or `--prod`. Only after `b4m mcp serve` is `--local` this command's own flag; anywhere else, including `b4m --local mcp serve`, it is the `--dev` alias and changes the CLI's saved backend. Without `--local`, `b4m mcp serve` still exits with `No API endpoint configured` when no backend is set.
 
 ### Claude Desktop
 
@@ -217,7 +239,7 @@ Add the server to `claude_desktop_config.json`:
 }
 ```
 
-Restart Claude Desktop and the Bike4Mind tools appear in its tools menu.
+Restart Claude Desktop and the Bike4Mind tools appear in its tools menu. For the local model tools alone, use `"args": ["mcp", "serve", "--local"]` and no Bike4Mind `env`.
 
 ## Headless / scripting mode
 

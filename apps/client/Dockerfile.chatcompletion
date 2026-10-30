@@ -54,6 +54,9 @@ RUN pnpm install --frozen-lockfile --filter @bike4mind/client...
 
 # 3) Source — the only layer a normal (source-only) commit invalidates.
 COPY . .
+# The install's codegen ran without infra/, which the runtime glue reads the core resource
+# names from; .dockerignore keeps the host's copy out, so regenerate it here.
+RUN node apps/client/scripts/generate-premium-glue.mjs
 
 # 4) Build the client's upstream @bike4mind/* packages (TS -> dist). The `^...` selector
 #    builds the dependencies of the client without building the Next.js app itself.

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { adminUpdateUser } from './adminUpdate';
+import { adminUpdateUser, adminUpdateUserSchema } from './adminUpdate';
+import { checkStorageLimit } from '@bike4mind/utils';
 
 vi.mock('../friendshipService/sendFriendRequest', () => ({ sendFriendRequest: vi.fn() }));
 
@@ -82,6 +83,29 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     });
     // Atomic increment applies the delta, not an overwrite.
     expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 50, expect.anything());
+  });
+
+  it('sets an absolute 0 balance from a positive balance as an audited deduction', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(100);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 0, creditReason: 'Abusive signup' }, adapters);
+
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_deduct');
+    expect(createTransaction.mock.calls[0][1].metadata).toMatchObject({
+      note: 'Abusive signup',
+      previousBalance: 100,
+      resultingBalance: 0,
+    });
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -100);
+  });
+
+  it('sets an absolute 0 balance from a negative balance as a grant', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(-40);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 0, creditReason: 'Reset balance' }, adapters);
+
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_add');
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 40, expect.anything());
   });
 
   it('routes a credit decrease through a generic_deduct transaction', async () => {
@@ -248,7 +272,26 @@ describe('adminUpdateUser — audited credit adjustments', () => {
       previousBalance: 100,
       resultingBalance: 0,
       note: 'Refund chargeback',
+      creditTransactionId: 'tx-1',
     });
+  });
+
+  it('links a grant to the ledger row it wrote', async () => {
+    const { adapters, createTransaction } = makeAdapters(100);
+    createTransaction.mockResolvedValueOnce({ id: 'tx-grant' });
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 50 }, adapters);
+
+    expect(result.creditAdjustment?.creditTransactionId).toBe('tx-grant');
+  });
+
+  it('links a deduction to the ledger row it wrote', async () => {
+    const { adapters, createTransaction } = makeAdapters(100);
+    createTransaction.mockResolvedValueOnce({ id: 'tx-deduct' });
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -30 }, adapters);
+
+    expect(result.creditAdjustment?.creditTransactionId).toBe('tx-deduct');
   });
 
   it('returns no credit adjustment when the balance does not change', async () => {
@@ -286,19 +329,37 @@ describe('adminUpdateUser - signed creditDelta path', () => {
     expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -30);
   });
 
-  it('does not invert a deduction when the balance is already negative', async () => {
-    const { adapters, createTransaction, incrementCredits } = makeAdapters(-100);
+  it('rejects a deduction from a non-positive balance without writing anything', async () => {
+    const { adapters, createTransaction, incrementCredits, update, target } = makeAdapters(-100);
 
-    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -50 }, adapters);
+    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -50 }, adapters)).rejects.toThrow(
+      'Balance is already at or below zero; nothing to deduct'
+    );
 
-    // The clamp must not floor at -previousBalance (+100): that would turn a 50-credit
-    // deduction into a +100 grant. The deduction applies verbatim on a negative balance.
-    expect(createTransaction.mock.calls[0][0]).toBe('generic_deduct');
-    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -50);
-    expect(createTransaction.mock.calls[0][1].metadata).toMatchObject({
-      previousBalance: -100,
-      resultingBalance: -150,
-    });
+    expect(createTransaction).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(target.currentCredits).toBe(-100);
+  });
+
+  it('applies creditDelta and ignores currentCredits when both are passed', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(100);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 20, currentCredits: 500 }, adapters);
+
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_add');
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 20, expect.anything());
+  });
+
+  it('rejects negative absolute and oversized credit values', () => {
+    const base = { id: TARGET_ID };
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: -5 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: 1e308 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, creditDelta: -1e308 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: 12.5 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, creditDelta: 0.5 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: Infinity }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: 0, creditDelta: -50 }).success).toBe(true);
   });
 });
 
@@ -414,6 +475,15 @@ describe('adminUpdateUser - username changes', () => {
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, username: ' New Name ' }, adapters);
 
     expect(update.mock.calls[0][0].username).toBe('New Name');
+  });
+
+  it('lets an admin give an account the reserved test-persona prefix', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.username = 'oldname';
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, username: 'persona-seed' }, adapters);
+
+    expect(update.mock.calls[0][0].username).toBe('persona-seed');
   });
 });
 
@@ -572,5 +642,54 @@ describe('adminUpdateUser - org move membership row', () => {
 
     expect(adapters.db.organizations.update).not.toHaveBeenCalled();
     expect(update).toHaveBeenCalled();
+  });
+});
+
+describe('adminUpdateUser storage overrides', () => {
+  it('writes an override and effective limit together, preserving usage', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { storageLimit: 5000, planStorageLimit: 5000, currentStorageSize: 8_000_000_000 });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, storageLimitOverride: 250.5 }, adapters);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: TARGET_ID,
+        storageLimitOverride: 250.5,
+        storageLimit: 250.5,
+      })
+    );
+    expect(update.mock.calls[0][0]).not.toHaveProperty('currentStorageSize');
+    expect(update.mock.calls[0][0]).not.toHaveProperty('planStorageLimit');
+    const persisted = { ...target, ...update.mock.calls[0][0] };
+    await expect(checkStorageLimit(persisted, 1)).rejects.toThrow('File size exceeds storage limit');
+    expect(persisted.currentStorageSize).toBe(8_000_000_000);
+  });
+
+  it.each([
+    [5000, 5000],
+    [null, 1000],
+  ])('clears to plan %s or default %s', async (plan, expected) => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { storageLimit: 2500, storageLimitOverride: 2500, planStorageLimit: plan });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, storageLimitOverride: null }, adapters);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ storageLimitOverride: null, storageLimit: expected })
+    );
+  });
+
+  it('maps the legacy admin input to an explicit override', async () => {
+    const { adapters, update } = makeAdapters(100);
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, storageLimit: 0 }, adapters);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ storageLimitOverride: 0, storageLimit: 0 }));
+  });
+
+  it('does not rewrite quota on unrelated edits', async () => {
+    const { adapters, update } = makeAdapters(100);
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, name: 'Updated' }, adapters);
+    expect(update.mock.calls[0][0]).not.toHaveProperty('storageLimitOverride');
+    expect(update.mock.calls[0][0]).not.toHaveProperty('storageLimit');
+  });
+
+  it.each([-1, Infinity, NaN, 1_000_000_001])('rejects invalid overrides: %s', value => {
+    expect(adminUpdateUserSchema.safeParse({ id: TARGET_ID, storageLimitOverride: value }).success).toBe(false);
   });
 });

@@ -12,7 +12,7 @@ import {
   usdToCreditsExpected,
 } from '@bike4mind/common';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { getAvailableModels, ApiKeyTable } from '@bike4mind/llm-adapters';
+import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import { resolveOpenAiBareModelAlias } from '@bike4mind/services/cliCompletions';
@@ -99,7 +99,8 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
       // Get effective API keys (user keys or fallback to admin demo keys)
       const apiKeys = await apiKeyService.getEffectiveLLMApiKeys(userId, { db, getSettingsByNames });
 
-      const models = await getAvailableModels(apiKeys as ApiKeyTable);
+      // Same table executeCompletion builds, so this hits its model-list cache entry instead of evicting it.
+      const models = await getAvailableModels(buildApiKeyTable(apiKeys));
       // Same resolution executeCompletion applies to the request before billing it, so a
       // bare OpenAI alias (e.g. "gpt-4.1") that the completion succeeded on doesn't come
       // back here as "model not found" and log a spurious zero-credit event.

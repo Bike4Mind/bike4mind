@@ -35,8 +35,8 @@ Want to continue a thought in Claude, ChatGPT, or Gemini? In the Share dialog, c
 
 Great for: one-page reports, landing snippets, dashboards built in pure HTML/CSS, diagrams, generated SVG art.
 
-:::tip Static today
-Artifacts publish as **static** pages. HTML/CSS and SVG render fully. Artifacts that depend on inline JavaScript (interactive React/Recharts widgets) currently publish as a **source view** — the code shows, but scripts don't run on the app origin (a security measure). For interactive output now, prefer self-contained HTML/CSS/SVG.
+:::tip Interactive React apps
+React artifacts also publish as interactive pages on an isolated origin. For an app split across React files, emit the entry and all imported siblings in the same reply, then open **Share** on the entry card or its side panel. The files publish together as one page. Use static imports, supported packages and inline CSS; see [multi-file React publishing](./publish-and-share.md#publish-a-multi-file-react-app).
 :::
 
 ### 4. Share a file
@@ -47,12 +47,12 @@ In any file list, open a file's `⋮` menu → **Publish to public link** → yo
 
 When publishing, pick the visibility that fits:
 
-| You want… | Use |
-|---|---|
-| A link for the open internet / social | **public** |
-| Something only your company sees | **organization** |
-| Something only a project team sees | **project** |
-| A private draft only you can open | **private** (the default for your space) |
+| You want…                             | Use                                      |
+| ------------------------------------- | ---------------------------------------- |
+| A link for the open internet / social | **public**                               |
+| Something only your company sees      | **organization**                         |
+| Something only a project team sees    | **project**                              |
+| A private draft only you can open     | **private** (the default for your space) |
 
 Change your mind later from your published list — bump a private draft to public when it's ready, or pull a public page back to private.
 
@@ -114,11 +114,13 @@ Multi-file bundles: list every file in `files[]` (≤ 50 files, ≤ 10 MB each, 
 `finalize` returns `422` with a structured `violations[]` if the bundle is unsafe:
 
 ```json
-{ "error": "Validation failed",
+{
+  "error": "Validation failed",
   "violations": [
     { "type": "forbidden_iframe", "message": "Iframes are not permitted", "file": "index.html" },
-    { "type": "csp_violation",    "message": "Disallowed script source: https://cdn.evil/x.js" }
-  ] }
+    { "type": "csp_violation", "message": "Disallowed script source: https://cdn.evil/x.js" }
+  ]
+}
 ```
 
 Common causes: an `iframe`, a non-allowlisted external `script`/`stylesheet` host, `eval`/`new Function`/`document.write` in an inline script, a missing root `index.html`, or a relative asset not present in the bundle.

@@ -86,13 +86,20 @@ async function run(req: unknown, res: unknown) {
   await (handler as any)(req, res);
 }
 
-const ACTIVE = [{ priceId: 'price_pro', periodEndsAt: new Date('2026-10-18T00:00:00.000Z') }];
+const ACTIVE = [
+  {
+    priceId: 'price_pro',
+    periodEndsAt: new Date('2026-10-18T00:00:00.000Z'),
+    ownerType: 'User',
+  },
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindActive.mockResolvedValue(ACTIVE);
   mockResolvePlan.mockReturnValue({
     tier: 'basic',
+    personalMonthlyCreditAllowance: 50000,
     subscription: {
       plan_name: 'Professional',
       price_id: 'price_pro',
@@ -122,7 +129,7 @@ describe('GET /api/v1/me', () => {
         interval: 'monthly',
         current_period_ends_at: '2026-10-18T00:00:00.000Z',
       },
-      credits: { balance: 1234 },
+      credits: { balance: 1234, monthly_allowance: 50000 },
       entitlements: ['base'],
     });
   });
@@ -179,7 +186,13 @@ describe('GET /api/v1/me', () => {
     mockPlanByPriceId.mockImplementation((priceId: string) =>
       priceId === 'price_team' ? { priceId, name: 'Team', interval: 'monthly', tier: 2 } : undefined
     );
-    const seatRows = [{ priceId: 'price_team', periodEndsAt: new Date('2026-11-01T00:00:00.000Z') }];
+    const seatRows = [
+      {
+        priceId: 'price_team',
+        periodEndsAt: new Date('2026-11-01T00:00:00.000Z'),
+        ownerType: 'Organization',
+      },
+    ];
     mockFindActive.mockResolvedValue(seatRows);
     const { req, res } = get();
 
@@ -197,6 +210,7 @@ describe('GET /api/v1/me', () => {
         interval: 'monthly',
         current_period_ends_at: '2026-11-01T00:00:00.000Z',
       },
+      credits: { monthly_allowance: null },
     });
   });
 

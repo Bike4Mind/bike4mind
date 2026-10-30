@@ -36,6 +36,55 @@ describe('resolveWithinRoots', () => {
     await expect(resolveWithinRoots(target, [granted])).resolves.toBe(target);
   });
 
+  // writeFile follows a dangling link to create its target, so the target is what must be inside.
+  it('denies a dangling symlink that points outside every root', async () => {
+    const link = join(granted, 'later.txt');
+    await symlink(join(base, 'outside', 'new.txt'), link);
+    await expect(resolveWithinRoots(link, [granted])).rejects.toBeInstanceOf(PathAccessDenied);
+  });
+
+  it('resolves symlinks before parent components inside a dangling link target', async () => {
+    const outside = join(base, 'outside');
+    await mkdir(join(outside, 'child'), { recursive: true });
+    await symlink(join(outside, 'child'), join(granted, 'hop'));
+    const link = join(granted, 'pending.txt');
+    await symlink('hop/../new.txt', link);
+    await expect(resolveWithinRoots(link, [granted])).rejects.toBeInstanceOf(PathAccessDenied);
+  });
+
+  it('allows a chain of dangling links whose final target stays inside a root', async () => {
+    await symlink('new.txt', join(granted, 'middle'));
+    const link = join(granted, 'pending.txt');
+    await symlink('middle', link);
+    await expect(resolveWithinRoots(link, [granted])).resolves.toBe(link);
+  });
+
+  it('allows a dangling target with symlink parent traversal that stays inside a root', async () => {
+    await mkdir(join(granted, 'nested', 'child'), { recursive: true });
+    await symlink(join(granted, 'nested', 'child'), join(granted, 'hop'));
+    const link = join(granted, 'pending.txt');
+    await symlink('hop/../new.txt', link);
+    await expect(resolveWithinRoots(link, [granted])).resolves.toBe(link);
+    await writeFile(link, 'inside', 'utf8');
+    await expect(realpath(link)).resolves.toBe(join(granted, 'nested', 'new.txt'));
+  });
+
+  it('canonicalizes existing parent casing before checking a new file', async () => {
+    const directory = join(granted, 'Workspace');
+    await mkdir(directory);
+    const alternate = join(granted, 'workspace');
+    // Case-sensitive volumes correctly treat the alternate spelling as a different directory.
+    if ((await realpath(alternate).catch(() => null)) !== directory) return;
+    const target = join(alternate, 'new.txt');
+    await expect(resolveWithinRoots(target, [directory])).resolves.toBe(target);
+  });
+
+  it('denies cyclic symlinks instead of accepting an unresolved path', async () => {
+    const link = join(granted, 'cycle');
+    await symlink('cycle', link);
+    await expect(resolveWithinRoots(link, [granted])).rejects.toBeInstanceOf(PathAccessDenied);
+  });
+
   it('denies a sibling folder that merely shares the granted prefix', async () => {
     const sibling = join(base, 'granted-secret');
     await mkdir(sibling, { recursive: true });

@@ -14,4 +14,22 @@ describe('aiMusicService', () => {
     // Cast past the type guard to exercise the runtime default branch.
     expect(() => aiMusicService('nope' as 'elevenlabs', 'key', logger)).toThrow(/Unknown music generation vendor/);
   });
+
+  it('forwards timeoutMs so the provider fetch is aborted at that deadline', async () => {
+    // Settles only when the request signal aborts, like a stalled provider round-trip.
+    const stalledFetch = vi.fn(
+      (_url: unknown, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        })
+    );
+
+    const generator = aiMusicService('elevenlabs', 'key', logger, {
+      fetchImpl: stalledFetch as unknown as typeof fetch,
+      timeoutMs: 20,
+    });
+
+    await expect(generator.generate('drone')).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(stalledFetch).toHaveBeenCalledTimes(1);
+  }, 2_000);
 });

@@ -46,7 +46,10 @@ vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: async () => ({ minSeats: 3, maxSeats: 100 }),
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@server/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+  return { ...actual, recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) };
+});
 
 // Drive the origin verdict per test rather than hard-coding it: a stub pinned to `true` would
 // make the rejection path untestable, which is exactly the gap this file closes.
@@ -59,7 +62,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'test'
 
 const mockSessionsCreate = vi.fn();
 const mockCreateCustomer = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   createCustomer: (...args: unknown[]) => mockCreateCustomer(...args),
   CustomerType: { Organization: 'Organization' },
   stripe: {
@@ -68,15 +71,16 @@ vi.mock('@server/integrations/stripe/stripe', () => ({
 }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
 import handler from '../convert-to-paid';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
 const CALLBACK_URL = 'https://app.example.com/admin/organizations';
 
-function makeReq(callbackUrl = CALLBACK_URL) {
+function makeReq(callbackUrl = CALLBACK_URL, extraBody: Record<string, unknown> = { reason: 'Billing correction' }) {
   const { req, res } = createMocks({ method: 'POST', query: { id: 'org_1' } });
-  (req as Record<string, unknown>).body = { callbackUrl };
+  (req as Record<string, unknown>).body = { callbackUrl, ...extraBody };
   // The guard sits BELOW the isAdmin check and the id check, so both must be satisfied for
   // the request to reach it at all.
   (req as Record<string, unknown>).user = { id: 'admin_1', username: 'admin', isAdmin: true };
@@ -183,7 +187,31 @@ describe('POST /api/admin/organizations/[id]/convert-to-paid - checkout currency
           id: '507f1f77bcf86cd799439011',
           displayName: 'Org One',
         }),
+        reason: 'Billing correction',
       })
     );
+  });
+
+  it('returns 400 and creates no checkout session when no reason is sent', async () => {
+    const { req, res } = makeReq(CALLBACK_URL, {});
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: BadRequestError,
+      message: ADMIN_ACTION_REASON_MISSING_MESSAGE,
+    });
+
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 and creates no checkout session for a too-short reason', async () => {
+    const { req, res } = makeReq(CALLBACK_URL, { reason: 'abc' });
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({ constructor: BadRequestError });
+
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

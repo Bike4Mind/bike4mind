@@ -89,7 +89,7 @@ export function saveContentAdapters(db: ToolDb) {
 /**
  * The status of an HTTPError-shaped value. Duck-typed rather than `instanceof`: common's and
  * utils' error classes are separate copies in the client bundle and are not identity-equal (see
- * the same note in apps/client/server/utils/orgAccess.ts).
+ * the same note in packages/server-utils/src/utils/orgAccess.ts).
  */
 export function httpStatusOf(error: unknown): number | undefined {
   if (!(error instanceof Error) || !('statusCode' in error)) return undefined;

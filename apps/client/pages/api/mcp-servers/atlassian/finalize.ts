@@ -1,9 +1,10 @@
+import { Types } from 'mongoose';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { z } from 'zod';
-import { decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptToken, encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 /**
@@ -111,7 +112,12 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
       { key: 'ATLASSIAN_CLOUD_ID', value: resourceId },
       { key: 'ATLASSIAN_SITE_URL', value: siteUrl },
     ];
-    const encryptedEnvVariables = encryptEnvVariables(plaintextEnvVariables);
+    const recordId = atlassianServer?.id ?? new Types.ObjectId().toHexString();
+    const encryptedEnvVariables = encryptEnvVariables(plaintextEnvVariables, {
+      userId,
+      name: McpServerName.Atlassian,
+      id: recordId,
+    });
 
     if (atlassianServer) {
       atlassianServer = await mcpServerRepository.update(
@@ -126,6 +132,7 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
       console.log('[Atlassian Finalize] Updated existing MCP server');
     } else {
       atlassianServer = await mcpServerRepository.create({
+        ...{ _id: recordId },
         userId: userId,
         name: McpServerName.Atlassian,
         envVariables: encryptedEnvVariables,

@@ -5,7 +5,7 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Snackbar from '@mui/joy/Snackbar';
 import Typography from '@mui/joy/Typography';
-import { Close } from '@mui/icons-material';
+import Close from '@mui/icons-material/Close';
 
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useModelInfo, useSupersededModels } from '@client/app/hooks/data/useModelInfo';

@@ -8,7 +8,7 @@ const { getConfigMock, decryptMock } = vi.hoisted(() => ({
 vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: getConfigMock,
 }));
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: decryptMock }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: decryptMock }));
 
 import { revokeAtlassianGrant } from './revokeAtlassianGrant';
 

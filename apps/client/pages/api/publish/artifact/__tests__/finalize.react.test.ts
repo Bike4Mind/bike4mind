@@ -184,3 +184,54 @@ describe('finalize - React artifact transpile branch', () => {
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled(); // no upsert - nothing published
   });
 });
+
+describe('finalize - multi-file React upload', () => {
+  const APP = `import Stopwatch from './Stopwatch';
+export default function App() { return <Stopwatch />; }`;
+  const STOPWATCH = `export default function Stopwatch() { return <span>0</span>; }`;
+  const multiManifest = (raw: string, reactSiblings: string[]) => ({
+    ...reactManifest(raw),
+    source: { kind: 'bundle', artifactId: 'a1', artifactType: 'react', reactSiblings },
+  });
+
+  it('bundles the entry with its siblings and keeps the sibling identifiers on the record', async () => {
+    const raw = JSON.stringify({ entry: APP, files: { Stopwatch: STOPWATCH } });
+    setDraft(multiManifest(raw, ['Stopwatch']), raw);
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const indexUpload = mockUpload.mock.calls.find(c => String(c[1]).endsWith('index.html'));
+    const promotedHtml = (indexUpload![0] as Buffer).toString('utf-8');
+    expect(promotedHtml).toContain('["Stopwatch", function (module, exports, require)');
+    expect(promotedHtml).not.toContain('"entry"');
+    expect(savedSet().source).toEqual(expect.objectContaining({ reactSiblings: ['Stopwatch'] }));
+  });
+
+  it('rejects an entry importing a sibling the upload does not carry (clean 422)', async () => {
+    const raw = JSON.stringify({ entry: APP, files: { Clock: STOPWATCH } });
+    setDraft(multiManifest(raw, ['Clock']), raw);
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    const body = res._getJSONData() as { violations?: Array<{ type: string; message: string }> };
+    expect(body.violations?.[0]).toEqual(
+      expect.objectContaining({
+        type: 'forbidden_pattern',
+        message: 'Cannot resolve "./Stopwatch": no artifact file is named "stopwatch". Available files: Clock.',
+      })
+    );
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects an upload whose files differ from the declared siblings (clean 422)', async () => {
+    const raw = JSON.stringify({ entry: APP, files: { Stopwatch: STOPWATCH } });
+    setDraft(multiManifest(raw, ['Stopwatch', 'Extra']), raw);
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+});

@@ -1,9 +1,11 @@
 import { ApiKeyScope, ReleaseNotesConfigSchema } from '@bike4mind/common';
+import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { loadReleaseNotesConfig, RELEASE_NOTES_SETTING } from '@server/releaseNotes/adminReleaseNotes';
+import { loadReleaseNotesConfig, RELEASE_NOTES_SETTING } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
+import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 
 // Validates only the keys sent; omitted keys keep their stored value (see the merge in PUT).
 const ConfigPatchSchema = ReleaseNotesConfigSchema.partial().strict();
@@ -40,11 +42,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const definedPatch = Object.fromEntries(Object.entries(patch.data).filter(([key]) => sent.has(key)));
     const merged = ReleaseNotesConfigSchema.strict().parse({ ...stored, ...definedPatch });
 
-    await AdminSettings.findOneAndUpdate(
-      { settingName: RELEASE_NOTES_SETTING },
-      { $set: { settingValue: merged } },
-      { upsert: true, new: true }
-    );
+    await withTransaction(async () => {
+      const existing = await AdminSettings.findOne({ settingName: RELEASE_NOTES_SETTING }).lean();
+      await AdminSettings.findOneAndUpdate(
+        { settingName: RELEASE_NOTES_SETTING },
+        { $set: { settingValue: merged } },
+        { upsert: true, new: true }
+      );
+      await recordAdminSettingChange(req, {
+        settingName: RELEASE_NOTES_SETTING,
+        before: existing?.settingValue ?? null,
+        after: merged,
+      });
+    });
     invalidateSettingsCache(RELEASE_NOTES_SETTING);
     return res.json({ config: merged, malformed: false });
   });

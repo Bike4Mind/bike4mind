@@ -15,20 +15,25 @@ export interface TOTPVerificationResult {
 }
 
 /**
- * Generate TOTP setup data including secret and QR code
+ * Generate TOTP setup data including secret and QR code. Pass `existingSecret` (base32) to
+ * re-render the QR code for a secret already issued instead of minting a new one.
  */
 export async function generateTOTPSetup(
   userEmail: string,
-  appName: string = process.env.APP_NAME || ''
+  appName: string = process.env.APP_NAME || '',
+  existingSecret?: string
 ): Promise<TOTPSetupData> {
   // No brand fallback: when APP_NAME is unconfigured, label the TOTP entry with just
   // the user's email rather than emitting a stray "(email)" with a leading space.
-  const secret = speakeasy.generateSecret({ name: appName ? `${appName} (${userEmail})` : userEmail });
-  const qrCodeUrl = await QRCode.toDataURL(secret.otpauth_url!);
+  const label = appName ? `${appName} (${userEmail})` : userEmail;
+  const secret = existingSecret || speakeasy.generateSecret({ name: label }).base32;
+  const qrCodeUrl = await QRCode.toDataURL(
+    speakeasy.otpauthURL({ secret, label: encodeURIComponent(label), encoding: 'base32' })
+  );
   return {
-    secret: secret.base32,
+    secret,
     qrCodeUrl,
-    manualEntryKey: secret.base32,
+    manualEntryKey: secret,
   };
 }
 

@@ -1,7 +1,7 @@
 import { creditLotRepository, creditTransactionRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import { CreditHolderType, dayjs } from '@bike4mind/common';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
@@ -48,7 +48,7 @@ export async function grantIndividualAdminSubscription(params: {
   skipIfAnyActiveIndividual?: boolean;
   subscriptionId?: string;
   /** Runs inside the grant transaction, so a throw rolls the grant back (used for strict audit writes). */
-  onGranted?: (grant: { credits: number }) => Promise<void>;
+  onGranted?: (grant: { credits: number; creditTransactionId: string | undefined }) => Promise<void>;
 }): Promise<GrantIndividualAdminSubscriptionResult> {
   const { userId, priceId, durationMonths, grantedBy, grantedReason, skipIfAnyActiveIndividual } = params;
 
@@ -93,7 +93,7 @@ export async function grantIndividualAdminSubscription(params: {
         canceledAt: null,
       });
 
-      const holder = await creditService.addCredits(
+      const { creditHolder: holder, creditTransactionId } = await creditService.addCreditsWithLedgerRow(
         {
           ownerId: userId,
           ownerType: CreditHolderType.User,
@@ -111,7 +111,7 @@ export async function grantIndividualAdminSubscription(params: {
       );
       currentCredits = holder?.currentCredits ?? null;
 
-      await params.onGranted?.({ credits });
+      await params.onGranted?.({ credits, creditTransactionId });
     });
   } catch (error) {
     if (params.subscriptionId && isDuplicateKeyError(error)) return { status: 'already_granted' };

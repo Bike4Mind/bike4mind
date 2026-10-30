@@ -16,8 +16,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
 import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { fetchPinned, SsrfError, validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { cacheRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError, TooManyRequestsError } from '@bike4mind/utils';
@@ -121,25 +121,30 @@ const handler = baseApi().post(
     const startTime = Date.now();
 
     try {
-      const response = await fetch(targetUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Webhook-Event-ID': eventId,
-          'X-Webhook-Delivery-ID': deliveryId,
-          'X-Webhook-Timestamp': String(timestamp),
-          'X-Webhook-Signature-256': `sha256=${signature}`,
-          'X-Event-Type': 'ping',
-          'X-GitHub-Event': 'ping',
-          'User-Agent': 'Lumina5-Webhook/1.0 (Test)',
+      const response = await fetchPinned(
+        targetUrl,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Webhook-Event-ID': eventId,
+            'X-Webhook-Delivery-ID': deliveryId,
+            'X-Webhook-Timestamp': String(timestamp),
+            'X-Webhook-Signature-256': `sha256=${signature}`,
+            'X-Event-Type': 'ping',
+            'X-GitHub-Event': 'ping',
+            'User-Agent': 'Lumina5-Webhook/1.0 (Test)',
+          },
+          body: payloadString,
+          signal: controller.signal,
+          // validateTargetUrl only vetted targetUrl itself; following a redirect would let a public host
+          // bounce this signed POST to an address it never checked.
+          redirect: 'manual',
         },
-        body: payloadString,
-        signal: controller.signal,
-        // validateTargetUrl only vetted targetUrl itself; following a redirect would let a public host
-        // bounce this signed POST to an address it never checked.
-        redirect: 'manual',
-      });
+        { allowHttp: true, discardBody: true }
+      );
       clearTimeout(timeoutId);
+      await response.body?.cancel().catch(() => undefined);
 
       const latencyMs = Date.now() - startTime;
 
@@ -163,6 +168,10 @@ const handler = baseApi().post(
     } catch (error) {
       clearTimeout(timeoutId);
       const latencyMs = Date.now() - startTime;
+
+      if (error instanceof SsrfError) {
+        throw new BadRequestError(error.message);
+      }
 
       if (error instanceof Error && error.name === 'AbortError') {
         return res.status(200).json({

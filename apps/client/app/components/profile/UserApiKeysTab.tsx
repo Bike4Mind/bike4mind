@@ -5,6 +5,7 @@ import {
   useRevokeUserApiKey,
   useDeleteUserApiKey,
   useBillingOrganizations,
+  useApiKeyEligibility,
   useRotateCallbackSigningSecret,
   CreateUserApiKeyRequest,
   CreateUserApiKeyResponse,
@@ -45,6 +46,7 @@ import {
 import CheckIcon from '@mui/icons-material/Check';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { cardSurfaceSx, hairlineBorderColor, tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
+import { ScopeEndpointList } from '@client/app/components/profile/ScopeEndpointList';
 import AddIcon from '@mui/icons-material/Add';
 import RotateLeftIcon from '@mui/icons-material/RotateLeft';
 import BlockIcon from '@mui/icons-material/Block';
@@ -58,6 +60,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {
   IUserApiKeyDocument,
   ApiKeyScope,
+  ApiKeyScopeValue,
   getMeContract,
   getCreditBalanceContract,
   listModelsContract,
@@ -66,7 +69,7 @@ import {
   listAgentsContract,
   listDataLakesContract,
 } from '@bike4mind/common';
-import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import { OPEN_TO_ANY_KEY_ENDPOINTS, type ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
@@ -131,7 +134,7 @@ interface ScopeGroup {
   resource: string;
   resourceLabel: string;
   scopes: {
-    value: ApiKeyScope;
+    value: ApiKeyScopeValue;
     actionLabel: string;
     description: string;
     isMutating: boolean;
@@ -141,9 +144,9 @@ interface ScopeGroup {
 type PresetId = 'read' | 'readwrite' | 'full';
 
 interface ScopeModel {
-  scopeValues: ApiKeyScope[];
+  scopeValues: ApiKeyScopeValue[];
   groups: ScopeGroup[];
-  presetScopes: Record<PresetId, ApiKeyScope[]>;
+  presetScopes: Record<PresetId, ApiKeyScopeValue[]>;
 }
 
 // Built from the viewer's generic-flow scopes, not a module constant, so the "full"
@@ -169,7 +172,8 @@ const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
 
   const scopeValues = scopes.map(s => s.value);
   const readScopes = scopeValues.filter(value => value.endsWith(':read'));
-  const writeScopes = scopeValues.filter(value => value.endsWith(':write'));
+  // Publishing to the Skill Market is outward-facing, so it is never implied by a preset short of Full access.
+  const writeScopes = scopeValues.filter(value => value.endsWith(':write') && value !== ApiKeyScope.SKILLS_WRITE);
   return {
     scopeValues,
     groups: [...groups.values()],
@@ -183,7 +187,8 @@ const PRESETS: { id: PresetId; label: string; description: string }[] = [
   { id: 'full', label: 'Full access', description: 'Everything, including AI generation & chat.' },
 ];
 
-const sameScopeSet = (a: ApiKeyScope[], b: ApiKeyScope[]) => a.length === b.length && a.every(x => b.includes(x));
+const sameScopeSet = (a: ApiKeyScopeValue[], b: ApiKeyScopeValue[]) =>
+  a.length === b.length && a.every(x => b.includes(x));
 
 interface NewKeyModalProps {
   open: boolean;
@@ -223,6 +228,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
 
   const { data: billingOrgs } = useBillingOrganizations();
   const canBillOrg = (billingOrgs?.length ?? 0) > 0;
+  const { data: eligibility } = useApiKeyEligibility();
 
   const createMutation = useCreateUserApiKey({
     onSuccess: result => {
@@ -257,13 +263,15 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
 
   const applyPreset = (id: PresetId) => setFormData(fd => ({ ...fd, scopes: [...scopeModel.presetScopes[id]] }));
 
-  const toggleScope = (value: ApiKeyScope) =>
+  const toggleScope = (value: ApiKeyScopeValue) =>
     setFormData(fd => ({
       ...fd,
       scopes: fd.scopes.includes(value) ? fd.scopes.filter(s => s !== value) : [...fd.scopes, value],
     }));
 
-  const canSubmit = !!formData.name.trim() && formData.scopes.length > 0;
+  // Only personal keys are trust-gated; picking an org to bill makes the key org-billed.
+  const blockedByTrust = eligibility?.canCreate === false && !formData.organizationId;
+  const canSubmit = !!formData.name.trim() && formData.scopes.length > 0 && !blockedByTrust;
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-modal">
@@ -280,6 +288,14 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
         </Typography>
 
         <Stack spacing={2.5} className="project-api-keys-modal-content">
+          {blockedByTrust && (
+            <Alert color="warning" variant="soft" data-testid="api-key-trust-alert">
+              {canBillOrg
+                ? `${eligibility?.message} You can still create a key billed to an organization you manage.`
+                : eligibility?.message}
+            </Alert>
+          )}
+
           <FormControl required className="project-api-keys-name-control">
             <FormLabel className="project-api-keys-name-label">Name</FormLabel>
             <Input
@@ -551,7 +567,7 @@ const KEY_TEST_CONTRACTS = [
 ];
 
 /** The GET path a key with `scopes` can call to prove it works, or undefined when none of them fits. */
-export const keyTestPath = (scopes: readonly ApiKeyScope[]): string | undefined =>
+export const keyTestPath = (scopes: readonly ApiKeyScopeValue[]): string | undefined =>
   KEY_TEST_CONTRACTS.find(contract => contract.scopes?.some(scope => scopes.includes(scope)))?.path;
 
 interface KeyCreatedModalProps {
@@ -561,7 +577,7 @@ interface KeyCreatedModalProps {
   /** Present only for a fresh create response; absent for a rotated key or a pre-feature key. */
   callbackSigningSecret?: string;
   /** The key's scopes, which pick the endpoint the test snippet calls. */
-  scopes: readonly ApiKeyScope[];
+  scopes: readonly ApiKeyScopeValue[];
 }
 
 function KeyCreatedModal({ open, onClose, apiKey, callbackSigningSecret, scopes }: KeyCreatedModalProps) {
@@ -1300,6 +1316,9 @@ ai_response = response.json()`,
               Each API key can have different permissions (scopes). Make sure your key has the right scopes for the
               endpoints you want to access.
             </Typography>
+            <Typography level="body-xs" data-testid="api-keys-scopes-open-endpoints" sx={{ color: 'text.secondary' }}>
+              Every key can also call {OPEN_TO_ANY_KEY_ENDPOINTS.join(', ')}, whatever its scopes.
+            </Typography>
 
             <Stack spacing={2} className="project-api-keys-documentation-scope-list">
               {scopeDescriptions.map(item => (
@@ -1331,9 +1350,7 @@ ai_response = response.json()`,
                         {item.description}
                       </Typography>
                     </Stack>
-                    <Typography level="body-xs" sx={{ color: theme => alpha(theme.palette.text.primary, 0.5) }}>
-                      <strong>Endpoints:</strong> {item.endpoints.join(', ')}
-                    </Typography>
+                    <ScopeEndpointList scope={item.value} endpoints={item.endpoints} />
                   </CardContent>
                 </Card>
               ))}
@@ -1913,11 +1930,13 @@ export default function UserApiKeysTab() {
   const { data, isLoading, error, refetch } = useGetUserApiKeys();
   const { data: billingOrgs } = useBillingOrganizations();
   const orgNameById = new Map((billingOrgs ?? []).map(org => [org.id, org.name]));
+  const { data: eligibility } = useApiKeyEligibility();
+  const createBlockedByTrust = eligibility?.canCreate === false && (billingOrgs?.length ?? 0) === 0;
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
   const [newlyCreatedSigningSecret, setNewlyCreatedSigningSecret] = useState<string | undefined>(undefined);
-  const [newlyCreatedScopes, setNewlyCreatedScopes] = useState<ApiKeyScope[]>([]);
+  const [newlyCreatedScopes, setNewlyCreatedScopes] = useState<ApiKeyScopeValue[]>([]);
   const [mainTab, setMainTab] = useState(0);
   // Off by default: revoked rows accumulate forever (scopes are write-once, so
   // every scope change mints a replacement and leaves one behind) and their
@@ -2046,11 +2065,23 @@ export default function UserApiKeysTab() {
                   <RefreshIcon />
                 </IconButton>
               </Tooltip>
-              <Button startDecorator={<AddIcon />} onClick={() => setShowNewKeyModal(true)} variant="solid">
+              <Button
+                startDecorator={<AddIcon />}
+                onClick={() => setShowNewKeyModal(true)}
+                variant="solid"
+                disabled={createBlockedByTrust}
+                data-testid="api-keys-create-btn"
+              >
                 Create API Key
               </Button>
             </Box>
           </Box>
+
+          {createBlockedByTrust && (
+            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-trust-notice">
+              {eligibility?.message}
+            </Alert>
+          )}
 
           {isLoading ? (
             <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
@@ -2134,7 +2165,7 @@ export default function UserApiKeysTab() {
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
                           {key.scopes.slice(0, 2).map(scope => (
                             <Chip key={scope} size="sm" variant="soft">
-                              {scope.split(':')[1]}
+                              {scope}
                             </Chip>
                           ))}
                           {key.scopes.length > 2 && (

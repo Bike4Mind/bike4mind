@@ -40,6 +40,7 @@ export function getExpiringModels(models: ModelInfo[], daysAhead: number): Expir
 
 /** Lifecycle as a catalog row expresses it, narrowed off the lenient read shape. */
 export interface CatalogLifecycle {
+  isSuperseded?: boolean;
   status?: string;
   deprecationDate?: string;
   retirementDate?: string;
@@ -53,6 +54,7 @@ function narrowLifecycle(value: unknown): CatalogLifecycle | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const lifecycle = value as Record<string, unknown>;
   return {
+    isSuperseded: typeof lifecycle.isSuperseded === 'boolean' ? lifecycle.isSuperseded : undefined,
     status: stringOr(lifecycle.status),
     deprecationDate: stringOr(lifecycle.deprecationDate),
     retirementDate: stringOr(lifecycle.retirementDate),

@@ -1,4 +1,11 @@
-import { ResearchModeParamsSchema, ModelInfo } from '@bike4mind/common';
+import {
+  ResearchModeParamsSchema,
+  ModelInfo,
+  createReasoningWithholder,
+  reasoningChannelOf,
+  withholdsReasoning,
+  type ThinkingVisibility,
+} from '@bike4mind/common';
 import { type ICompletionOptions, getLlmByModel, resolveOutputMaxTokens } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
@@ -52,7 +59,8 @@ export class ResearchModeService {
     messages: any[],
     baseOptions: ICompletionOptions,
     onStream: (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: any) => Promise<void>,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    thinkingVisibility: ThinkingVisibility = 'raw'
   ): Promise<ResearchModeResult[]> {
     if (!researchMode?.enabled || !researchMode.configurations?.length) {
       throw new Error('Research Mode is not properly configured');
@@ -65,7 +73,7 @@ export class ResearchModeService {
 
     // Process all enabled configurations in parallel
     const promises = enabledConfigs.map(config =>
-      this.processConfiguration(config, messages, baseOptions, onStream, abortSignal)
+      this.processConfiguration(config, messages, baseOptions, onStream, abortSignal, thinkingVisibility)
     );
 
     const results = await Promise.allSettled(promises);
@@ -92,7 +100,8 @@ export class ResearchModeService {
     messages: any[],
     baseOptions: ICompletionOptions,
     onStream: (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: any) => Promise<void>,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    thinkingVisibility: ThinkingVisibility = 'raw'
   ): Promise<ResearchModeResult> {
     // A Stop that landed before this configuration started must not reach the provider at all.
     if (abortSignal?.aborted) {
@@ -101,6 +110,8 @@ export class ResearchModeService {
 
     // Kept outside the try so a configuration that fails mid-stream still reports what it streamed.
     let finalResponse = '';
+    // Billed on what streamed, withheld reasoning included.
+    let streamedChars = 0;
     try {
       this.logger.info(`🔬 [Research Mode] Processing configuration: ${config.label || config.model} (${config.id})`);
 
@@ -109,6 +120,9 @@ export class ResearchModeService {
       if (!modelInfo) {
         throw new Error(`Model ${config.model} not found`);
       }
+      const reasoningWithholder = withholdsReasoning(thinkingVisibility, config.model)
+        ? createReasoningWithholder(reasoningChannelOf(modelInfo))
+        : null;
 
       // Get LLM instance for this model
       const llm = getLlmByModel(this.apiKeyTable, {
@@ -161,9 +175,18 @@ export class ResearchModeService {
         await Promise.race([
           llm.complete(
             config.model,
-            messages,
+            // Each configuration gets its own copy: backends append their tool rounds in place, in
+            // their own provider's shape, and the configurations run in parallel.
+            [...messages],
             options,
-            async (streamedTexts: (string | null | undefined)[], info?: any) => {
+            async (rawTexts: (string | null | undefined)[], rawInfo?: any) => {
+              for (const text of rawTexts) streamedChars += text?.length ?? 0;
+              const streamedTexts = reasoningWithholder
+                ? rawTexts.map(text => (text ? reasoningWithholder.visible(text, rawInfo?.channel) : text))
+                : rawTexts;
+              // Research mode runs its own tool loop, so no thinking block needs to reach the client.
+              const info = reasoningWithholder && rawInfo?.thinking ? { ...rawInfo, thinking: undefined } : rawInfo;
+
               // Forward streaming data with configuration ID
               await onStream(config.id, streamedTexts, info);
 
@@ -184,6 +207,11 @@ export class ResearchModeService {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (abortSignal && onAbort) abortSignal.removeEventListener('abort', onAbort);
       }
+      const heldText = reasoningWithholder?.flush();
+      if (heldText) {
+        finalResponse += heldText;
+        await onStream(config.id, [heldText]);
+      }
 
       this.logger.info(`🔬 [Research Mode] Configuration ${config.id} completed successfully`);
 
@@ -192,7 +220,7 @@ export class ResearchModeService {
         model: config.model,
         success: true,
         response: finalResponse,
-        streamedChars: finalResponse.length,
+        streamedChars,
         completionInfo,
       };
     } catch (error) {
@@ -202,7 +230,7 @@ export class ResearchModeService {
         configurationId: config.id,
         model: config.model,
         success: false,
-        streamedChars: finalResponse.length,
+        streamedChars,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }

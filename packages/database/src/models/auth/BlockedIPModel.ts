@@ -9,6 +9,9 @@ export interface IBlockedIPDocument extends IMongoDocument {
   blockedAt: Date;
   expiresAt: Date;
   unblockedAt?: Date;
+  source: 'auto' | 'manual';
+  /** 0 for manual blocks; for auto blocks, the step reached in the escalation schedule. */
+  escalationLevel: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -21,11 +24,22 @@ const BlockedIPSchema = new mongoose.Schema<IBlockedIPDocument>(
     blockedAt: { type: Date, default: () => new Date(), index: true },
     expiresAt: { type: Date, required: true, index: true },
     unblockedAt: { type: Date },
+    source: { type: String, enum: ['auto', 'manual'], default: 'manual' },
+    escalationLevel: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
 
 BlockedIPSchema.index({ ip: 1, active: 1 }, { unique: false });
+BlockedIPSchema.index({ ip: 1, blockedAt: -1 });
+
+export const DEFAULT_BLOCK_DURATION_MS = 10 * 60 * 1000;
+
+export interface BlockOptions {
+  durationMs?: number;
+  source?: 'auto' | 'manual';
+  escalationLevel?: number;
+}
 
 export const BlockedIP: Model<IBlockedIPDocument> =
   mongoose.models.BlockedIP || mongoose.model<IBlockedIPDocument>('BlockedIP', BlockedIPSchema);
@@ -35,29 +49,50 @@ export class BlockedIPRepository extends BaseRepository<IBlockedIPDocument> {
     super(model);
   }
 
-  async block(ip: string, reason?: string): Promise<IBlockedIPDocument> {
+  async block(
+    ip: string,
+    reason?: string,
+    options: BlockOptions = {}
+  ): Promise<{ doc: IBlockedIPDocument; created: boolean }> {
+    const { durationMs = DEFAULT_BLOCK_DURATION_MS, source = 'manual', escalationLevel = 0 } = options;
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + 10 * 60 * 1000); // 10 minutes from now
+    const expiresAt = new Date(now.getTime() + durationMs);
 
-    // Check for existing active non-expired block
-    const existing = await this.model.findOne({
-      ip,
-      active: true,
-      expiresAt: { $gt: now },
-    });
-    if (existing) return existing;
+    const existing = await this.isBlocked(ip);
+    if (existing) {
+      // Repeat blocks only ever extend the window (a short manual block must not cut an escalated
+      // auto block), without a new row or audit entry.
+      const refreshed = await this.model.findOneAndUpdate(
+        { ip, active: true, expiresAt: { $gt: now, $lt: expiresAt } },
+        { expiresAt },
+        { new: true, sort: { blockedAt: -1 } }
+      );
+      return { doc: refreshed ?? existing, created: false };
+    }
 
-    return this.model.create({
+    const doc = await this.model.create({
       ip,
       reason,
       active: true,
       blockedAt: now,
       expiresAt,
+      source,
+      escalationLevel,
     });
+    return { doc, created: true };
+  }
+
+  /** The most recent block of this IP, active or not. */
+  async findLatestBlock(ip: string): Promise<IBlockedIPDocument | null> {
+    return this.model.findOne({ ip }).sort({ blockedAt: -1 });
   }
 
   async unblock(ip: string): Promise<IBlockedIPDocument | null> {
-    return this.model.findOneAndUpdate({ ip, active: true }, { active: false, unblockedAt: new Date() }, { new: true });
+    const update = { active: false, unblockedAt: new Date() };
+    const doc = await this.model.findOneAndUpdate({ ip, active: true }, update, { new: true, sort: { blockedAt: -1 } });
+    // Concurrent block() calls can leave more than one active row, and isBlocked() matches any of them.
+    if (doc) await this.model.updateMany({ ip, active: true }, update);
+    return doc;
   }
 
   async list(limit = 10): Promise<IBlockedIPDocument[]> {

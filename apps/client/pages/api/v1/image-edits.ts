@@ -10,12 +10,15 @@ import { getImageEdit } from '@server/imageGenerations/imageEdit';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
-import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@server/utils/orgAccess';
+import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';
 import { editImageContract } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(editImageContract).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   assertNoStrayBillingOrgKeys(req.body);
   // organization_id is the request alias; only the mapped value goes on to the queue.
   const requestedOrgId = resolveBillingOrgInput(req.validated);
@@ -36,6 +39,7 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   const effectiveOrgId = await resolveMediaBillingOrgId(req, requestedOrgId);
 
   const quest = await getImageEdit().invoke({
+    adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
     userId: req.user.id,
     body: {
       ...body,

@@ -1,17 +1,38 @@
-import { identityProviderRepository } from '@bike4mind/database';
+import { identityProviderRepository, withTransaction, type IIdentityProviderDocument } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { clearConfigurationCache } from '@server/auth/oktaOidcClient';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, identityProviderResponseSchema, type AuditChange } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const AUDITED_IDP_FIELDS = ['name', 'emailDomain', 'type', 'isActive'] as const;
+const AUDITED_SAML_FIELDS = ['entryPoint', 'issuer', 'callbackUrl', 'identifierFormat'] as const;
+const AUDITED_OKTA_FIELDS = ['audience', 'clientId', 'authServerId', 'useOrgAuthServer'] as const;
+
+// Credentials (cert, Okta client secret, SAML key material) are never diffed; callers report them as booleans.
+function diffIdentityProvider(existing: IIdentityProviderDocument, updated: IIdentityProviderDocument): AuditChange[] {
+  const changes: AuditChange[] = [];
+  const push = (field: string, before: unknown, after: unknown) => {
+    if (before !== after) changes.push({ field, before, after });
+  };
+  for (const field of AUDITED_IDP_FIELDS) push(field, existing[field], updated[field]);
+  for (const field of AUDITED_SAML_FIELDS) {
+    push(`samlConfig.${field}`, existing.samlConfig?.[field], updated.samlConfig?.[field]);
+  }
+  for (const field of AUDITED_OKTA_FIELDS) {
+    push(`oktaConfig.${field}`, existing.oktaConfig?.[field], updated.oktaConfig?.[field]);
+  }
+  return changes;
+}
+
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
@@ -24,7 +45,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         throw new NotFoundError('Identity provider not found');
       }
 
-      return res.json(idp);
+      return respond(res, identityProviderResponseSchema, idp);
     } catch (error) {
       console.error('Error fetching identity provider:', error);
       if (error instanceof NotFoundError) {
@@ -38,10 +59,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .put(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
@@ -58,18 +75,38 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         }
       }
 
-      const updatedIdp = await identityProviderRepository.updateIDP(id, {
-        name,
-        emailDomain: emailDomain?.toLowerCase(),
-        type,
-        isActive,
-        samlConfig,
-        oktaConfig,
-      });
+      const updatedIdp = await withTransaction(async () => {
+        const existing = await identityProviderRepository.findById(id);
+        if (!existing) {
+          throw new NotFoundError('Identity provider not found');
+        }
 
-      if (!updatedIdp) {
-        throw new NotFoundError('Identity provider not found');
-      }
+        const updated = await identityProviderRepository.updateIDP(id, {
+          name,
+          emailDomain: emailDomain?.toLowerCase(),
+          type,
+          isActive,
+          samlConfig,
+          oktaConfig,
+        });
+
+        if (!updated) {
+          throw new NotFoundError('Identity provider not found');
+        }
+
+        await recordAdminActionFromRequest(req, {
+          action: 'identity.sso_provider.updated',
+          target: { kind: 'settings', id: updated.id, displayName: updated.name },
+          summary: `updated identity provider ${updated.name}`,
+          changes: diffIdentityProvider(existing, updated),
+          details: {
+            certReplaced: updated.samlConfig?.cert !== existing.samlConfig?.cert,
+            oktaClientSecretReplaced: !!oktaConfig?.clientSecret,
+            samlKeyMaterialReplaced: !!(samlConfig?.decryptionPvk || samlConfig?.privateCert),
+          },
+        });
+        return updated;
+      });
 
       // Clear OIDC configuration cache when Okta config is updated so the next login uses it.
       // Each Lambda instance has its own cache, so propagation may take up to 60s.
@@ -78,7 +115,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         Logger.info('[IDP Admin] Cleared Okta OIDC configuration cache after IDP update');
       }
 
-      return res.json(updatedIdp);
+      return respond(res, identityProviderResponseSchema, updatedIdp);
     } catch (error) {
       console.error('Error updating identity provider:', error);
       if (error instanceof NotFoundError) {
@@ -92,21 +129,31 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .delete(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
         throw new BadRequestError('Identity provider ID is required');
       }
 
-      const deleted = await identityProviderRepository.deleteIDP(id);
+      await withTransaction(async () => {
+        const provider = await identityProviderRepository.findById(id);
+        if (!provider) {
+          throw new NotFoundError('Identity provider not found');
+        }
 
-      if (!deleted) {
-        throw new NotFoundError('Identity provider not found');
-      }
+        const deleted = await identityProviderRepository.deleteIDP(id);
+
+        if (!deleted) {
+          throw new NotFoundError('Identity provider not found');
+        }
+
+        await recordAdminActionFromRequest(req, {
+          action: 'identity.sso_provider.deleted',
+          target: { kind: 'settings', id: provider.id, displayName: provider.name },
+          summary: `deleted ${provider.type} identity provider ${provider.name}`,
+          details: { emailDomain: provider.emailDomain, type: provider.type },
+        });
+      });
 
       // Clear OIDC configuration cache when any IDP is deleted so removed configs don't persist
       clearConfigurationCache();

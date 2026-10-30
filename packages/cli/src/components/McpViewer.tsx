@@ -2,6 +2,7 @@ import React, { useEffect, useReducer } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { CliConfig } from '../storage';
 import type { McpManager } from '../utils/mcpAdapter';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 export interface McpViewerProps {
   config: CliConfig;
@@ -81,16 +82,18 @@ export function McpViewer({ config, mcpManager, onClose }: McpViewerProps) {
 
         {config.mcpServers.map(server => {
           const status = server.enabled ? '✅ Enabled' : '⏸️  Disabled';
-          const commandInfo = server.command ? `${server.command} ${(server.args || []).join(' ')}` : '(internal)';
+          const commandInfo = server.command
+            ? sanitizeTerminalText(`${server.command} ${(server.args || []).join(' ')}`)
+            : '(internal)';
 
           return (
             <Box key={server.name} flexDirection="column" marginTop={1} marginLeft={2}>
               <Text>
-                • <Text bold>{server.name}</Text> - <Text dimColor>{status}</Text>
+                {'\u2022'} <Text bold>{sanitizeTerminalText(server.name)}</Text> - <Text dimColor>{status}</Text>
               </Text>
               <Text dimColor> Command: {commandInfo}</Text>
               {Object.keys(server.env).length > 0 && (
-                <Text dimColor> Env vars: {Object.keys(server.env).join(', ')}</Text>
+                <Text dimColor> Env vars: {sanitizeTerminalText(Object.keys(server.env).join(', '))}</Text>
               )}
             </Box>
           );
@@ -142,8 +145,8 @@ export function McpViewer({ config, mcpManager, onClose }: McpViewerProps) {
             return (
               <Box key={server.name} marginTop={1} marginLeft={2}>
                 <Text>
-                  • <Text bold>{server.name}</Text> · <Text color={color}>{icon}</Text>{' '}
-                  <Text color={color}>{statusText}</Text>
+                  {'\u2022'} <Text bold>{sanitizeTerminalText(server.name)}</Text> {'\u00B7'}{' '}
+                  <Text color={color}>{icon}</Text> <Text color={color}>{statusText}</Text>
                   {toolInfo && <Text dimColor>{toolInfo}</Text>}
                 </Text>
               </Box>

@@ -15,8 +15,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@server/services/githubService';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { logTestExecuted } from '@server/integrations/github/githubConnectionAuditLog';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 

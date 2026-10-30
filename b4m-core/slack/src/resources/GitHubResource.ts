@@ -1,3 +1,5 @@
+import type { IUserDocument } from '@bike4mind/common';
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { BaseResource, ConnectionStatus } from './BaseResource';
 import { McpServerName } from '@bike4mind/common';
 import {
@@ -384,7 +386,10 @@ If the user provides table data (markdown tables, formatted tables, or tabular d
     try {
       const { User, McpServer } = getSlackDb();
       // Find user by Slack User ID
-      const user = await (User as any).findOne({ 'slackSettings.slackUserId': slackUserId });
+      const user = await (User as { findOne(filter: Record<string, unknown>): Promise<IUserDocument | null> }).findOne({
+        'slackSettings.slackUserId': slackUserId,
+        ...VERIFIED_SLACK_IDENTITY_FILTER,
+      });
 
       if (!user) {
         this.logger.debug(`[slack-github-mapper] No user found for Slack User ID: ${slackUserId}`);

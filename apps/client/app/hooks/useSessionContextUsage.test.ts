@@ -71,6 +71,22 @@ describe('useSessionContextUsage', () => {
     expect(result.current?.band).toBe('danger');
   });
 
+  it('keeps the original input tokenizer when a different model answered via fallback', () => {
+    mockPages([
+      {
+        ...quest('q1'),
+        promptMeta: { ...quest('q1').promptMeta, model: { name: 'answered-model' } },
+        fallbackInfo: { primaryModel: 'input-model' },
+      },
+    ]);
+    expect(renderHook(() => useSessionContextUsage('s1')).result.current?.inputModelId).toBe('input-model');
+  });
+
+  it('uses the recorded model when no fallback occurred', () => {
+    mockPages([{ ...quest('q1'), promptMeta: { ...quest('q1').promptMeta, model: { name: 'input-model' } } }]);
+    expect(renderHook(() => useSessionContextUsage('s1')).result.current?.inputModelId).toBe('input-model');
+  });
+
   it('bands normal / warning / danger at the thresholds', () => {
     mockPages([quest('q1', { utilizationPercentage: 69 })]);
     expect(renderHook(() => useSessionContextUsage('s1')).result.current?.band).toBe('normal');

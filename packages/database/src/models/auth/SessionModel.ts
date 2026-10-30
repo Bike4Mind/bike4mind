@@ -963,6 +963,22 @@ SessionSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });
 // retry and the thread could never get a notebook again. A partial filter cannot exclude
 // soft-deleted rows. Migration 20251126202452 drops the index where an old build left it.
 
+// The Slack gear check (apps/client/server/services/gears/catalog.ts). Partial on the subdocument's
+// required channelId, so only Slack-born notebooks are indexed; the query must filter on that same
+// path for the planner to prove the filter is implied.
+export const SESSION_SLACK_NOTEBOOK_INDEX_NAME = 'userId_1_slackNotebook';
+SessionSchema.index(
+  { userId: 1 },
+  {
+    name: SESSION_SLACK_NOTEBOOK_INDEX_NAME,
+    partialFilterExpression: { 'slackMetadata.channelId': { $exists: true } },
+  }
+);
+
+// Sessions that reference a file (findAllWithKnowledgeId, pullKnowledgeIds), read on every file
+// delete, lake purge and lake ingest. Multikey; without it each call walks every session.
+SessionSchema.index({ knowledgeIds: 1, deletedAt: 1 });
+
 // Index for admin/cleanup queries on conversation context by user.
 // Feature queries use findById(sessionId), which hits the default _id index;
 // this index supports "find all sessions with context for user X".

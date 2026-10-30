@@ -1,9 +1,12 @@
 import { gitHubLakeAuthGrantRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { decryptToken, encryptToken } from '@server/security/tokenEncryption';
+import { decryptToken, encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { ForbiddenError, InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
-import { revokeInstallerToken, type GitHubLakeAppConfig } from './lakeAppClient';
+import {
+  revokeInstallerToken,
+  type GitHubLakeAppConfig,
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 
 /**
  * The server-side half of the authorize-first lake connect: the user-to-server token minted by the

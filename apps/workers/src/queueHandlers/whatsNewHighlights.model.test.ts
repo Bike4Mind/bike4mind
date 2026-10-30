@@ -27,7 +27,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitModalGenerationMetrics: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: vi.fn() }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: vi.fn() }));
 
 // The model gate runs after the release-note fetch; stub the fetch so these cases isolate the gate.
 vi.mock('@server/whatsNew/releaseNoteHighlights', () => ({

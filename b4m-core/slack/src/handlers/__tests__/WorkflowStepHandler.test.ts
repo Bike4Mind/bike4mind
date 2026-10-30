@@ -210,7 +210,10 @@ describe('WorkflowStepHandler', () => {
 
       await handler.handleFunctionExecuted(event);
 
-      expect(User.findOne).toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'U123' });
+      expect(User.findOne).toHaveBeenCalledWith({
+        'slackSettings.slackUserId': 'U123',
+        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+      });
       expect(createSession).toHaveBeenCalled();
       expect(mockSlackClient.functionCompleteSuccess).toHaveBeenCalledWith(
         'Fx123456',
@@ -823,8 +826,14 @@ describe('WorkflowStepHandler', () => {
       );
 
       expect(User.findOne).toHaveBeenCalledTimes(1);
-      expect(User.findOne).toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'U123' });
-      expect(User.findOne).not.toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'UVICTIM' });
+      expect(User.findOne).toHaveBeenCalledWith({
+        'slackSettings.slackUserId': 'U123',
+        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+      });
+      expect(User.findOne).not.toHaveBeenCalledWith({
+        'slackSettings.slackUserId': 'UVICTIM',
+        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+      });
     });
 
     it.each([
@@ -851,8 +860,14 @@ describe('WorkflowStepHandler', () => {
         })
       );
 
-      expect(User.findOne).toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'U123' });
-      expect(User.findOne).not.toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'UVICTIM' });
+      expect(User.findOne).toHaveBeenCalledWith({
+        'slackSettings.slackUserId': 'U123',
+        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+      });
+      expect(User.findOne).not.toHaveBeenCalledWith({
+        'slackSettings.slackUserId': 'UVICTIM',
+        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+      });
       // Assert the step actually reached the notification, so the DM target is pinned and not
       // passed vacuously by an error path that never sends one.
       expect(mockSlackClient.functionCompleteSuccess).toHaveBeenCalled();

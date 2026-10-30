@@ -2,6 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { ChatModels, IMessage, type ModelInfo, ModelBackend } from '@bike4mind/common';
 import { ChoiceEndReason, ChoiceStatus, ICompletionOptions, ICompletionResponseChunk } from '../backend';
 import { BaseBedrockBackend } from './base';
+import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
 // Bedrock rejects max_gen_len above 2048 for Llama models, even where the catalog lists more.
 // See docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-meta.html
@@ -116,14 +117,29 @@ export default class LlamaBedrockBackend extends BaseBedrockBackend {
     // Convert messages to a simple conversation format
     let prompt = '';
 
-    for (const message of messages) {
+    // The identity line rides on the last System: block so it sits with the final system layer;
+    // the pipeline can emit several. A call with no system message gets it as a leading block.
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : buildIdentityReminder(model, options.modelDisplayName);
+    const lastSystemIndex = identityReminder ? messages.findLastIndex(message => message.role === 'system') : -1;
+
+    for (const [index, message] of messages.entries()) {
       if (message.role === 'system') {
-        prompt += `System: ${message.content}\n\n`;
+        const content =
+          identityReminder && index === lastSystemIndex
+            ? appendIdentityReminder(String(message.content), identityReminder)
+            : message.content;
+        prompt += `System: ${content}\n\n`;
       } else if (message.role === 'user') {
         prompt += `Human: ${message.content}\n\n`;
       } else if (message.role === 'assistant') {
         prompt += `Assistant: ${message.content}\n\n`;
       }
+    }
+
+    if (identityReminder && lastSystemIndex === -1) {
+      prompt = `System: ${identityReminder}\n\n${prompt}`;
     }
 
     // Add the assistant prompt to start the response

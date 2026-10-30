@@ -42,11 +42,11 @@ describe('redactErrorForLog', () => {
 
   it('preserves the useful debugging fields', () => {
     const redacted = redactErrorForLog(makeAxiosError()) as Record<string, unknown>;
-    expect(redacted.message).toBe('Request failed with status code 402');
+    expect(redacted.message).toBe('Provider request failed');
     expect(redacted.code).toBe('ERR_BAD_REQUEST');
     expect(redacted.status).toBe(402);
-    expect(redacted.data).toEqual({ detail: 'Insufficient credits' });
-    expect(redacted.endpoint).toBe('https://api.bfl.ai/v1/flux-pro-1.1');
+    expect(redacted).not.toHaveProperty('data');
+    expect(redacted).not.toHaveProperty('endpoint');
     expect(redacted.method).toBe('post');
   });
 
@@ -63,5 +63,28 @@ describe('redactErrorForLog', () => {
 
   it('is recognized as an axios error by axios itself (guards the test fixture)', () => {
     expect(axios.isAxiosError(makeAxiosError())).toBe(true);
+  });
+
+  it('summarizes a validation detail array to locations and messages, dropping the echoed input', () => {
+    const error = Object.assign(makeAxiosError(), {
+      response: {
+        status: 422,
+        data: {
+          detail: [{ loc: ['body', 'prompt'], msg: 'String too long', type: 'too_long', input: 'a private prompt' }],
+        },
+        headers: {},
+      },
+    });
+
+    const redacted = redactErrorForLog(error) as Record<string, unknown>;
+
+    expect(redacted.providerDetail).toBe('body.prompt: String too long');
+    expect(JSON.stringify(redacted)).not.toContain('a private prompt');
+  });
+
+  it('keeps a string detail as the provider detail', () => {
+    expect((redactErrorForLog(makeAxiosError()) as Record<string, unknown>).providerDetail).toBe(
+      'Insufficient credits'
+    );
   });
 });

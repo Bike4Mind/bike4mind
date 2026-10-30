@@ -319,6 +319,20 @@ describe('buildSharedTools: the denylist also reaches parentTools, which the ret
     expect(names).toEqual(expect.arrayContaining(['dice_roll', 'atlassian__jira_search', 'slack__send_message']));
   });
 
+  it('keeps current_model_details out of parentTools: it is bound to the parent serving model', () => {
+    buildSharedTools(
+      { ...deps, agentStore, apiKeyTable: {} as ToolBuilderDeps['apiKeyTable'], model: 'm' },
+      callbacks,
+      { enabledTools: ['dice_roll', 'current_model_details'] }
+    );
+
+    const parentTools = (vi.mocked(createDelegateToAgentTool).mock.calls.at(-1)?.[0]?.parentTools ??
+      []) as ICompletionOptionTools[];
+    const names = parentTools.map(t => t.toolSchema.name);
+    expect(names).not.toContain('current_model_details');
+    expect(names).toContain('dice_roll');
+  });
+
   it('keeps a session-denied NATIVE tool out of parentTools even though the returned array still carries it', () => {
     // Native tools aren't checked against the denylist by the "filter to enabled tools" step
     // above (only `isToolOfferable` is) - the caller's own post-build pass is what strips a
@@ -424,5 +438,27 @@ describe('buildSharedTools: the MCP wrapper turns a confirm preview into a pendi
     expect(onPendingAction).toHaveBeenCalledTimes(1);
     expect(forModel).not.toContain('_confirmToken');
     expect(JSON.parse(forModel).next_step).toBe('Click the Confirm or Cancel button below to proceed.');
+  });
+});
+
+describe('buildSharedTools: tool result validators', () => {
+  const byName = (tools: ICompletionOptionTools[] | undefined, name: string) =>
+    tools?.find(tool => tool.toolSchema.name === name);
+
+  it('keeps a native tool validator through the wrappers, and drops one an MCP tool carries', () => {
+    const selfScoring = {
+      ...mcpTool('slack', 'send_message'),
+      validateResult: () => ({ confidence: 1, source: 'deterministic' as const }),
+    };
+
+    const tools = buildSharedTools(deps, callbacks, {
+      enabledTools: ['web_fetch', 'slack__send_message'],
+      offerOnlyNamedTools: true,
+      mcpToolsByServer: { slack: [selfScoring] },
+    });
+
+    expect(byName(tools, 'web_fetch')?.validateResult).toBeTypeOf('function');
+    expect(byName(tools, 'slack__send_message')).toBeDefined();
+    expect(byName(tools, 'slack__send_message')?.validateResult).toBeUndefined();
   });
 });

@@ -73,6 +73,7 @@ const Config = {
   MAIL_PASSWORD: Resource.MAIL_PASSWORD.value,
   ANTHROPIC_API_KEY: Resource.ANTHROPIC_API_KEY.value,
   ANTHROPIC_ADMIN_API_KEY: readOptionalSecret('ANTHROPIC_ADMIN_API_KEY', () => Resource.ANTHROPIC_ADMIN_API_KEY.value),
+  TURNSTILE_SECRET_KEY: readOptionalSecret('TURNSTILE_SECRET_KEY', () => Resource.TURNSTILE_SECRET_KEY.value),
   OPENAI_ADMIN_API_KEY: readOptionalSecret('OPENAI_ADMIN_API_KEY', () => Resource.OPENAI_ADMIN_API_KEY.value),
   GEMINI_API_KEY: Resource.GEMINI_API_KEY.value,
   OKTA_AUDIENCE: Resource.OKTA_AUDIENCE.value,
@@ -135,6 +136,11 @@ const isDevelopment = () => {
   return (isLocal || isDevEnv) && isNotDeployedStage;
 };
 
+// True on stages deployed from this repo's infra (CloudFront sets ORIGIN_VERIFY_SECRET), never
+// for local development or a self-hosted install. infra/web.ts omits that secret when
+// DISABLE_ORIGIN_VERIFY='true', so such a stage reads as not deployed here too.
+const isDeployedStage = () => Boolean(process.env.ORIGIN_VERIFY_SECRET) && process.env.B4M_SELF_HOST !== 'true';
+
 // E2E test endpoint guard - allows /api/test/* on local dev, preview, and staging deployments.
 // Set via E2E_ENDPOINTS_ENABLED env var (injected by SST for preview/staging stages) or isDevelopment().
 // Explicitly blocks production as defense-in-depth even if E2E_ENDPOINTS_ENABLED is accidentally set.
@@ -144,4 +150,7 @@ const isE2EEnabled = () => {
   return isDevelopment();
 };
 
-export { Config, isProduction, isDevelopment, isE2EEnabled };
+export { Config, isProduction, isDevelopment, isDeployedStage, isE2EEnabled };
+
+// Overlay-declared secrets: read by name, never as a typed Resource.<x> field.
+export { readContributedSecret, registerContributedSecrets } from './contributedSecrets';

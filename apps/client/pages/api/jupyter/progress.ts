@@ -29,7 +29,7 @@ const ProgressBody = z.object({
   error: z.string().optional(),
 });
 
-const handler = baseApi({ auth: true }).post(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const parsed = ProgressBody.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid request body', details: parsed.error.flatten() });

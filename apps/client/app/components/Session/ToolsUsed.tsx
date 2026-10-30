@@ -1,6 +1,7 @@
 import { Chip, Tooltip, Box, Stack, Typography, Modal, ModalDialog, ModalClose, IconButton } from '@mui/joy';
 import { messageMetaChipSx } from './messageMetaChipSx';
-import { HandymanOutlined as HandymanIcon, Info as InfoIcon } from '@mui/icons-material';
+import HandymanIcon from '@mui/icons-material/HandymanOutlined';
+import InfoIcon from '@mui/icons-material/Info';
 import { memo, useMemo, useState } from 'react';
 import { getToolInfo, getToolDisplayName, PublicTools } from '@client/app/utils/toolMapping';
 

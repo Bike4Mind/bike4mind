@@ -65,3 +65,61 @@ describe('ToolBuilder MCP narrowing', () => {
     );
   });
 });
+
+describe('ToolBuilder native confirmation wiring', () => {
+  it('persists on the live quest and forwards the server-derived Slack destination', async () => {
+    const slackNotification = {
+      workspaceId: 'installation-1',
+      channelId: 'C123',
+      threadTs: '123.456',
+      messageTs: '123.789',
+    };
+    const quest = {
+      id: 'quest-1',
+      sessionId: 'session-1',
+      slackNotification,
+      pendingAction: undefined as { tool: string; params: Record<string, unknown>; ts: number } | undefined,
+    };
+    const saveQuest = vi.fn().mockResolvedValue(quest);
+    const tools = makeBuilder().buildTools({
+      enabledTools: ['confirmation_probe'],
+      mcpToolsByServer: {},
+      quest: quest as never,
+      saveQuest,
+      llm: { complete: vi.fn() } as unknown as ICompletionBackend,
+      config: {},
+      externalTools: {
+        confirmation_probe: {
+          name: 'confirmation_probe',
+          implementation: context => ({
+            toolFn: async () => {
+              await context.requestConfirmation?.({
+                tool: 'share_curated_file',
+                params: { ...context.slackDestination },
+                ts: 123,
+              });
+              return 'Preview ready';
+            },
+            toolSchema: {
+              name: 'confirmation_probe',
+              description: 'Test confirmation wiring',
+              parameters: { type: 'object', properties: {} },
+            },
+          }),
+        },
+      },
+    });
+    await tools?.find(tool => tool.toolSchema.name === 'confirmation_probe')?.toolFn({});
+    expect(quest.pendingAction).toEqual({
+      tool: 'share_curated_file',
+      ts: 123,
+      params: { workspaceId: 'installation-1', channelId: 'C123', threadTs: '123.456' },
+    });
+    expect(saveQuest).toHaveBeenCalled();
+    expect(saveQuest.mock.calls.at(-1)?.[0]).toBe(quest);
+    await tools?.find(tool => tool.toolSchema.name === 'confirmation_probe')?.toolFn({});
+    expect(quest.pendingAction?.ts).toBe(124);
+    await tools?.find(tool => tool.toolSchema.name === 'confirmation_probe')?.toolFn({});
+    expect(quest.pendingAction?.ts).toBe(125);
+  });
+});

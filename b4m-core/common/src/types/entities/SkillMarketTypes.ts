@@ -30,6 +30,8 @@ export interface ISkillScanFinding {
   message: string;
   excerpt?: string;
   source: 'rules' | 'classifier';
+  /** Supporting file the finding is in; absent for the SKILL.md fields. */
+  file?: string;
 }
 
 /** Machine-generated from the body + allowedTools, never from the author's description. */
@@ -42,6 +44,12 @@ export interface ISkillHonestSummary {
   mismatchNote?: string;
 }
 
+/** A UTF-8 text file shipped beside SKILL.md, at a path under `scripts/` or `references/` (utils/skillFiles.ts). */
+export interface ISkillFile {
+  path: string;
+  content: string;
+}
+
 /** The skill fields a version freezes. */
 export interface ISkillSnapshot {
   name: string;
@@ -49,7 +57,10 @@ export interface ISkillSnapshot {
   body: string;
   argumentHint?: string;
   allowedTools?: string[];
+  claudeCodeAllowedTools?: string[];
   disableModelInvocation?: boolean;
+  /** Sorted by path; absent when the skill has none. */
+  files?: ISkillFile[];
 }
 
 export interface ISkillListing {
@@ -69,6 +80,8 @@ export interface ISkillListing {
   pendingVersion?: number | null;
   /** Monotonic counter used to number new versions. */
   latestVersion: number;
+  /** Organization listings' Claude Code plugin name: assigned at first approval, never changed. */
+  claudePluginName?: string;
 
   // Denormalized from the current approved version so browse/search/cards read only the listing.
   name: string;
@@ -126,6 +139,21 @@ export interface ISkillListingVersion {
   /** SLA reminders sent so far; capped so a stuck review does not page reviewers forever. */
   reminderCount?: number;
 
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** An org's curated set of Organization listings, served as one Claude Code plugin in the org feed. */
+export interface ISkillBundle {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string;
+  /** Claude Code plugin name, unique in the org feed alongside listings' `claudePluginName`. */
+  pluginName: string;
+  /** Member listings in the admin's order; the zip orders skills by directory name instead. */
+  listingIds: string[];
+  createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
 }

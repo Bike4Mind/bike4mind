@@ -562,7 +562,7 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
   pendingConnector?: DataLakePendingConnector;
   /**
    * Whether a GitHub lake connection row (enabled or not) is bound to this lake, read flag-free as
-   * apps/client/server/dataLakes/assertLakeConnectorFree.ts does. Present only alongside
+   * packages/server-utils/src/dataLakes/assertLakeConnectorFree.ts does. Present only alongside
    * `pendingConnector`, and only when the list route wires the lookup; absent means unknown.
    */
   hasGitHubConnection?: boolean;
@@ -715,7 +715,7 @@ export const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
  *
  * The shared place "is this lake's prefix an OPEN one" is decided BY ID MEMBERSHIP in the static
  * registry, so every consumer that reverses a content-tag-prefix match back to a specific lake -
- * `grantingLakes`/`isFileInAccessibleLake` (`apps/client/server/dataLakes/grantingLakes.ts`,
+ * `grantingLakes`/`isFileInAccessibleLake` (`packages/server-utils/src/dataLakes/grantingLakes.ts`,
  * naming the grantor of a single already-authorized file), `splitTagPrefixes` (same file's
  * barrel, scoping a browse/search query), and `attributeAccessedLakeIds`
  * (`b4m-core/services/src/dataLakeService/attributeAccessedLakes.ts`, naming the lake a retrieved

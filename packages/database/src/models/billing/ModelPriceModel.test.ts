@@ -39,6 +39,21 @@ describe('ModelPriceRepository', () => {
     expect(row.pricing['200000']).toMatchObject({ input: 2e-6, output: 8e-6, cache_read: 1e-6, cache_write: 3e-6 });
   });
 
+  it('returns the appended row with a JSON-serializable pricing map', async () => {
+    const pricing = { '0': { ...tier, cache_read: 2.5e-7, cache_write: 1.25e-5 } };
+    const row = await modelPriceRepository.append({
+      modelId: 'gpt-x',
+      unit: 'per_token',
+      pricing,
+      effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+      note: 'invoice X',
+    });
+
+    // The admin reprice endpoint res.json()s this row; a Mongoose Map serializes as {}.
+    expect(JSON.parse(JSON.stringify(row)).pricing).toEqual(pricing);
+    expect(row?.id).toEqual(expect.any(String));
+  });
+
   it('round-trips repricedBy and returns it in history', async () => {
     await modelPriceRepository.append({
       modelId: 'gpt-x',
@@ -71,6 +86,18 @@ describe('ModelPriceRepository', () => {
     const perMinute = rows.find(r => r.unit === 'per_minute');
     expect(perToken?.note).toBe('july');
     expect(perMinute?.pricing['1'].input).toBe(0.06);
+  });
+
+  it('rowsInForce returns each row with its id (the aggregation skips virtuals), for the UsageEvent price stamp', async () => {
+    const appended = await modelPriceRepository.append({
+      modelId: 'gpt-x',
+      unit: 'per_token',
+      pricing: { '200000': tier },
+      effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+    });
+
+    const [row] = await modelPriceRepository.rowsInForce(new Date('2026-07-15T00:00:00Z'));
+    expect(row.id).toBe(String(appended!._id));
   });
 
   it('historyForModel returns all rows newest first', async () => {

@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { ImageModels } from '../models';
+import { ImageModels, type ModelInfo } from '../models';
+import { BFL_IMAGE_MODELS } from '../schemas/bfl';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
 import { VIDEO_MODEL_IDS } from '../video/catalog';
 import {
+  filterRunnableModels,
+  getMaxReferenceImages,
+  supportsPromptUpsampling,
   isVideoModel,
   isGPTImageModel,
   isGPTImage2Model,
@@ -162,16 +166,9 @@ describe('clampImageQualityForModel', () => {
 });
 
 describe('isBflImageModel', () => {
-  // Enumerate the full BFL set (Kontext members included) - the ResetButton `style:'vivid'`
-  // and BFL-panel branches depend on Kontext models counting as BFL.
-  it.each([
-    ImageModels.FLUX_PRO_1_1,
-    ImageModels.FLUX_PRO,
-    ImageModels.FLUX_PRO_ULTRA,
-    ImageModels.FLUX_PRO_FILL,
-    ImageModels.FLUX_KONTEXT_PRO,
-    ImageModels.FLUX_KONTEXT_MAX,
-  ])('true for BFL model %s', model => expect(isBflImageModel(model)).toBe(true));
+  // Derived from the list itself so the assertion always covers the full set - the ResetButton
+  // `style:'vivid'` and BFL-panel branches depend on Kontext models counting as BFL.
+  it.each(BFL_IMAGE_MODELS)('true for BFL model %s', model => expect(isBflImageModel(model)).toBe(true));
   it('false for a non-BFL image model', () => expect(isBflImageModel(ImageModels.GPT_IMAGE_1)).toBe(false));
   it('false for null/undefined/empty', () => {
     expect(isBflImageModel(null)).toBe(false);
@@ -326,5 +323,58 @@ describe('isVideoModel', () => {
     expect(isVideoModel('gpt-4o')).toBe(false);
     expect(isVideoModel(ImageModels.GPT_IMAGE_1)).toBe(false);
     expect(isVideoModel('sora-2')).toBe(false);
+  });
+});
+
+describe('filterRunnableModels', () => {
+  const info = (id: string, disabled?: boolean) => ({ id, disabled }) as ModelInfo;
+
+  it('drops disabled models and models the user is not allowed, keeping unconfigured ones', () => {
+    const models = [info('open'), info('off', true), info('gated'), info('entitled')];
+    const configs = [
+      makeModel({ id: 'gated', allowedUserTags: ['pro'] }),
+      makeModel({ id: 'entitled', allowedEntitlements: ['medlib:pro'] }),
+    ];
+    expect(filterRunnableModels(models, configs, [], false, []).map(m => m.id)).toEqual(['open']);
+    expect(filterRunnableModels(models, configs, ['pro'], false, ['medlib:pro']).map(m => m.id)).toEqual([
+      'open',
+      'gated',
+      'entitled',
+    ]);
+  });
+
+  it('drops a model whose admin row is switched off, even for an admin', () => {
+    const configs = [makeModel({ id: 'paused', enabled: false })];
+    expect(filterRunnableModels([info('paused')], configs, [], true, [])).toEqual([]);
+  });
+});
+
+describe('getMaxReferenceImages', () => {
+  it.each([
+    [ImageModels.GPT_IMAGE_2, 15],
+    [ImageModels.FLUX_2_PRO, 8],
+    [ImageModels.FLUX_2_MAX, 8],
+    [ImageModels.FLUX_2_KLEIN_9B, 4],
+    [ImageModels.FLUX_2_KLEIN_4B, 4],
+    [ImageModels.FLUX_PRO_1_1, 0],
+    [ImageModels.GEMINI_3_PRO_IMAGE, 0],
+  ])('%s accepts %s references', (model, limit) => {
+    expect(getMaxReferenceImages(model)).toBe(limit);
+  });
+});
+
+describe('supportsPromptUpsampling', () => {
+  it.each([
+    [ImageModels.FLUX_2_MAX, true],
+    [ImageModels.FLUX_2_PRO, true],
+    [ImageModels.FLUX_2_PRO_PREVIEW, true],
+    [ImageModels.FLUX_2_FLEX, true],
+    [ImageModels.FLUX_2_KLEIN_9B, false],
+    [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, false],
+    [ImageModels.FLUX_2_KLEIN_4B, false],
+    [ImageModels.FLUX_PRO_1_1, true],
+    [ImageModels.GPT_IMAGE_2, false],
+  ])('%s exposes a prompt enhancement control: %s', (model, supported) => {
+    expect(supportsPromptUpsampling(model)).toBe(supported);
   });
 });

@@ -28,11 +28,10 @@ const CI_WORKFLOW = path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml');
  * Every shard leg declared as a matrix `args:` value, in file order, tagged with the lane its own
  * matrix block selects.
  *
- * Block-scoped on purpose. The workflow runs TWO shard sets over the same package - the unit `test`
- * lane and the `test:integration` lane - so a leg's `args` only promises anything about the lane of
- * the `script` in the SAME block. Collecting every `--shard=i/N` in the file and asserting one
- * complete set would see six legs of `i/3` and fail; grouping them globally would be worse, since a
- * lane that had lost a leg would pass as long as the other lane still covered 1..N.
+ * Block-scoped on purpose. The same package can run in more than one lane - the unit `test` lane
+ * and the `test:integration` lane - so a leg's `args` only promises anything about the lane of the
+ * `script` in the SAME block. If both lanes were sharded, grouping legs globally would let a lane
+ * that had lost a leg pass as long as the other lane still covered 1..N.
  *
  * A block runs from one `- name:` to the next. The `args:` key is anchored inside it rather than
  * matched anywhere in the file, because the workflow's own comments quote the flag while explaining
@@ -88,20 +87,29 @@ function readLegBlocks(contents: string): Array<{ filter: string; script: string
     });
 }
 
-describe('apps/workers integration leg in ci.yml', () => {
-  // The workers real-Mongo suites run only in this unsharded leg - the `misc` leg runs the workers
-  // unit lane, not `test:integration`. It has no `--shard` args, so every guard above skips it, and
-  // deleting it would leave CI green with those suites never running.
-  it('declares exactly one `test:integration` leg for @bike4mind/workers', () => {
+function filterPackages(filter: string): string[] {
+  const tokens = filter.split(/\s+/);
+  return tokens.filter((_, i) => i % 2 === 1);
+}
+
+describe.each([
+  { pkgName: '@bike4mind/client', dir: ['apps', 'client'] },
+  { pkgName: '@bike4mind/workers', dir: ['apps', 'workers'] },
+  { pkgName: '@bike4mind/server-utils', dir: ['packages', 'server-utils'] },
+])('$pkgName integration leg in ci.yml', ({ pkgName, dir }) => {
+  // Each package's real-Mongo suites run only in an unsharded `test:integration` leg; its unit lane
+  // runs elsewhere. That leg has no `--shard` args, so the shard guards below skip it, and dropping
+  // the package from it would leave CI green with those suites never running.
+  it('is named by exactly one `test:integration` leg', () => {
     const legs = readLegBlocks(fs.readFileSync(CI_WORKFLOW, 'utf8')).filter(
-      leg => leg.filter === '--filter @bike4mind/workers' && leg.script === 'test:integration'
+      leg => leg.script === 'test:integration' && filterPackages(leg.filter).includes(pkgName)
     );
     expect(legs).toHaveLength(1);
   });
 
-  it('points at a script apps/workers actually defines', () => {
-    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'apps', 'workers', 'package.json'), 'utf8'));
-    expect(pkg.scripts?.['test:integration'], 'apps/workers has no test:integration script').toBeDefined();
+  it('points at a script the package actually defines', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, ...dir, 'package.json'), 'utf8'));
+    expect(pkg.scripts?.['test:integration'], `${pkgName} has no test:integration script`).toBeDefined();
   });
 });
 
@@ -111,11 +119,12 @@ describe('apps/client test-shard legs in ci.yml', () => {
   const lanes = new Map<string, Array<{ index: number; count: number; lane: string }>>();
   for (const leg of legs) lanes.set(leg.lane, [...(lanes.get(leg.lane) ?? []), leg]);
 
-  it('declares both the unit and the integration lane', () => {
+  it('shards only the unit lane', () => {
     // Each lane is asserted complete below, so a lane that vanished entirely - or a `script` typo
-    // that merged two lanes into one group - has to be caught here. Otherwise it just shrinks the
-    // set of things checked, the same silent-drop shape this whole file exists to prevent.
-    expect([...lanes.keys()].sort()).toEqual(['test', 'test:integration']);
+    // that moved the unit legs into another group - has to be caught here. Otherwise it just
+    // shrinks the set of things checked, the same silent-drop shape this whole file exists to
+    // prevent. The integration lane runs unsharded; see the per-package leg checks above.
+    expect([...lanes.keys()].sort()).toEqual(['test']);
   });
 
   it('declares at least two legs per lane (otherwise the flag is pointless overhead)', () => {
@@ -267,14 +276,14 @@ describe('readShardLegs', () => {
 describe('readLegBlocks', () => {
   it("reads each block's filter and script, defaulting the script to the unit lane", () => {
     const contents = [
-      '          - name: workers-integration',
-      "            filter: '--filter @bike4mind/workers'",
+      '          - name: workers-server-utils-integration',
+      "            filter: '--filter @bike4mind/workers --filter @bike4mind/server-utils'",
       "            script: 'test:integration'",
       '          - name: services',
       "            filter: '--filter @bike4mind/services'",
     ].join('\n');
     expect(readLegBlocks(contents)).toEqual([
-      { filter: '--filter @bike4mind/workers', script: 'test:integration' },
+      { filter: '--filter @bike4mind/workers --filter @bike4mind/server-utils', script: 'test:integration' },
       { filter: '--filter @bike4mind/services', script: 'test' },
     ]);
   });

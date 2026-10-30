@@ -30,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: RouteHandler) => fn }));
-vi.mock('@server/utils/sessionAccess', () => ({ assertSessionAccess: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/sessionAccess', () => ({ assertSessionAccess: vi.fn() }));
 vi.mock('@server/utils/refreshAgentAvatarUrls', () => ({ refreshAgentAvatarUrls: mockRefs.refreshAgentAvatarUrls }));
 
 vi.mock('@bike4mind/database', () => ({

@@ -13,20 +13,18 @@ import {
   Typography,
   useTheme,
 } from '@mui/joy';
-import {
-  CheckCircle as CheckCircleIcon,
-  CloudOutlined as CloudOutlinedIcon,
-  CodeOutlined as CodeOutlinedIcon,
-  Error as ErrorIcon,
-  HomeRounded as HomeRoundedIcon,
-  Inventory2Outlined as Inventory2OutlinedIcon,
-  LockOutlined as LockOutlinedIcon,
-  MemoryOutlined as MemoryOutlinedIcon,
-  PlayCircleOutlined as PlayCircleOutlinedIcon,
-  ShieldOutlined as ShieldOutlinedIcon,
-  VpnKeyOutlined as VpnKeyOutlinedIcon,
-  Warning as WarningIcon,
-} from '@mui/icons-material';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
+import CodeOutlinedIcon from '@mui/icons-material/CodeOutlined';
+import ErrorIcon from '@mui/icons-material/Error';
+import HomeRoundedIcon from '@mui/icons-material/HomeRounded';
+import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
+import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
+import PlayCircleOutlinedIcon from '@mui/icons-material/PlayCircleOutlined';
+import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
+import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
+import WarningIcon from '@mui/icons-material/Warning';
 import { useMemo, useState } from 'react';
 import { useSecurityScanCooldown } from '@client/app/hooks/useSecurityScanCooldown';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
@@ -61,6 +59,8 @@ import {
 } from '@client/app/hooks/data/admin';
 import { WafTrafficOverview } from './SecurityDashboard/WafTrafficOverview';
 import ActiveDefenseTab from './SecurityDashboard/ActiveDefenseTab';
+import { AdminPageHeader, DataTable, EmptyState, ErrorState, StatusChip } from './shared';
+import { SecurityFindingsTable } from './SecurityDashboard/SecurityFindingsTable';
 
 const statusColorMap: Record<SecurityCheckStatus, 'success' | 'warning' | 'danger' | 'neutral'> = {
   pass: 'success',
@@ -154,72 +154,6 @@ const parseSeverityCountsFromSummary = (
 };
 
 /**
- * Determine badge colors and styling based on severity and score.
- * Priority: Critical > High > Score-based. Uses theme colors for dark mode.
- */
-const getBadgeColors = (
-  score: number,
-  criticalCount: number,
-  highCount: number,
-  theme: ReturnType<typeof useTheme>
-) => {
-  const { palette } = theme;
-
-  // Priority 1: Critical issues = RED (most severe)
-  if (criticalCount > 0) {
-    return {
-      gradient: `linear-gradient(135deg, ${palette.security.critical.gradientStart}, ${palette.security.critical.gradientEnd})`,
-      shadow: `0 8px 24px ${palette.security.critical.shadow}`,
-      textShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
-    };
-  }
-
-  // Priority 2: High issues = ORANGE
-  if (highCount > 0) {
-    return {
-      gradient: `linear-gradient(135deg, ${palette.security.high.gradientStart}, ${palette.security.high.gradientEnd})`,
-      shadow: `0 8px 24px ${palette.security.high.shadow}`,
-      textShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
-    };
-  }
-
-  // Priority 3: Score-based colors
-  if (score < 50) {
-    // At Risk = Use medium/amber
-    return {
-      gradient: `linear-gradient(135deg, ${palette.security.medium.gradientStart}, ${palette.security.medium.gradientEnd})`,
-      shadow: `0 8px 24px ${palette.security.medium.shadow}`,
-      textShadow: '0 2px 4px rgba(0, 0, 0, 0.15)',
-    };
-  }
-
-  if (score < 70) {
-    // Moderate
-    return {
-      gradient: `linear-gradient(135deg, ${palette.security.moderate.gradientStart}, ${palette.security.moderate.gradientEnd})`,
-      shadow: `0 8px 24px ${palette.security.moderate.shadow}`,
-      textShadow: '0 2px 4px rgba(0, 0, 0, 0.15)',
-    };
-  }
-
-  if (score < 85) {
-    // Good
-    return {
-      gradient: `linear-gradient(135deg, ${palette.security.good.gradientStart}, ${palette.security.good.gradientEnd})`,
-      shadow: `0 8px 24px ${palette.security.good.shadow}`,
-      textShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
-    };
-  }
-
-  // Excellent
-  return {
-    gradient: `linear-gradient(135deg, ${palette.security.excellent.gradientStart}, ${palette.security.excellent.gradientEnd})`,
-    shadow: `0 8px 24px ${palette.security.excellent.shadow}`,
-    textShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
-  };
-};
-
-/**
  * Get descriptive label based on severity and score
  */
 const getSecurityStatusLabel = (score: number, criticalCount: number, highCount: number): string => {
@@ -274,7 +208,20 @@ const getCheckStatusLabel = (
   theme: ReturnType<typeof useTheme>
 ): { label: string; color: string; bgcolor: string; icon?: 'check' | 'warning' | 'error' } => {
   const { id: checkId, score, status } = check;
-  const { palette } = theme;
+  const toneColors = (tone: 'bad' | 'warn' | 'neutral' | 'good') => ({
+    plainColor: theme.palette.admin.status[tone].foreground,
+    softBg: theme.palette.admin.status[tone].background,
+  });
+  const palette = {
+    security: {
+      neutral: toneColors('neutral'),
+      critical: toneColors('bad'),
+      high: toneColors('bad'),
+      medium: toneColors('warn'),
+      low: toneColors('neutral'),
+      good: toneColors('good'),
+    },
+  };
 
   // Handle disabled/not scanned state
   if (status === 'disabled' || score === null) {
@@ -420,9 +367,9 @@ const SecurityOverviewCard = ({ check }: SecurityOverviewCardProps) => {
   );
 };
 
-const SecurityOverviewGrid = () => {
+export const SecurityOverviewGrid = ({ onOpen }: { onOpen(section: SecurityDashboardSectionId): void }) => {
   const theme = useTheme();
-  const { data, isLoading } = useSecurityDashboardOverview();
+  const { data, isLoading, isError, refetch } = useSecurityDashboardOverview();
   const aiAssessment = useSecurityDashboardAiAssessment();
 
   // Fetch all schedules in a single request (N+1 fix)
@@ -473,7 +420,18 @@ const SecurityOverviewGrid = () => {
   }
 
   if (!data) {
-    return null;
+    return isError ? (
+      <ErrorState message="Could not load security checks." onRetry={() => void refetch()} />
+    ) : (
+      <EmptyState
+        title="No security checks available"
+        action={
+          <Button onClick={() => void refetch()} data-testid="security-overview-refresh-btn">
+            Refresh checks
+          </Button>
+        }
+      />
+    );
   }
 
   const lastUpdated = new Date(data.lastUpdated);
@@ -496,13 +454,11 @@ const SecurityOverviewGrid = () => {
   );
 
   // Get badge styling based on severity (or neutral if no scans yet)
-  const badgeColors = hasAnyScanRun
-    ? getBadgeColors(data.overallScore, totalSeverity.critical, totalSeverity.high, theme)
-    : {
-        gradient: `linear-gradient(135deg, ${theme.palette.security.neutral.gradientStart}, ${theme.palette.security.neutral.gradientEnd})`,
-        shadow: `0 8px 24px ${theme.palette.security.neutral.shadow}`,
-        textShadow: '0 2px 4px rgba(0, 0, 0, 0.15)',
-      };
+  const badgeColors = {
+    gradient: theme.palette.admin.surface,
+    shadow: 'none',
+    textShadow: '0 2px 4px rgba(0, 0, 0, 0.15)',
+  };
 
   const scoreLabel = hasAnyScanRun
     ? getSecurityStatusLabel(data.overallScore, totalSeverity.critical, totalSeverity.high)
@@ -537,7 +493,7 @@ const SecurityOverviewGrid = () => {
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: theme.palette.neutral[50],
+                color: theme.palette.admin.ink,
                 boxShadow: badgeColors.shadow,
               }}
             >
@@ -845,28 +801,65 @@ const SecurityOverviewGrid = () => {
 
       <Box
         sx={{
-          display: 'grid',
-          gridTemplateColumns: {
-            xs: '1fr',
-            md: 'repeat(3, minmax(0, 1fr))',
-          },
+          width: '100%',
           gap: 2,
           mb: 1,
         }}
         data-testid="security-overview-grid"
       >
-        {data.checks.map(check => (
-          <Box key={check.id}>
-            <SecurityOverviewCard check={check} />
-          </Box>
-        ))}
+        <DataTable
+          rows={data.checks}
+          getRowId={check => check.id}
+          label="Security checks"
+          onRetry={() => void refetch()}
+          onRowActivate={check => {
+            if (['web', 'cloud', 'waf'].includes(check.id)) onOpen(check.id as SecurityDashboardSectionId);
+          }}
+          columns={[
+            { id: 'check', label: 'Check', render: check => <SecurityOverviewCard check={check} /> },
+            {
+              id: 'status',
+              label: 'Status',
+              render: check => (
+                <StatusChip
+                  tone={
+                    check.status === 'pass'
+                      ? 'good'
+                      : check.status === 'fail'
+                        ? 'bad'
+                        : check.status === 'warning'
+                          ? 'warn'
+                          : 'neutral'
+                  }
+                  label={statusLabelMap[check.status]}
+                />
+              ),
+            },
+            {
+              id: 'detail',
+              label: 'Details',
+              render: check =>
+                ['web', 'cloud', 'waf'].includes(check.id) ? (
+                  <Button
+                    variant="plain"
+                    onClick={() => onOpen(check.id as SecurityDashboardSectionId)}
+                    data-testid={`security-open-${check.id}-btn`}
+                  >
+                    Review {check.label}
+                  </Button>
+                ) : (
+                  <Typography level="body-sm">{check.summary}</Typography>
+                ),
+            },
+          ]}
+        />
       </Box>
     </Stack>
   );
 };
 
 const SecurityWebTab = () => {
-  const { data: snapshot, isLoading } = useSecurityDashboardWeb();
+  const { data: snapshot, isLoading, refetch } = useSecurityDashboardWeb();
   const runWebScan = useRunWebSecurityScan();
   const { cooldownActive, hoursRemaining } = useSecurityScanCooldown(snapshot?.checkedAt);
   const { data: schedule } = useSecurityScanSchedule('web');
@@ -1265,52 +1258,7 @@ const SecurityWebTab = () => {
         </Box>
       </Sheet>
 
-      <Sheet
-        variant="outlined"
-        sx={{
-          p: 2,
-          borderRadius: 'md',
-        }}
-      >
-        <Typography level="body-xs" sx={{ color: 'neutral.500', mb: 1 }}>
-          Scan Details
-        </Typography>
-        <Stack spacing={1.5}>
-          {findings.map(finding => (
-            <Sheet
-              key={finding.id}
-              variant="soft"
-              sx={theme => ({
-                p: 1.5,
-                borderRadius: 'sm',
-                borderLeft: '3px solid',
-                borderLeftColor:
-                  finding.severity === 'critical'
-                    ? theme.palette.danger[500]
-                    : finding.severity === 'high'
-                      ? theme.palette.warning[700]
-                      : finding.severity === 'medium'
-                        ? theme.palette.warning[500]
-                        : theme.palette.success[600],
-                backgroundColor: theme.palette.background.level1,
-              })}
-              data-testid={`web-security-finding-${finding.id}`}
-            >
-              <Typography level="body-sm" sx={{ fontWeight: 600 }}>
-                {finding.title}
-              </Typography>
-              <Typography level="body-xs" sx={{ color: 'neutral.600', mt: 0.5 }}>
-                {finding.description}
-              </Typography>
-            </Sheet>
-          ))}
-          {findings.length === 0 && (
-            <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
-              No findings were reported in the latest scan.
-            </Typography>
-          )}
-        </Stack>
-      </Sheet>
+      <SecurityFindingsTable rows={findings} testId="web-security" onRetry={() => void refetch()} />
 
       <Typography level="body-xs" sx={{ color: 'neutral.500' }}>
         Last scan:{' '}
@@ -2252,7 +2200,7 @@ const CloudFindingCard = ({
 };
 
 const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: SecurityDashboardCloudSnapshot }) => {
-  const { data: liveSnapshot, isLoading } = useSecurityDashboardCloud();
+  const { data: liveSnapshot, isLoading, refetch } = useSecurityDashboardCloud();
   const snapshot = liveSnapshot ?? initialSnapshot;
   const runCloudScan = useRunCloudSecurityScan();
   const { cooldownActive, hoursRemaining } = useSecurityScanCooldown(snapshot?.checkedAt);
@@ -2414,21 +2362,12 @@ const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: S
         </Typography>
       </Sheet>
 
-      <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'md' }}>
-        <Typography level="body-xs" sx={{ color: 'neutral.500', mb: 1 }}>
-          Findings
-        </Typography>
-        <Stack spacing={1.5}>
-          {findings.map(finding => (
-            <CloudFindingCard key={finding.id} finding={finding} testIdPrefix="cloud-security" />
-          ))}
-          {findings.length === 0 && (
-            <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
-              No misconfigurations found in the latest baseline scan.
-            </Typography>
-          )}
-        </Stack>
-      </Sheet>
+      <SecurityFindingsTable
+        rows={findings}
+        testId="cloud-security"
+        onRetry={() => void refetch()}
+        renderDetail={finding => <CloudFindingCard finding={finding} testIdPrefix="cloud-security" />}
+      />
 
       <Typography level="body-xs" sx={{ color: 'neutral.500' }}>
         Last scan: {new Date(snapshot.checkedAt).toLocaleString('en-US', { timeZone: 'UTC' })} UTC
@@ -2439,7 +2378,7 @@ const InfrastructureBaselineSubTab = ({ initialSnapshot }: { initialSnapshot?: S
 };
 
 const ProwlerAuditSubTab = () => {
-  const { data: snapshot, isLoading } = useSecurityDashboardProwler();
+  const { data: snapshot, isLoading, refetch } = useSecurityDashboardProwler();
   const runProwler = useRunProwlerScan();
   const { cooldownActive, hoursRemaining } = useSecurityScanCooldown(snapshot?.checkedAt);
   const [showAll, setShowAll] = useState(false);
@@ -2593,16 +2532,12 @@ const ProwlerAuditSubTab = () => {
             </Button>
           )}
         </Stack>
-        <Stack spacing={1.5}>
-          {visibleFindings.map(finding => (
-            <CloudFindingCard key={finding.id} finding={finding} testIdPrefix="prowler" />
-          ))}
-          {visibleFindings.length === 0 && (
-            <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
-              No Prowler findings in the latest audit.
-            </Typography>
-          )}
-        </Stack>
+        <SecurityFindingsTable
+          rows={visibleFindings}
+          testId="prowler"
+          onRetry={() => void refetch()}
+          renderDetail={finding => <CloudFindingCard finding={finding} testIdPrefix="prowler" />}
+        />
       </Sheet>
 
       <Typography level="body-xs" sx={{ color: 'neutral.500' }}>
@@ -2656,7 +2591,7 @@ const SecurityWafTab = ({
   snapshot?: SecurityDashboardWafSnapshot;
   isActive?: boolean;
 }) => {
-  const { data: liveSnapshot, isLoading } = useSecurityDashboardWaf();
+  const { data: liveSnapshot, isLoading, refetch } = useSecurityDashboardWaf();
   const snapshot = liveSnapshot ?? initialSnapshot;
   const runWafScan = useRunWafSecurityScan();
   const { data: schedule } = useSecurityScanSchedule('waf');
@@ -2897,56 +2832,7 @@ const SecurityWafTab = ({
               )}
             </Sheet>
           )}
-          {issueFindings.map(finding => (
-            <Sheet
-              key={finding.id}
-              variant="soft"
-              sx={theme => ({
-                p: 1.5,
-                borderRadius: 'sm',
-                borderLeft: '3px solid',
-                borderLeftColor:
-                  finding.severity === 'critical'
-                    ? theme.palette.danger[500]
-                    : finding.severity === 'high'
-                      ? theme.palette.warning[700]
-                      : finding.severity === 'medium'
-                        ? theme.palette.warning[500]
-                        : theme.palette.success[600],
-                backgroundColor: theme.palette.background.level1,
-              })}
-              data-testid={`waf-security-finding-${finding.id}`}
-            >
-              <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
-                <Typography level="body-sm" sx={{ fontWeight: 600, mr: 1 }}>
-                  {finding.title}
-                </Typography>
-                <Chip
-                  size="sm"
-                  variant="soft"
-                  color={severityColorMap[finding.severity]}
-                  sx={{ textTransform: 'none', fontWeight: 500 }}
-                >
-                  {finding.severity[0].toUpperCase() + finding.severity.slice(1)} severity
-                </Chip>
-              </Stack>
-              <Typography level="body-xs" sx={{ color: 'neutral.600', mt: 0.5 }}>
-                {finding.description}
-              </Typography>
-              {finding.recommendation && (
-                <Typography level="body-xs" sx={{ color: 'neutral.600', mt: 0.5 }}>
-                  {finding.recommendation}
-                </Typography>
-              )}
-              {finding.documentationUrl?.startsWith('https://') && (
-                <Typography level="body-xs" sx={{ color: 'primary.600', mt: 0.5 }}>
-                  <a href={finding.documentationUrl} target="_blank" rel="noreferrer">
-                    View guidance
-                  </a>
-                </Typography>
-              )}
-            </Sheet>
-          ))}
+          <SecurityFindingsTable rows={issueFindings} testId="waf-security" onRetry={() => void refetch()} />
           {findings.length === 0 && (
             <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
               No firewall / WAF issues were reported in the latest scan.
@@ -2972,14 +2858,7 @@ const SecurityWafTab = ({
 };
 
 type SecurityDashboardSectionId =
-  | 'overview'
-  | 'web'
-  | 'code'
-  | 'packages'
-  | 'secrets'
-  | 'cloud'
-  | 'waf'
-  | 'active-defense';
+  'overview' | 'web' | 'code' | 'packages' | 'secrets' | 'cloud' | 'waf' | 'active-defense';
 
 // Tabs temporarily hidden - functionality preserved but not exposed in UI
 const HIDDEN_TABS: SecurityDashboardSectionId[] = ['code', 'packages', 'secrets'];
@@ -3000,14 +2879,7 @@ const SecurityDashboard: React.FC = () => {
       }}
       data-testid="security-dashboard-react-root"
     >
-      <Box>
-        <Typography level="h3" sx={{ mb: 0.5 }}>
-          Security Dashboard
-        </Typography>
-        <Typography level="body-sm" sx={{ color: 'neutral.600' }}>
-          Central view of your security posture across website, code, infrastructure, and more.
-        </Typography>
-      </Box>
+      <AdminPageHeader title="Security" description="Review security checks and inspect scan findings." />
 
       <Tabs
         value={activeSection}
@@ -3020,6 +2892,7 @@ const SecurityDashboard: React.FC = () => {
             borderBottom: '1px solid',
             borderColor: 'divider',
             mb: 1,
+            overflowX: 'auto',
           }}
         >
           <Tab
@@ -3112,7 +2985,7 @@ const SecurityDashboard: React.FC = () => {
         </TabList>
 
         <TabPanel value="overview" sx={{ px: 0, pt: 2 }}>
-          <SecurityOverviewGrid />
+          <SecurityOverviewGrid onOpen={setActiveSection} />
         </TabPanel>
         <TabPanel value="web" sx={{ px: 0, pt: 2 }}>
           <SecurityWebTab />

@@ -1,10 +1,11 @@
+import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { verifySlackRequest } from '@server/integrations/slack/slackWebhookVerification';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { User } from '@bike4mind/database/auth';
 import { Organization } from '@bike4mind/database/infra';
 import { Quest } from '@bike4mind/database/content';
@@ -54,7 +55,7 @@ import { runDataLakeSlackCommand, formatBareDataLakeMentionHint } from '@server/
 import { buildSlackLakeIngestDeps } from '@server/slack/dataLakeIngestDeps';
 import { logEvent } from '@server/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -341,7 +342,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // let Slack show cached view, then update directly to new content.
 
       // Look up B4M user by Slack ID
-      const b4mUser = await User.findOne({ 'slackSettings.slackUserId': slackUserId });
+      const b4mUser = await User.findOne({
+        'slackSettings.slackUserId': slackUserId,
+        ...VERIFIED_SLACK_IDENTITY_FILTER,
+      });
 
       // Update audit context with B4M user ID if found
       if (b4mUser) {

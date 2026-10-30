@@ -8,6 +8,11 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import {
+  lapseDissolvedOrganizationLakeAccess,
+  type LakeAccessLapseTrigger,
+  type LapseDepartedMemberLakeAccessAdapters,
+} from '../dataLakeService';
 import { get } from './get';
 
 export const deleteSchema = z.object({
@@ -26,12 +31,14 @@ export type DeleteValidationFn = (
 /**
  * Adapters interface for the deleteOrganization operation
  */
-interface DeleteAdapters {
-  db: {
+interface DeleteAdapters extends LapseDepartedMemberLakeAccessAdapters {
+  db: LapseDepartedMemberLakeAccessAdapters['db'] & {
     organizations: IOrganizationRepository;
     groups: Pick<IGroupRepository, 'findByOrganization' | 'delete'>;
     users: Pick<IUserRepository, 'removeGroupsFromAllUsers' | 'clearOrganizationPointer'>;
   };
+  /** API-key principal for the lake audit rows; see `PurgeOrgMembershipAdapters.auditPrincipal`. */
+  auditPrincipal?: LakeAccessLapseTrigger['auditPrincipal'];
   /**
    * Optional validation service to determine if organization can be deleted
    */
@@ -48,8 +55,9 @@ interface DeleteAdapters {
  * @throws {Error} If organization cannot be deleted based on validation, includes reason if provided
  *
  * Caller MUST wrap this in withTransaction (see the route): the member purge, the group
- * soft-deletes, the members' organizationId reset, and the org delete have to commit together, or
- * a partial failure leaves either dangling group access or an org that never actually deletes.
+ * soft-deletes, the members' lake-grant lapse, the members' organizationId reset, and the org delete
+ * have to commit together, or a partial failure leaves either dangling group or lake access or an org
+ * that never actually deletes.
  */
 export async function deleteOrganization(
   user: IUserDocument,
@@ -100,6 +108,19 @@ export async function deleteOrganization(
       await adapters.db.groups.delete(groupId);
     }
   }
+
+  // Grants carry no membership qualifier, so members' grants on this org's lakes would outlive the
+  // org. Same lapse-and-hand-off as a single departure (purgeOrgMembership.ts), for everyone at once.
+  const memberUserIds = [
+    ...(organization.users ?? []).map(member => String(member.userId)),
+    ...(organization.adminUserIds ?? []).map(String),
+  ];
+  await lapseDissolvedOrganizationLakeAccess(
+    memberUserIds,
+    { id: organization.id, userId: String(organization.userId) },
+    { userId: user.id, auditPrincipal: adapters.auditPrincipal },
+    adapters
+  );
 
   // Members would otherwise keep an active-org pointer to a deleted org and stay org-scoped.
   await adapters.db.users.clearOrganizationPointer(id);

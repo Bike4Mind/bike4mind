@@ -14,14 +14,15 @@
 
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { orgGitHubConnectionRepository } from '@bike4mind/database';
+import { adminApi } from '@server/middlewares/adminApi';
+import { orgGitHubConnectionRepository, withTransaction } from '@bike4mind/database';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { BadRequestError, InternalServerError, NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validatePrivateKeyFormat } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const logger = new Logger({ metadata: { component: 'admin-github-rotate-key' } });
 
@@ -33,7 +34,10 @@ const RotateKeySchema = z.object({
   privateKey: z.string().min(1, 'privateKey is required').max(MAX_PRIVATE_KEY_LENGTH, 'privateKey too long'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   // Rate limit to 3 rotations per hour
   .use(
     rateLimit({
@@ -43,8 +47,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   )
   // POST - Rotate private key
   .post(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const parseResult = RotateKeySchema.safeParse(req.body);
     if (!parseResult.success) {
       throw new BadRequestError(parseResult.error.issues[0]?.message || 'Invalid request body');
@@ -79,12 +81,23 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const encryptedPrivateKey = encryptSecret(privateKey, encryptionKey);
 
     // Update the connection with new key and clear cached token
-    await orgGitHubConnectionRepository.update({
-      id: connection.id,
-      privateKey: encryptedPrivateKey,
-      cachedAccessToken: undefined,
-      tokenExpiresAt: undefined,
-      tokenCachedAt: undefined,
+    await withTransaction(async () => {
+      const updated = await orgGitHubConnectionRepository.update({
+        id: connection.id,
+        privateKey: encryptedPrivateKey,
+        cachedAccessToken: undefined,
+        tokenExpiresAt: undefined,
+        tokenCachedAt: undefined,
+      });
+      if (!updated) {
+        throw new NotFoundError('Failed to update connection');
+      }
+      await recordAdminActionFromRequest(req, {
+        action: 'integration.github_connection.key_rotated',
+        target: { kind: 'settings', id: connection.id, displayName: 'System GitHub connection' },
+        summary: 'rotated github app private key',
+        details: { appId: connection.appId },
+      });
     });
 
     logger.info('[Admin] Rotated GitHub App private key', {

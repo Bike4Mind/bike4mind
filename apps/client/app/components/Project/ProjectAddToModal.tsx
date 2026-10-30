@@ -17,7 +17,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { FC, ReactNode, useMemo, useState, createContext, useContext, useRef, useEffect } from 'react';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import { toast } from 'sonner';
 
 interface ProjectAddToModalContextType {

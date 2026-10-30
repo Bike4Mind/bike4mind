@@ -7,7 +7,7 @@ vi.mock('@server/integrations/jira/atlassianTokenManager', () => ({
   AtlassianReconnectRequiredError: class extends Error {},
 }));
 // Stored values are encrypted at rest; identity decryption keeps the fixtures readable.
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptEnvVariables: (envVariables: unknown) => envVariables,
 }));
 

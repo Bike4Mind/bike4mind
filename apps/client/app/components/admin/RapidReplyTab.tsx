@@ -32,19 +32,17 @@ import {
   LinearProgress,
   Divider,
 } from '@mui/joy';
-import {
-  Add as AddIcon,
-  Delete as DeleteIcon,
-  Edit as EditIcon,
-  Save as SaveIcon,
-  Speed as SpeedIcon,
-  Psychology as PsychologyIcon,
-  PlayArrow as PlayArrowIcon,
-  CheckCircle as CheckCircleIcon,
-  Warning as WarningIcon,
-  Refresh as RefreshIcon,
-  Bolt as BoltIcon,
-} from '@mui/icons-material';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
+import SaveIcon from '@mui/icons-material/Save';
+import SpeedIcon from '@mui/icons-material/Speed';
+import PsychologyIcon from '@mui/icons-material/Psychology';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import WarningIcon from '@mui/icons-material/Warning';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import BoltIcon from '@mui/icons-material/Bolt';
 import { useQuery } from '@tanstack/react-query';
 import { useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';

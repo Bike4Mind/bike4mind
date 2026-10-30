@@ -27,7 +27,7 @@ const mockOrgCreate = vi.fn();
 const mockAddCredits = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   organizationService: { create: (...a: unknown[]) => mockOrgCreate(...a) },
-  creditService: { addCredits: (...a: unknown[]) => mockAddCredits(...a) },
+  creditService: { addCreditsWithLedgerRow: (...a: unknown[]) => mockAddCredits(...a) },
 }));
 
 let inTransaction = false;
@@ -105,6 +105,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
     mockUserFindById.mockResolvedValue({ id: 'user-1', email: 'u@example.com' });
     mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme' });
     mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockAddCredits.mockResolvedValue({ creditHolder: { currentCredits: 0 }, creditTransactionId: 'tx-sub-grant' });
   });
 
   it('grants a team within the configured range at the configured credits per seat', async () => {
@@ -128,6 +129,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
         organizationId: 'org-1',
         reason: REASON,
         details: expect.objectContaining({ subscriptionType: 'team', seats: 5, credits: 5 * 1000 }),
+        related: { creditTransactionId: 'tx-sub-grant' },
       })
     );
   });
@@ -176,6 +178,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
     mockUserFindById.mockResolvedValue({ id: 'user-1', email: 'u@example.com' });
     mockSubCreate.mockResolvedValue({ id: 'sub-1' });
     mockFindUserSub.mockResolvedValue(null);
+    mockAddCredits.mockResolvedValue({ creditHolder: { currentCredits: 0 }, creditTransactionId: 'tx-sub-grant' });
   });
 
   it('creates an admin-grant row granted by the admin and adds plan credits times months', async () => {
@@ -196,6 +199,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
         action: 'user.subscription.granted',
         target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
         reason: REASON,
+        related: { creditTransactionId: 'tx-sub-grant' },
       })
     );
   });

@@ -4,6 +4,7 @@ import {
   IUser,
 } from '@bike4mind/common';
 import type { AdminUserListItem } from './adminUserProjection';
+import type { EmailDomainGroup } from './signupAnomaly';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import axios, { AxiosResponse } from 'axios';
@@ -28,6 +29,11 @@ export interface IGetUsersParams {
   projectId?: string;
   pendingInviteProjectId?: string;
   publicView?: boolean;
+  recentSignups?: 'hour';
+  /** ISO instants bounding the created-at filter; `createdTo` is exclusive. */
+  createdFrom?: string;
+  createdTo?: string;
+  groupBy?: 'emailDomain';
 }
 
 export interface IGetUsersResponse {
@@ -39,6 +45,9 @@ export interface IGetUsersResponse {
   currentPage: number;
   totalPages: number;
   totalUsers: number;
+  groups?: EmailDomainGroup[];
+  groupsTruncated?: boolean;
+  keysTruncated?: boolean;
 }
 
 export const fetchUsers = async (params: IGetUsersParams & { downloadAll?: boolean }): Promise<IGetUsersResponse> => {
@@ -47,6 +56,7 @@ export const fetchUsers = async (params: IGetUsersParams & { downloadAll?: boole
     return response.data;
   } catch (error) {
     console.error('Error fetching users:', error);
+    if (params.groupBy) throw error;
     return { users: [], currentPage: 1, totalPages: 1, totalUsers: 0 };
   }
 };
@@ -59,6 +69,10 @@ export interface FetchCounterLogsParams {
   includeInsights?: boolean;
   orgs?: string[] | null;
   excludeOrgs?: string[] | null;
+  /** Drop rows whose counter log carries no organization. */
+  excludeNoOrg?: boolean;
+  /** Drop admin, system, synthetic and staff-domain accounts. */
+  excludeStaff?: boolean;
   isGated?: boolean;
   isHero?: boolean;
   weeklyReport?: boolean;
@@ -86,6 +100,8 @@ export interface AnalyticsReport {
   endDate?: string;
   report: string;
   aiInsights?: string | null;
+  /** Daily mode only: generation failed for this date; `report` is empty. */
+  error?: string;
 }
 
 /** One rendered User Activity row: the server groups per day/counter/user/metadata. */
@@ -114,6 +130,8 @@ export const fetchCounterLogs = async ({
   includeInsights = false,
   orgs = null,
   excludeOrgs = null,
+  excludeNoOrg = false,
+  excludeStaff = false,
   isGated,
   isHero,
   weeklyReport = false,
@@ -147,6 +165,8 @@ export const fetchCounterLogs = async ({
   if (excludeOrgs?.length) {
     queryParams.excludeOrgs = excludeOrgs.map(org => encodeURIComponent(org)).join(',');
   }
+  if (excludeNoOrg) queryParams.excludeNoOrg = 'true';
+  if (excludeStaff) queryParams.excludeStaff = 'true';
   if (isGated !== undefined) queryParams.isGated = String(isGated);
   if (isHero !== undefined) queryParams.isHero = String(isHero);
   if (page !== undefined) queryParams.page = String(page);
@@ -234,6 +254,9 @@ export function useUploadProfilePhoto() {
       // The shared helper handles both shapes the server can hand back: an S3 presign (hosted,
       // raw axios) and the same-origin app-file upload proxy (self-host, authed api).
       await uploadFileToUrl(url, file, file.type);
+
+      // photoUrl is only set once the bytes are in storage, so the avatar never points at a missing key.
+      await api.post(`/api/users/${userId}/confirm-photo`, { fileId });
 
       return fileId;
     },

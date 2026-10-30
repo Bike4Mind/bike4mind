@@ -1,3 +1,4 @@
+import { Types } from 'mongoose';
 import { mcpServerRepository } from '@bike4mind/database';
 import { mcpServerResponseSchema } from '@bike4mind/common';
 import { z } from 'zod';
@@ -9,7 +10,7 @@ import { respond } from '@server/utils/respond';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { encryptEnvVariables, decryptEnvVariables } from '@server/security/tokenEncryption';
+import { encryptEnvVariables, decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { mcpServerCreateBodySchema } from '@server/validators/mcpServerValidators';
 import { assertNoForbiddenMcpEnvKeys } from '@server/utils/mcpEnvValidation';
 import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
@@ -55,7 +56,7 @@ const handler = baseApi()
         serversNeedingSchemas.map(async server => {
           try {
             const result = await invokeMcpHandler<MCPClient['tools']>({
-              envVariables: decryptEnvVariables(server.envVariables),
+              envVariables: decryptEnvVariables(server.envVariables, server),
               name: server.name,
               action: 'getTools',
               userId: req.user.id,
@@ -90,7 +91,8 @@ const handler = baseApi()
 
     let server = await mcpServerRepository.findOne({ name, userId: req.user.id });
 
-    const encryptedVars = encryptEnvVariables(envVariables);
+    const recordId = server?.id ?? new Types.ObjectId().toHexString();
+    const encryptedVars = encryptEnvVariables(envVariables, { userId: req.user.id, name, id: recordId });
     if (server) {
       // New credentials mean the cached "confirmed empty" marker is no longer trustworthy.
       // Clear it before the fetch below so a failed reconnect retries instead of staying empty.
@@ -110,6 +112,7 @@ const handler = baseApi()
       // mongoose as `undefined`, so a request that omitted it failed validation with a 500 rather
       // than creating a disabled server. Nothing was relying on that.
       server = await mcpServerRepository.create({
+        ...{ _id: recordId },
         userId: req.user.id,
         name,
         envVariables: encryptedVars,

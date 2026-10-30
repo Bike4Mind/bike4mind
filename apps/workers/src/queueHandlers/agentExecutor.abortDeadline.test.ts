@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
 import type { Context } from 'aws-lambda';
 
 // `processSubagentDispatch`'s abort/deadline branch (the `abortController.signal.aborted`
@@ -127,6 +133,7 @@ vi.mock('@bike4mind/database', async () => {
   // Gates the artifact-emission-prompt lookup right before orchestrator construction;
   // `false` skips the second (ArtifactEmissionPrompt) read entirely.
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
+  vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 

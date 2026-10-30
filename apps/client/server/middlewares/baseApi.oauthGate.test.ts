@@ -41,7 +41,8 @@ vi.mock('@server/middlewares/oauthRouteGate', () => ({ oauthRouteGate: h.oauthRo
 vi.mock('@server/auth/auth', () => ({ authMiddleware: [], auth: h.AUTH_SENTINEL }));
 
 // Remaining imports are stubbed only to keep baseApi loadable/side-effect-free at import + build time.
-vi.mock('@server/services/gears/toolGearObserver', () => ({ registerToolGearObserver: () => {} }));
+vi.mock('@bike4mind/server-utils/services/gears/toolGearObserver', () => ({ registerToolGearObserver: () => {} }));
+vi.mock('@client/lib/settings/registerContributedSettings', () => ({}));
 vi.mock('@server/middlewares/logging', () => ({ logging: () => {} }));
 vi.mock('@server/middlewares/errorHandler', () => ({ default: () => {} }));
 vi.mock('@server/middlewares/apiKeyAuth', () => ({ apiKeyAuth: () => () => {} }));

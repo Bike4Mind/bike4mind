@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
+import type { ApiKeyScopeValue } from '../types/entities/UserApiKeyTypes';
 
 /**
  * Transport-agnostic API endpoint contract.
@@ -172,7 +172,7 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   tags?: string[];
   auth: AuthMode;
   /** OR-semantics: an API key needs ANY ONE of these. Only meaningful for apiKey auth. */
-  scopes?: readonly ApiKeyScope[];
+  scopes?: readonly ApiKeyScopeValue[];
   /** The schema the handlers validate the request body with (all transports). */
   request?: ReqSchema;
   /** Whether OpenAPI clients must send a body when `request` is present. Defaults to true. */

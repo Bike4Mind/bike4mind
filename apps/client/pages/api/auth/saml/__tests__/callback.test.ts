@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { AuthStrategy } from '@bike4mind/common';
 
 type Handler = (req: NextApiRequest, res: NextApiResponse) => Promise<unknown>;
 const captured = vi.hoisted(() => ({ handler: undefined as Handler | undefined }));
@@ -46,6 +47,14 @@ const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/utils/auth/oauthSourceTag', () => ({
   stampOAuthSourceTag: (...a: unknown[]) => mockStampSourceTag(...a),
 }));
+const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: (...a: unknown[]) => mockRecordSignupNetwork(...a),
+}));
+const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/signupRiskScore', () => ({
+  refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
+}));
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
   emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
@@ -79,18 +88,30 @@ describe('/api/auth/saml/callback - OAuth client source tag', () => {
       emailVerified: true,
       signupCreditsGranted: 0,
     });
-    await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: AUTHORIZE_REDIRECT }).toString());
+    const response = await runCallback(
+      new URLSearchParams({ idp: 'idp-1', redirectTo: AUTHORIZE_REDIRECT }).toString()
+    );
     expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', 'b4m_sat_0123abcd');
+    expect(mockRecordSignupNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-new', method: AuthStrategy.SAML })
+    );
+    expect(mockRefreshSignupRiskScore).toHaveBeenCalledWith('u-new', expect.anything());
+    expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRefreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
     expect(mockEmitSignupFunnelEvents).toHaveBeenCalledTimes(1);
     expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
       expect.objectContaining({ method: 'saml', emailVerified: true, creditsGranted: 0 })
     );
+    expect(response._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   it('never stamps a returning user, even when redirectTo names a client', async () => {
     mockSamlUser.mockReturnValue({ id: 'u-old', isBanned: false });
     await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: AUTHORIZE_REDIRECT }).toString());
     expect(mockStampSourceTag).not.toHaveBeenCalled();
+    expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
+    expect(mockRefreshSignupRiskScore).not.toHaveBeenCalled();
   });
 
   it('passes no clientId when redirectTo is not an authorize path', async () => {

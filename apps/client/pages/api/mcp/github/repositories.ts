@@ -4,7 +4,7 @@ import { GITHUB_REPOSITORY_FULL_NAME_PATTERN } from '@bike4mind/mcp/github/const
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { z } from 'zod';
 
 // Security fix: this used to be a raw NextApiRequest with no auth - any
@@ -46,7 +46,9 @@ const getRepositoriesHandler = asyncHandler(async (req, res) => {
     throw new BadRequestError('GitHub not connected');
   }
 
-  const tokenVar = mcpServer.envVariables.find(env => env.key === 'GITHUB_ACCESS_TOKEN');
+  const tokenVar = decryptEnvVariables(mcpServer.envVariables, mcpServer).find(
+    env => env.key === 'GITHUB_ACCESS_TOKEN'
+  );
 
   if (!tokenVar || !tokenVar.value) {
     throw new BadRequestError('GitHub token not found');
@@ -58,7 +60,7 @@ const getRepositoriesHandler = asyncHandler(async (req, res) => {
   });
 
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${decryptToken(tokenVar.value)}`,
+    Authorization: `Bearer ${tokenVar.value}`,
     Accept: 'application/vnd.github.v3+json',
   };
 

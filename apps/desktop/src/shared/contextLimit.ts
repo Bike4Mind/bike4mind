@@ -1,3 +1,4 @@
+import { artifactMarkup } from './artifactMarkup';
 import type { ChatMessage, ChatUsage } from './chat';
 
 /**
@@ -48,9 +49,75 @@ export function autoCompactThreshold(limit: number): number {
  * firing again on the next turn: the first figure after it measures the summary, not what the
  * summary replaced.
  */
-export function shouldAutoCompact(messages: readonly ChatMessage[], modelWindow: number | null | undefined): boolean {
-  const measured = contextTokens(latestReply(messages, true));
-  return measured !== null && measured >= autoCompactThreshold(effectiveContextLimit(modelWindow));
+export function shouldAutoCompact(
+  messages: readonly ChatMessage[],
+  modelWindow: number | null | undefined,
+  /** Also count what the next request re-sends of the last reply; for windows with no slack. */
+  countReply = false
+): boolean {
+  const occupied = occupiedTokens(messages, true, countReply);
+  return occupied !== null && occupied >= autoCompactThreshold(effectiveContextLimit(modelWindow));
+}
+
+/**
+ * The context figure both the composer ring and auto-compaction read: the last measured request,
+ * plus, with `countReply`, the part of the reply after it that the next request re-sends.
+ */
+export function occupiedTokens(
+  messages: readonly ChatMessage[],
+  turnOpen: boolean,
+  countReply: boolean
+): number | null {
+  const reply = latestReply(messages, turnOpen);
+  const measured = contextTokens(reply);
+  if (measured === null || !reply || !countReply) return measured;
+  return measured + resentReplyTokens(reply);
+}
+
+/**
+ * What the next request re-sends of this reply that its last measured request did not carry:
+ * the text, tool calls and tool results of the measured round and every round after it, with any
+ * artifact put back (restoreArtifactMarkup). Not the output count: that includes reasoning,
+ * which is never sent back.
+ *
+ * Every artifact of the reply is counted, though one written in an earlier round was already
+ * measured; erring high only compacts a turn sooner.
+ */
+export function resentReplyTokens(reply: ChatMessage): number {
+  const rounds = reply.rounds ?? [];
+  let measured = rounds.length - 1;
+  while (measured > 0 && inputSide(rounds[measured].usage) === null) measured--;
+  const unsent = rounds.slice(Math.max(measured, 0));
+  const byId = new Map((reply.toolCalls ?? []).map(call => [call.id, call]));
+  const calls = rounds.length > 0 ? unsent.flatMap(round => round.toolCallIds.flatMap(id => byId.get(id) ?? [])) : [];
+  const parts = [
+    ...(rounds.length > 0 ? unsent.map(round => round.text) : [reply.content]),
+    ...(reply.artifacts ?? []).map(artifactMarkup),
+    ...calls.map(call => call.name + JSON.stringify(call.input ?? {})),
+    // Matches toolResultContent (contextPruning) for a call this recent, which is never cleared.
+    ...calls.map(call => call.error ?? call.preview ?? ''),
+  ];
+  return parts.reduce((sum, part) => sum + estimateTextTokens(part), 0);
+}
+
+/**
+ * Tokens per code point, in twentieths, from what qwen2.5 measures (rounded up where tokenizers
+ * differ): Latin and code 1/4, Cyrillic, Greek, Hebrew and Arabic 1/2.5, Indic scripts 1.25,
+ * the rest of the BMP (CJK, Thai, kana, Hangul) and emoji 1, other astral characters 2.5.
+ */
+function codePointCost(code: number): number {
+  if (code <= 0x2ff) return 5;
+  if (code < 0x800) return 8;
+  if (code >= 0x900 && code < 0xe00) return 25;
+  if (code <= 0xffff || (code >= 0x1f000 && code <= 0x1ffff)) return 20;
+  return 50;
+}
+
+/** A per-script estimate; a flat four-characters-a-token rate undercounts dense scripts 2-5x. */
+export function estimateTextTokens(text: string): number {
+  let cost = 0;
+  for (const char of text) cost += codePointCost(char.codePointAt(0) ?? 0);
+  return Math.ceil(cost / 20);
 }
 
 /**

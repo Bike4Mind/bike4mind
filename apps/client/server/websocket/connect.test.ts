@@ -33,7 +33,7 @@ vi.mock('@server/cli/auth', () => ({
 }));
 
 const mockAssertAccountStateUsable = vi.fn();
-vi.mock('@server/auth/assertAccountStateUsable', () => ({
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
 }));
 
@@ -51,6 +51,8 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { func } from './connect';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const eventWithToken = (token = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },
@@ -162,6 +164,38 @@ describe('websocket connect - token gates', () => {
     });
 
     await expect(connect()).rejects.toThrow('blocked');
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+});
+
+const databaseUnreachable = () =>
+  toApiKeyAuthError(Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' }));
+
+describe('websocket connect - API-key check outcome', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockVerifyToken.mockImplementation(() => {
+      throw new Error('jwt malformed');
+    });
+    mockConnectionCreate.mockResolvedValue({});
+  });
+
+  it('propagates the 503 and creates no Connection when the database is unreachable', async () => {
+    mockVerifyApiKey.mockRejectedValue(databaseUnreachable());
+
+    const error = await connect().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ statusCode: 503, message: 'Authentication temporarily unavailable' });
+    expect(String((error as Error).message)).not.toContain('ECONNREFUSED');
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects with a 401 for an unknown key that is not a JWT either', async () => {
+    mockVerifyApiKey.mockRejectedValue(new UnauthorizedError('Invalid or expired API key'));
+
+    const error = await connect().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ statusCode: 401 });
     expect(mockConnectionCreate).not.toHaveBeenCalled();
   });
 });

@@ -11,6 +11,9 @@ import {
   otcEmailBudgetRetryAfter,
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
+import { requireTurnstile } from '@server/middlewares/requireTurnstile';
+import { wasTurnstileVerified } from '@server/auth/signupChallenge';
+import { TURNSTILE_ACTION_OTC_SEND } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { Config, isE2EEnabled } from '@bike4mind/server-utils/utils/config';
@@ -18,8 +21,9 @@ import jwt from 'jsonwebtoken';
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
-  .use(otcCounterLimit({ bucket: 'send-ip-daily', ...OTC_LIMITS.send.perIpDaily, subject: ipSubject }))
-  .use(otcCounterLimit({ bucket: 'send-ip-total', ...OTC_LIMITS.send.perIpTotal, subject: ipSubject }))
+  .use(requireTurnstile(TURNSTILE_ACTION_OTC_SEND))
+  .use(otcCounterLimit({ bucket: 'send-ip-daily', window: OTC_LIMITS.send.perIpDaily, subject: ipSubject }))
+  .use(otcCounterLimit({ bucket: 'send-ip-total', window: OTC_LIMITS.send.perIpTotal, subject: ipSubject }))
   .use(otcDistinctEmailsPerIpLimit())
   .post(async (req, res) => {
     const { email } = req.body;
@@ -109,11 +113,16 @@ const handler = baseApi({ auth: false })
                 to: toEmail,
                 subject: 'Your sign-in code',
                 body: emailBody,
+                category: 'otc',
               });
+              // Count accepted email dispatches even if token confirmation later fails.
+              req.logger.info('otc-code-dispatched');
             },
           },
           signPendingToken: payload => {
-            return jwt.sign(payload, Config.JWT_SECRET, { algorithm: 'HS256' });
+            return jwt.sign({ ...payload, challengeVerified: wasTurnstileVerified(req) }, Config.JWT_SECRET, {
+              algorithm: 'HS256',
+            });
           },
         }
       )

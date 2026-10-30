@@ -1,3 +1,4 @@
+import { assertMediaModelAdmission } from '@server/billing/assertMediaModelAdmission';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -19,13 +20,14 @@ import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ImageEditService } from '@bike4mind/services/llm/ImageEdit';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { fabFilesService } from '@bike4mind/services';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageCreditHolds } from '@server/billing/imageCreditHolds';
 
 let _imageEdit: ImageEditService | undefined;
 export const getImageEdit = (): ImageEditService => {
@@ -54,6 +56,8 @@ export const getImageEdit = (): ImageEditService => {
       // Owner-wide lake arms for the reference-image lookup, parity with imageGeneration - a
       // lake-only anchor the workbench admitted must still resolve as an edit input.
       resolveLakeAccess: (user: IUserDocument, logger: Logger) => createAttachmentLakeAccess(user, logger)(),
+      creditHolds: imageCreditHolds,
+      assertModelAdmission: assertMediaModelAdmission,
       startImageEditProcess: async body => {
         const queue = new SQSService();
         const queueUrl = getSourceQueueUrl('imageEditQueue');

@@ -79,6 +79,7 @@ const runResult = (overrides: Record<string, unknown> = {}) => ({
   diff: [],
   droppedRecords: [],
   absence: { sighted: [], missed: [], frozenBackends: [], frozenProfileIds: [] },
+  lifecycle: { transitions: [], dateChanges: [], suggestions: [], wouldDeprecate: [] },
   metrics: {
     ModelsDiscovered: 0,
     ModelsPromoted: 0,
@@ -149,6 +150,7 @@ describe('hosted cron handler', () => {
     const [namespace, data] = emitMetrics.mock.calls[0];
     expect(namespace).toBe('Lumina5/ModelDiscovery');
     expect(data.map((d: { name: string }) => d.name)).toContain('ModelsDiscovered');
+    expect(data).toContainEqual(expect.objectContaining({ name: 'LifecycleDateChanges', value: 0 }));
   });
 
   it('emits nothing for a skipped run, so lease contention is not a zero-discovery run', async () => {

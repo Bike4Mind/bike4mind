@@ -47,7 +47,6 @@ APP_EVENT_BUS: app-event-bus
 HISTORY_UPLOAD_COMPLETE_FUNCTION: history-upload-complete-function
 IMAGE_PROCESSOR: image-processor
 NOTEBOOK_IMPORT_COMPLETE_FUNCTION: notebook-import-complete-function
-SLACK_EVENT_BUS: slack-event-bus
 MCP_HANDLER: mcp-handler
 MONGODB_URI: mongodb://{{ .Release.Name }}-mongo-0.{{ .Release.Name }}-mongo:27017/bike4mind?replicaSet=rs0
 AWS_ENDPOINT_URL_S3: http://{{ .Release.Name }}-minio:9000

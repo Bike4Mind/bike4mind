@@ -18,6 +18,7 @@ import { AuditLogFiltersSchema, type AuditLogFilters } from '../types/entities/a
 export const ADMIN_TAB_PARAM = 'tab';
 export const FEEDBACK_ID_PARAM = 'feedbackId';
 export const QUEST_ID_PARAM = 'questId';
+export const USER_ID_PARAM = 'userId';
 
 /**
  * URL-stable slug for the admin console's Feedback tab.
@@ -65,6 +66,15 @@ export function adminModerationIncidentPath(incidentId: string): string {
     [ADMIN_TAB_PARAM]: ADMIN_USERS_TAB_SLUG,
     [MODERATION_INCIDENT_ID_PARAM]: incidentId,
   });
+  return `/admin?${params.toString()}`;
+}
+
+/**
+ * Deep link to one user's admin profile. Ids here come from counter logs, so they are not trusted:
+ * URLSearchParams encoding keeps a crafted id from grafting extra params onto the link.
+ */
+export function adminUserProfilePath(userId: string): string {
+  const params = new URLSearchParams({ [ADMIN_TAB_PARAM]: ADMIN_USERS_TAB_SLUG, [USER_ID_PARAM]: userId });
   return `/admin?${params.toString()}`;
 }
 

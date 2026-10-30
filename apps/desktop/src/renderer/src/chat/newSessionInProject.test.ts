@@ -31,4 +31,12 @@ describe('a new session in a project the user already has one in', () => {
   it('carries no context directories, because those are grants made for another conversation', () => {
     expect(newSessionInProject(SIBLING).contextDirectories).toBeUndefined();
   });
+
+  /** The user's default, not the sibling's toggle - and still no branch, so main picks the base. */
+  it('asks for a worktree when the user wants one by default', () => {
+    const request = newSessionInProject({ ...SIBLING, workspace: false }, true);
+
+    expect(request.workspace).toBe(true);
+    expect(request.branch).toBeUndefined();
+  });
 });
