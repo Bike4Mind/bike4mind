@@ -76,7 +76,11 @@ function StatsSection() {
         <StatTile
           label="Raters"
           value={stats?.raters.total ?? '-'}
-          comparison={stats ? `${stats.raters.qualified} qualified, ${stats.raters.flagged} flagged` : undefined}
+          comparison={
+            stats
+              ? `${stats.raters.qualified} qualified, ${stats.raters.flagged} flagged, ${stats.pairs.activeGold} active gold`
+              : undefined
+          }
         />
         <StatTile label="Credits awarded" value={stats?.votes.creditsAwarded ?? '-'} />
       </StatStrip>

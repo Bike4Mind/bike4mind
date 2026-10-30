@@ -60,7 +60,7 @@ describe('arenaPairRepository', () => {
     await seed({ goldChoice: 'a' });
     await seed();
     await seed({ active: false });
-    expect(await repo.countsForStats()).toEqual({ total: 3, gold: 1, active: 2 });
+    expect(await repo.countsForStats()).toEqual({ total: 3, gold: 1, active: 2, activeGold: 1 });
   });
 
   it('projects findByIds and ignores malformed ids', async () => {

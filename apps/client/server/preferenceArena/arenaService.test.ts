@@ -366,7 +366,7 @@ describe('submitVote', () => {
 describe('getArenaStats', () => {
   it('builds win rates only from raters the vote judge would also qualify', async () => {
     const { service, votes, pairs } = build({ settings: { minGoldVotes: 2, minGoldAccuracyPercent: 75 } });
-    pairs.countsForStats.mockResolvedValue({ total: 1, gold: 0, active: 1 });
+    pairs.countsForStats.mockResolvedValue({ total: 1, gold: 0, active: 1, activeGold: 0 });
     votes.totals.mockResolvedValue({ votes: 3, credited: 1, creditsAwarded: 2 });
     votes.rejectionCounts.mockResolvedValue({});
     votes.distinctRaterCount.mockResolvedValue(3);

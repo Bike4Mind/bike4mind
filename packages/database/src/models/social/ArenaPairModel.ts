@@ -95,13 +95,14 @@ export class ArenaPairRepository extends BaseRepository<IArenaPairDocument> {
     return result.matchedCount > 0;
   }
 
-  async countsForStats(): Promise<{ total: number; gold: number; active: number }> {
-    const [total, gold, active] = await Promise.all([
+  async countsForStats(): Promise<{ total: number; gold: number; active: number; activeGold: number }> {
+    const [total, gold, active, activeGold] = await Promise.all([
       this.model.countDocuments(),
       this.model.countDocuments(poolFilter('gold')),
       this.model.countDocuments({ active: true }),
+      this.model.countDocuments({ ...poolFilter('gold'), active: true }),
     ]);
-    return { total, gold, active };
+    return { total, gold, active, activeGold };
   }
 
   /** `projection` limits the fetched fields; the answer texts are large and rarely needed in bulk. */

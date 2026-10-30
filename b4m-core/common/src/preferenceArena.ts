@@ -228,7 +228,7 @@ export interface ArenaModelWinRate {
 }
 
 export interface ArenaStats {
-  pairs: { total: number; gold: number; active: number };
+  pairs: { total: number; gold: number; active: number; activeGold: number };
   votes: { total: number; credited: number; creditsAwarded: number };
   raters: { total: number; qualified: number; flagged: number };
   rejections: Partial<Record<ArenaRejectReason, number>>;

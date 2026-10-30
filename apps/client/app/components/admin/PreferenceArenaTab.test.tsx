@@ -6,7 +6,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import PreferenceArenaTab from './PreferenceArenaTab';
 
 const stats: ArenaStats = {
-  pairs: { total: 41, gold: 3, active: 37 },
+  pairs: { total: 41, gold: 3, active: 37, activeGold: 2 },
   votes: { total: 1234, credited: 321, creditsAwarded: 4567 },
   raters: { total: 88, qualified: 55, flagged: 2 },
   rejections: { too_fast: 7 },
@@ -63,6 +63,7 @@ describe('PreferenceArenaTab', () => {
     expect(screen.getByText('1,234')).toBeInTheDocument();
     expect(screen.getByText('4,567')).toBeInTheDocument();
     expect(screen.getByText('37 active, 3 gold')).toBeInTheDocument();
+    expect(screen.getByText('55 qualified, 2 flagged, 2 active gold')).toBeInTheDocument();
     expect(screen.getByText('Too fast: 7')).toBeInTheDocument();
     const winRates = screen.getByTestId('arena-winrates-table');
     expect(within(winRates).getByText('model-one')).toBeInTheDocument();
