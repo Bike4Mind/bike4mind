@@ -112,8 +112,8 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
     return res.json({ ...result, data: await toSharerInviteViews(result.data, req.user!) });
   })
   .post(
-    outboundActionGate(),
     rateLimit(PROJECT_INVITE_RATE_LIMIT),
+    outboundActionGate(),
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
       assertProjectsWriteScope(req);
       const { id } = req.query as { id: string };

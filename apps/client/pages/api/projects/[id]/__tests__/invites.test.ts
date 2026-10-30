@@ -79,8 +79,8 @@ describe('POST /api/projects/:id/invites', () => {
 
   it('rate limits invite creation per user with a route-wide bucket', () => {
     expect(mockRefs.postMiddleware).toEqual([
-      expect.any(Function),
       { rateLimitOptions: expect.objectContaining({ bucket: 'POST /api/projects/[id]/invites' }) },
+      expect.any(Function),
     ]);
   });
 

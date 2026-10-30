@@ -6,7 +6,7 @@ import path from 'path';
 /**
  * Invariant: outbound and abuse-prone routes reject untrusted and moderated accounts.
  *
- * Gated methods must start with `outboundActionGate()`; the agent helpers call
+ * Gated methods start with `outboundActionGate()` (only a rate limiter may precede it); the agent helpers call
  * `assertOutboundActionAllowed` inline. Read from outside pages/ for the reason given in
  * aiRoutesGateModeratedUsers.test.ts.
  */
@@ -48,8 +48,10 @@ const INLINE_GATED = [
 const source = (route: string) => readFileSync(path.join(ROUTES_DIR, route), 'utf8').replace(/^\s*\/\/[^\n]*/gm, '');
 
 describe('outbound routes gate untrusted and moderated accounts', () => {
-  it.each(MIDDLEWARE_GATED)('%s runs outboundActionGate() first on .%s', (route, method) => {
-    expect(source(route)).toMatch(new RegExp(`\\.${method}\\(\\s*outboundActionGate\\(\\)`));
+  it.each(MIDDLEWARE_GATED)('%s runs outboundActionGate() before the handler on .%s', (route, method) => {
+    expect(source(route)).toMatch(
+      new RegExp(`\\.${method}\\(\\s*(?:rateLimit\\([^)]*\\),\\s*)?outboundActionGate\\(\\)`)
+    );
   });
 
   it.each(INLINE_GATED)('%s calls assertOutboundActionAllowed', route => {
