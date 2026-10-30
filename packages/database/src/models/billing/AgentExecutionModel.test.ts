@@ -93,6 +93,32 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('listRecentForLoop', () => {
+    it("returns a loop's newest top-level runs", async () => {
+      const older = await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: 'sl', loopId: 'loopL', totalCreditsUsed: 1, createdAt: new Date(1000) })
+      );
+      const newer = await agentExecutionRepository.create(
+        makeBaseExecution({
+          sessionId: 'sl',
+          loopId: 'loopL',
+          totalCreditsUsed: 2,
+          failureReason: 'abandoned',
+          createdAt: new Date(2000),
+        })
+      );
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: 'sl', loopId: 'loopL', parentExecutionId: newer.id })
+      );
+      await agentExecutionRepository.create(makeBaseExecution({ sessionId: 'sl', loopId: 'loopOther' }));
+
+      const runs = await agentExecutionRepository.listRecentForLoop('loopL', 'sl', 5);
+      expect(runs.map(run => run.id)).toEqual([newer.id, older.id]);
+      expect(runs[0]).toMatchObject({ failureReason: 'abandoned', totalCreditsUsed: 2 });
+      expect(await agentExecutionRepository.listRecentForLoop('loopL', 'sl', 1)).toHaveLength(1);
+    });
+  });
+
   describe('countActiveByUserId', () => {
     it('counts top-level executions in any active status', async () => {
       const userId = new mongoose.Types.ObjectId().toString();

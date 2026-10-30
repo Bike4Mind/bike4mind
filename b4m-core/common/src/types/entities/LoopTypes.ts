@@ -25,6 +25,14 @@ export const loopStatusNeedsOwner = (loop: Pick<ILoop, 'status' | 'statusReason'
  */
 export const LOOP_TICKET_TOOL_NAMES = ['loop_ticket_list', 'loop_ticket_create', 'loop_ticket_update'] as const;
 
+/**
+ * Directive tools (`apps/workers/src/queueHandlers/agentExecutor.loopDirectiveTools.ts`): every loop run can
+ * answer the directives sent to it; only runs of a loop with `oversees` get the overseer tools. Both lists are
+ * pre-approved on headless loop runs in `startAgentExecution`.
+ */
+export const LOOP_DIRECTIVE_TOOL_NAMES = ['loop_directive_respond'] as const;
+export const LOOP_OVERSEER_TOOL_NAMES = ['loop_oversee_status', 'loop_directive_issue'] as const;
+
 export const DEFAULT_LOOP_STAGES: readonly string[] = ['todo', 'doing', 'done'];
 
 /** State carried from one run to the next. */
@@ -69,6 +77,8 @@ export interface ILoop {
   runCount: number;
   /** Non-credit failures in a row; the loop moves to `error` at the scheduler's limit. */
   consecutiveFailures: number;
+  /** Ids of the same owner's loops this loop oversees: its runs may read their state and send them directives. */
+  oversees?: string[];
 
   createdAt: Date;
   updatedAt: Date;
@@ -113,11 +123,14 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   makeDueNow(id: string, now: Date): Promise<void>;
   /** Moves a still-`live` loop to `error` once it has `maxFailures` failures in a row. */
   markErroredIfFailing(id: string, maxFailures: number): Promise<void>;
+  /** Drops a deleted loop from every other loop's `oversees`. */
+  removeFromOversees(userId: string, loopId: string): Promise<void>;
 }
 
 /**
  * A per-loop event, kept past the execution TTL. `unsure` is a run the confidence gate paused: the
- * scheduler parks its ticket as blocked and records it here; `gate_response` records the owner's answer.
+ * scheduler parks its ticket as blocked and records it here, with the owner's answer as its `resolution`.
+ * Directives live in their own collection (`ILoopDirective`); the events API merges both into one log.
  */
 export const LOOP_EVENT_KINDS = ['unsure'] as const;
 
@@ -160,5 +173,77 @@ export interface ILoopEventRepository extends IBaseRepository<ILoopEvent> {
   /** Resumed events whose run the scheduler has not folded yet. */
   listResumedUnfolded(limit: number): Promise<ILoopEvent[]>;
   markFolded(id: string, now: Date): Promise<void>;
+  deleteManyForLoop(userId: string, loopId: string): Promise<number>;
+}
+
+/**
+ * A directive one loop's run (the overseer) sends to another loop of the same owner (the worker). The worker
+ * answers it on its next scheduled run with `loop_directive_respond`; the owner may withdraw or overrule it.
+ *
+ * | Who    | From                         | To                            |
+ * |--------|------------------------------|-------------------------------|
+ * | worker | open                         | accepted, pushed_back, done   |
+ * | worker | accepted                     | pushed_back, done             |
+ * | owner  | open, accepted, pushed_back  | withdrawn                     |
+ * | owner  | pushed_back (overrule)       | open                          |
+ */
+export const LOOP_DIRECTIVE_STATES = ['open', 'accepted', 'pushed_back', 'done', 'withdrawn'] as const;
+
+export type LoopDirectiveState = (typeof LOOP_DIRECTIVE_STATES)[number];
+
+export type LoopDirectiveWorkerOutcome = 'accepted' | 'pushed_back' | 'done';
+export type LoopDirectiveOwnerAction = 'withdraw' | 'overrule';
+
+/** States each move is allowed from; shared by the worker tool and the owner override route. */
+export const LOOP_DIRECTIVE_TRANSITIONS: Record<
+  LoopDirectiveWorkerOutcome | LoopDirectiveOwnerAction,
+  readonly LoopDirectiveState[]
+> = {
+  accepted: ['open'],
+  pushed_back: ['open', 'accepted'],
+  done: ['open', 'accepted'],
+  withdraw: ['open', 'accepted', 'pushed_back'],
+  overrule: ['pushed_back'],
+};
+
+export type ILoopDirectiveReply =
+  | { by: 'worker'; outcome: LoopDirectiveWorkerOutcome; note?: string; executionId: string; at: Date }
+  | { by: 'owner'; outcome: 'withdrawn' | 'overruled'; note?: string; userId: string; at: Date };
+
+export interface ILoopDirective {
+  id: string;
+  /** The worker (target) loop. */
+  loopId: string;
+  userId: string;
+  /** The overseer loop; its name is copied so the thread still reads after the overseer is deleted. */
+  fromLoopId: string;
+  fromLoopName: string;
+  /** The overseer run that issued it. */
+  executionId: string;
+  instruction: string;
+  reason: string;
+  state: LoopDirectiveState;
+  replies: ILoopDirectiveReply[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ILoopDirectiveRepository extends IBaseRepository<ILoopDirective> {
+  countByExecution(executionId: string): Promise<number>;
+  /** Open and accepted directives to a loop, oldest first: what its next run is shown. */
+  listOpenForLoop(userId: string, loopId: string, limit: number): Promise<ILoopDirective[]>;
+  /** Directives to a loop in any state, newest first. */
+  listToLoop(userId: string, loopId: string, limit: number): Promise<ILoopDirective[]>;
+  /** Directives to or from a loop, newest first: its Log. */
+  listForLoop(userId: string, loopId: string, limit: number): Promise<ILoopDirective[]>;
+  findByIdForUser(id: string, userId: string): Promise<ILoopDirective | null>;
+  /** Moves the directive to `to` and appends `reply`, only while it is still in one of `from`. Null when it was not. */
+  transition(
+    id: string,
+    userId: string,
+    from: readonly LoopDirectiveState[],
+    to: LoopDirectiveState,
+    reply: ILoopDirectiveReply
+  ): Promise<ILoopDirective | null>;
   deleteManyForLoop(userId: string, loopId: string): Promise<number>;
 }

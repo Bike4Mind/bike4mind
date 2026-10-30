@@ -149,4 +149,20 @@ describe('LoopRepository', () => {
     expect((await loopRepository.findByIdAndUserId(paused.id, USER))?.nextRunAt).toEqual(later);
     expect((await loopRepository.findByIdAndUserId(alreadyDue.id, USER))?.nextRunAt).toEqual(earlier);
   });
+
+  it("removeFromOversees pulls a deleted loop from the owner's other loops only", async () => {
+    const a = await create({ oversees: ['gone', 'kept'] });
+    const b = await create({ oversees: ['gone'] });
+    const foreign = await create({ userId: 'user-2', oversees: ['gone'] });
+    await loopRepository.removeFromOversees(USER, 'gone');
+    expect((await loopRepository.findById(a.id))?.oversees).toEqual(['kept']);
+    expect((await loopRepository.findById(b.id))?.oversees).toEqual([]);
+    expect((await loopRepository.findById(foreign.id))?.oversees).toEqual(['gone']);
+  });
+
+  it('updateForUser with oversees null unsets it', async () => {
+    const loop = await create({ oversees: ['x'] });
+    const updated = await loopRepository.updateForUser(loop.id, USER, { oversees: null });
+    expect(updated?.oversees).toBeUndefined();
+  });
 });

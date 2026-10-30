@@ -112,6 +112,10 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
       { $set: { status: 'error' } }
     );
   }
+
+  async removeFromOversees(userId: string, loopId: string): Promise<void> {
+    await this.loopModel.updateMany({ userId, oversees: loopId }, { $pull: { oversees: loopId } });
+  }
 }
 
 export const LoopSchema = new Schema<ILoop, ILoopModel>(
@@ -148,6 +152,7 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     leaseUntil: { type: Date },
     runCount: { type: Number, default: 0 },
     consecutiveFailures: { type: Number, default: 0 },
+    oversees: { type: [String], default: undefined },
   },
   {
     timestamps: { createdAt: true, updatedAt: true },

@@ -1196,6 +1196,26 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     return Object.fromEntries(rows.map(row => [row._id, row.credits]));
   }
 
+  /** A loop's newest top-level runs; `sessionId` (its notebook) narrows the scan like `sumCreditsByLoop`. */
+  async listRecentForLoop(
+    loopId: string,
+    sessionId: string,
+    limit: number
+  ): Promise<Pick<IAgentExecution, 'id' | 'status' | 'failureReason' | 'completedAt' | 'totalCreditsUsed'>[]> {
+    const results = await this.model
+      .find({ sessionId, loopId, parentExecutionId: null })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .select({ status: 1, failureReason: 1, completedAt: 1, totalCreditsUsed: 1 });
+    return results.map(doc => ({
+      id: doc.id,
+      status: doc.status,
+      failureReason: doc.failureReason,
+      completedAt: doc.completedAt,
+      totalCreditsUsed: doc.totalCreditsUsed,
+    }));
+  }
+
   /**
    * Find background children spawned by a parent execution. Used by the abort cascade
    * to propagate aborts from the parent to its background children. Returns only
