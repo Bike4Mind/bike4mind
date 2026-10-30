@@ -3184,7 +3184,8 @@ export class ChatService {
         // Appended HERE and nowhere else. toolResultContent is also what the two history
         // rebuilds send, so folding this into it would rewrite the text of already-sent
         // messages and break the prompt-cache prefix on every later turn (see contextPruning).
-        // The nudge is ephemeral by design: never stored on the call, never replayed.
+        // The nudge is never stored on the call; it is replayed only as this round's
+        // `sent.resultNote`, so later turns send it exactly where this request did.
         const nudge = stalePlanReminder(
           activeTodos([...sentHistory(session.messages), replySoFar(toolCalls)], true),
           roundsSincePlanUpdate
