@@ -90,6 +90,13 @@ vi.mock('@server/credits/paymentUnlockForfeit', () => ({
   forfeitHeldUnlockForRefund: mocks.forfeitHeldUnlockForRefund,
   forfeitHeldUnlockForFraudWarning: mocks.forfeitHeldUnlockForFraudWarning,
 }));
+
+// Payment risk screening has its own suite (server/billing/paymentRisk.test.ts).
+vi.mock('@server/billing/paymentRisk', () => ({
+  alertStripeRiskEvent: vi.fn(),
+  radarRiskLine: vi.fn().mockResolvedValue(null),
+  screenPaymentOutcome: vi.fn(),
+}));
 vi.mock('@server/analytics/signupEvents', () => ({
   emitPurchaseEvents: vi.fn(),
   emitBillingEvent: mocks.emitBillingEvent,

@@ -41,6 +41,7 @@ ENABLED_EVENTS=(
   payment_intent.payment_failed
   payment_intent.succeeded
   radar.early_fraud_warning.created
+  review.opened
 )
 
 RED='\033[0;31m'
