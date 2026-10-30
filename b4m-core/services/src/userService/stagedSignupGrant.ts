@@ -133,6 +133,8 @@ async function releaseStage(
           const { day, dailyCredits, dripCap, period } = evidence.drip;
           const dripped = grant.dripCredits ?? 0;
           if (hasPaidSignupDrip(grant, day, period) || !Number.isSafeInteger(dripped) || dripped < 0) return noGrant();
+          // A verification unlock already paid the whole entitlement; only a drip-completed grant reopens on a raised cap.
+          if (grant.stage === 'unlocked' && grant.unlockedBy !== 'activity_drip') return noGrant();
           dripAmount = Math.max(0, Math.min(dailyCredits, signupGrantDripRemaining(grant, dripCap)));
           target = grant.creditsReleased + dripAmount;
           // The live cap governs the drip, so a cap raised after enrollment grows the snapshot pool to fit,
