@@ -1352,11 +1352,17 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
+  const [approvedImageSources] = useState(() => new Set<string>());
   const markdownImage = useCallback(
     ({ alt, src }: ComponentProps<'img'>) => (
-      <ReplyMarkdownImage src={typeof src === 'string' ? src : ''} alt={alt} onSendMessage={onSendMessage} />
+      <ReplyMarkdownImage
+        src={typeof src === 'string' ? src : ''}
+        alt={alt}
+        onSendMessage={onSendMessage}
+        approvedSources={approvedImageSources}
+      />
     ),
-    [onSendMessage]
+    [onSendMessage, approvedImageSources]
   );
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
   // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search

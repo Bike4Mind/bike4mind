@@ -23,3 +23,16 @@ it('forwards the Markdown alt text to the loaded image', () => {
   fireEvent.click(screen.getByTestId('reply-image-load-btn'));
   expect(screen.getByTestId('loaded-image')).toHaveAttribute('alt', 'sales chart');
 });
+
+it('keeps an approval made through approvedSources when it remounts', () => {
+  const approvedSources = new Set<string>();
+  const { unmount } = render(
+    <ReplyMarkdownImage src="https://example.com/c.png" onSendMessage={vi.fn()} approvedSources={approvedSources} />
+  );
+  fireEvent.click(screen.getByTestId('reply-image-load-btn'));
+  unmount();
+  render(
+    <ReplyMarkdownImage src="https://example.com/c.png" onSendMessage={vi.fn()} approvedSources={approvedSources} />
+  );
+  expect(screen.getByTestId('loaded-image')).toBeTruthy();
+});
