@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { SPEND_BUCKET_MS } from '@bike4mind/common';
 import { connectDB, adminSettingsRepository, spendRollupRepository } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
@@ -22,6 +23,14 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
 
   const latestRolled = await spendRollupRepository.latestBucketStart();
   const buckets = bucketsToRoll(now, latestRolled);
+  const firstUnrolled = latestRolled && new Date(latestRolled.getTime() + SPEND_BUCKET_MS);
+  if (firstUnrolled && buckets.length > 0 && buckets[0] > firstUnrolled) {
+    logger.warn('spend-monitor-gap-skipped', {
+      from: firstUnrolled.toISOString(),
+      to: buckets[0].toISOString(),
+      repair: 'pnpm --filter @bike4mind/scripts backfill:spend-rollups',
+    });
+  }
   // Sequential, oldest first: a failure leaves a contiguous rolled prefix for the next run to extend.
   for (const bucketStart of buckets) {
     const { docs } = await spendRollupRepository.rollupBucket(bucketStart);

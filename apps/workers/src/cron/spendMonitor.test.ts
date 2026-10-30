@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   rollupBucket: vi.fn(),
   latestBucketStart: vi.fn(),
   log: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: mocks.resource }));
@@ -24,7 +25,7 @@ vi.mock('@bike4mind/utils', () => ({
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     withMetadata() {
-      return { log: mocks.log, error: vi.fn() };
+      return { log: mocks.log, warn: mocks.warn, error: vi.fn() };
     }
   },
 }));
@@ -51,6 +52,25 @@ describe('spendMonitor handler', () => {
       '2026-10-30T10:00:00.000Z',
       '2026-10-30T10:05:00.000Z',
     ]);
+  });
+
+  it('warns with the skipped range when the gap exceeds the catch-up cap', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T06:00:00.000Z'));
+
+    await expect(handler(event)).resolves.toEqual({ status: 'ok', rolled: 24 });
+
+    expect(mocks.warn).toHaveBeenCalledWith(
+      'spend-monitor-gap-skipped',
+      expect.objectContaining({ from: '2026-10-30T06:05:00.000Z', to: '2026-10-30T08:10:00.000Z' })
+    );
+  });
+
+  it('does not warn when the gap fits within the cap', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T09:55:00.000Z'));
+
+    await handler(event);
+
+    expect(mocks.warn).not.toHaveBeenCalled();
   });
 
   it('rolls nothing when already caught up', async () => {
