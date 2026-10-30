@@ -596,6 +596,23 @@ describe('registerUser', () => {
       expect(invited.signupGrant).toBeUndefined();
     });
 
+    it('snapshots the default unlock pool and warns when verifiedUnlockCredits has no row', async () => {
+      setAllowOpenRegistration('true');
+      const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+      const stage = (values: Record<string, string>) =>
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) =>
+          name in values ? { settingValue: values[name] } : readSetting(name)
+        );
+      stage({ stagedSignupGrantEnabled: 'true', signupGrantCredits: '12', verifiedUnlockCredits: '0' });
+      const stored = (await registerUser(noInviteParams, mockAdapters)).signupGrant;
+      expect(mockAdapters.logger.warn).not.toHaveBeenCalled();
+      stage({ stagedSignupGrantEnabled: 'true', signupGrantCredits: '12' });
+      const absent = (await registerUser(noInviteParams, mockAdapters)).signupGrant;
+      expect(absent).toEqual(stored);
+      expect(absent).toMatchObject({ signupCredits: 12, unlockCredits: 0 });
+      expect(mockAdapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('verifiedUnlockCredits'));
+    });
+
     describe('invite-code grants under the staged signup grant', () => {
       const enableStaging = () => {
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();

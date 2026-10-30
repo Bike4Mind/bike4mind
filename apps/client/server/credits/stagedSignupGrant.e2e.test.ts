@@ -789,3 +789,32 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(12);
   });
 });
+
+describe('unset verified unlock credits', () => {
+  it('snapshots the same grant with the row deleted as with the default row stored', async () => {
+    await AdminSettings.create([
+      { settingName: 'stagedSignupGrantEnabled', settingValue: 'true' },
+      { settingName: 'signupGrantCredits', settingValue: '12' },
+      { settingName: 'verifiedUnlockCredits', settingValue: '0' },
+    ]);
+    const warn = vi.fn();
+    const stored = await newSignupGrant(adminSettingsRepository, undefined, { warn });
+    await AdminSettings.deleteOne({ settingName: 'verifiedUnlockCredits' }, { hardDelete: true });
+    const absent = await newSignupGrant(adminSettingsRepository, undefined, { warn });
+    expect(absent).toEqual(stored);
+    expect(warn).toHaveBeenCalledOnce();
+    const user = await User.create({
+      username: 'synthetic-user',
+      name: 'Synthetic User',
+      email: 'user@example.test',
+      emailVerified: true,
+      signupGrant: absent,
+    });
+    expect((await User.findById(user.id))?.toObject().signupGrant).toMatchObject({
+      stage: 'pending_email',
+      signupCredits: 12,
+      unlockCredits: 0,
+      creditsReleased: 0,
+    });
+  });
+});

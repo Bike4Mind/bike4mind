@@ -276,6 +276,13 @@ describe('settings/update cleared forced-retrieval absolute floor', () => {
     );
   });
 
+  it('deletes the verified unlock credits row on a blank save', async () => {
+    const res = await runHandler('verifiedUnlockCredits', '');
+    expect(deleteOne).toHaveBeenCalledWith({ settingName: 'verifiedUnlockCredits' }, { hardDelete: true });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+    expect(res.settingValue).toBe(null);
+  });
+
   it('stores the default instead of deleting for a number key without clearDeletesRow', async () => {
     // The delete branch is gated on clearDeletesRow. Without that check a blank save on ANY number
     // key would hard-delete its row; this is the guard on the gate.

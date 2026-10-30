@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { selfUserResponseSchema } from './user';
 import { API_SERVICE_GROUPS, SettingKeySchema, settingsMap } from './settings';
+import { VERIFIED_UNLOCK_CREDITS_DEFAULT } from '../signupGrant';
 
 describe('signup activity drip settings', () => {
   it('registers an admin-only preview test switch that defaults off', () => {
@@ -54,5 +55,14 @@ describe('signup grant drip state on the self user schema', () => {
     expect(parse(base).success).toBe(true);
     expect(parse({ ...base, lastDripDay: '10/29/2026' }).success).toBe(false);
     expect(parse({ ...base, dripCredits: -1 }).success).toBe(false);
+  });
+});
+
+describe('verified unlock credits setting', () => {
+  it('can be cleared back to unset and defaults to the resolver fallback', () => {
+    const setting = settingsMap.verifiedUnlockCredits;
+    expect(setting.clearDeletesRow).toBe(true);
+    expect(setting.defaultValue).toBe(VERIFIED_UNLOCK_CREDITS_DEFAULT);
+    expect(setting.schema.parse('')).toBe(VERIFIED_UNLOCK_CREDITS_DEFAULT);
   });
 });
