@@ -184,6 +184,7 @@ import {
   type ModelAdmission,
 } from './modelAdmission';
 import {
+  executedModelFields,
   recordShadowTokenUsage,
   reserveShadowTokenBudget,
   resolveShadowModelInfo,
@@ -5150,6 +5151,7 @@ export class ChatCompletionProcess {
             feature: 'chat',
             provider: this.ledgerModel(attemptModel).backend,
             model: this.ledgerModel(attemptModel).id,
+            ...executedModelFields(this.ledgerModel(attemptModel), attemptModel),
             source: 'web',
             // inputTokens is the local estimate and counts toward the user's token quota; this
             // attempt is ours to absorb, so the provider count goes in providerInputTokens only.
@@ -6644,6 +6646,7 @@ export class ChatCompletionProcess {
               feature: 'chat',
               provider: settledLedgerModel.backend,
               model: settledLedgerModel.id,
+              ...executedModelFields(settledLedgerModel, currentModel),
               // 'web' covers all callers of ChatCompletionProcess today (matches
               // the paired ledger writes below); no API-key auth on this path.
               source: 'web',
@@ -7512,6 +7515,7 @@ export class ChatCompletionProcess {
           feature: 'chat',
           provider: usageLedgerModel.backend,
           model: usageLedgerModel.id,
+          ...executedModelFields(usageLedgerModel, usage.modelInfo),
           source: 'web',
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,

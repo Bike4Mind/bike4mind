@@ -78,7 +78,12 @@ import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
 import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './llm/modelAdmission';
-import { recordShadowTokenUsage, reserveShadowTokenBudget, resolveShadowRouting } from './llm/shadowTier';
+import {
+  executedModelFields,
+  recordShadowTokenUsage,
+  reserveShadowTokenBudget,
+  resolveShadowRouting,
+} from './llm/shadowTier';
 import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
 import { fallbackThinkingVisibility } from './thinkingVisibility';
@@ -1021,6 +1026,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             apiKeyId: apiKeyInfo?.keyId,
             provider: requestedModelInfo!.backend,
             model,
+            ...executedModelFields(requestedModelInfo!, shadowModelInfo),
             inputTokens: finalInputTokens,
             outputTokens: finalOutputTokens,
             cachedInputTokens: finalCacheReadTokens,
@@ -1130,6 +1136,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         feature: 'completion_api',
         provider: requestedModelInfo!.backend,
         model,
+        ...executedModelFields(requestedModelInfo!, shadowModelInfo),
         // Denormalized origin, kept in lockstep with this call's ledger write
         // (subtractCredits above). apiKeyId is present for API-key auth, undefined for JWT.
         source,

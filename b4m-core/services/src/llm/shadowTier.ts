@@ -43,6 +43,16 @@ export function shadowCandidates(models: ModelInfo[], allowlist: string[]): Mode
   return allowlist.flatMap(id => runnable.find(m => m.id === id) ?? []);
 }
 
+/** Usage-event fields naming a substituted model that actually ran; empty when it is the recorded one. */
+export function executedModelFields(
+  recorded: { id: string; backend: string },
+  executed: { id: string; backend: string } | undefined
+): { executedProvider?: string; executedModel?: string } {
+  return executed && executed.id !== recorded.id
+    ? { executedProvider: executed.backend, executedModel: executed.id }
+    : {};
+}
+
 export type ShadowTierSettings = Awaited<ReturnType<typeof loadShadowTierSettings>>;
 
 /** Restricted users only: their settings and the substitute model, if any. Others pay no I/O. */

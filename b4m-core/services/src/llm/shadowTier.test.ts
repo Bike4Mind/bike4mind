@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
 import {
+  executedModelFields,
   recordShadowTokenUsage,
   reserveShadowTokenBudget,
   resolveShadowModelInfo,
@@ -105,5 +106,17 @@ describe('daily token budget', () => {
   it('never throws when recording fails', async () => {
     const cache = { tryAddWithinLimitFixedWindow: vi.fn().mockRejectedValue(new Error('down')) };
     await expect(recordShadowTokenUsage(shadow, 10, { cache })).resolves.toBeUndefined();
+  });
+});
+
+describe('executedModelFields', () => {
+  const requested = { id: 'premium', backend: 'anthropic' };
+  it('names the executed model only when it differs from the recorded one', () => {
+    expect(executedModelFields(requested, { id: 'cheap', backend: 'gemini' })).toEqual({
+      executedProvider: 'gemini',
+      executedModel: 'cheap',
+    });
+    expect(executedModelFields(requested, requested)).toEqual({});
+    expect(executedModelFields(requested, undefined)).toEqual({});
   });
 });

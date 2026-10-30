@@ -232,6 +232,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import { admitAgentDefinitions } from './agentExecutor.modelAdmission';
 import {
+  executedModelFields,
   recordShadowTokenUsage,
   reserveShadowTokenBudget,
   resolveShadowRouting,
@@ -2534,6 +2535,7 @@ async function processExecution(
                 feature: 'agent_execution',
                 provider: requestedBackend,
                 model: execution.model,
+                ...executedModelFields({ id: execution.model, backend: requestedBackend }, shadowModelInfo),
                 ...event,
               })
               .catch(err => logger.warn('Failed to record usage event', { err }));

@@ -99,7 +99,12 @@ describe('executeCompletion for a restricted-tier caller', () => {
     expect(h.getLlmByModel.mock.results[0].value.currentModel).toBe('cheap-model');
     expect(h.complete.mock.calls.map(call => call[0])).toEqual(['cheap-model']);
     expect(db.usageEvents.record).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'premium-model', provider: 'anthropic' })
+      expect.objectContaining({
+        model: 'premium-model',
+        provider: 'anthropic',
+        executedModel: 'cheap-model',
+        executedProvider: 'gemini',
+      })
     );
     expect(vi.mocked(subtractCredits)).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'premium-model' }),
@@ -120,6 +125,7 @@ describe('executeCompletion for a restricted-tier caller', () => {
     await run(db);
 
     expect(h.complete.mock.calls.map(call => call[0])).toEqual(['premium-model']);
+    expect(db.usageEvents.record.mock.calls[0][0]).not.toHaveProperty('executedModel');
     expect(db.cache.tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
     expect(db.cache.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
   });
