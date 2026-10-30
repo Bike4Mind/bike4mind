@@ -88,6 +88,18 @@ PR that must ship alone on top of main. Their suites stay in as `*.regression3.t
 | Preamble (`perf/chat-preamble-overlap`) | None | Ships alone |
 | Provider transport (`perf/provider-keepalive-retries`) | None. Noted: the non-streaming Anthropic call keeps `withRetry` 3, so 12 attempts; a socket idle under 60 s can be stale after a NAT drop, and the transparent transport retry covers it | Ships alone |
 
+## Regression pass, round 5 (2026-10-30), render PR only
+
+No rendering difference found. Three missed settles in the re-parse trigger, all caught up by the
+parse at completion: a list waiting for the next node's first line to end was not re-parsed when
+that line ended; a list-marker line below a list was never a boundary even when another node
+(a column-0 fence) had already ended the list, so numbered steps with fences settled late; a
+skipped frame reported `crossBlock` without the unsettled tail. Fixed: the trigger remembers the
+line a list waits on and re-parses once it ends; the same-marker exclusion only holds while no
+other column-0 line has ended the list; a skipped frame keeps the last parse's `crossBlock`.
+The never-settle tight-list benchmark ran at 1.07-1.15x base across runs (the splitter is about
+1 ms of it), so its gate is 1.3x.
+
 ## Browser A/B on the local host-dev stack (2026-10-29)
 
 Same machine, same Docker backing services (Mongo, WS gateway, MinIO, SQS), same user and

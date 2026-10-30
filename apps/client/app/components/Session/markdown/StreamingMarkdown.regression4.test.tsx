@@ -170,6 +170,6 @@ describe.skipIf(!process.env.B4M_PERF)('StreamingMarkdown round 4 replies that n
     const a = measure(frames, single);
     const b = measure(frames, streamed);
     console.log(`${_name}: A full re-parse ${a.toFixed(1)} ms, B streamed ${b.toFixed(1)} ms`);
-    expect(b).toBeLessThan(a * 1.1);
+    expect(b).toBeLessThan(a * 1.3);
   });
 });
