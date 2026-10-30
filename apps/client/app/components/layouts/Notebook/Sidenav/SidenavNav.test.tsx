@@ -168,12 +168,33 @@ describe('SidenavNav Opti row', () => {
 describe('SidenavNav feature rows', () => {
   // SidenavNav reads no gear unlock state at all any more; only flags gate a row.
   it('shows every feature row with its flag on', () => {
-    useFeatureEnabledMock.mockReturnValue(true);
+    useFeatureEnabledMock.mockImplementation((flag: string) => flag !== 'enableQuestMasterV5');
     renderNav();
 
-    for (const key of ['files', 'projects', 'published', 'skill-market', 'agents']) {
+    for (const key of ['files', 'projects', 'published', 'skill-market', 'agents', 'quests']) {
       expect(screen.getByTestId(`sidenav-nav-${key}`)).toBeInTheDocument();
     }
+  });
+});
+
+describe('SidenavNav Quest Master row', () => {
+  it('shows with the Quest Master flag and opens the quests page', () => {
+    useFeatureEnabledMock.mockImplementation((flag: string) => flag === 'enableQuestMaster');
+    renderNav();
+    const row = screen.getByTestId('sidenav-nav-quests');
+    expect(row).toHaveTextContent('Quest Master');
+    fireEvent.click(row);
+    expect(navigate).toHaveBeenCalledWith({ to: '/quests' });
+  });
+
+  it('hides without the flag, and is not marked on the v5 page', () => {
+    renderNav();
+    expect(screen.queryByTestId('sidenav-nav-quests')).not.toBeInTheDocument();
+
+    useFeatureEnabledMock.mockReturnValue(true);
+    location.pathname = '/quests-v5';
+    renderNav();
+    expect(screen.getByTestId('sidenav-nav-quests')).not.toHaveAttribute('aria-current');
   });
 });
 
@@ -470,7 +491,7 @@ describe('SidenavNav More overflow', () => {
       .getAllByRole('menuitem')
       .map(item => item.getAttribute('data-testid'));
 
-  // 13 rows: every flag, Opti, Bob, two overlay rows and Studio.
+  // 14 rows: every flag, Opti, Bob, two overlay rows and Studio.
   const seeEverything = () => {
     useFeatureEnabledMock.mockReturnValue(true);
     userState.isAdmin = true;
@@ -489,7 +510,7 @@ describe('SidenavNav More overflow', () => {
   });
 
   it('draws no More row at exactly the limit', () => {
-    useFeatureEnabledMock.mockReturnValue(true);
+    useFeatureEnabledMock.mockImplementation((flag: string) => flag !== 'enableQuestMasterV5');
     const { container } = renderNav();
     expect(navRowIds(container)).toHaveLength(8);
     expect(screen.queryByTestId('sidenav-nav-more')).not.toBeInTheDocument();
@@ -505,7 +526,7 @@ describe('SidenavNav More overflow', () => {
       'sidenav-nav-bob',
       'sidenav-nav-files',
       'sidenav-nav-agents',
-      'sidenav-nav-quests-v5',
+      'sidenav-nav-quests',
       'sidenav-nav-gears',
       'sidenav-nav-more',
     ]);
@@ -516,11 +537,12 @@ describe('SidenavNav More overflow', () => {
       'sidenav-more-studio',
       'sidenav-more-published',
       'sidenav-more-skill-market',
+      'sidenav-more-quests-v5',
     ]);
   });
 
   it('never folds a single row: one over the limit moves two', () => {
-    useFeatureEnabledMock.mockReturnValue(true);
+    useFeatureEnabledMock.mockImplementation((flag: string) => flag !== 'enableQuestMasterV5');
     userState.isAdmin = true;
     userState.currentUser = { preferences: { hiddenSurfaces: [] } };
     const { container } = renderNav();
