@@ -43,11 +43,11 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
   )} not classified yet. Bars are ${BUCKET_UNIT[bucket]}; click one to list its accounts.`;
   const axisTick = { fontSize: 12, fill: admin.inkMuted };
 
-  const partialCell = (entry: SignupBucket, fill: string) => (
+  const partialCell = (entry: SignupBucket, fill: string, baseOpacity = 1) => (
     <Cell
       key={entry.start}
       fill={fill}
-      fillOpacity={entry.partial ? 0.45 : 1}
+      fillOpacity={entry.partial ? baseOpacity * 0.45 : baseOpacity}
       stroke={entry.partial ? fill : admin.surface}
       strokeDasharray={entry.partial ? '3 2' : undefined}
     />
@@ -108,7 +108,9 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
             fill={admin.inkMuted}
             fillOpacity={0.4}
             isAnimationActive={false}
-          />
+          >
+            {rows.map(entry => partialCell(entry, admin.inkMuted, 0.4))}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     </Box>

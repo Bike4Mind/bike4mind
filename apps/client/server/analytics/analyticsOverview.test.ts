@@ -179,6 +179,12 @@ describe('buildOverview', () => {
     expect(build(query({ compare: 'off' }), rows).activeUsers.days[0]).not.toHaveProperty('previousMau');
   });
 
+  it('leaves previousMau empty for the partial day instead of reaching back to the window start', () => {
+    const rows = [...rowsFor('2026-06-01', '2026-06-08'), ...rowsFor('2026-06-09', '2026-06-14')];
+    const days = build(query(), rows).activeUsers.days;
+    expect(days.at(-1)).toMatchObject({ day: '2026-06-15', partial: true, previousMau: null });
+  });
+
   it('drops system traffic from the surface breakdown and orders surfaces by volume', () => {
     const overview = build(query({ compare: 'off' }), rowsFor('2026-06-09', '2026-06-14'));
     expect(overview.activeUsers.sources).toEqual(['web', 'cli']);

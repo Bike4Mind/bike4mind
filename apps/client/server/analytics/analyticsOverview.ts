@@ -154,7 +154,9 @@ export function buildOverview({
       wau: values?.wau ?? null,
       mau: values?.mau ?? null,
       partial: day === window.partialDay,
-      ...(window.previous ? { previousMau: byDay.get(shiftBack(day))?.mau ?? null } : {}),
+      ...(window.previous
+        ? { previousMau: day === window.partialDay ? null : (byDay.get(shiftBack(day))?.mau ?? null) }
+        : {}),
     };
   });
 

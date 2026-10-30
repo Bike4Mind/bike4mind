@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const mocks = vi.hoisted(() => ({ overview: vi.fn() }));
-vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ get: (handler: unknown) => handler }) }));
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    const chain = { use: () => chain, get: (handler: unknown) => handler };
+    return chain;
+  },
+}));
 vi.mock('@server/analytics/analyticsOverview', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/analytics/analyticsOverview')>()),
   getAnalyticsOverview: mocks.overview,
