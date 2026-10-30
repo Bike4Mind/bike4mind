@@ -21,6 +21,8 @@ const HOUR_MS = 60 * 60 * 1000;
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
   .use(requireTurnstile(TURNSTILE_ACTION_SUBSCRIBE))
+  // Fixed built-ins, no admin setting. Unlike otcCounterLimit (server/utils/otcLimits.ts) there is no E2E
+  // bypass, so an e2e spec hitting this route from CI's shared IP would trip the hourly cap.
   .use(rateLimit({ bucket: 'subscribers-create-hourly', subject: ipSubject, limit: 10, windowMs: HOUR_MS }))
   .use(rateLimit({ bucket: 'subscribers-create-daily', subject: ipSubject, limit: 30, windowMs: 24 * HOUR_MS }))
   .post(async (req, res) => {
