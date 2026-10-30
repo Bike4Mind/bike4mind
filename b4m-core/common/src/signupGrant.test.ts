@@ -141,6 +141,18 @@ describe('signup grant schedule', () => {
     expect([one.dripCap, one.dripCapSource]).toEqual([7000, 'legacy']);
   });
 
+  it.each([
+    { max: '3000', verified: '9000', dripCap: 3000, unlockCredits: 9000 },
+    { max: '9000', verified: '3000', dripCap: 3000, unlockCredits: 3000 },
+  ])(
+    'bounds the drip by the smaller legacy cap but enrolls verifiedUnlockCredits (max $max, verified $verified)',
+    async ({ max, verified, dripCap, unlockCredits }) => {
+      const values = { ...prodOldKeys, signupGrantActivityMaxCredits: max, verifiedUnlockCredits: verified };
+      expect(await resolveSignupGrantSchedule(settings(values))).toMatchObject({ dripCap, unlockCredits });
+      expect(await newSignupGrant(settings(values))).toMatchObject({ signupCredits: 1000, unlockCredits });
+    }
+  );
+
   it('keeps a legacy activity max of 0 as drip-off while verification still releases verifiedUnlockCredits', async () => {
     const values = {
       stagedSignupGrantEnabled: 'true',

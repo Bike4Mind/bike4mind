@@ -34,14 +34,21 @@ const migration: MigrationFile = {
     });
     // A legacy cap of 0 (activity max 0) stopped the drip even with a daily amount set.
     const dripOn = schedule.dailyCredits > 0 && schedule.dripCap > 0;
-    const values = {
+    const values: Record<string, number | undefined> = {
       signupGrantInitialCredits: schedule.initialCredits,
       signupGrantDailyCredits: dripOn ? schedule.dailyCredits : 0,
       // With no drip the cap only sets what verification releases, so a 0 activity max must not zero it.
-      signupGrantDripCap: dripOn ? schedule.dripCap : schedule.unlockCredits,
+      // An activity max below verifiedUnlockCredits splits drip and unlock, which one stored cap cannot hold:
+      // leave the cap unset so the resolver's legacy fallback keeps both.
+      signupGrantDripCap: !dripOn
+        ? schedule.unlockCredits
+        : schedule.unlockCredits > schedule.dripCap
+          ? undefined
+          : schedule.dripCap,
       signupGrantInviteBonusCredits: 0,
     };
     for (const [settingName, value] of Object.entries(values)) {
+      if (value === undefined) continue;
       const settingValue = String(value);
       await AdminSettings.updateOne({ settingName }, { $setOnInsert: { settingName, settingValue } }, { upsert: true });
     }

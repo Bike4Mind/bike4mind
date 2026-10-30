@@ -114,6 +114,39 @@ describe('seed signup grant schedule migration', () => {
     expect(await stored()).toMatchObject({ signupGrantDripCap: '9000', signupGrantDailyCredits: '0' });
   });
 
+  const dripping = {
+    stagedSignupGrantEnabled: 'true',
+    signupGrantActivityEnabled: 'true',
+    signupGrantActivityDailyCredits: '1000',
+  };
+
+  it('leaves the cap unset when the activity max is below the verification unlock', async () => {
+    await seed({ ...dripping, signupGrantActivityMaxCredits: '3000', verifiedUnlockCredits: '9000' });
+    await migration.up();
+    expect(await stored()).toEqual({
+      signupGrantInitialCredits: expect.any(String),
+      signupGrantDailyCredits: '1000',
+      signupGrantInviteBonusCredits: '0',
+    });
+    expect(await resolveSignupGrantSchedule(repo)).toMatchObject({
+      dripCap: 3000,
+      unlockCredits: 9000,
+      dailyCredits: 1000,
+      dripCapSource: 'legacy',
+    });
+  });
+
+  it('seeds the verification unlock as the cap when it is below the activity max', async () => {
+    await seed({ ...dripping, signupGrantActivityMaxCredits: '9000', verifiedUnlockCredits: '3000' });
+    await migration.up();
+    expect((await stored()).signupGrantDripCap).toBe('3000');
+    expect(await resolveSignupGrantSchedule(repo)).toMatchObject({
+      dripCap: 3000,
+      unlockCredits: 3000,
+      dripCapSource: 'setting',
+    });
+  });
+
   it('seeds the default cap for a staged environment with no legacy cap keys', async () => {
     await seed({ stagedSignupGrantEnabled: 'true', signupGrantActivityEnabled: 'true' });
     await migration.up();
