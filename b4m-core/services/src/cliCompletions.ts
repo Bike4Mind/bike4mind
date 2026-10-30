@@ -1000,11 +1000,33 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // is left once the rounds so far are paid for. A round that cannot afford a short answer ends
   // the turn instead of overdrawing.
   let stoppedForCredits = false;
+  // Adapters carry earlier rounds' usage forward in `_internal.accum*` and report it only on the
+  // terminal round, so the gate adopts it from there: that prices the spend so far, and bills the
+  // rounds already run when the gate ends the turn before any terminal report. Never lowers a total
+  // a callback already reported.
+  const adoptAccumulatedUsage = (internal: ICompletionOptions['_internal']) => {
+    const turns = internal?.accumTurnUsage;
+    if (turns?.length) {
+      if (turns.length <= (finalTurnUsage?.length ?? 0)) return;
+      finalTurnUsage = turns;
+      // Turns are split cache-exclusive; Gemini's raw accumInputTokens includes cache reads.
+      finalInputTokens = turns.reduce((sum, turn) => sum + turn.inputTokens, 0);
+      finalOutputTokens = turns.reduce((sum, turn) => sum + turn.outputTokens, 0);
+      finalCacheReadTokens = turns.reduce((sum, turn) => sum + (turn.cacheReadInputTokens ?? 0), 0);
+      finalCacheCreationTokens = turns.reduce((sum, turn) => sum + (turn.cacheCreationInputTokens ?? 0), 0);
+      return;
+    }
+    finalInputTokens = Math.max(finalInputTokens, internal?.accumInputTokens ?? 0);
+    finalOutputTokens = Math.max(finalOutputTokens, internal?.accumOutputTokens ?? 0);
+    finalCacheReadTokens = Math.max(finalCacheReadTokens, internal?.accumCacheReadTokens ?? 0);
+    finalCacheCreationTokens = Math.max(finalCacheCreationTokens, internal?.accumCacheWriteTokens ?? 0);
+  };
   const roundBudget = roundBudgetFor;
   const completionLlm =
     useServerTools && roundBudget
       ? gateEveryRound(llm, async (roundMessages, roundOptions, round) => {
           if (round === 0) return roundOptions;
+          adoptAccumulatedUsage(roundOptions._internal);
           const spentCredits = usdToCredits(settledUsdCost(modelInfo!));
           const balance = (await fetchHolder())?.currentCredits ?? 0;
           const budget = roundBudget(roundMessages, balance + reservedCredits - spentCredits);

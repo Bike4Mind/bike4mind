@@ -77,7 +77,9 @@ export type RoundGate = (
  * next round through `this.complete(...)` (anthropic, bedrock, openai, gemini, xai, deepseek, kimi,
  * ollama all do): the wrapper's prototype is the backend, so `this` is the wrapper and each
  * recursion re-enters the gate. A gate returning null ends the turn without calling the model;
- * the round that recursed simply returns, having already reported its usage.
+ * the round that recursed simply returns. Adapters report earlier rounds' usage only on the
+ * terminal round (it travels in `options._internal.accum*` until then), so a gate that prices or
+ * stops a turn must read it from the options it is handed.
  */
 export function gateEveryRound(backend: ICompletionBackend, gate: RoundGate): ICompletionBackend {
   const complete = backend.complete;

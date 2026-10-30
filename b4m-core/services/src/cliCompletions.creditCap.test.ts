@@ -160,11 +160,11 @@ describe('executeCompletion - server-side tool loop', () => {
     },
   ] as any;
 
-  // Each round answers up to its max_tokens and reports the running total, as adapters do, then
-  // recurses through this.complete for the next tool round.
+  // Mirrors the adapters' contract: each round answers up to its max_tokens, carries its usage
+  // forward in `_internal.accum*` and recurses through this.complete with only a toolsUsed frame.
+  // The cumulative total is emitted once, by the terminal round.
   function loopingComplete(rounds: number) {
     let round = 0;
-    const total = { inputTokens: 0, outputTokens: 0 };
     return async function (
       this: ICompletionBackend,
       model: string,
@@ -173,15 +173,56 @@ describe('executeCompletion - server-side tool loop', () => {
       cb: (text: string[], info: object) => Promise<void>
     ) {
       round++;
-      total.inputTokens += INPUT_TOKENS;
-      total.outputTokens += Math.min(LOOP_MAX_TOKENS, options.maxTokens!);
-      await cb([''], { ...total });
-      if (round < rounds) {
-        await this.complete(model, [...(messages as any[]), { role: 'user', content: 'tool result' }], options, cb);
+      const turnUsage = [
+        ...(options._internal?.accumTurnUsage ?? []),
+        { inputTokens: INPUT_TOKENS, outputTokens: Math.min(LOOP_MAX_TOKENS, options.maxTokens!) },
+      ];
+      const inputTokens = turnUsage.reduce((sum, turn) => sum + turn.inputTokens, 0);
+      const outputTokens = turnUsage.reduce((sum, turn) => sum + turn.outputTokens, 0);
+      if (round === rounds) {
+        await cb([''], { inputTokens, outputTokens, turnUsage });
+        return;
       }
+      await cb(['\n\n'], { toolsUsed: [] });
+      await this.complete(
+        model,
+        [...(messages as any[]), { role: 'user', content: 'tool result' }],
+        {
+          ...options,
+          _internal: {
+            ...options._internal,
+            accumInputTokens: inputTokens,
+            accumOutputTokens: outputTokens,
+            accumTurnUsage: turnUsage,
+          },
+        },
+        cb
+      );
     };
   }
   const LOOP_MAX_TOKENS = 2000;
+
+  /** Credits for the rounds the model actually ran, priced from the options each was sent. */
+  const ranRoundsUsd = () =>
+    llm.complete.mock.calls.reduce(
+      (sum, [, , options]) =>
+        sum + getTextModelCost(MODEL_INFO, INPUT_TOKENS, Math.min(LOOP_MAX_TOKENS, options.maxTokens)),
+      0
+    );
+
+  it('bills every round of a loop that runs to its terminal round', async () => {
+    const startingBalance = 1_000_000;
+    const { db, balance } = buildDb(startingBalance);
+    llm.complete.mockImplementation(loopingComplete(3));
+
+    await executeCompletion({ ...baseParams, options: { maxTokens: LOOP_MAX_TOKENS }, db, serverTools });
+
+    expect(llm.complete).toHaveBeenCalledTimes(3);
+    const charged = startingBalance - balance();
+    const exactCredits = ranRoundsUsd() * CREDITS_PER_USD_COST;
+    expect(charged).toBeGreaterThanOrEqual(Math.floor(exactCredits));
+    expect(charged).toBeLessThanOrEqual(Math.ceil(exactCredits));
+  });
 
   it('caps every round and stops cleanly when the balance runs out mid-loop', async () => {
     // A full round costs ~100 credits; the balance covers a few rounds, not ten.
@@ -202,5 +243,10 @@ describe('executeCompletion - server-side tool loop', () => {
     // The truncation reaches the client on the final frame, and the holder is not overdrawn.
     expect(onChunk).toHaveBeenLastCalledWith([], expect.objectContaining({ stopReason: 'max_tokens' }));
     expect(balance()).toBeGreaterThanOrEqual(0);
+    // No terminal round reported usage, yet every round that ran is billed, not refunded.
+    const charged = startingBalance - balance();
+    const exactCredits = ranRoundsUsd() * CREDITS_PER_USD_COST;
+    expect(charged).toBeGreaterThanOrEqual(Math.floor(exactCredits));
+    expect(charged).toBeLessThanOrEqual(Math.ceil(exactCredits));
   });
 });
