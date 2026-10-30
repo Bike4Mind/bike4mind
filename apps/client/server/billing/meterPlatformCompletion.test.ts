@@ -25,6 +25,11 @@ vi.mock('@bike4mind/database', async () => ({
   userRepository: { findById: m.userFindById, incrementCredits: m.userIncrement },
   usageEventRepository: { record: m.recordUsageEvent },
   cacheRepository: { tryAddWithinLimitFixedWindow: m.tokenCounter },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@bike4mind/services/llm/shadowTier', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services/llm/shadowTier')>()),

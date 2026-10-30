@@ -14,6 +14,7 @@ export type ProfileAction =
   | 'mfaReset'
   | 'emailVerification'
   | 'apiKeyTrust'
+  | 'newAccountSpendCap'
   | 'subscription'
   | 'loginAs'
   | 'message'

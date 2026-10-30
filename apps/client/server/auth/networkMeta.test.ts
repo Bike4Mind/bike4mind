@@ -2,10 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const updateOne = vi.fn();
 const record = vi.fn();
+const alertSignupNetworkBurst = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   User: { updateOne: (...args: unknown[]) => updateOne(...args) },
   authEventRepository: { record: (...args: unknown[]) => record(...args) },
+}));
+
+vi.mock('./signupNetworkAlerts', () => ({
+  alertSignupNetworkBurst: (...args: unknown[]) => alertSignupNetworkBurst(...args),
 }));
 
 import { readNetworkMeta, recordLoginEvent, recordSignupNetwork, type NetworkRequest } from './networkMeta';
@@ -121,7 +126,19 @@ describe('recordSignupNetwork', () => {
   beforeEach(() => {
     updateOne.mockReset().mockResolvedValue({});
     record.mockReset().mockResolvedValue(undefined);
+    alertSignupNetworkBurst.mockReset().mockResolvedValue(undefined);
     warn.mockClear();
+  });
+
+  it('checks for a signup network burst after the signup event is written, so the count includes it', async () => {
+    await recordSignupNetwork({ req: AWS_REQUEST, userId: 'u1', method: 'google' });
+
+    expect(alertSignupNetworkBurst).toHaveBeenCalledWith({
+      network: expect.objectContaining({ ip: '203.0.113.7', asn: 16509, isDatacenter: true }),
+      userId: 'u1',
+      method: 'google',
+    });
+    expect(record.mock.invocationCallOrder[0]).toBeLessThan(alertSignupNetworkBurst.mock.invocationCallOrder[0]);
   });
 
   it('stamps signupMeta only on a user that has none, and logs a signup event', async () => {

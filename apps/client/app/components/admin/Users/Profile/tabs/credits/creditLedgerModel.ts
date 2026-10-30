@@ -54,6 +54,14 @@ const humanize = (value: string): string => {
 
 const MIDDLE_DOT = ' · ';
 
+/** Cached tokens are priced apart from plain input, so a row's total alone can hide where its cost went. */
+function cacheBreakdown(cacheRead: number, cacheWrite: number): string {
+  const parts: string[] = [];
+  if (cacheRead > 0) parts.push(`${cacheRead.toLocaleString('en-US')} cache read`);
+  if (cacheWrite > 0) parts.push(`${cacheWrite.toLocaleString('en-US')} cache write`);
+  return parts.length > 0 ? ` (incl. ${parts.join(', ')})` : '';
+}
+
 /** One line saying what the row was: the admin's note and name, the key and tokens, or the description. */
 export function ledgerRowDetail(row: AdminLedgerRow): string {
   const parts: string[] = [];
@@ -63,8 +71,11 @@ export function ledgerRowDetail(row: AdminLedgerRow): string {
   } else {
     if (row.description) parts.push(row.description);
     if (row.apiKeyPrefix) parts.push(`key ${row.apiKeyPrefix}`);
-    const tokens = (row.inputTokens ?? 0) + (row.outputTokens ?? 0);
-    if (tokens > 0) parts.push(`${tokens.toLocaleString('en-US')} tokens`);
+    const cacheRead = row.cacheReadTokens ?? 0;
+    const cacheWrite = row.cacheWriteTokens ?? 0;
+    const tokens = (row.inputTokens ?? 0) + (row.outputTokens ?? 0) + cacheRead + cacheWrite;
+    if (tokens > 0) parts.push(`${tokens.toLocaleString('en-US')} tokens${cacheBreakdown(cacheRead, cacheWrite)}`);
+    if (row.toolNames?.length) parts.push(`tools: ${row.toolNames.join(', ')}`);
   }
   return parts.filter(Boolean).join(MIDDLE_DOT);
 }

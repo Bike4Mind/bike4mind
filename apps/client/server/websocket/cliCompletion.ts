@@ -94,7 +94,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
     return { statusCode: 200 };
   }
-  const { accessToken, requestId, model, messages, options } = body;
+  const { accessToken, requestId, model, messages, options, sessionId } = body;
 
   // Authenticate (try API key first, then JWT) - same dual-auth as SSE handler
   let userId: string;
@@ -210,6 +210,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       billingOrganizationId: apiKeyInfo?.organizationId,
       requestId,
       source,
+      sessionId,
       logger: logger as unknown as Logger,
       onChunk: async (text, info) => {
         // Track token counts and tool usage

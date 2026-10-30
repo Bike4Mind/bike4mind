@@ -24,6 +24,7 @@ import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
+import { propagateAccountRisk } from '@server/billing/linkedAccounts';
 import {
   diffProfileFields,
   profileFieldsSent,
@@ -303,7 +304,7 @@ const handler = baseApi().put(
       const profileBefore = profileFields.length > 0 ? await readProfileSnapshot(userId, profileFields) : null;
 
       req.logger.updateMetadata({ updatedFields: Object.keys(body) });
-      await commitWithSessionEnd(
+      const { snapshot: blockSnapshot, updated: blockUpdated } = await commitWithSessionEnd(
         req,
         async () => {
           // Read inside the transaction so the reason sees the state the write saw; an
@@ -388,6 +389,15 @@ const handler = baseApi().put(
           return reason && { userId, reason, actorUserId: currentUser.id !== userId ? currentUser.id : undefined };
         }
       );
+
+      // A ban, suspension or dispute flag reaches accounts linked by card or network. After commit
+      // and never throws, so it cannot undo the admin's change.
+      if (blockSnapshot && blockUpdated && userService.entersBlockedState(blockSnapshot, blockUpdated)) {
+        await propagateAccountRisk(
+          { sourceUserId: userId, trigger: 'blocked by an admin', key: `admin-block:${userId}:${Date.now()}` },
+          req.logger
+        );
+      }
 
       if (profileFields.length > 0) {
         await recordProfileUpdate(req, {

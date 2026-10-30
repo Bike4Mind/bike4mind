@@ -12,11 +12,13 @@ import {
   curatedListing,
   curatedParamsLabel,
   curatedPicks,
+  curatedRunner,
   curatedSource,
   isAbliteratedModel,
   isHubRepoId,
   isPermissiveEntry,
   loadCuratedManifest,
+  ollamaLibraryLayers,
   probeHardware,
   type HardwareProfile,
   type HubGated,
@@ -34,6 +36,8 @@ import {
   clean,
   formatBytes,
   gatedMessage,
+  hadTagBefore,
+  installedUncheckedMessage,
   hiddenAbliteratedMessage,
   hubAccessMessage,
   licenseFor,
@@ -44,7 +48,9 @@ import {
   planPull,
   rankSearchHits,
   removeInstalled,
+  requireInstalledReviewed,
   requireRemovable,
+  requireReviewedLayers,
   requireUnchangedLicenses,
   requireUnchangedManifest,
   resolveRuntimeTarget,
@@ -486,10 +492,7 @@ export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promis
     deps.log('A restricted license is not a permissive open-source license; pull asks you to accept it first.');
   }
   deps.log('');
-  deps.log(
-    `Pull one with: b4m models pull ${refOf(picks[0]?.build ?? listing[0].builds[0])} ` +
-      '(pull does not check the build against the reviewed one)'
-  );
+  deps.log(`Pull one with: b4m models pull ${refOf(picks[0]?.build ?? listing[0].builds[0])}`);
   return 0;
 }
 
@@ -500,12 +503,19 @@ async function confirmDownload(question: string, deps: ModelsDeps, opts: ModelsO
   return deps.confirm(question);
 }
 
-async function pullWithProgress(target: RuntimeTarget, ref: string, deps: ModelsDeps): Promise<PullResult> {
+/** `runner` and `verify` come from a curated build: the runner Ollama must use, and the post-install check. */
+async function pullWithProgress(
+  target: RuntimeTarget,
+  ref: string,
+  deps: ModelsDeps,
+  { runner, verify }: { runner?: string; verify?: () => Promise<void> } = {}
+): Promise<PullResult> {
   let lastStatus = '';
   let lastDraw = 0;
   let sawBytes = false;
   try {
     await target.runtime.pull(ref, {
+      runner,
       signal: deps.signal,
       onProgress: ({ status, completedBytes, totalBytes }) => {
         // A cached layer can precede the first partial one; wait until there is work left.
@@ -545,6 +555,16 @@ async function pullWithProgress(target: RuntimeTarget, ref: string, deps: Models
     throw error;
   }
   if (deps.isTTY) deps.progress.end();
+  if (verify) {
+    deps.log('Checking the installed model against the reviewed build.');
+    try {
+      await verify();
+    } catch (error) {
+      if (!deps.signal.aborted) throw error;
+      deps.log(installedUncheckedMessage(ref));
+      return 'cancelled';
+    }
+  }
   deps.log(`Pulled ${clean(ref)}. Chat with it by default: b4m models use ${clean(ref)}`);
   return 'pulled';
 }
@@ -597,7 +617,7 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
     if (!(await acceptLicense(license, deps, opts))) return 'declined';
     if (!(await confirmDownload(`Download ${formatBytes(manifest.sizeBytes)}? [y/N] `, deps, opts))) return 'declined';
     await requireUnchangedManifest(name, manifest, deps);
-    return pullWithProgress(target, name, deps);
+    return pullReviewed(plan, name, deps);
   }
 
   const { hub, detail, build, id, target, license, projectorBytes: projector } = plan;
@@ -637,7 +657,28 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
         `Pick another build from: b4m models show ${id}`
     );
   }
-  return pullWithProgress(target, ref, deps);
+  return pullReviewed(plan, ref, deps);
+}
+
+/** Pulls `ref`; a curated build is checked against its reviewed pins first and once Ollama has installed it. */
+async function pullReviewed(plan: PullPlan, ref: string, deps: ModelsDeps): Promise<PullResult> {
+  const { curated, target } = plan;
+  if (!curated) return pullWithProgress(target, ref, deps);
+  let hadTag: boolean | null;
+  try {
+    await requireReviewedLayers(curated, ref, deps);
+    hadTag = await hadTagBefore(target, ref, deps.signal);
+  } catch (error) {
+    if (deps.signal.aborted) {
+      deps.log('Pull cancelled before the download started.');
+      return 'cancelled';
+    }
+    throw error;
+  }
+  return pullWithProgress(target, ref, deps, {
+    runner: curatedRunner(curated.build),
+    verify: () => requireInstalledReviewed(target, curated, ref, hadTag, deps.signal),
+  });
 }
 
 export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
@@ -793,6 +834,7 @@ export async function handleModelsCommand(subcommand: string | undefined, argv: 
     return await runModelsCommand(subcommand, argv, {
       hub: () => (hub ??= new HuggingFaceHub({ token: process.env.HF_TOKEN })),
       ollamaRegistry: (name, signal) => readOllamaManifest(name, signal),
+      libraryLayers: (ref, signal) => ollamaLibraryLayers(ref, { signal }),
       resolveRuntime: async () => {
         const target = await resolveRuntimeTarget({
           flag: flagHost || undefined,

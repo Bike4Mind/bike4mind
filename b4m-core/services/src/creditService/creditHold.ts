@@ -16,6 +16,7 @@ import {
   type DeductCreditsParams,
 } from './deductCreditsWithOrgSupport';
 import { isMemberCreditCapExceeded } from './memberCreditCap';
+import { assertNewAccountSpendWithinCap, type NewAccountSpendCapAdapters } from './newAccountSpendCap';
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
@@ -35,6 +36,7 @@ export type CreditHoldAdapters = {
    * module-mocked tests) keeps that seam.
    */
   deductCredits?: typeof deductCreditsWithOrgSupport;
+  newAccountSpendCap: NewAccountSpendCapAdapters;
 };
 
 type HolderAdapters = Pick<CreditHoldAdapters, 'users' | 'organizations'>;
@@ -85,6 +87,11 @@ export async function holdCredits(
       `Your organization member credit limit has been reached for ${featureLabel}. Contact your organization administrator.`
     );
   }
+
+  await assertNewAccountSpendWithinCap(
+    { user, requestedCredits: requiredCredits, billedToOrganization: organization !== null, logger },
+    adapters.newAccountSpendCap
+  );
 
   const ownerId = organizationId ?? userId;
   const ownerType = organization ? CreditHolderType.Organization : CreditHolderType.User;

@@ -89,6 +89,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
+  'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.removed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.role_changed': { category: 'org', severity: 'notice', write: 'strict' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
@@ -109,6 +113,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.verified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.api_key_trust.approved': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.new_account_spend_cap.lifted': { category: 'identity', severity: 'notice', write: 'strict' },
+  'user.new_account_spend_cap.restored': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },

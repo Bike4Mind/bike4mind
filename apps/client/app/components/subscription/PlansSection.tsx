@@ -22,6 +22,7 @@ import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import SubscribeButton from '../Credits/SubscribeButton';
 import ManageSubscriptionButton from './ManageSubscriptionButton';
+import PayNowButton from './PayNowButton';
 import PlanCard from './PlanCard';
 import { isPopularPlan } from './isPopularPlan';
 import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
@@ -234,6 +235,9 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
                 priceId={plan.priceId}
                 actionButton={
                   <Stack gap={1} direction={{ xs: 'column', sm: 'row' }} sx={{ '& > *': { flex: 1 } }}>
+                    {isStripeManaged && hasPaymentIssue && isCurrentPlan.subscriptionId && (
+                      <PayNowButton subscriptionId={isCurrentPlan.subscriptionId} testId="plan-card-pay-now-btn" />
+                    )}
                     {isStripeManaged && <ManageSubscriptionButton isPrimaryAction={hasPaymentIssue} />}
                     <SubscribeButton
                       priceId={plan.priceId}

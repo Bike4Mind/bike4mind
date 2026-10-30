@@ -420,8 +420,8 @@ export type SpawnPlacement = { kind: 'local' } | { kind: 'worktree'; branch: str
  * A delivered message, and whether the target took it up straight away.
  *
  * `title` is what the caller's transcript row names, resolved here because the model only ever
- * had the id. `queued` is the honest half: the target was mid-reply, so the message is waiting
- * behind that turn rather than running now.
+ * had the id. `queued` is the honest half: the target was mid-reply, so the message waits for
+ * that turn's next round boundary, or its end, rather than running now.
  */
 export interface RelayAccepted {
   ok: true;

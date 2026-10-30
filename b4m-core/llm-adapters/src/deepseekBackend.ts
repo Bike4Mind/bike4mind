@@ -14,6 +14,7 @@ import { stripToolDependentMessages } from './toolPairingUtils';
 import { OutputBudgetExhaustedError, StreamEndedWithoutFinishError } from './llmEmptyTurnErrors';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
+import { providerFetchOptions } from './providerDispatcher';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
@@ -75,7 +76,7 @@ export class DeepSeekBackend implements ICompletionBackend {
     if (!apiKey) {
       throw new Error('DeepSeek API key is required');
     }
-    this._api = new OpenAI({ apiKey, baseURL: this._baseUrl });
+    this._api = new OpenAI({ apiKey, baseURL: this._baseUrl, fetchOptions: providerFetchOptions() });
     this.logger = logger ?? new Logger();
   }
 

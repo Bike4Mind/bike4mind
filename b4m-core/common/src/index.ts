@@ -16,6 +16,7 @@ export * from './modelCatalog';
 export * from './modelIdJoin';
 export * from './claudeModelId';
 export * from './claudeToolCapabilities';
+export * from './deferredTools';
 export * from './successorCostDelta';
 export * from './pricing';
 export * from './realtimeVoicePricing';
@@ -203,4 +204,6 @@ export * from './adminPermissions';
 export { VERIFIED_SLACK_IDENTITY_FILTER } from './slackIdentity';
 
 export * from './noCardUnlock';
+export * from './preferenceArena';
+export * from './ipBlock';
 export { regionalPersonalEmailProviders } from './organizationUtils';

@@ -363,6 +363,18 @@ describe('processSubagentDispatch admission and billing', () => {
     expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
   });
 
+  it('fails a subagent whose model the catalog no longer carries instead of throwing', async () => {
+    const { getAvailableModels, getLlmByModel } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValue([] as never);
+    vi.mocked(getLlmByModel).mockReturnValueOnce(null);
+
+    const { markFailed } = await dispatch();
+
+    expect(markFailed).toHaveBeenCalledWith('child-1', { message: 'Model "test-model" is no longer available' });
+    expect(delegateToAgentMock).not.toHaveBeenCalled();
+    expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a subagent on a disabled model before it runs', async () => {
     const { getAvailableModels } = await import('@bike4mind/llm-adapters');
     vi.mocked(getAvailableModels).mockResolvedValue([{ ...testModel, disabled: true }] as never);

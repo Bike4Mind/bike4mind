@@ -10,6 +10,7 @@ const {
   mockCount,
   mockSessionEnded,
   mockRequireStepUp,
+  mockPropagateAccountRisk,
   mockRecord,
   mockDeny,
   mockSetThrottleTier,
@@ -24,6 +25,7 @@ const {
   mockCount: vi.fn(),
   mockSessionEnded: vi.fn(),
   mockRequireStepUp: vi.fn(),
+  mockPropagateAccountRisk: vi.fn(),
   // Records whether a findById read ran inside the change callback, so a test can pin the
   // session-end snapshot to the write's own transaction instead of a stale read before it.
   txnState: { changeRunning: false, snapshotReadInsideChange: undefined as boolean | undefined },
@@ -166,6 +168,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 
 // The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
+vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
 
 import { adminSettingsRepository } from '@bike4mind/database';
 import handler from '../update';
@@ -207,6 +210,7 @@ beforeEach(() => {
   txnState.changeRunning = false;
   txnState.snapshotReadInsideChange = undefined;
   mockRequireStepUp.mockReset().mockResolvedValue(undefined);
+  mockPropagateAccountRisk.mockReset().mockResolvedValue({ locked: [], review: [] });
 });
 
 describe('PUT /api/users/:id/update - changing your own password', () => {
@@ -770,6 +774,26 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     await promise;
 
     expect(txnState.snapshotReadInsideChange).toBe(true);
+  });
+
+  it('acts on accounts linked to one an admin bans, and not on other edits', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    await run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    }).promise;
+
+    expect(mockPropagateAccountRisk).toHaveBeenCalledTimes(1);
+    expect(mockPropagateAccountRisk).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceUserId: 'target', key: expect.stringMatching(/^admin-block:target:/) }),
+      expect.anything()
+    );
+
+    mockPropagateAccountRisk.mockClear();
+    adminEdit(BEFORE, { ...BEFORE, email: 'new@example.com' });
+    await run({ user: ADMIN, userId: 'target', body: { email: 'new@example.com' } }).promise;
+    expect(mockPropagateAccountRisk).not.toHaveBeenCalled();
   });
 
   it('ends sessions once, under the account-block reason, when one admin edit does several', async () => {

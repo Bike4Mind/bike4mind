@@ -219,6 +219,47 @@ export const ApiKeyTrustDialog: React.FC<ProfileDialogProps> = ({ user, onClose,
   );
 };
 
+/** Exempts a young account from the hourly and daily new-account spend caps; it ages out of them anyway. */
+export const NewAccountSpendCapDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
+  const post = useAdminUserPost(user.id, 'The spend cap was not changed.');
+  const showUndo = useUndoToast();
+  const lifting = !user.newAccountSpendCapLifted;
+  const label = (lifted: boolean) => (lifted ? 'Lifted' : 'Applies while new');
+
+  const handleConfirm = async (reason: string) => {
+    await post('new-account-spend-cap', { lifted: lifting, reason });
+    onClose();
+    showUndo({
+      message: lifting ? 'New-account spend cap lifted' : 'New-account spend cap restored',
+      onUndo: () => post('new-account-spend-cap', { lifted: !lifting, reason: undoAdminReason(reason) }),
+      onViewAudit: onAudit,
+    });
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title={lifting ? 'Lift the new-account spend cap' : 'Restore the new-account spend cap'}
+      description={
+        lifting
+          ? 'They can spend their own credits as fast as they like, without the hourly and daily limits for new accounts.'
+          : 'While the account is new, their spend is held to the hourly and daily limits again.'
+      }
+      reasonPresets={ADMIN_REASON_PRESETS.newAccountSpendCap}
+      confirmLabel={lifting ? 'Lift cap' : 'Restore cap'}
+      onConfirm={handleConfirm}
+      data-testid="new-account-spend-cap-dialog"
+    >
+      <ChangePreview
+        before={label(!!user.newAccountSpendCapLifted)}
+        after={label(lifting)}
+        data-testid="new-account-spend-cap-dialog-preview"
+      />
+    </ActionDialog>
+  );
+};
+
 /** No undo: the user re-enrols their authenticator. */
 export const ResetMfaDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) => {
   const resetMfa = useForceResetMFA();

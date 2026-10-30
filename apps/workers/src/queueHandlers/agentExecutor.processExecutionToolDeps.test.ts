@@ -184,6 +184,7 @@ const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
 vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
+    'responding-workspace': { ownedFields: [], resolve: async () => ({}), respond: async () => null },
   },
 }));
 
@@ -538,6 +539,17 @@ describe('processExecution tool deps', () => {
 
       expect(markFailed).toHaveBeenCalledWith('exec-1', {
         message: 'Model "claude-sonnet-5" is not available to this user',
+      });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    it('fails a run whose model the catalog no longer carries instead of throwing', async () => {
+      const { getLlmByModel } = await import('@bike4mind/llm-adapters');
+      vi.mocked(getLlmByModel).mockReturnValueOnce(null);
+      const { markFailed } = await runWithModels([]);
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Model "claude-sonnet-5" is no longer available. Choose a different model for this agent.',
       });
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
     });
@@ -1009,6 +1021,22 @@ describe('processExecution tool deps', () => {
           message: 'Workspace session settings resolver for "settings-workspace" failed',
         })
       );
+    });
+
+    it('refuses a run on a workspace that answers its own turns, before any tool or model work', async () => {
+      const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(sessionRepository.findById).mockResolvedValue({
+        ...baseSession,
+        surface: 'responding-workspace',
+      } as never);
+      const { handler } = await import('./agentExecutor');
+
+      await expect(handler(continuationEvent(), lambdaContext)).resolves.toEqual({ batchItemFailures: [] });
+
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+      expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith('exec-1', {
+        message: 'This workspace answers its own turns, so agent runs are not available in it',
+      });
     });
 
     it('keeps the stored flag on a session outside any contributed workspace', async () => {

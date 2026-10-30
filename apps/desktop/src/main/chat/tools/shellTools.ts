@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
-import { realpathNearest, resolveWithinRoots } from './paths';
+import { isWithin, realpathNearest, resolveWithinRoots } from './paths';
 import { writesOwnRepository } from './ownRepository';
 import { scanShell } from './shellScan';
 import {
@@ -454,6 +455,10 @@ export async function shellApproval(
   const ownRepository = await Promise.all(
     scan.sends.map(({ target }) => (target ? writesOwnRepository(target).catch(() => false) : false))
   );
+  // A worktree session reading its own main checkout (`git -C <main> status`, `ls <main>/x`) is
+  // not reaching outside the project, so it does not need that folder granted first.
+  const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
+  const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
   const asks = scan.envFiles.length > 0 || ownRepository.includes(false) || !!script || !!gitProgram;
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : key;
@@ -472,7 +477,7 @@ export async function shellApproval(
         words,
         ...(opaque ? { opaque } : {}),
       })),
-      directories: [...new Set([...directories, ...scan.directories])],
+      directories: [...new Set([...directories, ...outside])],
       paths: scan.paths ?? [],
     },
   };
@@ -622,3 +627,29 @@ export const bashExecute: ToolDefinition = {
     }
   },
 };
+
+/**
+ * The main checkout a linked git worktree belongs to, or null when `directory` is not one. Both
+ * links must agree: the worktree's `.git` file names `<main>/.git/worktrees/<name>`, and that
+ * folder's `gitdir` names the worktree back. The worktree side is writable by this session, but
+ * the main checkout's side is outside it, so a forged `.git` file cannot widen what reads go unasked.
+ */
+export async function mainCheckoutOf(directory: string): Promise<string | null> {
+  const pointer = await readFile(join(directory, '.git'), 'utf8').catch(() => null);
+  const gitdir = pointer === null ? undefined : /^gitdir: (.+)$/m.exec(pointer)?.[1]?.trim();
+  if (!gitdir) return null;
+  const linked = resolve(directory, gitdir);
+  const [common, back] = await Promise.all([
+    readFile(join(linked, 'commondir'), 'utf8').catch(() => null),
+    readFile(join(linked, 'gitdir'), 'utf8').catch(() => null),
+  ]);
+  if (common === null || back === null) return null;
+  const commonDirectory = await realpathNearest(resolve(linked, common.trim()));
+  if (basename(commonDirectory) !== '.git') return null;
+  if ((await realpathNearest(dirname(linked))) !== join(commonDirectory, 'worktrees')) return null;
+  const [named, own] = await Promise.all([
+    realpathNearest(resolve(linked, back.trim())),
+    realpathNearest(join(directory, '.git')),
+  ]);
+  return named === own ? dirname(commonDirectory) : null;
+}
