@@ -283,7 +283,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   },
   SuccessfulSignups: {
     title: 'More new accounts than usual',
-    level: 'warn',
+    level: 'page',
     unit: 'new accounts',
     meaning:
       'The hourly census counted more new accounts in one hour than the ceiling. It notifies once per episode and stays on while each following hour also breaches.',
@@ -292,7 +292,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   },
   NewAccountApiKeys: {
     title: 'New accounts are creating API keys fast',
-    level: 'warn',
+    level: 'page',
     unit: 'API keys',
     meaning:
       'Accounts under 24 hours old created more API keys in one hour than the ceiling. Credit farms create keys right after signing up.',
@@ -316,7 +316,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   },
   'young-account-spend-rate': {
     title: 'New accounts are spending a lot on AI',
-    level: 'warn',
+    level: 'page',
     unit: 'USD',
     meaning:
       'Accounts under 7 days old spent more estimated AI dollars in one hour than the ceiling. Credit farms spend their free credits fast.',

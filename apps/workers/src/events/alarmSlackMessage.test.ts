@@ -343,6 +343,9 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG['signup-code-send-burst'].level).toBe('page');
     expect(ALARM_CATALOG['ungranted-credit-purchases'].level).toBe('page');
     expect(ALARM_CATALOG['signup-code-send-rate'].level).toBe('warn');
+    expect(ALARM_CATALOG.SuccessfulSignups.level).toBe('page');
+    expect(ALARM_CATALOG.NewAccountApiKeys.level).toBe('page');
+    expect(ALARM_CATALOG['young-account-spend-rate'].level).toBe('page');
   });
 });
 
