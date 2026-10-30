@@ -1,3 +1,4 @@
+import { ARTIFACTS_DISABLED_ERROR } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatArtifact, ChatArtifactSave } from '@shared/chat';
@@ -101,14 +102,9 @@ function withSave(artifact: ChatArtifact, save: ChatArtifactSave): ChatArtifact 
 }
 
 /**
- * The error body `POST /api/artifacts` answers when `EnableArtifacts` is off for this user. Must
- * stay in sync with the route (`apps/client/pages/api/artifacts/index.ts`). Matched on the body
- * rather than the bare 403 because the route also 403s on org and source-ref access checks,
- * which are real failures and not the opt-out.
- */
-const ARTIFACTS_DISABLED_ERROR = 'Artifacts are disabled for this user';
-
-/**
+ * Matched on the body rather than the bare 403 because the route also 403s on org and source-ref
+ * access checks, which are real failures and not the opt-out.
+ *
  * The opt-out is not a fault: the artifact rendered and still publishes, only the library copy
  * was skipped, so the reason says that and where the setting lives instead of reading as if the
  * whole feature were off.
@@ -126,6 +122,8 @@ function toSaveFailure(err: unknown): ChatArtifactSave {
     if (status === 401) {
       return { status: 'failed', reason: 'Your session has expired.' };
     }
+    const serverError = errorMessageOf(err.response?.data);
+    if (status === 403 && serverError) return { status: 'failed', reason: serverError };
     if (status) return { status: 'failed', reason: `The server answered ${status}.` };
     return { status: 'failed', reason: 'The server could not be reached.' };
   }
@@ -133,7 +131,11 @@ function toSaveFailure(err: unknown): ChatArtifactSave {
 }
 
 function isArtifactsDisabledBody(data: unknown): boolean {
-  return (
-    typeof data === 'object' && data !== null && (data as Record<string, unknown>).error === ARTIFACTS_DISABLED_ERROR
-  );
+  return errorMessageOf(data) === ARTIFACTS_DISABLED_ERROR;
+}
+
+function errorMessageOf(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const { error } = data as Record<string, unknown>;
+  return typeof error === 'string' && error ? error : undefined;
 }
