@@ -6,9 +6,9 @@
 
 /**
  * Drops comments while leaving string literals intact, in one pass so an apostrophe in prose
- * ("it is") reads as comment text rather than opening a string. Neither file contains a regex
- * literal, which is the one construct this cannot tell from a division operator; the scanner's
- * own behaviour is pinned at the bottom of this file.
+ * ("it is") reads as comment text rather than opening a string. None of the scanned infra files
+ * (infra/mcp.ts, infra/cron.ts) contains a regex literal, which is the one construct this cannot
+ * tell from a division operator; the scanner's own behaviour is pinned in contentHashCoverage.test.ts.
  */
 export function stripComments(source: string): string {
   let out = '';
@@ -49,7 +49,7 @@ export function stripComments(source: string): string {
  * `indexOf` returning -1 degrades to "search from the start", which is how a guard like this one
  * goes quietly green after the declaration it reads is renamed - the same silent-drift failure it
  * exists to prevent, one level up. Two matches are equally loud, so a second copyFiles list in
- * either declaration has to be read rather than skipped. Each anchor is matched against the
+ * a scanned declaration has to be read rather than skipped. Each anchor is matched against the
  * declaration slice, not the whole file, so an unrelated Lambda gaining copyFiles stays quiet.
  */
 export function soleMatch(source: string, anchor: RegExp, what: string): RegExpExecArray {
@@ -62,7 +62,7 @@ export function soleMatch(source: string, anchor: RegExp, what: string): RegExpE
 
 /**
  * Slice from the first `open` at or after `startIndex` through its matching close. Runs on
- * comment-stripped source; no path literal in either file contains a bracket or brace.
+ * comment-stripped source; no path literal in infra/mcp.ts or infra/cron.ts contains a bracket or brace.
  */
 export function balanced(source: string, startIndex: number, open: string, close: string): string {
   const start = source.indexOf(open, startIndex);
