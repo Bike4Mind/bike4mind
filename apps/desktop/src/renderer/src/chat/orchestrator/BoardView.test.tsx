@@ -70,7 +70,7 @@ describe('BoardView', () => {
   });
 
   describe('FLIP', () => {
-    const animate = vi.fn();
+    const animate = vi.fn().mockReturnValue({ cancel: () => {} });
     let top = 0;
     const setReduced = (matches: boolean) => {
       vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
@@ -105,6 +105,19 @@ describe('BoardView', () => {
       top = 40;
       await renderBoard([agentFixture('a', 'working')]);
       expect(animate).toHaveBeenCalledTimes(1);
+    });
+
+    it('slides a card across columns by the visual delta, ignoring a scrolled source column', async () => {
+      await renderBoard([agentFixture('a', 'working')]);
+      top = 60;
+      await act(async () => {
+        el('orchestrator-board-column-working').dispatchEvent(new Event('scroll'));
+      });
+      expect(animate).not.toHaveBeenCalled();
+      top = 20;
+      await renderBoard([agentFixture('a', 'done')]);
+      const keyframes = animate.mock.calls[0]?.[0] as Array<{ transform: string }>;
+      expect(keyframes[0]?.transform).toBe('translate(0px, 40px)');
     });
 
     it('does not animate under reduced motion', async () => {

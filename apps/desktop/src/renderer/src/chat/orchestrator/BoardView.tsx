@@ -1,7 +1,7 @@
 import Box from '@mui/joy/Box';
 import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
-import { useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import type { OrchestratorViewProps } from './OrchestratorStage';
@@ -34,48 +34,76 @@ interface Point {
   y: number;
 }
 
-/** Card position in board content space, so scrolling or resizing between commits is not read as a move. */
-function positionIn(node: HTMLElement, board: HTMLElement): Point {
+/**
+ * On-screen position relative to the board, deliberately without scroll offsets: a card that changes
+ * column lands in a different scroll frame, and only the visual delta is what the eye should see slide.
+ */
+function visualPosition(node: HTMLElement, board: HTMLElement): Point {
   const rect = node.getBoundingClientRect();
   const boardRect = board.getBoundingClientRect();
-  const column = node.parentElement;
-  return {
-    x: rect.left - boardRect.left + board.scrollLeft + (column?.scrollLeft ?? 0),
-    y: rect.top - boardRect.top + board.scrollTop + (column?.scrollTop ?? 0),
-  };
+  return { x: rect.left - boardRect.left, y: rect.top - boardRect.top };
 }
 
 /**
- * FLIP: after every commit, compare each card's board-relative position with the previous commit's
- * and slide moved cards from the old spot. Skips the first mount (nothing remembered) and reduced motion.
+ * FLIP: after every commit, compare each card's visual position with the last snapshot and slide moved
+ * cards from the old spot. The snapshot is also refreshed on scroll so scrolling alone never reads as a move.
+ * Skips the first mount (nothing remembered) and reduced motion.
  */
 function useFlip() {
   const boardRef = useRef<HTMLElement | null>(null);
   const nodes = useRef(new Map<string, HTMLElement>());
   const refCallbacks = useRef(new Map<string, (node: HTMLElement | null) => void>());
   const previous = useRef(new Map<string, Point>());
+  const running = useRef(new Map<string, Animation>());
 
   useLayoutEffect(() => {
     const board = boardRef.current;
     if (!board) return;
     const animate = !prefersReducedMotion();
+    const visual = new Map<string, Point>();
+    nodes.current.forEach((node, id) => visual.set(id, visualPosition(node, board)));
+
+    // Cancel only our own slides so hover and CSS transitions are untouched; a card caught mid-slide
+    // restarts from where it is currently drawn rather than snapping.
+    const inFlight = new Set<string>();
+    running.current.forEach((animation, id) => {
+      animation.cancel();
+      inFlight.add(id);
+    });
+    running.current.clear();
+
     const next = new Map<string, Point>();
-    nodes.current.forEach(node => node.getAnimations?.().forEach(running => running.cancel()));
     nodes.current.forEach((node, id) => {
-      const point = positionIn(node, board);
-      next.set(id, point);
-      const before = previous.current.get(id);
-      if (!animate || !before || typeof node.animate !== 'function') return;
-      const dx = before.x - point.x;
-      const dy = before.y - point.y;
+      const layout = visualPosition(node, board);
+      next.set(id, layout);
+      const origin = inFlight.has(id) ? visual.get(id) : previous.current.get(id);
+      if (!animate || !origin || typeof node.animate !== 'function') return;
+      const dx = origin.x - layout.x;
+      const dy = origin.y - layout.y;
       if (dx === 0 && dy === 0) return;
-      node.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], {
-        duration: FLIP_MS,
-        easing: 'ease',
-      });
+      running.current.set(
+        id,
+        node.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], {
+          duration: FLIP_MS,
+          easing: 'ease',
+        })
+      );
     });
     previous.current = next;
   });
+
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+    // Capture phase: column scrolls do not bubble.
+    const resnapshot = () => {
+      const next = new Map<string, Point>();
+      nodes.current.forEach((node, id) => next.set(id, visualPosition(node, board)));
+      previous.current = next;
+    };
+    board.addEventListener('scroll', resnapshot, { capture: true, passive: true });
+    return () => board.removeEventListener('scroll', resnapshot, { capture: true });
+  }, []);
 
   const refFor = (id: string) => {
     let callback = refCallbacks.current.get(id);
