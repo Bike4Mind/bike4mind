@@ -1,5 +1,6 @@
 import { snippetOf } from '@shared/agentOutcome';
 import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
+import type { AgentView } from './roster';
 
 /** What a running agent is doing right now, as far as its stream shows. Status only, never stored. */
 export type AgentActivity =
@@ -95,4 +96,10 @@ export function activityLabel(activity: AgentActivity): string {
   if (activity.kind === 'tool') return `${activity.tool} ${activity.detail}`.trim();
   if (activity.phase === 'writing-tool') return `Preparing ${activity.tool ?? 'a tool'}`;
   return PHASE_LABEL[activity.phase];
+}
+
+/** The "Now" text shared by the table and board: live activity while working, else the last snippet. */
+export function agentNowText(agent: Pick<AgentView, 'state' | 'activity' | 'lastSnippet'>): string | undefined {
+  if (agent.state === 'working' && agent.activity) return activityLabel(agent.activity);
+  return agent.lastSnippet || undefined;
 }

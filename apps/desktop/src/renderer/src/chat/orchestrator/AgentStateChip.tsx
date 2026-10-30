@@ -11,12 +11,12 @@ const STATE_COLOR: Record<AgentState, ColorPaletteProp> = {
   idle: 'neutral',
 };
 
-export function AgentStateChip({ state }: { state: AgentState }) {
+export function AgentStateChip({ state, muted = false }: { state: AgentState; muted?: boolean }) {
   return (
     <Chip
       size="sm"
       color={STATE_COLOR[state]}
-      variant={state === 'needs-you' ? 'solid' : 'soft'}
+      variant={muted ? 'outlined' : state === 'needs-you' ? 'solid' : 'soft'}
       data-testid={`orchestrator-state-chip-${state}`}
     >
       {AGENT_STATE_LABEL[state]}
