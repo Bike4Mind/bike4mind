@@ -1337,6 +1337,26 @@ describe('ChatCompletionProcess', () => {
       });
     });
 
+    it('counts the tokens a failed turn already used toward the daily cap', async () => {
+      const { body, complete } = wireRestrictedTurn();
+      complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['Hi'], { inputTokens: 40, outputTokens: 2 });
+        throw new Error('stream broke');
+      });
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      restrict();
+
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      expect(mockDb.quests.update.mock.calls.at(-1)?.[0].type).toBe('error');
+      expect(mockDb.caches.tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+        expect.stringMatching(/^shadow-tokens:user1:/),
+        42,
+        Number.MAX_SAFE_INTEGER,
+        expect.any(Number)
+      );
+    });
+
     it('runs the requested model when no allowlisted model is available', async () => {
       const { body, complete } = wireRestrictedTurn();
       restrict();

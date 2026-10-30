@@ -2209,6 +2209,10 @@ export class ChatCompletionProcess {
       logger.warn('[NarratedToolCall] Reply wrote a tool call as text; stripped and not run', { questId, toolNames });
       if (quest.promptMeta) quest.promptMeta.narratedToolCall = { toolNames };
     };
+    // The running attempt's provider counts, until a settlement adds them to the restricted tier's daily counter.
+    let unrecordedShadowUsage:
+      | Pick<CompletionInfo, 'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'>
+      | undefined;
 
     try {
       const abilityStartTime = Date.now();
@@ -4826,6 +4830,7 @@ export class ChatCompletionProcess {
         stopReason: undefined,
       };
       if (this.reservationBasis) this.reservationBasis.reported = actualTokenUsage;
+      unrecordedShadowUsage = actualTokenUsage;
 
       if (THROTTLE_INTERVAL) {
         logger.info(`🚫 [STREAMING] Server throttling DISABLED for maximum TTFVT in ${process.env.NODE_ENV} mode`);
@@ -6428,6 +6433,7 @@ export class ChatCompletionProcess {
         // usage event, and the ledger deduction below so they can never
         // disagree about what was charged.
         const textCreditsUsed = usdToCreditsStochastic(estimatedCost);
+        unrecordedShadowUsage = undefined;
         await recordShadowTokenUsage(
           this.user,
           settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens + settledOutputTokens,
@@ -7172,6 +7178,18 @@ export class ChatCompletionProcess {
       const totalResponseTime = Date.now() - processStartTime;
       // Every branch below that saves the quest keeps the failed turn's timing too.
       turnTiming.finish();
+      if (unrecordedShadowUsage) {
+        const partial = unrecordedShadowUsage;
+        unrecordedShadowUsage = undefined;
+        await recordShadowTokenUsage(
+          this.user,
+          (partial.inputTokens ?? 0) +
+            (partial.cacheReadInputTokens ?? 0) +
+            (partial.cacheCreationInputTokens ?? 0) +
+            (partial.outputTokens ?? 0),
+          { cache: this.db.caches }
+        );
+      }
 
       // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
       // streamed and the tools already delivered; the rollback below then has nothing left to refund.
