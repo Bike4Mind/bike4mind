@@ -99,7 +99,7 @@ describe('set_session_pull_request', () => {
     monitor.dispose();
   });
 
-  it('clears through dismiss, keeping the sidebar icon, and a later bind brings the bar back', async () => {
+  it('clears through dismiss, dropping the sidebar icon, and a later bind brings both back', async () => {
     const { store, out, pushed, monitor, run, labels } = setup();
     await run({ pull_request: REF.url });
     await monitor.idle();
@@ -107,12 +107,16 @@ describe('set_session_pull_request', () => {
     expect(await store.get(SESSION)).toMatchObject({ number: 611, dismissed: true });
     expect(out.last()?.binding).toBeNull();
     expect(labels.at(-1)).toBe("Cleared the session's PR");
-    // A dismissed bar keeps its icon; see PrMonitor.summaryOf.
-    expect(pushed).toEqual([{ sessionId: SESSION, summary: { number: 611, state: 'open' } }]);
+    // A dismissed bar has no icon either; see PrMonitor.summaryOf.
+    expect(pushed).toEqual([
+      { sessionId: SESSION, summary: { number: 611, state: 'open' } },
+      { sessionId: SESSION, summary: null },
+    ]);
 
     await run({ pull_request: REF.url });
     await monitor.idle();
     expect((await store.get(SESSION))?.dismissed).toBe(false);
+    expect(pushed.at(-1)).toEqual({ sessionId: SESSION, summary: { number: 611, state: 'open' } });
     monitor.dispose();
   });
 

@@ -36,8 +36,8 @@ export const setSessionPullRequest: ToolDefinition = {
         clear: {
           type: 'boolean',
           description:
-            "true to close the session's PR bar instead, as the user's close button does; the sidebar keeps " +
-            "the PR's icon. Leave pull_request out.",
+            "true to close the session's PR bar instead, as the user's close button does; the sidebar drops " +
+            "the PR's icon too. Leave pull_request out.",
         },
       },
     },
