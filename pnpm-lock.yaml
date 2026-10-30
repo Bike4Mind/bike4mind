@@ -1516,6 +1516,9 @@ importers:
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
+      '@bike4mind/local-models':
+        specifier: workspace:*
+        version: link:../local-models
       '@bike4mind/observability':
         specifier: workspace:*
         version: link:../observability

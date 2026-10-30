@@ -268,6 +268,7 @@ const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
   [ModelBackend.AWS]: 'amazon',
   [ModelBackend.VoyageAI]: 'voyageai',
   [ModelBackend.Ollama]: 'ollama',
+  [ModelBackend.OpenAICompatible]: 'local',
   [ModelBackend.LocalImage]: 'local',
   // Bedrock hosts other people's models; the id prefix below is the real answer.
   [ModelBackend.Bedrock]: 'amazon',

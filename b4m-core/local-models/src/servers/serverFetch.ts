@@ -31,6 +31,8 @@ export interface ServerEndpoint {
   origin: string;
   /** Shown in errors. */
   label: string;
+  /** The app named in transport and redirect errors. Defaults to Desktop. */
+  app?: string;
   /** Read per request so a credential change applies at once. Null for none. */
   credentialHeaders(): Record<string, string> | null;
 }
@@ -62,10 +64,11 @@ export function redactServerResponse(text: string, response: Response): string {
  * redirect is followed. Connection failures reject with `TypeError('fetch failed', { cause })` like fetch.
  */
 export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDeps = {}): FetchLike {
+  const app = endpoint.app ?? 'Desktop';
   return async (input, init = {}) => {
     const url = new URL(input);
     if (url.origin !== endpoint.origin) {
-      throw new ServerTransportError(`Desktop only sends ${endpoint.label}'s requests to its own address.`);
+      throw new ServerTransportError(`${app} only sends ${endpoint.label}'s requests to its own address.`);
     }
     const credentials = endpoint.credentialHeaders();
     const headers: Record<string, string> = { ...plainHeaders(init.headers), ...(credentials ?? {}) };
@@ -121,7 +124,7 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
       throw new ServerRedirectError(
         scrub(
           crossOrigin
-            ? `${endpoint.label} redirected to another address. Desktop does not follow redirects to another address, so its credentials stay with this server. Check the address.`
+            ? `${endpoint.label} redirected to another address. ${app} does not follow redirects to another address, so its credentials stay with this server. Check the address.`
             : `${endpoint.label} answered with a redirect. Check the address, including any path.`
         ),
         crossOrigin

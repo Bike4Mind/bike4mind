@@ -993,3 +993,33 @@ describe('OllamaBackend tool result recording', () => {
     expect(toolsUsed.map(t => t.returnValue)).toEqual(['3', '7']);
   });
 });
+
+describe('OllamaBackend with a custom fetch', () => {
+  it('sends requests through it and binds the abort signal', async () => {
+    const calls: { url: string; signal?: AbortSignal | null; dispatcher?: unknown }[] = [];
+    const custom = vi.fn(async (input: unknown, init?: RequestInit & { dispatcher?: unknown }) => {
+      calls.push({ url: String(input), signal: init?.signal, dispatcher: init?.dispatcher });
+      return new Response(
+        JSON.stringify({ model: 'm', message: { role: 'assistant', content: 'hi' }, done: true, done_reason: 'stop' }),
+        { headers: { 'content-type': 'application/json' } }
+      );
+    });
+    const backend = new OllamaBackend('http://gpu-box:11434', silentLogger, { fetch: custom as typeof fetch });
+    const controller = new AbortController();
+    let text = '';
+    await backend.complete(
+      'm',
+      [{ role: 'user', content: 'hi' }] as unknown as IMessage[],
+      { stream: false, abortSignal: controller.signal },
+      async parts => {
+        text += parts.filter(Boolean).join('');
+      }
+    );
+    expect(text).toContain('hi');
+    const chat = calls.find(call => call.url === 'http://gpu-box:11434/api/chat');
+    expect(chat).toBeDefined();
+    expect(calls.every(call => call.dispatcher === undefined)).toBe(true);
+    controller.abort();
+    expect(chat?.signal?.aborted).toBe(true);
+  });
+});

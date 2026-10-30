@@ -15,6 +15,8 @@ export enum ModelBackend {
   Anthropic = 'anthropic',
   Gemini = 'gemini',
   Ollama = 'ollama',
+  // A user's own vLLM, llama-server or LM Studio, built client-side; the server never dispatches it.
+  OpenAICompatible = 'openai-compatible',
   BFL = 'bfl',
   XAI = 'xai',
   // Moonshot AI's Kimi models, served from their OpenAI-compatible endpoint.

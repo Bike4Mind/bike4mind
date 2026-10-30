@@ -35,6 +35,8 @@ export {
   type ParsedAddress,
   type TransportVerdict,
 } from './addressPolicy';
+export { OpenAICompatibleRuntime, type OpenAICompatibleRuntimeOptions } from '../openaiCompatible';
+export type { FetchLike, InstalledModel, OpenAICompatibleProduct } from '../types';
 export { credentialRedactor, type CredentialRedactor } from './redact';
 export {
   createServerFetch,

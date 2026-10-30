@@ -31,6 +31,7 @@ export const BACKEND_DISPLAY_NAMES: Readonly<Record<ModelBackend, string>> = {
   [ModelBackend.Kimi]: 'Moonshot (Kimi)',
   [ModelBackend.DeepSeek]: 'DeepSeek',
   [ModelBackend.Ollama]: 'Ollama',
+  [ModelBackend.OpenAICompatible]: 'Local model server',
   [ModelBackend.AWS]: 'AWS',
   [ModelBackend.BFL]: 'Black Forest Labs',
   [ModelBackend.VoyageAI]: 'Voyage AI',

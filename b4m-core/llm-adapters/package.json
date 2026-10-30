@@ -65,6 +65,7 @@
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
     "@aws-sdk/client-sts": "^3.1150.0",
     "@bike4mind/common": "workspace:*",
+    "@bike4mind/local-models": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@google/genai": "^1.46.0",
     "axios": "1.20.0",

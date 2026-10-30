@@ -299,3 +299,14 @@ describe('createServerFetch', () => {
     expect(target.seen.map(request => request.headers.authorization)).toEqual(['Bearer first', 'Bearer second']);
   });
 });
+
+describe('app name in transport errors', () => {
+  const endpoint = { origin: 'http://127.0.0.1:9', label: 'gpu-box', credentialHeaders: () => null };
+
+  it('names Desktop by default and the given app otherwise', async () => {
+    await expect(createServerFetch(endpoint)('http://127.0.0.1:10/x')).rejects.toThrow(/^Desktop only sends gpu-box/);
+    await expect(createServerFetch({ ...endpoint, app: 'the CLI' })('http://127.0.0.1:10/x')).rejects.toThrow(
+      /^the CLI only sends gpu-box/
+    );
+  });
+});
