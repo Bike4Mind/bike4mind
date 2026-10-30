@@ -550,6 +550,18 @@ describe('processExecution tool deps', () => {
       );
     });
 
+    it("stamps the run's API key on an in-process subagent charge", async () => {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({ ...execDoc, apiKeyId: 'key-1' } as never);
+      const tracker = await subagentTracker();
+      await tracker.onComplete({ childExecutionId: 'child-1', result: childResult });
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'text_generation_usage', apiKeyId: 'key-1' }),
+        expect.anything()
+      );
+    });
+
     it("charges a timed-out in-process subagent's partial spend", async () => {
       const tracker = await subagentTracker();
       await tracker.onFailure({

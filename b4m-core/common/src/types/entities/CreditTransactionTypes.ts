@@ -486,8 +486,9 @@ export interface ILedgerPage {
 }
 
 /**
- * One API key's usage rolled up from the ledger (completion_api_usage and
- * decision_usage rows, which carry `apiKeyId`). Credits are the spend magnitude (positive). The
+ * One API key's usage rolled up from the ledger rows that carry `apiKeyId`. `requests` counts only
+ * completion_api_usage and decision_usage rows (one per request); credits and tokens sum every
+ * key-attributed row. Credits are the spend magnitude (positive). The
  * ledger has no COGS, so this cut carries tokens + credits only, not cogsUsd.
  */
 export interface IApiKeyUsage {

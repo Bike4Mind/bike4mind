@@ -193,6 +193,8 @@ export type AiSpendSummary = {
   bySource: AiSpendBucket[];
 };
 
+const API_KEY_REQUEST_TRANSACTION_TYPES = ['completion_api_usage', 'decision_usage'];
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const AI_SPEND_DAILY_WINDOW_DAYS = 90;
 
@@ -534,7 +536,9 @@ export class CreditTransactionRepository
       {
         $group: {
           _id: '$apiKeyId',
-          requests: { $sum: 1 },
+          // Chat, tool, media and agent rows also carry the key (for per-key spend), but one request
+          // can write several of them; only these types are one row per API request.
+          requests: { $sum: { $cond: [{ $in: ['$type', API_KEY_REQUEST_TRANSACTION_TYPES] }, 1, 0] } },
           // Usage is stored negative; report the spend magnitude.
           creditsSpent: { $sum: { $abs: '$credits' } },
           inputTokens: { $sum: { $ifNull: ['$inputTokens', 0] } },
