@@ -118,6 +118,17 @@ describe('useSessionContextUsage', () => {
     expect(renderHook(() => useSessionContextUsage('s1')).result.current?.cachingIneffective).toBe(false);
   });
 
+  it('sets cacheExpiresAt only when the latest turn read or wrote the cache', () => {
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    mockPages([{ ...quest('q1', { cacheReadInputTokens: 0 }), timestamp }]);
+    expect(renderHook(() => useSessionContextUsage('s1')).result.current?.cacheExpiresAt).toBeNull();
+
+    mockPages([{ ...quest('q1', { cacheReadInputTokens: 5_000 }), timestamp }]);
+    expect(renderHook(() => useSessionContextUsage('s1')).result.current?.cacheExpiresAt).toBe(
+      Date.parse(timestamp) + 5 * 60 * 1000
+    );
+  });
+
   it('surfaces compactedTurns from the latest turn (0 when absent)', () => {
     mockPages([quest('q1', { verbatimTurnsExcluded: 3 })]);
     expect(renderHook(() => useSessionContextUsage('s1')).result.current?.compactedTurns).toBe(3);

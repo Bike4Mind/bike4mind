@@ -21,6 +21,8 @@ export interface SSEContentEvent {
     /** Anthropic-style cache token deltas */
     cacheReadInputTokens?: number;
     cacheCreationInputTokens?: number;
+    /** The part of cacheCreationInputTokens written with the 1-hour TTL. */
+    cacheWrite1hInputTokens?: number;
   };
   /**
    * Credit usage information for real-time display
@@ -105,6 +107,8 @@ export interface CompletionInfo {
   /** Anthropic-style cache token deltas */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /** The part of cacheCreationInputTokens written with the 1-hour TTL. */
+  cacheWrite1hInputTokens?: number;
   /** Per-provider-request breakdown, for settlement only; buildSSEEvent never forwards it. */
   turnUsage?: TurnUsage[];
   /**
@@ -204,6 +208,7 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
       ...(info.reasoningTokens !== undefined ? { reasoningTokens: info.reasoningTokens } : {}),
       cacheReadInputTokens: info.cacheReadInputTokens,
       cacheCreationInputTokens: info.cacheCreationInputTokens,
+      ...(info.cacheWrite1hInputTokens ? { cacheWrite1hInputTokens: info.cacheWrite1hInputTokens } : {}),
     };
   }
 
@@ -293,6 +298,7 @@ export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: 
     reasoningTokens: info.reasoningTokens,
     cacheReadInputTokens: info.cacheReadInputTokens,
     cacheCreationInputTokens: info.cacheCreationInputTokens,
+    cacheWrite1hInputTokens: info.cacheWrite1hInputTokens,
     creditsUsed: info.creditsUsed,
   };
   return buildSSEEvent(responseOnly, safeInfo);

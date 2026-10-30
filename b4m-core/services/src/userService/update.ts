@@ -101,6 +101,7 @@ export const updateUserSchema = z.object({
       showFunTools: z.boolean().optional(),
       showSplashCards: z.boolean().optional(),
       desktopPromoDismissed: z.boolean().optional(),
+      promptCacheTtl: z.enum(['5m', '1h']).optional(),
     })
     .nullable()
     .optional(),

@@ -46,6 +46,11 @@ describe('streamCompletion reasoning effort', () => {
   it('leaves the field off the payload when none is set', async () => {
     expect(await sentOptions(REQUEST)).not.toHaveProperty('reasoningEffort');
   });
+
+  it('sends a prompt cache lifetime under options only when one is set', async () => {
+    expect(await sentOptions({ ...REQUEST, cacheTtl: '1h' })).toMatchObject({ cacheTtl: '1h' });
+    expect(await sentOptions(REQUEST)).not.toHaveProperty('cacheTtl');
+  });
 });
 
 describe('streamCompletion', () => {

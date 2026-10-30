@@ -15,7 +15,7 @@ import {
   shell,
   type WebContents,
 } from 'electron';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, isPromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
@@ -59,6 +59,7 @@ import type { McpMutationResult, McpServerInput, McpServersState } from '@shared
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
+import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
 import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware } from './localContextSizing';
@@ -398,7 +399,8 @@ export function registerChat(
     randomUUID(),
     () => sessionScopeForChat(auth.getState()),
     approvalModes,
-    REASONING_EFFORT
+    REASONING_EFFORT,
+    new PromptCacheTtlPreference(join(userData, 'prompt-cache-ttl.json'))
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
   const capabilityLedger = new CapabilityLedger(join(userData, 'capability-ledger.json'));
@@ -727,6 +729,9 @@ export function registerChat(
     const setting = storedReasoningEffortSetting(effort);
     return setting ? service.setSessionReasoningEffort(sessionId, setting) : null;
   });
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionPromptCacheTtl, (_event, sessionId: string, ttl: unknown) =>
+    isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
+  );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );

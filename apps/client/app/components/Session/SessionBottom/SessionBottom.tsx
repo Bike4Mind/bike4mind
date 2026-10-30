@@ -67,8 +67,9 @@ import { noModelsPlaceholder, NoModelsPlaceholder, LowCreditsWarning } from '../
 import { ZeroCreditWarning } from '../ZeroCreditWarning';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { getComposerCreditUi } from './composerCreditUi';
-import { getModelSwitchCostNotice } from './modelSwitchCost';
-import { ModelSwitchCostNotice } from './ModelSwitchCostNotice';
+import { CacheExpiryNotice, ModelSwitchCostNotice } from './ModelSwitchCostNotice';
+import { usePromptCacheComposer } from './usePromptCacheComposer';
+import PromptCacheTtlChip from './PromptCacheTtlChip';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
@@ -216,17 +217,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // the current input box against the budget.
   const contextUsage = useSessionContextUsage(currentSessionId);
   const modelName = useMemo(() => modelInfo?.find(m => m.id === model)?.name ?? model, [modelInfo, model]);
-  const modelSwitchCredits = useMemo(
-    () =>
-      getModelSwitchCostNotice({
-        selectedModel: modelInfo?.find(m => m.id === model),
-        answeredModelId: contextUsage?.answeredModelId,
-        previousInputTokens: contextUsage?.actualInputTokens,
-        previousInputModelId: contextUsage?.inputModelId,
-        providerInputTokens: contextUsage?.providerInputTokens,
-      }),
-    [modelInfo, model, contextUsage]
-  );
   const attachmentFit = useAttachmentFitWarning(
     model,
     // Notebook-context files ride EVERY turn on this session, so they spend the budget too.
@@ -304,6 +294,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     () => isChatCompletionActiveFor(chatCompletion, currentSessionId),
     [chatCompletion, currentSessionId]
   );
+  const promptCache = usePromptCacheComposer({
+    selectedModel: useMemo(() => modelInfo?.find(m => m.id === model), [modelInfo, model]),
+    contextUsage,
+    isGenerating: shouldShowStopButton,
+  });
 
   // Check if there are active file uploads or images still pending a content-moderation
   // scan - the Send button must stay disabled until the scan clears, otherwise
@@ -640,7 +635,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           }}
         />
         {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
-        {!creditUi.replaceComposer && <ModelSwitchCostNotice credits={modelSwitchCredits} />}
+        {!creditUi.replaceComposer && <ModelSwitchCostNotice credits={promptCache.modelSwitchCredits} />}
+        {!creditUi.replaceComposer && (
+          <CacheExpiryNotice credits={promptCache.cacheExpiryCredits} expiresAt={promptCache.cacheExpiresAt} />
+        )}
       </Box>
       {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
           below, and on phones the box sits on the keyboard. */}
@@ -667,6 +665,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
               inputOverLimit={isOverContextWindow}
               attachment={attachmentFit}
             />
+            {promptCache.ttlChip && <PromptCacheTtlChip {...promptCache.ttlChip} />}
             <CreditBalanceChip session={currentSession} />
           </>
         }

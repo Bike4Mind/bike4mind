@@ -458,6 +458,8 @@ export type CompletionInfo = {
    */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /** The part of cacheCreationInputTokens written with the 1-hour TTL, when the adapter can tell. */
+  cacheWrite1hInputTokens?: number;
   /**
    * The same usage broken down per provider request (one entry per tool round-trip), in the
    * same disjoint convention; summing it reproduces the aggregate fields above. Settlement prices

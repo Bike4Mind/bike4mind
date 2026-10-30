@@ -28,6 +28,17 @@ describe('selectUsableModels', () => {
     expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('maxOutputTokens');
   });
 
+  it('offers the 1-hour prompt cache only on a direct-Anthropic model that takes it', () => {
+    const opus = { id: 'claude-opus-5-5', name: 'Claude Opus 5.5' };
+    expect(selectUsableModels([wireModel(opus)])[0]).toMatchObject({ supportsOneHourCache: true });
+    expect(selectUsableModels([wireModel({ id: 'claude-opus-4-1-20250805' })])[0]).not.toHaveProperty(
+      'supportsOneHourCache'
+    );
+    expect(
+      selectUsableModels([wireModel({ ...opus, id: 'global.anthropic.claude-opus-5-5', backend: 'bedrock' })])[0]
+    ).not.toHaveProperty('supportsOneHourCache');
+  });
+
   it('carries well-formed pricing tiers and drops malformed ones', () => {
     const pricing = {
       200000: { input: 3e-6, output: 15e-6, cache_write: 3.75e-6 },
