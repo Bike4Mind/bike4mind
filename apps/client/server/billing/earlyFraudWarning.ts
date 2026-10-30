@@ -27,15 +27,16 @@ import type Stripe from 'stripe';
 /**
  * The automatic response to a Stripe early fraud warning: the issuer has told Stripe the charge
  * was fraudulent, and a dispute (with its fee and its mark on the dispute ratio) usually follows.
- * Refunding first ends that; the credits it bought, and any signup credits its subscription
- * unlocked, are clawed back; the account is locked the way a dispute locks it; subscriptions on the
- * same card are cancelled; linked accounts are handled by propagateAccountRisk. Off
- * (paymentRiskAutoRefundEnabled), the warning is only forwarded to LiveOps.
+ * The account is locked the way a dispute locks it, subscriptions on the same card are cancelled,
+ * linked accounts are handled by propagateAccountRisk, and any signup credits its subscription
+ * unlocked are clawed back; then the charge is refunded, which ends the dispute, and the credits it
+ * bought are clawed back. Off (paymentRiskAutoRefundEnabled), the warning is only forwarded to LiveOps.
  *
  * Idempotent on the warning id: a completed response is skipped, the refund carries a Stripe
  * idempotency key, the purchase clawback is keyed by the refund id, and the steps that must not
  * repeat (signup clawback, alert) are claimed in PaymentRiskAction. Errors propagate so Stripe
- * retries the delivery.
+ * retries the delivery; a refund Stripe refuses is reported in the alert first, so the account is
+ * already contained when the delivery fails.
  */
 
 export type EarlyFraudWarningSettings = { autoAct: boolean; minUnspentPercent: number };
@@ -61,7 +62,8 @@ export function shouldRefund(unspent: number | null, minUnspentPercent: number):
 export type RefundResult =
   | { status: 'refunded'; refundId: string; amount: number; currency: string; clawedBackCredits: number }
   | { status: 'alreadyRefunded' }
-  | { status: 'belowThreshold'; unspent: number; threshold: number };
+  | { status: 'belowThreshold'; unspent: number; threshold: number }
+  | { status: 'failed'; reason: string };
 
 export type FraudWarningResponse = {
   refund: RefundResult;
@@ -90,8 +92,8 @@ async function refundCharge(input: {
     { charge: charge.id, amount: remaining, reason: 'fraudulent', metadata: { earlyFraudWarningId: warningId } },
     { idempotencyKey: `efw-refund:${warningId}` }
   );
-  // Clawed back now rather than on the charge.refunded webhook, so the credits are gone before
-  // anything else runs; that webhook then finds the refund id taken and skips.
+  // Clawed back now rather than on the charge.refunded webhook; that webhook then finds the refund
+  // id taken and skips.
   const clawback =
     purchasedCredits && paymentIntentId
       ? await clawbackRefundCredits({
@@ -109,6 +111,25 @@ async function refundCharge(input: {
     currency: refund.currency,
     clawedBackCredits: clawback?.credits ?? 0,
   };
+}
+
+/** Stripe's error code (e.g. charge_disputed, balance_insufficient), else the message. */
+function refundFailureReason(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string') {
+    return error.code;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** A refund Stripe refuses becomes a reported result; the caller rethrows the error once it has alerted. */
+async function attemptRefund(
+  input: Parameters<typeof refundCharge>[0]
+): Promise<{ refund: RefundResult; refundError: unknown }> {
+  try {
+    return { refund: await refundCharge(input), refundError: null };
+  } catch (error) {
+    return { refund: { status: 'failed', reason: refundFailureReason(error) }, refundError: error };
+  }
 }
 
 /**
@@ -167,6 +188,8 @@ function describeRefund(refund: RefundResult): string {
       return 'already refunded';
     case 'belowThreshold':
       return `not refunded: ${refund.unspent}% of its credits unspent, below the ${refund.threshold}% setting`;
+    case 'failed':
+      return `*refund failed* (${escapeSlackText(refund.reason)}), Stripe will retry the delivery`;
   }
 }
 
@@ -248,13 +271,10 @@ export async function respondToEarlyFraudWarning(
   const user = await userRepository.findById(userId);
   if (!user) throw new Error(`User ${userId} for early fraud warning ${warning.id} not found`);
 
+  // Containment runs before the refund and is safe to repeat: Stripe refuses a refund on exactly
+  // the charges that most need it (a dispute already open, a short balance), and that must not
+  // leave the account unlocked.
   const unspent = unspentPercent(user.currentCredits ?? 0, purchasedCredits);
-  const refund: RefundResult = shouldRefund(unspent, settings.minUnspentPercent)
-    ? await refundCharge({ warningId: warning.id, charge, paymentIntentId, userId, purchasedCredits })
-    : { status: 'belowThreshold', unspent: unspent!, threshold: settings.minUnspentPercent };
-
-  // A credit pack never unlocks the signup grant; a subscription payment can.
-  const signupClawback = purchasedCredits === null ? await clawbackSubscriptionUnlock(key, userId) : 0;
   const wasBlocked = Boolean(user.disputePending);
   const { deactivatedKeys } = await lockAccountForPaymentRisk(user);
   const cancelledSubscriptions = await cancelSubscriptionsOnCard(userId, chargeRiskOf(charge).cardFingerprint);
@@ -262,6 +282,15 @@ export async function respondToEarlyFraudWarning(
     { sourceUserId: userId, trigger: 'early fraud warning', key: `${key}:linked` },
     logger
   );
+  // A credit pack never unlocks the signup grant; a subscription payment can.
+  const signupClawback = purchasedCredits === null ? await clawbackSubscriptionUnlock(key, userId) : 0;
+
+  const { refund, refundError } = shouldRefund(unspent, settings.minUnspentPercent)
+    ? await attemptRefund({ warningId: warning.id, charge, paymentIntentId, userId, purchasedCredits })
+    : {
+        refund: { status: 'belowThreshold', unspent: unspent!, threshold: settings.minUnspentPercent } as const,
+        refundError: null,
+      };
 
   const response: FraudWarningResponse = {
     refund,
@@ -283,5 +312,7 @@ export async function respondToEarlyFraudWarning(
   if (await paymentRiskActionRepository.claimStep(key, 'alert', userId)) {
     await postMessageToSlack(formatFraudWarningAlert({ warning, userId, charge, response }));
   }
+  // Left uncompleted so the retried delivery tries the refund again; the alert is already claimed.
+  if (refundError !== null) throw refundError;
   await paymentRiskActionRepository.markCompleted(key, userId);
 }

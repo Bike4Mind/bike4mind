@@ -262,10 +262,26 @@ describe('respondToEarlyFraudWarning', () => {
     expect(mocks.markCompleted).toHaveBeenCalledWith('efw:issfr_1', null);
   });
 
-  it('lets a Stripe failure propagate so the delivery is retried, without marking it done', async () => {
-    mocks.refundsCreate.mockRejectedValue(new Error('stripe down'));
+  it('contains the account and alerts before a refused refund fails the delivery for a retry', async () => {
+    const refused = Object.assign(new Error('This charge has an open dispute'), { code: 'charge_disputed' });
+    mocks.refundsCreate.mockRejectedValue(refused);
 
-    await expect(respondToEarlyFraudWarning(warningEvent, logger)).rejects.toThrow('stripe down');
+    await expect(respondToEarlyFraudWarning(warningEvent, logger)).rejects.toBe(refused);
+    expect(mocks.lockAccountForPaymentRisk).toHaveBeenCalledWith(user);
+    expect(mocks.propagateAccountRisk).toHaveBeenCalled();
+    expect(mocks.clawbackRefundCredits).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
+    const [message] = mocks.postMessageToSlack.mock.calls[0];
+    expect(message).toContain('*refund failed* (charge_disputed)');
+    expect(message).toContain('account locked');
+    expect(mocks.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it('lets a containment failure propagate before any refund, without marking it done', async () => {
+    mocks.lockAccountForPaymentRisk.mockRejectedValue(new Error('db down'));
+
+    await expect(respondToEarlyFraudWarning(warningEvent, logger)).rejects.toThrow('db down');
+    expect(mocks.refundsCreate).not.toHaveBeenCalled();
     expect(mocks.markCompleted).not.toHaveBeenCalled();
   });
 });
