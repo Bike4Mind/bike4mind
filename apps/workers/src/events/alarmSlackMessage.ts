@@ -300,6 +300,8 @@ const PRODUCTION_PREFIX: Record<AlarmLevel, string> = {
 };
 
 const STAGE_ALIASES = ['prod', 'production', 'dev', 'staging'];
+/** Staging deploys as SST stage `dev`; the channel shows the name the team uses. Alarm names stay raw. */
+const STAGE_LABELS: Record<string, string> = { dev: 'staging' };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const SEPARATOR = '  |  ';
 
@@ -308,6 +310,7 @@ export function isCloudWatchAlarm(payload: unknown): payload is CloudWatchAlarmP
 }
 
 export const isProductionStage = (stage: string) => classifyStage(stage) === 'production';
+export const stageLabel = (stage: string) => STAGE_LABELS[stage] ?? stage;
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -517,7 +520,9 @@ export interface ComposeParams {
 /** Assembles the header + colour-barred attachment shape every alarm-style message uses. */
 export function composeAlarmMessage(params: ComposeParams): SlackAlarmMessage {
   const production = isProductionStage(params.stage);
-  const prefix = production ? PRODUCTION_PREFIX[params.level] : `:small_blue_diamond: ${params.stage} alarm`;
+  const prefix = production
+    ? PRODUCTION_PREFIX[params.level]
+    : `:small_blue_diamond: ${stageLabel(params.stage)} alarm`;
   const color = production ? COLOR[params.level] : COLOR.nonprod;
   const headerText = `${prefix}: ${params.title}`;
   const mention = production && params.level === 'page' ? normalizeMentionToken(params.mention) : undefined;
@@ -584,7 +589,7 @@ export function formatAlarmSlackMessage(
               type: 'section',
               text: {
                 type: 'mrkdwn',
-                text: `:white_check_mark: *Resolved: ${escapeMrkdwn(title)}*\n${escapeMrkdwn(stage)}${SEPARATOR}${back}`,
+                text: `:white_check_mark: *Resolved: ${escapeMrkdwn(title)}*\n${escapeMrkdwn(stageLabel(stage))}${SEPARATOR}${back}`,
               },
             },
             { type: 'context', elements: [{ type: 'mrkdwn', text: context.join(SEPARATOR) }] },
@@ -610,7 +615,7 @@ export function formatAlarmSlackMessage(
   }
 
   const stamp = when ? `${formatClock(when)} UTC, ${when.getUTCDate()} ${MONTHS[when.getUTCMonth()]}` : undefined;
-  const context = [escapeMrkdwn(stage), `level ${level}`, escapeMrkdwn(alarm.AlarmName), stamp].filter(
+  const context = [escapeMrkdwn(stageLabel(stage)), `level ${level}`, escapeMrkdwn(alarm.AlarmName), stamp].filter(
     Boolean
   ) as string[];
 

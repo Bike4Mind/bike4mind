@@ -269,14 +269,14 @@ describe('formatAlarmSlackMessage on production', () => {
 describe('formatAlarmSlackMessage on other stages', () => {
   const devBurst = { ...burst, AlarmName: 'bike4mind-dev-signup-code-send-burst' };
 
-  it('marks dev as secondary: grey bar, no siren, no mention even at page level', () => {
+  it('labels stage dev as staging and keeps it secondary: grey bar, no siren, no mention even at page level', () => {
     const message = formatAlarmSlackMessage(devBurst, 'dev', { mention: 'channel' });
-    expect(header(message)).toBe(':small_blue_diamond: dev alarm: Sign-in code emails spiking');
+    expect(header(message)).toBe(':small_blue_diamond: staging alarm: Sign-in code emails spiking');
     expect(attachment(message).color).toBe('#9AA5B1');
     expect(topBlocks(message)).toHaveLength(1);
     expect(message?.text).not.toContain('<!channel>');
     expect(contextOf(message)).toBe(
-      'dev  |  level page  |  bike4mind-dev-signup-code-send-burst  |  12:39 UTC, 27 Oct'
+      'staging  |  level page  |  bike4mind-dev-signup-code-send-burst  |  12:39 UTC, 27 Oct'
     );
   });
 
@@ -294,7 +294,7 @@ describe('formatAlarmSlackMessage on other stages', () => {
   it('resolves on dev in the same quiet green shape', () => {
     const message = formatAlarmSlackMessage({ ...devBurst, NewStateValue: 'OK' }, 'dev');
     expect(attachment(message).color).toBe('#2EB67D');
-    expect(bodyOf(message)[0].text?.text).toContain('dev  |  back to normal at 12:39 UTC');
+    expect(bodyOf(message)[0].text?.text).toContain('staging  |  back to normal at 12:39 UTC');
   });
 });
 
