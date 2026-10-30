@@ -2,8 +2,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type Stripe from 'stripe';
 
-const { mockFindById, mockRepo, mockAddCredits, mockSubtractCredits, mockGetSettingsMap, mockAlert } = vi.hoisted(
-  () => ({
+const { mockFindById, mockRepo, mockAddCredits, mockSubtractCredits, mockClawbackLots, mockGetSettingsMap, mockAlert } =
+  vi.hoisted(() => ({
     mockFindById: vi.fn(),
     mockRepo: {
       create: vi.fn(),
@@ -17,10 +17,10 @@ const { mockFindById, mockRepo, mockAddCredits, mockSubtractCredits, mockGetSett
     },
     mockAddCredits: vi.fn(),
     mockSubtractCredits: vi.fn(),
+    mockClawbackLots: vi.fn(),
     mockGetSettingsMap: vi.fn(),
     mockAlert: vi.fn(),
-  })
-);
+  }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -32,7 +32,11 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/services', () => ({
-  creditService: { addCreditsWithLedgerRow: mockAddCredits, subtractCredits: mockSubtractCredits },
+  creditService: {
+    addCreditsWithLedgerRow: mockAddCredits,
+    subtractCredits: mockSubtractCredits,
+    clawbackCreditLotsByStripeRef: mockClawbackLots,
+  },
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mockGetSettingsMap,
@@ -375,6 +379,12 @@ describe('reverseSubscriptionRewardForRefund', () => {
       credits: 6000,
       reason: 'referral_reward_takeback',
     });
+    expect(mockClawbackLots).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/^referral-subscription:inviter1:/),
+      'proportional',
+      6000,
+      expect.anything()
+    );
   });
 
   it('takes back only the refunded share on a partial refund', async () => {
