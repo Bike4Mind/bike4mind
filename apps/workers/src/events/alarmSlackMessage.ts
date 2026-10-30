@@ -20,7 +20,8 @@ export type AlarmLinkKey =
   | 'agent-executions'
   | 'integration-health'
   | 'system-secrets'
-  | 'rate-limits';
+  | 'rate-limits'
+  | 'spend-monitor';
 
 export interface AlarmCatalogEntry {
   title: string;
@@ -61,6 +62,7 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'integration-health': { label: 'Integration health', path: '/admin?tab=integration-health' },
   'system-secrets': { label: 'System secrets', path: '/admin?tab=system-secrets' },
   'rate-limits': { label: 'Rate limits', path: '/admin?tab=rate-limits' },
+  'spend-monitor': { label: 'Spend Monitor', path: '/admin?tab=credit-analytics' },
 };
 
 const SIGNUP_ACTION =

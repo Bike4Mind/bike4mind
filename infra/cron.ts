@@ -1353,6 +1353,7 @@ export {
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
+  spendMonitor,
   creditPurchaseReconciliationCron,
   storageReconciliationCron,
   driveLakeResyncPollCron,

@@ -46,6 +46,8 @@ export interface ISpendAlert {
   acknowledgedBy?: string;
   acknowledgedAt?: Date;
   resolvedAt?: Date;
+  /** End of the newest window a run has applied to this incident; a retry of that window is a no-op. */
+  lastEvaluatedWindowEnd?: Date;
   /** Snapshot rendered in Slack. */
   context: Record<string, unknown>;
 }
@@ -55,7 +57,7 @@ export interface ISpendRollupRepository extends IBaseRepository<ISpendRollup> {
   rollupBucket(bucketStart: Date): Promise<{ docs: number }>;
   /** Newest bucketStart that has a platform doc, or null when nothing has been rolled up. */
   latestBucketStart(): Promise<Date | null>;
-  /** Totals per scopeId summed over buckets in [from, to). */
+  /** Totals per scopeId summed over buckets in [from, to). Each total's bucketStart is synthetic: it is `from`. */
   sumWindow(
     scopeType: SpendRollupScopeType,
     from: Date,
@@ -70,8 +72,21 @@ export interface ISpendRollupRepository extends IBaseRepository<ISpendRollup> {
     to: Date
   ): Promise<Map<string, ISpendRollup[]>>;
 }
-// Placeholder: filled in by the alert repository task.
-export interface ISpendAlertRepository {}
+/** A persisted alert as the repository returns it. */
+export type SpendAlertRecord = ISpendAlert & { id: string };
+
+export interface ISpendAlertRepository extends IBaseRepository<SpendAlertRecord> {
+  /** Incidents still holding an openKey: status open or acknowledged. */
+  findActive(): Promise<SpendAlertRecord[]>;
+  /**
+   * Applies one run's patch unless a run already evaluated `patch.lastEvaluatedWindowEnd` or a later
+   * window. Returns false when nothing matched, meaning an overlapping or retried run got there first.
+   */
+  applyEvaluation(
+    patch: Partial<ISpendAlert> & { id: string; lastEvaluatedWindowEnd: Date },
+    options?: { unset?: (keyof ISpendAlert)[] }
+  ): Promise<boolean>;
+}
 
 export function floorToBucket(date: Date): Date {
   return new Date(Math.floor(date.getTime() / SPEND_BUCKET_MS) * SPEND_BUCKET_MS);
