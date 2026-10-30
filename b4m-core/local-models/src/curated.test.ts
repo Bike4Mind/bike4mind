@@ -2,6 +2,7 @@ import type { HardwareProfile, HubEntry, HubManifest } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import {
   curatedBuildForRef,
+  curatedEntryForRef,
   curatedListing,
   curatedOllamaBlocked,
   curatedParamsLabel,
@@ -124,6 +125,26 @@ describe('curatedBuildForRef', () => {
     const ref = curatedSource(entry.builds[0]).ollamaRef;
     entry.flags.abliterated = true;
     expect(curatedBuildForRef(list, ref)).toBeNull();
+  });
+});
+
+describe('curatedEntryForRef', () => {
+  it('finds the entry behind a library ref even when Curated does not offer it', () => {
+    const list = manifest();
+    const entry = entryOf(list, 'qwen3-5-4b');
+    const ref = curatedSource(entry.builds[0]).ollamaRef;
+    entry.flags.abliterated = true;
+    expect(curatedEntryForRef(list, ref.toUpperCase())).toBe(entry);
+    expect(curatedEntryForRef(list, 'qwen2.5:0.5b')).toBeNull();
+  });
+
+  it('finds an hf.co entry by its repo, whatever quant or tag the ref names', () => {
+    const list = manifest();
+    const entry = entryOf(list, 'qwen3-8-27b-gsq');
+    const repo = entry.builds[0].hf?.repo;
+    for (const ref of [`hf.co/${repo}`, `hf.co/${repo}:Q2_K`, `HF.CO/${repo?.toUpperCase()}:latest`])
+      expect(curatedEntryForRef(list, ref)).toBe(entry);
+    expect(curatedEntryForRef(list, `hf.co/${repo}-other:Q4_K_M`)).toBeNull();
   });
 });
 

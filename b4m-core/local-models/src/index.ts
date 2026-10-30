@@ -44,6 +44,7 @@ export {
 export { isAbliteratedModel } from './abliterated';
 export {
   curatedBuildForRef,
+  curatedEntryForRef,
   curatedLibrary,
   curatedListing,
   curatedOllamaBlocked,
@@ -51,10 +52,12 @@ export {
   curatedPicks,
   curatedPins,
   curatedSource,
+  installedReviewed,
   isCuratedListable,
   isCuratedPullable,
   isPermissiveEntry,
   loadCuratedManifest,
+  servesReviewed,
   type CuratedListing,
   type CuratedSource,
   type CuratedTierPick,

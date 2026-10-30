@@ -6,6 +6,7 @@ import {
   LocalRuntimeError,
   ModelNotFoundError,
   RuntimeConnectionError,
+  installedReviewed,
   loadCuratedManifest,
   type HardwareProfile,
   ollamaPullRef,
@@ -31,7 +32,6 @@ import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import {
   ModelHubService,
   toModelHubError,
-  installedReviewed,
   type HubTokenPort,
   type ModelHubPort,
   type ModelRuntimePort,
