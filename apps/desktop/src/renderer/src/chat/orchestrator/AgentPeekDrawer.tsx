@@ -56,6 +56,16 @@ function ReplyBox({ agentId }: { agentId: string }) {
   // A ref as well as state: two keystrokes can land before React re-renders with `sending` set.
   const sendingRef = useRef(false);
 
+  // Main flushes, merges or returns queued messages on its own; the note goes once ours leaves the queue.
+  const queuedId = queued?.id;
+  useEffect(() => {
+    if (queuedId === undefined) return;
+    return window.b4m.chat.onQueueChanged(event => {
+      if (event.sessionId !== agentId) return;
+      if (!event.queued.some(message => message.id === queuedId)) setQueued(null);
+    });
+  }, [agentId, queuedId]);
+
   const send = async () => {
     const trimmed = text.trim();
     if (!trimmed || sendingRef.current) return;

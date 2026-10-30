@@ -63,6 +63,25 @@ describe('TableView', () => {
     expect(getComputedStyle(title as Element).paddingLeft).toBe('32px');
   });
 
+  it('selects a row from the keyboard with Enter or Space', async () => {
+    await renderTable([agentFixture('a'), agentFixture('b')]);
+    const row = el('orchestrator-table-row-b');
+    expect(row.tabIndex).toBe(0);
+    act(() => {
+      row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    expect(onSelect).toHaveBeenLastCalledWith('b');
+    onSelect.mockClear();
+    act(() => {
+      el('orchestrator-table-row-a').dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    });
+    expect(onSelect).toHaveBeenLastCalledWith('a');
+    act(() => {
+      row.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }));
+    });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
   it('shows the activity while working and the last snippet otherwise', async () => {
     await renderTable([
       agentFixture('a', 'working', { activity: { kind: 'phase', phase: 'thinking' } }),

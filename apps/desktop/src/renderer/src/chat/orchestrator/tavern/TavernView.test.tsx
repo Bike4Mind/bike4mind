@@ -122,6 +122,36 @@ describe('TavernView', () => {
       expect(await clickFrom('w0')).toBe('w6');
     });
 
+    const needing = (count: number) =>
+      Array.from({ length: count }, (_, index) => agentFixture(`n${index}`, 'needs-you'));
+    const working = (count: number) =>
+      Array.from({ length: count }, (_, index) => agentFixture(`w${index}`, 'working'));
+
+    it('puts a fifth needs-you agent at the door with its bubble', async () => {
+      await renderTavern(needing(5));
+      expect(el('orchestrator-tavern-bubble-n4').textContent).toBe('Needs you!');
+      expect(el('orchestrator-tavern-agent-n4').style.left).toBe(`${DOOR_POINT.x}%`);
+      expect(query('orchestrator-tavern-door-overflow')).toBeNull();
+    });
+
+    it('prefers a needs-you agent over earlier queued ones at the door', async () => {
+      await renderTavern([...working(8), ...needing(5)]);
+      expect(query('orchestrator-tavern-agent-n4')).not.toBeNull();
+      expect(query('orchestrator-tavern-agent-w6')).toBeNull();
+      expect(badge().textContent).toBe('+2');
+      expect(badge().getAttribute('aria-label')).toBe('2 more waiting at the door; select next');
+    });
+
+    it('marks the badge urgent while a needs-you agent is hidden in the queue', async () => {
+      await renderTavern([...working(7), ...needing(6)]);
+      expect(query('orchestrator-tavern-agent-n4')).not.toBeNull();
+      expect(badge().textContent).toBe('!+2');
+      expect(badge().getAttribute('aria-label')).toBe('2 more waiting at the door, 1 needs you; select next');
+      onSelect.mockClear();
+      await act(async () => badge().click());
+      expect(onSelect).toHaveBeenCalledWith('n4');
+    });
+
     it('shows the selected queued agent at the door instead of the first', async () => {
       await renderTavern(nine, false, 'w7');
       expect(query('orchestrator-tavern-agent-w7')).not.toBeNull();

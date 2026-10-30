@@ -22,7 +22,7 @@ export interface OrchestratorViewProps {
   introPlaying: boolean;
 }
 
-interface OrchestratorStageProps {
+export interface OrchestratorStageProps {
   agents: readonly AgentView[];
   view: OrchestratorViewId;
   onViewChange(view: OrchestratorViewId): void;
@@ -63,8 +63,8 @@ export function OrchestratorStage({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [hasSelection]);
 
-  const { total, counts, usdCost, credits, costPartial } = summarizeRoster(agents);
-  const cost = formatAgentCost(usdCost === 0 && credits > 0 ? undefined : usdCost, credits);
+  const { total, counts, usdCost, credits, hasUsd, costPartial } = summarizeRoster(agents);
+  const cost = formatAgentCost(hasUsd ? usdCost : undefined, credits);
   const needsYou = counts['needs-you'];
   const firstNeedsYou = agents.find(agent => agent.state === 'needs-you');
 
@@ -90,7 +90,7 @@ export function OrchestratorStage({
           ))}
         </ToggleButtonGroup>
         <Typography level="body-sm" data-testid="orchestrator-summary-strip">
-          {`${total} agents \u00B7 ${counts.working} working \u00B7 ${needsYou} need you \u00B7 ${counts.done} done \u00B7 ${counts.failed} failed \u00B7 ${costPartial ? '~' : ''}${cost}`}
+          {`${total} ${total === 1 ? 'agent' : 'agents'} \u00B7 ${counts.working} working \u00B7 ${needsYou} need you \u00B7 ${counts.done} done \u00B7 ${counts.failed} failed \u00B7 ${costPartial ? '~' : ''}${cost}`}
         </Typography>
         {needsYou > 0 && firstNeedsYou && (
           <Button

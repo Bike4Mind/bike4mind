@@ -46,7 +46,7 @@ export interface AgentView {
 
 const OUTCOME_STATE: Record<ChildOutcome, AgentState> = {
   finished: 'done',
-  'max-tokens': 'done',
+  'max-tokens': 'failed',
   failed: 'failed',
   'turn-budget': 'failed',
   'context-limit': 'failed',
@@ -61,7 +61,10 @@ export function deriveAgentState(status: ChatSessionStatus | undefined, outcome:
   return outcome ? OUTCOME_STATE[outcome] : 'idle';
 }
 
-/** Distance from `rootId` up the parent chain, or null if the chain ends elsewhere or loops. */
+/**
+ * Distance from `rootId` up the parent chain, or null if the chain ends elsewhere, loops, or passes
+ * through an archived session below the root (archiving an agent shelves its whole subtree).
+ */
 function depthBelow(
   session: ChatSessionSummary,
   rootId: string,
@@ -77,8 +80,46 @@ function depthBelow(
     if (visited.has(parentId)) return null;
     visited.add(parentId);
     current = byId.get(parentId);
+    if (current?.archived) return null;
   }
   return null;
+}
+
+type SpawnedSession = ChatSessionSummary & Required<Pick<ChatSessionSummary, 'origin'>>;
+
+const isSpawned = (session: ChatSessionSummary): session is SpawnedSession => session.origin !== undefined;
+
+/** Every live session below `rootId`, with its depth. Shared by buildRoster and descendantIds. */
+function descendantsOf(
+  sessions: readonly ChatSessionSummary[],
+  rootId: string
+): Array<{ session: SpawnedSession; depth: number }> {
+  const byId = new Map(sessions.map(session => [session.id, session]));
+  const found: Array<{ session: SpawnedSession; depth: number }> = [];
+  for (const session of sessions) {
+    if (session.archived || !isSpawned(session) || session.id === rootId) continue;
+    const depth = depthBelow(session, rootId, byId);
+    if (depth !== null) found.push({ session, depth });
+  }
+  return found;
+}
+
+/** The ids buildRoster would list for `rootId`; cheap enough to compute on every render. */
+export function descendantIds(sessions: readonly ChatSessionSummary[], rootId: string | null): Set<string> {
+  if (rootId === null) return new Set();
+  return new Set(descendantsOf(sessions, rootId).map(({ session }) => session.id));
+}
+
+/** Each agent's state from statuses alone: what the header chip needs, with no activity subscription. */
+export function agentStates(
+  sessions: readonly ChatSessionSummary[],
+  statuses: ReadonlyMap<string, ChatSessionStatus>,
+  rootId: string | null
+): AgentState[] {
+  if (rootId === null) return [];
+  return descendantsOf(sessions, rootId).map(({ session }) =>
+    deriveAgentState(statuses.get(session.id), session.lastOutcome)
+  );
 }
 
 export function buildRoster(input: {
@@ -89,14 +130,9 @@ export function buildRoster(input: {
   rootId: string;
 }): AgentView[] {
   const { sessions, statuses, activity, prSummaries, rootId } = input;
-  const byId = new Map(sessions.map(session => [session.id, session]));
   const views: AgentView[] = [];
 
-  for (const session of sessions) {
-    if (session.archived || !session.origin || session.id === rootId) continue;
-    const depth = depthBelow(session, rootId, byId);
-    if (depth === null) continue;
-
+  for (const { session, depth } of descendantsOf(sessions, rootId)) {
     const state = deriveAgentState(statuses.get(session.id), session.lastOutcome);
     views.push({
       id: session.id,
@@ -125,17 +161,14 @@ export function buildRoster(input: {
   );
 }
 
-export function hasAgents(sessions: readonly ChatSessionSummary[], rootId: string | null): boolean {
-  if (rootId === null) return false;
-  return sessions.some(session => !session.archived && session.origin?.parentSessionId === rootId);
-}
-
 export interface RosterSummary {
   total: number;
   counts: Record<AgentState, number>;
   usdCost: number;
   credits: number;
-  /** Some agent reported neither cost, so the totals are a floor. */
+  /** Some agent reported a dollar cost, so the total is shown in dollars rather than credits. */
+  hasUsd: boolean;
+  /** Some agent lacks the shown currency (credit-only beside dollars, or no cost), so the total is a floor. */
   costPartial: boolean;
 }
 
@@ -143,14 +176,14 @@ export function summarizeRoster(agents: readonly AgentView[]): RosterSummary {
   const counts: Record<AgentState, number> = { 'needs-you': 0, working: 0, done: 0, failed: 0, stopped: 0, idle: 0 };
   let usdCost = 0;
   let credits = 0;
-  let costPartial = false;
   for (const agent of agents) {
     counts[agent.state] += 1;
     usdCost += agent.usdCost ?? 0;
     credits += agent.credits ?? 0;
-    if (agent.usdCost === undefined && agent.credits === undefined) costPartial = true;
   }
-  return { total: agents.length, counts, usdCost, credits, costPartial };
+  const hasUsd = agents.some(agent => agent.usdCost !== undefined);
+  const costPartial = agents.some(agent => (hasUsd ? agent.usdCost : agent.credits) === undefined);
+  return { total: agents.length, counts, usdCost, credits, hasUsd, costPartial };
 }
 
 export function formatAgentCost(usdCost?: number, credits?: number): string {

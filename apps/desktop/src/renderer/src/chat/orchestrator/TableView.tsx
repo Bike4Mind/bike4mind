@@ -100,7 +100,13 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
             <tr
               key={agent.id}
               data-testid={`orchestrator-table-row-${agent.id}`}
+              tabIndex={0}
               onClick={() => onSelect(agent.id)}
+              onKeyDown={event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                onSelect(agent.id);
+              }}
               style={{ cursor: 'pointer' }}
               aria-selected={agent.id === selectedId}
             >

@@ -16,6 +16,7 @@ import type {
   ReasoningEffortSetting,
   UpdateProjectRequest,
 } from '@shared/chat';
+import { summarizeSession } from '@shared/agentOutcome';
 import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
 import type { CreatedSession } from '@shared/ipc';
@@ -922,8 +923,7 @@ export function useConversation(
       const summary = await window.b4m.chat.getSession(sessionId);
       if (summary) {
         setSession(summary);
-        const { messages: _messages, spawnSuggestions: _suggestions, ...rest } = summary;
-        onSummaryChanged({ ...rest, messageCount: summary.messages.length });
+        onSummaryChanged(summarizeSession(summary));
       }
       return true;
     },
