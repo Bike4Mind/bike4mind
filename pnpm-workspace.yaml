@@ -71,6 +71,7 @@ overrides:
   "follow-redirects@<1.16.1": "^1.16.1"
   "markdown-it@<14.3.3": "^14.3.3"
   "dompurify@>=3.0.0 <3.4.17": "^3.4.17"
+  "decode-uri-component@>=0.5.0 <0.5.1": "^0.5.1"
 
 ignoredBuiltDependencies:
   - "aws-sdk"
