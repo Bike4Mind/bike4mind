@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { SxProps } from '@mui/joy/styles/types';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -178,6 +179,8 @@ export type AccountStrip = (status: ReactNode) => ReactNode;
 
 /** How long the first-run tavern intro plays before it is marked seen (ms). */
 const ORCHESTRATOR_INTRO_MS = 1500;
+/** The conversation docked beside the orchestrator stage (px). */
+const DOCK_WIDTH = 380;
 
 /**
  * 'playing' while the first-run intro runs, then 'shown' until the user picks a view: the intro is
@@ -938,6 +941,27 @@ export function ChatShell({
     </VideoJobsContext.Provider>
   );
 
+  const orchestratorShown = orchestrating && activeId !== null;
+  const dockHidden = orchestratorShown && !orchestratorPrefs.dockOpen;
+  const threadHostTestId = dockHidden
+    ? 'orchestrator-dock-hidden'
+    : orchestratorShown
+      ? 'orchestrator-dock'
+      : undefined;
+  // A hidden dock stays laid out (visibility, not display), so the thread keeps its scroll offset.
+  const threadHostSx: SxProps = !orchestratorShown
+    ? { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }
+    : {
+        width: DOCK_WIDTH,
+        flexShrink: 0,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        ...(dockHidden
+          ? { position: 'absolute', top: 0, right: 0, bottom: 0, visibility: 'hidden' }
+          : { borderLeft: '1px solid', borderColor: 'divider' }),
+      };
+
   return (
     <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
       <SpawnFailureToast />
@@ -1156,8 +1180,10 @@ export function ChatShell({
             ref={threadRegion}
             sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
           >
-            {orchestrating && activeId !== null ? (
-              <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
+            {/* One tree for both surfaces, so entering or leaving orchestrate, or toggling the dock,
+                never remounts the thread and loses the reader's place in it. */}
+            <Box sx={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0 }}>
+              {orchestratorShown && (
                 <OrchestratorSurface
                   // Keyed so a switch between orchestrating parents resets selection and sort, and never reuses sprites.
                   key={activeId}
@@ -1191,26 +1217,11 @@ export function ChatShell({
                     </Tooltip>
                   }
                 />
-                {orchestratorPrefs.dockOpen && (
-                  <Box
-                    data-testid="orchestrator-dock"
-                    sx={{
-                      width: 380,
-                      flexShrink: 0,
-                      borderLeft: '1px solid',
-                      borderColor: 'divider',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      minHeight: 0,
-                    }}
-                  >
-                    {thread}
-                  </Box>
-                )}
+              )}
+              <Box data-testid={threadHostTestId} sx={threadHostSx}>
+                {thread}
               </Box>
-            ) : (
-              thread
-            )}
+            </Box>
 
             {panelShown && panelProject && conversation.session && (
               <SessionPanel

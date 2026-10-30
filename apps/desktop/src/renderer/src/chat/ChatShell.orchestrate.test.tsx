@@ -14,6 +14,23 @@ import { DOOR_POINT } from './orchestrator/tavern/scene';
 // Screens and panels this test never opens, each with its own IPC to stub otherwise.
 vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
 
+const threadMounts = vi.hoisted(() => ({ count: 0 }));
+// The real thread, counting its mounts.
+vi.mock('./MessageThread', async importOriginal => {
+  const actual = await importOriginal<typeof import('./MessageThread')>();
+  const { useEffect } = await import('react');
+  type Props = Parameters<typeof actual.MessageThread>[0];
+  return {
+    ...actual,
+    MessageThread: (props: Props) => {
+      useEffect(() => {
+        threadMounts.count += 1;
+      }, []);
+      return <actual.MessageThread {...props} />;
+    },
+  };
+});
+
 window.matchMedia ??= ((query: string) => ({
   matches: false,
   media: query,
@@ -179,6 +196,23 @@ describe('orchestrate mode in the chat shell', () => {
     act(() => el('chat-surface-toggle-chat').click());
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('chat-thread-empty-host')).not.toBeNull();
+  });
+
+  it('keeps the same thread mounted across surface and dock toggles', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    const mountsBefore = threadMounts.count;
+
+    await enterOrchestrate();
+    act(() => el('orchestrator-dock-toggle-btn').click());
+    // Hidden, not unmounted.
+    expect(el('orchestrator-dock-hidden').querySelector('[data-testid="chat-thread-empty-host"]')).not.toBeNull();
+    act(() => el('orchestrator-dock-toggle-btn').click());
+    act(() => el('chat-surface-toggle-chat').click());
+    await enterOrchestrate();
+    act(() => el('chat-surface-toggle-chat').click());
+
+    expect(threadMounts.count).toBe(mountsBefore);
   });
 
   it('plays the tavern intro on the first entry only, then marks it seen', async () => {
