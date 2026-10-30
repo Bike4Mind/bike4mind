@@ -88,7 +88,9 @@ export const snapshotAliasOf = (modelId: string): string | undefined =>
  * Discovery must not introduce one: the read path matches rows to adapter literals by
  * exact id, so the alias would list as a second "GPT-4.1" next to the snapshot. Aliases
  * already in the catalog are retired through the queue instead (snapshotAliasSuggestions
- * in lifecyclePlan.ts).
+ * in lifecyclePlan.ts). The set is deliberately backend-blind: unlike that suggestion, which
+ * requires the alias and snapshot to share a backend, an introduction is refused whatever
+ * backend holds the snapshot.
  */
 export function datedSnapshotAliases(heldModelIds: Iterable<string>): Set<string> {
   const aliases = new Set<string>();
