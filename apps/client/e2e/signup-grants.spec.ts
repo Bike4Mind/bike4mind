@@ -4,7 +4,7 @@ import { test, expect, openPageAs } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { getTestRunId, getTestUsers } from './helpers/test-users';
 import { isSharedRealEnv } from './helpers/env';
-import { apiGetSignupGrant, apiRegisterViaOtc, apiUpdateAdminSetting } from './helpers/api';
+import { apiGetSignupGrant, apiRegisterViaOtc, apiUpdateAdminSetting, sameOriginHeaders } from './helpers/api';
 import { AdminPage } from './pages/AdminPage';
 import { BasePage } from './pages/BasePage';
 
@@ -14,13 +14,16 @@ import { BasePage } from './pages/BasePage';
  * tranche of signups past it until an admin releases the hold.
  *
  * The staged grant settings are global, so this file only runs where flipping them is safe (previews,
- * localhost) and puts every touched setting back afterwards. It registers exactly two accounts through
- * the real OTC path because each one spends the email domain's hourly new-account budget.
+ * localhost) and puts every touched setting back afterwards. It also lifts the per-IP and per-ASN signup
+ * caps for the run, since every run signs up from the same runner. It registers exactly two accounts
+ * through the real OTC path because each one spends the email domain's hourly new-account budget,
+ * which no setting can raise.
  *
  * Serial mode: the self-serve account walks the grant from tranche to fully released, and the held
  * account relies on the budget day the first account's payouts already drew from.
  */
-test.describe.configure({ mode: 'serial' });
+// No retries: a retry re-runs the group from the first registration and spends more domain budget.
+test.describe.configure({ mode: 'serial', retries: 0 });
 
 const SIGNUP_CREDITS = 7;
 const UNLOCK_CREDITS = 13;
@@ -42,6 +45,8 @@ const GRANT_SETTINGS = {
   signupGrantActivityDailyCredits: DRIP_CREDITS,
   signupGrantActivityMaxCredits: DRIP_CREDITS,
   signupGrantActivityPreviewTestMode: false,
+  maxSignupsPerIpPerDay: 0,
+  maxSignupsPerAsnPerHour: 0,
 } as const;
 type GrantSettingKey = keyof typeof GRANT_SETTINGS;
 
@@ -80,9 +85,9 @@ async function register(request: APIRequestContext, label: string): Promise<Acco
 
 async function heartbeat(request: APIRequestContext, account: Account) {
   const response = await request.post(`${API_URL}/api/users/active-session`, {
-    headers: { Authorization: `Bearer ${account.accessToken}` },
+    headers: { Authorization: `Bearer ${account.accessToken}`, ...sameOriginHeaders() },
   });
-  expect(response.ok(), 'active-session heartbeat').toBe(true);
+  expect(response.ok(), `active-session heartbeat: ${response.status()} ${await response.text()}`).toBe(true);
   return (await response.json()) as { creditsGranted: number; paidToday: boolean; activeSeconds: number };
 }
 
@@ -170,7 +175,7 @@ test.describe('Staged signup grants', () => {
     });
 
     // The day's drip is spent: another ping pays nothing more.
-    expect((await heartbeat(request, selfServe)).creditsGranted).toBe(0);
+    expect(await heartbeat(request, selfServe)).toMatchObject({ creditsGranted: 0, paidToday: true });
   });
 
   test('an admin unlock releases the locked remainder, and the account cannot unlock itself', async ({
@@ -182,13 +187,15 @@ test.describe('Staged signup grants', () => {
     const reason = 'E2E staged signup grant unlock';
 
     const selfAttempt = await request.post(unlockUrl, {
-      headers: { Authorization: `Bearer ${selfServe.accessToken}` },
+      headers: { Authorization: `Bearer ${selfServe.accessToken}`, ...sameOriginHeaders() },
       data: { reason },
     });
     expect(selfAttempt.status()).toBe(403);
+    // Not the CSRF 403: the request must reach the route's own admin check.
+    expect(await selfAttempt.text()).toContain('Admin access required');
 
     const unlock = await request.post(unlockUrl, {
-      headers: { Authorization: `Bearer ${adminToken()}` },
+      headers: { Authorization: `Bearer ${adminToken()}`, ...sameOriginHeaders() },
       data: { reason },
     });
     expect(unlock.ok(), await unlock.text()).toBe(true);
