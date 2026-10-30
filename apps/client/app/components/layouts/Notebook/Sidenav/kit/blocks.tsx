@@ -1,7 +1,7 @@
 import { Box, Divider, type BoxProps } from '@mui/joy';
 import { forwardRef } from 'react';
 import { SIDENAV } from './metrics';
-import { pinnedSx, searchBarSx, sectionSx } from './styles';
+import { navStackSx, pinnedSx, searchBarSx, sectionSx } from './styles';
 
 const merge = (base: BoxProps['sx'], sx: BoxProps['sx']): BoxProps['sx'] => [
   ...(Array.isArray(base) ? base : [base]),
@@ -26,6 +26,10 @@ export const SidenavPinned = forwardRef<HTMLDivElement, BoxProps>(function Siden
 
 export const SidenavSection = ({ sx, className, ...rest }: BoxProps) => (
   <Box className={withClass('notebook-sidenav-container', className)} {...rest} sx={merge(sectionSx, sx)} />
+);
+
+export const SidenavNavStack = ({ sx, className, ...rest }: BoxProps) => (
+  <Box className={withClass('notebook-sidenav-nav', className)} {...rest} sx={merge(navStackSx, sx)} />
 );
 
 export const SidenavSearchBar = ({ top, sx, className, children, ...rest }: BoxProps & { top: number }) => (

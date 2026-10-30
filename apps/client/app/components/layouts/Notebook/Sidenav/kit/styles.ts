@@ -95,16 +95,15 @@ export const pinnedSx = (theme: Theme) =>
     zIndex: 3,
     backgroundColor: sidenavTokens(theme).pinnedBackdrop,
     pt: SIDENAV.pinnedTop,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: SIDENAV.rowGap,
   }) as const;
 
-export const sectionSx = {
+export const sectionSx = { display: 'flex', flexDirection: 'column' } as const;
+
+export const navStackSx = {
   display: 'flex',
   flexDirection: 'column',
   gap: SIDENAV.rowGap,
-  mt: SIDENAV.sectionGap,
+  mt: SIDENAV.navTop,
 } as const;
 
 export const searchBarSx = (theme: Theme, top: number) =>

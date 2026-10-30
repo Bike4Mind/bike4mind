@@ -7,6 +7,7 @@ import {
   iconSlotSx,
   listRowsSx,
   navRowSx,
+  navStackSx,
   notebookListTokens,
   pinnedSx,
   searchBarSx,
@@ -52,8 +53,9 @@ describe('sidenav kit styles', () => {
   });
 
   it('spaces blocks and rows from the metrics', () => {
-    expect(pinnedSx(theme)).toMatchObject({ position: 'sticky', top: 0, pt: '12px', gap: '2px' });
-    expect(sectionSx).toMatchObject({ gap: '2px', mt: '2px' });
+    expect(pinnedSx(theme)).toMatchObject({ position: 'sticky', top: 0, pt: '10px' });
+    expect(sectionSx).not.toHaveProperty('mt');
+    expect(navStackSx).toMatchObject({ display: 'flex', flexDirection: 'column', gap: '2px', mt: '2px' });
     expect(searchBarSx(theme, 78)).toMatchObject({ position: 'sticky', top: '78px', pt: '6px', pb: '10px' });
     expect(listRowsSx).toMatchObject({ display: 'flex', flexDirection: 'column', gap: '2px' });
   });

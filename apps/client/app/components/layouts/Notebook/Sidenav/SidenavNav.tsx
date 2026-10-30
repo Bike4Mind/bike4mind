@@ -1,9 +1,8 @@
-import { Box, Chip, Divider, Dropdown, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
+import { Box, Chip, Divider, Dropdown, Menu, MenuButton, MenuItem, Typography } from '@mui/joy';
 import { useTheme, type Theme } from '@mui/joy/styles';
 import { useNavigate, useLocation } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Fragment, ReactNode, useEffect, useRef, useState } from 'react';
-import AddIcon from '@mui/icons-material/Add';
 import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
@@ -42,12 +41,8 @@ import { useNotebookLayout } from '..';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
 import { menuItemListSx, menuRowSx, menuSurfaceSx } from './menuSurfaceSx';
+import { NavIcon, NewActionIcon, SIDENAV, SidenavNavRow, SidenavNavStack, navLabelSx, navRowSx } from './kit';
 
-const NAV_ROW_HEIGHT = 32;
-const NAV_TAG_HEIGHT = 24;
-/** A row's right padding when it carries a tag: the gap left above and below
- *  the tag, so it sits evenly inset on three sides. */
-const NAV_TAG_INSET = (NAV_ROW_HEIGHT - NAV_TAG_HEIGHT) / 2;
 /** Rows kept at the top in the unified-scroll sidebar's pinned section. */
 const PINNED_COUNT = 2;
 /** Past this many rows, the lowest-priority ones fold into a More menu; More counts toward it. */
@@ -56,7 +51,7 @@ const MAX_NAV_ROWS = 8;
 /** Shared by the tags on the right of a row: labels, not controls - the row
  *  under them is what gets clicked. */
 const navTagSx = {
-  '--Chip-minHeight': `${NAV_TAG_HEIGHT}px`,
+  '--Chip-minHeight': `${SIDENAV.tagHeight}px`,
   // 13px, as on the Gears page's credit chips.
   fontSize: '13px',
   pointerEvents: 'none',
@@ -90,31 +85,6 @@ type NavItem = {
   // Lower stays in the nav longer once rows overflow MAX_NAV_ROWS; ties fold in display order.
   priority: number;
 };
-
-const navRowSx = (theme: Theme, isActive: boolean, hasTrailing: boolean) => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: '12px',
-  pl: '12px',
-  pr: hasTrailing ? `${NAV_TAG_INSET}px` : '12px',
-  height: `${NAV_ROW_HEIGHT}px`,
-  minHeight: `${NAV_ROW_HEIGHT}px`,
-  borderRadius: '8px',
-  cursor: 'pointer',
-  color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary,
-  backgroundColor: isActive ? theme.palette.notebooklist.focusedBackground : 'transparent',
-  transition: 'background 0.15s',
-  '&:hover': {
-    backgroundColor: isActive ? theme.palette.notebooklist.focusedBackground : theme.palette.notebooklist.hoverBg,
-  },
-  '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
-});
-
-const navLabel = (label: string) => (
-  <Typography level="body-sm" sx={{ fontSize: '14px', fontWeight: 400, color: 'inherit' }} noWrap>
-    {label}
-  </Typography>
-);
 
 /**
  * Primary sidebar navigation - a vertical icon list (New Chat, Files Manager, Agents, Projects,
@@ -202,48 +172,12 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
     if (isMobile) setOpenSideNav(false);
   };
 
-  const iconSlot = (node: ReactNode) => (
-    <Box
-      sx={{
-        width: 20,
-        height: 20,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexShrink: 0,
-        // Joy SvgIcons resolve their color from the --Icon-color CSS variable
-        // (set by an ancestor), which wins over plain `color` - so set it directly.
-        '--Icon-color': theme.palette.sidenav?.navItemIcon,
-        color: theme.palette.sidenav?.navItemIcon,
-        // Soften the nav icons: 0.75 in dark, 0.5 in light.
-        opacity: theme.palette.mode === 'dark' ? 0.75 : 0.5,
-      }}
-    >
-      {node}
-    </Box>
-  );
-
   const items: NavItem[] = [
     {
       key: 'new-chat',
       priority: 0,
       label: t('sidenav.sessions.new'),
-      icon: (
-        <Box
-          sx={{
-            width: 20,
-            height: 20,
-            borderRadius: '6px',
-            backgroundColor: 'primary.500',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-          }}
-        >
-          <AddIcon sx={{ fontSize: '16px', color: '#fff' }} />
-        </Box>
-      ),
+      icon: <NewActionIcon />,
       isActive: location.pathname === '/new',
       onClick: () => {
         closeOnMobile();
@@ -256,7 +190,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             key: 'opti',
             priority: 1,
             label: 'OptiHashi',
-            icon: iconSlot(<TempleBuddhistOutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: (
+              <NavIcon>
+                <TempleBuddhistOutlinedIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
             isActive: location.pathname.startsWith('/opti'),
             onClick: () => {
               closeOnMobile();
@@ -272,7 +210,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             key: 'bob',
             priority: 1,
             label: 'Bob',
-            icon: iconSlot(BobIcon ? <BobIcon /> : <Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: <NavIcon>{BobIcon ? <BobIcon /> : <Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />}</NavIcon>,
             isActive: location.pathname.startsWith('/bob'),
             onClick: () => {
               closeOnMobile();
@@ -289,7 +227,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             key: 'meetings',
             priority: 1,
             label: 'Interactive Meetings',
-            icon: iconSlot(<GroupsOutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: (
+              <NavIcon>
+                <GroupsOutlinedIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
             isActive: location.pathname.startsWith('/meetings'),
             onClick: () => {
               closeOnMobile();
@@ -305,7 +247,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       key: 'files',
       priority: 0,
       label: t('files.manager', 'Files Manager'),
-      icon: iconSlot(<FolderSharedIcon sx={{ fontSize: '18px' }} />),
+      icon: (
+        <NavIcon>
+          <FolderSharedIcon sx={{ fontSize: '18px' }} />
+        </NavIcon>
+      ),
       isActive: fileBrowserOpen,
       onClick: () => {
         closeOnMobile();
@@ -320,7 +266,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         key,
         label: item.label,
         priority: 3,
-        icon: iconSlot(ContributedIcon ? <ContributedIcon /> : <ExtensionOutlinedIcon sx={{ fontSize: '18px' }} />),
+        icon: (
+          <NavIcon>
+            {ContributedIcon ? <ContributedIcon /> : <ExtensionOutlinedIcon sx={{ fontSize: '18px' }} />}
+          </NavIcon>
+        ),
         isActive: location.pathname === item.path || location.pathname.startsWith(`${item.path}/`),
         onClick: () => {
           closeOnMobile();
@@ -335,7 +285,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             key: 'agents',
             priority: 0,
             label: t('agents.title'),
-            icon: iconSlot(<SmartToyOutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: (
+              <NavIcon>
+                <SmartToyOutlinedIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
             // Active only on the overall agents grid, not a specific agent screen (/agents/:id),
             // which highlights its own row in the list below instead.
             isActive: location.pathname === '/agents',
@@ -352,7 +306,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       label: t('projects.projects'),
       // Active only on the overall projects grid, not a specific project screen
       // (/projects/:id), which highlights its own row in the list below instead.
-      icon: iconSlot(<HubOutlinedIcon sx={{ fontSize: '18px' }} />),
+      icon: (
+        <NavIcon>
+          <HubOutlinedIcon sx={{ fontSize: '18px' }} />
+        </NavIcon>
+      ),
       isActive: location.pathname === '/projects',
       onClick: () => {
         closeOnMobile();
@@ -365,7 +323,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             key: 'studio',
             priority: 1,
             label: t('sidenav.studio', 'Studio'),
-            icon: iconSlot(<PermMediaOutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: (
+              <NavIcon>
+                <PermMediaOutlinedIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
             isActive: location.pathname.startsWith('/studio/'),
             onClick: () => {
               closeOnMobile();
@@ -380,7 +342,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       key: 'published',
       priority: 2,
       label: t('sidenav.published', 'Live Artifacts'),
-      icon: iconSlot(<PublicOutlinedIcon sx={{ fontSize: '18px' }} />),
+      icon: (
+        <NavIcon>
+          <PublicOutlinedIcon sx={{ fontSize: '18px' }} />
+        </NavIcon>
+      ),
       isActive: location.pathname === '/profile' && (location.search as { tab?: string }).tab === 'published',
       onClick: () => {
         closeOnMobile();
@@ -392,7 +358,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       key: 'skill-market',
       priority: 2,
       label: t('sidenav.skillMarket', 'Skill Market'),
-      icon: iconSlot(<StorefrontOutlinedIcon sx={{ fontSize: '18px' }} />),
+      icon: (
+        <NavIcon>
+          <StorefrontOutlinedIcon sx={{ fontSize: '18px' }} />
+        </NavIcon>
+      ),
       isActive: location.pathname.startsWith('/skills/market'),
       onClick: () => {
         closeOnMobile();
@@ -405,7 +375,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             key: 'quests',
             priority: 0,
             label: t('sidenav.questMaster', 'Quest Master'),
-            icon: iconSlot(<AutoAwesomeOutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: (
+              <NavIcon>
+                <AutoAwesomeOutlinedIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
             isActive: location.pathname === '/quests' || location.pathname.startsWith('/quests/'),
             onClick: () => {
               closeOnMobile();
@@ -423,7 +397,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             key: 'quests-v5',
             priority: 3,
             label: t('sidenav.questsV5', 'Quests v5'),
-            icon: iconSlot(<AccountTreeOutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: (
+              <NavIcon>
+                <AccountTreeOutlinedIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
             isActive: location.pathname.startsWith('/quests-v5'),
             onClick: () => {
               closeOnMobile();
@@ -438,7 +416,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             key: 'tavern',
             priority: 3,
             label: 'Tavern',
-            icon: iconSlot(<CastleOutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: (
+              <NavIcon>
+                <CastleOutlinedIcon sx={{ fontSize: '18px' }} />
+              </NavIcon>
+            ),
             isActive: location.pathname === '/tavern',
             onClick: () => {
               closeOnMobile();
@@ -457,7 +439,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       key: 'gears',
       priority: 0,
       label: t('sidenav.gears', 'Gears'),
-      icon: iconSlot(<SettingsOutlinedIcon sx={{ fontSize: '18px' }} />),
+      icon: (
+        <NavIcon>
+          <SettingsOutlinedIcon sx={{ fontSize: '18px' }} />
+        </NavIcon>
+      ),
       isActive: location.pathname === '/gears',
       // One tag at a time: a waiting reward outranks the nudge to explore, and the
       // row is too narrow to carry both.
@@ -539,28 +525,18 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const moreActive = moreItems.some(item => item.isActive);
 
   return (
-    <Stack className="notebook-sidenav-nav" sx={{ gap: '2px', mt: '2px' }}>
+    <SidenavNavStack>
       {shownItems.map(item => (
         <Fragment key={item.key}>
           {item.dividerAbove && <Divider sx={{ my: '4px', opacity: 0.6 }} />}
-          <Box
+          <SidenavNavRow
             data-testid={`sidenav-nav-${item.key}`}
-            role="button"
-            tabIndex={0}
-            aria-current={item.isActive ? 'page' : undefined}
+            icon={item.icon}
+            label={item.label}
+            active={item.isActive}
+            trailing={item.trailing}
             onClick={item.onClick}
-            onKeyDown={e => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                item.onClick?.();
-              }
-            }}
-            sx={navRowSx(theme, item.isActive, !!item.trailing)}
-          >
-            {item.icon}
-            {navLabel(item.label)}
-            {item.trailing && <Box sx={{ ml: 'auto', display: 'flex', flexShrink: 0 }}>{item.trailing}</Box>}
-          </Box>
+          />
         </Fragment>
       ))}
       {showMore && (
@@ -573,12 +549,16 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
                 role: 'button',
                 tabIndex: 0,
                 'aria-current': moreActive ? 'page' : undefined,
-                sx: navRowSx(theme, moreActive, false),
+                sx: navRowSx(theme, moreActive),
               },
             }}
           >
-            {iconSlot(<FormatListBulletedIcon sx={{ fontSize: '18px' }} />)}
-            {navLabel(t('common.more', 'More'))}
+            <NavIcon>
+              <FormatListBulletedIcon sx={{ fontSize: '18px' }} />
+            </NavIcon>
+            <Typography level="body-sm" sx={navLabelSx} noWrap>
+              {t('common.more', 'More')}
+            </Typography>
             <ChevronLeftIcon
               sx={{
                 ml: 'auto',
@@ -609,13 +589,15 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
                 sx={menuTheme => menuRowSx(menuTheme)}
               >
                 {item.icon}
-                {navLabel(item.label)}
+                <Typography level="body-sm" sx={navLabelSx} noWrap>
+                  {item.label}
+                </Typography>
               </MenuItem>
             ))}
           </Menu>
         </Dropdown>
       )}
-    </Stack>
+    </SidenavNavStack>
   );
 };
 

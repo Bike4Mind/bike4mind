@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ReactNode } from 'react';
-import { NavIcon, SidenavNavRow, SidenavPinned, SidenavSearchBar, SidenavSection } from '.';
+import { NavIcon, SidenavNavRow, SidenavNavStack, SidenavPinned, SidenavSearchBar, SidenavSection } from '.';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (node: ReactNode) => render(<CssVarsProvider theme={appTheme}>{node}</CssVarsProvider>);
@@ -57,6 +57,7 @@ describe('kit blocks', () => {
       <>
         <SidenavPinned data-testid="pinned" />
         <SidenavSection data-testid="section" />
+        <SidenavNavStack data-testid="stack" />
         <SidenavSearchBar data-testid="search" top={78}>
           <input />
         </SidenavSearchBar>
@@ -64,6 +65,7 @@ describe('kit blocks', () => {
     );
     expect(screen.getByTestId('pinned')).toHaveClass('notebook-sidenav-pinned');
     expect(screen.getByTestId('section')).toHaveClass('notebook-sidenav-container');
+    expect(screen.getByTestId('stack')).toHaveClass('notebook-sidenav-nav');
     expect(screen.getByTestId('search')).toHaveClass('notebook-sidenav-search-container');
     expect(screen.getByTestId('search').querySelector('hr, [role="separator"]')).not.toBeNull();
   });

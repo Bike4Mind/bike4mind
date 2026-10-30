@@ -1,9 +1,9 @@
 // The rail's spacing and row geometry; the premium overlays' sidenavs read these too.
 export const SIDENAV = {
   railPadX: '10px',
-  pinnedTop: '12px',
+  pinnedTop: '10px',
+  navTop: '2px',
   rowGap: '2px',
-  sectionGap: '2px',
   rowHeight: 32,
   tagHeight: 24,
   rowRadius: '8px',

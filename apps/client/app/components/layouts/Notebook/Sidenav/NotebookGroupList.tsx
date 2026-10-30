@@ -11,6 +11,7 @@ import NotebookRow from './NotebookRow';
 import { collapseApiItems } from './apiGrouping';
 import { useApiGroupExpansion } from './useApiGroupExpansion';
 import type { CombinedItem } from './types';
+import { groupHeaderSx, listRowsSx } from './kit';
 
 interface NotebookGroupListProps {
   items: CombinedItem[];
@@ -108,14 +109,10 @@ export default function NotebookGroupList({
     <>
       {grouped.sortedGroupKeys.map(key => (
         <div className="combined-notebooks-group" key={key}>
-          <Typography
-            className="combined-notebooks-group-title"
-            level="body-xs"
-            sx={{ color: 'text.tertiary', marginBottom: '0.1em' }}
-          >
+          <Typography className="combined-notebooks-group-title" level="body-xs" sx={groupHeaderSx}>
             {key}
           </Typography>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <Box sx={listRowsSx}>
             {(shouldGroup
               ? collapseApiItems(grouped.groupSessions[key], key)
               : grouped.groupSessions[key].map(item => ({ kind: 'item' as const, item }))
@@ -158,10 +155,7 @@ export default function NotebookGroupList({
                     </Typography>
                   </Box>
                   {expanded && (
-                    <Box
-                      data-testid="sidenav-api-group-items"
-                      sx={{ pl: '12px', display: 'flex', flexDirection: 'column', gap: '2px' }}
-                    >
+                    <Box data-testid="sidenav-api-group-items" sx={{ pl: '12px', ...listRowsSx }}>
                       {row.items.map(renderRow)}
                     </Box>
                   )}
