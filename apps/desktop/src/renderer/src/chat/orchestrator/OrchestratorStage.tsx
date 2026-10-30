@@ -57,9 +57,9 @@ export function OrchestratorStage({
   delegate,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Keyed on ids and creation times so status churn does not recompute names; titles and prompts feed
-  // only the epithet, which is fixed once an agent is created.
-  const personaKey = agents.map(agent => `${agent.id}@${agent.createdAt}`).join('\n');
+  // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
+  // feeds only the epithet and is fixed once an agent is created.
+  const personaKey = agents.map(agent => `${agent.id}@${agent.createdAt}@${agent.title}`).join('\n');
   const personas = useMemo(() => assignPersonas(agents), [personaKey]);
   const selected = agents.find(agent => agent.id === selectedId) ?? null;
   const hasSelection = selected !== null;

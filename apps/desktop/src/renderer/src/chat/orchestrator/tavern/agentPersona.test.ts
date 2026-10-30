@@ -93,6 +93,17 @@ describe('assignPersonas', () => {
     expect(Object.fromEntries(second)).toEqual(Object.fromEntries(first));
   });
 
+  it('adds the title part that differs from its siblings as shortTitle', () => {
+    const personas = assignPersonas([
+      agentFixture('a', { title: 'Desktop audit: unused files' }),
+      agentFixture('b', { title: 'Desktop audit: large files' }),
+      agentFixture('c', { title: 'Standalone' }),
+    ]);
+    expect(personas.get('a')?.shortTitle).toBe('unused files');
+    expect(personas.get('b')?.shortTitle).toBe('large files');
+    expect(personas.get('c')?.shortTitle).toBe('Standalone');
+  });
+
   it('gives a 12-agent roster 12 distinct names and labels', () => {
     const personas = [...assignPersonas(roster(12)).values()];
     expect(new Set(personas.map(persona => persona.name)).size).toBe(12);

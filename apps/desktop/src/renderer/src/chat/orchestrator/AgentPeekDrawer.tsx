@@ -281,7 +281,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
           </Typography>
           {persona && (
             <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-peek-persona">
-              {persona.label}
+              {`${persona.label} \u00B7 ${persona.shortTitle}`}
             </Typography>
           )}
         </Box>

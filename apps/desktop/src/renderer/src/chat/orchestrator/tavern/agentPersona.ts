@@ -2,7 +2,7 @@ import type { AgentView } from '../roster';
 
 export type Epithet = 'Warden' | 'Scribe' | 'Tinkerer' | 'Cartographer' | 'Seeker' | 'Wanderer';
 
-export type AgentPersona = { name: string; epithet: Epithet; label: string };
+export type AgentPersona = { name: string; epithet: Epithet; label: string; shortTitle: string };
 
 const SEPARATORS = [':', ' - ', ' | '] as const;
 
@@ -115,6 +115,7 @@ const byAge = (a: AgentView, b: AgentView) =>
  * names oldest first, which keeps existing agents' names when a newer one joins.
  */
 export function assignPersonas(agents: readonly AgentView[]): Map<string, AgentPersona> {
+  const titles = agents.map(agent => agent.title);
   const taken = new Set<number>();
   const personas = new Map<string, AgentPersona>();
   for (const agent of [...agents].sort(byAge)) {
@@ -126,7 +127,12 @@ export function assignPersonas(agents: readonly AgentView[]): Map<string, AgentP
     taken.add(index);
     const name = PERSONA_NAMES[index] ?? 'Wren';
     const epithet = epithetFor(agent.title, agent.seedPrompt);
-    personas.set(agent.id, { name, epithet, label: `${name} the ${epithet}` });
+    personas.set(agent.id, {
+      name,
+      epithet,
+      label: `${name} the ${epithet}`,
+      shortTitle: distinctTitle(agent.title, titles),
+    });
   }
   return personas;
 }

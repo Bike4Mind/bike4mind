@@ -178,6 +178,7 @@ function Sprite({
   const bubble = bubbleText(agent);
   const displayName = persona?.label ?? agent.title;
   const fullName = persona ? `${persona.label}: ${agent.title}` : agent.title;
+  const tooltip = persona ? `${persona.label}: ${persona.shortTitle}` : agent.title;
   return (
     <Box
       component="button"
@@ -185,7 +186,7 @@ function Sprite({
       data-testid={`orchestrator-tavern-agent-${agent.id}`}
       aria-label={`${fullName}: ${AGENT_STATE_LABEL[agent.state]}`}
       aria-pressed={selected}
-      title={fullName}
+      title={tooltip}
       onClick={() => onSelect(agent.id)}
       style={{ left: `${at.x}%`, top: `${at.y}%`, '--sprite-z': Math.round(at.y) } as CssVars}
       sx={{

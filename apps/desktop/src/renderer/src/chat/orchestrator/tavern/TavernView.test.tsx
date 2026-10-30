@@ -70,6 +70,19 @@ describe('TavernView', () => {
     expect(el('orchestrator-tavern-agent-a').getAttribute('title')).toBe(`${label}: Review the auth middleware`);
   });
 
+  it('uses the part of the title that differs from its siblings in the tooltip only', async () => {
+    const agents = [
+      agentFixture('a', 'working', { title: 'Desktop audit: unused files' }),
+      agentFixture('b', 'working', { title: 'Desktop audit: large files' }),
+    ];
+    await renderTavern(agents);
+    const label = assignPersonas(agents).get('a')?.label ?? '';
+    expect(el('orchestrator-tavern-agent-a').getAttribute('title')).toBe(`${label}: unused files`);
+    expect(el('orchestrator-tavern-agent-a').getAttribute('aria-label')).toBe(
+      `${label}: Desktop audit: unused files: Working`
+    );
+  });
+
   it('renders one button per agent labelled with its title and state', async () => {
     await renderTavern([
       agentFixture('a', 'working'),

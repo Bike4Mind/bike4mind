@@ -80,8 +80,10 @@ describe('AgentPeekDrawer', () => {
   it('keeps the task title as the heading and shows the persona beneath it', async () => {
     const agent = agentFixture('a1', 'working', { title: 'Fix the flaky login test' });
     await renderDrawer(agent);
-    expect(el('orchestrator-peek-persona').textContent).toBe(assignPersonas([agent]).get('a1')?.label);
-    expect(el('orchestrator-peek-persona').textContent).toMatch(/ the Tinkerer$/);
+    expect(el('orchestrator-peek-persona').textContent).toBe(
+      `${assignPersonas([agent]).get('a1')?.label} \u00B7 Fix the flaky login test`
+    );
+    expect(el('orchestrator-peek-persona').textContent).toMatch(/ the Tinkerer/);
     expect(document.body.textContent).toContain('Fix the flaky login test');
   });
 
