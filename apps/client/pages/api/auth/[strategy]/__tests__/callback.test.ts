@@ -3,12 +3,29 @@ import { createMocks } from 'node-mocks-http';
 
 // Middleware: collapse the baseApi chain so `.get(fn)` yields the raw handler,
 // mirroring apps/client/pages/api/auth/okta/__tests__/callback.test.ts.
+const mockChain = vi.hoisted(() => ({ order: [] as string[] }));
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = { use: () => chain, get: (fn: any) => fn };
+  type Chain = { use: () => Chain; get: (fn: unknown) => unknown };
+  const chain: Chain = {
+    use: () => chain,
+    get: fn => {
+      mockChain.order.push('get');
+      return fn;
+    },
+  };
   return { baseApi: () => chain };
 });
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
-  checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
+  checkBlockedIP: () => {
+    mockChain.order.push('checkBlockedIP');
+    return (_req: unknown, _res: unknown, next?: () => void) => next?.();
+  },
+}));
+vi.mock('@server/middlewares/oauthIpRateLimit', () => ({
+  oauthIpRateLimit: (bucket: string) => {
+    mockChain.order.push(`oauthIpRateLimit:${bucket}`);
+    return (_req: unknown, _res: unknown, next?: () => void) => next?.();
+  },
 }));
 const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown[] }));
 vi.mock('@server/middlewares/rateLimit', () => ({
@@ -304,6 +321,31 @@ describe('[strategy]/callback - banned user gate', () => {
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
     expect(res._getRedirectUrl()).not.toContain('firstSignupSession');
+  });
+});
+
+describe('[strategy]/callback - guards and refusal metric line', () => {
+  it('registers the block check and the per-IP limit ahead of the get handler', () => {
+    expect(mockChain.order).toEqual(['checkBlockedIP', 'oauthIpRateLimit:oauth-callback', 'get']);
+  });
+
+  it.each([
+    ['registration_closed', 1],
+    ['state_expired', 0],
+    ['internal', 0],
+  ])('logs oauth-signup-refused for %s: %i time(s)', async (code, count) => {
+    const info = vi.fn();
+    mockAuthenticate.mockImplementation(
+      (_s: string, _o: unknown, cb: (...args: unknown[]) => Promise<unknown>) => () => {
+        pending = cb(null, undefined, { code });
+      }
+    );
+    let pending: Promise<unknown> | undefined;
+    const { req, res } = makeReqRes();
+    req.logger = { info };
+    await handler(req, res, vi.fn());
+    await pending;
+    expect(info.mock.calls.filter(c => c[0] === 'oauth-signup-refused')).toHaveLength(count);
   });
 });
 

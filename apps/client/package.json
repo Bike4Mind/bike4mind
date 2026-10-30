@@ -5,6 +5,7 @@
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
     "codegen": "node scripts/generate-premium-glue.mjs",
+    "gen:api-key-scope-endpoints": "vitest run app/constants/apiKeyScopeEndpoints.generated.test.ts -u",
     "predev": "node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs && pnpm openapi:deployment && pnpm help:build",
     "prebuild": "node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs && pnpm openapi:deployment && pnpm help:build",
     "dev": "WATCHPACK_POLLING=true next dev",
