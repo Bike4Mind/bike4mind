@@ -10,7 +10,13 @@ import {
 import { withTransaction } from '@bike4mind/db-core';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService';
 import type { FreeCreditAdapters, GrantFreeCreditsResult } from './freeCredits';
-import { evaluateSignupRisk, signupRiskPolicySchema, type SignupRiskBand, type SignupRiskSignals } from './signupRisk';
+import {
+  evaluateSignupRisk,
+  isSignupGrantHeldForReview,
+  signupRiskPolicySchema,
+  type SignupRiskBand,
+  type SignupRiskSignals,
+} from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
 import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './signupGrantBudget';
@@ -221,22 +227,40 @@ async function releaseStage(
       }
       const released = grant.creditsReleased + amount;
       const unlocked = released >= maximum;
+      const nextGrant: SignupGrant = {
+        ...grant,
+        stage: unlocked ? 'unlocked' : 'signup',
+        creditsReleased: released,
+        nextCondition: unlocked ? null : 'verification',
+        ...(reason ? { unlockedBy: reason } : {}),
+        ...(dripDay ? { dripCredits: (grant.dripCredits ?? 0) + dripAmount, lastDripDay: dripDay } : {}),
+        ...(dripPeriod ? { lastDripPeriod: dripPeriod } : {}),
+        ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
+          ? { unlockedOrgId: evidence.unlockedOrgId }
+          : {}),
+      };
+      // A held tranche is released only from the admin risk review queue, and not every caller rescores
+      // after this (refreshSignupRiskScore), so queue it here. An admin decision already taken stands.
+      const enterRiskReview =
+        !!assessedBand &&
+        isSignupGrantHeldForReview({ signupGrant: nextGrant, signupGrantAssessment: assessment }) &&
+        (user.riskScore?.reviewState ?? 'none') === 'none';
       const updated = await db.users.update({
         id: userId,
         ...(assessment ? { signupGrantAssessment: assessment } : {}),
         ...(user.signupGrantHeldReason ? { signupGrantHeldReason: null } : {}),
-        signupGrant: {
-          ...grant,
-          stage: unlocked ? 'unlocked' : 'signup',
-          creditsReleased: released,
-          nextCondition: unlocked ? null : 'verification',
-          ...(reason ? { unlockedBy: reason } : {}),
-          ...(dripDay ? { dripCredits: (grant.dripCredits ?? 0) + dripAmount, lastDripDay: dripDay } : {}),
-          ...(dripPeriod ? { lastDripPeriod: dripPeriod } : {}),
-          ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
-            ? { unlockedOrgId: evidence.unlockedOrgId }
-            : {}),
-        },
+        ...(enterRiskReview
+          ? {
+              riskScore: {
+                score: 0,
+                signals: [],
+                computedAt: new Date(),
+                ...user.riskScore,
+                reviewState: 'pending' as const,
+              },
+            }
+          : {}),
+        signupGrant: nextGrant,
       });
       if (!updated) throw new Error('Staged grant account update failed');
       await audit?.({ userId, credits: amount, creditTransactionId });

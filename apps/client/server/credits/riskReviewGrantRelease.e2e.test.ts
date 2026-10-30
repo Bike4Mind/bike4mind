@@ -61,14 +61,18 @@ beforeEach(async () => {
   await CreditLot.collection.deleteMany({});
 });
 
-/** A verified account whose signup tranche the grant policy assessed into the review band. */
-async function heldAccount(reviewState: 'pending' | 'approved' = 'pending') {
+/**
+ * A verified account scored at verification (reviewState from that rescore), whose signup tranche the
+ * grant policy then assesses into the review band, as the domain-hold release and email change do.
+ */
+async function heldAccount(scoredState: 'none' | 'approved' = 'none') {
   const user = await User.create({
     username: 'synthetic-user',
     name: 'Synthetic User',
     email: 'user@example.test',
     emailVerified: true,
     signupGrant: await newSignupGrant(adminSettings),
+    riskScore: { score: 5, signals: [], computedAt: new Date(), reviewState: scoredState },
   });
   await userService.grantFreeCredits(
     { id: user.id },
@@ -77,10 +81,6 @@ async function heldAccount(reviewState: 'pending' | 'approved' = 'pending') {
       reason: 'synthetic signup',
       collectRiskSignals: async () => ({ datacenter: true }),
     }
-  );
-  await User.updateOne(
-    { _id: user.id },
-    { $set: { riskScore: { score: 0, signals: [], computedAt: new Date(), reviewState } } }
   );
   return user.id as string;
 }
@@ -91,11 +91,13 @@ const release = (userId: string) => releaseRiskReviewedSignupGrant(userId, { rea
 describe('releaseRiskReviewedSignupGrant', () => {
   beforeEach(() => audit.mockClear());
 
-  it('pays the held tranche once, then leaves the unlock remainder to the usual unlocks', async () => {
+  it('queues the held tranche for review, pays it once, then leaves the unlock remainder to the usual unlocks', async () => {
     const userId = await heldAccount();
     const held = await User.findById(userId).lean();
     expect(held?.signupGrantAssessment?.band).toBe('review');
     expect(held?.signupGrant).toMatchObject({ stage: 'signup', creditsReleased: 0 });
+    expect(held?.riskScore).toMatchObject({ score: 5, reviewState: 'pending' });
+    expect((await userRepository.findPendingRiskReviews(10)).map(user => user.id)).toEqual([userId]);
 
     expect(await release(userId)).toBe(12);
     expect(await release(userId)).toBe(0);
@@ -115,8 +117,9 @@ describe('releaseRiskReviewedSignupGrant', () => {
     expect(await CreditTransaction.countDocuments({ ownerId: userId })).toBe(2);
   });
 
-  it('pays nothing once the review is no longer pending', async () => {
+  it('keeps an earlier approval and pays nothing once the review is no longer pending', async () => {
     const userId = await heldAccount('approved');
+    expect((await User.findById(userId).lean())?.riskScore?.reviewState).toBe('approved');
 
     expect(await release(userId)).toBe(0);
     expect((await User.findById(userId).lean())?.currentCredits ?? 0).toBe(0);
