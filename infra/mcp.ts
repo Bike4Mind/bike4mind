@@ -32,9 +32,8 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
     // *code*; `install` brings those packages' npm *deps* (SST installs them into
     // node_modules with their transitive deps). Keep in sync when a child gains a
     // new runtime dependency; infra/__tests__/mcpInstallCoverage.test.ts checks it
-    // against the copied packages' package.json. NOTE: @anthropic-ai/sdk is
-    // intentionally NOT here - it is a type-only import in the MCP client, erased
-    // at build.
+    // against the copied packages' package.json; deps deliberately left out, and
+    // why, are its NOT_INSTALLED list.
     install: ['@modelcontextprotocol/sdk', '@octokit/rest', 'zod', 'dayjs', 'unzipper', 'axios', 'yaml'],
     esbuild: {
       // Mark workspace packages as external to prevent bundling, allowing runtime resolution
