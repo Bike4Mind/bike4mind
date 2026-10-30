@@ -5,6 +5,7 @@ export const SIDENAV = {
   navTop: '2px',
   rowGap: '2px',
   rowHeight: 32,
+  rowPadX: 12,
   tagHeight: 24,
   rowRadius: '8px',
   searchTop: '6px',

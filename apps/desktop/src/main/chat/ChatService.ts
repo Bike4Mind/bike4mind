@@ -59,7 +59,8 @@ import {
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
-import { AUTO_COMPACT_PERCENT, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
+import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
+import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import type { AppWorktree } from '@shared/worktreeRemoval';
@@ -552,6 +553,7 @@ interface ResumedReply {
   toolCalls: ChatToolCall[];
   artifacts: ChatArtifact[];
   usage?: ChatUsage;
+  contextSnapshot?: ContextSnapshot;
 }
 
 /** One round as it is produced, before its artifact markup is parsed out of the text. */
@@ -2151,6 +2153,7 @@ export class ChatService {
       toolCalls: last.toolCalls ?? [],
       artifacts: last.artifacts ?? [],
       ...(last.usage ? { usage: last.usage } : {}),
+      ...(last.contextSnapshot ? { contextSnapshot: last.contextSnapshot } : {}),
     });
     return { ok: true, messageId: replyId };
   }
@@ -2596,6 +2599,7 @@ export class ChatService {
     let content = resume?.content ?? '';
     let stopReason: string | undefined;
     let usage: ChatUsage | undefined = resume?.usage;
+    let contextSnapshot: ContextSnapshot | undefined = resume?.contextSnapshot;
     let toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
     let thinking: unknown[] | undefined;
     let segmentSettled = false;
@@ -2774,6 +2778,8 @@ export class ChatService {
           toolsSupported && !!screen
         );
       wire.unshift(systemMessage());
+      let overheadKey = '';
+      let overhead: ContextSnapshot['overhead'] = [];
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
       // conversation around. It rides on the newest turn only, after the cached prefix.
       const carried = this.pendingPlanReminder.get(sessionId);
@@ -2834,6 +2840,7 @@ export class ChatService {
           ...(thinking ? { thinking } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(usage ? { usage } : {}),
+          ...(contextSnapshot ? { contextSnapshot } : {}),
         };
         await this.settleReply(sessionId, !!resume, historyScope, message);
         this.emit({
@@ -2843,6 +2850,7 @@ export class ChatService {
           content: finalContent,
           stopReason,
           usage,
+          ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
@@ -2876,6 +2884,23 @@ export class ChatService {
         };
 
         await this.clearStaleResults(session, toolCalls, produced, wire, replyId);
+
+        const system = typeof wire[0].content === 'string' ? wire[0].content : '';
+        const key = system + JSON.stringify(tools);
+        if (key !== overheadKey) {
+          overheadKey = key;
+          const mcpNames = new Set(mcpTools.map(binding => binding.definition.schema.name));
+          overhead = estimateContextOverhead({
+            system,
+            project: projectContext,
+            skills: toolsSupported ? skillsSection : '',
+            tools: tools.map(tool => ({
+              name: tool.toolSchema.name,
+              schema: tool,
+              mcp: mcpNames.has(tool.toolSchema.name),
+            })),
+          });
+        }
 
         const probe = this.deps.turnTiming ? createRoundProbe(roundIndex === 0 ? turnStartedAt : undefined) : undefined;
         const setPhase = createPhaseTracker(phase =>
@@ -2935,7 +2960,7 @@ export class ChatService {
                 messages: cacheable ? withCacheBreakpoints(wire) : wire,
                 tools,
                 thinking: askForThinking,
-                // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
+                // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
                 ...(maxTokens ? { maxTokens } : {}),
@@ -2968,6 +2993,14 @@ export class ChatService {
         // from the first round trip on - the alternative is a field that stays blank for a
         // minute, or one filled in with a guess.
         usage = addUsage(usage, turnUsage);
+        const inputTokens = inputSide(turnUsage);
+        if (inputTokens !== null)
+          contextSnapshot = {
+            model: session.model,
+            inputTokens,
+            overhead,
+            ...(localTurn ? { modelWindow: await this.contextWindowOf(session.model) } : {}),
+          };
         if (usage) this.emit({ type: 'usage', sessionId, messageId: replyId, usage });
 
         // A turn whose context has run out is not a failed request to report: the rounds before
@@ -3191,6 +3224,7 @@ export class ChatService {
           toolCalls = [];
           produced = [];
           usage = undefined;
+          contextSnapshot = undefined;
           thinking = undefined;
           stopReason = undefined;
           // New input is new information: repeating the last round may be the right answer to it.
@@ -3262,8 +3296,16 @@ export class ChatService {
         ...stop,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
+        ...(contextSnapshot ? { contextSnapshot } : {}),
       });
-      this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
+      this.emit({
+        type: 'error',
+        sessionId,
+        messageId: replyId,
+        message,
+        ...stop,
+        ...(contextSnapshot ? { contextSnapshot } : {}),
+      });
       return expired ? 'expired' : 'failed';
     }
   }
@@ -3341,6 +3383,7 @@ export class ChatService {
       thinking: message.thinking,
       artifacts: message.artifacts,
       usage: message.usage,
+      contextSnapshot: message.contextSnapshot,
     });
     if (updated) this.captureSessionHistory(updated, historyScope);
   }

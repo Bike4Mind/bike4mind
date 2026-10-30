@@ -28,12 +28,11 @@ describe('sidenav kit styles', () => {
     expect(notebookListTokens(bare as typeof theme)).toEqual({});
   });
 
-  it('builds the nav row from the metrics, with the tag inset only when a tag trails', () => {
+  it('builds the nav row from the metrics', () => {
     const row = navRowSx(theme, false);
     expect(row.height).toBe('32px');
     expect(row.borderRadius).toBe(SIDENAV.rowRadius);
-    expect(row.pr).toBe('12px');
-    expect(navRowSx(theme, false, { trailing: true }).pr).toBe('4px');
+    expect(row.px).toBe('12px');
   });
 
   it('paints the focused wash only on the active row', () => {

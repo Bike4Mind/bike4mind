@@ -35,8 +35,7 @@ import { firstUsableStudioModality } from '@client/app/components/Studio/studioM
 import { useAudioProviders } from '@client/app/hooks/data/audioProviders';
 import { useMusicModels } from '@client/app/hooks/data/musicGenerations';
 import { useVideoModels } from '@client/app/hooks/data/videoGenerations';
-import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
-import { gray } from '@client/app/utils/themes/colors';
+import { inviteBlue, rewardGreen } from '@client/app/components/common/gearRewardStyles';
 import { useNotebookLayout } from '..';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
@@ -57,19 +56,29 @@ const navTagSx = {
   pointerEvents: 'none',
 } as const;
 
-/**
- * Start here: the Gears page's neutral marker in dark mode. In light mode that
- * tint vanishes on the active row's blue wash, so it gets a white fill and the
- * theme's solid light border instead - the same white the Gears cards use.
- */
-const startHereTagSx = (theme: Theme) =>
-  theme.palette.mode === 'dark'
-    ? { ...neutralFrame(theme), color: theme.palette.text.primary }
-    : {
-        backgroundColor: gray[0],
-        border: `1px solid ${theme.palette.border.light}`,
-        color: theme.palette.text.primary,
-      };
+/** Start here, and the tags overlays put on their rows: an invitation, outlined in the primary blue. */
+const inviteTagSx = (theme: Theme) => {
+  const blue = inviteBlue(theme);
+  return {
+    color: blue.ink,
+    backgroundColor: blue.fill,
+    backgroundImage: blue.wash,
+    border: `1px solid ${blue.stroke}`,
+  };
+};
+
+/** The tag an overlay's nav item names for its row (`PremiumNavDescriptor.useSidebarTag`). A component
+ *  of its own so the overlay's hook runs unconditionally, whichever rows the user can see. */
+const PremiumNavTag = ({ useTag, testId }: { useTag: () => string | null; testId: string }) => {
+  const theme = useTheme();
+  const label = useTag();
+  if (!label) return null;
+  return (
+    <Chip size="sm" variant="soft" color="neutral" data-testid={testId} sx={{ ...navTagSx, ...inviteTagSx(theme) }}>
+      {label}
+    </Chip>
+  );
+};
 
 type NavItem = {
   key: string;
@@ -213,6 +222,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             label: 'Bob',
             icon: <NavIcon>{BobIcon ? <BobIcon /> : <Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />}</NavIcon>,
             isActive: location.pathname.startsWith('/bob'),
+            trailing: bobNavItem.useSidebarTag && (
+              <PremiumNavTag useTag={bobNavItem.useSidebarTag} testId="sidenav-nav-bob-tag" />
+            ),
             onClick: () => {
               closeOnMobile();
               // `/bob` is a codegen-mounted premium route (no core route file), so it is not in
@@ -273,6 +285,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           </NavIcon>
         ),
         isActive: location.pathname === item.path || location.pathname.startsWith(`${item.path}/`),
+        trailing: item.useSidebarTag && <PremiumNavTag useTag={item.useSidebarTag} testId={`sidenav-nav-${key}-tag`} />,
         onClick: () => {
           closeOnMobile();
           // Codegen-mounted, so not in Tanstack's statically-typed route union - same cast as /bob.
@@ -474,9 +487,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             data-testid="sidenav-gears-start-here"
             sx={{
               ...navTagSx,
-              // An invitation, kept quiet so the green Claim tag stays the only
-              // one asking for something.
-              ...startHereTagSx(theme),
+              ...inviteTagSx(theme),
             }}
           >
             {gearsSignal.startHereCredits > 0

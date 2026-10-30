@@ -24,6 +24,11 @@ const mocks = vi.hoisted(() => ({
   findByPaymentIntentId: vi.fn(),
   updateTransactionStatus: vi.fn(),
   emitBillingEvent: vi.fn(),
+  forfeitSignupUnlock: vi.fn(),
+  forfeitHeldUnlockForRefund: vi.fn(),
+  forfeitHeldUnlockForFraudWarning: vi.fn(),
+  flagDisputePending: vi.fn(),
+  retrieveCharge: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -42,10 +47,14 @@ vi.mock('@bike4mind/database', () => ({
     updateTransactionStatus: mocks.updateTransactionStatus,
   },
   organizationRepository: {},
+  realtimeConnectionRepository: {},
   userRepository: { findById: mocks.findUserById, findByStripeCustomerId: mocks.findUserByStripeCustomerId },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
-vi.mock('@bike4mind/services', () => ({ creditService: {}, userService: {} }));
+vi.mock('@bike4mind/services', () => ({
+  creditService: {},
+  userService: { flagDisputePending: mocks.flagDisputePending },
+}));
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     updateByStripeSubscriptionIdReturningBefore: mocks.updateByStripeSubscriptionId,
@@ -63,7 +72,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   CustomerType: {},
   customerExists: vi.fn(),
   isStripeConfigured: () => true,
-  stripe: { webhooks: { constructEvent: mocks.constructEvent } },
+  stripe: { webhooks: { constructEvent: mocks.constructEvent }, charges: { retrieve: mocks.retrieveCharge } },
 }));
 vi.mock('@server/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: mocks.voidOpenSubscriptionInvoices,
@@ -76,6 +85,18 @@ vi.mock('@server/integrations/slack/subscriptionLifecycle', async importOriginal
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
 vi.mock('@server/billing/grantCreditPurchase', () => ({ grantCreditPurchase: vi.fn() }));
+vi.mock('@server/credits/paymentUnlockForfeit', () => ({
+  forfeitSignupUnlock: mocks.forfeitSignupUnlock,
+  forfeitHeldUnlockForRefund: mocks.forfeitHeldUnlockForRefund,
+  forfeitHeldUnlockForFraudWarning: mocks.forfeitHeldUnlockForFraudWarning,
+}));
+
+// Payment risk screening has its own suite (server/billing/paymentRisk.test.ts).
+vi.mock('@server/billing/paymentRisk', () => ({
+  alertStripeRiskEvent: vi.fn(),
+  radarRiskLine: vi.fn().mockResolvedValue(null),
+  screenPaymentOutcome: vi.fn(),
+}));
 vi.mock('@server/analytics/signupEvents', () => ({
   emitPurchaseEvents: vi.fn(),
   emitBillingEvent: mocks.emitBillingEvent,
@@ -135,6 +156,40 @@ beforeEach(() => {
   mocks.findUserById.mockResolvedValue(owner);
   mocks.findUserByStripeCustomerId.mockResolvedValue(null);
   mocks.findByPaymentIntentId.mockResolvedValue(null);
+  mocks.flagDisputePending.mockResolvedValue({ deactivatedKeys: 0 });
+});
+
+describe('signup unlock forfeits', () => {
+  it('forfeits the signup unlock of a disputed subscription payer found by customer', async () => {
+    mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
+    mocks.findUserByStripeCustomerId.mockResolvedValue(owner);
+
+    const res = await deliver({
+      type: 'charge.dispute.created',
+      data: { object: { id: 'dp_1', charge: 'ch_1', amount: 3000, currency: 'usd', reason: 'fraudulent' } },
+    });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.forfeitSignupUnlock).toHaveBeenCalledWith('user_1', 'dispute', logger);
+  });
+
+  it('forfeits on a refunded charge before its credit purchase lookup', async () => {
+    const charge = { id: 'ch_1', customer: 'cus_1', payment_intent: 'pi_1', refunds: { data: [{ id: 're_1' }] } };
+
+    await deliver({ type: 'charge.refunded', data: { object: charge } });
+
+    expect(mocks.forfeitHeldUnlockForRefund).toHaveBeenCalledExactlyOnceWith(charge, logger);
+  });
+
+  // Guards a merge with another radar.early_fraud_warning.created case dropping this call.
+  it('cancels a held unlock on an early fraud warning', async () => {
+    const warning = { id: 'issfr_1', charge: 'ch_1' };
+
+    const res = await deliver({ type: 'radar.early_fraud_warning.created', data: { object: warning } });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.forfeitHeldUnlockForFraudWarning).toHaveBeenCalledExactlyOnceWith(warning, logger);
+  });
 });
 
 describe('invoice.payment_failed', () => {

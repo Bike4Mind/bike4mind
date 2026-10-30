@@ -54,6 +54,20 @@ describe('SidenavNavRow', () => {
     wrap(<SidenavNavRow data-testid="row" icon={null} label="Gears" trailing={<span data-testid="tag" />} />);
     expect(screen.getByTestId('row').lastElementChild).toContainElement(screen.getByTestId('tag'));
   });
+
+  it('pulls the tag into the row padding, and drops its slot when the tag renders nothing', () => {
+    const NoTag = () => null;
+    wrap(
+      <>
+        <SidenavNavRow data-testid="tagged" icon={null} label="Gears" trailing={<span>Start here</span>} />
+        <SidenavNavRow data-testid="untagged" icon={null} label="Bob" trailing={<NoTag />} />
+      </>
+    );
+    const tagged = screen.getByTestId('tagged').lastElementChild as HTMLElement;
+    expect(getComputedStyle(tagged).marginRight).toBe('-8px');
+    expect(getComputedStyle(tagged).display).toBe('flex');
+    expect(getComputedStyle(screen.getByTestId('untagged').lastElementChild as HTMLElement).display).toBe('none');
+  });
 });
 
 describe('kit blocks', () => {

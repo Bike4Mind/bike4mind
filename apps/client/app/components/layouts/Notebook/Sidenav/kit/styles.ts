@@ -11,14 +11,13 @@ export const sidenavTokens = (theme: Theme): SidenavTokens =>
 export const notebookListTokens = (theme: Theme): NotebookListTokens =>
   (theme.palette as unknown as { notebooklist?: NotebookListTokens }).notebooklist ?? {};
 
-export const navRowSx = (theme: Theme, active: boolean, { trailing = false }: { trailing?: boolean } = {}) => {
+export const navRowSx = (theme: Theme, active: boolean) => {
   const list = notebookListTokens(theme);
   return {
     display: 'flex',
     alignItems: 'center',
     gap: '12px',
-    pl: '12px',
-    pr: trailing ? `${(SIDENAV.rowHeight - SIDENAV.tagHeight) / 2}px` : '12px',
+    px: `${SIDENAV.rowPadX}px`,
     height: `${SIDENAV.rowHeight}px`,
     minHeight: `${SIDENAV.rowHeight}px`,
     borderRadius: SIDENAV.rowRadius,

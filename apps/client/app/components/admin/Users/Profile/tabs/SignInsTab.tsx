@@ -1,11 +1,13 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Box, Button, Link, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { authMethodLabel, type UserSignIn, type UserSignInResult } from '@bike4mind/common';
 import { useUserSignIns, useUserSignupCluster } from '@client/app/hooks/data/adminUserTimeline';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { DataTable, Fact, RelativeTime, SectionCard, StatusChip, type DataColumn } from '../../../shared';
+import { BlockIpDialog } from '../../../BlockedIPs/IpBlockDialogs';
 import { useOpenUserProfile } from '../useOpenUserProfile';
+import { RowAction } from './cardActions';
 import { ActiveSessions } from './ActiveSessions';
 import type { AdminUserProfile } from '../userProfileModel';
 
@@ -113,6 +115,7 @@ const SignupRecord: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const meta = user.signupMeta ?? undefined;
   const domain = emailDomain(user.email);
   const method = authMethodLabel(user.acquisition?.signupMethod);
+  const [blockingIp, setBlockingIp] = useState(false);
   return (
     <SectionCard title="Signup" data-testid="user-profile-signup">
       <Fact label="Signed up">{user.createdAt && <RelativeTime at={user.createdAt} />}</Fact>
@@ -138,7 +141,17 @@ const SignupRecord: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
           <StatusChip tone="warn" label="Not verified" data-testid="user-signup-verification" />
         )}
       </Fact>
-      <Fact label="IP address">{meta?.ip && <Mono value={meta.ip} />}</Fact>
+      <Fact label="IP address">
+        {meta?.ip && (
+          <Stack direction="row" alignItems="center" gap={1}>
+            <Mono value={meta.ip} />
+            <RowAction onClick={() => setBlockingIp(true)} data-testid="user-signup-block-ip-btn">
+              Block this IP
+            </RowAction>
+          </Stack>
+        )}
+        {blockingIp && meta?.ip && <BlockIpDialog initialIp={meta.ip} onClose={() => setBlockingIp(false)} />}
+      </Fact>
       <Fact label="Country">{meta?.country}</Fact>
       <Fact label="Network">{meta && networkLabel(meta)}</Fact>
       <Fact label="User agent">

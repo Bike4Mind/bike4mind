@@ -1,6 +1,7 @@
 import { Box, Typography, type BoxProps } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import type { ElementType, HTMLAttributes, KeyboardEvent, ReactNode, SyntheticEvent } from 'react';
+import { SIDENAV } from './metrics';
 import { iconSlotSx, navLabelSx, navRowSx, newActionTileSx } from './styles';
 
 export const NavIcon = ({ children }: { children: ReactNode }) => <Box sx={iconSlotSx}>{children}</Box>;
@@ -10,6 +11,14 @@ export const NewActionIcon = () => (
     <AddIcon sx={{ fontSize: '16px', color: '#fff' }} />
   </Box>
 );
+
+const trailingSlotSx = {
+  ml: 'auto',
+  mr: `${(SIDENAV.rowHeight - SIDENAV.tagHeight) / 2 - SIDENAV.rowPadX}px`,
+  display: 'flex',
+  flexShrink: 0,
+  '&:empty': { display: 'none' },
+} as const;
 
 export type SidenavNavRowProps = {
   icon: ReactNode;
@@ -67,7 +76,7 @@ export const SidenavNavRow = ({
       onClick={activate}
       sx={[
         theme => ({
-          ...navRowSx(theme, active, { trailing: !!trailing }),
+          ...navRowSx(theme, active),
           ...(disabled && { opacity: 0.5, pointerEvents: 'none' }),
         }),
         ...(Array.isArray(sx) ? sx : [sx]),
@@ -77,7 +86,9 @@ export const SidenavNavRow = ({
       <Typography level="body-sm" sx={navLabelSx} noWrap>
         {label}
       </Typography>
-      {trailing && <Box sx={{ ml: 'auto', display: 'flex', flexShrink: 0 }}>{trailing}</Box>}
+      {/* Pulled into the row's padding so the tag sits evenly inset on three sides, and dropped
+          when empty so a tag that renders nothing leaves the row as if it had none. */}
+      {trailing && <Box sx={trailingSlotSx}>{trailing}</Box>}
     </Box>
   );
 };

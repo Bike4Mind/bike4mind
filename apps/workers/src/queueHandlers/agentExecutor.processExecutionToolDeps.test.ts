@@ -517,6 +517,17 @@ describe('processExecution tool deps', () => {
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
     });
 
+    it('fails a run whose model the catalog no longer carries instead of throwing', async () => {
+      const { getLlmByModel } = await import('@bike4mind/llm-adapters');
+      vi.mocked(getLlmByModel).mockReturnValueOnce(null);
+      const { markFailed } = await runWithModels([]);
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Model "claude-sonnet-5" is no longer available. Choose a different model for this agent.',
+      });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
     it('refuses a run on a model gated to a tag the user does not hold', async () => {
       const { markFailed } = await runWithModels(
         [runModel],
