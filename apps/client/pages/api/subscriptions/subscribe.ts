@@ -4,6 +4,7 @@ import { subscriptionCheckoutSchema } from '@bike4mind/server-utils/lib/userSubs
 import { findSubscriptionPlan } from '@client/lib/userSubscriptions/constants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
+import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
@@ -18,6 +19,7 @@ type RequestBody = z.infer<typeof subscriptionCheckoutSchema>;
 
 const handler = baseApi()
   .use(requireStripeWebhook())
+  .use(refuseBlockedAccount())
   .post<Request<unknown, RequestBody>>(async (req, res) => {
     const { priceId, callbackUrl, attributionConsent, surface } = subscriptionCheckoutSchema.parse(req.body);
 

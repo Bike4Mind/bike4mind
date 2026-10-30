@@ -27,7 +27,12 @@ import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
-import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './modelAdmission';
+import {
+  createModelAdmission,
+  isModelRequiresSubscriptionError,
+  loadFreeTierAllowedModels,
+  loadModelConfigurations,
+} from './modelAdmission';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { filterBuiltInTools } from './tools/toolManager';
@@ -469,7 +474,10 @@ export class ChatCompletionInvoke {
       });
       for (const gatedModelId of [originalModel, ...researchModelIds]) {
         await admission.assert(gatedModelId).catch(err => {
-          this.logger.error(`Model ${gatedModelId} is not admitted: ${(err as Error).message}`);
+          // A free-tier caller picking a paid model is their plan, not a fault: warn, still refuse.
+          const message = `Model ${gatedModelId} is not admitted: ${(err as Error).message}`;
+          if (isModelRequiresSubscriptionError(err)) this.logger.warn(message);
+          else this.logger.error(message);
           throw err;
         });
       }

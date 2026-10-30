@@ -177,6 +177,8 @@ describe('POST /api/gears/claim', () => {
       credits: 1000,
       type: 'generic_add',
       transactionId: 'gear-unlock:u1:projects',
+      reason: 'gear unlock: projects',
+      description: 'Gear unlock reward: projects',
     });
   });
 

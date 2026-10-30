@@ -46,6 +46,7 @@ import {
   cacheRepository,
 } from '@bike4mind/database';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   registerLambdaErrorHandlers,
   getSettingsByNames,
@@ -204,6 +205,7 @@ import {
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
+  stopBlockedAccountIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
@@ -748,6 +750,12 @@ async function readPayerBalance(payer: { organizationId?: string | null; userId:
   return loadPayerBalance(payer, { organizations: organizationRepository, users: userRepository });
 }
 
+/** A fresh read of the run's user, so the per-iteration account gate never decides on the invocation's snapshot. */
+async function readUserAccessDenial(userId: string): Promise<string | null> {
+  const user = await userRepository.findById(userId);
+  return user ? aiAccessDeniedMessage(user) : 'User not found';
+}
+
 /**
  * Flat token allowance set aside for instructions before the attachment share is computed.
  * Matches SYSTEM_PROMPT_RESERVE in ChatCompletionProcess so an agent turn and a chat turn size the
@@ -1148,7 +1156,17 @@ async function processExecution(
       return;
     }
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: execution.userId });
-    if (!llm) throw new Error(`Failed to create LLM backend for model "${execution.model}"`);
+    // No backend means the model id is unknown to the catalog: a retired snapshot with no successor in
+    // resolveDeprecatedModel.ts, or a backend this deployment has no key for. That is a stale agent
+    // setting, not a platform fault, so fail the run with a reason the user can act on.
+    if (!llm) {
+      logger.warn('[AgentExecutor] No LLM backend for model; refusing execution', { model: resolvedModelId });
+      await agentExecutionRepository.markFailed(executionId, {
+        message: `Model "${resolvedModelId}" is no longer available. Choose a different model for this agent.`,
+      });
+      await sendWs('failed', { executionId, reason: 'model_unavailable' });
+      return;
+    }
     llm.currentModel = resolvedModelId;
 
     // Same admission rule as chat (b4m-core/services/src/llm/modelAdmission.ts), after the remap so the
@@ -2840,6 +2858,26 @@ async function processExecution(
         return;
       }
 
+      // A run outlives the message that admitted it, so an account blocked mid-run stops at the next iteration.
+      const blocked = await stopBlockedAccountIteration(
+        {
+          executionId,
+          readAccessDenial: () => readUserAccessDenial((user as IUserDocument).id),
+          snapshot: () => {
+            const checkpoint = agent.toCheckpoint();
+            return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
+          },
+        },
+        {
+          markFailed: (id, error) => agentExecutionRepository.markFailed(id, error),
+          sendWs,
+          persistRunAsQuest: (id, message) =>
+            persistRunAsQuest(id, message, logger, generatedImages, undefined, allSideEffects, retrievalSummary),
+          logger,
+        }
+      );
+      if (blocked) return;
+
       // Each iteration settles with an unconditional debit, so stop before one the payer's live
       // balance cannot cover rather than letting the run carry the balance below zero. The one
       // aggregation-only wake extension is exempt for its first iteration only.
@@ -3597,6 +3635,8 @@ async function chargeSubagentTokens(
           model: args.model,
           inputTokens: args.completionInfo.totalInputTokens ?? 0,
           outputTokens: args.completionInfo.totalOutputTokens ?? 0,
+          cacheReadTokens: args.usage?.cacheReadTokens || undefined,
+          cacheWriteTokens: args.usage?.cacheWriteTokens || undefined,
         },
         {
           db: {
@@ -3862,16 +3902,12 @@ async function processSubagentDispatch(
         : enforceCredits && modelInfo && uncoveredIterationCredits(availableCredits, modelInfo, 0) !== undefined
           ? { message: 'Insufficient credits to run subagent', error: 'insufficient_credits' }
           : null;
-    if (refusal) {
-      logger.warn('[SubagentDispatch] Refusing to start subagent', { model: childModel, reason: refusal.error });
-      await agentExecutionRepository.markFailed(childExecutionId, { message: refusal.message });
-      await sendWs('subagent_failed', {
-        executionId: parentId,
-        childExecutionId,
-        agentName,
-        error: refusal.error,
-        isTimeout: false,
-      });
+    // Every pre-start refusal fails the child the same way: mark it failed, tell the parent, and
+    // terminate its DAG node so the parent's wake is not left waiting on it.
+    const refuseSubagent = async ({ message, error }: { message: string; error: string }) => {
+      logger.warn('[SubagentDispatch] Refusing to start subagent', { model: childModel, reason: error });
+      await agentExecutionRepository.markFailed(childExecutionId, { message });
+      await sendWs('subagent_failed', { executionId: parentId, childExecutionId, agentName, error, isTimeout: false });
       await fireDagNodeTerminalOnRefusal({
         dagNodeId,
         parentExecutionId: dagParentExecutionId,
@@ -3880,11 +3916,18 @@ async function processSubagentDispatch(
         logger,
         sendWs,
       });
+    };
+    if (refusal) {
+      await refuseSubagent(refusal);
       return;
     }
 
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
-    if (!llm) throw new Error(`Failed to create LLM backend for model "${childModel}"`);
+    // Same as the parent run: an id the catalog no longer carries fails this child cleanly.
+    if (!llm) {
+      await refuseSubagent({ message: `Model "${childModel}" is no longer available`, error: 'model_unavailable' });
+      return;
+    }
     llm.currentModel = childModel;
 
     const modelAdmission = await createModelAdmission(user as IUserDocument, models);
@@ -3893,22 +3936,7 @@ async function processSubagentDispatch(
       (err: Error) => err
     );
     if (admissionRefusal) {
-      await agentExecutionRepository.markFailed(childExecutionId, { message: admissionRefusal.message });
-      await sendWs('subagent_failed', {
-        executionId: parentId,
-        childExecutionId,
-        agentName,
-        error: 'model_not_admitted',
-        isTimeout: false,
-      });
-      await fireDagNodeTerminalOnRefusal({
-        dagNodeId,
-        parentExecutionId: dagParentExecutionId,
-        childExecutionId,
-        connectionId,
-        logger,
-        sendWs,
-      });
+      await refuseSubagent({ message: admissionRefusal.message, error: 'model_not_admitted' });
       return;
     }
 

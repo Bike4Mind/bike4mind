@@ -1,9 +1,15 @@
-import { HuggingFaceHub, OllamaRuntime, curatedOllamaBlocked, ollamaLibraryLayers } from '@bike4mind/local-models';
+import {
+  HuggingFaceHub,
+  OllamaRuntime,
+  curatedOllamaBlocked,
+  installedReviewed,
+  ollamaLibraryLayers,
+  servesReviewed,
+} from '@bike4mind/local-models';
 import { HubManifestSchema } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import bundled from '../../../../../catalog/model-hub/curated-v2.json';
-import { installedReviewed, servesReviewed } from './ModelHubService';
 
 // Registry-only by default. Pull mode downloads weights but never removes or rewrites catalog pins.
 const mode = z.enum(['registry', 'installed', 'pull']).parse(process.env.CURATED_CHECK ?? 'registry');

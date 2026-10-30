@@ -7,6 +7,7 @@ import { rethrowStripeRejection } from '@server/integrations/stripe/errors';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
+import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -31,6 +32,7 @@ async function callStripe<T>(call: () => Promise<T>): Promise<T> {
 // are unaffected.
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(requireStripeWebhook())
+  .use(refuseBlockedAccount())
   .put<Request<unknown, unknown, RequestBody>>(async (req, res) => {
     const userId = req.user?.id;
     const { priceId } = subscriptionPlanSchema.parse(req.body);

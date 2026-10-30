@@ -69,6 +69,22 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     keys: ['enforceCredits', 'pricePerCredit', 'lowCreditsThreshold'],
   },
   {
+    id: 'preference-arena',
+    title: 'Preference arena',
+    description:
+      'Verified users compare two blind answers and earn promotional credits for accepted votes. A credits-per-vote of 0 keeps collecting votes with rewards off; low-quality raters are dropped without notice.',
+    keys: [
+      'preferenceArenaEnabled',
+      'preferenceArenaCreditsPerVote',
+      'preferenceArenaDailyVoteCap',
+      'preferenceArenaLifetimeCreditCap',
+      'preferenceArenaMinResponseMs',
+      'preferenceArenaGoldRatePercent',
+      'preferenceArenaMinGoldVotes',
+      'preferenceArenaMinGoldAccuracyPercent',
+    ],
+  },
+  {
     id: 'team',
     title: 'Team plan',
     description: 'Seat limits and the credits each paid seat adds to a team pool.',

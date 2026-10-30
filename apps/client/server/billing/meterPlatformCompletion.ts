@@ -184,6 +184,8 @@ export async function settleCompletion(
     source,
     inputTokens: charge.inputTokens,
     outputTokens: charge.outputTokens,
+    cacheReadTokens: charge.cacheReadInputTokens,
+    cacheWriteTokens: charge.cacheCreationInputTokens,
   });
   await usageEventRepository
     .record({
