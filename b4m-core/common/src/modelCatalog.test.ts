@@ -100,6 +100,12 @@ describe('toModelInfo', () => {
     );
   });
 
+  it('drops the OpenAI effort style of a record that says reasoning is unsupported, in both directions', () => {
+    const info = toModelInfo({ ...minimal, reasoning: { supported: false, style: 'openai-effort' } });
+    expect(info).not.toHaveProperty('openaiReasoningEffort');
+    expect(toModelRecord(info).reasoning).toEqual({ supported: false });
+  });
+
   it('treats either owner as able to disable, and reports the matching reason', () => {
     expect(toModelInfo({ ...minimal, autoDisabled: true, autoDisabledReason: 'awaiting price' })).toMatchObject({
       disabled: true,
