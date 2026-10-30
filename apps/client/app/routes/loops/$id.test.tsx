@@ -4,8 +4,9 @@ import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { navigate, search, loopState, actions } = vi.hoisted(() => ({
+const { navigate, search, loopState, actions, eventsState } = vi.hoisted(() => ({
   navigate: vi.fn(),
+  eventsState: { data: undefined as unknown },
   search: { run: undefined as string | undefined },
   loopState: { data: undefined as unknown, isLoading: false, error: null as unknown },
   actions: { onDeleted: undefined as (() => void) | undefined },
@@ -34,9 +35,11 @@ vi.mock('@client/app/components/Loops/LoopTicketBoard', () => ({
 vi.mock('@client/app/components/Session/AgentExecution/AgentRunViewer', () => ({
   default: ({ executionId }: { executionId: string }) => <div data-testid="agent-run-viewer">{executionId}</div>,
 }));
-vi.mock('@client/app/hooks/data/loops', () => ({
+vi.mock('@client/app/hooks/data/loops', async importOriginal => ({
+  countNeedsYou: (await importOriginal<typeof import('@client/app/hooks/data/loops')>()).countNeedsYou,
   useLoop: () => loopState,
   useLoopTickets: () => ({ data: undefined }),
+  useLoopEvents: () => eventsState,
 }));
 
 import LoopDetailPage from './$id';
@@ -69,6 +72,7 @@ beforeEach(() => {
   search.run = undefined;
   loopState.data = loop();
   loopState.error = null;
+  eventsState.data = undefined;
 });
 
 describe('LoopDetailPage states', () => {
@@ -123,5 +127,34 @@ describe('LoopDetailPage run drawer', () => {
     expect(screen.getByTestId('agent-run-viewer')).toHaveTextContent('ticket-run');
     fireEvent.click(screen.getByTestId('loop-run-drawer-close-btn'));
     expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' }, search: {} });
+  });
+});
+
+describe('LoopDetailPage log', () => {
+  const unsure = (id: string, resolution?: unknown) => ({
+    id,
+    kind: 'unsure',
+    executionId: `run-${id}`,
+    iteration: 1,
+    confidence: 0.3,
+    reason: 'thin',
+    createdAt: '2026-10-29T10:00:00.000Z',
+    ...(resolution ? { resolution } : {}),
+  });
+
+  it('counts the unsure runs that need the owner', () => {
+    renderPage();
+    expect(screen.queryByTestId('loop-detail-needs-you')).toBeNull();
+
+    eventsState.data = [unsure('a'), unsure('b'), unsure('c', { outcome: 'resumed', at: '2026-10-29T11:00:00.000Z' })];
+    renderPage();
+    expect(screen.getByTestId('loop-detail-needs-you')).toHaveTextContent('2 need you');
+  });
+
+  it('opens a logged run in the drawer', () => {
+    eventsState.data = [unsure('a')];
+    renderPage();
+    fireEvent.click(screen.getByTestId('loop-log-view-run-btn'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' }, search: { run: 'run-a' } });
   });
 });

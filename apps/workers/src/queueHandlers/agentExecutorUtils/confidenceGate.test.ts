@@ -4,6 +4,7 @@ import {
   decideIterationConfidencePause,
   evaluateConfidenceGate,
   formatConfidenceGateReason,
+  gateThresholdFor,
   isPausingLowConfidenceStreak,
   LOW_CONFIDENCE_STREAK_TO_PAUSE,
   recordAndDecideConfidencePause,
@@ -302,5 +303,20 @@ describe('decideIterationConfidencePause', () => {
       }
       expect(pauses).toEqual([...Array(script.length - 1).fill(false), true]);
     });
+  });
+});
+
+describe('gateThresholdFor', () => {
+  it('keeps the gate on for a loop run whose profile sets threshold 0', () => {
+    expect(gateThresholdFor({ confidenceGateThreshold: 0 }, { loopId: 'loop-1' })).toBe(0.6);
+  });
+
+  it('lets threshold 0 disable the gate on a non-loop run', () => {
+    expect(gateThresholdFor({ confidenceGateThreshold: 0 }, {})).toBe(0);
+  });
+
+  it('uses a non-zero profile threshold as is, and the default without one', () => {
+    expect(gateThresholdFor({ confidenceGateThreshold: 0.4 }, { loopId: 'loop-1' })).toBe(0.4);
+    expect(gateThresholdFor(undefined, {})).toBe(0.6);
   });
 });

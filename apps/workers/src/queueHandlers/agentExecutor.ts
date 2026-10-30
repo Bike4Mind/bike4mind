@@ -138,6 +138,7 @@ import {
   evaluateConfidenceGate,
   formatConfidenceGateReason,
   decideIterationConfidencePause,
+  gateThresholdFor,
 } from './agentExecutorUtils/confidenceGate';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
 import {
@@ -287,18 +288,6 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
 
 // MAX_CHECKPOINT_DEPTH and CHECKPOINT_DEPTH_WARNING imported from agentExecutor.checkpointDepth
 // (kept in a side-effect-free module so the thresholds can be unit-tested).
-
-/**
- * Confidence-gate threshold for the web agent execution flow.
- * An iteration whose every non-failed tool call scores below this counts toward a
- * pause for human review (see `evaluateConfidenceGate`).
- * Shared default across autonomous agent flows - the value below
- * which a run is considered "not autonomous-safe". A persisted gate stalls
- * the execution in `paused` until the client responds via `gate_response`,
- * or until the stale-active sweep reaps it (`cleanupStaleActive` includes
- * `paused`).
- */
-const CONFIDENCE_GATE_THRESHOLD = 0.6;
 
 // `persistRunAsQuest` moved to `@server/utils/persistRunAsQuest` so the
 // WebSocket `gate_response: stop` handler can share the same chat-history
@@ -2804,7 +2793,7 @@ async function processExecution(
           approvedToolCallId: approvedPause.toolCallId,
           approvedTools,
           deniedTools,
-          confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+          confidenceGateThreshold: gateThresholdFor(orchestrationProfile, execution),
           confidenceOverrides: execution.confidenceOverrides,
         },
         {
@@ -3302,8 +3291,8 @@ async function processExecution(
       // It pauses on a streak of low iterations, not one (`LOW_CONFIDENCE_STREAK_TO_PAUSE`);
       // the streak is persisted on the execution doc so it survives continuations.
       // Per-profile override wins over the global default; a profile threshold of 0
-      // disables the gate entirely (confidence is never < 0) for unattended loops.
-      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
+      // disables the gate (confidence is never < 0), except on loop runs (`gateThresholdFor`).
+      const confidenceGateThreshold = gateThresholdFor(orchestrationProfile, execution);
       const gate = evaluateConfidenceGate({
         gate: readLastIterationConfidence(),
         isComplete: iterationResult.isComplete,

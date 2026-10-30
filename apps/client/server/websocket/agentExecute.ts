@@ -20,9 +20,13 @@ import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 import {
   adminSettingsRepository,
   agentExecutionRepository,
+  loopEventRepository,
   sessionToolApprovalRepository,
+  workItemRepository,
   type IAgentExecution,
 } from '@bike4mind/database';
+import type { LoopGateOutcome } from '@bike4mind/common';
+import { unsureEventFields } from '@server/utils/loopTickets';
 import { canReadAgentExecution, toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
@@ -802,7 +806,7 @@ export async function handleGateResponse(
     // this, `markComplete` (which has no such guard) would silently overwrite
     // a freshly-aborted execution back to `completed`, contradicting the
     // user's abort decision.
-    const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId);
+    const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId, 'rejected', userId);
     if (!cleared) {
       logger.warn('[Gate] Stop ignored — clearPendingGate matched 0 docs (likely aborted concurrently)', {
         executionId: cmd.executionId,
@@ -841,6 +845,7 @@ export async function handleGateResponse(
     // natural completion path fires. Resolve gates through the shared authority
     // and hand them over; the helper guards on the gates and `parentExecutionId`.
     await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
+    await recordLoopGateResolution(execution, cmd.executionId, 'rejected', userId, logger);
     logger.info('[Gate] Stopped execution with partial answer', { executionId: cmd.executionId });
     return;
   }
@@ -849,7 +854,7 @@ export async function handleGateResponse(
   if (!executorTarget) throw new Error('Agent execution is not configured');
 
   // decision === 'continue' - clear the gate and resume.
-  const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId);
+  const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId, 'resumed', userId);
   if (!cleared) {
     // Either the doc no longer exists or the execution was aborted between
     // the status check above and now. Bail rather than re-invoke into a
@@ -868,16 +873,50 @@ export async function handleGateResponse(
     await dispatchAgentExecution({ executionId: cmd.executionId, connectionId }, executorTarget);
   } catch (error) {
     // A lost ACK may still have queued work. Only an explicit rejection permits rollback.
+    // The `resumed` record this leaves in `gateHistory` is kept as an audit trail; the loop log is not
+    // told, so it never shows "Resumed" for a run that is still paused.
     if (error instanceof AgentExecutorRejectedError) {
       await agentExecutionRepository.restoreRejectedResume(cmd.executionId, {
         status: 'paused',
         pendingGate: execution.pendingGate,
       });
+    } else {
+      await recordLoopGateResolution(execution, cmd.executionId, 'resumed', userId, logger);
     }
     throw error;
   }
 
+  await recordLoopGateResolution(execution, cmd.executionId, 'resumed', userId, logger);
   logger.info('[Gate] Continue - executor re-invoked', { executionId: cmd.executionId });
+}
+
+/**
+ * Records the owner's gate answer in the loop log for a loop run (a no-op otherwise). A resumed run's
+ * ticket goes back to in_progress if the scheduler had already parked it as unsure; the scheduler folds
+ * it when the run ends. Best effort: the gate itself is already resolved.
+ */
+async function recordLoopGateResolution(
+  execution: IAgentExecution,
+  executionId: string,
+  outcome: LoopGateOutcome,
+  userId: string,
+  logger: Logger
+): Promise<void> {
+  if (!execution.loopId || !execution.pendingGate) return;
+  try {
+    const ticket = await workItemRepository.findByExecutionId(executionId);
+    await loopEventRepository.resolveUnsure(
+      unsureEventFields(
+        { loopId: execution.loopId, userId: execution.userId, executionId },
+        execution.pendingGate,
+        ticket
+      ),
+      { outcome, by: userId, at: new Date() }
+    );
+    if (outcome === 'resumed' && ticket) await workItemRepository.resumeBlockedRun(ticket.id, executionId);
+  } catch (error) {
+    logger.warn('[Gate] Could not record the gate answer in the loop log', { executionId, error });
+  }
 }
 
 async function handleReconnect(

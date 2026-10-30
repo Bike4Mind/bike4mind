@@ -42,12 +42,14 @@ const tickets = vi.hoisted(() => ({
   listForLoop: vi.fn(),
   findManyByIdsForUser: vi.fn(),
 }));
+const loopEvents = vi.hoisted(() => ({ listForLoop: vi.fn(), deleteManyForLoop: vi.fn() }));
 const settings = vi.hoisted(() => ({ EnableLoops: true as unknown }));
 const executions = vi.hoisted(() => ({ sumCreditsByLoop: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   loopRepository: repo,
   agentExecutionRepository: executions,
   workItemRepository: tickets,
+  loopEventRepository: loopEvents,
   adminSettingsRepository: {
     getSettingsValue: async (key: string) => settings[key as 'EnableLoops'],
     findAll: async () => [],
@@ -71,6 +73,8 @@ currentModule.name = 'run';
 await import('@pages/api/loops/[id]/run');
 currentModule.name = 'tickets';
 await import('@pages/api/loops/[id]/tickets');
+currentModule.name = 'events';
+await import('@pages/api/loops/[id]/events');
 
 const OID = '507f1f77bcf86cd799439011';
 
@@ -365,6 +369,7 @@ describe('DELETE /api/loops/:id', () => {
     await result;
     expect(repo.deleteForUser).toHaveBeenCalledWith(OID, 'u1');
     expect(tickets.softDeleteByLoop).toHaveBeenCalledWith('u1', OID);
+    expect(loopEvents.deleteManyForLoop).toHaveBeenCalledWith('u1', OID);
     expect(res._getStatusCode()).toBe(204);
   });
 });
@@ -419,5 +424,33 @@ describe('GET /api/loops/:id/tickets', () => {
     } finally {
       settings.EnableLoops = true;
     }
+  });
+});
+
+describe('GET /api/loops/:id/events', () => {
+  it('is session-only', () => {
+    expect(baseApiOptions.events).toEqual({ auth: 'jwtOnly' });
+  });
+
+  it("returns the owner's loop events as listed, newest first, capped", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    loopEvents.listForLoop.mockResolvedValue([
+      { id: 'e2', kind: 'unsure', executionId: 'x2', confidence: 0.2, reason: 'r', userId: 'u1' },
+      { id: 'e1', kind: 'unsure', executionId: 'x1', confidence: 0.4, reason: 'r', userId: 'u1' },
+    ]);
+
+    const { res, result } = call('events', 'get', { query: { id: OID } });
+    await result;
+
+    expect(loopEvents.listForLoop).toHaveBeenCalledWith('u1', OID, 100);
+    const events = res._getJSONData();
+    expect(events.map((event: { id: string }) => event.id)).toEqual(['e2', 'e1']);
+    expect(events[0]).not.toHaveProperty('userId');
+  });
+
+  it("is a 404 for another user's loop", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(null);
+    await expect(call('events', 'get', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 404 });
+    expect(loopEvents.listForLoop).not.toHaveBeenCalled();
   });
 });
