@@ -388,6 +388,34 @@ describe('lookupCatalog', () => {
     expect(lookupCatalog('nothing-like-it')).toBeUndefined();
   });
 
+  it('generates dead-letter queue entries that name the queue', () => {
+    const messages = lookupCatalog('dlq-billing-events-messages');
+    expect(messages?.title).toBe('Background job failed: billing events');
+    expect(messages?.links).toEqual(['dlq-replay']);
+    const age = lookupCatalog('dlq-fab-file-chunk-age');
+    expect(age?.title).toBe('Unhandled failure for over an hour: fab file chunk');
+    expect(lookupCatalog('dlq-alarm-handler-dlq-messages')).toBe(ALARM_CATALOG['dlq-alarm-handler-dlq-messages']);
+    expect(lookupCatalog('dlq-')).toBeUndefined();
+  });
+
+  it('covers the signup, spend and census alarms by exact name or provider prefix', () => {
+    expect(lookupCatalog('SuccessfulSignups')).toBe(ALARM_CATALOG.SuccessfulSignups);
+    expect(lookupCatalog('NewAccountApiKeys')).toBe(ALARM_CATALOG.NewAccountApiKeys);
+    expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
+    expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
+    expect(lookupCatalog('account-creation-metrics-missing')).toBe(ALARM_CATALOG['account-creation-metrics-missing']);
+  });
+
+  it('renders a dead-letter queue alarm with the queue name and the replay button', () => {
+    const message = formatAlarmSlackMessage(
+      { ...burst, AlarmName: 'bike4mind-production-dlq-release-notes-messages' },
+      'production',
+      { appUrl: 'https://app.example.com' }
+    );
+    expect(header(message)).toBe(':warning: Production warning: Background job failed: release notes');
+    expect(buttons(message).map(b => b.label)).toContain('DLQ replay');
+  });
+
   it('handles hand-shaped cap-exceeded messages with no Trigger', () => {
     const message = formatAlarmSlackMessage(
       {
