@@ -108,6 +108,18 @@ describe('shareable.updateUserShares', () => {
     expect(await rowsOf(id)).toEqual([]);
   });
 
+  it('removes a row whose projectId was stored as an ObjectId', async () => {
+    const projectId = new mongoose.Types.ObjectId();
+    const id = await seed();
+    await FabFile.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { users: [{ userId: 'u1', permissions: [read], projectId }] } }
+    );
+
+    await fabFileRepository.shareable.updateUserShares(id, { remove: { projectId: projectId.toString() } });
+    expect(await rowsOf(id)).toEqual([]);
+  });
+
   it('removes only rows matching every given field', async () => {
     const id = await seed([
       { userId: 'u1', permissions: [read] },
@@ -171,6 +183,18 @@ describe('shareable.updateUserShares', () => {
     const after = await FabFile.findById(id).lean();
     expect(after!.__v).toBe((before!.__v ?? 0) + 1);
     expect(after!.updatedAt.getTime()).toBeGreaterThanOrEqual(before!.updatedAt.getTime());
+  });
+
+  it('leaves the version key untouched and drops the scratch field on a no-op', async () => {
+    const id = await seed([{ userId: 'u1', permissions: [read] }]);
+    const before = await FabFile.findById(id).lean();
+
+    await fabFileRepository.shareable.updateUserShares(id, { remove: { projectId: 'p-none' } });
+    await fabFileRepository.shareable.updateUserShares(id, { add: [{ userId: 'u1', permissions: [read] }] });
+
+    const after = await FabFile.findById(id).lean();
+    expect(after!.__v).toBe(before!.__v);
+    expect(after).not.toHaveProperty('__usersBefore');
   });
 
   it('keeps every grant when many land at once', async () => {

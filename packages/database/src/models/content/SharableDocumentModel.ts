@@ -101,10 +101,13 @@ export const readAccessArms = (user: Pick<IUserDocument, 'id' | 'groups'>): Reco
 ];
 
 // Pipeline updates skip Mongoose casting, so values go in as `$literal` and stored ids compare via
-// `$toString` (a legacy ObjectId userId still matches).
+// `$toString` (a legacy ObjectId userId or projectId still matches).
 const sameTag = (path: string, value: string | undefined) => ({
-  $eq: [{ $ifNull: [path, null] }, { $literal: value ?? null }],
+  $eq: [{ $toString: { $ifNull: [path, null] } }, { $literal: value ?? null }],
 });
+
+// Scratch field holding `users` as read, so the final stage can skip the version bump on a no-op.
+const USERS_BEFORE = '__usersBefore';
 
 const rowMatches = (match: UserShareMatch) => ({
   $and: [
@@ -290,13 +293,27 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
     }
     if (stages.length === 0) return ((await this.model.findById(id))?.toJSON() ?? null) as T | null;
 
+    // The version is bumped only when `users` changed: a no-op (e.g. removing a project that has no
+    // rows here) must not make a concurrent version-guarded write of `users` fail with a spurious
+    // conflict. `updatedAt` still moves, since Mongoose's timestamps hook stamps it on every update.
     const versionKey = this.model.schema.get('versionKey');
-    stages.push({
-      $set: {
-        ...(this.model.schema.get('timestamps') ? { updatedAt: '$$NOW' } : {}),
-        ...(typeof versionKey === 'string' ? { [versionKey]: { $add: [{ $ifNull: [`$${versionKey}`, 0] }, 1] } } : {}),
+    const changed = { $ne: ['$users', `$${USERS_BEFORE}`] };
+    stages.unshift({ $set: { [USERS_BEFORE]: { $ifNull: ['$users', []] } } });
+    stages.push(
+      {
+        $set: {
+          ...(this.model.schema.get('timestamps') ? { updatedAt: '$$NOW' } : {}),
+          ...(typeof versionKey === 'string'
+            ? {
+                [versionKey]: {
+                  $cond: [changed, { $add: [{ $ifNull: [`$${versionKey}`, 0] }, 1] }, `$${versionKey}`],
+                },
+              }
+            : {}),
+        },
       },
-    });
+      { $unset: USERS_BEFORE }
+    );
 
     const doc = await this.model.findOneAndUpdate({ _id: id }, stages as mongoose.UpdateWithAggregationPipeline, {
       new: true,

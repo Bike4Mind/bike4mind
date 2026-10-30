@@ -21,7 +21,10 @@ export interface IInviteRepository extends IBaseRepository<IInviteDocument> {
     options?: { limit: number; page: number }
   ) => Promise<IInviteDocument[]>;
   countPendingByUserId: (userId: string) => Promise<number>;
-  /** Record `email` as accepted (leaving pending/refused) and spend one slot; null when no slot is left. */
+  /**
+   * Record `email` as accepted (leaving pending/refused) and spend one slot. Null when no slot is left,
+   * the email (case-insensitive) already accepted, or a named invite (`isLinkOnly: false`) no longer has it pending.
+   */
   acceptRecipient: (id: string, email: string) => Promise<IInviteDocument | null>;
   /** Move `email` (case-insensitive) from pending to refused and spend one slot; null when not pending. */
   refusePendingRecipient: (id: string, email: string) => Promise<IInviteDocument | null>;

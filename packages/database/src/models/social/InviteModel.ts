@@ -41,6 +41,10 @@ function pendingEmailMatch(pendingEmail: string) {
   };
 }
 
+const lowercased = (list: 'pending' | 'accepted') => ({
+  $map: { input: { $ifNull: [`$recipients.${list}`, []] }, in: { $toLower: '$$this' } },
+});
+
 // A list that is not stored stays absent rather than becoming [].
 const withoutEmail = (list: 'pending' | 'refused', email: string) => ({
   $cond: [
@@ -180,7 +184,21 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
 
   async acceptRecipient(id: string, email: string): Promise<IInviteDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    return this.pipelineUpdate({ _id: id, remaining: { $gt: 0 } }, [
+    const lower = { $literal: email.toLowerCase() };
+    // Re-checks the service's read-time gates in the write, so a double accept or a cancel that lands
+    // between the read and this write cannot spend a slot. Pending is only required when the invite
+    // is flagged named (`isLinkOnly: false`); legacy rows without the flag keep the service's check.
+    const filter = {
+      _id: id,
+      remaining: { $gt: 0 },
+      $expr: {
+        $and: [
+          { $not: [{ $in: [lower, lowercased('accepted')] }] },
+          { $or: [{ $ne: ['$isLinkOnly', false] }, { $in: [lower, lowercased('pending')] }] },
+        ],
+      },
+    };
+    return this.pipelineUpdate(filter, [
       {
         $set: {
           recipients: {
@@ -213,7 +231,7 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
         $set: {
           'recipients.pending': withoutEmail('pending', email),
           'recipients.refused': { $concatArrays: [{ $ifNull: ['$recipients.refused', []] }, [{ $literal: email }]] },
-          remaining: { $subtract: ['$remaining', 1] },
+          remaining: { $max: [0, { $subtract: ['$remaining', 1] }] },
           updatedAt: '$$NOW',
         },
       },
@@ -252,8 +270,10 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
 
   private async updatePendingRecipient(id: string, email: string, stages: Record<string, unknown>[]) {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    const pendingLower = { $map: { input: { $ifNull: ['$recipients.pending', []] }, in: { $toLower: '$$this' } } };
-    return this.pipelineUpdate({ _id: id, $expr: { $in: [{ $literal: email.toLowerCase() }, pendingLower] } }, stages);
+    return this.pipelineUpdate(
+      { _id: id, $expr: { $in: [{ $literal: email.toLowerCase() }, lowercased('pending')] } },
+      stages
+    );
   }
 
   private async pipelineUpdate(filter: Record<string, unknown>, stages: Record<string, unknown>[]) {

@@ -63,6 +63,38 @@ describe('InviteRepository recipient writes', () => {
     expect(invite.recipients?.pending).toBeUndefined();
   });
 
+  it('concurrent accepts of the same email spend one slot', async () => {
+    const id = await seed({ pending: [] }, 3);
+
+    const results = await Promise.all([repo.acceptRecipient(id, 'a@x.com'), repo.acceptRecipient(id, 'A@x.com')]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const invite = await stored(id);
+    expect(invite.recipients?.accepted).toHaveLength(1);
+    expect(invite.remaining).toBe(2);
+    expect(invite.accepted).toBe(1);
+  });
+
+  it('acceptRecipient on a named invite refuses an email that is no longer pending', async () => {
+    const id = await seed({ pending: ['a@x.com', 'b@x.com'] });
+    await Invite.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { isLinkOnly: false } });
+
+    await repo.cancelPendingRecipient(id, 'a@x.com');
+
+    expect(await repo.acceptRecipient(id, 'a@x.com')).toBeNull();
+    expect(await repo.acceptRecipient(id, 'B@x.com')).not.toBeNull();
+    const invite = await stored(id);
+    expect(invite.recipients?.accepted).toEqual(['B@x.com']);
+    expect(invite.remaining).toBe(0);
+  });
+
+  it('refusePendingRecipient never drives remaining below zero', async () => {
+    const id = await seed({ pending: ['a@x.com'] }, 0);
+
+    expect(await repo.refusePendingRecipient(id, 'a@x.com')).not.toBeNull();
+    expect((await stored(id)).remaining).toBe(0);
+  });
+
   it('refusePendingRecipient moves the email to refused and spends a slot once', async () => {
     const id = await seed({ pending: ['A@x.com', 'b@x.com'] });
 
