@@ -12,7 +12,7 @@ import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { canSpawnDeeper, findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
@@ -492,7 +492,8 @@ export function ChatShell({
   const orchestratorPrefs = useOrchestratorPrefs(activeId);
   const { setDockOpen, setView: setOrchestratorView, setSurface: setOrchestratorSurface } = orchestratorPrefs;
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
-  const orchestrateCapable = !!activeSummary?.project;
+  // One at the depth cap could start none, so main ignores its flag and so does this.
+  const orchestrateCapable = !!activeSummary?.project && canSpawnDeeper(activeSummary);
   const delegating = activeSummary?.orchestrate === true;
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && (spawnedStates.length > 0 || orchestrateCapable);
   const { setOrchestrate } = conversation;

@@ -356,6 +356,37 @@ describe('orchestrate mode in the chat shell', () => {
     expect(delegate()?.checked).toBe(false);
   });
 
+  it('offers no orchestrate controls on a code agent at the spawn depth cap, even with the flag on', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    const deep = {
+      ...CODE,
+      id: 'code-deep',
+      title: 'Deep agent',
+      orchestrate: true,
+      origin: { parentSessionId: CODE.id, depth: 2, seedPrompt: 'deep' },
+    } as ChatSessionSummary;
+    window.localStorage.setItem(`b4m.orchestrator.surface.${deep.id}`, 'orchestrate');
+    listed = [...SESSIONS, CODE, deep];
+    await openParent(deep.title, 'code');
+    expect(el('chat-session-title').textContent).toBe(deep.title);
+    expect(query('chat-orchestrate-chip')).toBeNull();
+    expect(query('orchestrator-stage')).toBeNull();
+    expect(query('orchestrator-delegate-switch')).toBeNull();
+  });
+
+  it('offers the chip on a code agent below the depth cap', async () => {
+    const shallow = {
+      ...CODE,
+      id: 'code-shallow',
+      title: 'Shallow agent',
+      origin: { parentSessionId: CODE.id, depth: 1, seedPrompt: 'shallow' },
+    } as ChatSessionSummary;
+    listed = [...SESSIONS, CODE, shallow];
+    await openParent(shallow.title, 'code');
+    expect(el('chat-session-title').textContent).toBe(shallow.title);
+    expect(el('chat-orchestrate-chip').textContent).toBe('Orchestrate');
+  });
+
   it('leaves the delegate switch out of a chat session stage', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     await openParent();

@@ -57,8 +57,10 @@ import {
   isResumableStop,
   isTurnBudgetStop,
   localBackend,
+  MAX_SPAWN_DEPTH,
   messagesSinceBoundary,
   NO_LOCAL_MODEL,
+  orchestratesAgents,
   parseLocalModelId,
   pickLocalModel,
   SERVER_CREDENTIALS_STOP,
@@ -349,16 +351,6 @@ type SendOptions = {
  * Counts autonomous runs only. A user typing into a spawned session is not rationed.
  */
 export const MAX_CONCURRENT_SPAWNED = 10;
-
-/**
- * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
- * and a grandchild and refuses the next one.
- *
- * Read off the child's stored `origin.depth` rather than walked back up the parent chain,
- * because a parent can be deleted mid-run and a cap that stops being enforceable when a row
- * disappears is not a cap.
- */
-const MAX_SPAWN_DEPTH = 2;
 
 /**
  * How long a title request may take before it is dropped.
@@ -2661,6 +2653,8 @@ export class ChatService {
       // Narrower than `ask`: a relay or automatic turn in a main session can still show a card,
       // but nobody typed it.
       const attended = this.attendedTurns.has(sessionId);
+      // One reading for the tool list, the prompt and the host (buildHostContext), so none disagree.
+      const orchestrating = orchestratesAgents(session);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = api && !localTurn ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
@@ -2769,7 +2763,7 @@ export class ChatService {
               web: !!web,
               // See ToolDefinition.interactive.
               ask,
-              suggestions: !session.origin && !session.orchestrate,
+              suggestions: !session.origin && !orchestrating,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
@@ -2901,7 +2895,7 @@ export class ChatService {
           session.model,
           toolsSupported && !!web,
           toolsSupported && !!screen,
-          session.orchestrate === true
+          orchestrating
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -4163,7 +4157,7 @@ export class ChatService {
 
       // A spawned session has no suggestion tray, so it keeps the approval-gated start. With
       // Orchestrate on, the user's switch is the approval and a spawn starts at once.
-      ...(session.orchestrate
+      ...(orchestratesAgents(session)
         ? { delegates: true }
         : session.origin
           ? {}

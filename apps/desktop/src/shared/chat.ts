@@ -866,6 +866,29 @@ export function parseLocalModelId(id: string): { runtimeId: string; model: strin
   }
 }
 
+/**
+ * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
+ * and a grandchild and refuses the next one.
+ *
+ * Read off the child's stored `origin.depth` rather than walked back up the parent chain,
+ * because a parent can be deleted mid-run and a cap that stops being enforceable when a row
+ * disappears is not a cap.
+ */
+export const MAX_SPAWN_DEPTH = 2;
+
+/** Whether this session may still start one under MAX_SPAWN_DEPTH. */
+export function canSpawnDeeper(session: { origin?: Pick<ChatSessionOrigin, 'depth'> }): boolean {
+  return (session.origin?.depth ?? 0) < MAX_SPAWN_DEPTH;
+}
+
+/**
+ * Orchestrate in effect, not merely switched on: a session at the depth cap could start no
+ * agent, so it keeps its ordinary prompt and gated start whatever the flag says.
+ */
+export function orchestratesAgents(session: Pick<ChatSessionMeta, 'orchestrate' | 'origin'>): boolean {
+  return session.orchestrate === true && canSpawnDeeper(session);
+}
+
 /** Fails closed: a malformed `local:` id still counts as local so it never falls onto the hosted path. */
 export function isLocalModel(id: string): boolean {
   return id.startsWith('local:');
