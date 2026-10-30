@@ -137,7 +137,7 @@ describe('turnstile policy alarm wiring', () => {
     expect(resources.filter).toHaveBeenCalledWith(
       'cardVerificationFailureSpikeFilter',
       expect.objectContaining({
-        pattern: '%\\x22message\\x22:\\x22card-verification-failure-spike\\x22%',
+        pattern: '{ $.message = "card-verification-failure-spike" }',
       })
     );
     expect(resources.alarm).toHaveBeenCalledWith(
@@ -151,6 +151,7 @@ describe('turnstile policy alarm wiring', () => {
       'cardVerificationRecoveryFailureSpikeFilter',
       expect.objectContaining({
         logGroupName: 'recovery-logs',
+        pattern: '{ $.message = "card-verification-failure-spike" }',
         metricTransformation: expect.objectContaining({ name: 'CardVerificationFailureSpike' }),
       })
     );
