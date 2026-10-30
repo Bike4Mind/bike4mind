@@ -16,7 +16,12 @@ import { useRouter, useSearch } from '@tanstack/react-router';
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
-import { getTurnstileToken, TurnstileCancelledError, TurnstileError } from '@client/app/utils/turnstile';
+import {
+  getTurnstileToken,
+  TurnstileCancelledError,
+  TurnstileError,
+  turnstileFailureMessage,
+} from '@client/app/utils/turnstile';
 import type { ServerConfigPublic } from '@pages/api/settings/serverConfigPublic';
 import type { TurnstileClientFailure } from '@pages/api/turnstile/client-failure';
 
@@ -129,7 +134,7 @@ async function solveTurnstileIfRequired(
       throw new Error('Verification cancelled. Try again when you are ready.');
     }
     reportTurnstileFailure(action, error);
-    throw new Error('Could not complete the verification check. Please refresh and try again.');
+    throw new Error(turnstileFailureMessage(error));
   }
 }
 

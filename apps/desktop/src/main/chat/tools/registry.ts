@@ -25,6 +25,7 @@ import {
 } from './mediaTools';
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
+import { setSessionPullRequest } from './pullRequestTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
@@ -147,6 +148,7 @@ const BY_NAME = new Map(
     ...SKILL_TOOLS,
     askUser,
     requestDirectory,
+    setSessionPullRequest,
     ...MCP_TOOLS,
     ...WEB_TOOLS,
   ].map(tool => [tool.schema.name, tool])
@@ -241,6 +243,11 @@ export function toolsForRequest(options: {
    * whether or not anything is configured, so the tool list does not churn as servers come and go.
    */
   mcpServers?: boolean;
+  /**
+   * A Code session with a user present, who is the only one who may say which PR the session
+   * follows. Offers set_session_pull_request.
+   */
+  pullRequest?: boolean;
 }): { toolSchema: ToolSchema }[] {
   const available = [
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
@@ -255,6 +262,7 @@ export function toolsForRequest(options: {
     ...(options.web ? WEB_TOOLS : []),
     // Offered with no folder granted too: asking for one is exactly what that conversation needs.
     ...(options.ask ? [askUser, requestDirectory] : []),
+    ...(options.pullRequest && options.ask ? [setSessionPullRequest] : []),
     ...(options.mcpServers ? (options.ask ? MCP_TOOLS : MCP_READ_TOOLS) : []),
   ];
   return [
