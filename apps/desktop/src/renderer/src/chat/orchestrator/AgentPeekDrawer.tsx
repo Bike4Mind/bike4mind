@@ -256,6 +256,9 @@ export function AgentPeekDrawer({ agent, onClose, actions }: AgentPeekDrawerProp
         width: 340,
         flexShrink: 0,
         overflowY: 'auto',
+        overflowX: 'hidden',
+        // Unbroken worktree paths in agent messages would otherwise widen the drawer.
+        overflowWrap: 'anywhere',
         display: 'flex',
         flexDirection: 'column',
         gap: 1.5,
