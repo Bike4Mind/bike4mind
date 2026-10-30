@@ -16,7 +16,12 @@ import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constant
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
-import { CompletionProviderBlockEventSchema, CompletionToolSchema, ResponseFormatSchema } from './cliCompletions';
+import {
+  CompletionProviderBlockEventSchema,
+  CompletionSessionIdSchema,
+  CompletionToolSchema,
+  ResponseFormatSchema,
+} from './cliCompletions';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -101,6 +106,7 @@ export const CliCompletionRequestAction = z.object({
       })
     )
     .min(1),
+  sessionId: CompletionSessionIdSchema.optional(),
   options: z
     .object({
       temperature: z.number().optional(),

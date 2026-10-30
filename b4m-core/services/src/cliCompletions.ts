@@ -181,6 +181,12 @@ export interface CompletionParams {
   /** Correlation id for the usage-event dual write. Synthesized when absent. */
   requestId?: string;
   /**
+   * The caller's conversation id (desktop chat session, CLI session), as the client sent it.
+   * Recorded on the completion_api_usage ledger row so spend can be traced back to a conversation.
+   * Untrusted, display-only: never used for authorization or lookups.
+   */
+  sessionId?: string;
+  /**
    * Where this completion request originated. Recorded on the credit
    * transaction (and analytics event) so reports can break down usage by
    * surface (cli, api, etc.). Defaults to 'api' since this service is only
@@ -209,6 +215,14 @@ export interface CompletionParams {
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
   /** Resolved on the reloaded caller; omitted means `raw`. A failed resolution withholds. */
   getThinkingVisibility?: (user: IUserDocument) => Promise<ThinkingVisibility>;
+}
+
+const MAX_LEDGER_TOOL_NAMES = 20;
+const MAX_LEDGER_TOOL_NAME_LENGTH = 64;
+
+/** Caps the tool names a ledger row carries: tool names are caller-supplied on the wire path. */
+export function boundedToolNames(names: Iterable<string>): string[] {
+  return [...names].slice(0, MAX_LEDGER_TOOL_NAMES).map(name => name.slice(0, MAX_LEDGER_TOOL_NAME_LENGTH));
 }
 
 /**
@@ -875,6 +889,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let finalStopReason: string | undefined;
   // Every char streamed to the caller, for pricing a first call that was cut short (see below).
   let streamedOutputChars = 0;
+  // Distinct tool names the model called on this request, for the ledger row.
+  const toolNamesUsed = new Set<string>();
 
   const settledUsdCost = (pricedModel: ModelInfo): number =>
     finalTurnUsage?.length
@@ -908,6 +924,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (info?.outputTokens !== undefined && info.reasoningTokens !== undefined)
       finalReasoningTokens = info.reasoningTokens;
     if (info?.stopReason) finalStopReason = info.stopReason;
+    if (info?.toolStarted) toolNamesUsed.add(info.toolStarted.name);
+    for (const tool of info?.toolsUsed ?? []) toolNamesUsed.add(tool.name);
     // Tool-artifact frames carry a tool's own output for a renderer, not the model's, so they are not
     // output the provider bills on this call.
     if (info?.channel !== 'tool-artifact') {
@@ -1243,8 +1261,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
               description,
               model: model as ChatModels,
               apiKeyId: apiKeyInfo?.keyId, // Optional - present for API key auth, undefined for JWT
+              sessionId: params.sessionId,
               inputTokens: finalInputTokens,
               outputTokens: finalOutputTokens,
+              cacheReadTokens: finalCacheReadTokens,
+              cacheWriteTokens: finalCacheCreationTokens,
               source,
               metadata: {
                 // Include API key info if present
@@ -1259,6 +1280,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
                 usdCost,
                 reservedCredits,
                 creditDifference,
+                ...(toolNamesUsed.size > 0 && { toolNames: boundedToolNames(toolNamesUsed) }),
               },
             },
             {

@@ -2221,6 +2221,12 @@
           "max_tokens": {
             "type": "number"
           },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise."
+          },
           "options": {
             "type": "object",
             "properties": {

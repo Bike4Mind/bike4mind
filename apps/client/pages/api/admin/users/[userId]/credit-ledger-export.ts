@@ -40,6 +40,10 @@ const CSV_HEADER = [
   // Appended, not inserted, so spreadsheets that read earlier exports by column position still line up.
   'Request id',
   'Quest id',
+  'Cache read tokens',
+  'Cache write tokens',
+  'Session id',
+  'Tools',
 ];
 
 // A number is not a formula, so numeric cells stay raw (escaping would turn -412 into '-412).
@@ -63,6 +67,10 @@ const toCsvLine = (row: AdminLedgerRow): string =>
     escapeCsvCell(row.note),
     escapeCsvCell(row.requestId),
     escapeCsvCell(row.questId),
+    numberCell(row.cacheReadTokens),
+    numberCell(row.cacheWriteTokens),
+    escapeCsvCell(row.sessionId),
+    escapeCsvCell(row.toolNames?.join(' ')),
   ].join(',');
 
 type ExportRequestQuery = {
