@@ -43,6 +43,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: 5, windowMs: 60 * 1000 }))
   .post(async (req, res) => {
     const user = req.user;
+    if (!user) throw new BadRequestError(NOT_FOUND_MESSAGE);
     const { subscriptionId } = PayInvoiceSchema.parse(req.body);
 
     const row = await subscriptionRepository.findByStripeSubscriptionId(subscriptionId);
