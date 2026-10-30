@@ -145,3 +145,23 @@ describe('environment banner contrast', () => {
     expect(contrast(environmentBannerPalette.foreground, fill)).toBeGreaterThanOrEqual(AA_TEXT);
   });
 });
+
+/**
+ * ClientOutdatedBanner tints its own pill from the primary channel rather than a background token,
+ * so the sweep above cannot reach it. The tint alpha and the two label colours are copied from that
+ * component and have to stay in sync with it; this guards the palette side of the pair, so a change
+ * to the primary scale or to background.body cannot quietly make the label unreadable again.
+ */
+describe('outdated client pill contrast', () => {
+  const PILL_TINT = 0.16;
+
+  it.each(MODES)('%s: the pill label reaches 4.5:1 on the tinted pill', mode => {
+    const palette = theme.colorSchemes[mode].palette as unknown as Palette;
+    const tint = palette.primary.mainChannel.split(' ').map(Number);
+    const body = parse(palette.background.body);
+    const fill = `rgb(${tint.map((c, i) => Math.round(c * PILL_TINT + body[i] * (1 - PILL_TINT))).join(', ')})`;
+    // common.white is '#fff', which parse() does not take; the component's dark label is plain white.
+    const label = mode === 'dark' ? '#FFFFFF' : palette.text.primary;
+    expect(contrast(label, fill)).toBeGreaterThanOrEqual(AA_TEXT);
+  });
+});
