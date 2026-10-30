@@ -275,4 +275,33 @@ describe('SessionStore', () => {
       expect(summary).toMatchObject({ lastOutcome: 'finished', lastSnippet: 'hi' });
     });
   });
+
+  describe('setOrchestrate', () => {
+    it('round-trips the flag through the file and the summary, and clears it rather than storing false', async () => {
+      const { id } = await store.create();
+      const before = (await store.get(id))?.updatedAt;
+
+      expect(await store.setOrchestrate(id, true)).toMatchObject({ id, orchestrate: true });
+      const relaunched = new SessionStore(directory, MODEL);
+      expect(await relaunched.get(id)).toMatchObject({ orchestrate: true, updatedAt: before });
+      expect((await relaunched.list())[0]).toMatchObject({ id, orchestrate: true });
+
+      expect(await store.setOrchestrate(id, false)).not.toHaveProperty('orchestrate');
+      expect(JSON.parse(await readFile(join(directory, `${id}.json`), 'utf8'))).not.toHaveProperty('orchestrate');
+      expect((await new SessionStore(directory, MODEL).list())[0]).not.toHaveProperty('orchestrate');
+    });
+
+    it('reads a session and a cached summary written before the flag existed as not orchestrating', async () => {
+      const { id } = await store.create();
+      await store.list();
+
+      const relaunched = new SessionStore(directory, MODEL);
+      expect(await relaunched.get(id)).not.toHaveProperty('orchestrate');
+      expect((await relaunched.list())[0]).not.toHaveProperty('orchestrate');
+    });
+
+    it('returns null for a session that does not exist', async () => {
+      expect(await store.setOrchestrate('00000000-0000-4000-8000-000000000000', true)).toBeNull();
+    });
+  });
 });

@@ -772,6 +772,15 @@ export class SessionStore implements SessionWritesStore {
     });
   }
 
+  /** Turn Orchestrate on or off. Leaves `updatedAt` alone, as pinning does. */
+  async setOrchestrate(id: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
+    return this.mutate(id, session => {
+      if (orchestrate) session.orchestrate = true;
+      else delete session.orchestrate;
+      return true;
+    });
+  }
+
   /**
    * Archive or restore a conversation.
    *
@@ -1207,6 +1216,7 @@ export class SessionStore implements SessionWritesStore {
       ...(grantedDirectories.length > 0 ? { grantedDirectories } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
+      ...(parsed.orchestrate === true ? { orchestrate: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
       ...(origin ? { origin } : {}),

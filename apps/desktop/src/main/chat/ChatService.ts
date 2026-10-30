@@ -1441,6 +1441,11 @@ export class ChatService {
     return this.deps.store.setPinned(sessionId, pinned);
   }
 
+  /** Read at the start of each turn, so a change applies from the next one. */
+  setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setOrchestrate(sessionId, orchestrate);
+  }
+
   /**
    * Set how much this conversation may do without asking.
    *

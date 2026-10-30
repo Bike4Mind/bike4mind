@@ -1187,6 +1187,12 @@ interface ChatSessionMeta {
   grantedDirectories?: string[];
   /** Pinned to the top of the sidebar, above both the groups and the loose conversations. */
   pinned?: boolean;
+  /**
+   * The user turned on Orchestrate: the model is steered to split work across agents, and the
+   * agents it asks for start without a card, the switch being the approval. Never inherited by
+   * a session it spawns.
+   */
+  orchestrate?: boolean;
   /** Set when the agent spawned this session rather than the user starting it. */
   origin?: ChatSessionOrigin;
   /** Set on a session imported from Claude; see ChatImportOrigin. */

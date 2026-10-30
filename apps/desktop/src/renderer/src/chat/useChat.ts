@@ -458,6 +458,8 @@ export interface ConversationController {
    * click, and from nothing else: this is the only path to the mode in the renderer.
    */
   setApprovalMode: (mode: ChatApprovalMode) => Promise<void>;
+  /** Turn Orchestrate on or off for this conversation; see ChatSessionMeta.orchestrate. */
+  setOrchestrate: (orchestrate: boolean) => Promise<void>;
   /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
   project: ProjectBindingController;
   /** Answer a tool call waiting at the approval gate. Nothing has run until this is called. */
@@ -1134,6 +1136,21 @@ export function useConversation(
     [sessionId, onSummaryChanged]
   );
 
+  const setOrchestrate = useCallback(
+    async (orchestrate: boolean) => {
+      if (!sessionId) return;
+      const updated = await window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate);
+      if (!updated) return;
+      setSession(current => {
+        if (!current) return current;
+        const { orchestrate: _previous, ...rest } = current;
+        return updated.orchestrate ? { ...rest, orchestrate: true } : rest;
+      });
+      onSummaryChanged(updated);
+    },
+    [sessionId, onSummaryChanged]
+  );
+
   const respondToApproval = useCallback((approvalId: string, answer: ChatApprovalAnswer) => {
     void window.b4m.chat.respondToApproval(approvalId, answer);
   }, []);
@@ -1297,6 +1314,7 @@ export function useConversation(
     setReasoningEffort,
     setPromptCacheTtl,
     setApprovalMode,
+    setOrchestrate,
     project,
     respondToApproval,
   };
