@@ -9,3 +9,4 @@ export * from './UsageEventModel';
 export * from './ModelPriceModel';
 export * from './ProviderInvoiceModel';
 export * from './SpendReconciliationModel';
+export * from './SpokeBudgetModel';
