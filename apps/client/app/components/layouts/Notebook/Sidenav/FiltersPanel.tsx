@@ -29,6 +29,8 @@ interface FiltersPanelProps {
 
 // The least room the panel keeps from either side of the screen.
 const SCREEN_EDGE = 8;
+// The gap between the Filters button and the top of the panel.
+const ANCHOR_GAP = 8;
 
 const sectionTitleSx = { color: 'text.tertiary', fontSize: '12px', fontWeight: 400, letterSpacing: 0, mb: '12px' };
 
@@ -115,7 +117,9 @@ export default function FiltersPanel({
     const width = panelRef.current?.offsetWidth ?? 0;
     const underButton = anchor.left + anchor.width / 2;
     const fits = underButton - width / 2 >= SCREEN_EDGE && underButton + width / 2 <= window.innerWidth - SCREEN_EDGE;
-    setPlace({ top: anchor.bottom + 8, left: fits ? underButton : window.innerWidth / 2 });
+    // Left edge rather than translateX(-50%), rounded so an odd width does not land on a half pixel.
+    const centre = fits ? underButton : window.innerWidth / 2;
+    setPlace({ top: anchor.bottom + ANCHOR_GAP, left: Math.round(centre - width / 2) });
   }, [anchorRef]);
   // On a short viewport the panel scrolls; a fade at its foot says there is more below until the end.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -133,8 +137,33 @@ export default function FiltersPanel({
       measure();
     };
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    // Rows can change while open (e.g. typeOptions); the sections' sizes track that, the capped scroll box does not.
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onResize);
+    for (const section of Array.from(scrollRef.current?.children ?? [])) observer?.observe(section);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      observer?.disconnect();
+    };
   }, [placePanel, measure]);
+  // The portal puts the panel at the end of <body>: take focus into it, close on Escape, and hand
+  // focus back to whatever opened it. onClose goes through a ref (the parent passes an inline arrow)
+  // so this runs once per open.
+  const onCloseRef = useRef(onClose);
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus({ preventScroll: true });
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCloseRef.current();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      opener?.focus({ preventScroll: true });
+    };
+  }, []);
 
   const contentOptions: { value: NotebookContentFilter; testId: string; label: string }[] = [
     { value: 'all', testId: 'sidenav-filter-content-all', label: t('filter.content.all', 'All') },
@@ -153,12 +182,14 @@ export default function FiltersPanel({
       <Box
         ref={panelRef}
         data-testid="sidenav-filters-panel"
+        tabIndex={-1}
         sx={theme => ({
           position: 'fixed',
           top: place.top,
           left: place.left,
-          transform: 'translateX(-50%)',
           width: 'max-content',
+          maxWidth: `calc(100vw - ${2 * SCREEN_EDGE}px)`,
+          outline: 'none',
           zIndex: 10001,
           backgroundColor: theme.palette.background.surface,
           border: `1px solid ${theme.palette.divider}`,
@@ -167,7 +198,7 @@ export default function FiltersPanel({
           overflow: 'hidden',
           display: 'flex',
           // Five sections can outgrow a short viewport; scroll inside the panel instead of clipping.
-          maxHeight: `calc(100vh - ${place.top + 16}px)`,
+          maxHeight: `calc(100dvh - ${place.top + 2 * SCREEN_EDGE}px)`,
         })}
       >
         <Box
