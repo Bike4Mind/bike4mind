@@ -20,10 +20,19 @@ docs live in `docs-site/` (not `docs/`), `.changeset/` is excluded, and a second
 | `docs-changed`      | `'true'` when the changeset touches `docs-site/` or the help tooling in `packages/scripts/help/`. Fails **open** (`true`) on an unresolved range. Gates the `help-docs` job. |
 | `published-changed` | `'true'` when the changeset touches b4m-core, the lockfile or the check and its fixture. Fails **open** (`true`) on an unresolved range. Gates the `published-dts` job.      |
 
-`deployable` and `docs-changed` are orthogonal: a docs-only PR is
+`deployable` and `docs-changed` are orthogonal: a docs-site-only PR is
 `deployable=false, docs-changed=true`; a code+docs PR is `true, true`; a
-`.changeset` or root-`README` change is `false, false`. `published-changed` is a
-third, independent signal.
+`.changeset`, `docs/` or any other markdown-only change is `false, false`.
+`published-changed` is a third, independent signal.
+
+"Docs-only" for `deployable` means: every changed file is a `.md`/`.mdx` file
+anywhere in the tree, or under `docs/`, `docs-site/`, `agents/`, `.changeset/`,
+or one of the config/editor files in the default exclude list, and none of them
+is under `content-paths` (markdown the build or the tests read: the client's
+`content/` tree, the CLI's built-in agent definitions, the model-discovery
+fixtures and the lake RAG eval corpus). Those last stay deployable even though
+`**/*.md` is excluded. `packages/scripts/src/changesFilterDeployable.test.ts`
+pins both sides of that line.
 
 ## Why this and not `paths-ignore` / a marketplace action
 
@@ -108,7 +117,8 @@ is what turns that into a local build instead of a red leg. That pairing is enfo
 
 | Input             | Default                                                                                                                                                                 | Notes                                                                                                                                                                  |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `exclude-paths`   | curated docs/config list                                                                                                                                                | Newline-separated **git pathspecs**. If every changed file matches one, `deployable=false`. Blank lines and `#` comments ignored.                                      |
+| `exclude-paths`   | all markdown + curated docs/config list                                                                                                                                 | Newline-separated **git pathspecs**. If every changed file matches one, `deployable=false`. Blank lines and `#` comments ignored.                                      |
+| `content-paths`   | `apps/client/content/**`, `packages/cli/src/agents/defaults/**`, `b4m-core/services/src/llm/evals/**`, `**/__fixtures__/**`                                             | INCLUDE-form pathspecs of markdown the build or tests read. A change here is deployable regardless of `exclude-paths`.                                                 |
 | `docs-paths`      | `docs-site/**`, `packages/scripts/help/**`                                                                                                                              | INCLUDE-form pathspecs defining the docs site for `docs-changed`. Includes the help tooling, so a change to those scripts runs the `help-docs` guard that covers them. |
 | `published-paths` | `b4m-core/**`, `pnpm-lock.yaml`, `scripts/check-published-dts.mjs`, `scripts/fixtures/dangling-dts/**`, `.github/workflows/ci.yml`, `.github/actions/changes-filter/**` | INCLUDE-form pathspecs the published declaration check covers, for `published-changed`.                                                                                |
 
@@ -116,9 +126,9 @@ is what turns that into a local build instead of a red leg. That pairing is enfo
 
 - Use `:(glob)` magic so `**` means "any depth" and `*` stops at `/`. Default
   pathspec magic does **not** exclude a root `README.md` via `:(exclude)**/*.md`.
-- Do **not** blanket-exclude `**/*.md`. Some markdown is a runtime build input
-  (`@next/mdx`, `app/prompts/*.md`, `app/content/*.md`); the default only excludes
-  markdown in docs locations (READMEs, `docs-site/`, `agents/`, repo root).
+- `**/*.md` and `**/*.mdx` are excluded everywhere, so markdown that is a build or
+  test input must be listed in `content-paths` or a change to it skips CI. Register a
+  directory, not the files in it, so a new file there is covered without an edit here.
 - `.github/actions/changes-filter/**` is **intentionally not** excluded — a PR that
   edits only this action still runs the full pipeline, so the change is exercised
   end-to-end before it ships.

@@ -5,8 +5,7 @@ import {
   assertProjectsWriteScope,
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
-import { cacheRepository, inviteRepository, projectRepository } from '@bike4mind/database';
-import { TooManyRequestsError } from '@bike4mind/utils';
+import { inviteRepository, projectRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -23,64 +22,24 @@ import {
   organizationRepository,
   Project,
   Group,
-  User,
 } from '@bike4mind/database';
 import { z } from 'zod';
-import { getInviteTypeName, sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
+import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
+import {
+  MAX_INVITE_MESSAGE_LENGTH,
+  MAX_INVITE_RECIPIENTS,
+  notifyInvitees,
+  reserveInviteSendBudget,
+} from '@server/utils/inviteSendLimits';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
-// Creating a project invite emails every recipient, including addresses with no account, with the
-// inviter's name, the project name and their message. These bounds keep the route from being a
-// free mail relay. The request limit is loose because the Add Members modal sends one request per
-// selected user; typed addresses, the only way to reach someone with no account, get their own
-// tighter hourly budget, counted per address and the same whether or not the address has an account.
-const MAX_INVITE_RECIPIENTS = 25;
-const MAX_INVITE_MESSAGE_LENGTH = 1000;
-const HOUR_MS = 60 * 60 * 1000;
-const PROJECT_INVITE_RATE_LIMIT = { limit: 100, windowMs: HOUR_MS, bucket: 'POST /api/projects/[id]/invites' } as const;
-const TYPED_ADDRESS_INVITES_PER_HOUR = 20;
-
-const MAX_EMAILED_NAME_LENGTH = 60;
-
-const capLength = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 3)}...` : value);
-
-/**
- * Emails the invitees. An address with no account gets only the fixed template: no custom message,
- * and the inviter-chosen names capped, so the platform cannot be used to mail free text to
- * strangers. Recipients who already have an account get the message as before. Which is which is
- * never reflected in the response, so the lookup discloses nothing to the inviter.
- */
-async function notifyProjectInvitees(params: {
-  recipients: string[];
-  sharerName: string;
-  sharerEmail: string;
-  projectName: string;
-  inviteLink: string;
-  message?: string;
-}) {
-  const { recipients, sharerName, sharerEmail, projectName, inviteLink, message } = params;
-  const accounts = await User.find({ email: { $in: recipients } }, { email: 1 })
-    .collation({ locale: 'en', strength: 2 })
-    .lean();
-  const hasAccount = new Set(accounts.map(account => account.email?.toLowerCase()));
-  const members = recipients.filter(recipient => hasAccount.has(recipient.toLowerCase()));
-  const strangers = recipients.filter(recipient => !hasAccount.has(recipient.toLowerCase()));
-  const typeName = getInviteTypeName(InviteType.Project);
-
-  await Promise.all([
-    members.length > 0 &&
-      sendInviteNotificationEmails(members, sharerName, sharerEmail, projectName, typeName, inviteLink, message),
-    strangers.length > 0 &&
-      sendInviteNotificationEmails(
-        strangers,
-        capLength(sharerName, MAX_EMAILED_NAME_LENGTH),
-        sharerEmail,
-        capLength(projectName, MAX_EMAILED_NAME_LENGTH),
-        typeName,
-        inviteLink
-      ),
-  ]);
-}
+// Loose because the Add Members modal sends one request per selected user. The mail itself is
+// bounded per recipient by reserveInviteSendBudget.
+const PROJECT_INVITE_RATE_LIMIT = {
+  limit: 100,
+  windowMs: 60 * 60 * 1000,
+  bucket: 'POST /api/projects/[id]/invites',
+} as const;
 
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
@@ -126,15 +85,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
 
-      const typedAddresses = (restBody.recipients ?? []).filter(recipient => recipient.includes('@'));
-      for (let i = 0; i < typedAddresses.length; i++) {
-        const { success } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-          `rate-limit:${req.user.id}:project-invite-typed-address`,
-          TYPED_ADDRESS_INVITES_PER_HOUR,
-          HOUR_MS
-        );
-        if (!success) throw new TooManyRequestsError('Too many email invitations. Try again later.');
-      }
+      const budget = await reserveInviteSendBudget(req.user.id, restBody.recipients, { chargeTypedAddresses: true });
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
@@ -152,6 +103,9 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
             },
           }
         );
+      }).catch(async (error: unknown) => {
+        await budget.release();
+        throw error;
       });
 
       await logEvent(
@@ -194,11 +148,12 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       const pendingRecipients = created.recipients?.pending || [];
       if (pendingRecipients.length > 0) {
         const brand = process.env.APP_NAME || '';
-        notifyProjectInvitees({
+        notifyInvitees({
           recipients: pendingRecipients,
           sharerName: req.user.name || req.user.username || `A${brand ? ` ${brand}` : ''} user`,
           sharerEmail: req.user.email || '',
-          projectName: project?.name || 'a project',
+          documentName: project?.name || 'a project',
+          typeName: getInviteTypeName(InviteType.Project),
           inviteLink: generateInviteLink(created),
           message: restBody.description,
         }).catch(error => {

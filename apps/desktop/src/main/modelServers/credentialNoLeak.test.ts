@@ -88,7 +88,8 @@ function capturedFile(out: Outbound, saved: string | null): StoreFile & { conten
   };
 }
 
-type Mode = 'ok' | 'reject' | 'error' | 'hang' | 'echo-401' | 'echo-500' | 'echo-stream' | 'paused-echo-stream';
+type Mode =
+  'ok' | 'reject' | 'error' | 'hang' | 'echo-401' | 'echo-500' | 'echo-stream' | 'paused-echo-stream' | 'echo-pull';
 
 /** A server or proxy that quotes the credential it was sent back in its error, escaping `/` as some encoders do. */
 const echoText = (req: http.IncomingMessage) =>
@@ -145,6 +146,12 @@ async function fakeServer(kind: ModelServerKind) {
         );
         return;
       }
+      if (state.mode === 'echo-pull' && route === 'POST /api/pull')
+        return send(
+          200,
+          `${echoJson({ status: echoText(req) })}\n${echoJson({ error: echoText(req) })}\n`,
+          'application/x-ndjson'
+        );
       if (state.mode === 'echo-stream' && route === 'POST /api/chat')
         return send(200, `${echoJson({ error: echoText(req) })}\n`, 'application/x-ndjson');
       if (state.mode === 'echo-stream' && route === 'POST /v1/chat/completions')
@@ -467,6 +474,40 @@ describe('a model server credential never leaves main except in its own request 
         expect(requestLeaks(target.seen)).toEqual([]);
       }
     );
+  });
+
+  it.each(['bearer', 'header'] as const)('redacts a %s credential echoed into a streamed pull', async type => {
+    const target = await fakeServer('ollama');
+    const main = desktopMain(xorCipher(true));
+    await main.registry.start();
+    const added = await main.invoke<ModelServerMutationResult>(IPC_CHANNELS.modelServersAdd, {
+      address: target.address,
+      credential: credential(type),
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'manage',
+    });
+    if (!added.ok) throw new Error(added.error);
+    const saved = added.servers.find(server => !server.local);
+    const hub = saved && main.registry.hubServer(saved.id);
+    if (!hub) throw new Error('The model server was not saved.');
+
+    target.state.mode = 'echo-pull';
+    const statuses: string[] = [];
+    const error = await hub.runtime
+      .pull('qwen2.5:0.5b', { onProgress: progress => statuses.push(progress.status) })
+      .catch((err: unknown) => err);
+    main.out.add('pull error', error);
+    main.out.add('pull statuses', statuses);
+    main.registry.stop();
+
+    expect((error as Error).message).toMatch(
+      /could not pull qwen2\.5:0\.5b: credential \[redacted\] is not valid here$/
+    );
+    expect(statuses).toEqual(['credential [redacted] is not valid here']);
+    expect(target.seen.some(request => request.url === '/api/pull')).toBe(true);
+    expect(main.out.leaks()).toEqual([]);
+    expect(requestLeaks(target.seen)).toEqual([]);
   });
 
   it('Ollama with a keyring: bearer token, then a custom header', { timeout: 60_000 }, async () => {

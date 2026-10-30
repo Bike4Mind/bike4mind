@@ -8,6 +8,12 @@ let capturedOptions: Record<string, any> | undefined;
 let completeImpl: (onChunk: (text: string[], info?: Record<string, unknown>) => Promise<void>) => Promise<void>;
 
 // The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+// Pricing is stubbed flat in this file, so the per-round credit cap cannot be priced here; it is held
+// open, and cliCompletions.creditCap.test.ts covers it on real pricing.
+vi.mock('./completionCreditBudget', async importOriginal => ({
+  ...(await importOriginal<typeof import('./completionCreditBudget')>()),
+  affordableRoundBudget: () => ({ affordable: true, outputTokens: Number.MAX_SAFE_INTEGER }),
+}));
 vi.mock('./llm/modelAdmission', async importOriginal => ({
   ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
   loadFreeTierAllowedModels: async () => undefined,
@@ -199,7 +205,11 @@ describe('executeCompletion - serverTools opt-in', () => {
     // guard skips them), the terminal turn emits the accumulated whole-completion totals.
     const { db, usageEvents } = buildDb();
     completeImpl = async onChunk => {
-      await onChunk(['tool output\n'], { inputTokens: 0, outputTokens: 0, toolsUsed: ['search_knowledge_base'] });
+      await onChunk(['tool output\n'], {
+        inputTokens: 0,
+        outputTokens: 0,
+        toolsUsed: [{ name: 'search_knowledge_base', arguments: '{}' }],
+      });
       await onChunk(['answer'], { inputTokens: 300, outputTokens: 80 });
     };
 

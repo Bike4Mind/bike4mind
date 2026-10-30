@@ -10,6 +10,7 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
+import { researchRunEnvelopeResponseSchema, researchRunListResponseSchema } from '@bike4mind/common';
 import { InternalServerError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { Resource } from 'sst';
@@ -19,6 +20,7 @@ import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigA
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { queueResearchRun } from '@bike4mind/server-utils/dataLakes/queueResearchRun';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { respond } from '@server/utils/respond';
 
 const StartInput = z.object({ configId: z.string() });
 
@@ -47,7 +49,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { limit } = ListQuery.parse(req.query);
 
     const runs = await dataLakeResearchRunRepository.listByLake(lake.id, { limit: limit ?? DEFAULT_LIMIT });
-    return res.json({ data: runs });
+    return respond(res, researchRunListResponseSchema, { data: runs });
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
@@ -97,7 +99,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
     await queueResearchRun(run, lake, queueUrl, req.logger);
 
-    return res.status(202).json({ data: run });
+    return respond(res, researchRunEnvelopeResponseSchema, { data: run }, 202);
   });
 
 export const config = {

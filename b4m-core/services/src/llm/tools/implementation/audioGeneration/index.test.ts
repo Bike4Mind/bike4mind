@@ -101,8 +101,10 @@ describe('audio_generation tool', () => {
   it.each(['speech', 'sound_effect'])('refuses free-tier %s before holding credits or generating', async kind => {
     vi.mocked(loadFreeTierAllowedModels).mockResolvedValue(new Set(['cheap-text']));
     const context = createFakeContext();
-    await expect(run(context, { kind, text: 'A sound' })).rejects.toMatchObject({
-      additionalInfo: { errorCode: 'model_requires_subscription' },
+    // The refusal is the tool result, not a throw: the backend's tool loop logs throws at error.
+    await expect(run(context, { kind, text: 'A sound' })).resolves.toMatch(/^Error: .*requires a paid plan/);
+    expect(context.logger.warn).toHaveBeenCalledWith(expect.stringContaining('requires a paid plan'), {
+      modelId: expect.any(String),
     });
     expect(context.onStart).not.toHaveBeenCalled();
     expect(mockSynthesize).not.toHaveBeenCalled();

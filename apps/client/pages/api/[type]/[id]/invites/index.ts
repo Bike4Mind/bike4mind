@@ -8,7 +8,6 @@ import {
   Group,
   Session,
   withTransaction,
-  Project,
   fabFileRepository,
   sessionRepository,
   userRepository,
@@ -24,8 +23,13 @@ import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { ProjectEvents } from '@bike4mind/common';
-import { getInviteTypeName, sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
+import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
+import {
+  MAX_INVITE_MESSAGE_LENGTH,
+  MAX_INVITE_RECIPIENTS,
+  notifyInvitees,
+  reserveInviteSendBudget,
+} from '@server/utils/inviteSendLimits';
 
 // Audit-only lookup: a failure here must not fail an invite that is already committed.
 const lookUpGroupOrganizationId = async (
@@ -48,8 +52,8 @@ interface IParams {
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
   permissions: z.array(z.enum(Permission)),
-  recipients: z.string().array().optional(),
-  description: z.string().optional(),
+  recipients: z.string().array().max(MAX_INVITE_RECIPIENTS).optional(),
+  description: z.string().max(MAX_INVITE_MESSAGE_LENGTH).optional(),
   // null is the client's "no expiry" (hooks/data/invites.ts DataInput) -- map to undefined so
   // the service's 100-year prefault applies. z.coerce.date(null) would silently produce epoch.
   expiresAt: z.preprocess(
@@ -116,9 +120,17 @@ const handler = baseApi()
       }
       const inviteType = resolveInviteType(urlPathType);
       if (!inviteType) throw new BadRequestError('Invalid type');
+      // Project invites have their own route (pages/api/projects/[id]/invites.ts), which shadows the
+      // `projects` alias here. Only the raw `Project` value reaches this handler, and creating one
+      // here would skip that route's API-key scope checks and its budget for addresses with no
+      // account, which only project invites can name.
+      if (inviteType === InviteType.Project) {
+        throw new BadRequestError('Create project invites at /api/projects/:id/invites');
+      }
       if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
+      const budget = await reserveInviteSendBudget(req.user.id, restBody.recipients, { chargeTypedAddresses: false });
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
@@ -136,6 +148,9 @@ const handler = baseApi()
             },
           }
         );
+      }).catch(async (error: unknown) => {
+        await budget.release();
+        throw error;
       });
 
       // Log invite creation event
@@ -168,50 +183,23 @@ const handler = baseApi()
         });
       }
 
-      // If this is a project invite, also log ADD_MEMBER event
-      if (inviteType === InviteType.Project) {
-        const project = await Project.findById(id);
-        if (project) {
-          await Promise.all(
-            (created.recipients?.pending || []).map(async (recipientId: string) =>
-              logEvent(
-                {
-                  userId: req.user.id,
-                  type: ProjectEvents.ADD_MEMBER,
-                  metadata: {
-                    projectId: id,
-                    projectName: project.name,
-                    memberId: recipientId,
-                    memberRole: (restBody.permissions || []).join(','),
-                  },
-                },
-                { ability: req.ability }
-              )
-            )
-          );
-        }
-      }
-
       // Send email notifications to recipients
       const pendingRecipients = created.recipients?.pending || [];
       if (pendingRecipients.length > 0) {
         const inviteLink = generateInviteLink(created);
         const documentName = await getDocumentName(inviteType, id);
-        const typeName = getInviteTypeName(inviteType);
         const brand = process.env.APP_NAME || '';
-        const sharerName = req.user.name || req.user.username || `A${brand ? ` ${brand}` : ''} user`;
-        const sharerEmail = req.user.email || '';
 
         // Send notifications asynchronously - don't block the response
-        sendInviteNotificationEmails(
-          pendingRecipients,
-          sharerName,
-          sharerEmail,
+        notifyInvitees({
+          recipients: pendingRecipients,
+          sharerName: req.user.name || req.user.username || `A${brand ? ` ${brand}` : ''} user`,
+          sharerEmail: req.user.email || '',
           documentName,
-          typeName,
+          typeName: getInviteTypeName(inviteType),
           inviteLink,
-          restBody.description
-        ).catch(error => {
+          message: restBody.description,
+        }).catch(error => {
           req.logger?.error('Failed to send invite notification emails', { error, inviteId: created.id });
         });
       }
@@ -287,10 +275,6 @@ const getDocumentName = async (type: InviteType, id: string): Promise<string> =>
     case InviteType.Session: {
       const session = await Session.findById(id);
       return session?.name || 'a notebook';
-    }
-    case InviteType.Project: {
-      const project = await Project.findById(id);
-      return project?.name || 'a project';
     }
     case InviteType.Organization: {
       const org = await Organization.findById(id);
