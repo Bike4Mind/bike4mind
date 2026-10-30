@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@client/app/hooks/data/user', () => ({ useGetUser: mocks.useGetUser }));
-vi.mock('../../AdminProfileModal', () => ({ default: () => <div data-testid="stub-admin-profile-modal" /> }));
 vi.mock('../ComplianceModal', () => ({ default: () => <div data-testid="stub-compliance-modal" /> }));
 // The view is covered by UserProfileView.test.tsx; this stub exposes the props the page wires.
 vi.mock('./UserProfileView', () => ({
@@ -75,10 +74,9 @@ describe('UserProfilePage', () => {
     expect(screen.getByTestId('user-profile-page')).toBeInTheDocument();
   });
 
-  it('mounts the modals the header opens, which the view no longer renders itself', () => {
+  it('mounts the compliance modal the header opens, which the view does not render itself', () => {
     renderPage();
 
-    expect(screen.getByTestId('stub-admin-profile-modal')).toBeInTheDocument();
     expect(screen.getByTestId('stub-compliance-modal')).toBeInTheDocument();
   });
 

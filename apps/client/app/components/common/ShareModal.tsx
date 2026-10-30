@@ -274,7 +274,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
             }
           } catch (error) {
             console.error('Email error:', error);
-            toast.error('Failed to send email');
+            toast.error(getErrorMessage(error));
           }
           setLoading(false);
           return;
@@ -403,7 +403,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
             }
           } catch (error) {
             console.error('Email error:', error);
-            toast.error('Failed to send email');
+            toast.error(getErrorMessage(error));
           }
           setLoading(false);
           return;
