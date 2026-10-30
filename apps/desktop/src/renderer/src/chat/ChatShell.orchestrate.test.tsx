@@ -283,14 +283,12 @@ describe('orchestrate mode in the chat shell', () => {
     expect(el('orchestrator-table-sort-agent').getAttribute('aria-sort')).toBe('none');
   });
 
-  it('prunes stored orchestrator prefs for sessions that no longer exist once the list loads', async () => {
-    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
-    window.localStorage.setItem('b4m.orchestrator.view.deleted-session', 'board');
-    window.localStorage.setItem('b4m.orchestrator.surface.deleted-session', 'orchestrate');
+  it('never drops stored prefs for sessions outside the current listing', async () => {
+    window.localStorage.setItem('b4m.orchestrator.view.other-scope', 'board');
+    window.localStorage.setItem('b4m.orchestrator.surface.other-scope', 'orchestrate');
     await openParent();
-    expect(window.localStorage.getItem(`b4m.orchestrator.view.${PARENT.id}`)).toBe('table');
-    expect(window.localStorage.getItem('b4m.orchestrator.view.deleted-session')).toBeNull();
-    expect(window.localStorage.getItem('b4m.orchestrator.surface.deleted-session')).toBeNull();
+    expect(window.localStorage.getItem('b4m.orchestrator.view.other-scope')).toBe('board');
+    expect(window.localStorage.getItem('b4m.orchestrator.surface.other-scope')).toBe('orchestrate');
   });
 
   it('opens an agent session from the stage', async () => {

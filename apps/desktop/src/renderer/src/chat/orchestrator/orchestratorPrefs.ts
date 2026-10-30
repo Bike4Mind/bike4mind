@@ -42,19 +42,16 @@ export function writeView(sessionId: string, view: OrchestratorViewId): void {
   writeItem(VIEW_KEY + sessionId, view);
 }
 
-/** Forgets the per-session surface and view of every session not in `knownSessionIds`. */
-export function pruneSessionPrefs(knownSessionIds: ReadonlySet<string>): void {
+/**
+ * Forgets a deleted session's surface and view. Called from the delete path only: the session list is
+ * scoped to the signed-in account while storage is install-wide, so "not listed" never means "gone".
+ */
+export function forgetSessionPrefs(sessionId: string): void {
   try {
-    const storage = window.localStorage;
-    const stale: string[] = [];
-    for (let index = 0; index < storage.length; index++) {
-      const key = storage.key(index);
-      const prefix = [SURFACE_KEY, VIEW_KEY].find(candidate => key?.startsWith(candidate));
-      if (key && prefix && !knownSessionIds.has(key.slice(prefix.length))) stale.push(key);
-    }
-    stale.forEach(key => storage.removeItem(key));
+    window.localStorage.removeItem(SURFACE_KEY + sessionId);
+    window.localStorage.removeItem(VIEW_KEY + sessionId);
   } catch {
-    // Left for the next launch to try again.
+    // A stale preference is harmless; it only applies if the same id ever comes back.
   }
 }
 

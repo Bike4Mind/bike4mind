@@ -24,6 +24,7 @@ import type { ModelRuntimeStatus } from '@shared/models';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
 import { addDirPath } from './commands';
+import { forgetSessionPrefs } from './orchestrator/orchestratorPrefs';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
@@ -157,6 +158,7 @@ export function useSessions(): SessionsController {
 
   const remove = useCallback(async (sessionId: string, removeWorktree = false) => {
     await window.b4m.chat.deleteSession(sessionId, removeWorktree);
+    forgetSessionPrefs(sessionId);
     editSessions(current => current.filter(session => session.id !== sessionId));
   }, []);
 

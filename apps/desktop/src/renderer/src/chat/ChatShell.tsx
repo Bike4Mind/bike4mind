@@ -86,12 +86,7 @@ import { BoardView } from './orchestrator/BoardView';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import type { AgentActions, OrchestratorViewProps } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
-import {
-  pruneSessionPrefs,
-  readIntroSeen,
-  writeIntroSeen,
-  type OrchestratorViewId,
-} from './orchestrator/orchestratorPrefs';
+import { readIntroSeen, writeIntroSeen, type OrchestratorViewId } from './orchestrator/orchestratorPrefs';
 import { TableView } from './orchestrator/TableView';
 import { TavernView } from './orchestrator/tavern/TavernView';
 import { agentStates } from './orchestrator/roster';
@@ -244,13 +239,6 @@ export function ChatShell({
   // Until this is false the shell does not know which conversation it will show, so it draws
   // none of the empty-state copy that would otherwise flash up before the real one.
   const settling = loading || restoring;
-  // Once per launch, after the first successful listing: an empty list before then is not "no sessions".
-  const prefsPruned = useRef(false);
-  useEffect(() => {
-    if (loading || prefsPruned.current) return;
-    prefsPruned.current = true;
-    pruneSessionPrefs(new Set(sessions.map(session => session.id)));
-  }, [loading, sessions]);
   const [importedInline] = useImportedInline();
 
   const conversation = useConversation(activeId, apply);
