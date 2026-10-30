@@ -346,6 +346,8 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG.SuccessfulSignups.level).toBe('page');
     expect(ALARM_CATALOG.NewAccountApiKeys.level).toBe('page');
     expect(ALARM_CATALOG['young-account-spend-rate'].level).toBe('page');
+    expect(ALARM_CATALOG['llm-spend-hourly'].level).toBe('page');
+    expect(ALARM_CATALOG['llm-spend-rate'].level).toBe('warn');
   });
 });
 
@@ -457,6 +459,7 @@ describe('lookupCatalog', () => {
     expect(lookupCatalog('SuccessfulSignups')).toBe(ALARM_CATALOG.SuccessfulSignups);
     expect(lookupCatalog('NewAccountApiKeys')).toBe(ALARM_CATALOG.NewAccountApiKeys);
     expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
+    expect(lookupCatalog('llm-spend-hourly-anthropic')).toBe(ALARM_CATALOG['llm-spend-hourly']);
     expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
     expect(lookupCatalog('account-creation-metrics-missing')).toBe(ALARM_CATALOG['account-creation-metrics-missing']);
   });

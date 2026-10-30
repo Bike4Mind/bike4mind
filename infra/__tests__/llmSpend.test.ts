@@ -63,6 +63,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('ENABLE_MONITORING', undefined);
   vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', undefined);
+  vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR', undefined);
+  vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', undefined);
   vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', undefined);
   vi.stubGlobal('aws', {
     cloudwatch: {
@@ -182,6 +184,29 @@ describe('LLM spend alarms', () => {
     });
   });
 
+  it.each([
+    ['anthropic', 75],
+    ['openai', 20],
+  ])('pages on hourly %s spend at a ceiling of %i USD', async (provider, threshold) => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith(`llmSpendHourly-${provider}`, {
+      name: `test-app-production-llm-spend-hourly-${provider}`,
+      alarmDescription: `Estimated ${provider} LLM spend in one hour at or above the configured USD ceiling`,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsd',
+      namespace: 'test-app/production/LLMSpend',
+      dimensions: { Provider: provider },
+      period: 3600,
+      statistic: 'Sum',
+      threshold,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic', 'email-topic'],
+      okActions: ['alarm-topic', 'email-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Critical' },
+    });
+  });
+
   it('alarms on hourly spend by accounts under 7 days old', async () => {
     await load();
     expect(resources.alarm).toHaveBeenCalledWith('youngAccountSpendRate', {
@@ -205,9 +230,24 @@ describe('LLM spend alarms', () => {
   it('reads the configured ceilings', async () => {
     vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', '60');
     vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', '9');
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR', '30');
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', '90');
     await load();
-    for (const [name, args] of resources.alarm.mock.calls)
-      expect(args.threshold).toBe(name === 'youngAccountSpendRate' ? 9 : 60);
+    const expected = (name: string) => {
+      if (name === 'youngAccountSpendRate') return 9;
+      if (name === 'llmSpendHourly-anthropic') return 90;
+      if (name.startsWith('llmSpendHourly-')) return 30;
+      return 60;
+    };
+    for (const [name, args] of resources.alarm.mock.calls) expect(args.threshold).toBe(expected(name));
+  });
+
+  it.each([
+    ['LLM_SPEND_ALARM_USD_PER_HOUR', '0'],
+    ['LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC', '1.5'],
+  ])('rejects a malformed hourly ceiling %s=%s', async (name, raw) => {
+    vi.stubEnv(name, raw);
+    await expect(load()).rejects.toThrow(new RegExp(name));
   });
 
   it('rejects a malformed young-account ceiling', async () => {
@@ -243,6 +283,7 @@ describe('LLM spend dashboard', () => {
       'LLM Spend - Alarm Status',
       'Estimated USD per 5 min by provider',
       'Estimated USD in selected range',
+      'Estimated USD per hour by provider',
       'Output tokens per 5 min by provider',
       'Young-account share of estimated USD (%)',
       'Estimated USD per 5 min by model',
@@ -251,8 +292,20 @@ describe('LLM spend dashboard', () => {
     ]);
     const byTitle = (title: string) => widgets.find(w => w.properties.title === title)!.properties;
 
-    expect(byTitle('LLM Spend - Alarm Status').alarms).toEqual(PROVIDERS.map(p => `alarm-arn-llmSpendRate-${p}`));
+    expect(byTitle('LLM Spend - Alarm Status').alarms).toEqual(
+      PROVIDERS.flatMap(p => [`alarm-arn-llmSpendRate-${p}`, `alarm-arn-llmSpendHourly-${p}`])
+    );
     expect(byTitle('Estimated USD per 5 min by provider')).toMatchObject({ stacked: true, period: 300 });
+    expect(byTitle('Estimated USD per hour by provider')).toMatchObject({
+      stacked: true,
+      period: 3600,
+      annotations: {
+        horizontal: [
+          { label: 'Hourly alarm (anthropic)', value: 75 },
+          { label: 'Hourly alarm (other providers)', value: 20 },
+        ],
+      },
+    });
     expect(byTitle('Estimated USD in selected range')).toMatchObject({
       view: 'singleValue',
       period: 300,
@@ -275,7 +328,7 @@ describe('LLM spend dashboard', () => {
 describe('LLM spend stage gating', () => {
   it.each(['dev', 'production'])('creates resources on %s', async stage => {
     await load(stage);
-    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length + 1);
+    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length * 2 + 1);
     expect(resources.dashboard).toHaveBeenCalledTimes(1);
   });
   it('creates nothing on an unmonitored stage', async () => {
@@ -292,6 +345,8 @@ describe('LLM spend stage gating', () => {
   it('declares the env var in the deploy contract and exports the module', () => {
     const contract = JSON.parse(readFileSync(new URL('../deploy-contract.json', import.meta.url), 'utf8'));
     expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_5MIN');
+    expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_HOUR');
+    expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC');
     expect(contract.deployEnv).toContain('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR');
     expect(readFileSync(new URL('../index.ts', import.meta.url), 'utf8')).toContain("export * from './llmSpend';");
   });
