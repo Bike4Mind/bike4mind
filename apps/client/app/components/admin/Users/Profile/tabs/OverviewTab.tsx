@@ -72,6 +72,14 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
           </RowAction>
         </Stack>
       </Fact>
+      <Fact label="New-account spend cap" data-testid="user-profile-fact-spend-cap">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {user.newAccountSpendCapLifted ? 'Lifted' : 'Applies while the account is new'}
+          <RowAction onClick={() => onAction('newAccountSpendCap')} data-testid="user-profile-spend-cap-btn">
+            Change
+          </RowAction>
+        </Stack>
+      </Fact>
       <Fact label="Storage">
         {`${formatBytes(user.currentStorageSize ?? 0)} of ${formatBytes(storageLimitToBytes(storage.limitMb))}`}
       </Fact>

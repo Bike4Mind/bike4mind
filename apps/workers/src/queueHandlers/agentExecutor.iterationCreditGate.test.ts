@@ -40,6 +40,7 @@ function args(overrides: Record<string, unknown> = {}) {
     modelInfo: model,
     lastInputTokens: 0,
     readBalance: vi.fn().mockResolvedValue(required()),
+    checkSpendCap: vi.fn().mockResolvedValue(null),
     snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' as string | undefined }),
     ...overrides,
   };
@@ -97,6 +98,41 @@ describe('stopUnfundedIteration', () => {
 
     await expect(stopUnfundedIteration(args({ lastInputTokens: 0, readBalance }), deps)).resolves.toBe(false);
     await expect(stopUnfundedIteration(args({ lastInputTokens: 100_000, readBalance }), deps)).resolves.toBe(true);
+  });
+
+  it('stops a funded iteration that would take a new account over its spend cap, before the model call', async () => {
+    const deps = makeDeps();
+    const capMessage = 'New accounts can spend up to 10,000 credits per hour; this resets at 12:11 UTC.';
+    const checkSpendCap = vi.fn().mockResolvedValue(capMessage);
+
+    await expect(
+      stopUnfundedIteration(
+        args({ lastInputTokens: 5_000, readBalance: vi.fn().mockResolvedValue(required(5_000)), checkSpendCap }),
+        deps
+      )
+    ).resolves.toBe(true);
+
+    expect(checkSpendCap).toHaveBeenCalledWith(required(5_000));
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: capMessage });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'insufficient_credits',
+      partialResult: steps,
+    });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith(
+      'exec-1',
+      `Stopped: ${capMessage} Partial response:\n\npartial answer`
+    );
+  });
+
+  it('does not read the spend cap when the balance already stops the run', async () => {
+    const deps = makeDeps();
+    const checkSpendCap = vi.fn();
+
+    await expect(
+      stopUnfundedIteration(args({ readBalance: vi.fn().mockResolvedValue(0), checkSpendCap }), deps)
+    ).resolves.toBe(true);
+    expect(checkSpendCap).not.toHaveBeenCalled();
   });
 
   it('stops with the plain message when the run produced no partial answer', async () => {

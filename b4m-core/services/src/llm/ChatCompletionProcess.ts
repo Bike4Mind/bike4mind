@@ -274,6 +274,7 @@ import {
   getMemberCreditCap,
   getMemberCreditPeriodEnd,
   isMemberCreditCapExceeded,
+  checkNewAccountSpendCap,
 } from '../creditService';
 import {
   TelemetryBuilder,
@@ -4675,6 +4676,14 @@ export class ChatCompletionProcess {
               'insufficient_credits'
             );
           }
+        }
+
+        if (!organization) {
+          const spendCapMessage = await checkNewAccountSpendCap(
+            { user: this.user, requestedCredits: requiredCredits, billedToOrganization: false, logger },
+            this.db.newAccountSpendCap
+          );
+          if (spendCapMessage) throw new InsufficientCreditsError(spendCapMessage, 'insufficient_credits');
         }
 
         // Preserve low-credits notification (checks current balance before reservation)

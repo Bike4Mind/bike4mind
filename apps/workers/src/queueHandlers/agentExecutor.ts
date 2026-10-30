@@ -44,6 +44,7 @@ import {
   mcpServerRepository,
   scopedSettingsRepository,
   cacheRepository,
+  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
@@ -2896,6 +2897,16 @@ async function processExecution(
             lastInputTokens,
             readBalance: () =>
               readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id }),
+            checkSpendCap: requiredCredits =>
+              creditService.checkNewAccountSpendCap(
+                {
+                  user: user as IUserDocument,
+                  requestedCredits: requiredCredits,
+                  billedToOrganization: Boolean(organization),
+                  logger,
+                },
+                newAccountSpendCapAdapters
+              ),
             snapshot: () => {
               const checkpoint = agent.toCheckpoint();
               return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
