@@ -168,6 +168,8 @@ export interface RosterSummary {
   credits: number;
   /** Some agent reported a dollar cost, so the total is shown in dollars rather than credits. */
   hasUsd: boolean;
+  /** False when no agent has reported any cost yet, so the strip shows '-' rather than a zero. */
+  hasCost: boolean;
   /** Some agent lacks the shown currency (credit-only beside dollars, or no cost), so the total is a floor. */
   costPartial: boolean;
 }
@@ -182,8 +184,9 @@ export function summarizeRoster(agents: readonly AgentView[]): RosterSummary {
     credits += agent.credits ?? 0;
   }
   const hasUsd = agents.some(agent => agent.usdCost !== undefined);
-  const costPartial = agents.some(agent => (hasUsd ? agent.usdCost : agent.credits) === undefined);
-  return { total: agents.length, counts, usdCost, credits, hasUsd, costPartial };
+  const hasCost = hasUsd || agents.some(agent => agent.credits !== undefined);
+  const costPartial = hasCost && agents.some(agent => (hasUsd ? agent.usdCost : agent.credits) === undefined);
+  return { total: agents.length, counts, usdCost, credits, hasUsd, hasCost, costPartial };
 }
 
 export function formatAgentCost(usdCost?: number, credits?: number): string {

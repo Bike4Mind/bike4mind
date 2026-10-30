@@ -266,6 +266,12 @@ describe('summarizeRoster', () => {
     credits,
   });
 
+  it('reports no cost, and nothing partial, before any agent has a cost', () => {
+    const result = summarizeRoster([view('working'), view('idle')]);
+    expect(result.hasCost).toBe(false);
+    expect(result.costPartial).toBe(false);
+  });
+
   it('counts states and totals cost, flagging an agent with no cost as partial', () => {
     const result = summarizeRoster([
       view('working', 0.25, 10),

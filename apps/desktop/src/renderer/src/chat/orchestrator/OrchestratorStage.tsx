@@ -63,8 +63,8 @@ export function OrchestratorStage({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [hasSelection]);
 
-  const { total, counts, usdCost, credits, hasUsd, costPartial } = summarizeRoster(agents);
-  const cost = formatAgentCost(hasUsd ? usdCost : undefined, credits);
+  const { total, counts, usdCost, credits, hasUsd, hasCost, costPartial } = summarizeRoster(agents);
+  const cost = hasCost ? formatAgentCost(hasUsd ? usdCost : undefined, credits) : '-';
   const needsYou = counts['needs-you'];
   const firstNeedsYou = agents.find(agent => agent.state === 'needs-you');
 
