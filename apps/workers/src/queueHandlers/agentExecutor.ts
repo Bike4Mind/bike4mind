@@ -62,6 +62,7 @@ import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from '@bike4mind/fab-pipeline';
 import {
   applyWorkspaceSessionSettings,
+  workspaceAnswersTurns,
   defaultEmbeddingModelForEnv,
   isSupportedEmbeddingModel,
   libraryFlagForScope,
@@ -1037,6 +1038,14 @@ async function processExecution(
         message: 'Session ownership validation failed',
       });
       await sendWs('failed', { executionId, reason: 'unauthorized' });
+      return;
+    }
+    // Such a workspace scripts every reply, so an agent model must not improvise one.
+    if (workspaceAnswersTurns(loadedSession, premiumWorkspaceSessionSettings)) {
+      await agentExecutionRepository.markFailed(executionId, {
+        message: 'This workspace answers its own turns, so agent runs are not available in it',
+      });
+      await sendWs('failed', { executionId, reason: 'workspace_answers_turns' });
       return;
     }
     const session = await applyWorkspaceSessionSettings(
