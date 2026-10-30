@@ -41,6 +41,8 @@ export const secrets = {
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),
   STRIPE_WEBHOOK_SECRET: new sst.Secret('STRIPE_WEBHOOK_SECRET', 'not-configured'),
+  CARD_VERIFICATION_IDENTITY_KEY: new sst.Secret('CARD_VERIFICATION_IDENTITY_KEY', 'not-configured'),
+  CARD_VERIFICATION_WEBHOOK_SECRET: new sst.Secret('CARD_VERIFICATION_WEBHOOK_SECRET', 'not-configured'),
   SUPPORT_EMAIL: new sst.Secret('SUPPORT_EMAIL', 'not-configured'),
   MAIL_FROM: new sst.Secret('MAIL_FROM', 'not-configured'),
   MAIL_HOST: new sst.Secret('MAIL_HOST', 'not-configured'),

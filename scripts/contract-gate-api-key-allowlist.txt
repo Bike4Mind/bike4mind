@@ -734,6 +734,7 @@ apps/client/pages/api/sre/tracking/[id]/rerun.ts
 apps/client/pages/api/sre/tracking/[id]/retry.ts
 apps/client/pages/api/sre/trigger.ts
 apps/client/pages/api/sre/workflow-callback.ts
+apps/client/pages/api/stripe/card-verification-webhook.ts  # Stripe-signed webhook, own whsec secret
 apps/client/pages/api/stripe/portal.ts
 apps/client/pages/api/stripe/start-payment.ts
 apps/client/pages/api/stripe/subscription-plans.ts

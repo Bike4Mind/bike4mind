@@ -171,6 +171,12 @@ describe('the fleet alarms', () => {
     expect(DLQ_ALARMS).toMatch(/for \(const dlq of ALARMED_DLQS\) \{\s*createDlqAlarms\(dlq\);\s*\}/);
   });
 
+  it('alarms the conditional card verification recovery dead letter without a replay source', () => {
+    expect(DLQ_ALARMS).toMatch(
+      /if \(cardVerificationRecoveryDLQ\) \{\s*createDlqAlarms\(\{\s*label: 'card-verification-recovery',\s*displayName: 'Card Verification Recovery',\s*application: 'Billing',\s*queue: cardVerificationRecoveryDLQ,\s*\}\);/
+    );
+  });
+
   it('alarms the contributed DLQs through the same loop as the core ones', () => {
     // A contributed DLQ outside ALARMED_DLQS would get no alarm, or one built without the shared specs.
     const alarmed = DLQ_ALARMS.match(/const ALARMED_DLQS: InfraDlqDescriptor\[\] = \[[\s\S]*?\n\];/)?.[0] ?? '';

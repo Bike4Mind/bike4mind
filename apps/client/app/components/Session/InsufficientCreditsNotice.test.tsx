@@ -4,6 +4,8 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../utils/themes';
 
+vi.mock('../subscription/CardVerificationCard', () => ({ CardVerificationCard: () => null }));
+
 // SessionCreditsButton mounts the purchase CreditsModal (and SessionCreditsButtons
 // also imports SubscriptionModal); both pull a deep data/context chain not wired in
 // vitest. Stub them to lightweight open-state reveals so we can assert the CTA opens

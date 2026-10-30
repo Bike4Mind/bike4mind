@@ -21,6 +21,7 @@
 import { secrets } from './secrets';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
+import { cardVerificationRecoveryDLQ } from './cardVerificationRecovery';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
   fabFileVectorizeQueueDLQ,
@@ -572,6 +573,15 @@ if (isMonitoredStage) {
       displayName: 'Signup Grant Held Release',
       application: 'Signup',
       queue: signupGrantHeldReleaseDeadLetter.queue,
+    });
+  }
+
+  if (cardVerificationRecoveryDLQ) {
+    createDlqAlarms({
+      label: 'card-verification-recovery',
+      displayName: 'Card Verification Recovery',
+      application: 'Billing',
+      queue: cardVerificationRecoveryDLQ,
     });
   }
 

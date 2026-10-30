@@ -73,6 +73,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'c8f7a1da54367bdfacb6ccdf02843f4bca8200dfd493942452a3a402dab910c4',
     'Hosted business analytics and Stripe receipts; not applicable to a portable deployment.'
   ),
+  broker(
+    'queue:infra/cardVerificationRecovery.ts:cardVerificationRecoveryDLQ',
+    '89a68d1fc93648e9bc2063a6e66fbd3c239a2752d699a824b9e6321df9a6ebe5'
+  ),
+  hostedOnly(
+    'schedule:infra/cardVerificationRecovery.ts:cardVerificationRecovery',
+    '3af8a7917a2057f5b78738ba9e8331c1b31257c0e9e7393833ec7d78655e60a5',
+    'Hosted Stripe promotional grant recovery, gated by CARD_VERIFICATION_RECOVERY_ENABLED; no self-host schedule is registered.'
+  ),
   gap('event:infra/eventBus.ts:email-send', '3e4a74324ec602608487f3d9f877681aebdf77d584cf02c00a89e2e759aa7d96'),
   gap(
     'event:infra/eventBus.ts:notebook-curation-complete-analytics',
@@ -979,7 +988,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'fafebf006e6655d7a4555b81c411a192f903c3780a9bfd9abca62bcf80c467ac',
+    '838c9bf7acd9914ecb02211907553cc6d19fe032718f495e3aaeddaa3336e431',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),

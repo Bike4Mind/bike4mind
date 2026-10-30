@@ -18,6 +18,7 @@ vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutat
 vi.mock('./CreditsSection', () => ({ CreditsSection: () => null }));
 vi.mock('./CreditsExplanation', () => ({ default: () => null }));
 vi.mock('./NoCardUnlockCard', () => ({ NoCardUnlockCard: () => null }));
+vi.mock('./CardVerificationCard', () => ({ CardVerificationCard: () => null }));
 vi.mock('./PlansSection', () => ({ PlansSection: () => null, PlansSectionSkeleton: () => null }));
 
 import CreditsModal from './CreditsModal';

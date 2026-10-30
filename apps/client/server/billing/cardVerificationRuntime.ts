@@ -69,7 +69,7 @@ async function verificationIndexesReady() {
 }
 
 export function cardNetworkDigest(ip: string): string {
-  const key = process.env.CARD_VERIFICATION_IDENTITY_KEY ?? '';
+  const key = Config.CARD_VERIFICATION_IDENTITY_KEY ?? '';
   if (key.length < 32) throw new ServiceUnavailableError('Card verification is unavailable.');
   return createHmac('sha256', key).update(`network:${ip}`).digest('hex');
 }
@@ -99,14 +99,14 @@ export async function cardVerificationRuntime(): Promise<CardVerificationDepende
   const enabled = settingsMap.cardUnlockEnabled.schema.parse(enabledRow?.settingValue);
   const credits = settingsMap.cardUnlockCredits.schema.parse(creditsRow?.settingValue);
   const defense = parseCardDefensePolicy(process.env.CARD_VERIFICATION_DEFENSE_POLICY);
-  const identityKey = process.env.CARD_VERIFICATION_IDENTITY_KEY ?? '';
+  const identityKey = Config.CARD_VERIFICATION_IDENTITY_KEY ?? '';
   const ready =
     enabled &&
     isStripeConfigured() &&
     challenge.active &&
     identityKey.length >= 32 &&
     !!defense &&
-    !!process.env.CARD_VERIFICATION_WEBHOOK_SECRET?.startsWith('whsec_') &&
+    !!Config.CARD_VERIFICATION_WEBHOOK_SECRET?.startsWith('whsec_') &&
     process.env.CARD_VERIFICATION_RECOVERY_ENABLED === 'true';
   const policy = {
     enabled: !!ready,
@@ -275,6 +275,29 @@ async function notifyVerification(verificationId: string, userId: string) {
   if (sent) await CardVerification.updateOne({ verificationId, userId }, { $set: { notifiedAt: new Date() } });
 }
 
+async function expirePendingVerification(row: CardVerificationRecord): Promise<boolean> {
+  if (row.setupIntentId) {
+    const intent = await stripe.setupIntents.retrieve(row.setupIntentId);
+    const customer = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
+    if (
+      intent.id !== row.setupIntentId ||
+      intent.livemode !== row.livemode ||
+      customer !== row.customerId ||
+      intent.metadata?.verificationId !== row.verificationId ||
+      intent.metadata?.purpose !== 'card_verification' ||
+      intent.metadata?.environment !== row.environment
+    )
+      throw new CardVerificationRefused('not_found');
+    if (intent.status === 'succeeded' || intent.status === 'processing') return false;
+    if (intent.status !== 'canceled') await stripe.setupIntents.cancel(intent.id);
+  }
+  await CardVerification.updateOne(
+    { verificationId: row.verificationId, state: 'pending' },
+    { $set: { state: 'refused' } }
+  );
+  return true;
+}
+
 export async function reconcileCardVerifications() {
   const rows = await CardVerification.find({
     environment: Config.STAGE,
@@ -292,26 +315,42 @@ export async function reconcileCardVerifications() {
   let failures = 0;
   for (const row of rows) {
     try {
+      if (
+        row.state === 'pending' &&
+        (!row.createdAt || row.createdAt.getTime() < Date.now() - 23 * 3600000) &&
+        (await expirePendingVerification(row))
+      )
+        continue;
       if (row.state === 'refused') await finishCardVerification(row.verificationId, row.userId, true);
-      else if (!row.setupIntentId) {
-        if (!row.createdAt || row.createdAt.getTime() < Date.now() - 23 * 3600000) {
-          await CardVerification.updateOne(
-            { verificationId: row.verificationId, state: 'pending' },
-            { $set: { state: 'refused' } }
-          );
-          continue;
-        }
-        const { resumeCardVerificationSetup } = await import('./cardVerificationLifecycle');
-        await resumeCardVerificationSetup(row.verificationId, row.userId, await cardVerificationRuntime());
-      } else {
+      else {
         if (row.state === 'verified' && !row.saveCard)
           await finishCardVerification(row.verificationId, row.userId, true);
+        if (row.state === 'pending' || row.state === 'verified') {
+          const runtime = await cardVerificationRuntime();
+          if (!(await runtime.policy()).enabled) continue;
+          if (!(await cardAccountEligible(row.userId))) {
+            if (row.state === 'pending' && !(await expirePendingVerification(row))) continue;
+            await CardVerification.updateOne(
+              { verificationId: row.verificationId, state: row.state },
+              { $set: { state: 'refused' } }
+            );
+            await finishCardVerification(row.verificationId, row.userId, true);
+            continue;
+          }
+          if (!row.setupIntentId) {
+            const { resumeCardVerificationSetup } = await import('./cardVerificationLifecycle');
+            await resumeCardVerificationSetup(row.verificationId, row.userId, runtime);
+            continue;
+          }
+        }
         await finishCardVerification(row.verificationId, row.userId);
       }
-    } catch {
-      failures += 1;
+    } catch (error) {
+      if (!(error instanceof CardVerificationRefused && ['unavailable', 'ineligible'].includes(error.code)))
+        failures += 1;
+    } finally {
+      await CardVerification.updateOne({ verificationId: row.verificationId }, { $set: { updatedAt: new Date() } });
     }
-    await CardVerification.updateOne({ verificationId: row.verificationId }, { $set: { updatedAt: new Date() } });
   }
   if (failures) throw new Error(`Verification recovery failed for ${failures} records`);
 }

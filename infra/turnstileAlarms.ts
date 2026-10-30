@@ -7,6 +7,7 @@
  */
 
 import { web } from './web';
+import { cardVerificationRecoveryLogGroup } from './cardVerificationRecovery';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import { messageFilterPattern } from './logMessageFilterPattern';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
@@ -87,4 +88,16 @@ if (isMonitoredStage) {
     'CardVerificationFailureSpike',
     'The server reported a card verification failure spike under its private alert policy'
   );
+  if (cardVerificationRecoveryLogGroup) {
+    new aws.cloudwatch.LogMetricFilter('cardVerificationRecoveryFailureSpikeFilter', {
+      logGroupName: cardVerificationRecoveryLogGroup,
+      pattern: messageFilterPattern('card-verification-failure-spike'),
+      metricTransformation: {
+        name: 'CardVerificationFailureSpike',
+        namespace: metricNamespace,
+        value: '1',
+        unit: 'Count',
+      },
+    });
+  }
 }

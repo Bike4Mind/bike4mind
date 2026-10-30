@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   lease: vi.fn(),
   release: vi.fn(),
   remove: vi.fn(),
+  user: vi.fn(),
 }));
 vi.mock('@bike4mind/database', async () => ({
   mongoose: (await import('mongoose')).default,
@@ -24,7 +25,7 @@ vi.mock('@bike4mind/database', async () => ({
     releaseLease: mocks.release,
   },
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: mocks.user },
 }));
 vi.mock('@bike4mind/services', () => ({ userService: {} }));
 vi.mock('@server/auth/signupProtection', () => ({ signupProtection: {} }));
@@ -33,12 +34,23 @@ vi.mock('@server/utils/auth/turnstile', () => ({
   turnstileAllowedHostnames: () => ['example.test'],
 }));
 vi.mock('@bike4mind/server-utils/utils/turnstile', () => ({ verifyTurnstile: mocks.verify }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'test' }, isProduction: () => false }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: {
+    STAGE: 'test',
+    CARD_VERIFICATION_IDENTITY_KEY: 'synthetic-key-'.repeat(4),
+    CARD_VERIFICATION_WEBHOOK_SECRET: 'whsec_synthetic',
+  },
+  isProduction: () => false,
+}));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   isStripeConfigured: () => true,
   stripe: { accounts: { retrieve: mocks.account }, setupIntents: { retrieve: mocks.retrieve, cancel: mocks.cancel } },
 }));
-import { CardVerificationFailure, cardVerificationRuntime } from './cardVerificationRuntime';
+import {
+  CardVerificationFailure,
+  cardVerificationRuntime,
+  reconcileCardVerifications,
+} from './cardVerificationRuntime';
 import { finishCardVerification } from './cardVerificationRuntime';
 vi.mock('./cardVerificationLifecycle', async importOriginal => ({
   ...(await importOriginal<typeof import('./cardVerificationLifecycle')>()),
@@ -65,9 +77,7 @@ const defense = {
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
-  vi.stubEnv('CARD_VERIFICATION_IDENTITY_KEY', 'synthetic-key-'.repeat(4));
   vi.stubEnv('CARD_VERIFICATION_RECOVERY_ENABLED', 'true');
-  vi.stubEnv('CARD_VERIFICATION_WEBHOOK_SECRET', 'whsec_synthetic');
   vi.stubEnv('CARD_VERIFICATION_DEFENSE_POLICY', JSON.stringify(defense));
   mocks.setting.mockImplementation(async (key: string) => ({
     settingValue: key === 'cardUnlockEnabled' ? 'true' : '17',
@@ -88,6 +98,116 @@ beforeEach(() => {
 const context = { userId: 'synthetic-user', ip: '192.0.2.1', asn: '64512', turnstileToken: 'synthetic-token' };
 
 describe('mandatory verification defenses', () => {
+  it.each([false, true])('expires abandoned setups quietly with the offer enabled=%s', async enabled => {
+    const row = {
+      verificationId: 'synthetic-verification',
+      userId: 'synthetic-user',
+      state: 'pending',
+      environment: 'test',
+      livemode: false,
+      customerId: 'cus_synthetic',
+      setupIntentId: 'seti_synthetic',
+      createdAt: new Date(0),
+    };
+    vi.spyOn(CardVerification, 'find').mockReturnValue({
+      sort: () => ({ limit: () => ({ lean: async () => [row] }) }),
+    } as never);
+    vi.spyOn(CardVerification, 'updateOne').mockResolvedValue({} as never);
+    mocks.setting.mockResolvedValue({ settingValue: String(enabled) });
+    mocks.retrieve.mockResolvedValue({
+      id: row.setupIntentId,
+      customer: row.customerId,
+      livemode: false,
+      status: 'requires_payment_method',
+      metadata: { verificationId: row.verificationId, purpose: 'card_verification', environment: 'test' },
+    });
+    await expect(reconcileCardVerifications()).resolves.toBeUndefined();
+    expect(mocks.cancel).toHaveBeenCalledWith(row.setupIntentId);
+    expect(CardVerification.updateOne).toHaveBeenCalledWith(
+      { verificationId: row.verificationId, state: 'pending' },
+      { $set: { state: 'refused' } }
+    );
+  });
+  it('skips a recent pending verification quietly when the offer is disabled', async () => {
+    vi.spyOn(CardVerification, 'find').mockReturnValue({
+      sort: () => ({
+        limit: () => ({
+          lean: async () => [
+            {
+              verificationId: 'synthetic',
+              userId: 'synthetic-user',
+              state: 'pending',
+              setupIntentId: 'seti_synthetic',
+              createdAt: new Date(),
+            },
+          ],
+        }),
+      }),
+    } as never);
+    vi.spyOn(CardVerification, 'updateOne').mockResolvedValue({} as never);
+    mocks.setting.mockImplementation(async (key: string) => ({
+      settingValue: key === 'cardUnlockEnabled' ? 'false' : '17',
+    }));
+    await expect(reconcileCardVerifications()).resolves.toBeUndefined();
+    expect(mocks.retrieve).not.toHaveBeenCalled();
+    expect(mocks.cancel).not.toHaveBeenCalled();
+  });
+  it('retires an ineligible verified account without attempting another grant', async () => {
+    vi.spyOn(CardVerification, 'find').mockReturnValue({
+      sort: () => ({
+        limit: () => ({
+          lean: async () => [
+            {
+              verificationId: 'synthetic',
+              userId: 'synthetic-user',
+              state: 'verified',
+              saveCard: true,
+              setupIntentId: 'seti_synthetic',
+              createdAt: new Date(),
+            },
+          ],
+        }),
+      }),
+    } as never);
+    vi.spyOn(CardVerification, 'updateOne').mockResolvedValue({} as never);
+    mocks.user.mockResolvedValue(null);
+    await expect(reconcileCardVerifications()).resolves.toBeUndefined();
+    expect(CardVerification.updateOne).toHaveBeenCalledWith(
+      { verificationId: 'synthetic', state: 'verified' },
+      { $set: { state: 'refused' } }
+    );
+    expect(mocks.remove).toHaveBeenCalled();
+    expect(mocks.retrieve).not.toHaveBeenCalled();
+  });
+  it.each(['succeeded', 'processing'])('does not cancel an old %s setup', async status => {
+    const row = {
+      verificationId: 'synthetic',
+      userId: 'synthetic-user',
+      state: 'pending',
+      environment: 'test',
+      livemode: false,
+      customerId: 'cus_synthetic',
+      setupIntentId: 'seti_synthetic',
+      createdAt: new Date(0),
+    };
+    vi.spyOn(CardVerification, 'find').mockReturnValue({
+      sort: () => ({ limit: () => ({ lean: async () => [row] }) }),
+    } as never);
+    vi.spyOn(CardVerification, 'updateOne').mockResolvedValue({} as never);
+    mocks.setting.mockImplementation(async (key: string) => ({
+      settingValue: key === 'cardUnlockEnabled' ? 'false' : '17',
+    }));
+    mocks.retrieve.mockResolvedValue({
+      id: row.setupIntentId,
+      customer: row.customerId,
+      livemode: false,
+      status,
+      metadata: { verificationId: row.verificationId, purpose: 'card_verification', environment: 'test' },
+    });
+    await expect(reconcileCardVerifications()).resolves.toBeUndefined();
+    expect(mocks.cancel).not.toHaveBeenCalled();
+    expect(CardVerification.updateOne).not.toHaveBeenCalledWith(expect.anything(), { $set: { state: 'refused' } });
+  });
   it('cleans up a committed default-detach grant even with the offer disabled', async () => {
     vi.spyOn(CardVerification, 'findOne').mockReturnValue({
       lean: async () => ({

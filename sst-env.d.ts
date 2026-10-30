@@ -381,6 +381,14 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "CARD_VERIFICATION_IDENTITY_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "CARD_VERIFICATION_WEBHOOK_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "SUPPORT_EMAIL": {
       "type": "sst.sst.Secret"
       "value": string

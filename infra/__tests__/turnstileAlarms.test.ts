@@ -35,6 +35,7 @@ vi.mock('../dlqAlarms', () => ({
     return resources.oobTopic;
   },
 }));
+vi.mock('../cardVerificationRecovery', () => ({ cardVerificationRecoveryLogGroup: 'recovery-logs' }));
 vi.mock('@bike4mind/infra', () => import('../../b4m-core/infra/src/stageGating'));
 
 async function loadAlarms(stage = 'production', appName = 'test-app') {
@@ -144,6 +145,13 @@ describe('turnstile policy alarm wiring', () => {
       expect.objectContaining({
         alarmActions: ['alarm-topic', 'email-topic'],
         okActions: ['alarm-topic', 'email-topic'],
+      })
+    );
+    expect(resources.filter).toHaveBeenCalledWith(
+      'cardVerificationRecoveryFailureSpikeFilter',
+      expect.objectContaining({
+        logGroupName: 'recovery-logs',
+        metricTransformation: expect.objectContaining({ name: 'CardVerificationFailureSpike' }),
       })
     );
   });

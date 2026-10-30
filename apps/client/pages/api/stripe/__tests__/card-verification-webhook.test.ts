@@ -5,7 +5,7 @@ import { createMocks } from 'node-mocks-http';
 const mocks = vi.hoisted(() => ({ construct: vi.fn(), find: vi.fn(), finish: vi.fn(), recordFailure: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (fn: unknown) => fn }) }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
-  Config: { STAGE: 'test', STRIPE_WEBHOOK_SECRET: 'synthetic-secret' },
+  Config: { STAGE: 'test', CARD_VERIFICATION_WEBHOOK_SECRET: 'whsec_synthetic' },
 }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: { webhooks: { constructEvent: mocks.construct } },
@@ -18,6 +18,7 @@ vi.mock('@server/billing/cardVerificationRuntime', () => ({
   cardVerificationRuntime: async () => ({ guards: { recordFailure: mocks.recordFailure } }),
 }));
 import handler from '../card-verification-webhook';
+import { Config } from '@bike4mind/server-utils/utils/config';
 const call = async () => {
   const { res } = createMocks();
   const req = {
@@ -31,7 +32,7 @@ const call = async () => {
 };
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.stubEnv('CARD_VERIFICATION_WEBHOOK_SECRET', 'whsec_synthetic');
+  Config.CARD_VERIFICATION_WEBHOOK_SECRET = 'whsec_synthetic';
   mocks.find.mockResolvedValue({
     verificationId: 'synthetic-verification',
     userId: 'synthetic-user',
@@ -45,7 +46,7 @@ beforeEach(() => {
 });
 describe('signed verification webhook', () => {
   it('refuses an unconfigured dedicated endpoint secret', async () => {
-    vi.stubEnv('CARD_VERIFICATION_WEBHOOK_SECRET', '');
+    Config.CARD_VERIFICATION_WEBHOOK_SECRET = '';
     expect((await call()).statusCode).toBe(503);
     expect(mocks.construct).not.toHaveBeenCalled();
   });

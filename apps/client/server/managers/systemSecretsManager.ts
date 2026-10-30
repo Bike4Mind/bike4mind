@@ -317,6 +317,14 @@ export const RESOLVABLE_SECRETS = {
     category: 'api_key' as SystemSecretCategory,
     description: 'Stripe webhook signing secret',
   },
+  CARD_VERIFICATION_IDENTITY_KEY: {
+    category: 'api_key' as SystemSecretCategory,
+    description: 'Permanent card verification identity HMAC key; preserve across deployments',
+  },
+  CARD_VERIFICATION_WEBHOOK_SECRET: {
+    category: 'api_key' as SystemSecretCategory,
+    description: 'Dedicated card verification Stripe webhook signing secret',
+  },
 
   // Slack
   SLACK_WEBHOOK_URL: {
