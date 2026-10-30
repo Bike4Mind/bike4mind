@@ -1748,7 +1748,8 @@ export interface ChatReplyRound {
   reasoning?: string;
   /**
    * Main only: what this round put on the wire, so later requests replay the turn byte for byte and
-   * read the cache entry its last round wrote (see toCompletionMessages). Absent on older rounds.
+   * read the cache entry its last round wrote (see toCompletionMessages). The exception is a round
+   * that attached tool images, whose images turn is not replayed (see sentRounds in ChatService). Absent on older rounds.
    * Persisted with the session, but stripped before the renderer sees it (sessionForRenderer).
    */
   sent?: ChatSentRound;

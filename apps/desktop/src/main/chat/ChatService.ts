@@ -6882,7 +6882,8 @@ function toolResultBlock(call: ChatToolCall, note = ''): Record<string, unknown>
 /**
  * A tool turn as its rounds sent it: each round's assistant message and tool results, then the
  * answer as its own assistant message, so the next turn reads the entry the last round cached.
- * Must stay in step with the round loop in runReply. Undefined when a round predates `sent`.
+ * Not exact for a round that attached tool images: that user turn is not replayed, so the next turn
+ * misses that round's cache entry. Must stay in step with the round loop in runReply. Undefined when a round predates `sent`.
  */
 function sentRounds(message: ChatMessage): CompletionMessage[] | undefined {
   const rounds = message.rounds;
