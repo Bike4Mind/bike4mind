@@ -2769,7 +2769,7 @@ export class ChatService {
               web: !!web,
               // See ToolDefinition.interactive.
               ask,
-              suggestions: !session.origin,
+              suggestions: !session.origin && !session.orchestrate,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
@@ -2900,7 +2900,8 @@ export class ChatService {
           toolsSupported && ask,
           session.model,
           toolsSupported && !!web,
-          toolsSupported && !!screen
+          toolsSupported && !!screen,
+          session.orchestrate === true
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -4160,8 +4161,13 @@ export class ChatService {
 
       sendTo: async (targetId, message) => this.relayMessage(session, await addressable(targetId), targetId, message),
 
-      // A spawned session has no suggestion tray, so it keeps the approval-gated start.
-      ...(session.origin ? {} : { suggestions: this.suggestionHost(session.id, project) }),
+      // A spawned session has no suggestion tray, so it keeps the approval-gated start. With
+      // Orchestrate on, the user's switch is the approval and a spawn starts at once.
+      ...(session.orchestrate
+        ? { delegates: true }
+        : session.origin
+          ? {}
+          : { suggestions: this.suggestionHost(session.id, project) }),
     };
   }
 
@@ -6100,8 +6106,11 @@ export function buildSystemMessage(
   ask = false,
   modelId = '',
   web = false,
-  screen = false
+  screen = false,
+  /** The session's Orchestrate switch; only meaningful with the host tools it steers toward. */
+  orchestrate = false
 ): CompletionMessage {
+  const orchestrating = host && orchestrate;
   if (roots.length === 0) {
     return {
       role: 'system',
@@ -6114,6 +6123,7 @@ export function buildSystemMessage(
         ...(web ? WEB_GUIDANCE : []),
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
+        ...(orchestrating ? ORCHESTRATOR_GUIDANCE : []),
         ...(memory ? MEMORY_GUIDANCE : []),
         ...(ask ? ASK_GUIDANCE : []),
         ...desktopAppGuidance(mcpServers ? (ask ? 'manage' : 'read') : null),
@@ -6142,6 +6152,7 @@ export function buildSystemMessage(
       ...HONESTY_LINES,
       ...(media ? MEDIA_GUIDANCE : []),
       ...(host ? HOST_GUIDANCE : []),
+      ...(orchestrating ? ORCHESTRATOR_GUIDANCE : []),
       ...(memory ? MEMORY_GUIDANCE : []),
       ...(ask ? ASK_GUIDANCE : []),
       ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
@@ -6568,6 +6579,28 @@ const HOST_GUIDANCE: readonly string[] = [
   'Prefer session_archive over session_delete. Deleting cannot be undone, the user is asked every',
   'single time, and you should only ever reach for it when they have asked for that particular',
   'conversation to be deleted.',
+];
+
+/**
+ * For a session with Orchestrate on. Placed after HOST_GUIDANCE because it overrides that
+ * block's suggest-only rule: in such a session session_spawn starts the child at once (see
+ * buildHostContext). Children share the parent's working directory, hence the split by file.
+ */
+const ORCHESTRATOR_GUIDANCE: readonly string[] = [
+  'The user turned on Orchestrate for this conversation: you are coordinating agents, not doing',
+  'the work yourself. Here session_spawn STARTS the session at once, with no card and nothing to',
+  'approve, whatever is said above about suggesting.',
+  'For each request, split the work into independent pieces that can run in parallel and start',
+  'one agent per piece with session_spawn. Each prompt must be self-contained: what to do, which',
+  'files, and what done means. The agents share this working directory, so give each one',
+  'different files to change. Do not do the delegated work yourself.',
+  `At most ${MAX_CONCURRENT_SPAWNED} agents run at once; plan within that, and if a start is refused for`,
+  'the limit, wait for one to finish before starting another.',
+  'Then track them with session_list and session_read. When they finish, review their results',
+  'and combine them into one answer for the user.',
+  'If the request is too small or does not split - a question, a single-step change - handle it',
+  'directly and say so in one short sentence, for example:',
+  '"This is small enough to handle directly, so I didn\'t start any agents."',
 ];
 
 /**

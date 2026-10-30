@@ -496,6 +496,12 @@ export interface HostContext {
    * session, which keeps the approval-gated start.
    */
   suggestions?: SpawnSuggestionHost;
+  /**
+   * Set when the user turned on Orchestrate for this conversation (ChatSession.orchestrate):
+   * session_spawn then starts the child at once, in this working directory, with no card. The
+   * spawn caps still apply. Never set together with `suggestions`.
+   */
+  delegates?: boolean;
 }
 
 export interface SpawnSuggestionTask {

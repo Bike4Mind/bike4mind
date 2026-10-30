@@ -349,6 +349,32 @@ describe('ChatService spawn suggestions', () => {
     expect(latestSuggestions(parent.id)).toEqual([]);
   });
 
+  it('starts the agent at once in an orchestrating session, with no card and nothing to approve', async () => {
+    const parent = await codeSession();
+    await service.setSessionOrchestrate(parent.id, true);
+    await service.send(parent.id, 'split this up');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    const tools = (post.mock.calls[0][1].options.tools as { toolSchema: { name: string } }[]).map(
+      entry => entry.toolSchema.name
+    );
+    expect(tools).toContain('session_spawn');
+    expect(tools).not.toContain('session_suggestion_update');
+    expect(String(wire(0)[0]?.content)).toContain('you are coordinating agents');
+
+    callTool(streams[0], 'o1', 'session_spawn', { prompt: 'do the first piece', title: 'First piece' });
+    const call = await vi.waitUntil(() => settled('session_spawn')[0], { timeout: 5000, interval: 5 });
+
+    expect(call?.status).toBe('done');
+    expect(call?.preview).toContain('Started session');
+    expect(requested).not.toHaveBeenCalled();
+    expect(latestSuggestions(parent.id)).toEqual([]);
+    const child = (await store.list()).find(session => session.origin?.parentSessionId === parent.id);
+    expect(child).toMatchObject({ title: 'First piece', origin: { seedPrompt: 'do the first piece' } });
+    // The switch is the user's approval for this conversation only, never handed down.
+    expect(child).not.toHaveProperty('orchestrate');
+    expect(await store.get(child?.id ?? '')).not.toHaveProperty('orchestrate');
+  });
+
   it('keeps the approval-gated start in a spawned session, which has no card to show', async () => {
     const { parent, suggestion } = await suggestedBy('do the child work');
     const result = await service.startSpawnSuggestion({

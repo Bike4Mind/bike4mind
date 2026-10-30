@@ -164,7 +164,7 @@ export const sessionSpawn: ToolDefinition = {
     },
   },
   // A suggestion starts nothing, so there is nothing to approve; the gate is for the start itself.
-  needsApproval: (_input, context) => !context.host?.suggestions,
+  needsApproval: (_input, context) => !context.host?.suggestions && !context.host?.delegates,
   async approval(input, context) {
     // Resolved here, once, and carried to `run` in the option's input: the base the card names
     // is then the base the child is cut from, with no second resolution to disagree with it.
@@ -257,7 +257,9 @@ export const sessionSpawn: ToolDefinition = {
       `Started session ${outcome.session.id} ("${outcome.session.title}").`,
       placement.kind === 'worktree'
         ? `The user gave it its own worktree on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
-        : 'The user had it share this working directory, so it is editing the same files you are.',
+        : host.delegates
+          ? 'It shares this working directory, so it is editing the same files you are.'
+          : 'The user had it share this working directory, so it is editing the same files you are.',
       'It is running now. You will be told in this conversation WHEN it finishes, but not what',
       'it said - read it with session_read then if you need that. Do not wait for it in this',
       'turn, and do not start another one for the same work.',
