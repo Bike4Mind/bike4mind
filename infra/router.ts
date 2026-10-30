@@ -144,11 +144,12 @@ const userFileMarkerInjection = `
   }
 `;
 
-// Shared secret proving a request came through this distribution: the server function URL is
-// public, so apps/client/proxy.ts 403s any request without it (deployed stages only, via
-// ORIGIN_VERIFY_SECRET in infra/web.ts). The assignment replaces any inbound value (CloudFront
-// lowercases viewer header names), so a forged header is never trusted.
-// The header name must stay in sync with ORIGIN_VERIFY_HEADER in apps/client/proxy.ts.
+// Shared secret proving a request came through this distribution: the server function URL and the
+// ChatCompletion ALB are public, so apps/client/proxy.ts and
+// apps/client/server/chatCompletion/originVerify.ts 403 any request without it (deployed stages
+// only, via ORIGIN_VERIFY_SECRET in infra/web.ts and infra/chatCompletion.ts). The assignment
+// replaces any inbound value (CloudFront lowercases viewer header names), so a forged header is
+// never trusted. The header name must stay in sync with both of those files.
 export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
 export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
