@@ -2591,6 +2591,7 @@ export class ChatService {
     let content = resume?.content ?? '';
     let stopReason: string | undefined;
     let usage: ChatUsage | undefined = resume?.usage;
+    let contextSnapshot: ContextSnapshot | undefined = resume?.contextSnapshot;
     let toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
     let thinking: unknown[] | undefined;
     let previousRound: string | null = null;
@@ -2764,7 +2765,6 @@ export class ChatService {
           toolsSupported && !!screen
         );
       wire.unshift(systemMessage());
-      let contextSnapshot: ContextSnapshot | undefined = resume?.contextSnapshot;
       let overheadKey = '';
       let overhead: ContextSnapshot['overhead'] = [];
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
@@ -3198,6 +3198,7 @@ export class ChatService {
           toolCalls = [];
           produced = [];
           usage = undefined;
+          contextSnapshot = undefined;
           thinking = undefined;
           stopReason = undefined;
           // New input is new information: repeating the last round may be the right answer to it.
@@ -3261,8 +3262,16 @@ export class ChatService {
         ...stop,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
+        ...(contextSnapshot ? { contextSnapshot } : {}),
       });
-      this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
+      this.emit({
+        type: 'error',
+        sessionId,
+        messageId: replyId,
+        message,
+        ...stop,
+        ...(contextSnapshot ? { contextSnapshot } : {}),
+      });
       return expired ? 'expired' : 'failed';
     }
   }

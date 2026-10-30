@@ -1274,7 +1274,14 @@ export type ChatStreamEvent =
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
     }
-  | { type: 'error'; sessionId: string; messageId: string; message: string; stopReason?: string }
+  | {
+      type: 'error';
+      sessionId: string;
+      messageId: string;
+      message: string;
+      stopReason?: string;
+      contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
+    }
   | {
       type: 'background-output';
       sessionId: string;
