@@ -34,7 +34,9 @@ const pressEscape = (init: KeyboardEventInit = {}) =>
   });
 
 beforeEach(() => {
-  (window as unknown as { b4m: unknown }).b4m = { chat: { getSession: vi.fn().mockResolvedValue(null) } };
+  (window as unknown as { b4m: unknown }).b4m = {
+    chat: { getSession: vi.fn().mockResolvedValue(null), onQueueChanged: vi.fn(() => () => undefined) },
+  };
 });
 
 afterEach(() => {

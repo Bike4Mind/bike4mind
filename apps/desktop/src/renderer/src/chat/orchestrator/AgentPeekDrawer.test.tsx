@@ -140,7 +140,7 @@ describe('AgentPeekDrawer', () => {
     expect(query('orchestrator-peek-queued-note')).toBeNull();
   });
 
-  it('clears the queued note once the message leaves that session queue, and unsubscribes', async () => {
+  it('clears the queued note once the message leaves that session queue', async () => {
     const message = { id: 'q1', sessionId: 'a1', text: 'hello' } as ChatQueuedMessage;
     chat.sendMessage.mockResolvedValue({ ok: true, queued: true, message });
     await renderDrawer(agentFixture('a1'));
@@ -154,7 +154,19 @@ describe('AgentPeekDrawer', () => {
 
     await emit({ sessionId: 'a1', queued: [] });
     expect(query('orchestrator-peek-queued-note')).toBeNull();
-    expect(queueUnsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('never shows the note when the queue drains before the send resolves', async () => {
+    const message = { id: 'q1', sessionId: 'a1', text: 'hello' } as ChatQueuedMessage;
+    // Main announces the enqueue, the reply ends and flushes it, and only then does the invoke resolve.
+    chat.sendMessage.mockImplementation(async () => {
+      queueListener?.({ sessionId: 'a1', queued: [message] });
+      queueListener?.({ sessionId: 'a1', queued: [] });
+      return { ok: true, queued: true, message };
+    });
+    await renderDrawer(agentFixture('a1'));
+    await typeAndSend('hello');
+    expect(query('orchestrator-peek-queued-note')).toBeNull();
   });
 
   it('unsubscribes from queue changes on unmount', async () => {

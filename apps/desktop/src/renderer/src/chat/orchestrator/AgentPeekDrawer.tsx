@@ -56,15 +56,21 @@ function ReplyBox({ agentId }: { agentId: string }) {
   // A ref as well as state: two keystrokes can land before React re-renders with `sending` set.
   const sendingRef = useRef(false);
 
+  // This session's queued ids as of the latest change; `version` counts changes so a send can tell
+  // whether any arrived while it was in flight.
+  const latestQueue = useRef<{ version: number; ids: ReadonlySet<string> }>({ version: 0, ids: new Set() });
+
   // Main flushes, merges or returns queued messages on its own; the note goes once ours leaves the queue.
-  const queuedId = queued?.id;
+  // Subscribed for the box's whole life, not just while a note shows: main can announce the enqueue
+  // and the flush before `sendMessage` resolves, and a listener added after that would never hear it.
   useEffect(() => {
-    if (queuedId === undefined) return;
     return window.b4m.chat.onQueueChanged(event => {
       if (event.sessionId !== agentId) return;
-      if (!event.queued.some(message => message.id === queuedId)) setQueued(null);
+      const ids = new Set(event.queued.map(message => message.id));
+      latestQueue.current = { version: latestQueue.current.version + 1, ids };
+      setQueued(current => (current && !ids.has(current.id) ? null : current));
     });
-  }, [agentId, queuedId]);
+  }, [agentId]);
 
   const send = async () => {
     const trimmed = text.trim();
@@ -72,6 +78,7 @@ function ReplyBox({ agentId }: { agentId: string }) {
     sendingRef.current = true;
     setSending(true);
     setError(null);
+    const versionBefore = latestQueue.current.version;
     try {
       const result = await window.b4m.chat.sendMessage({ sessionId: agentId, text: trimmed });
       if (!result.ok) {
@@ -79,7 +86,9 @@ function ReplyBox({ agentId }: { agentId: string }) {
         return;
       }
       setText('');
-      setQueued(result.queued ? result.message : null);
+      const seen = latestQueue.current;
+      const stillQueued = result.queued && (seen.version === versionBefore || seen.ids.has(result.message.id));
+      setQueued(stillQueued ? result.message : null);
     } catch (caught) {
       setError(errorText(caught));
     } finally {
