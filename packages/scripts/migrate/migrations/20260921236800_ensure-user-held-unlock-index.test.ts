@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const models = vi.hoisted(() => ({ userIndexes: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ User: { createIndexes: models.userIndexes } }));
-import migration from './20260921236600_ensure-user-held-unlock-index';
+import migration from './20260921236800_ensure-user-held-unlock-index';
 
 describe('held unlock index migration', () => {
   beforeEach(() => {

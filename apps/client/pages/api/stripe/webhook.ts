@@ -34,7 +34,11 @@ import {
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
-import { findUserByStripeCustomer, forfeitSignupUnlock } from '@server/credits/paymentUnlockForfeit';
+import {
+  forfeitHeldUnlockForFraudWarning,
+  forfeitHeldUnlockForRefund,
+  forfeitSignupUnlock,
+} from '@server/credits/paymentUnlockForfeit';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
@@ -568,8 +572,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       }
 
       // Before the purchase lookup: a refunded subscription charge has no credit purchase row.
-      const refundedUser = await findUserByStripeCustomer(charge.customer);
-      if (refundedUser) await forfeitSignupUnlock(refundedUser.id, 'refund', req.logger);
+      await forfeitHeldUnlockForRefund(charge, req.logger);
 
       const refundPaymentIntentId =
         typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
@@ -643,12 +646,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     }
 
     case 'radar.early_fraud_warning.created': {
-      const warning = event.data.object;
-      const chargeId = typeof warning.charge === 'string' ? warning.charge : warning.charge.id;
-      const charge = await stripe.charges.retrieve(chargeId);
-      const user = await findUserByStripeCustomer(charge.customer);
-      if (user) await forfeitSignupUnlock(user.id, 'fraud_warning', req.logger);
-      else req.logger.warn(`Could not find user for early fraud warning ${warning.id}`);
+      // Must stay the only case for this event: a merged second case would be unreachable.
+      await forfeitHeldUnlockForFraudWarning(event.data.object, req.logger);
       break;
     }
 

@@ -8,7 +8,7 @@ import { type MigrationFile } from './index';
  * indexes that already exist, and the name matches the schema declaration.
  */
 const migration: MigrationFile = {
-  id: 20260921236600,
+  id: 20260921236800,
   name: 'ensure user held unlock index',
 
   up: async () => {

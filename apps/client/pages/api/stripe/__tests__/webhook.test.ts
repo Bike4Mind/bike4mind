@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   updateTransactionStatus: vi.fn(),
   emitBillingEvent: vi.fn(),
   forfeitSignupUnlock: vi.fn(),
+  forfeitHeldUnlockForRefund: vi.fn(),
+  forfeitHeldUnlockForFraudWarning: vi.fn(),
   flagDisputePending: vi.fn(),
   retrieveCharge: vi.fn(),
 }));
@@ -85,8 +87,8 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: mocks.sendToClient }))
 vi.mock('@server/billing/grantCreditPurchase', () => ({ grantCreditPurchase: vi.fn() }));
 vi.mock('@server/credits/paymentUnlockForfeit', () => ({
   forfeitSignupUnlock: mocks.forfeitSignupUnlock,
-  findUserByStripeCustomer: (customer: unknown) =>
-    typeof customer === 'string' ? mocks.findUserByStripeCustomerId(customer) : null,
+  forfeitHeldUnlockForRefund: mocks.forfeitHeldUnlockForRefund,
+  forfeitHeldUnlockForFraudWarning: mocks.forfeitHeldUnlockForFraudWarning,
 }));
 vi.mock('@server/analytics/signupEvents', () => ({
   emitPurchaseEvents: vi.fn(),
@@ -164,30 +166,22 @@ describe('signup unlock forfeits', () => {
     expect(mocks.forfeitSignupUnlock).toHaveBeenCalledWith('user_1', 'dispute', logger);
   });
 
-  it('forfeits on a refunded charge that has no credit purchase row', async () => {
-    mocks.findUserByStripeCustomerId.mockResolvedValue(owner);
+  it('forfeits on a refunded charge before its credit purchase lookup', async () => {
+    const charge = { id: 'ch_1', customer: 'cus_1', payment_intent: 'pi_1', refunds: { data: [{ id: 're_1' }] } };
 
-    await deliver({
-      type: 'charge.refunded',
-      data: {
-        object: { id: 'ch_1', customer: 'cus_1', payment_intent: 'pi_1', refunds: { data: [{ id: 're_1' }] } },
-      },
-    });
+    await deliver({ type: 'charge.refunded', data: { object: charge } });
 
-    expect(mocks.forfeitSignupUnlock).toHaveBeenCalledWith('user_1', 'refund', logger);
+    expect(mocks.forfeitHeldUnlockForRefund).toHaveBeenCalledExactlyOnceWith(charge, logger);
   });
 
-  it('forfeits on an early fraud warning, and only warns for an unknown customer', async () => {
-    mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
-    mocks.findUserByStripeCustomerId.mockResolvedValueOnce(owner);
-    const warning = { type: 'radar.early_fraud_warning.created', data: { object: { id: 'issfr_1', charge: 'ch_1' } } };
+  // Guards a merge with another radar.early_fraud_warning.created case dropping this call.
+  it('cancels a held unlock on an early fraud warning', async () => {
+    const warning = { id: 'issfr_1', charge: 'ch_1' };
 
-    await deliver(warning);
-    expect(mocks.forfeitSignupUnlock).toHaveBeenCalledExactlyOnceWith('user_1', 'fraud_warning', logger);
+    const res = await deliver({ type: 'radar.early_fraud_warning.created', data: { object: warning } });
 
-    await deliver(warning);
-    expect(mocks.forfeitSignupUnlock).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith('Could not find user for early fraud warning issfr_1');
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.forfeitHeldUnlockForFraudWarning).toHaveBeenCalledExactlyOnceWith(warning, logger);
   });
 });
 
