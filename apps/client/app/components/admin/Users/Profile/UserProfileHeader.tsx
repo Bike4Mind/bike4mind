@@ -1,11 +1,11 @@
 import React from 'react';
+import { isThrottleExempt } from '@bike4mind/common';
 import { Avatar, Button, Dropdown, ListDivider, Menu, MenuButton, MenuItem } from '@mui/joy';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { EntityHeader, StatusChip } from '../../shared';
 import type { ProfileAction } from './actions/profileActions';
 import {
   LEVEL_LABELS,
-  isShadowTierExempt,
   accountStatus,
   displayName,
   initials,
@@ -82,7 +82,7 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
           {user.throttle?.tier === 'shadow' && (
             <StatusChip
               tone="neutral"
-              label={isShadowTierExempt(user) ? 'Limited tier (not in effect)' : 'Limited tier'}
+              label={isThrottleExempt(user) ? 'Limited tier (not in effect)' : 'Limited tier'}
               data-testid="user-profile-shadow-tier-chip"
             />
           )}

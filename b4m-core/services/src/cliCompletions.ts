@@ -163,8 +163,8 @@ export interface CompletionParams {
      * accumulated on the key via incrementSpend for spend-cap enforcement.
      */
     userApiKeys?: IUserApiKeyRepository;
-    /** Restricted-tier daily token counter; without it that cap is not enforced. */
-    cache?: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'tryIncrementWithinLimitFixedWindow'>;
+    /** Required: backs the daily token cap and per-minute limit, which are skipped when absent. */
+    cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'tryIncrementWithinLimitFixedWindow'>;
   };
   /**
    * Applied to the reloaded caller before model admission, e.g. to withhold an admin role the

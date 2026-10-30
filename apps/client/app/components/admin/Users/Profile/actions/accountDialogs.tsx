@@ -5,13 +5,14 @@ import { FormControl, FormLabel, Input, Stack, Textarea, Typography } from '@mui
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
+import { isThrottleExempt } from '@bike4mind/common';
 import { useDeleteUser, useLoginAsUser } from '@client/app/hooks/data/user';
 import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useSendSystemMessage } from '@client/app/hooks/data/inbox';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, undoAdminReason, useUndoToast } from '../../../shared';
 import { useAdminUserUpdate, adminUpdateErrorMessage } from './useAdminUserUpdate';
 import type { ProfileDialogProps } from './profileActions';
-import { accountStatus, displayName, isShadowTierExempt } from '../userProfileModel';
+import { accountStatus, displayName } from '../userProfileModel';
 
 /** POST to one of the admin user endpoints, refresh the user, toast a failure and rethrow it. */
 const useAdminUserPost = (userId: string, failure: string) => {
@@ -128,7 +129,7 @@ export const ShadowTierDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
             ? `Signals: ${signals.map(signal => `${signal.type} (${dateOnly(signal.at)})`).join(', ')}`
             : 'No signals'}
         </Typography>
-        {isShadowTierExempt(user) && (
+        {isThrottleExempt(user) && (
           <Typography level="body-sm" color="warning" data-testid="profile-shadow-tier-exempt">
             Not in effect: admins and Developer-tagged users are never limited.
           </Typography>

@@ -1,7 +1,12 @@
 import { hasDeveloperUserTag } from '../schemas/user';
 import type { ThrottleSource, ThrottleTier, UserRiskSignalType } from '../types/entities/UserTypes';
 
-/** True when the user is in the restricted tier. Admins and developer-tagged users are never restricted in effect. */
+/** Admins and developer-tagged users are never throttled, whatever tier is stored. */
+export function isThrottleExempt(user: { isAdmin?: boolean | null; tags?: readonly string[] | null }): boolean {
+  return !!user.isAdmin || hasDeveloperUserTag(user.tags);
+}
+
+/** True when the user is in the restricted tier. Exempt users are never restricted in effect. */
 export function isShadowTier(
   user:
     | {
@@ -12,7 +17,7 @@ export function isShadowTier(
     | null
     | undefined
 ): boolean {
-  if (!user || user.isAdmin || hasDeveloperUserTag(user.tags)) return false;
+  if (!user || isThrottleExempt(user)) return false;
   return user.throttle?.tier === 'shadow';
 }
 

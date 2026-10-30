@@ -68,7 +68,3 @@ export const LEVEL_LABELS: Readonly<Record<string, string>> = {
 export const latestSignIn = (user: Pick<AdminUserListItem, 'loginRecords'>): ILoginRecord | null =>
   [...(user.loginRecords ?? [])].sort((a, b) => new Date(b.loginTime).getTime() - new Date(a.loginTime).getTime())[0] ??
   null;
-
-/** Must stay in sync with isShadowTier (b4m-core/common/src/utils/throttleTier.ts): admins and Developer-tagged users are never throttled. */
-export const isShadowTierExempt = (user: { isAdmin?: boolean | null; tags?: readonly string[] | null }): boolean =>
-  !!user.isAdmin || hasDeveloperUserTag(user.tags);

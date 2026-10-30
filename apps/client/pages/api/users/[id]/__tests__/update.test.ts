@@ -1423,9 +1423,11 @@ describe('PUT /api/users/:id/update - restricted tier', () => {
   });
 
   it('does not apply the tier from a non-admin self update', async () => {
-    const { promise } = run({ user: { id: 'u1', isAdmin: false }, userId: 'u1', body: body() });
-    await promise.catch(() => undefined);
+    const { res, promise } = run({ user: { id: 'u1', isAdmin: false }, userId: 'u1', body: body() });
+    await promise;
 
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().ignoredFields).toContain('throttleTier');
     expect(mockSetThrottleTier).not.toHaveBeenCalled();
   });
 });

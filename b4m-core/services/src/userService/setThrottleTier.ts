@@ -12,7 +12,7 @@ export interface SetThrottleTierAdapters {
   db: { users: Pick<IUserRepository, 'findById' | 'update'> };
 }
 
-/** The only writer of `User.throttle`. Idempotent: no write when the tier is unchanged. Audit is the caller's job. */
+/** The only writer of `User.throttle`. Idempotent: re-applying the same tier is a no-op and leaves the stored reason as is. Audit is the caller's job. */
 export async function setThrottleTier(
   userId: string,
   tier: ThrottleTier,
