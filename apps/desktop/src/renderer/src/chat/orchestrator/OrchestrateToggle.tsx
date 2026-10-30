@@ -54,7 +54,7 @@ export function OrchestrateToggle({ agents, surface, onSurfaceChange }: Orchestr
         ) : undefined
       }
     >
-      {`${agents.length} agents${busy ? ' working' : ''} \u00B7 Orchestrate`}
+      {`${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}${busy ? ' working' : ''} \u00B7 Orchestrate`}
     </Chip>
   );
 }

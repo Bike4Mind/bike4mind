@@ -488,7 +488,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       setIntroPhase('shown');
     }, ORCHESTRATOR_INTRO_MS);
     return () => window.clearTimeout(timer);
-  }, [introPhase]);
+    // introEntry too: a switch between two orchestrating sessions keeps the phase 'playing', and the
+    // new session's intro still needs its full run.
+  }, [introPhase, introEntry]);
   const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
   const changeOrchestratorView = useCallback(
     (view: OrchestratorViewId) => {
