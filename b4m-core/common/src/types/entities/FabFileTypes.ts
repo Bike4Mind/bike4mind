@@ -494,6 +494,12 @@ export interface IFabFile {
    */
   clientUpload?: boolean;
 
+  /**
+   * The UserApiKey that requested the upload (pages/api/v1/files). Its indexing charge is billed later
+   * in apps/workers/src/queueHandlers/fabFileVectorize.ts, which stamps this on the ledger row.
+   */
+  apiKeyId?: string;
+
   /** Keeps rejected upload tombstones discoverable for object cleanup on event redelivery. */
   uploadRejectedAt?: Date;
 
