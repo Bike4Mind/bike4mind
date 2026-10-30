@@ -8,7 +8,7 @@ import {
 import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
-import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
+import { holdsPrompt, LOCAL_CONTEXT_TARGET_TOKENS, replyRoom } from '../chat/localContext';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { ServerCredentialsError } from './errors';
 
@@ -41,6 +41,29 @@ export function toolsOffHint(label: string, product: OpenAICompatibleProduct | n
   if (product === 'llama-server')
     return `${label} refuses tool calls, so its chats run without tools. Restart llama-server with --jinja, ${after}`;
   return `${label} refuses tool calls, so its chats run without tools. Turn tool calling on there, ${after}`;
+}
+
+/** Why tools are off when the server's context is too small for Desktop's prompt and tools. */
+export function contextTooSmallHint(
+  label: string,
+  product: OpenAICompatibleProduct | null,
+  small: readonly { name: string; context: number }[],
+  toolPromptTokens: number
+): string {
+  const smallest = Math.min(...small.map(model => model.context));
+  const names = small.map(model => model.name).join(', ');
+  const sizes =
+    new Set(small.map(model => model.context)).size === 1
+      ? `a ${smallest}-token context`
+      : `contexts as small as ${smallest} tokens`;
+  const target = Math.max(16_384, 2 ** Math.ceil(Math.log2(toolPromptTokens + replyRoom(16_384))));
+  const restart =
+    product === 'vllm'
+      ? `Restart vLLM with --max-model-len ${target}`
+      : product === 'llama-server'
+        ? `Restart llama-server with --ctx-size ${target}`
+        : `Give it a context of ${target} tokens or more`;
+  return `${label} runs ${names} with ${sizes}, too small for Desktop's instructions and tools (about ${toolPromptTokens} tokens), so its chats run without tools. ${restart}, and Desktop turns them back on at its next check, within a minute.`;
 }
 
 type Block = {
@@ -149,6 +172,10 @@ export class OpenAICompatibleChat implements LocalChat {
   private probing: Promise<void> | null = null;
   /** Conversations already told that tools are off. */
   private readonly told = new Set<string>();
+  /** Desktop's prompt plus tools, from the last turn that left them out because the context was too small. */
+  private toolPrompt: number | undefined;
+  /** Names from the last listing, for the server's hint. */
+  private listed: string[] = [];
 
   constructor(private readonly server: OpenAICompatibleServer) {
     this.runtime = new OpenAICompatibleRuntime({
@@ -163,21 +190,23 @@ export class OpenAICompatibleChat implements LocalChat {
   /** Rejects when the server cannot be listed, so the caller can mark it down. */
   async listModels(): Promise<ChatModelOption[]> {
     const models = await this.runtime.list();
+    const before = this.smallKey();
     this.learnContexts(models);
-    return models
-      .filter(model => !model.capabilities.embeddings || model.capabilities.completion)
-      .map(model => ({
-        id: localModelId(this.server.runtimeId, model.name),
-        name: model.name,
-        backend: localBackend(this.server.runtimeId),
-        ...(model.capabilities.vision ? { supportsVision: true } : {}),
-        ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name) } : {}),
-        ...(model.baseModel ? { baseModel: model.baseModel } : {}),
-        ...(model.aliases?.length
-          ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
-          : {}),
-        ...(this.toolsOff ? { supportsTools: false } : {}),
-      }));
+    const chat = models.filter(model => !model.capabilities.embeddings || model.capabilities.completion);
+    this.listed = chat.map(model => model.name);
+    this.smallChanged(before);
+    return chat.map(model => ({
+      id: localModelId(this.server.runtimeId, model.name),
+      name: model.name,
+      backend: localBackend(this.server.runtimeId),
+      ...(model.capabilities.vision ? { supportsVision: true } : {}),
+      ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name), contextFixed: true } : {}),
+      ...(model.baseModel ? { baseModel: model.baseModel } : {}),
+      ...(model.aliases?.length
+        ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
+        : {}),
+      ...(this.toolsOff || this.tooSmall(model.name) ? { supportsTools: false } : {}),
+    }));
   }
 
   async contextTokens(modelId: string, signal?: AbortSignal): Promise<number> {
@@ -195,7 +224,8 @@ export class OpenAICompatibleChat implements LocalChat {
 
   /** Why chats on this server run without tools; null while they have them. */
   toolsHint(): string | null {
-    return this.toolsOff ? toolsOffHint(this.server.label, this.server.product) : null;
+    if (this.toolsOff) return toolsOffHint(this.server.label, this.server.product);
+    return this.contextHint(this.listed);
   }
 
   /**
@@ -245,14 +275,26 @@ export class OpenAICompatibleChat implements LocalChat {
           ...(withTools && tools.length > 0 ? { tools } : {}),
         }),
       });
+    if (request.toolPromptTokens !== undefined && request.toolPromptTokens !== this.toolPrompt) {
+      const before = this.smallKey();
+      this.toolPrompt = request.toolPromptTokens;
+      this.smallChanged(before);
+    }
     let response = await post(true);
     if (!response.ok && tools.length > 0 && (await refusedTools(response))) {
       this.setToolsOff(true);
       response = await post(false);
     }
-    if (this.toolsOff && onNotice && request.sessionId && !this.told.has(request.sessionId)) {
+    const context = this.contexts.get(model);
+    const measured = request.toolPromptTokens ?? (this.tooSmall(model) ? this.toolPrompt : undefined);
+    const why = this.toolsOff
+      ? toolsOffHint(this.server.label, this.server.product)
+      : measured !== undefined && context !== undefined
+        ? contextTooSmallHint(this.server.label, this.server.product, [{ name: model, context }], measured)
+        : null;
+    if (why && onNotice && request.sessionId && !this.told.has(request.sessionId)) {
       this.told.add(request.sessionId);
-      onNotice(toolsOffHint(this.server.label, this.server.product));
+      onNotice(why);
     }
     if (!response.ok || !response.body) throw await this.httpError(response);
     await this.readStream(response.body, onEvent, text => this.server.redact(text, response));
@@ -347,6 +389,31 @@ export class OpenAICompatibleChat implements LocalChat {
     this.toolsOff = off;
     if (!off) this.told.clear();
     this.server.toolsChanged?.();
+  }
+
+  /** Whether the server's context for `name` cannot hold Desktop's prompt and tools, as last measured. */
+  private tooSmall(name: string): boolean {
+    const context = this.contexts.get(name);
+    return this.toolPrompt !== undefined && context !== undefined && !holdsPrompt(context, this.toolPrompt);
+  }
+
+  private smallKey(): string {
+    return this.listed.filter(name => this.tooSmall(name)).join('\n');
+  }
+
+  /** A model's context crossed the line either way, so its tools and the server's hint change. */
+  private smallChanged(before: string): void {
+    const after = this.smallKey();
+    if (after === before) return;
+    if (!after) this.told.clear();
+    this.server.toolsChanged?.();
+  }
+
+  private contextHint(names: readonly string[]): string | null {
+    const measured = this.toolPrompt;
+    if (measured === undefined) return null;
+    const small = names.flatMap(name => (this.tooSmall(name) ? [{ name, context: this.contexts.get(name)! }] : []));
+    return small.length > 0 ? contextTooSmallHint(this.server.label, this.server.product, small, measured) : null;
   }
 
   private async probeTools(model: string): Promise<'accepted' | 'refused' | null> {

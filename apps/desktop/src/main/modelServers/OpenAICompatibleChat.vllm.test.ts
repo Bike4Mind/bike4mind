@@ -7,7 +7,7 @@ import type { CompletionRequest } from '../chat/completions';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
-import { OpenAICompatibleChat } from './OpenAICompatibleChat';
+import { contextTooSmallHint, OpenAICompatibleChat } from './OpenAICompatibleChat';
 
 /**
  * A vLLM stand-in that answers with vLLM's own shapes: ModelCard and ErrorResponse from
@@ -18,6 +18,8 @@ interface FakeVllm {
   baseUrl: string;
   /** Restarts it with or without `--enable-auto-tool-choice --tool-call-parser hermes`. */
   toolFlags: boolean;
+  /** Restarts it with another `--max-model-len`. */
+  maxModelLen: number;
   requests: Record<string, unknown>[];
   close(): Promise<void>;
 }
@@ -27,7 +29,7 @@ const ROOT = '/models/Qwen2.5-0.5B-Instruct';
 const MAX_MODEL_LEN = 4096;
 const REFUSAL = '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set';
 
-function modelList() {
+function modelList(maxModelLen: number) {
   const created = Math.floor(Date.now() / 1000);
   const card = (id: string, root: string, parent: string | null, maxModelLen: number | null) => ({
     id,
@@ -42,7 +44,7 @@ function modelList() {
   return {
     object: 'list',
     data: [
-      ...SERVED.map(name => card(name, ROOT, null, MAX_MODEL_LEN)),
+      ...SERVED.map(name => card(name, ROOT, null, maxModelLen)),
       card('sql-lora', '/adapters/sql-lora', SERVED[0], null),
     ],
   };
@@ -59,7 +61,7 @@ function chunk(model: string, delta: object, finish: string | null = null) {
 }
 
 async function startFakeVllm(): Promise<FakeVllm> {
-  const fake = { toolFlags: true, requests: [] as Record<string, unknown>[] };
+  const fake = { toolFlags: true, maxModelLen: MAX_MODEL_LEN, requests: [] as Record<string, unknown>[] };
   const server: Server = createServer(async (req, res) => {
     const parts: Buffer[] = [];
     for await (const part of req) parts.push(part as Buffer);
@@ -67,7 +69,7 @@ async function startFakeVllm(): Promise<FakeVllm> {
       res.writeHead(status, { 'content-type': 'application/json' });
       res.end(JSON.stringify(body));
     };
-    if (req.method === 'GET' && req.url === '/v1/models') return send(200, modelList());
+    if (req.method === 'GET' && req.url === '/v1/models') return send(200, modelList(fake.maxModelLen));
     if (req.method === 'GET' && req.url === '/version') return send(200, { version: '0.32.0' });
     if (req.method !== 'POST' || req.url !== '/v1/chat/completions') return send(404, { detail: 'Not Found' });
     const body = JSON.parse(Buffer.concat(parts).toString('utf8')) as {
@@ -329,6 +331,67 @@ describe('OpenAICompatibleChat against vLLM', () => {
     const fresh = client(vllm);
     await fresh.recheckTools('qwen-small');
     expect(fresh.toolsHint()).toMatch(/started without tool calling/);
+  });
+});
+
+describe('OpenAICompatibleChat when the context is too small for Desktop prompt and tools', () => {
+  const ask = (sessionId: string, toolPromptTokens?: number): CompletionRequest => ({
+    model: `local:${RUNTIME}:qwen-small`,
+    messages: [{ role: 'user', content: 'Say hello.' }],
+    sessionId,
+    ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
+  });
+
+  it('says why once per conversation, lists tools off, and names --max-model-len; a larger one turns them back on', async () => {
+    vllm = await startFakeVllm();
+    const toolsChanged = vi.fn();
+    const chat = client(vllm, toolsChanged);
+    expect(
+      (await chat.listModels()).map(model => [model.contextWindow, model.contextFixed, model.supportsTools])
+    ).toEqual([
+      [MAX_MODEL_LEN, true, undefined],
+      [MAX_MODEL_LEN, true, undefined],
+    ]);
+    expect(chat.toolsHint()).toBeNull();
+
+    const notices: string[] = [];
+    expect(texts(await turn(chat, ask('a', 9_000), notices))).toEqual(['Hello.']);
+    await turn(chat, ask('a'), notices);
+    await turn(chat, ask('b'), notices);
+    expect(notices).toHaveLength(2);
+    expect(notices[0]).toMatch(/qwen-small with a 4096-token context.*about 9000 tokens.*--max-model-len 16384/);
+    expect(notices[0]).not.toMatch(/--enable-auto-tool-choice/);
+    expect(toolsChanged).toHaveBeenCalledTimes(1);
+    expect((await chat.listModels()).map(model => model.supportsTools)).toEqual([false, false]);
+    expect(chat.toolsHint()).toMatch(/runs qwen-small, sql-lora with a 4096-token context/);
+
+    vllm.maxModelLen = 16_384;
+    expect((await chat.listModels()).map(model => model.supportsTools)).toEqual([undefined, undefined]);
+    expect(chat.toolsHint()).toBeNull();
+    expect(toolsChanged).toHaveBeenCalledTimes(2);
+    await turn(chat, ask('c'), notices);
+    expect(notices).toHaveLength(2);
+  });
+
+  it('keeps tools on and says nothing when the context holds the prompt', async () => {
+    vllm = await startFakeVllm();
+    vllm.maxModelLen = 16_384;
+    const toolsChanged = vi.fn();
+    const chat = client(vllm, toolsChanged);
+    await chat.listModels();
+    const notices: string[] = [];
+    await turn(chat, { ...ask('a'), tools: [WEATHER_TOOL] }, notices);
+    expect(notices).toEqual([]);
+    expect(vllm.requests.at(-1)?.tools).toHaveLength(1);
+    expect(chat.toolsHint()).toBeNull();
+    expect(toolsChanged).not.toHaveBeenCalled();
+  });
+
+  it('names the larger --max-model-len a bigger prompt needs', () => {
+    expect(contextTooSmallHint('gpu', 'vllm', [{ name: 'm', context: 8192 }], 15_000)).toMatch(/--max-model-len 32768/);
+    expect(contextTooSmallHint('gpu', 'llama-server', [{ name: 'm', context: 4096 }], 9_000)).toMatch(
+      /--ctx-size 16384/
+    );
   });
 });
 

@@ -4,10 +4,11 @@ import { join } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { localBackend, localModelId, NO_LOCAL_MODEL, type ChatModelOption, type ChatStreamEvent } from '@shared/chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, toolPromptOverflow } from './ChatService';
+import { estimateTokens } from './localContext';
 import { MessageQueue } from './MessageQueue';
 import type { ModelCatalog } from './ModelCatalog';
-import { LocalModelRemovedError, OLLAMA_RUNTIME_ID, type OllamaLocal } from './OllamaLocal';
+import { LocalModelRemovedError, OLLAMA_RUNTIME_ID, toMessages, type OllamaLocal } from './OllamaLocal';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -292,6 +293,48 @@ describe('a conversation saved on a served-model alias', () => {
       expect(listLocal).not.toHaveBeenCalledWith(true);
     }
   );
+
+  it.each([
+    ['device-local', 1_024, true, false],
+    ['signed-in', 1_024, true, false],
+    ['device-local', 1_000_000, true, true],
+    ['signed-in', 1_000_000, true, true],
+    // Ollama grows its context to fit instead, so a window it reports is not a reason to drop tools.
+    ['device-local', 1_024, false, true],
+  ] as const)('%s: a %i-token context (fixed: %s) sends tools: %s', async (mode, window, fixed, withTools) => {
+    const option = { ...served(true), contextWindow: window, ...(fixed ? { contextFixed: true } : {}) };
+    const { service, stream, settled } = await fixture({ mode, local: [option], last: [option] });
+    const session = await service.createSession();
+    await service.setSessionModel(session.id, ALIAS);
+    expect(await service.send(session.id, 'hello')).toMatchObject({ ok: true });
+    await settled(session.id);
+    const sent = stream.mock.calls.find(([request]) => request.sessionId === session.id)?.[0];
+    expect((sent?.tools?.length ?? 0) > 0).toBe(withTools);
+    expect(sent?.toolPromptTokens === undefined).toBe(withTools);
+    if (!withTools) expect(sent?.toolPromptTokens).toBeGreaterThan(0);
+  });
+
+  it('drops tools exactly when prompt, tools and the reply room pass the fixed window', () => {
+    const wire = [
+      { role: 'system' as const, content: 'You are Desktop. '.repeat(200) },
+      { role: 'user' as const, content: 'Say hello.' },
+    ];
+    const tools = [{ toolSchema: { name: 'read_file', description: 'Reads a file.', parameters: { type: 'object' } } }];
+    const at = (window: number, maxTokens?: number) =>
+      toolPromptOverflow({ ...served(true), contextWindow: window, contextFixed: true }, wire, tools, maxTokens);
+    const schemas = tools.map(tool => ({ type: 'function', function: tool.toolSchema }));
+    const toolPrompt = estimateTokens(toMessages([wire[0]]), schemas);
+    const prompt = estimateTokens(toMessages([wire[1]]));
+    // The smallest window holding system prompt + tools + the user's prompt + min(reply, window / 4).
+    let edge = 1;
+    while (toolPrompt + prompt + Math.min(2_048, Math.floor(edge / 4)) > edge) edge++;
+    expect(at(edge)).toBeUndefined();
+    expect(at(edge - 1)).toBe(toolPrompt);
+    expect(at(toolPrompt + prompt + 1, 1)).toBeUndefined();
+    expect(at(toolPrompt + prompt, 1)).toBe(toolPrompt);
+    expect(at(1_000_000)).toBeUndefined();
+    expect(toolPromptOverflow({ ...served(true), contextWindow: 1 }, wire, tools, undefined)).toBeUndefined();
+  });
 
   it.each(['device-local', 'signed-in'] as const)('%s: sends no tools when its primary has none', async mode => {
     const { service, stream, settled } = await fixture({ mode, local: [served(false)], last: [served(false)] });

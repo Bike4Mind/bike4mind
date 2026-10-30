@@ -928,6 +928,8 @@ export interface ChatModelOption {
   server?: { id: string; name: string };
   /** A LoRA adapter's base model on the same server, shown with it in the picker. */
   baseModel?: string;
+  /** `contextWindow` is set by the server (vLLM --max-model-len), so Desktop cannot grow it to fit its tools. */
+  contextFixed?: boolean;
   /** Ids of the other names a server serves this model under; a conversation saved on one resolves here. */
   aliasIds?: string[];
   /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */

@@ -135,10 +135,16 @@ import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
-import { LocalModelRemovedError, OllamaLocal } from './OllamaLocal';
+import { LocalModelRemovedError, OllamaLocal, toMessages } from './OllamaLocal';
 import type { LocalChat } from './localChat';
 import { ServerCredentialsError } from '../modelServers/errors';
-import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
+import {
+  ContextOverflowError,
+  estimateTokens,
+  holdsPrompt,
+  localTranscriptChars,
+  shrunkTranscriptChars,
+} from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
@@ -2691,8 +2697,10 @@ export class ChatService {
         ? { available: () => skillCatalog.forModel(skillRoot) }
         : undefined;
       const videoModels = await videoModelsRead;
+      // Cleared when the server-fixed context cannot hold Desktop's prompt with tools; see toolPromptOverflow.
+      let roomForTools = true;
       const toolsFor = (granted: readonly string[]) =>
-        modelOption?.supportsTools === false || (localTurn && !modelOption)
+        modelOption?.supportsTools === false || (localTurn && !modelOption) || !roomForTools
           ? []
           : toolsForRequest({
               modelId: session.model,
@@ -2741,7 +2749,7 @@ export class ChatService {
       );
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
-      const toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
+      let toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
       const systemMessage = () =>
         buildSystemMessage(
           toolsSupported ? roots : [],
@@ -2767,6 +2775,13 @@ export class ChatService {
       const carried = this.pendingPlanReminder.get(sessionId);
       this.pendingPlanReminder.delete(sessionId);
       if (carried && !resume) appendToLastUserTurn(wire, carried);
+      const toolPromptTokens = localTurn ? toolPromptOverflow(modelOption, wire, tools, maxTokens) : undefined;
+      if (toolPromptTokens !== undefined) {
+        roomForTools = false;
+        toolsSupported = false;
+        tools = [];
+        wire[0] = systemMessage();
+      }
 
       /**
        * Store what the reply has produced so far as its own message and announce it finished:
@@ -2909,6 +2924,7 @@ export class ChatService {
                 sessionId,
                 ...effortField,
                 ...(maxTokens ? { maxTokens } : {}),
+                ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
               },
               onCompletionEvent,
               controller.signal,
@@ -5672,6 +5688,25 @@ function projectPreamble(project: ChatProject): string[] {
     );
   }
   return lines;
+}
+
+/**
+ * Desktop's system prompt plus tool schemas, estimated in tokens, when a context the server fixes (vLLM
+ * --max-model-len) cannot hold them with the latest prompt and room for the reply; undefined when it can.
+ */
+export function toolPromptOverflow(
+  option: ChatModelOption | undefined,
+  wire: readonly CompletionMessage[],
+  tools: readonly { toolSchema: unknown }[],
+  maxTokens: number | undefined
+): number | undefined {
+  const window = option?.contextFixed ? option.contextWindow : undefined;
+  if (!window || tools.length === 0) return undefined;
+  const schemas = tools.map(tool => ({ type: 'function', function: tool.toolSchema }));
+  const toolPrompt = estimateTokens(toMessages(wire.filter(message => message.role === 'system')), schemas);
+  const prompt = wire.findLast(message => message.role === 'user' && !message.continuesTurn);
+  const promptTokens = prompt ? estimateTokens(toMessages([prompt])) : 0;
+  return holdsPrompt(window, toolPrompt + promptTokens, maxTokens) ? undefined : toolPrompt;
 }
 
 /**
