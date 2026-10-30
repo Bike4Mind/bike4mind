@@ -8,6 +8,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isAdminBlockedEmailDomain, isDisposableEmail } from './disposableEmail';
+import { isSignupGrantHeldForReview } from './signupRisk';
 import { scoreSignupRisk } from './signupRiskScore';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -65,7 +66,8 @@ export async function refreshSignupRiskScore(
       score,
       signals,
       computedAt: now,
-      reviewState: needsReview ? 'pending' : 'none',
+      // A grant held by the signup grant policy is released by approving it here, whatever this score says.
+      reviewState: needsReview || isSignupGrantHeldForReview(user) ? 'pending' : 'none',
     });
   } catch (error) {
     logger.warn('Signup risk score refresh failed', {

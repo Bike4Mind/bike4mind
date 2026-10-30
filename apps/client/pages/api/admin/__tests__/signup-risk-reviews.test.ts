@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   denySelf: vi.fn(),
   inTransaction: false,
   settings: vi.fn(),
+  release: vi.fn(),
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -56,6 +57,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
   denySelfAdminAction: h.denySelf,
   userAuditTarget: async (id: string) => ({ kind: 'user', id, displayName: `${id}@example.com` }),
 }));
+vi.mock('@server/credits/riskReviewGrantRelease', () => ({ releaseRiskReviewedSignupGrant: h.release }));
 import '@pages/api/admin/signup-risk-reviews';
 
 const ADMIN_ID = 'a'.repeat(24);
@@ -90,7 +92,10 @@ beforeEach(() => {
   h.keysCreated.mockReset().mockResolvedValue({});
   h.record.mockReset().mockImplementation(async () => expect(h.inTransaction).toBe(true));
   h.denySelf.mockReset().mockRejectedValue(new Error('Admins cannot review their own account.'));
+  h.release.mockReset().mockResolvedValue(0);
 });
+
+const NO_GRANT_RELEASES = { grantReleasedUserIds: [] };
 
 describe('signup risk review queue', () => {
   it('is session-only and admin-only for both reads and decisions', async () => {
@@ -181,7 +186,13 @@ describe('signup risk review queue', () => {
       reason: REASON,
       changes: [{ field: 'riskScore.reviewState', before: 'pending', after: 'approved' }],
     });
-    expect(res._getJSONData()).toEqual({ updatedUserIds: [USER_A], skippedUserIds: [USER_B], failedUserIds: [] });
+    expect(res._getJSONData()).toEqual({
+      updatedUserIds: [USER_A],
+      skippedUserIds: [USER_B],
+      failedUserIds: [],
+      ...NO_GRANT_RELEASES,
+    });
+    expect(h.release.mock.calls.map(([userId]) => userId)).toEqual([USER_A, USER_B]);
   });
 
   it('keeps going when one account fails and reports it', async () => {
@@ -201,6 +212,7 @@ describe('signup risk review queue', () => {
       updatedUserIds: [USER_A, USER_C],
       skippedUserIds: [],
       failedUserIds: [USER_B],
+      ...NO_GRANT_RELEASES,
     });
     expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ userId: USER_B }));
   });
@@ -215,6 +227,69 @@ describe('signup risk review queue', () => {
       req,
       expect.objectContaining({ action: 'user.signup_risk.reopened', reason: REASON })
     );
+    expect(h.release).not.toHaveBeenCalled();
+  });
+
+  it('flags rows whose signup tranche the grant policy holds for review', async () => {
+    const grant = { stage: 'signup', signupCredits: 500, unlockCredits: 500, creditsReleased: 0 };
+    h.findPending.mockResolvedValue([
+      { ...pendingUser(USER_A, 'a@example.com', 0), signupGrant: grant, signupGrantAssessment: { band: 'review' } },
+      { ...pendingUser(USER_B, 'b@example.com', 60), signupGrant: grant, signupGrantAssessment: { band: 'full' } },
+    ]);
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(res._getJSONData().data.map((row: { grantHeld: boolean }) => row.grantHeld)).toEqual([true, false]);
+  });
+
+  it('pays a held signup tranche before approving, audited outside the review transaction', async () => {
+    const order: string[] = [];
+    h.setState.mockImplementation(async () => {
+      order.push('approve');
+      return true;
+    });
+    h.record.mockImplementation(async (_req: unknown, entry: { action: string }) =>
+      expect(h.inTransaction).toBe(entry.action.startsWith('user.signup_risk.'))
+    );
+    h.release.mockImplementation(async (_userId: string, { audit }) => {
+      order.push('release');
+      await audit({ credits: 500, creditTransactionId: 'tx1' });
+      return 500;
+    });
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON });
+
+    await h.handlers.post(req, res);
+
+    expect(order).toEqual(['release', 'approve']);
+    expect(h.release).toHaveBeenCalledWith(USER_A, expect.objectContaining({ reason: REASON }));
+    expect(h.record).toHaveBeenCalledWith(req, {
+      action: 'user.credits.adjusted',
+      target: { kind: 'user', id: USER_A, displayName: `${USER_A}@example.com` },
+      summary: 'released a signup grant held for risk review',
+      reason: REASON,
+      details: { credits: 500, source: 'signup_unlock' },
+      related: { creditTransactionId: 'tx1' },
+    });
+    expect(res._getJSONData()).toMatchObject({ updatedUserIds: [USER_A], grantReleasedUserIds: [USER_A] });
+  });
+
+  it('leaves the account pending for a retry when the held tranche cannot be paid', async () => {
+    h.release.mockRejectedValue(new Error('ledger unavailable'));
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON });
+    const error = vi.fn();
+    Object.assign(req, { logger: { error } });
+
+    await h.handlers.post(req, res);
+
+    expect(h.setState).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toEqual({
+      updatedUserIds: [],
+      skippedUserIds: [],
+      failedUserIds: [USER_A],
+      ...NO_GRANT_RELEASES,
+    });
+    expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ userId: USER_A }));
   });
 
   it("refuses to review the admin's own account and changes nothing", async () => {

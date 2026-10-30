@@ -121,6 +121,15 @@ describe('UserRepository.findPendingRiskReviews', () => {
     expect(rows.map(row => row.id)).toEqual([high, mid, low]);
     expect(await userRepository.findPendingRiskReviews(2).then(r => r.map(row => row.id))).toEqual([high, mid]);
   });
+
+  it('returns the signup grant fields the queue reads to flag a held tranche', async () => {
+    const signupGrant = { stage: 'signup', signupCredits: 12, unlockCredits: 28, creditsReleased: 0 };
+    await scored(60, 'pending', { signupGrant, signupGrantAssessment: { band: 'review' } });
+
+    const [row] = await userRepository.findPendingRiskReviews(10);
+    expect(row.signupGrant).toMatchObject(signupGrant);
+    expect(row.signupGrantAssessment?.band).toBe('review');
+  });
 });
 
 describe('UserRepository.setRiskReviewState', () => {

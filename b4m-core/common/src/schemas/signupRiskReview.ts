@@ -24,6 +24,8 @@ export const signupRiskReviewItemSchema = z.object({
   computedAt: z.date(),
   creditsSpent: z.number(),
   apiKeysCreated: z.number(),
+  /** The signup grant policy withheld the signup tranche; approving releases it. */
+  grantHeld: z.boolean(),
 });
 export type SignupRiskReviewItem = z.infer<typeof signupRiskReviewItemSchema>;
 
@@ -53,5 +55,7 @@ export const signupRiskReviewDecisionResultSchema = z.object({
   skippedUserIds: z.array(z.string()),
   /** Users whose transaction failed and rolled back; the rest of the batch still ran. */
   failedUserIds: z.array(z.string()),
+  /** Users whose held signup tranche was paid. A payout failure lands the user in failedUserIds. */
+  grantReleasedUserIds: z.array(z.string()),
 });
 export type SignupRiskReviewDecisionResult = z.infer<typeof signupRiskReviewDecisionResultSchema>;

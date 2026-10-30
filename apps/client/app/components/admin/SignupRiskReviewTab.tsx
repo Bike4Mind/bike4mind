@@ -64,6 +64,13 @@ const SignupTime: React.FC<{ iso: string; now: number }> = ({ iso, now }) => {
 
 const Signals: React.FC<{ row: SignupRiskReviewRow }> = ({ row }) => (
   <Stack direction="row" flexWrap="wrap" gap={0.5}>
+    {row.grantHeld && (
+      <Tooltip title="The signup grant policy held this account's signup credits. Approving pays them.">
+        <span tabIndex={0} data-testid={`signup-risk-grant-held-${row.userId}`}>
+          <StatusChip tone="warn" label="Credits held" />
+        </span>
+      </Tooltip>
+    )}
     {row.signals.map(signal => (
       <Tooltip key={signal.signal} title={`${signal.reason} (+${signal.points})`}>
         <span tabIndex={0} data-testid={`signup-risk-signal-${row.userId}-${signal.signal}`}>
@@ -146,8 +153,9 @@ export const SignupRiskReviewTab: React.FC = () => {
           const approved = result.updatedUserIds;
           setFailedCount(result.failedUserIds.length);
           if (approved.length === 0) return;
+          const paid = result.grantReleasedUserIds.length;
           showUndo({
-            message: `Approved ${plural(approved.length, 'account')}`,
+            message: `Approved ${plural(approved.length, 'account')}${paid > 0 ? ` and paid held credits to ${paid}` : ''}`,
             onUndo: async () => {
               await decision.mutateAsync({
                 action: 'reopen',
@@ -411,6 +419,12 @@ export const SignupRiskReviewTab: React.FC = () => {
         testIds={{ confirm: 'signup-risk-approve-confirm-btn', reason: 'signup-risk-approve-reason' }}
       >
         {approving && <ApprovalPreview rows={approving} />}
+        {approving?.some(row => row.grantHeld) && (
+          <Alert color="warning" data-testid="signup-risk-approve-grant-note">
+            {plural(approving.filter(row => row.grantHeld).length, 'account')} will be paid the signup credits held for
+            review. Undo does not take them back.
+          </Alert>
+        )}
         {decision.error && <Alert color="danger">{getErrorMessage(decision.error)}</Alert>}
       </ActionDialog>
 

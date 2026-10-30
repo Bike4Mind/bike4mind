@@ -1,3 +1,4 @@
+import type { IUserDocument, SignupGrant } from '@bike4mind/common';
 import { z } from 'zod';
 
 export const SIGNUP_RISK_SIGNALS = [
@@ -163,4 +164,19 @@ export async function assessSignupGrant(
     }
   }
   return result;
+}
+
+/**
+ * The signup tranche was withheld in the review band and is still unpaid, so the account waits on
+ * the admin risk review queue (refreshSignupRiskScore), whose approval releases it.
+ */
+export function isSignupGrantHeldForReview(
+  user: Pick<IUserDocument, 'signupGrant' | 'signupGrantAssessment'>
+): user is typeof user & { signupGrant: SignupGrant } {
+  const grant = user.signupGrant;
+  return (
+    user.signupGrantAssessment?.band === 'review' &&
+    grant?.stage === 'signup' &&
+    grant.creditsReleased < grant.signupCredits
+  );
 }

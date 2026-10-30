@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assessSignupGrant, evaluateSignupRisk, signupRiskPolicySchema, type SignupRiskAdapters } from './signupRisk';
+import type { IUserDocument } from '@bike4mind/common';
+import {
+  assessSignupGrant,
+  evaluateSignupRisk,
+  isSignupGrantHeldForReview,
+  signupRiskPolicySchema,
+  type SignupRiskAdapters,
+} from './signupRisk';
 
 const policy = {
   enabled: true as const,
@@ -191,5 +198,26 @@ describe('assessSignupGrant', () => {
     });
     await expect(assessSignupGrant(11, adapters)).resolves.toMatchObject({ applied: true });
     expect(warn).toHaveBeenCalledExactlyOnceWith('[signup-risk] Band telemetry failed after grant commit');
+  });
+});
+
+describe('isSignupGrantHeldForReview', () => {
+  type GrantFields = Pick<IUserDocument, 'signupGrant' | 'signupGrantAssessment'>;
+  const held = (band: string, stage: string, creditsReleased: number) =>
+    ({
+      signupGrant: { stage, signupCredits: 500, unlockCredits: 500, creditsReleased, nextCondition: null },
+      signupGrantAssessment: { band },
+    }) as unknown as GrantFields;
+
+  it('holds an unpaid tranche assessed into the review band', () => {
+    expect(isSignupGrantHeldForReview(held('review', 'signup', 0))).toBe(true);
+    expect(isSignupGrantHeldForReview(held('review', 'signup', 100))).toBe(true);
+  });
+
+  it('does not hold other bands, a paid tranche, or a tranche still waiting on email', () => {
+    expect(isSignupGrantHeldForReview(held('reduced', 'signup', 0))).toBe(false);
+    expect(isSignupGrantHeldForReview(held('review', 'signup', 500))).toBe(false);
+    expect(isSignupGrantHeldForReview(held('review', 'pending_email', 0))).toBe(false);
+    expect(isSignupGrantHeldForReview({})).toBe(false);
   });
 });

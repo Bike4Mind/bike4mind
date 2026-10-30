@@ -917,7 +917,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return this.model
       .find(
         { 'riskScore.reviewState': 'pending', isBanned: { $ne: true } },
-        { email: 1, username: 1, createdAt: 1, riskScore: 1 }
+        { email: 1, username: 1, createdAt: 1, riskScore: 1, signupGrant: 1, signupGrantAssessment: 1 }
       )
       .sort({ 'riskScore.score': -1, _id: 1 })
       .limit(limit)
