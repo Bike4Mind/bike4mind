@@ -38,8 +38,7 @@ const BUDGET_EXEMPT_REASONS: ReadonlySet<SignupGrantUnlockReason | undefined> = 
   'admin',
 ]);
 
-/** Thrown inside a grant transaction when another account already holds this inbox's claim. */
-export class InboxGrantClaimDeniedError extends Error {}
+class InboxGrantClaimDeniedError extends Error {}
 
 function isReleaseEligible(
   user: IUserDocument | null | undefined,

@@ -22,7 +22,6 @@ import { accountBlockReasons } from './accountState';
 import { isDisposableEmail } from './disposableEmail';
 import { protectSignupCredits } from './signupProtection';
 import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './signupGrantBudget';
-import { InboxGrantClaimDeniedError } from './stagedSignupGrant';
 
 /** `reasonGranted`: this user already holds a ledger row for the reason, e.g. a concurrent request won the grant. */
 export type NoCardUnlockRelease = (opts: { reasonGranted: boolean }) => Promise<void>;
@@ -280,16 +279,6 @@ export async function grantNoCardUnlock(
       reservations.push(reservation);
       if (reservation.outcome === 'exhausted') return refused('daily_budget_reached');
 
-      // Unlocks share the one free-credit entitlement per canonical inbox with signup grants, so an
-      // alias of an inbox that already earned credits anywhere earns none here. Claimed on the first
-      // payout, which also stops a later signup grant on a sibling alias. A denied claim may have
-      // aborted Mongo's transaction: throw out of it rather than running another operation.
-      //
-      // After the budget check, not before: an exhausted day *returns* a refusal, which commits this
-      // transaction, so claiming first would strand the inbox's one claim on an unlock that paid
-      // nothing. The denied-claim throw aborts instead, and the catch below refunds the reservation.
-      if (!(await db.users.claimFreeCreditGrant(userId))) throw new InboxGrantClaimDeniedError();
-
       const { creditHolder } = await addCreditsWithLedgerRow(
         {
           ownerId: userId,
@@ -311,9 +300,6 @@ export async function grantNoCardUnlock(
     if (error instanceof DuplicateCreditTransactionError) {
       result = refused('already_granted');
       paidByPeer = true;
-    } else if (error instanceof InboxGrantClaimDeniedError) {
-      // Nothing was paid under this id, so the reservation above is refunded by the release below.
-      result = refused('inbox_already_claimed');
     } else failure = error;
   }
   // A duplicate ledger row means a concurrent grant paid under this id, so its draw stays spent.

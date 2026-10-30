@@ -20,7 +20,6 @@ export type NoCardUnlockRefusal =
   | 'signup_grant_pending'
   | 'daily_budget_reached'
   | 'cap_reached'
-  | 'inbox_already_claimed'
   | 'already_granted';
 
 export function noCardUnlockTransactionId(reason: NoCardUnlockReason, userId: string): string {

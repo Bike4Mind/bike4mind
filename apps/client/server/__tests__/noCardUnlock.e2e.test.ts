@@ -354,39 +354,6 @@ describe('grantNoCardUnlock on a real replica set', () => {
     expect(await grantNoCardUnlock(id, 'github_verified', adapters)).toMatchObject({ granted: true });
   });
 
-  it('refuses an alias of an inbox that already holds the free-credit claim', async () => {
-    await seedSettings();
-    const first = await seedUser({ email: 'x.y@gmail.com' });
-    const alias = await seedUser({ email: 'xy+1@gmail.com' });
-
-    expect(await grantNoCardUnlock(first, 'github_verified', await build(51))).toMatchObject({ granted: true });
-    expect(await grantNoCardUnlock(alias, 'github_verified', await build(52))).toEqual({
-      granted: false,
-      refusal: 'inbox_already_claimed',
-    });
-    expect(await balance(alias)).toBe(0);
-    expect(await rows(alias)).toBe(0);
-    // A refused unlock must not burn the alias's GitHub id: it is released for a later, legitimate use.
-    expect(await GithubUnlockClaim.countDocuments({ githubId: 52 })).toBe(0);
-  });
-
-  it('claims the inbox on the first unlock, so a sibling alias cannot earn a signup grant later', async () => {
-    await seedSettings();
-    const id = await seedUser({ email: 'a.b@gmail.com' });
-
-    expect(await grantNoCardUnlock(id, 'github_verified', await build(61))).toMatchObject({ granted: true });
-    expect((await User.findById(id).lean())?.freeCreditClaimEmail).toBe('ab@gmail.com');
-  });
-
-  it('lets the account that already holds its own claim unlock both reasons', async () => {
-    await seedSettings();
-    const id = await seedUser({ email: 'solo@gmail.com' });
-    expect(await userRepository.claimFreeCreditGrant(id)).toBe(true);
-
-    expect(await grantNoCardUnlock(id, 'github_verified', await build(71))).toMatchObject({ granted: true });
-    expect(await balance(id)).toBe(GITHUB);
-  });
-
   it('enforces the per-domain daily cap across accounts', async () => {
     await seedSettings();
     const users = [await seedUser(), await seedUser(), await seedUser()];

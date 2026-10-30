@@ -25,7 +25,6 @@ const REFUSAL_TEXT: Record<NoCardUnlockRefusal, string> = {
   signup_grant_pending: 'Your signup credits are still being prepared. Unlocks open once they arrive.',
   daily_budget_reached: 'Free credit unlocks are paused for today. Try again tomorrow.',
   cap_reached: 'You have already unlocked the maximum available.',
-  inbox_already_claimed: 'Free credits have already been claimed for this email inbox.',
   already_granted: 'This unlock has already been applied to your account.',
 };
 
