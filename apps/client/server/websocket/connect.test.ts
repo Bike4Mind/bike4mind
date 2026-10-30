@@ -44,6 +44,11 @@ vi.mock('@server/websocket/realtimeSession', () => ({
   assertRealtimeSessionActive: (...args: unknown[]) => mockAssertSessionActive(...args),
 }));
 
+const mockIpBlockRefusal = vi.fn();
+vi.mock('@server/middlewares/checkBlockedIP', () => ({
+  ipBlockRefusal: (...args: unknown[]) => mockIpBlockRefusal(...args),
+}));
+
 vi.mock('@server/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
@@ -72,6 +77,7 @@ describe('websocket connect - token gates', () => {
     mockConnectionCreate.mockResolvedValue({});
     mockAssertAccountStateUsable.mockReturnValue(undefined);
     mockAssertSessionActive.mockResolvedValue(undefined);
+    mockIpBlockRefusal.mockResolvedValue(null);
   });
 
   it("records a CLI JWT's sid and tokenVersion, bounded by the gateway cap rather than the token exp", async () => {
@@ -165,6 +171,31 @@ describe('websocket connect - token gates', () => {
 
     await expect(connect()).rejects.toThrow('blocked');
     expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a connection from an address under an admin's all-scope IP block", async () => {
+    mockIpBlockRefusal.mockResolvedValue({ message: 'network blocked', scope: 'all', expiresAt: new Date() });
+    const event = {
+      ...eventWithToken(),
+      requestContext: { connectionId: 'conn-1', identity: { sourceIp: '203.0.113.9' } },
+    };
+
+    await expect(func(event as any, {} as any, noopLogger as any)).rejects.toThrow('network blocked');
+    expect(mockIpBlockRefusal).toHaveBeenCalledWith(
+      { headers: event.headers, socket: { remoteAddress: '203.0.113.9' } },
+      'app',
+      noopLogger
+    );
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin connect from a blocked address', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, isAdmin: true, save: vi.fn() });
+    mockIpBlockRefusal.mockResolvedValue({ message: 'network blocked', scope: 'all', expiresAt: new Date() });
+
+    await connect();
+    expect(mockIpBlockRefusal).not.toHaveBeenCalled();
+    expect(mockConnectionCreate).toHaveBeenCalled();
   });
 });
 

@@ -6,7 +6,8 @@ import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAcc
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { verifyApiKey } from '@server/cli/auth';
 import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { ipBlockRefusal } from '@server/middlewares/checkBlockedIP';
 import { withWebSocketContext } from '@server/websocket/utils';
 import { gatewayCapExpiry, assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
 import { APIGatewayProxyEvent, APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
@@ -192,6 +193,15 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
     }
     assertAccountStateUsable(user);
     await assertRealtimeSessionActive(auth.sid);
+    // Completions and agent runs stream over this socket, so an admin's `all` IP block refuses the connection.
+    if (!user.isAdmin) {
+      const clientRequest = {
+        headers: event.headers,
+        socket: { remoteAddress: event.requestContext.identity?.sourceIp },
+      };
+      const refusal = await ipBlockRefusal(clientRequest, 'app', logger);
+      if (refusal) throw new ForbiddenError(refusal.message);
+    }
 
     await Connection.create({
       connectionId: event.requestContext.connectionId,
