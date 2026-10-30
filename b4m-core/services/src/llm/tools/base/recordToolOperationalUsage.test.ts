@@ -359,8 +359,19 @@ describe('recordToolOperationalUsage', () => {
     expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({
       provider: 'anthropic',
       model: 'claude-x',
+      executedProvider: 'openai',
+      executedModel: 'gpt-4o-mini',
       costUsd: 0.0042,
     });
+  });
+
+  it('names no executed model when the run model is the recorded one', async () => {
+    await recordToolOperationalUsage(makeContext({ toLedgerModel: id => id }), {
+      model: 'gpt-4o-mini',
+      completionInfo,
+      startTime: Date.now(),
+    });
+    expect(recordOperationalUsageMock.mock.calls[0][0]).not.toHaveProperty('executedModel');
   });
 
   it('omits the run model provider when the mapped id is not in the catalog', async () => {
@@ -370,6 +381,10 @@ describe('recordToolOperationalUsage', () => {
       completionInfo,
       startTime: Date.now(),
     });
-    expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({ provider: 'unknown', model: 'gpt-4' });
+    expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({
+      provider: 'unknown',
+      model: 'gpt-4',
+      executedModel: 'gpt-4o-mini',
+    });
   });
 });

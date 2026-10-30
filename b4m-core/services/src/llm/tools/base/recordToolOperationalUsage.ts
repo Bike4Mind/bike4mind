@@ -1,6 +1,7 @@
 import { buildUsagePriceStamp, getTextModelCost, getTurnsCost } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordOperationalUsage } from '../../../billing';
+import { executedModelFields } from '../../shadowTier';
 import type { ToolContext } from './types';
 import { resolveToolBillingOrganization } from './resolveToolBillingOrganization';
 
@@ -88,6 +89,7 @@ export async function recordToolOperationalUsage(
       costUsd,
     });
 
+    const recordedProvider = context.availableModels?.find(m => m.id === recordedModel)?.backend ?? 'unknown';
     await recordOperationalUsage(
       {
         requestId: context.sessionId ?? context.userId,
@@ -95,8 +97,12 @@ export async function recordToolOperationalUsage(
         organization,
         sessionId: context.sessionId,
         feature: 'operations',
-        provider: context.availableModels?.find(m => m.id === recordedModel)?.backend ?? 'unknown',
+        provider: recordedProvider,
         model: recordedModel,
+        ...executedModelFields(
+          { id: recordedModel, backend: recordedProvider },
+          { id: model, backend: modelInfo?.backend ?? 'unknown' }
+        ),
         inputTokens,
         outputTokens,
         cachedInputTokens,

@@ -13,8 +13,10 @@ import { z } from 'zod';
 
 export interface ResearchModeResult {
   configurationId: string;
-  /** The configuration's model, which its usage is priced on. */
+  /** The configuration's requested model, which its ledger row names; the only model the client sees. */
   model: string;
+  /** The model that ran, when a restricted user's request was substituted; it prices the usage. */
+  runModel?: string;
   success: boolean;
   /** Characters streamed before the configuration finished or failed, to price an interrupted run. */
   streamedChars: number;
@@ -114,6 +116,8 @@ export class ResearchModeService {
     let finalResponse = '';
     // Billed on what streamed, withheld reasoning included.
     let streamedChars = 0;
+    // Set once the run model is known, so a failure after that is still priced at the model that ran.
+    let runModelField: { runModel?: string } = {};
     try {
       this.logger.info(`🔬 [Research Mode] Processing configuration: ${config.label || config.model} (${config.id})`);
 
@@ -123,6 +127,7 @@ export class ResearchModeService {
         throw new Error(`Model ${config.model} not found`);
       }
       const modelInfo = this.runModelFor?.(requestedModelInfo) ?? requestedModelInfo;
+      if (modelInfo.id !== requestedModelInfo.id) runModelField = { runModel: modelInfo.id };
       const reasoningWithholder = withholdsReasoning(thinkingVisibility, modelInfo.id)
         ? createReasoningWithholder(reasoningChannelOf(modelInfo))
         : null;
@@ -221,11 +226,10 @@ export class ResearchModeService {
 
       this.logger.info(`🔬 [Research Mode] Configuration ${config.id} completed successfully`);
 
-      // Prices at the requested model on substituted runs (overcharging reveals less than undercharging).
-      // Chat and agent settlement still bill the model that ran; keep these in step when that changes.
       return {
         configurationId: config.id,
         model: config.model,
+        ...runModelField,
         success: true,
         response: finalResponse,
         streamedChars,
@@ -237,6 +241,7 @@ export class ResearchModeService {
       return {
         configurationId: config.id,
         model: config.model,
+        ...runModelField,
         success: false,
         streamedChars,
         error: error instanceof Error ? error.message : 'Unknown error',

@@ -1186,6 +1186,45 @@ describe('processExecution tool deps', () => {
       expect(toLedgerModel('gpt-4')).toBe('gpt-4');
     });
 
+    it('has current_model_details report the requested model, not the substitute', async () => {
+      await runRestricted();
+      const { servingModel } = buildSharedToolsMock.mock.calls[0][0] as { servingModel?: { current: { id: string } } };
+
+      expect(servingModel?.current.id).toBe('claude-sonnet-5');
+    });
+
+    it('counts untracked subagent cache tokens toward the daily cap, as chat does', async () => {
+      const { counter } = await runRestricted();
+      const { onSubagentCredits } = buildSharedToolsMock.mock.calls[0][1] as {
+        onSubagentCredits: (
+          credits: number,
+          meta?: {
+            model: string;
+            inputTokens: number;
+            outputTokens: number;
+            cacheReadTokens?: number;
+            cacheWriteTokens?: number;
+          }
+        ) => Promise<void>;
+      };
+      counter.mockClear();
+
+      await onSubagentCredits(4, {
+        model: 'cheap-model',
+        inputTokens: 2,
+        outputTokens: 1,
+        cacheReadTokens: 10,
+        cacheWriteTokens: 5,
+      });
+
+      expect(counter).toHaveBeenCalledWith(
+        expect.stringMatching(/^shadow-tokens:user-1:/),
+        18,
+        Number.MAX_SAFE_INTEGER,
+        expect.any(Number)
+      );
+    });
+
     it('runs deep_research on the substitute, with no OpenAI key to swap it onto GPT-4.1', async () => {
       const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
       await runRestricted();

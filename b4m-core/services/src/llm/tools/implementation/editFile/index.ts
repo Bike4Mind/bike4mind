@@ -10,6 +10,8 @@ import { diffLines, type Change } from 'diff';
 // What a normal turn runs; also the id recorded when a restricted-tier turn substitutes another model.
 const DEFAULT_EDIT_MODEL = 'gpt-4';
 
+const editFileConfigSchema = z.object({ model: z.string().optional() }).optional();
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- consumed via z.infer<typeof editFileSchema> at the type level; schema name is API contract
 const editFileSchema = z.object({
   fileId: z.string().describe('The ID of the file to edit'),
@@ -205,9 +207,11 @@ Return only the edited content without any markdown code blocks or explanations.
 
         let editedContent = '';
         let completionInfo: CompletionInfo | undefined;
-        // The backend uses whatever model id is passed here (the interface's `model` arg
-        // is authoritative), so record this same id for the usage event.
-        const editModel = (config as { model?: string } | undefined)?.model ?? DEFAULT_EDIT_MODEL;
+        // The backend runs whatever model id is passed here, and the usage event records it. A
+        // configured model is the turn's run model: only when it is a restricted-tier substitute
+        // (toLedgerModel maps it away) does the row name the default a normal turn runs instead.
+        const editModel = editFileConfigSchema.parse(config)?.model ?? DEFAULT_EDIT_MODEL;
+        const substituted = (context.toLedgerModel?.(editModel) ?? editModel) !== editModel;
         const startTime = Date.now();
         await context.llm.complete(
           editModel,
@@ -226,7 +230,7 @@ Return only the edited content without any markdown code blocks or explanations.
 
         await recordToolOperationalUsage(context, {
           model: editModel,
-          ledgerModel: DEFAULT_EDIT_MODEL,
+          ...(substituted ? { ledgerModel: DEFAULT_EDIT_MODEL } : {}),
           completionInfo,
           startTime,
         });

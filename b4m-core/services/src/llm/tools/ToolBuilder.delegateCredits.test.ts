@@ -150,6 +150,7 @@ describe('ToolBuilder delegate_to_agent credit attribution', () => {
       priceSource: 'literal',
       rates: { tierKey: 128_000, input: 0.4, output: 1.6 },
     });
+    expect(recordUsage.mock.calls[0][0]).not.toHaveProperty('executedModel');
   });
 
   it('contributes nothing for a zero-credit delegation', async () => {
@@ -193,6 +194,11 @@ describe('ToolBuilder delegate_to_agent credit attribution', () => {
     await delegateTool.toolFn({ task: 'research', agent: 'researcher' });
 
     expect(resolveAggregateToolModel(toolCreditModels)).toBe('claude-sonnet-5');
-    expect(recordUsage.mock.calls[0][0]).toMatchObject({ model: 'claude-sonnet-5', provider: ModelBackend.Anthropic });
+    expect(recordUsage.mock.calls[0][0]).toMatchObject({
+      model: 'claude-sonnet-5',
+      provider: ModelBackend.Anthropic,
+      executedModel: PARENT_MODEL,
+      executedProvider: parentModelInfo.backend,
+    });
   });
 });

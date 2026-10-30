@@ -967,7 +967,10 @@ export function warnOnSettlementDebt(
 
 /** One model's share of a turn's usage, priced against the turn's credit reservation. */
 export interface ReservationUsage {
+  /** The model that ran, which prices the usage. */
   modelInfo: ModelInfo;
+  /** The requested model its ledger row names, when known per usage (Research mode); else ledgerModel() maps it. */
+  ledgerModelInfo?: ModelInfo;
   /** Uncached input; cache reads and writes are counted separately, as the provider reports them. */
   inputTokens: number;
   outputTokens: number;
@@ -986,14 +989,16 @@ export function researchModeUsages(
   inputTokens: number
 ): ReservationUsage[] {
   return results.flatMap(result => {
-    const modelInfo = models.find(m => m.id === result.model);
+    const ledgerModelInfo = models.find(m => m.id === result.model);
+    const modelInfo = result.runModel ? models.find(m => m.id === result.runModel) : ledgerModelInfo;
     const reported = result.completionInfo;
-    if (!modelInfo || (!reported && !result.streamedChars)) return [];
+    if (!modelInfo || !ledgerModelInfo || (!reported && !result.streamedChars)) return [];
     return [
       {
         modelInfo,
+        ledgerModelInfo,
         inputTokens: reported?.inputTokens || inputTokens,
-        outputTokens: reported?.outputTokens || estimateStreamedOutputTokens(result.streamedChars, result.model),
+        outputTokens: reported?.outputTokens || estimateStreamedOutputTokens(result.streamedChars, modelInfo.id),
       },
     ];
   });
@@ -5035,7 +5040,8 @@ export class ChatCompletionProcess {
         // Update quest with Research Mode results. A Stop makes the cancellation watcher
         // abort the controller, so the terminal status has to reflect that rather than
         // unconditionally claiming the turn finished.
-        quest.researchModeResults = researchResults;
+        // runModel stays server-side: the client only ever sees the requested model.
+        quest.researchModeResults = researchResults.map(({ runModel: _runModel, ...result }) => result);
         setTerminalQuestStatus(quest, successStatus());
 
         if (shadowSettings) {
@@ -7512,7 +7518,7 @@ export class ChatCompletionProcess {
         source: 'chat',
         accountCreatedAt: this.user.createdAt,
       });
-      const usageLedgerModel = this.ledgerModel(usage.modelInfo);
+      const usageLedgerModel = usage.ledgerModelInfo ?? this.ledgerModel(usage.modelInfo);
       this.db.usageEvents
         ?.record({
           requestId: quest.id,

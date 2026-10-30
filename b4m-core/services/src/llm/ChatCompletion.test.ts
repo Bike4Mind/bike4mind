@@ -59,6 +59,7 @@ import {
   StreamEndedWithoutFinishError,
   bedrockEmptyResponseMessage,
   type ICompletionBackend,
+  type ICompletionOptions,
   federatedSharedKeyProviders,
 } from '@bike4mind/llm-adapters';
 import {
@@ -1231,13 +1232,15 @@ describe('ChatCompletionProcess', () => {
       it('records no retry for the silent hop and masks the substitute retries it does store', async () => {
         const { body, complete, requested } = await wireFailingSubstitute(['cheap-model']);
         const inner = complete.getMockImplementation()!;
-        complete.mockImplementation(async (modelId: string, messages: unknown, opts: any, cb: unknown) => {
-          if (modelId === 'cheap-model-2') {
-            const error = Object.assign(new Error('rate limited'), { status: 429, requestID: 'req_provider' });
-            opts._internal.turnTelemetry.onRetry({ error, delayMs: 0, model: modelId });
+        complete.mockImplementation(
+          async (modelId: string, messages: unknown, opts: ICompletionOptions, cb: unknown) => {
+            if (modelId === 'cheap-model-2') {
+              const error = Object.assign(new Error('rate limited'), { status: 429, requestID: 'req_provider' });
+              opts._internal?.turnTelemetry?.onRetry({ error, delayMs: 0, model: modelId });
+            }
+            return inner(modelId, messages, opts, cb);
           }
-          return inner(modelId, messages, opts, cb);
-        });
+        );
 
         await service.process({ body, logger: mockLogger });
 
@@ -1259,15 +1262,15 @@ describe('ChatCompletionProcess', () => {
         ] as never);
         let reported: string | undefined;
         const inner = complete.getMockImplementation()!;
-        complete.mockImplementation(async (modelId: string, messages: unknown, opts: any, cb: unknown) => {
-          if (modelId === 'cheap-model-2') {
-            const tool = opts.tools.find(
-              (t: { toolSchema: { name: string } }) => t.toolSchema.name === 'current_model_details'
-            );
-            reported = await tool.toolFn({});
+        complete.mockImplementation(
+          async (modelId: string, messages: unknown, opts: ICompletionOptions, cb: unknown) => {
+            if (modelId === 'cheap-model-2') {
+              const tool = opts.tools?.find(t => t.toolSchema.name === 'current_model_details');
+              reported = await tool?.toolFn({});
+            }
+            return inner(modelId, messages, opts, cb);
           }
-          return inner(modelId, messages, opts, cb);
-        });
+        );
 
         await service.process({ body, logger: mockLogger });
 
@@ -5564,6 +5567,65 @@ describe('ChatCompletionProcess', () => {
           expect.objectContaining({ inputTokens: 10, outputTokens: 1000, source: 'chat' })
         );
         expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+      });
+
+      it('bills a substituted configuration at the model that ran and names both on its row', async () => {
+        const { complete } = reservationOrgSetup();
+        const [requested] = (await mockedGetAvailableModels()) as unknown as ModelInfo[];
+        const runModel = {
+          ...requested,
+          id: 'cheap-model',
+          name: 'Cheap',
+          pricing: { 200000: { input: 0, output: 3 / 1_000_000 } },
+        };
+        mockedGetAvailableModels.mockResolvedValue([requested, runModel] as never);
+        complete.mockImplementation(
+          async (
+            _model: string,
+            _messages: unknown,
+            _opts: unknown,
+            cb: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+          ) => {
+            await cb(['Answer'], { inputTokens: 10, outputTokens: 1000 });
+          }
+        );
+        (service as any).user = { ...mockUser, throttle: { tier: 'shadow' } }; // any: user is private
+        const previous = mockedGetSettingsValue.getMockImplementation();
+        mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) => {
+          if (key === 'shadowTierModelAllowlist') return ['cheap-model'];
+          if (key === 'shadowTierDailyTokenCap') return 20000;
+          return previous?.(key as never, settings);
+        }) as typeof getSettingsValue);
+        onTestFinished(() => {
+          if (previous) mockedGetSettingsValue.mockImplementation(previous);
+        });
+        mockDb.caches = {
+          tryAddWithinLimitFixedWindow: vi.fn().mockResolvedValue({ success: true, count: 1, expiresAt: new Date() }),
+        };
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        const body = researchReservationBody();
+        body.researchMode.configurations = body.researchMode.configurations.slice(0, 1);
+
+        await service.process({ body: body as never, logger: mockLogger });
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model']);
+        const runModelCredits = realUsdToCreditsStochastic((1000 * 3) / 1_000_000, () => 0);
+        const [[, row]] = mockDb.creditTransactions.createTransaction.mock.calls;
+        expect(row.model).toBe(requested.id);
+        expect(Math.abs(row.credits)).toBeGreaterThanOrEqual(runModelCredits);
+        expect(Math.abs(row.credits)).toBeLessThanOrEqual(runModelCredits + 1);
+        expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+        expect(usageEventsRecord.mock.calls[0][0]).toMatchObject({
+          model: requested.id,
+          provider: requested.backend,
+          executedModel: 'cheap-model',
+          executedProvider: runModel.backend,
+        });
+        expect(usageEventsRecord.mock.calls[0][0].costUsd).toBeCloseTo((1000 * 3) / 1_000_000, 9);
+        expect(JSON.stringify(mockQuest.researchModeResults)).not.toContain('cheap-model');
       });
 
       it('refunds the hold when the research settlement fails', async () => {

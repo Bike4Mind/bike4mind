@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ReActAgent } from './ReActAgent';
 import type { ICompletionBackend, ICompletionOptions } from '@bike4mind/llm-adapters';
+import type { Logger } from '@bike4mind/observability';
 
 const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -15,10 +16,9 @@ async function optionsSentFor(identity: { modelIdentityId?: string; modelDisplay
     },
     pushToolMessages: vi.fn(),
   };
-  // any: the logger mock carries only the methods the agent calls
   const agent = new ReActAgent({
     userId: 'u1',
-    logger: logger as any,
+    logger: logger as unknown as Logger,
     llm,
     model: 'run-model',
     tools: [],

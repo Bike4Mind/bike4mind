@@ -1912,6 +1912,8 @@ async function processExecution(
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       llm,
       model: agentModel,
+      // current_model_details reports the requested model, never the substitute, as on the chat path.
+      servingModel: modelInfo ? { current: modelInfo } : undefined,
       // Tools that run on `model` (blog_draft, jupyter_notebook) record the requested id, as on the chat path.
       toLedgerModel: visibleModelId,
       precomputed: {
@@ -2076,6 +2078,8 @@ async function processExecution(
               totalCredits: credits,
               totalInputTokens: meta?.inputTokens ?? 0,
               totalOutputTokens: meta?.outputTokens ?? 0,
+              totalCacheReadTokens: meta?.cacheReadTokens,
+              totalCacheWriteTokens: meta?.cacheWriteTokens,
             },
           },
           logger
@@ -3603,13 +3607,21 @@ async function chargeSubagentTokens(
     sessionId: string;
     questId: string;
     model: string;
-    completionInfo: Pick<AgentResult['completionInfo'], 'totalCredits' | 'totalInputTokens' | 'totalOutputTokens'>;
+    completionInfo: Pick<
+      AgentResult['completionInfo'],
+      'totalCredits' | 'totalInputTokens' | 'totalOutputTokens' | 'totalCacheReadTokens' | 'totalCacheWriteTokens'
+    >;
   },
   logger: Logger
 ): Promise<void> {
+  const { completionInfo } = args;
+  // Same basis as the chat and iteration counters: input, cache reads and writes, and output.
   await recordShadowTokenUsage(
     args.user,
-    (args.completionInfo.totalInputTokens ?? 0) + (args.completionInfo.totalOutputTokens ?? 0),
+    (completionInfo.totalInputTokens ?? 0) +
+      (completionInfo.totalCacheReadTokens ?? 0) +
+      (completionInfo.totalCacheWriteTokens ?? 0) +
+      (completionInfo.totalOutputTokens ?? 0),
     { cache: cacheRepository }
   );
   const credits = args.completionInfo.totalCredits ?? 0;

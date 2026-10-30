@@ -50,6 +50,7 @@ import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
 import { usageEventStatusForFinish } from '../earlyStopStamp';
 import type { ModelAdmission } from '../modelAdmission';
+import { executedModelFields } from '../shadowTier';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
@@ -58,6 +59,9 @@ export function buildToolUsageEvent(params: {
   organization?: IOrganizationDocument | null;
   provider: string;
   model: string;
+  /** The substitute that ran instead of `model` (executedModelFields); costUsd prices it. */
+  executedProvider?: string;
+  executedModel?: string;
   costUsd: number;
   creditsCharged: number;
   units?: number;
@@ -86,6 +90,7 @@ export function buildToolUsageEvent(params: {
     feature: params.feature ?? 'tool',
     provider: params.provider,
     model: params.model,
+    ...(params.executedModel ? { executedProvider: params.executedProvider, executedModel: params.executedModel } : {}),
     inputTokens: params.inputTokens ?? 0,
     outputTokens: params.outputTokens ?? 0,
     cachedInputTokens: params.cachedInputTokens ?? 0,
@@ -1180,6 +1185,10 @@ export class ToolBuilder {
                 organization,
                 provider: ledger?.backend ?? meta.provider,
                 model: ledger?.id ?? meta.model,
+                ...executedModelFields(ledger ?? { id: meta.model, backend: meta.provider }, {
+                  id: meta.model,
+                  backend: meta.provider,
+                }),
                 costUsd: meta.usdCost,
                 creditsCharged: credits,
                 inputTokens: meta.inputTokens,
