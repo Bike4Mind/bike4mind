@@ -36,7 +36,7 @@ export type AdminRevenueTotals = {
   payingCount: number;
   /** MRR of subscriptions created in the range that count toward MRR now. */
   newMrr: AdminSubscriptionsMrrTotal;
-  /** MRR of Stripe subscriptions that reached canceled in the range, at the price they were billed. */
+  /** MRR of Stripe subscriptions that ended in the range (`cancelAt`, else `canceledAt`), at the price they were billed; excludes rows created in the same range. */
   churnedMrr: AdminSubscriptionsMrrTotal;
   pastDueMrr: AdminSubscriptionsMrrTotal;
   cancelingMrr: AdminSubscriptionsMrrTotal;
