@@ -53,6 +53,11 @@ export interface OllamaRuntimeOptions {
   fetch?: FetchLike;
   /** Sent as `Authorization: Bearer <apiKey>`, for a daemon behind an authenticating proxy. */
   apiKey?: string;
+  /**
+   * Scrubs credentials a proxy or daemon echoes into a streamed `/api/pull` line, given the response it came on.
+   * Defaults to removing `apiKey`.
+   */
+  redact?: (text: string, response: Response) => string;
   /** Deadline for ordinary API calls (ms). `pull` has none beyond its own signal. */
   requestTimeoutMs?: number;
   healthTimeoutMs?: number;
@@ -222,6 +227,7 @@ export class OllamaRuntime implements LocalRuntime {
   private readonly client: HttpClient;
   private readonly requestTimeoutMs: number;
   private readonly healthTimeoutMs: number;
+  private readonly redact: (text: string, response: Response) => string;
 
   constructor(options: OllamaRuntimeOptions = {}) {
     this.baseUrl = requireBaseUrl(options.baseUrl ?? DEFAULT_OLLAMA_URL, 'ollama');
@@ -238,6 +244,8 @@ export class OllamaRuntime implements LocalRuntime {
       fetch: options.fetch ?? fetch,
       headers: options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : undefined,
     };
+    const { apiKey } = options;
+    this.redact = options.redact ?? (apiKey ? text => text.split(apiKey).join('[redacted]') : text => text);
   }
 
   async health(): Promise<RuntimeHealth> {
@@ -333,7 +341,7 @@ export class OllamaRuntime implements LocalRuntime {
       for await (const line of readLines(response.body)) {
         if (signal.aborted) break;
         arm();
-        const frame = parseJson(this.client, '/api/pull', line, pullFrameSchema);
+        const frame = parseJson(this.client, '/api/pull', this.redact(line, response), pullFrameSchema);
         if (frame.error === MISSING_MANIFEST) throw new ModelNotFoundError(this.id, ref, { cause: frame.error });
         if (frame.error) throw new LocalRuntimeError(`${this.id} could not pull ${ref}: ${frame.error}`, this.id);
         if (frame.digest && frame.total !== undefined) {

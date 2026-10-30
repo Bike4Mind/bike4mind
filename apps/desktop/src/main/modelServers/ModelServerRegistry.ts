@@ -582,7 +582,7 @@ export class ModelServerRegistry {
           });
     const runtime: LocalRuntime =
       record.kind === 'ollama'
-        ? new OllamaRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch })
+        ? new OllamaRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch, redact: redactServerResponse })
         : new OpenAICompatibleRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch, product });
     return {
       record,
