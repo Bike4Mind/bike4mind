@@ -280,7 +280,116 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     meaning: 'A long-window run failed. The block list is unchanged.',
     action: 'Check the blocker Lambda log.',
   },
+  SuccessfulSignups: {
+    title: 'More new accounts than usual',
+    level: 'warn',
+    unit: 'new accounts',
+    meaning:
+      'The hourly census counted more new accounts in one hour than the ceiling. It notifies once per episode and stays on while each following hour also breaches.',
+    action: SIGNUP_ACTION,
+    links: SIGNUP_LINKS,
+  },
+  NewAccountApiKeys: {
+    title: 'New accounts are creating API keys fast',
+    level: 'warn',
+    unit: 'API keys',
+    meaning:
+      'Accounts under 24 hours old created more API keys in one hour than the ceiling. Credit farms create keys right after signing up.',
+    action: 'Check which new accounts created the keys and revoke the ones that look automated.',
+    links: ['signup-activity'],
+  },
+  'account-creation-metrics-missing': {
+    title: 'The signup census did not run',
+    level: 'warn',
+    unit: 'missed hours',
+    meaning: 'No hourly new-account count was published, so the new-account alarms are blind until it runs again.',
+    action: 'Check the account creation metrics Lambda log and its dead-letter queue.',
+  },
+  'account-creation-metrics-failed': {
+    title: 'The signup census is failing',
+    level: 'warn',
+    unit: 'failed runs',
+    meaning: 'The hourly new-account count failed and its event is parked in the failure queue.',
+    action: 'Check the account creation metrics Lambda log, fix the cause, then replay the failed hour.',
+    links: ['dlq-replay'],
+  },
+  'young-account-spend-rate': {
+    title: 'New accounts are spending a lot on AI',
+    level: 'warn',
+    unit: 'USD',
+    meaning:
+      'Accounts under 7 days old spent more estimated AI dollars in one hour than the ceiling. Credit farms spend their free credits fast.',
+    action:
+      'Read the young-account spend post in LiveOps for the top accounts, then check the signup activity and the WAF block list.',
+    links: SIGNUP_LINKS,
+  },
+  'llm-spend-rate': {
+    title: 'AI provider spend is spiking',
+    level: 'warn',
+    unit: 'USD',
+    meaning:
+      'Estimated spend at one provider in five minutes is at or above the ceiling. A runaway agent or a credit farm are the usual causes.',
+    action:
+      'Open the LLM spend dashboard for the provider and model, then check the agent executions and signup activity.',
+    links: ['agent-executions', 'signup-activity'],
+  },
+  'mail-send-failures': {
+    title: 'Emails are failing to send',
+    level: 'page',
+    unit: 'failed sends',
+    meaning:
+      'The mail transport rejected outbound emails in the last hour. Sign-in codes go through the same path, so people may be unable to sign in.',
+    action: 'Check the email-send worker log for the transport error and the mail provider status.',
+  },
+  'oauth-signups-refused-burst': {
+    title: 'Refused OAuth sign-ups spiking',
+    level: 'warn',
+    unit: 'refused sign-ups',
+    meaning:
+      'Many Google or other OAuth sign-ups were refused in five minutes because registration is closed to them. The refusing IPs are blocked automatically.',
+    action: 'Check the WAF block list. Nothing else is needed unless real users report being refused.',
+    links: ['waf-block-list'],
+  },
+  'stream-idle-timeouts': {
+    title: 'AI replies are being cut off by our idle watchdog',
+    level: 'warn',
+    unit: 'cut streams',
+    meaning:
+      'Our idle watchdog cut at least ten model streams in an hour. Each cut attempt is still billed by the provider and then retried or sent to a fallback model, so users see slow or repeated answers.',
+    action:
+      'Search the ChatCompletion logs for "Stream idle timeout". keepalive: true means the model was still generating, so the timeout is too short for that model.',
+  },
 };
+
+/**
+ * Dead-letter queue alarms are one per queue and one per signal, so they are generated from the
+ * name rather than listed: dlq-<queue>-messages (a job failed) and dlq-<queue>-age (its failure has
+ * waited over an hour). Exact catalog keys such as the alarm relay's own DLQ take precedence.
+ */
+export function dlqCatalogEntry(suffix: string): AlarmCatalogEntry | undefined {
+  const match = /^dlq-(.+)-(messages|age)$/.exec(suffix);
+  if (!match) return undefined;
+  const queue = match[1].replace(/-/g, ' ');
+  const action = 'Open DLQ replay, read the error on the message, fix the cause, then replay it.';
+  if (match[2] === 'messages') {
+    return {
+      title: `Background job failed: ${queue}`,
+      level: 'warn',
+      unit: 'failed messages',
+      meaning: `A message for the ${queue} job could not be processed after retries and is parked in its dead-letter queue. Whatever that job does for the affected item did not happen.`,
+      action,
+      links: ['dlq-replay'],
+    };
+  }
+  return {
+    title: `Unhandled failure for over an hour: ${queue}`,
+    level: 'warn',
+    unit: 'waiting messages',
+    meaning: `A failed message for the ${queue} job has sat in its dead-letter queue for more than an hour without being replayed or dropped.`,
+    action,
+    links: ['dlq-replay'],
+  };
+}
 
 /** Level for alarms the catalog does not know. */
 export const DEFAULT_ALARM_LEVEL: AlarmLevel = 'warn';
@@ -300,6 +409,8 @@ const PRODUCTION_PREFIX: Record<AlarmLevel, string> = {
 };
 
 const STAGE_ALIASES = ['prod', 'production', 'dev', 'staging'];
+/** Staging deploys as SST stage `dev`; the channel shows the name the team uses. Alarm names stay raw. */
+const STAGE_LABELS: Record<string, string> = { dev: 'staging' };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const SEPARATOR = '  |  ';
 
@@ -308,6 +419,7 @@ export function isCloudWatchAlarm(payload: unknown): payload is CloudWatchAlarmP
 }
 
 export const isProductionStage = (stage: string) => classifyStage(stage) === 'production';
+export const stageLabel = (stage: string) => STAGE_LABELS[stage] ?? stage;
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -318,9 +430,11 @@ export function alarmSuffix(alarmName: string, stage: string): string {
   return match ? match[2] : alarmName;
 }
 
-/** Exact match first, then the longest catalog key the suffix starts or ends with. */
+/** Exact match first, then the generated DLQ entries, then the longest catalog key the suffix starts or ends with. */
 export function lookupCatalog(suffix: string): AlarmCatalogEntry | undefined {
   if (Object.prototype.hasOwnProperty.call(ALARM_CATALOG, suffix)) return ALARM_CATALOG[suffix];
+  const dlq = dlqCatalogEntry(suffix);
+  if (dlq) return dlq;
   let best: string | undefined;
   for (const key of Object.keys(ALARM_CATALOG)) {
     if (suffix.startsWith(key) || suffix.endsWith(key)) {
@@ -517,7 +631,9 @@ export interface ComposeParams {
 /** Assembles the header + colour-barred attachment shape every alarm-style message uses. */
 export function composeAlarmMessage(params: ComposeParams): SlackAlarmMessage {
   const production = isProductionStage(params.stage);
-  const prefix = production ? PRODUCTION_PREFIX[params.level] : `:small_blue_diamond: ${params.stage} alarm`;
+  const prefix = production
+    ? PRODUCTION_PREFIX[params.level]
+    : `:small_blue_diamond: ${stageLabel(params.stage)} alarm`;
   const color = production ? COLOR[params.level] : COLOR.nonprod;
   const headerText = `${prefix}: ${params.title}`;
   const mention = production && params.level === 'page' ? normalizeMentionToken(params.mention) : undefined;
@@ -584,7 +700,7 @@ export function formatAlarmSlackMessage(
               type: 'section',
               text: {
                 type: 'mrkdwn',
-                text: `:white_check_mark: *Resolved: ${escapeMrkdwn(title)}*\n${escapeMrkdwn(stage)}${SEPARATOR}${back}`,
+                text: `:white_check_mark: *Resolved: ${escapeMrkdwn(title)}*\n${escapeMrkdwn(stageLabel(stage))}${SEPARATOR}${back}`,
               },
             },
             { type: 'context', elements: [{ type: 'mrkdwn', text: context.join(SEPARATOR) }] },
@@ -610,7 +726,7 @@ export function formatAlarmSlackMessage(
   }
 
   const stamp = when ? `${formatClock(when)} UTC, ${when.getUTCDate()} ${MONTHS[when.getUTCMonth()]}` : undefined;
-  const context = [escapeMrkdwn(stage), `level ${level}`, escapeMrkdwn(alarm.AlarmName), stamp].filter(
+  const context = [escapeMrkdwn(stageLabel(stage)), `level ${level}`, escapeMrkdwn(alarm.AlarmName), stamp].filter(
     Boolean
   ) as string[];
 

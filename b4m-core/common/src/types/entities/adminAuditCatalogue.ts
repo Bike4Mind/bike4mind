@@ -88,6 +88,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
+  'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.removed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.role_changed': { category: 'org', severity: 'notice', write: 'strict' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },

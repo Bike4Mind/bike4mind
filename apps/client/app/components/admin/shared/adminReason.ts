@@ -42,6 +42,8 @@ export const ADMIN_REASON_PRESETS = {
   subscriptionRemove: ['Duplicate record', 'Comp no longer needed', 'Test or internal record', 'Billing correction'],
   seatChange: ['Customer request', 'Team size changed', 'Seats out of sync with billing', 'Billing correction'],
   paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
+  orgMembership: ['Customer request', 'Joined the team', 'Left the team', 'Account cleanup'],
+  orgRoleChange: ['Customer request', 'Owner request', 'Team lead changed'],
   signupRiskApproval: ['Verified legitimate user', 'Known customer or partner', 'False positive signal'],
 } as const satisfies Record<string, readonly string[]>;
 
