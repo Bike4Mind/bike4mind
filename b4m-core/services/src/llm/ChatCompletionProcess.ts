@@ -147,6 +147,7 @@ import {
   convertOpenAIToolHistoryToCanonical,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
+import { timedOutAttemptUsageFields } from './timedOutAttemptUsage';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
@@ -5140,13 +5141,14 @@ export class ChatCompletionProcess {
       let streamIdleTimeoutRetried = false;
       let streamEndedWithoutFinishRetried = false;
       // A timed-out stream rejects before reporting usage and the next attempt resets
-      // actualTokenUsage, so the prompt the provider billed for it is recorded here as COGS only.
-      // Called only when the loop moves on to another attempt: a timeout that ends the turn is
-      // settled by settleAbortedReservation, and recording it here too would count it twice.
-      const recordTimedOutAttempt = (error: Error, attemptModel: typeof currentModel) => {
+      // actualTokenUsage, so the usage the provider billed for it is recorded here as COGS only:
+      // when the loop moves on, and when the timeout ends the turn (nothing else settles it then).
+      // The set keeps an error rethrown after its hop was recorded from being booked twice.
+      const recordedTimeouts = new WeakSet<Error>();
+      const recordTimedOutAttempt = (error: unknown, attemptModel: typeof currentModel) => {
         if (!adminSettingsEnforceCredits || !isLlmTimeoutError(error) || !error.usage) return;
-        const { inputTokens: providerInputTokens, cacheReadInputTokens, cacheCreationInputTokens } = error.usage;
-        const promptTokens = providerInputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+        if (recordedTimeouts.has(error)) return;
+        recordedTimeouts.add(error);
         this.db.usageEvents
           ?.record({
             requestId: quest.id,
@@ -5155,29 +5157,11 @@ export class ChatCompletionProcess {
             ownerType: this.reservedCreditsOwnerType,
             sessionId: quest.sessionId,
             feature: 'chat',
+            source: 'web',
+            ...timedOutAttemptUsageFields(attemptModel, error.usage),
             provider: this.ledgerModel(attemptModel).backend,
             model: this.ledgerModel(attemptModel).id,
             ...executedModelFields(this.ledgerModel(attemptModel), attemptModel),
-            source: 'web',
-            // inputTokens is the local estimate and counts toward the user's token quota; this
-            // attempt is ours to absorb, so the provider count goes in providerInputTokens only.
-            inputTokens: 0,
-            // The provider reports output only in message_delta, which a cut stream never reached.
-            outputTokens: 0,
-            providerInputTokens,
-            cachedInputTokens: cacheReadInputTokens,
-            cacheWriteTokens: cacheCreationInputTokens,
-            costUsd: getTextModelCost(
-              attemptModel,
-              providerInputTokens,
-              0,
-              cacheReadInputTokens,
-              cacheCreationInputTokens,
-              promptTokens
-            ),
-            creditsCharged: 0,
-            ...buildUsagePriceStamp(attemptModel, { tierBasisTokens: promptTokens }),
-            status: 'timeout',
             latencyMs: Date.now() - processStartTime,
           })
           .catch((usageEventError: unknown) => {
@@ -6325,6 +6309,7 @@ export class ChatCompletionProcess {
         };
       } catch (error) {
         logger.debug(`Error during fallback-enabled model invocation (final model: ${currentModel.id}):`, error);
+        recordTimedOutAttempt(error, currentModel);
         // Only a turn that ends refused counts: a refusal a fallback model answered may be a
         // classifier false positive, and the hit drives throttling/suspension.
         if (error instanceof Error && isSafetyRefusalError(error)) {

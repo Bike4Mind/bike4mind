@@ -74,6 +74,7 @@ import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
+import { timedOutAttemptUsageFields, timedOutUsageOf } from './llm/timedOutAttemptUsage';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
@@ -1011,7 +1012,23 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       // this path has no fallback loop, so the refused call is the whole request.
       const isRefusal = error instanceof Error && isSafetyRefusalError(error);
       const recordsUsage = enforceCredits || params.alwaysRecordUsage;
-      if (
+      const timeoutUsage = timedOutUsageOf(error);
+      if (modelInfo && recordsUsage && timeoutUsage) {
+        db.usageEvents
+          ?.record({
+            requestId,
+            userId,
+            ownerId: holderId,
+            ownerType: holderType,
+            feature: 'completion_api',
+            source,
+            apiKeyId: apiKeyInfo?.keyId,
+            ...timedOutAttemptUsageFields(modelInfo, timeoutUsage),
+            model,
+            latencyMs: Date.now() - completionStartTime,
+          })
+          .catch(err => logger?.warn?.('Failed to record timed-out usage event', err));
+      } else if (
         modelInfo &&
         ((isRefusal && recordsUsage) || (params.alwaysRecordUsage && (finalInputTokens > 0 || finalOutputTokens > 0)))
       ) {
