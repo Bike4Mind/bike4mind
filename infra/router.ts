@@ -173,9 +173,15 @@ $transform(aws.cloudfront.Function, (args, _opts, name) => {
 const sharedResponseFunctionArn =
   isPreviewStage && !$dev ? process.env.PREVIEW_SHARED_RESPONSE_FUNCTION_ARN || undefined : undefined;
 
-const authNetworkOriginRequestPolicy = shouldUseSharedRouter
+// CloudFront caps custom origin request policies per account (20 by default), so like the cache
+// policy above, a deployer can point every stage at one account-level policy instead of each
+// creating its own. docs/ja4-forwarding.md has the matching create command.
+const sharedAuthNetworkOriginRequestPolicyId = process.env.AUTH_NETWORK_ORIGIN_REQUEST_POLICY_ID || undefined;
+
+const authNetworkOriginRequestPolicyId = shouldUseSharedRouter
   ? undefined
-  : new aws.cloudfront.OriginRequestPolicy('AuthNetworkOriginRequestPolicy', {
+  : (sharedAuthNetworkOriginRequestPolicyId ??
+    new aws.cloudfront.OriginRequestPolicy('AuthNetworkOriginRequestPolicy', {
       comment: 'Forward trusted connection metadata on authentication requests',
       headersConfig: {
         headerBehavior: 'allViewerAndWhitelistCloudFront',
@@ -183,7 +189,7 @@ const authNetworkOriginRequestPolicy = shouldUseSharedRouter
       },
       cookiesConfig: { cookieBehavior: 'all' },
       queryStringsConfig: { queryStringBehavior: 'all' },
-    });
+    }).id);
 
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
@@ -277,14 +283,14 @@ const routerInstance = shouldUseSharedRouter
           // The request-function transform pins origin Host separately from the viewer hostname.
           // Keep x-forwarded-host, cookies, Authorization and the existing cache/edge settings.
           // Scope this policy to auth so S3 keeps the managed policy's response-* query filtering.
-          if (authNetworkOriginRequestPolicy && args.defaultCacheBehavior) {
+          if (authNetworkOriginRequestPolicyId && args.defaultCacheBehavior) {
             const existing = args.orderedCacheBehaviors as
               aws.types.input.cloudfront.DistributionOrderedCacheBehavior[] | undefined;
             args.orderedCacheBehaviors = [
               ...(existing ?? []),
               ...authNetworkCacheBehaviors(
                 args.defaultCacheBehavior as aws.types.input.cloudfront.DistributionDefaultCacheBehavior,
-                authNetworkOriginRequestPolicy.id
+                authNetworkOriginRequestPolicyId
               ),
             ];
           }

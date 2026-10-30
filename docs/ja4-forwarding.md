@@ -15,6 +15,34 @@ CloudFront does not generate viewer city, region or coordinates on the
 authentication behaviors, so code under these paths must not rely on geo headers.
 Shared development routers must receive this change through their owning stage.
 
+## Sharing the origin request policy
+
+CloudFront allows 20 custom origin request policies per account by default, and
+each stage that owns its router creates one for these behaviors. Before an account
+runs many previews, create one shared policy and set
+`AUTH_NETWORK_ORIGIN_REQUEST_POLICY_ID` to its id in the deployer's environment.
+Stages then attach that policy and create none of their own; the next deploy of
+an existing stage deletes its own copy. The configuration must match
+`AUTH_NETWORK_HEADERS` in `infra/authNetworkForwarding.ts`:
+
+```bash
+aws cloudfront create-origin-request-policy --origin-request-policy-config '{
+  "Name": "bike4mind-auth-network",
+  "Comment": "Forward trusted connection metadata on authentication requests",
+  "HeadersConfig": {
+    "HeaderBehavior": "allViewerAndWhitelistCloudFront",
+    "Headers": { "Quantity": 4, "Items": [
+      "CloudFront-Viewer-Address", "CloudFront-Viewer-ASN",
+      "CloudFront-Viewer-Country", "CloudFront-Viewer-JA4-Fingerprint"
+    ] }
+  },
+  "CookiesConfig": { "CookieBehavior": "all" },
+  "QueryStringsConfig": { "QueryStringBehavior": "all" }
+}' --query OriginRequestPolicy.Id --output text
+```
+
+When `AUTH_NETWORK_HEADERS` changes, update the shared policy in each account too.
+
 SST's lazy router preserves the viewer domain in `x-forwarded-host`, then selects
 the URL origin using `cf.updateRequestOrigin`. The request-function transform
 explicitly sets `hostHeader` to the destination domain; relying on the implicit
