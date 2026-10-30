@@ -167,6 +167,14 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return result.modifiedCount > 0;
   }
 
+  async resumeBlockedRun(id: string, executionId: string): Promise<boolean> {
+    const result = await this.workItemModel.updateOne(
+      { _id: id, executionId, status: 'blocked', deletedAt: null },
+      { $set: { status: 'in_progress' }, $unset: { statusReason: '' } }
+    );
+    return result.modifiedCount > 0;
+  }
+
   async listForLoop(userId: string, loopId: string, closedLimit: number): Promise<IWorkItem[]> {
     const scope = { userId, loopId, deletedAt: null };
     const [active, closed] = await Promise.all([

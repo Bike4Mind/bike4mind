@@ -1450,6 +1450,46 @@ describe('AgentExecutionRepository', () => {
       expect(await agentExecutionRepository.recordIterationConfidence(exec.id, 0.2, { belowThreshold: true })).toBe(1);
     });
 
+    it('clearPendingGate moves each resolved gate into gateHistory, oldest first', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const gate = (iteration: number) => ({
+        iteration,
+        confidence: 0.2,
+        reason: `low ${iteration}`,
+        requestedAt: new Date(),
+      });
+
+      await agentExecutionRepository.setPendingGate(exec.id, gate(1));
+      expect(await agentExecutionRepository.clearPendingGate(exec.id, 'resumed', 'user-1')).toBe(true);
+      await agentExecutionRepository.setPendingGate(exec.id, gate(3));
+      expect(await agentExecutionRepository.clearPendingGate(exec.id, 'rejected')).toBe(true);
+
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect(updated?.pendingGate).toBeUndefined();
+      expect(updated?.gateHistory).toMatchObject([
+        { iteration: 1, reason: 'low 1', resolution: 'resumed', resolvedBy: 'user-1' },
+        { iteration: 3, reason: 'low 3', resolution: 'rejected' },
+      ]);
+      expect(updated?.gateHistory?.[0].resolvedAt).toBeInstanceOf(Date);
+      expect(updated?.gateHistory?.[1].resolvedBy).toBeUndefined();
+    });
+
+    it('clearPendingGate returns false on an aborted run and leaves its gate in place', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.setPendingGate(exec.id, {
+        iteration: 1,
+        confidence: 0.2,
+        reason: 'low',
+        requestedAt: new Date(),
+      });
+      await AgentExecutionModel.updateOne({ _id: exec.id }, { $set: { abortedAt: new Date() } });
+
+      expect(await agentExecutionRepository.clearPendingGate(exec.id, 'resumed')).toBe(false);
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect(updated?.pendingGate).toMatchObject({ reason: 'low' });
+      expect(updated?.gateHistory).toBeUndefined();
+    });
+
     it('advances only the streak when told not to record telemetry (a scripted score)', async () => {
       const exec = await agentExecutionRepository.create(makeBaseExecution());
       const scripted = (confidence: number, belowThreshold: boolean) =>

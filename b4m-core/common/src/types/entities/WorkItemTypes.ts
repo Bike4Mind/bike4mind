@@ -170,6 +170,9 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
    */
   foldTicketRun(id: string, executionId: string, patch: WorkItemPatch): Promise<boolean>;
 
+  /** Moves a ticket blocked under `executionId` back to `in_progress`, for a run its owner resumed. */
+  resumeBlockedRun(id: string, executionId: string): Promise<boolean>;
+
   /** A loop's live tickets: every non-closed one plus the `closedLimit` most recently closed. */
   listForLoop(userId: string, loopId: string, closedLimit: number): Promise<IWorkItem[]>;
 
