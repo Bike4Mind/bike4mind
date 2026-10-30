@@ -527,6 +527,10 @@ export function useAgentExecutionSubscriptions(): void {
           gapResubscribes.delete(subscribedId);
           const viewed = store().viewedExecutionIds[subscribedId];
           if (viewed && viewed !== 'closed') store().setViewed(subscribedId, msg.found ? 'found' : 'not_found');
+        } else if (msg.found && msg.executionId && store().viewedExecutionIds[msg.executionId] === 'closed') {
+          // A chat `reconnect` (e.g. opening the loop's notebook) streams the run here again;
+          // the closed viewer's tombstone would otherwise hide it until reload.
+          store().setViewed(msg.executionId, undefined);
         }
         const reconnectSequence = store().consumeReconnectRequest(
           msg.requestId,

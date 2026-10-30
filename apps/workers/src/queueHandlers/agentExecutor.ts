@@ -400,6 +400,8 @@ export function createWsSender(connectionId: string, logger: Logger, viewerExecu
     if (!viewerExecutionId) return [];
     if (!VIEWER_CACHED_ACTIONS.has(action) || Date.now() - viewers.at > VIEWER_CACHE_MS) {
       // Single-flight: frames emitted in the same tick share one read and keep their emit order.
+      // A step joining a read already in flight can miss a viewer added meanwhile; the client's
+      // gap re-subscribe repairs that.
       viewers.refresh ??= agentExecutionRepository
         .findViewerConnectionIds(viewerExecutionId)
         .then(
