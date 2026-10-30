@@ -9,6 +9,7 @@ const { mocks } = vi.hoisted(() => ({
     loadFreeTierAllowedModels: vi.fn(),
     getUserEntitlements: vi.fn(),
     findAdminSetting: vi.fn(),
+    cacheFindOne: vi.fn(),
   },
 }));
 
@@ -33,7 +34,10 @@ vi.mock('@server/entitlements', () => ({
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { findOne: (...a: unknown[]) => mocks.findAdminSetting(...a) },
-  cacheRepository: { findOne: vi.fn(async () => null), createOrUpdate: vi.fn(async () => undefined) },
+  cacheRepository: {
+    findOne: (...a: unknown[]) => mocks.cacheFindOne(...a),
+    createOrUpdate: vi.fn(async () => undefined),
+  },
 }));
 // The real getSettingsValue, so the setting is parsed exactly as production parses it.
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -76,6 +80,7 @@ beforeEach(() => {
   mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined);
   mocks.getUserEntitlements.mockResolvedValue(['base']);
   mocks.findAdminSetting.mockResolvedValue(null);
+  mocks.cacheFindOne.mockResolvedValue(null);
 });
 
 describe('getCallerModelList unpriced text models', () => {
@@ -119,6 +124,58 @@ describe('getCallerModelList free-tier gate', () => {
     mocks.loadFreeTierAllowedModels.mockResolvedValue(new Set(['priced', 'image-model']));
 
     expect(await listedIds()).toEqual(['priced', 'image-model']);
+  });
+
+  it('moves paid-only models of any modality to lockedModels, marked locked, for a free user', async () => {
+    const list = await callerList(makeUser());
+
+    expect(list.lockedModels.map(model => model.id)).toEqual(['free', 'image-model']);
+    expect(list.lockedModels.every(model => model.access?.locked === true)).toBe(true);
+    expect(list.lockedModels[0].access?.reason).toBe('requires_paid_plan');
+    expect(list.models.some(model => model.access)).toBe(false);
+  });
+
+  it('splits a cached list without lockedModels for a free user, without recomputing', async () => {
+    mocks.cacheFindOne.mockResolvedValue({ result: { models: [priced, free, image], supersededModels: [] } });
+    mocks.getAvailableModels.mockClear();
+
+    const list = await callerList(makeUser());
+
+    expect(list.models.map(model => model.id)).toEqual(['priced']);
+    expect(list.lockedModels.map(model => model.id)).toEqual(['free', 'image-model']);
+    expect(list.lockedModels.every(model => model.access?.locked === true)).toBe(true);
+    expect(mocks.getAvailableModels).not.toHaveBeenCalled();
+  });
+
+  it('leaves disabled and retired models out of lockedModels, since no upgrade unlocks them', async () => {
+    const disabled = textModel('disabled-model', { disabled: true });
+    const retired = textModel('retired-model', { deprecationDate: '2000-01-01' });
+    mocks.getAvailableModels.mockResolvedValue([priced, free, disabled, retired]);
+
+    const list = await callerList(makeUser());
+
+    expect(list.models.map(model => model.id)).toEqual(['priced']);
+    expect(list.lockedModels.map(model => model.id)).toEqual(['free']);
+  });
+
+  it.each([
+    ['a plan:paid user', makeUser(), () => mocks.getUserEntitlements.mockResolvedValue(['base', 'plan:paid'])],
+    ['an admin', makeUser({ isAdmin: true }), () => undefined],
+    ['an anonymous caller', null, () => undefined],
+    ['any caller when the gate is off', makeUser(), () => mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined)],
+  ])('locks nothing for %s', async (_label, user, arrange) => {
+    arrange();
+
+    expect((await callerList(user)).lockedModels).toEqual([]);
+  });
+
+  it('never points an upgrade offer at a locked model', async () => {
+    mocks.getSupersededModels.mockReturnValue([{ id: 'old', replacementId: 'free' } as unknown as SupersededModelInfo]);
+
+    const list = await callerList(makeUser());
+
+    expect(list.lockedModels.map(model => model.id)).toContain('free');
+    expect(list.supersededModels).toEqual([]);
   });
 
   it('lists everything for a user holding plan:paid', async () => {

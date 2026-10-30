@@ -124,6 +124,19 @@ describe('GET /api/v1/models', () => {
     expect(res._getJSONData().data.map((model: { id: string }) => model.id)).toEqual(['model-a']);
   });
 
+  it('never lists the paid-only models the SPA picker shows a free account as locked', async () => {
+    getCallerModelList.mockResolvedValue({
+      models: [textModel('model-a')],
+      supersededModels: [],
+      lockedModels: [{ ...textModel('paid-only'), access: { locked: true, reason: 'requires_paid_plan' } }],
+    });
+    const { req, res } = get();
+
+    await run(req, res);
+
+    expect(res._getJSONData().data.map((model: { id: string }) => model.id)).toEqual(['model-a']);
+  });
+
   it('never publishes internal catalog fields', async () => {
     const { req, res } = get();
 
