@@ -136,4 +136,20 @@ describe('PATCH /api/admin/users/:userId/profile (real repository + Mongo)', () 
     });
     expect(h.publish).not.toHaveBeenCalled();
   });
+
+  it('publishes only the committed verification token after a transaction retry', async () => {
+    const user = await seedUser('retry');
+    h.record.mockRejectedValueOnce(Object.assign(new Error('write conflict'), { code: 112 }));
+
+    await patch(user.id, { email: 'retry-next@example.com' });
+
+    const stored = await User.findById(user.id).lean();
+    expect(h.record).toHaveBeenCalledTimes(2);
+    expect(h.publish).toHaveBeenCalledTimes(2);
+    expect(h.publish.mock.calls.map(([message]) => message.to)).toEqual([
+      'user-retry@example.com',
+      'retry-next@example.com',
+    ]);
+    expect(h.publish.mock.calls[1][0].body).toContain(stored!.pendingEmailToken);
+  });
 });

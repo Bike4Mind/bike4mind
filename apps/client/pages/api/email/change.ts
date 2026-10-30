@@ -38,6 +38,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const pendingEmails: EmailChangeMessage[] = [];
 
       await withTransaction(async () => {
+        // Keep only messages from this attempt: a retry generates a new verification token.
+        pendingEmails.length = 0;
         await userService.requestEmailChange(
           {
             userId: req.user.id,

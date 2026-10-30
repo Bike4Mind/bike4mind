@@ -63,6 +63,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       const outbox: EmailChangeMessage[] = [];
       const result = await withTransaction(async () => {
+        // A retry rolls back Mongo writes, but not this buffer or its now-invalid tokens.
+        outbox.length = 0;
         const user = await userRepository.findById(userId);
         if (!user) throw new NotFoundError('User not found');
 

@@ -183,7 +183,8 @@ export const buildEmailChangeMailer = (
 /**
  * Publishes buffered email-change messages after the write commits. The DB write is the source of
  * truth: a publish failure must not fail the request (which would falsely signal the change did not
- * happen), so it is logged and SQS's own retry/DLQ recovers.
+ * happen), so a failed publish is logged for investigation. A message that never reaches SQS
+ * cannot be recovered by the queue's retry or DLQ handling.
  */
 export const publishEmailChangeMessages = async (
   outbox: readonly EmailChangeMessage[],

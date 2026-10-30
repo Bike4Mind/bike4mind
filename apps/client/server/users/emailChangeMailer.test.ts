@@ -86,7 +86,9 @@ describe('buildEmailChangeMailer', () => {
 });
 
 describe('publishEmailChangeMessages', () => {
-  beforeEach(() => publish.mockReset());
+  beforeEach(() => {
+    publish.mockReset();
+  });
 
   it('publishes every message and logs a failed one without throwing', async () => {
     const logger = { error: vi.fn() };

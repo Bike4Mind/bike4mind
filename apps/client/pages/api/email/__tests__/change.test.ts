@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   logAuditEvent: vi.fn(),
   logAuthAudit: vi.fn(),
   users: { findById: vi.fn(), existsOtherUserWithEmail: vi.fn(), update: vi.fn() },
+  withTransaction: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -29,7 +30,7 @@ vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: h.users,
-  withTransaction: async (fn: () => Promise<unknown>) => fn(),
+  withTransaction: h.withTransaction,
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { requestEmailChange: h.requestEmailChange } }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
@@ -60,6 +61,7 @@ const run = async () => {
 describe('POST /api/email/change templates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => fn());
     h.requestEmailChange.mockImplementation(async (_params: unknown, { mailer }: { mailer: Mailer }) => {
       await mailer.sendEmailChangeNotification(user, newEmail);
       await mailer.sendEmailChangeVerification(user, newEmail, 'tok');
@@ -137,5 +139,23 @@ describe('POST /api/email/change templates', () => {
       metadata: { oldEmail: user.email, newEmail },
     });
     expect(h.logAuditEvent).not.toHaveBeenCalled();
+  });
+
+  it('discards messages from a rolled-back transaction attempt', async () => {
+    h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+      return fn();
+    });
+    const tokens = ['rolled-back-token', 'committed-token'];
+    h.requestEmailChange.mockImplementation(async (_params: unknown, { mailer }: { mailer: Mailer }) => {
+      await mailer.sendEmailChangeNotification(user, newEmail);
+      await mailer.sendEmailChangeVerification(user, newEmail, tokens.shift()!);
+    });
+
+    const messages = await run();
+
+    expect(messages).toHaveLength(2);
+    expect(messages[1].body).toContain('committed-token');
+    expect(messages.some(message => message.body.includes('rolled-back-token'))).toBe(false);
   });
 });

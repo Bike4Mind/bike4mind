@@ -280,4 +280,16 @@ describe('PATCH /api/admin/users/[userId]/profile', () => {
     expect(h.writeUserUpdate).not.toHaveBeenCalled();
     expect(h.requestEmailChange).not.toHaveBeenCalled();
   });
+
+  it('makes no changes or audit entry when step-up fails', async () => {
+    const failure = new Error('step-up required');
+    h.requireStepUp.mockRejectedValue(failure);
+
+    await expect(run({ name: 'Ada King', email: 'new@example.com', reason: REASON })).rejects.toBe(failure);
+
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+    expect(h.requestEmailChange).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+    expect(h.publishEmailChangeMessages).not.toHaveBeenCalled();
+  });
 });
