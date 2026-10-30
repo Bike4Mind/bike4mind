@@ -55,9 +55,11 @@ export type ArenaServiceDeps = {
   >;
   loadUser: (userId: string) => Promise<ArenaUser | null>;
   loadSettings: () => Promise<PreferenceArenaSettings>;
+  /** Credits the ledger already holds under this transaction id, or null when it has no such row. */
+  findPaidCredits: (transactionId: string) => Promise<number | null>;
   addCredits: AddCredits;
   creditAdapters: Parameters<AddCredits>[1];
-  logger: Pick<Logger, 'error'>;
+  logger: Pick<Logger, 'error' | 'warn'>;
   now?: () => Date;
   random?: () => number;
 };
@@ -195,6 +197,28 @@ export function createArenaService(deps: ArenaServiceDeps) {
     if (!claimed) {
       const settled = await votes.findForPair(userId, pairId);
       return { creditsAwarded: settled?.status === 'voted' ? settled.creditsAwarded : 0 };
+    }
+
+    if (row.claimedAt) {
+      // A crashed submit may have paid before dying; honor the ledger instead of judging again.
+      const paid = await deps.findPaidCredits(arenaVoteTransactionId(row.id));
+      if (paid !== null) {
+        logger.warn('[preference-arena] stale claim taken over after the ledger already paid', {
+          userId,
+          voteId: row.id,
+          paid,
+        });
+        const choice = row.swapped ? opposite(request.choice) : request.choice;
+        const recorded = await votes.recordVote(userId, pairId, votedAt, {
+          choice,
+          votedAt,
+          responseMs: Math.max(0, votedAt.getTime() - row.servedAt.getTime()),
+          goldCorrect: pair.goldChoice ? choice === pair.goldChoice : null,
+          credited: true,
+          creditsAwarded: paid,
+        });
+        return { creditsAwarded: recorded?.creditsAwarded ?? paid };
+      }
     }
 
     const responseMs = Math.max(0, votedAt.getTime() - row.servedAt.getTime());

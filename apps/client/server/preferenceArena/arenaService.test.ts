@@ -79,19 +79,21 @@ function build(over: { user?: ArenaUser | null; settings?: Partial<PreferenceAre
   };
   const addCredits = vi.fn().mockResolvedValue({ creditTransactionId: 'tx1' });
   const creditAdapters = { db: { creditLots: 'lots' }, creditHolderMethods: 'holder' } as never;
-  const logger = { error: vi.fn() };
+  const logger = { error: vi.fn(), warn: vi.fn() };
+  const findPaidCredits = vi.fn().mockResolvedValue(null);
   const deps: ArenaServiceDeps = {
     pairs,
     votes,
     loadUser: async () => (over.user === undefined ? verifiedUser : over.user),
     loadSettings: async () => ({ ...settings, ...over.settings }),
+    findPaidCredits,
     addCredits,
     creditAdapters,
     logger,
     now: () => new Date('2026-01-01T00:00:10Z'),
     random: () => over.random ?? 0.9,
   };
-  return { service: createArenaService(deps), votes, pairs, addCredits, creditAdapters, logger };
+  return { service: createArenaService(deps), votes, pairs, addCredits, creditAdapters, logger, findPaidCredits };
 }
 
 const vote = { pairId: 'AAAAAAAAAAAAAAAAAAAAAAAA', choice: 'a' as const };
@@ -326,6 +328,29 @@ describe('submitVote', () => {
       await expect(service.submitVote('u1', vote)).rejects.toBeInstanceOf(ForbiddenError);
       expect(addCredits).not.toHaveBeenCalled();
     }
+  });
+
+  it('honors credits the ledger already paid when taking over a stale claim', async () => {
+    const { service, votes, addCredits, logger, findPaidCredits } = build();
+    votes.findForPair.mockResolvedValue(servedRow({ claimedAt: new Date('2025-12-31T00:00:00Z') }));
+    findPaidCredits.mockResolvedValue(2);
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
+    expect(findPaidCredits).toHaveBeenCalledWith(expect.stringContaining('vote1'));
+    expect(addCredits).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
+    expect(votes.recordVote).toHaveBeenCalledWith(
+      'u1',
+      expect.any(String),
+      expect.any(Date),
+      expect.objectContaining({ credited: true, creditsAwarded: 2 })
+    );
+  });
+
+  it('judges normally when a stale claim left nothing in the ledger', async () => {
+    const { service, votes, addCredits } = build();
+    votes.findForPair.mockResolvedValue(servedRow({ claimedAt: new Date('2025-12-31T00:00:00Z') }));
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
+    expect(addCredits).toHaveBeenCalledTimes(1);
   });
 
   it('releases the claim and throws when the grant fails so a retry can pay', async () => {

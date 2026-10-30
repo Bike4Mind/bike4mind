@@ -62,12 +62,14 @@ export async function loadArenaUser(userId: string): Promise<ArenaUser | null> {
   return user && { ...user, noCardUnlocks };
 }
 
-export function getArenaService(logger: Pick<Logger, 'error'>) {
+export function getArenaService(logger: Pick<Logger, 'error' | 'warn'>) {
   return createArenaService({
     pairs: arenaPairRepository,
     votes: arenaVoteRepository,
     loadUser: loadArenaUser,
     loadSettings: loadArenaSettings,
+    findPaidCredits: async transactionId =>
+      (await creditTransactionRepository.findOne({ transactionId }))?.credits ?? null,
     addCredits: creditService.addCreditsWithLedgerRow,
     creditAdapters: {
       db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
