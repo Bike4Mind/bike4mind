@@ -204,7 +204,7 @@ export function orderedSessions(
     includeImported = false,
   }: { isOpen?: (sessionId: string) => boolean; includeImported?: boolean } = {}
 ): ChatSessionSummary[] {
-  // A parent's children follow it only while it is open, for the same reason.
+  // A folded parent's children are left out too: the sidebar does not draw them.
   const withChildren = (session: ChatSessionSummary): ChatSessionSummary[] => [
     session,
     ...(isOpen(session.id) ? (sections.children.get(session.id) ?? []).flatMap(withChildren) : []),

@@ -57,7 +57,7 @@ import {
   SearchIcon,
   SubSessionsIcon,
 } from './icons';
-import { toggleFolded, useFoldedParents, useNestedSessions } from './nestedSessions';
+import { foldedParents, toggleFolded, useFoldedParents, useNestedSessions } from './nestedSessions';
 import { ModeSwitcher } from './ModeSwitcher';
 import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
@@ -174,6 +174,8 @@ interface NestProps {
   /** The loudest state among them, which the fold pill wears while they are folded away. */
   subActivity?: SubActivity;
   subFolded?: boolean;
+  /** False while a search holds every branch open, when folding could not show. */
+  subFoldable?: boolean;
 }
 
 type SubActivity = 'needs-action' | 'processing' | undefined;
@@ -229,18 +231,21 @@ const pulse = keyframes({ '0%, 100%': { opacity: 1 }, '50%': { opacity: 0.35 } }
  * it fills in, and takes on the colour of anything underneath that is working or waiting on the
  * user, so folding a busy tree away never hides that it needs attention.
  *
- * A span with a button role rather than a <button>, because it sits inside the row's own button.
+ * A mouse shortcut only, hidden from assistive tech: it sits inside the row's own button, and the
+ * row already carries aria-expanded and folds on Left/Right, so a second control would be nested.
  */
 function FoldPill({
   sessionId,
   count,
   activity,
   folded,
+  foldable,
 }: {
   sessionId: string;
   count: number;
   activity: SubActivity;
   folded: boolean;
+  foldable: boolean;
 }) {
   const color = activity === 'needs-action' ? 'warning' : activity === 'processing' ? 'primary' : 'neutral';
   const label = `${folded ? 'Show' : 'Hide'} ${count} sub-session${count === 1 ? '' : 's'}`;
@@ -251,19 +256,10 @@ function FoldPill({
   return (
     <Box
       component="span"
-      role="button"
-      tabIndex={0}
-      aria-label={label}
-      aria-expanded={!folded}
-      title={label}
-      onClick={toggle}
+      aria-hidden
+      title={foldable ? label : undefined}
+      onClick={foldable ? toggle : undefined}
       onDoubleClick={isolate}
-      onKeyDown={event => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          toggle(event);
-        }
-      }}
       sx={{
         flexShrink: 0,
         display: 'inline-flex',
@@ -275,13 +271,12 @@ function FoldPill({
         fontSize: '0.6875rem',
         fontVariantNumeric: 'tabular-nums',
         lineHeight: 1,
-        cursor: 'pointer',
+        cursor: foldable ? 'pointer' : 'default',
         transition: 'background-color 120ms, color 120ms',
         color: folded && activity ? `${color}.plainColor` : 'text.tertiary',
         bgcolor: folded ? `${color}.softBg` : 'transparent',
         '& svg': { transition: 'transform 160ms', transform: folded ? 'none' : 'rotate(90deg) scaleY(-1)' },
-        '&:hover': { bgcolor: `${color}.softHoverBg`, color: `${color}.softColor` },
-        '&:focus-visible': { outline: '2px solid var(--joy-palette-focusVisible)', outlineOffset: '1px' },
+        '&:hover': foldable ? { bgcolor: `${color}.softHoverBg`, color: `${color}.softColor` } : undefined,
       }}
       data-testid="chat-session-fold-btn"
       data-folded={folded ? 'true' : 'false'}
@@ -492,6 +487,7 @@ const SessionRow = memo(function SessionRow({
   subCount = 0,
   subActivity,
   subFolded = false,
+  subFoldable = true,
 }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
@@ -620,7 +616,7 @@ const SessionRow = memo(function SessionRow({
         aria-expanded={subCount > 0 ? !subFolded : undefined}
         onKeyDown={event => {
           // A tree's own keys: right opens a folded parent, left folds an open one.
-          if (subCount === 0 || editing) return;
+          if (subCount === 0 || !subFoldable || editing) return;
           if (event.key === (subFolded ? 'ArrowRight' : 'ArrowLeft')) {
             event.preventDefault();
             toggleFolded(session.id);
@@ -693,7 +689,13 @@ const SessionRow = memo(function SessionRow({
           {subCount > 0 && !editing && (
             // A spacer rather than margin-left: auto, which the Stack's own spacing overrides.
             <Box sx={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
-              <FoldPill sessionId={session.id} count={subCount} activity={subActivity} folded={subFolded} />
+              <FoldPill
+                sessionId={session.id}
+                count={subCount}
+                activity={subActivity}
+                folded={subFolded}
+                foldable={subFoldable}
+              />
             </Box>
           )}
         </Stack>
@@ -1049,15 +1051,28 @@ export function SessionList({
     };
   }, [sections]);
 
-  // A fold gives way to a search, which would otherwise hide its own matches, and to the open
-  // session, so selecting a sub-session from anywhere never leaves it folded out of sight.
-  const isFolded = useCallback(
-    (sessionId: string) =>
-      foldedIds.has(sessionId) &&
-      !searching &&
-      !descendantsOf(sections.children, sessionId).some(session => session.id === activeId),
-    [foldedIds, searching, sections, activeId]
-  );
+  // The open session's ancestors, as a key that only changes when the chain itself does, so a
+  // fold the user makes later with the open session inside it is not undone by the next update.
+  const activeAncestry = useMemo(() => {
+    const parentOf = new Map<string, string>();
+    for (const [parentId, children] of sections.children) {
+      for (const child of children) parentOf.set(child.id, parentId);
+    }
+    const chain: string[] = [];
+    for (let id = activeId && parentOf.get(activeId); id; id = parentOf.get(id)) chain.push(id);
+    return chain.join('\n');
+  }, [sections, activeId]);
+
+  // Opening a sub-session from anywhere unfolds the branches it sits in, so it is never folded out
+  // of sight. Cleared from the store rather than overridden, so the pill always shows what a click does.
+  useEffect(() => {
+    if (!activeAncestry) return;
+    for (const id of activeAncestry.split('\n')) if (foldedParents().has(id)) toggleFolded(id);
+  }, [activeAncestry]);
+
+  // A fold gives way to a search, which would otherwise hide its own matches; the pill is inert
+  // meanwhile, since a toggle could not show.
+  const isFolded = useCallback((sessionId: string) => foldedIds.has(sessionId) && !searching, [foldedIds, searching]);
   const empty =
     sections.pinned.length === 0 &&
     sections.custom.length === 0 &&
@@ -1196,6 +1211,7 @@ export function SessionList({
         subCount={under.length}
         subActivity={loudestActivity(under, statuses)}
         subFolded={folded}
+        subFoldable={!searching}
       />,
       ...(folded
         ? []

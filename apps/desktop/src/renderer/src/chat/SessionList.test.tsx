@@ -89,7 +89,8 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
 async function mount(
   sessions: ChatSessionSummary[],
   mode: ChatSessionMode = 'chat',
-  extra: Record<string, unknown> = {}
+  extra: Record<string, unknown> = {},
+  activeId: string | null = null
 ) {
   (window as unknown as { b4m: unknown }).b4m = {
     chat: {
@@ -106,7 +107,7 @@ async function mount(
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <Harness activeId={null} mode={mode} />
+        <Harness activeId={activeId} mode={mode} />
       </CssVarsProvider>
     );
   });
@@ -510,6 +511,29 @@ describe('sub-sessions an agent spawned', () => {
     });
     // The parent does not match, so its children stand on their own rows.
     expect(titles()).toEqual(['Kid A', 'Grandkid', 'Kid B']);
+  });
+
+  it('leave the pill inert under a search, where a fold could not show', async () => {
+    await mount(sessions());
+    const input = el('chat-search-input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, 'Kid');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => foldButton().click());
+    expect(foldedParents().has('kid-a')).toBe(false);
+    expect(titles()).toEqual(['Kid A', 'Grandkid', 'Kid B']);
+  });
+
+  it('unfold the branches holding the open session, and still fold on request', async () => {
+    toggleFolded('root');
+    await mount(sessions(), 'chat', {}, 'grandkid');
+    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+    expect(foldedParents().has('root')).toBe(false);
+
+    act(() => all('chat-session-fold-btn')[0].click());
+    expect(titles()).toEqual(['Root']);
   });
 
   it('list flat when the setting is off', async () => {
