@@ -2,11 +2,12 @@
  * Signup abuse alarms on the Next.js server log group: sign-in code sends (hourly ceiling from
  * SIGNUP_CODE_SEND_ALARM_PER_HOUR, unset: no hourly alarm; 5-minute burst ceiling from
  * SIGNUP_CODE_SEND_ALARM_PER_5MIN), user API key creation (API_KEY_CREATE_ALARM_PER_5MIN), and a
- * large signup grant released while a signup protection is still off.
+ * large signup grant released while a signup protection is still off (also counted from the held-release cron).
  * See infra/signup-code-send-alarm.md.
  */
 
 import { web } from './web';
+import { signupGrantHeldRelease } from './cron';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import { messageFilterPattern } from './logMessageFilterPattern';
 import {
@@ -172,18 +173,34 @@ if (isMonitoredStage) {
     },
   });
 
+  const protectionGapMetric = {
+    name: 'SignupGrantProtectionGaps',
+    namespace: metricNamespace,
+    value: '1',
+    unit: 'Count',
+  };
   // Same string as SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE in b4m-core/common/src/signupGrant.ts.
+  const protectionGapPattern = messageFilterPattern('signup-grant-protections-off');
   new aws.cloudwatch.LogMetricFilter('signupGrantProtectionGapFilter', {
     name: `${$app.name}-${$app.stage}-signup-grant-protection-gap`,
     logGroupName: serverLogGroupName,
-    pattern: messageFilterPattern('signup-grant-protections-off'),
-    metricTransformation: {
-      name: 'SignupGrantProtectionGaps',
-      namespace: metricNamespace,
-      value: '1',
-      unit: 'Count',
-    },
+    pattern: protectionGapPattern,
+    metricTransformation: protectionGapMetric,
   });
+  // The hourly held-grant release also logs the message, from its own Lambda log group.
+  if (signupGrantHeldRelease) {
+    new aws.cloudwatch.LogMetricFilter('signupGrantProtectionGapCronFilter', {
+      name: `${$app.name}-${$app.stage}-signup-grant-protection-gap-cron`,
+      logGroupName: signupGrantHeldRelease.nodes.function
+        .apply(fn => fn.nodes.logGroup)
+        .apply(logGroup => {
+          if (!logGroup) throw new Error('signup grant held release function is missing its CloudWatch log group');
+          return logGroup.name;
+        }),
+      pattern: protectionGapPattern,
+      metricTransformation: protectionGapMetric,
+    });
+  }
 
   new aws.cloudwatch.MetricAlarm('signupGrantProtectionGap', {
     name: `${$app.name}-${$app.stage}-signup-grant-protection-gap`,

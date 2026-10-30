@@ -16,6 +16,8 @@ const resources = vi.hoisted(() => {
     topic: { arn: 'alarm-topic' } as { arn: string } | undefined,
     oobTopic: { arn: 'email-topic' } as { arn: string } | undefined,
     hasServer: true,
+    cronLogGroup: { name: 'held-release-logs' } as { name: string } | undefined,
+    hasCron: true,
   };
 });
 
@@ -26,6 +28,13 @@ vi.mock('../web', () => ({
         server: resources.hasServer ? resources.output({ nodes: { logGroup: resources.logGroup } }) : undefined,
       };
     },
+  },
+}));
+vi.mock('../cron', () => ({
+  get signupGrantHeldRelease() {
+    return resources.hasCron
+      ? { nodes: { function: resources.output({ nodes: { logGroup: resources.cronLogGroup } }) } }
+      : undefined;
   },
 }));
 vi.mock('../dlqAlarms', () => ({
@@ -58,6 +67,8 @@ beforeEach(() => {
   resources.topic = { arn: 'alarm-topic' };
   resources.oobTopic = { arn: 'email-topic' };
   resources.hasServer = true;
+  resources.cronLogGroup = { name: 'held-release-logs' };
+  resources.hasCron = true;
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -328,6 +339,29 @@ describe('signup grant protection gap alarm wiring', () => {
         prefix + JSON.stringify({ requestId: SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE, message: 'req-timing' })
       )
     ).toBe(false);
+  });
+
+  it('counts the same message from the held-release cron log group', async () => {
+    await loadAlarms();
+    const server = callFor(resources.filter, 'signupGrantProtectionGapFilter');
+    expect(callFor(resources.filter, 'signupGrantProtectionGapCronFilter')).toMatchObject({
+      name: 'test-app-production-signup-grant-protection-gap-cron',
+      logGroupName: expect.objectContaining({ value: 'held-release-logs' }),
+      pattern: server?.pattern,
+      metricTransformation: server?.metricTransformation,
+    });
+  });
+
+  it('skips the cron filter on a stage that runs no scheduled jobs', async () => {
+    resources.hasCron = false;
+    await loadAlarms();
+    expect(callFor(resources.filter, 'signupGrantProtectionGapFilter')).toBeDefined();
+    expect(callFor(resources.filter, 'signupGrantProtectionGapCronFilter')).toBeUndefined();
+  });
+
+  it('fails loudly when the held-release cron log group is missing', async () => {
+    resources.cronLogGroup = undefined;
+    await expect(loadAlarms()).rejects.toThrow('held release function is missing its CloudWatch log group');
   });
 
   it('alarms on a single occurrence, holds for an hour, and routes ALARM and OK to Slack and email', async () => {
