@@ -50,6 +50,23 @@ describe('OrchestratorStage', () => {
     );
   });
 
+  it('uses the singular for one agent', async () => {
+    await renderStage([agentFixture('w', 'working', { usdCost: 0.5 })]);
+    expect(query('orchestrator-summary-strip')?.textContent).toBe(
+      '1 agent \u00B7 1 working \u00B7 0 need you \u00B7 0 done \u00B7 0 failed \u00B7 $0.50'
+    );
+  });
+
+  it('marks the dollar total partial when an agent only reported credits', async () => {
+    await renderStage([agentFixture('a', 'done', { usdCost: 1 }), agentFixture('b', 'done', { credits: 4 })]);
+    expect(query('orchestrator-summary-strip')?.textContent).toContain('\u00B7 ~$1.00');
+  });
+
+  it('shows credits when no agent reported dollars', async () => {
+    await renderStage([agentFixture('a', 'done', { credits: 4 }), agentFixture('b', 'done', { credits: 2 })]);
+    expect(query('orchestrator-summary-strip')?.textContent).toContain('\u00B7 6 cr');
+  });
+
   it('hides the needs-you pill when nothing needs the user', async () => {
     await renderStage([agentFixture('w', 'working')]);
     expect(query('orchestrator-needs-you-pill')).toBeNull();

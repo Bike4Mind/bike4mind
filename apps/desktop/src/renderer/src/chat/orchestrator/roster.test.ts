@@ -7,9 +7,10 @@ import {
   AGENT_STATE_LABEL,
   AGENT_STATE_PRIORITY,
   buildRoster,
+  agentStates,
   deriveAgentState,
+  descendantIds,
   formatAgentCost,
-  hasAgents,
   summarizeRoster,
   type AgentState,
   type AgentView,
@@ -43,7 +44,7 @@ const noInput = {
 describe('deriveAgentState', () => {
   const outcomes: ReadonlyArray<readonly [ChildOutcome | undefined, AgentState]> = [
     ['finished', 'done'],
-    ['max-tokens', 'done'],
+    ['max-tokens', 'failed'],
     ['failed', 'failed'],
     ['turn-budget', 'failed'],
     ['context-limit', 'failed'],
@@ -179,6 +180,22 @@ describe('buildRoster', () => {
     expect(roster.find(agent => agent.id === 'calm')?.activity).toBeUndefined();
   });
 
+  it('leaves out an agent below an archived ancestor', () => {
+    const sessions = [
+      summary('root', undefined),
+      summary('shelved', 'root', { archived: true }),
+      summary('under-shelved', 'shelved'),
+      summary('deeper', 'under-shelved'),
+      summary('kept', 'root'),
+    ];
+    expect(buildRoster({ sessions, rootId: 'root', ...noInput }).map(agent => agent.id)).toEqual(['kept']);
+  });
+
+  it('keeps the roster of an archived root', () => {
+    const sessions = [summary('root', undefined, { archived: true }), summary('child', 'root')];
+    expect(buildRoster({ sessions, rootId: 'root', ...noInput }).map(agent => agent.id)).toEqual(['child']);
+  });
+
   it('sorts by state priority, then newest first', () => {
     const sessions = [
       summary('root', undefined),
@@ -203,22 +220,34 @@ describe('buildRoster', () => {
   });
 });
 
-describe('hasAgents', () => {
-  const sessions = [
-    summary('root', undefined),
-    summary('child', 'root'),
-    summary('gone', 'root2', { archived: true }),
-    summary('grand', 'child'),
-  ];
-
-  it('is true for a root with a non-archived direct child', () => {
-    expect(hasAgents(sessions, 'root')).toBe(true);
+describe('descendantIds', () => {
+  it('lists the ids buildRoster would, and nothing for a null root', () => {
+    const sessions = [
+      summary('root', undefined),
+      summary('child', 'root'),
+      summary('grand', 'child'),
+      summary('archived', 'root', { archived: true }),
+      summary('other', undefined),
+    ];
+    expect([...descendantIds(sessions, 'root')].sort()).toEqual(['child', 'grand']);
+    expect(descendantIds(sessions, null).size).toBe(0);
   });
+});
 
-  it('ignores archived children, grandchildren and a null root', () => {
-    expect(hasAgents(sessions, 'root2')).toBe(false);
-    expect(hasAgents(sessions, 'grand')).toBe(false);
-    expect(hasAgents(sessions, null)).toBe(false);
+describe('agentStates', () => {
+  it('derives each agent state from statuses alone, empty for a null root', () => {
+    const sessions = [
+      summary('root', undefined),
+      summary('a', 'root', { lastOutcome: 'finished' }),
+      summary('b', 'root'),
+      summary('c', 'a'),
+    ];
+    const statuses = new Map<string, ChatSessionStatus>([
+      ['b', 'processing'],
+      ['c', 'needs-action'],
+    ]);
+    expect(agentStates(sessions, statuses, 'root').sort()).toEqual(['done', 'needs-you', 'working']);
+    expect(agentStates(sessions, statuses, null)).toEqual([]);
   });
 });
 
@@ -251,9 +280,20 @@ describe('summarizeRoster', () => {
     expect(result.costPartial).toBe(true);
   });
 
-  it('is not partial when every agent reported a cost', () => {
-    expect(summarizeRoster([view('done', 1), view('done', undefined, 2)]).costPartial).toBe(false);
+  it('is not partial when every agent reported the shown currency', () => {
+    expect(summarizeRoster([view('done', 1), view('done', 2, 3)]).costPartial).toBe(false);
+    expect(summarizeRoster([view('done', undefined, 1), view('done', undefined, 2)]).costPartial).toBe(false);
     expect(summarizeRoster([]).costPartial).toBe(false);
+  });
+
+  it('is partial when a credit-only agent sits beside dollar costs', () => {
+    const result = summarizeRoster([view('done', 1), view('done', undefined, 2)]);
+    expect(result.hasUsd).toBe(true);
+    expect(result.costPartial).toBe(true);
+  });
+
+  it('reports credits only when no agent has a dollar cost', () => {
+    expect(summarizeRoster([view('done', undefined, 2)]).hasUsd).toBe(false);
   });
 });
 

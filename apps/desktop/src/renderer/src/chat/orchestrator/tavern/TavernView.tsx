@@ -227,16 +227,22 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying }: Orche
 
   const queue = agents.filter(agent => placements.get(agent.id)?.zone === 'door');
   const selectedQueued = queue.findIndex(agent => agent.id === selectedId);
-  // The door shows one agent: the selected one when it is queued, so the selection stays visible.
+  const firstQueued = (candidates: readonly AgentView[]) =>
+    candidates.reduce<AgentView | undefined>(
+      (first, agent) =>
+        !first || (placements.get(agent.id)?.slot ?? 0) < (placements.get(first.id)?.slot ?? 0) ? agent : first,
+      undefined
+    );
+  // The door shows one agent: the selected one so the selection stays visible, else one that needs the
+  // user so the bar overflowing never hides a call for help, else the longest-queued.
   const atDoor =
     selectedQueued >= 0
       ? queue[selectedQueued]
-      : queue.reduce<AgentView | undefined>(
-          (first, agent) =>
-            !first || (placements.get(agent.id)?.slot ?? 0) < (placements.get(first.id)?.slot ?? 0) ? agent : first,
-          undefined
-        );
+      : (firstQueued(queue.filter(agent => agent.state === 'needs-you')) ?? firstQueued(queue));
   const waiting = queue.length - 1;
+  const hiddenNeedsYou = queue.filter(agent => agent !== atDoor && agent.state === 'needs-you').length;
+  const urgent = hiddenNeedsYou > 0;
+  const urgentNote = urgent ? `, ${hiddenNeedsYou} ${hiddenNeedsYou === 1 ? 'needs' : 'need'} you` : '';
 
   return (
     <Box
@@ -295,8 +301,11 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying }: Orche
             component="button"
             type="button"
             data-testid="orchestrator-tavern-door-overflow"
-            aria-label={`${waiting} more waiting at the door; select next`}
-            onClick={() => onSelect(queue[(selectedQueued + 1) % queue.length].id)}
+            aria-label={`${waiting} more waiting at the door${urgentNote}; select next`}
+            onClick={() => {
+              const next = selectedQueued >= 0 ? queue[(selectedQueued + 1) % queue.length] : atDoor;
+              if (next) onSelect(next.id);
+            }}
             style={{ left: `${DOOR_POINT.x}%`, top: `${DOOR_POINT.y}%` }}
             sx={{
               position: 'absolute',
@@ -307,15 +316,15 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying }: Orche
               border: 0,
               borderRadius: '999px',
               cursor: 'pointer',
-              bgcolor: '#f5c542',
-              color: '#2a1d10',
+              bgcolor: urgent ? '#f5c542' : 'rgba(20, 12, 6, 0.78)',
+              color: urgent ? '#2a1d10' : '#fbe9c8',
               fontWeight: 700,
               fontSize: 'clamp(10px, 2.2cqh, 14px)',
               lineHeight: 1.5,
               '&:focus-visible': { outline: '2px solid #fbe9c8', outlineOffset: 2 },
             }}
           >
-            {`+${waiting}`}
+            {`${urgent ? '!' : ''}+${waiting}`}
           </Box>
         )}
       </Box>

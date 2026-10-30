@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
 import { act } from 'react';
+import type { ChatQueueEvent, ChatQueuedMessage } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import type { AgentView } from './roster';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
+let queueListener: ((event: ChatQueueEvent) => void) | null = null;
+const queueUnsubscribe = vi.fn();
 const chat = {
+  onQueueChanged: vi.fn((listener: (event: ChatQueueEvent) => void) => {
+    queueListener = listener;
+    return queueUnsubscribe;
+  }),
   getSession: vi.fn(),
   sendMessage: vi.fn(),
   cancelQueuedMessage: vi.fn(),
@@ -36,6 +43,7 @@ const pressEnter = (init: KeyboardEventInit = {}) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  queueListener = null;
   chat.getSession.mockResolvedValue(sessionWith('message 1', 'message 2', 'message 3', 'message 4'));
   chat.sendMessage.mockResolvedValue({ ok: true, messageId: 'x' });
   chat.cancelQueuedMessage.mockResolvedValue(undefined);
@@ -130,6 +138,31 @@ describe('AgentPeekDrawer', () => {
     await act(async () => el('orchestrator-peek-queued-cancel-btn').click());
     expect(chat.cancelQueuedMessage).toHaveBeenCalledWith('a1', 'q1');
     expect(query('orchestrator-peek-queued-note')).toBeNull();
+  });
+
+  it('clears the queued note once the message leaves that session queue, and unsubscribes', async () => {
+    const message = { id: 'q1', sessionId: 'a1', text: 'hello' } as ChatQueuedMessage;
+    chat.sendMessage.mockResolvedValue({ ok: true, queued: true, message });
+    await renderDrawer(agentFixture('a1'));
+    await typeAndSend('hello');
+    expect(chat.onQueueChanged).toHaveBeenCalledTimes(1);
+
+    const emit = (event: ChatQueueEvent) => act(async () => queueListener?.(event));
+    await emit({ sessionId: 'other', queued: [] });
+    await emit({ sessionId: 'a1', queued: [message] });
+    expect(query('orchestrator-peek-queued-note')).not.toBeNull();
+
+    await emit({ sessionId: 'a1', queued: [] });
+    expect(query('orchestrator-peek-queued-note')).toBeNull();
+    expect(queueUnsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('unsubscribes from queue changes on unmount', async () => {
+    chat.sendMessage.mockResolvedValue({ ok: true, queued: true, message: { id: 'q1', sessionId: 'a1', text: 'x' } });
+    await renderDrawer(agentFixture('a1'));
+    await typeAndSend('x');
+    themed.unmount();
+    expect(queueUnsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the queued note and shows the error when settling it fails', async () => {

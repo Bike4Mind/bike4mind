@@ -15,7 +15,7 @@ import type {
 } from '@shared/chat';
 import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import type { WorkspaceOwner } from '@shared/worktreeRemoval';
-import { classifyMessagesOutcome, snippetOf } from '@shared/agentOutcome';
+import { summarizeSession } from '@shared/agentOutcome';
 import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
@@ -147,32 +147,6 @@ async function projectOnDisk(project: ChatProject): Promise<boolean> {
     }
   }
   return true;
-}
-
-function summarize(session: ChatSession): ChatSessionSummary {
-  const { messages, spawnSuggestions: _suggestions, ...summary } = session;
-  const lastAssistant = [...messages].reverse().find(message => message.role === 'assistant');
-  const lastSnippet = lastAssistant ? snippetOf(lastAssistant.content) : '';
-  const totalUsdCost = sumUsage(messages, 'usdCost');
-  const totalCredits = sumUsage(messages, 'creditsUsed');
-  return {
-    ...summary,
-    messageCount: messages.length,
-    ...(lastAssistant ? { lastOutcome: classifyMessagesOutcome(messages) } : {}),
-    ...(lastSnippet ? { lastSnippet } : {}),
-    ...(totalUsdCost !== undefined ? { totalUsdCost } : {}),
-    ...(totalCredits !== undefined ? { totalCredits } : {}),
-  };
-}
-
-/** Sum of one usage field over every message, or undefined when no message reported it. */
-function sumUsage(messages: readonly ChatMessage[], field: 'usdCost' | 'creditsUsed'): number | undefined {
-  let total: number | undefined;
-  for (const message of messages) {
-    const value = message.usage?.[field];
-    if (typeof value === 'number') total = (total ?? 0) + value;
-  }
-  return total;
 }
 
 /**
@@ -426,7 +400,7 @@ export class SessionStore implements SessionWritesStore {
       messages: [],
     };
     await this.write(directory, session);
-    return summarize(session);
+    return summarizeSession(session);
   }
 
   /** Capture identity before an asynchronous operation that must not cross accounts. */
@@ -496,7 +470,7 @@ export class SessionStore implements SessionWritesStore {
           }
           const session = await this.read(directory, id);
           if (!session) continue;
-          const summary = summarize(session);
+          const summary = summarizeSession(session);
           index.set(id, { size: info.size, mtimeMs: info.mtimeMs, summary });
           changed = true;
           sessions[position] = summary;
@@ -1144,7 +1118,7 @@ export class SessionStore implements SessionWritesStore {
       const outcome = change(session);
       if (outcome === null) return null;
       if (outcome) await this.write(directory, session);
-      return summarize(session);
+      return summarizeSession(session);
     });
   }
 
