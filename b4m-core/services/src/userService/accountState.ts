@@ -45,13 +45,43 @@ export const AI_ACCESS_REVOKED_MESSAGE =
 export const AI_ACCESS_PENDING_REVIEW_MESSAGE =
   'AI features are temporarily unavailable while your account awaits review. You can still sign in and access your data. Please contact support to request a review.';
 
-export type AiAccessStateFields = {
+export const ACCOUNT_BANNED_MESSAGE = 'This account has been suspended. Please contact support.';
+
+export const ACCOUNT_DISPUTE_PENDING_MESSAGE = 'Account suspended pending dispute resolution. Please contact support.';
+
+export const ACCOUNT_SUSPENDED_MESSAGE =
+  'Your account is suspended for repeated content-policy violations. Please contact support to appeal.';
+
+const BLOCK_REASON_MESSAGES: Record<AccountBlockReason, string> = {
+  banned: ACCOUNT_BANNED_MESSAGE,
+  disputePending: ACCOUNT_DISPUTE_PENDING_MESSAGE,
+  suspended: ACCOUNT_SUSPENDED_MESSAGE,
+};
+
+/**
+ * The user-facing refusal for a blocked account (ban, dispute pending, suspension), or null when it is not
+ * blocked. The one predicate for "this account may not spend or buy": the AI gate below builds on it, and the
+ * money-in routes refuse with it (apps/client/server/middlewares/refuseBlockedAccount.ts).
+ */
+export function accountBlockedMessage(user: AccountStateFields): string | null {
+  const [reason] = accountBlockReasons(user);
+  return reason ? BLOCK_REASON_MESSAGES[reason] : null;
+}
+
+export type AiAccessStateFields = AccountStateFields & {
   isModerated?: boolean | null;
   riskScore?: Pick<ISignupRiskScore, 'reviewState'> | null;
 };
 
-/** Review holds are separate from manual restrictions, so approval cannot undo an admin restriction. */
+/**
+ * The AI and credit-spend gate, behind createModelAdmission, assertAiAccessAllowed, reserveRequestCredits and
+ * the worker handlers. A blocked account is refused here too, not only at sign-in: a queued job, a continuation
+ * or an agent run outlives the request that authenticated it, and its user is reloaded rather than re-authed.
+ * Review holds are separate from manual restrictions, so approval cannot undo an admin restriction.
+ */
 export function aiAccessDeniedMessage(user: AiAccessStateFields): string | null {
+  const blocked = accountBlockedMessage(user);
+  if (blocked) return blocked;
   if (isAiAccessRevoked(user)) return AI_ACCESS_REVOKED_MESSAGE;
   if (user.riskScore?.reviewState === 'pending') return AI_ACCESS_PENDING_REVIEW_MESSAGE;
   return null;

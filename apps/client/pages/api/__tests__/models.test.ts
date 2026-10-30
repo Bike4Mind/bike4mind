@@ -35,6 +35,12 @@ vi.mock('@bike4mind/utils', () => ({
 
 // The free-tier gate is off here (no admin setting), so entitlements are never read; the mock only
 // keeps the Mongoose model chain out. The gate itself is covered in server/utils/callerModelList.test.ts.
+const mockLoadFreeTierAllowedModels = vi.fn();
+vi.mock('@bike4mind/services/llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: (...a: unknown[]) => mockLoadFreeTierAllowedModels(...a),
+}));
+
 vi.mock('@server/entitlements', () => ({
   getUserEntitlements: vi.fn(async () => []),
   toEntitlementUser: (user: unknown) => user,
@@ -89,6 +95,7 @@ beforeEach(() => {
   mockGetEffectiveLLMApiKeys.mockResolvedValue(noKeys);
   mockCacheFindOne.mockResolvedValue(null);
   mockCacheCreateOrUpdate.mockResolvedValue(undefined);
+  mockLoadFreeTierAllowedModels.mockResolvedValue(undefined);
   delete process.env.B4M_SELF_HOST;
   // Also clears the llm-adapters module-level model cache, so each case re-runs
   // the fan-out instead of reusing the previous case's list.
@@ -116,7 +123,7 @@ afterEach(() => {
   else process.env.B4M_SELF_HOST = savedSelfHost;
 });
 
-async function callRoute(userId?: string) {
+async function callRouteBody(userId?: string) {
   const { req, res } = createMocks({ method: 'GET' });
   Object.assign(req, {
     user: userId ? { id: userId } : undefined,
@@ -132,8 +139,13 @@ async function callRoute(userId?: string) {
       disabled?: boolean;
       image?: ImageModelCapabilities;
     }>;
+    lockedModels: Array<{ id: string; access?: { locked: boolean; reason: string } }>;
   };
-  return body.models;
+  return body;
+}
+
+async function callRoute(userId?: string) {
+  return (await callRouteBody(userId)).models;
 }
 
 describe('/api/models provider coverage', () => {
@@ -266,5 +278,19 @@ describe('/api/models cache identity', () => {
 
     expect(models).toEqual([{ id: 'cached-model' }]);
     expect(mockGetEffectiveLLMApiKeys).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/models locked models', () => {
+  it('serves paid-only models in lockedModels, apart from models, for a free caller', async () => {
+    mockCacheFindOne.mockResolvedValue({
+      result: { models: [{ id: 'free-model' }, { id: 'paid-model' }], supersededModels: [] },
+    });
+    mockLoadFreeTierAllowedModels.mockResolvedValue(new Set(['free-model']));
+
+    const body = await callRouteBody('user-1');
+
+    expect(body.models.map(m => m.id)).toEqual(['free-model']);
+    expect(body.lockedModels).toEqual([{ id: 'paid-model', access: { locked: true, reason: 'requires_paid_plan' } }]);
   });
 });

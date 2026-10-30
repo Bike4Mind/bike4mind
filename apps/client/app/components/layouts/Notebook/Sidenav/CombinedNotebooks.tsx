@@ -591,6 +591,7 @@ const CombinedNotebooks = () => {
                   setShowMessageCounts={setShowMessageCounts}
                   onOpenBulkActions={openBulkActions}
                   onClose={() => setFiltersOpen(false)}
+                  anchorRef={filtersAnchorRef}
                 />
               )}
 

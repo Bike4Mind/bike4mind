@@ -115,10 +115,9 @@ test.describe('Admin - User CRUD', () => {
       await adminPage.searchUser(TEST_USER.name);
       await adminPage.waitForUserVisible(TEST_USER.name);
 
-      await adminPage.clickUserProfileButton(TEST_USER.name);
-      await adminPage.fillProfileField('Name:', EDITED_NAME);
-      await adminPage.saveProfileChanges();
-      await adminPage.closeModal();
+      await adminPage.openEditProfileDialog(TEST_USER.name);
+      await adminPage.fillEditProfileName(EDITED_NAME);
+      await adminPage.saveEditProfile();
 
       // Verify the edit persisted by searching for the new name (the edit happened on the profile page)
       await adminPage.navigateToUsersTab();

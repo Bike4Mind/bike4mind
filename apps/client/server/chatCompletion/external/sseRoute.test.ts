@@ -287,6 +287,16 @@ describe('JWT rate limiting', () => {
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
   });
 
+  it("passes the client's session id through to the completion, for its ledger row", async () => {
+    expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' }, { ...COMPLETION, sessionId: 's-1' })).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's-1' }));
+  });
+
+  it('rejects an oversized session id instead of storing it', async () => {
+    expect((await postAs({}, { ...COMPLETION, sessionId: 'x'.repeat(129) })).status).toBe(422);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
   it('resolves thinking visibility for the caller', async () => {
     expect((await postAs({})).status).toBe(200);
     expect(mockExecuteCompletion).toHaveBeenCalledWith(

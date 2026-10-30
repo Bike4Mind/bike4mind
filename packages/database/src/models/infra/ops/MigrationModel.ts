@@ -11,10 +11,17 @@ export interface MigrationFile {
   down: () => Promise<void>;
 }
 
-const MigrationSchema = new mongoose.Schema({
+export interface IMigration {
+  id: number;
+  name: string;
+  migratedAt: Date;
+}
+
+const MigrationSchema = new mongoose.Schema<IMigration>({
   id: { type: Number, required: true },
   name: { type: String, required: true },
   migratedAt: { type: Date, default: Date.now },
 });
 
-export const Migration = mongoose.models.Migration || mongoose.model('Migration', MigrationSchema, 'migrations');
+export const Migration: mongoose.Model<IMigration> =
+  mongoose.models.Migration || mongoose.model<IMigration>('Migration', MigrationSchema, 'migrations');

@@ -205,6 +205,17 @@ export const GenericCreditDeductTransaction = BaseCreditTransaction.extend({
   stripeRefundId: z.string().optional(),
 });
 
+/**
+ * Prompt-cache token counts, in the billing convention: disjoint from `inputTokens` and priced at
+ * their own rates, so a row whose `inputTokens` looks tiny can still carry a large charge. Optional
+ * because rows written before these were recorded (and providers that report no cache) lack them.
+ * Same names as the usage event's `cacheReadTokens`/`cacheWriteTokens`.
+ */
+const CacheTokenFields = {
+  cacheReadTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
+};
+
 // Usage transactions with service-specific details
 export const TextGenerationUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('text_generation_usage'),
@@ -213,6 +224,7 @@ export const TextGenerationUsageTransaction = BaseCreditTransaction.extend({
   sessionId: z.string(),
   inputTokens: z.number(),
   outputTokens: z.number(),
+  ...CacheTokenFields,
 });
 
 export const ImageGenerationUsageTransaction = BaseCreditTransaction.extend({
@@ -263,8 +275,11 @@ export const CompletionApiUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('completion_api_usage'),
   model: z.string(),
   apiKeyId: z.string().optional(), // Optional - present for API key auth, undefined for JWT
+  /** The client conversation the request belongs to, when the client sends one (desktop, CLI). */
+  sessionId: z.string().optional(),
   inputTokens: z.number(),
   outputTokens: z.number(),
+  ...CacheTokenFields,
 });
 
 /** Synchronous POST /api/v1/decisions call. Quest-less; one row per call that charged >= 1 credit. */
@@ -274,6 +289,7 @@ export const DecisionUsageTransaction = BaseCreditTransaction.extend({
   apiKeyId: z.string().optional(), // Optional - present for API key auth, undefined for JWT
   inputTokens: z.number(),
   outputTokens: z.number(),
+  ...CacheTokenFields,
 });
 
 export const SpeechToTextUsageTransaction = BaseCreditTransaction.extend({

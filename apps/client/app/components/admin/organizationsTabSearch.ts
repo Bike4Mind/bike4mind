@@ -26,6 +26,10 @@ const ORGS_VIEW_PARAMS = [
 
 export const ORGS_TAB_PARAMS = [...ORGS_VIEW_PARAMS, ORGS_ORG_ID_PARAM] as const;
 
+/** The admin console URL that opens one organization's profile. */
+export const adminOrganizationHref = (orgId: string): string =>
+  `/admin?${new URLSearchParams({ tab: ADMIN_ORGANIZATIONS_TAB_SLUG, [ORGS_ORG_ID_PARAM]: orgId })}`;
+
 export const ORGS_PAGE_LIMIT_OPTIONS = [5, 10, 20];
 
 const ORGS_SORT_FIELDS = ['name', 'createdAt', 'updatedAt'] as const;

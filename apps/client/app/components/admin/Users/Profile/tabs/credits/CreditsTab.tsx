@@ -124,7 +124,10 @@ const LEDGER_COLUMNS: readonly DataColumn<AdminLedgerRow>[] = [
     id: 'request',
     label: 'Request',
     render: row => {
-      if (row.requestId) return <CodeText text={row.requestId} title={`API request id: ${row.requestId}`} />;
+      if (row.requestId) {
+        const session = row.sessionId ? `\nSession id: ${row.sessionId}` : '';
+        return <CodeText text={row.requestId} title={`API request id: ${row.requestId}${session}`} />;
+      }
       if (row.questId) return <CodeText text={row.questId} title={`Chat message (quest) id: ${row.questId}`} />;
       return DASH;
     },

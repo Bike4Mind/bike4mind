@@ -127,7 +127,7 @@ const ProfileDetailSection = ({ userId, extra, canEdit, email }: ProfileDetailSe
           {avatarSection}
 
           {user.data && editing ? (
-            <ProfileDataForm userData={user.data} adminMode={false} onCancel={() => setEditing(false)} />
+            <ProfileDataForm userData={user.data} onCancel={() => setEditing(false)} />
           ) : (
             <Box
               className="profile-detail-info-container"

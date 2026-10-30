@@ -61,4 +61,9 @@ describe('getLoginErrorMessage (surface SSO failures)', () => {
       'Sign-in failed. Please try again or use another method.'
     );
   });
+
+  it('maps the OAuth guard codes to specific messages, not the generic fallback', () => {
+    expect(getLoginErrorMessage('oauth_rate_limited')).toMatch(/too many sign-in attempts/i);
+    expect(getLoginErrorMessage('ip_blocked')).toMatch(/temporarily blocked/i);
+  });
 });
