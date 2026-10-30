@@ -14,6 +14,7 @@ import {
 // The repo's one curated list, bundled at build time; the hub schema validates it in loadCuratedManifest.test.ts.
 import bundled from '../../../catalog/model-hub/curated-v2.json';
 import { isAbliteratedModel } from './abliterated';
+import { ollamaModelKey } from './huggingface';
 import type { ModelInspection, OllamaRegistryLayers } from './types';
 
 const EMPTY = { schemaVersion: 2, updatedAt: '1970-01-01T00:00:00Z', families: {}, rankings: {}, entries: [] };
@@ -47,6 +48,12 @@ export const isPermissiveEntry = (entry: HubEntry) =>
   entry.license.class === 'permissive' && entry.license.base.class === 'permissive';
 
 export const curatedLibrary = (build: HubBuild) => (build.ollama?.kind === 'library' ? build.ollama : null);
+
+/**
+ * The runner a curated pull must ask Ollama for: library pins are the GGUF child of a manifest list, which Apple
+ * Silicon Ollama would otherwise swap for MLX. Every curated pull (Desktop, CLI, MCP) passes this.
+ */
+export const curatedRunner = (build: HubBuild): string | undefined => (curatedLibrary(build) ? 'llamacpp' : undefined);
 
 export const curatedPins = (build: HubBuild) =>
   build.ollama?.kind === 'library' || build.ollama?.kind === 'hf-pull' ? build.ollama.layers : undefined;
@@ -135,26 +142,34 @@ export function curatedListing(manifest: HubManifest): CuratedListing[] {
     .sort((a, b) => smallest(a) - smallest(b));
 }
 
-/** The offered entry and build Ollama pulls by `ref`, ignoring case; null when Curated offers none by that ref. */
+/** The offered entry and build Ollama pulls by `ref`, under any spelling of it; null when Curated offers none. */
 export function curatedBuildForRef(manifest: HubManifest, ref: string): { entry: HubEntry; build: HubBuild } | null {
-  const wanted = ref.toLowerCase();
+  const wanted = pullRefKey(ref);
   for (const { entry, builds } of curatedListing(manifest))
-    for (const build of builds) if (curatedSource(build).ollamaRef.toLowerCase() === wanted) return { entry, build };
+    for (const build of builds) if (pullRefKey(curatedSource(build).ollamaRef) === wanted) return { entry, build };
   return null;
 }
 
+// One spelling for every name Ollama pulls the same model by: `library/x`, `x` and `x:latest`, hf.co and huggingface.co.
+function pullRefKey(ref: string): string {
+  const name = ollamaModelKey(ref.replace(/^library\//i, ''));
+  return name.lastIndexOf(':') > name.lastIndexOf('/') ? name : `${name}:latest`;
+}
+
 /**
- * The entry that records the license of what Ollama pulls by `ref`, ignoring case: a library build by its ref, a
+ * The entry that records the license of what Ollama pulls by `ref` under any spelling: a library build by its ref, a
  * Hugging Face repo by any of its builds. Every entry counts, including ones Curated does not offer.
  */
 export function curatedEntryForRef(manifest: HubManifest, ref: string): HubEntry | null {
-  const wanted = ref.toLowerCase();
+  const wanted = pullRefKey(ref);
   const repo = wanted.startsWith('hf.co/') ? wanted.slice('hf.co/'.length).replace(/:[^/]*$/, '') : null;
   return (
     manifest.entries.find(entry =>
-      entry.builds.some(build =>
-        repo === null ? curatedLibrary(build)?.ref.toLowerCase() === wanted : build.hf?.repo.toLowerCase() === repo
-      )
+      entry.builds.some(build => {
+        if (repo !== null) return build.hf?.repo.toLowerCase() === repo;
+        const library = curatedLibrary(build);
+        return !!library && pullRefKey(library.ref) === wanted;
+      })
     ) ?? null
   );
 }
@@ -165,8 +180,8 @@ const PINNED_LAYERS = ['template', 'params', 'license', 'projector', 'draft'] as
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 const reviewedDigest = (build: HubBuild) => curatedLibrary(build)?.digest ?? build.weights[0]?.sha256;
 
-/** The Modelfile's num_ctx, from the `parameters` text Ollama's /api/show prints. */
-function configuredNumCtx(parameters: string | null | undefined): number | undefined {
+/** The Modelfile's num_ctx, from the `parameters` text Ollama's /api/show prints. Desktop's chat reads it too. */
+export function configuredNumCtx(parameters: string | null | undefined): number | undefined {
   const value = Number(/^num_ctx[ \t]+(\S+)[ \t]*$/m.exec(parameters ?? '')?.[1]);
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }

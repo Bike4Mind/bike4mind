@@ -33,6 +33,7 @@ import {
   licenseFor,
   parsePullTarget,
   pickBuild,
+  requireInstalledReviewed,
   resolveRuntimeTarget,
   type HubClient,
   type RuntimeTarget,
@@ -924,6 +925,116 @@ describe('models curated', () => {
     ).toBe(0);
   });
 
+  it('says it could not read the version, not that Ollama is old, when the runtime is unreachable', async () => {
+    const manifest = bundled();
+    const build = manifest.entries[0].builds[0];
+    const ref = curatedSource(build).ollamaRef;
+    const runtime = fakeRuntime({
+      health: vi.fn().mockResolvedValue({ ok: false, version: null, error: 'connection refused' }),
+    });
+    const h = harness({ runtime, curated: () => manifest });
+    const failure = await runModelsCommand('pull', { _: [], ref, yes: true }, h.deps).catch((error: unknown) => error);
+    expect((failure as Error).message).toContain(
+      `Could not read the version of Ollama at http://127.0.0.1:11500 (connection refused), which ${manifest.entries[0].name} needs to be ${build.runtimeMin?.ollama} or newer, so nothing was downloaded.`
+    );
+    expect((failure as Error).message).not.toContain('Update Ollama');
+    expect(h.registry).not.toHaveBeenCalled();
+    expect(h.libraryLayers).not.toHaveBeenCalled();
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('asks Ollama for the llamacpp runner on a curated library pull only', async () => {
+    const manifest = bundled();
+    const build = manifest.entries[0].builds[0];
+    const ref = curatedSource(build).ollamaRef;
+    const library = harness({ curated: () => manifest });
+    expect(await runModelsCommand('pull', { _: [], ref, yes: true }, library.deps)).toBe(0);
+    expect(library.runtime.pull).toHaveBeenCalledWith(ref, expect.objectContaining({ runner: 'llamacpp' }));
+
+    const plain = harness();
+    expect(await runModelsCommand('pull', { _: [], ref: 'qwen2.5:0.5b', yes: true }, plain.deps)).toBe(0);
+    expect(plain.runtime.pull).toHaveBeenCalledWith(
+      'qwen2.5:0.5b',
+      expect.not.objectContaining({ runner: 'llamacpp' })
+    );
+  });
+
+  describe('when what Ollama installed is not the reviewed build', () => {
+    const changedInstall = (build: HubBuild) =>
+      vi.fn(async (name: string) => {
+        const inspection = reviewedInspection(build, name);
+        return {
+          ...inspection,
+          contents: inspection.contents && { ...inspection.contents, modelBlob: 'f'.repeat(64) },
+        };
+      });
+
+    it('leaves it in place when the pre-pull listing failed, saying it may have been there before', async () => {
+      const manifest = bundled();
+      const build = manifest.entries[0].builds[0];
+      const ref = curatedSource(build).ollamaRef;
+      const runtime = fakeRuntime({
+        list: vi.fn().mockRejectedValue(new Error('timed out')),
+        inspect: changedInstall(build),
+      });
+      const h = harness({ runtime, curated: () => manifest });
+      await expect(runModelsCommand('pull', { _: [], ref, yes: true }, h.deps)).rejects.toThrow(
+        /may have been installed before this download/
+      );
+      expect(runtime.pull).toHaveBeenCalled();
+      expect(runtime.remove).not.toHaveBeenCalled();
+    });
+
+    it('says so when removing it fails', async () => {
+      const manifest = bundled();
+      const build = manifest.entries[0].builds[0];
+      const ref = curatedSource(build).ollamaRef;
+      const runtime = fakeRuntime({
+        inspect: changedInstall(build),
+        remove: vi.fn().mockRejectedValue(new Error('busy')),
+      });
+      const h = harness({ runtime, curated: () => manifest });
+      await expect(runModelsCommand('pull', { _: [], ref, yes: true }, h.deps)).rejects.toThrow(/removing it failed/);
+      expect(runtime.remove).toHaveBeenCalledWith(ref);
+    });
+
+    it('names why Ollama could not describe the model', async () => {
+      const manifest = bundled();
+      const entry = manifest.entries[0];
+      const ref = curatedSource(entry.builds[0]).ollamaRef;
+      const cause = new Error('timed out');
+      const runtime = fakeRuntime({ inspect: vi.fn().mockRejectedValue(cause) });
+      const failure = await requireInstalledReviewed(
+        { runtime, source: 'config' },
+        { entry, build: entry.builds[0] },
+        ref,
+        false,
+        new AbortController().signal
+      ).catch((error: unknown) => error);
+      expect((failure as Error).message).toMatch(/could not describe .* after downloading it \(timed out\)/);
+    });
+
+    it('tells the user the model is still installed when Ctrl-C lands during the check', async () => {
+      const manifest = bundled();
+      const ref = curatedSource(manifest.entries[0].builds[0]).ollamaRef;
+      let abort = () => {};
+      const runtime = fakeRuntime({
+        inspect: vi.fn(async () => {
+          abort();
+          throw new Error('aborted');
+        }),
+      });
+      const h = harness({ runtime, curated: () => manifest });
+      abort = () => h.controller.abort();
+      expect(await runModelsCommand('pull', { _: [], ref, yes: true }, h.deps)).toBe(EXIT_CANCELLED);
+      const text = h.lines.join('\n');
+      expect(text).toContain('Cancelled while checking');
+      expect(text).toContain('still installed');
+      expect(text).not.toContain('Pulled ');
+      expect(runtime.remove).not.toHaveBeenCalled();
+    });
+  });
+
   it('checks a curated library build against its reviewed layers before pulling and its contents after', async () => {
     const manifest = bundled();
     const build = manifest.entries[0].builds[0];
@@ -1022,7 +1133,7 @@ describe('models curated', () => {
     });
     expect(await runModelsCommand('pull', { _: [], ref, yes: true, force: true }, h.deps)).toBe(0);
     expect(served).toHaveBeenCalledWith(build.hf.repo, build.quant.label, expect.anything());
-    expect(h.runtime.pull).toHaveBeenCalledWith(ref, expect.anything());
+    expect(h.runtime.pull).toHaveBeenCalledWith(ref, expect.not.objectContaining({ runner: 'llamacpp' }));
 
     served.mockResolvedValue({ ...reviewedLayers(build), model: 'f'.repeat(64) });
     const changed = harness({

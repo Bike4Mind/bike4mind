@@ -12,6 +12,7 @@ import {
   curatedParamsLabel as paramsLabel,
   curatedPicks,
   curatedPins as pinsOf,
+  curatedRunner,
   curatedSource,
   installedReviewed,
   isAbliteratedModel,
@@ -1232,8 +1233,7 @@ export class ModelHubService {
     this.#push(true);
     try {
       await target.runtime.pull(ref, {
-        // Pins are the GGUF child of a library manifest list; Apple Silicon Ollama would otherwise pick MLX.
-        ...(curated && libraryOf(curated.build) ? { runner: 'llamacpp' } : {}),
+        runner: curated ? curatedRunner(curated.build) : undefined,
         signal,
         onProgress: (progress: PullProgress) => {
           const phase = phaseOf(progress.status);

@@ -12,6 +12,7 @@ import {
   curatedListing,
   curatedParamsLabel,
   curatedPicks,
+  curatedRunner,
   curatedSource,
   isAbliteratedModel,
   isHubRepoId,
@@ -36,6 +37,7 @@ import {
   formatBytes,
   gatedMessage,
   hadTagBefore,
+  installedUncheckedMessage,
   hiddenAbliteratedMessage,
   hubAccessMessage,
   licenseFor,
@@ -501,17 +503,19 @@ async function confirmDownload(question: string, deps: ModelsDeps, opts: ModelsO
   return deps.confirm(question);
 }
 
+/** `runner` and `verify` come from a curated build: the runner Ollama must use, and the post-install check. */
 async function pullWithProgress(
   target: RuntimeTarget,
   ref: string,
   deps: ModelsDeps,
-  verify?: () => Promise<void>
+  { runner, verify }: { runner?: string; verify?: () => Promise<void> } = {}
 ): Promise<PullResult> {
   let lastStatus = '';
   let lastDraw = 0;
   let sawBytes = false;
   try {
     await target.runtime.pull(ref, {
+      runner,
       signal: deps.signal,
       onProgress: ({ status, completedBytes, totalBytes }) => {
         // A cached layer can precede the first partial one; wait until there is work left.
@@ -553,7 +557,13 @@ async function pullWithProgress(
   if (deps.isTTY) deps.progress.end();
   if (verify) {
     deps.log('Checking the installed model against the reviewed build.');
-    await verify();
+    try {
+      await verify();
+    } catch (error) {
+      if (!deps.signal.aborted) throw error;
+      deps.log(installedUncheckedMessage(ref));
+      return 'cancelled';
+    }
   }
   deps.log(`Pulled ${clean(ref)}. Chat with it by default: b4m models use ${clean(ref)}`);
   return 'pulled';
@@ -665,7 +675,10 @@ async function pullReviewed(plan: PullPlan, ref: string, deps: ModelsDeps): Prom
     }
     throw error;
   }
-  return pullWithProgress(target, ref, deps, () => requireInstalledReviewed(target, curated, ref, hadTag, deps.signal));
+  return pullWithProgress(target, ref, deps, {
+    runner: curatedRunner(curated.build),
+    verify: () => requireInstalledReviewed(target, curated, ref, hadTag, deps.signal),
+  });
 }
 
 export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOptions): Promise<number> {

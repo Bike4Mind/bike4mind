@@ -364,6 +364,85 @@ describe('model tools', () => {
       expect(runtime.pull).not.toHaveBeenCalled();
     });
 
+    it('asks for the llamacpp runner on a curated library pull, and not on a plain one', async () => {
+      const curated = reviewedList();
+      const build = curated.entries[0].builds[0];
+      const ref = curatedSource(build).ollamaRef;
+      const { call, runtime } = await setup({
+        elicit: accept,
+        curated: () => curated,
+        libraryLayers: async () => reviewedLayers(build),
+      });
+      vi.mocked(runtime.inspect).mockImplementation(async name => reviewedInspection(build, name));
+      await call('models_pull', { ref });
+      expect(runtime.pull).toHaveBeenCalledWith(ref, expect.objectContaining({ runner: 'llamacpp' }));
+
+      const plain = await setup({ elicit: accept });
+      await plain.call('models_pull', { ref: REPO });
+      expect(plain.runtime.pull).toHaveBeenCalledWith(
+        `hf.co/${REPO}:Q4_K_M`,
+        expect.not.objectContaining({ runner: 'llamacpp' })
+      );
+    });
+
+    it('leaves the pulled model in place when the pre-pull listing failed and the check finds another build', async () => {
+      const curated = reviewedList();
+      const build = curated.entries[0].builds[0];
+      const { call, runtime } = await setup({
+        elicit: accept,
+        curated: () => curated,
+        libraryLayers: async () => reviewedLayers(build),
+      });
+      vi.mocked(runtime.list).mockRejectedValue(new Error('timed out'));
+      vi.mocked(runtime.inspect).mockImplementation(async name => {
+        const inspection = reviewedInspection(build, name);
+        return {
+          ...inspection,
+          contents: inspection.contents && { ...inspection.contents, modelBlob: 'f'.repeat(64) },
+        };
+      });
+      const { isError, text } = await call('models_pull', { ref: curatedSource(build).ollamaRef });
+      expect(isError).toBe(true);
+      expect(text).toMatch(/may have been installed before this download/);
+      expect(runtime.remove).not.toHaveBeenCalled();
+    });
+
+    it('reports the model as still installed when the request is cancelled during the check', async () => {
+      const curated = reviewedList();
+      const build = curated.entries[0].builds[0];
+      const ref = curatedSource(build).ollamaRef;
+      const handlers = new Map<string, (...args: unknown[]) => Promise<{ isError?: boolean; content: unknown }>>();
+      const stub = {
+        registerTool: (name: string, _config: unknown, handler: (...args: unknown[]) => never) =>
+          handlers.set(name, handler),
+        server: {
+          getClientCapabilities: () => ({ elicitation: { form: {} } }),
+          elicitInput: async () => ({ action: 'accept', content: { download: true, acceptLicense: true } }),
+        },
+      } as unknown as McpServer;
+      const runtime = fakeRuntime();
+      const controller = new AbortController();
+      vi.mocked(runtime.inspect).mockImplementation(async () => {
+        controller.abort();
+        throw new Error('aborted');
+      });
+      registerModelTools(stub, {
+        hub: () => fakeHub(),
+        ollamaRegistry: async () => manifest(),
+        libraryLayers: async () => reviewedLayers(build),
+        resolveRuntime: async () => ({ runtime, source: 'env' }),
+        defaultModel: async () => undefined,
+        machine: async () => ({ hardware: CPU_64 }),
+        curated: () => curated,
+      });
+      const result = await handlers.get('models_pull')?.({ ref }, { signal: controller.signal, requestId: 1 });
+      const text = (result?.content as Array<{ text: string }>)[0].text;
+      expect(result?.isError).toBe(true);
+      expect(text).toContain('still installed');
+      expect(text).not.toContain('Nothing was installed');
+      expect(runtime.remove).not.toHaveBeenCalled();
+    });
+
     it('refuses a build this Ollama is too old for before asking the user', async () => {
       const curated = reviewedList();
       const build = curated.entries[0].builds[0];

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   HUGGING_FACE_SSH_KEYS_URL,
   HuggingFaceHub,
+  curatedRunner,
   isAbliteratedModel,
   loadCuratedManifest,
   ollamaLibraryLayers,
@@ -26,6 +27,7 @@ import {
   hadTagBefore,
   hiddenAbliteratedMessage,
   hubAccessMessage,
+  installedUncheckedMessage,
   licenseName,
   listInstalled,
   findInstalledModel,
@@ -403,8 +405,11 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
           hadTag = await hadTagBefore(plan.target, ref, extra.signal);
         }
         try {
-          await plan.target.runtime.pull(ref, { signal: extra.signal, onProgress: pullProgress(extra) });
-          if (plan.curated) await requireInstalledReviewed(plan.target, plan.curated, ref, hadTag, extra.signal);
+          await plan.target.runtime.pull(ref, {
+            runner: plan.curated ? curatedRunner(plan.curated.build) : undefined,
+            signal: extra.signal,
+            onProgress: pullProgress(extra),
+          });
         } catch (error) {
           if (extra.signal.aborted) {
             return errorResult(
@@ -412,6 +417,14 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
             );
           }
           throw error;
+        }
+        if (plan.curated) {
+          try {
+            await requireInstalledReviewed(plan.target, plan.curated, ref, hadTag, extra.signal);
+          } catch (error) {
+            if (extra.signal.aborted) return errorResult(installedUncheckedMessage(ref));
+            throw error;
+          }
         }
         return toResult({ status: 'pulled', downloaded: true, installedAs: clean(ref), ...summary });
       })

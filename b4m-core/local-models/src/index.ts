@@ -43,6 +43,7 @@ export {
 } from './errors';
 export { isAbliteratedModel } from './abliterated';
 export {
+  configuredNumCtx,
   curatedBuildForRef,
   curatedEntryForRef,
   curatedLibrary,
@@ -51,6 +52,7 @@ export {
   curatedParamsLabel,
   curatedPicks,
   curatedPins,
+  curatedRunner,
   curatedSource,
   installedReviewed,
   isCuratedListable,

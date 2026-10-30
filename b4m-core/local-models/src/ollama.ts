@@ -55,7 +55,7 @@ export interface OllamaRuntimeOptions {
   apiKey?: string;
   /**
    * Scrubs credentials a proxy or daemon echoes into a streamed `/api/pull` line, given the response it came on.
-   * Defaults to removing `apiKey`.
+   * Defaults to removing `apiKey`, raw or JSON-escaped. Desktop passes its own (apps/desktop credentialRedactor).
    */
   redact?: (text: string, response: Response) => string;
   /** Deadline for ordinary API calls (ms). `pull` has none beyond its own signal. */
@@ -245,7 +245,7 @@ export class OllamaRuntime implements LocalRuntime {
       headers: options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : undefined,
     };
     const { apiKey } = options;
-    this.redact = options.redact ?? (apiKey ? text => text.split(apiKey).join('[redacted]') : text => text);
+    this.redact = options.redact ?? (apiKey ? apiKeyRedactor(apiKey) : text => text);
   }
 
   async health(): Promise<RuntimeHealth> {
@@ -430,4 +430,23 @@ export class OllamaRuntime implements LocalRuntime {
       throw error;
     }
   }
+}
+
+/**
+ * Replaces `apiKey` in a raw JSON line, where an encoder may have written any character backslash-escaped (`\/`)
+ * or as `\uXXXX` (Go escapes `&<>`). A lighter sibling of Desktop's credentialRedactor, for the bearer key alone.
+ */
+function apiKeyRedactor(apiKey: string): (text: string) => string {
+  let body = '';
+  for (let index = 0; index < apiKey.length; index++) {
+    const code = apiKey.charCodeAt(index);
+    const literal = apiKey[index].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const hex = code
+      .toString(16)
+      .padStart(4, '0')
+      .replace(/[a-f]/g, digit => `[${digit}${digit.toUpperCase()}]`);
+    body += `(?:${literal}|\\\\${literal}|\\\\u${hex})`;
+  }
+  const pattern = new RegExp(body, 'g');
+  return text => text.replace(pattern, '[redacted]');
 }

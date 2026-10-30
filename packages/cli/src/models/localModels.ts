@@ -494,10 +494,17 @@ async function requireCuratedRuntime(
 ): Promise<void> {
   if (!curated?.build.runtimeMin?.ollama) return;
   const health = await abortable(target.runtime.health(), signal);
-  const blocked = curatedOllamaBlocked(curated.build, health.ok ? health.version : null);
+  const name = clean(curated.entry.name);
+  // Unreachable is not outdated: telling the user to update would send them the wrong way.
+  if (!health.ok) {
+    throw new Error(
+      `Could not read the version of ${runtimeLabel(target)} (${clean(health.error ?? 'no reply')}), which ${name} needs to be ${curated.build.runtimeMin.ollama} or newer, so nothing was downloaded.`
+    );
+  }
+  const blocked = curatedOllamaBlocked(curated.build, health.version);
   if (blocked) {
     throw new Error(
-      `${blocked} for ${clean(curated.entry.name)}, so nothing was downloaded. Update ${runtimeLabel(target)}, then pull it again.`
+      `${blocked} for ${name}, so nothing was downloaded. Update ${runtimeLabel(target)}, then pull it again.`
     );
   }
 }
@@ -600,6 +607,15 @@ export async function requireReviewedLayers(
   if (!servesReviewed(live, build)) throw new Error(`${LAYERS_CHANGED}, so nothing was downloaded.`);
 }
 
+/** Cancelling after the download, during the reviewed-build check, leaves the model installed but unchecked. */
+export function installedUncheckedMessage(ref: string): string {
+  const name = clean(ref);
+  return (
+    `Cancelled while checking ${name} against the reviewed build. ` +
+    `It is still installed; remove it with \`b4m models rm ${name}\` unless you trust it.`
+  );
+}
+
 /** Whether `ref` is installed before a pull; null when the runtime could not say. */
 export async function hadTagBefore(target: RuntimeTarget, ref: string, signal: AbortSignal): Promise<boolean | null> {
   try {
@@ -633,9 +649,10 @@ export async function requireInstalledReviewed(
     );
   } catch (error) {
     if (signal.aborted) throw error;
+    const reason = clean(error instanceof Error ? error.message : String(error));
     throw new Error(
-      `Ollama could not describe ${name} after downloading it, so it was not checked against the reviewed build. ` +
-        `It is still installed; remove it with \`b4m models rm ${name}\` unless you trust it.`
+      `Ollama could not describe ${name} after downloading it (${reason}), so it was not checked against the ` +
+        `reviewed build. It is still installed; remove it with \`b4m models rm ${name}\` unless you trust it.`
     );
   }
   if (installedReviewed(inspection, curated.build)) return;

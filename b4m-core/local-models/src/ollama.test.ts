@@ -519,6 +519,25 @@ describe('OllamaRuntime.pull', () => {
     expect(JSON.stringify([String(error), (error as Error).stack, statuses])).not.toContain('sk-sentinel-91c2');
   });
 
+  it('scrubs an apiKey that a frame echoes JSON-escaped, and still the plain form', async () => {
+    const apiKey = 'sk/a&b-7F';
+    server = await startFakeServer({
+      'POST /api/pull': (_request, response) =>
+        response.end(
+          ['{"status":"pulling as sk\\/a\\u0026b-7F"}', '{"error":"refused sk\\/a&b-7F and sk/a&b-7F"}'].join('\n') +
+            '\n'
+        ),
+    });
+    const statuses: string[] = [];
+    const error = await new OllamaRuntime({ baseUrl: server.baseUrl, apiKey })
+      .pull('qwen3:8b', { onProgress: update => statuses.push(update.status) })
+      .catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(LocalRuntimeError);
+    expect((error as Error).message).toContain('refused [redacted] and [redacted]');
+    expect(statuses).toEqual(['pulling as [redacted]']);
+    expect(JSON.stringify([String(error), statuses])).not.toMatch(/sk\/a|a&b|a\\u0026b/i);
+  });
+
   it('passes each streamed line and its response through a given redact', async () => {
     server = await startFakeServer({
       'POST /api/pull': (_request, response) =>
