@@ -1061,6 +1061,15 @@ describe('supplementary SerpAPI lookup failure logging', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  it('degrades a null body to no images or places without logging a failure', async () => {
+    fetchMock.mockResolvedValue(jsonRes(null));
+
+    await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
+    await expect(createSerpApiProvider(adapters).searchPlaces!('tivoli')).resolves.toEqual([]);
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
   it('warns on a network failure of the place search but keeps an unexpected error at error', async () => {
     fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'));
     await expect(createSerpApiProvider(adapters).searchPlaces!('tivoli')).resolves.toEqual([]);

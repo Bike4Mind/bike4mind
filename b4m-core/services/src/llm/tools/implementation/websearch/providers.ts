@@ -587,39 +587,41 @@ async function serpApiImageSearch(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  // Only the request is inside the try, so the failure classification sees fetch and body errors alone.
+  let data: SerpApiImagesResponse | null;
   try {
     const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
     if (!response.ok) {
       logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI image search failed', { status: response.status });
       return [];
     }
-    const data = (await response.json()) as SerpApiImagesResponse;
-    const entries = Array.isArray(data.images_results) ? data.images_results : [];
-
-    const seen = new Set<string>();
-    const images: WebSearchImageResult[] = [];
-    for (const entry of entries) {
-      if (!entry) continue;
-      const image = safeImageUrl(entry.original) ?? safeImageUrl(entry.thumbnail);
-      const pageUrl = typeof entry.link === 'string' ? entry.link : '';
-      // A picture with no page cannot be attributed or linked, which is the whole point of a card.
-      if (!image || !pageUrl || seen.has(image)) continue;
-      seen.add(image);
-      images.push({
-        url: image,
-        pageUrl,
-        title: entry.title ?? '',
-        source: entry.source || safeHost(pageUrl),
-      });
-      if (images.length >= limit) break;
-    }
-    return images;
+    data = (await response.json()) as SerpApiImagesResponse | null;
   } catch (error) {
     logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI image search request failed:', { error });
     return [];
   } finally {
     clearTimeout(timeoutId);
   }
+
+  const entries = Array.isArray(data?.images_results) ? data.images_results : [];
+  const seen = new Set<string>();
+  const images: WebSearchImageResult[] = [];
+  for (const entry of entries) {
+    if (!entry) continue;
+    const image = safeImageUrl(entry.original) ?? safeImageUrl(entry.thumbnail);
+    const pageUrl = typeof entry.link === 'string' ? entry.link : '';
+    // A picture with no page cannot be attributed or linked, which is the whole point of a card.
+    if (!image || !pageUrl || seen.has(image)) continue;
+    seen.add(image);
+    images.push({
+      url: image,
+      pageUrl,
+      title: entry.title ?? '',
+      source: entry.source || safeHost(pageUrl),
+    });
+    if (images.length >= limit) break;
+  }
+  return images;
 }
 
 /** An entry of the `google_maps` engine's `local_results`, or its single-match `place_results`. */
@@ -678,21 +680,23 @@ async function serpApiPlaceSearch(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  let data: SerpApiMapsResponse | null;
   try {
     const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
     if (!response.ok) {
       logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI place search failed', { status: response.status });
       return [];
     }
-    const data = (await response.json()) as SerpApiMapsResponse;
-    const local = Array.isArray(data.local_results) ? data.local_results : [];
-    return dedupePlaces([fromSerpApiMapsPlace(data.place_results), ...local.map(fromSerpApiMapsPlace)], limit);
+    data = (await response.json()) as SerpApiMapsResponse | null;
   } catch (error) {
     logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI place search request failed:', { error });
     return [];
   } finally {
     clearTimeout(timeoutId);
   }
+
+  const local = Array.isArray(data?.local_results) ? data.local_results : [];
+  return dedupePlaces([fromSerpApiMapsPlace(data?.place_results), ...local.map(fromSerpApiMapsPlace)], limit);
 }
 
 /** Hostname of a URL, or the URL itself when it will not parse. */
