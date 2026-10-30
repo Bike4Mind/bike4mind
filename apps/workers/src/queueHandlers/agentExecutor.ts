@@ -3614,8 +3614,12 @@ async function chargeSubagentTokens(
         })
       );
   }
-  if (args.usage) {
-    const { usage } = args;
+  const { usage } = args;
+  // A run that stopped before its first model call reports no tokens; there is nothing to record.
+  const reportedTokens = usage
+    ? usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
+    : 0;
+  if (usage && reportedTokens > 0) {
     await recordToolUsageEvent(
       { usageEvents: usageEventRepository },
       logger,
