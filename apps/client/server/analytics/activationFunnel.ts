@@ -73,7 +73,11 @@ export function funnelStepOf({
 
 type CohortMember = { id: string; signupAt: Date };
 
-const pushTo = <T>(map: Map<string, T[]>, key: string, value: T) => map.set(key, [...(map.get(key) ?? []), value]);
+const pushTo = <T>(map: Map<string, T[]>, key: string, value: T) => {
+  const bucket = map.get(key);
+  if (bucket) bucket.push(value);
+  else map.set(key, [value]);
+};
 
 async function loadActiveDays(batch: CohortMember[], deadlineMs: number): Promise<Map<string, string[]>> {
   const signupDays = batch.map(member => utcDayOf(member.signupAt)).sort();
