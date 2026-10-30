@@ -225,7 +225,7 @@ export interface IUserPreferences {
   showSplashCards?: boolean;
   /** Set once the user closes the "Try the desktop app" pill in the sidebar; it never shows again. */
   desktopPromoDismissed?: boolean;
-  /** Prompt-cache lifetime for new chats on models that support both. Default: '5m'. */
+  /** Prompt-cache lifetime for web chats that haven't picked their own, on models that support both. Default: '5m'. */
   promptCacheTtl?: '5m' | '1h';
 }
 

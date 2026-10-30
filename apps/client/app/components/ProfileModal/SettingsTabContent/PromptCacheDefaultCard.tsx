@@ -3,7 +3,7 @@ import { isPromptCacheTtl } from '@bike4mind/common';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyles';
 
-/** Default prompt-cache lifetime for new chats; each chat can still pick its own in the composer. */
+/** Default prompt-cache lifetime for web chats that haven't picked their own in the composer. */
 export default function PromptCacheDefaultCard() {
   const { settings, updatePreferences } = useUserSettings();
 
@@ -26,8 +26,8 @@ export default function PromptCacheDefaultCard() {
             Prompt Cache
           </Typography>
           <Typography level="body-sm" sx={{ mt: 0.5 }}>
-            How long Claude keeps a chat cached between messages. An hour costs more to cache (2x input instead of
-            1.25x) and the same to reuse.
+            How long Claude keeps a web chat cached between messages, for chats that have not picked their own. An hour
+            costs more to cache (2x input instead of 1.25x) and the same to reuse.
           </Typography>
         </Box>
         <Select
