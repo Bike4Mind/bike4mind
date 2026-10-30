@@ -28,6 +28,19 @@ describe('cleanLandingPath', () => {
     // Slugs and short ids pass unchanged.
     expect(cleanLandingPath('/blog/how-to-learn-kanji-in-2024')).toBe('/blog/how-to-learn-kanji-in-2024');
     expect(cleanLandingPath('/u/42')).toBe('/u/42');
+    expect(cleanLandingPath('/blog/caf%C3%A9')).toBe('/blog/caf%C3%A9');
+  });
+
+  it('redacts each id in a bulk share link, however the comma is written', () => {
+    const [a, b] = ['65a1b2c3d4e5f60718293a4b', '65a1b2c3d4e5f60718293a4c'];
+    expect(cleanLandingPath(`/share/${a},${b}`)).toBe('/share/:token,:token');
+    expect(cleanLandingPath(`/share/${a}%2C${b}`)).toBe('/share/:token%2C:token');
+  });
+
+  it('sends nothing for a path no browser could send', () => {
+    for (const raw of ['/<script>alert(1)</script>', '/a\nb', '/a\u0000b', '/a b', '/caf\u00e9', '/a"b']) {
+      expect(cleanLandingPath(raw), JSON.stringify(raw)).toBeUndefined();
+    }
   });
 
   it('sends nothing for a path holding an address, or for anything that is no path', () => {
