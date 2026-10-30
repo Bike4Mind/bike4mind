@@ -126,6 +126,16 @@ vi.mock('@server/billing/grantCreditPurchase', () => ({
   grantCreditPurchase: (...args: unknown[]) => mockGrantCreditPurchase(...args),
 }));
 
+// The screening itself has its own suite (server/billing/paymentRisk.test.ts); here only the wiring.
+const mockAlertStripeRiskEvent = vi.fn();
+const mockScreenPaymentOutcome = vi.fn();
+const mockRadarRiskLine = vi.fn();
+vi.mock('@server/billing/paymentRisk', () => ({
+  alertStripeRiskEvent: (...args: unknown[]) => mockAlertStripeRiskEvent(...args),
+  screenPaymentOutcome: (...args: unknown[]) => mockScreenPaymentOutcome(...args),
+  radarRiskLine: (...args: unknown[]) => mockRadarRiskLine(...args),
+}));
+
 // The real source-product emitter runs (signupEvents.ts); only the network edge is mocked, with an
 // ingest key for one made-up product.
 const mockEmitProductEvent = vi.fn();
@@ -263,6 +273,115 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockClawbackCreditLotsByStripeRef.mockResolvedValue(undefined);
     mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
     mockEmitProductEvent.mockResolvedValue(undefined);
+    mockRadarRiskLine.mockResolvedValue(null);
+  });
+
+  describe('payment risk wiring', () => {
+    it.each(['radar.early_fraud_warning.created', 'review.opened'])('forwards %s to the risk alert', async type => {
+      const event = { type, data: { object: { id: 'obj_1', charge: 'ch_1' } } };
+
+      const { res } = await invokeWebhookWithEvent(event);
+
+      expect(mockAlertStripeRiskEvent).toHaveBeenCalledWith(event, expect.anything());
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('screens a first credit grant, but not a redelivery', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ id: 'user123' });
+      const event = {
+        type: 'payment_intent.succeeded',
+        data: {
+          object: {
+            id: 'pi_pack',
+            object: 'payment_intent',
+            customer: 'cus_123',
+            amount: 999,
+            currency: 'usd',
+            latest_charge: 'ch_pack',
+            metadata: { environment: 'test', credits: '500' },
+          },
+        },
+      };
+
+      await invokeWebhookWithEvent(event);
+      expect(mockScreenPaymentOutcome).toHaveBeenCalledWith(
+        {
+          paymentIntentId: 'pi_pack',
+          userId: 'user123',
+          kind: 'credits',
+          amount: 999,
+          currency: 'usd',
+          outcome: 'succeeded',
+          chargeRef: 'ch_pack',
+        },
+        expect.anything()
+      );
+
+      mockScreenPaymentOutcome.mockClear();
+      mockGrantCreditPurchase.mockResolvedValue('already_granted');
+      await invokeWebhookWithEvent(event);
+      expect(mockScreenPaymentOutcome).not.toHaveBeenCalled();
+    });
+
+    it("screens a subscription's payment intent as a subscription payment", async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ id: 'user123' });
+
+      await invokeWebhookWithEvent({
+        type: 'payment_intent.succeeded',
+        data: {
+          object: {
+            id: 'pi_sub',
+            object: 'payment_intent',
+            customer: 'cus_123',
+            amount: 3000,
+            currency: 'usd',
+            latest_charge: 'ch_sub',
+            metadata: {},
+          },
+        },
+      });
+
+      expect(mockGrantCreditPurchase).not.toHaveBeenCalled();
+      expect(mockScreenPaymentOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({ paymentIntentId: 'pi_sub', kind: 'subscription', outcome: 'succeeded' }),
+        expect.anything()
+      );
+    });
+
+    it('alerts on and records a failed card attempt', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(null);
+      mockFindByStripeCustomerId.mockResolvedValue({ id: 'user123' });
+      const event = {
+        type: 'payment_intent.payment_failed',
+        data: {
+          object: {
+            id: 'pi_blocked',
+            customer: 'cus_123',
+            amount: 10000,
+            currency: 'usd',
+            metadata: { credits: '1000' },
+            last_payment_error: { charge: 'ch_blocked', payment_method: { card: { fingerprint: 'fp_2' } } },
+          },
+        },
+      };
+
+      await invokeWebhookWithEvent(event);
+
+      expect(mockAlertStripeRiskEvent).toHaveBeenCalledWith(event, expect.anything());
+      expect(mockScreenPaymentOutcome).toHaveBeenCalledWith(
+        {
+          paymentIntentId: 'pi_blocked',
+          userId: 'user123',
+          kind: 'credits',
+          amount: 10000,
+          currency: 'usd',
+          outcome: 'failed',
+          chargeRef: 'ch_blocked',
+          fallbackCardFingerprint: 'fp_2',
+        },
+        expect.anything()
+      );
+    });
   });
 
   describe('payment_intent.succeeded', () => {
@@ -614,6 +733,20 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       expect(message).toContain('*User:* `user123`');
       expect(message).not.toContain('test@example.com');
       expect(message).not.toContain('Test User');
+    });
+
+    it("adds the charge's Radar risk to the dispute alert", async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+      mockSubtractCredits.mockResolvedValue({ currentCredits: 300 });
+      mockRadarRiskLine.mockResolvedValue('*Radar risk:* highest (score 91)');
+
+      await invokeWebhookWithEvent(disputeEvent);
+
+      expect(mockRadarRiskLine).toHaveBeenCalledWith('ch_456');
+      expect(mockPostMessageToSlack).toHaveBeenCalledWith(
+        expect.stringMatching(/Account flagged.*\n\*Radar risk:\* highest \(score 91\)$/)
+      );
     });
 
     it('is idempotent — duplicate dispute event is swallowed (code 11000)', async () => {

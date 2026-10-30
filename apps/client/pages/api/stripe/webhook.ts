@@ -34,6 +34,7 @@ import {
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
+import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
@@ -110,16 +111,33 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         req.logger.debug(`Ignoring non-invoice webhook: ${intent.object}`);
         break;
       }
+      if (!intent.metadata?.credits || Number(intent.metadata.credits) < 1) {
+        // Subscription-related payment intents don't carry credits metadata
+        // and are handled via invoice.payment_succeeded instead. They are still screened for
+        // payment risk, ahead of the stage guard because they carry no environment metadata. A
+        // customer from another stage or an org resolves to no user here and is skipped.
+        req.logger.debug(`Ignoring intent without credits: ${intent.id}`);
+        const subscriber = customerId ? await userRepository.findByStripeCustomerId(customerId) : null;
+        if (subscriber) {
+          await screenPaymentOutcome(
+            {
+              paymentIntentId: intent.id,
+              userId: subscriber.id,
+              kind: 'subscription',
+              amount: intent.amount_received ?? intent.amount,
+              currency: intent.currency,
+              outcome: 'succeeded',
+              chargeRef: intent.latest_charge,
+            },
+            req.logger
+          );
+        }
+        break;
+      }
       if (intent.metadata?.environment !== Resource.App.stage) {
         req.logger.debug(
           `Ignoring webhook for wrong environment: ${intent.metadata?.environment}, wanted ${Resource.App.stage}`
         );
-        break;
-      }
-      if (!intent.metadata?.credits || Number(intent.metadata.credits) < 1) {
-        // Subscription-related payment intents don't carry credits metadata
-        // and are handled via invoice.payment_succeeded instead
-        req.logger.debug(`Ignoring intent without credits: ${intent.id}`);
         break;
       }
 
@@ -197,6 +215,20 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         );
         break;
       }
+
+      // First grant only, so a redelivery does not alert twice. Never throws.
+      await screenPaymentOutcome(
+        {
+          paymentIntentId: intent.id,
+          userId: user.id,
+          kind: 'credits',
+          amount: intent.amount_received ?? intent.amount,
+          currency: intent.currency,
+          outcome: 'succeeded',
+          chargeRef: intent.latest_charge,
+        },
+        req.logger
+      );
 
       req.logger.info('[CreditPurchase] Credits granted', {
         step: 'credits_granted',
@@ -487,6 +519,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         }
       }
 
+      const disputeRadarLine = await radarRiskLine(dispute.charge);
+      const disputeRadarSuffix = disputeRadarLine ? `\n${disputeRadarLine}` : '';
+
       if (user) {
         const { deactivatedKeys } = await userService.flagDisputePending(user, {
           db: {
@@ -497,12 +532,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         });
 
         await postMessageToSlack(
-          `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.`
+          `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.${disputeRadarSuffix}`
         );
         req.logger.info(`User ${user.id} flagged disputePending=true for dispute ${dispute.id}`);
       } else {
         await postMessageToSlack(
-          `\u26A0\uFE0F *Stripe Dispute Created \u2014 No User Found* \u2014 dispute ${dispute.id}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nCould not identify user. Manual review required.`
+          `\u26A0\uFE0F *Stripe Dispute Created \u2014 No User Found* \u2014 dispute ${dispute.id}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nCould not identify user. Manual review required.${disputeRadarSuffix}`
         );
         req.logger.warn(`Could not find user for dispute ${dispute.id}`);
       }
@@ -696,8 +731,35 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       break;
     }
 
+    case 'radar.early_fraud_warning.created':
+    case 'review.opened': {
+      await alertStripeRiskEvent(event, req.logger);
+      break;
+    }
+
     case 'payment_intent.payment_failed': {
       const intent = event.data.object;
+
+      // A Radar block or high-risk failure alerts on its own; every failed card attempt is also
+      // recorded so the per-account and per-network card counts see it. Neither throws.
+      await alertStripeRiskEvent(event, req.logger);
+      const failedCustomerId = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
+      const failedPayer = failedCustomerId ? await userRepository.findByStripeCustomerId(failedCustomerId) : null;
+      if (failedPayer) {
+        await screenPaymentOutcome(
+          {
+            paymentIntentId: intent.id,
+            userId: failedPayer.id,
+            kind: Number(intent.metadata?.credits) >= 1 ? 'credits' : 'subscription',
+            amount: intent.amount,
+            currency: intent.currency,
+            outcome: 'failed',
+            chargeRef: intent.last_payment_error?.charge,
+            fallbackCardFingerprint: intent.last_payment_error?.payment_method?.card?.fingerprint ?? null,
+          },
+          req.logger
+        );
+      }
 
       // Only act if credits were pre-allocated for this payment intent
       const failedTx = await creditTransactionRepository.findByPaymentIntentId(intent.id);
