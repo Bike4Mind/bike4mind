@@ -467,6 +467,7 @@ export const SettingKeySchema = z.enum([
   'freeTierDailySpendCapCredits',
   'freeTierDay1SpendCapCredits',
   'freeTierDays2To7SpendCapCredits',
+  'freeTierDailySystemCostCapUsd',
   'stagedSignupGrantEnabled',
   'signupGrantCredits',
   'verifiedUnlockCredits',
@@ -2169,6 +2170,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'freeTierDailySpendCapCredits', order: 17 },
       { key: 'freeTierDay1SpendCapCredits', order: 18 },
       { key: 'freeTierDays2To7SpendCapCredits', order: 19 },
+      { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
       { key: 'turnstileFailClosed', order: 22 },
@@ -4349,6 +4351,16 @@ export const settingsMap = {
     min: 0,
     description:
       'Daily spend cap for a free-tier account aged 24 hours to 7 days. Intermediate ramp between the day-1 allowance and the steady-state cap. Set to 0 to fall back to the steady-state cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  freeTierDailySystemCostCapUsd: makeNumberSetting({
+    key: 'freeTierDailySystemCostCapUsd',
+    name: 'Free Tier Daily System Cost Cap (USD)',
+    defaultValue: 0.1,
+    min: 0,
+    description:
+      'Daily provider cost, in USD, a free-tier account may incur through system work it triggers (file indexing, knowledge-base search, tool and session operations), counted per UTC calendar day whether or not that work was charged credits. Once reached, new chat, API and session-operation requests are refused with the same 429 as the daily spend cap until the next UTC midnight; work already admitted (e.g. tool calls inside a running turn, queued file indexing) is not interrupted. Set to 0 to disable.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

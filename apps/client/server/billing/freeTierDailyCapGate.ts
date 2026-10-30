@@ -12,6 +12,7 @@ interface IUserRepository {
 
 type DailySpendRepository = {
   findDailySpendByUser(userId: string, since: Date): Promise<number>;
+  systemCostUsdByUserSince(userId: string, since: Date): Promise<number>;
 };
 
 type CapCheckInput =
@@ -23,7 +24,8 @@ type CapCheckInput =
 /** 24 hours in milliseconds. */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function utcMidnight(now: Date): Date {
+/** Start of the UTC day the daily caps count from; the admin credit summary reports the same window. */
+export function utcMidnight(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
@@ -36,8 +38,9 @@ export function isFreeTierDailyCapError(error: unknown): error is TooManyRequest
 
 /**
  * Throw a 429 `daily_free_limit_reached` if the user is on the free tier and
- * has already spent their daily credit allowance. No-op when enforceCredits is
- * off, the user is on a paid/bypass tier, or no cap is configured.
+ * has already spent their daily credit allowance or their daily system cost
+ * allowance (provider USD of system-sourced work, which often bills 0 credits).
+ * No-op when enforceCredits is off, the user is on a paid/bypass tier, or no cap is configured.
  *
  * Call this AFTER `assertAiAccessAllowed` and BEFORE the credit hold, so a
  * capped user never produces a dangling hold that the sweep has to clean up.
@@ -66,7 +69,8 @@ export async function checkFreeTierDailySpendCap({
     if (billingOrganizationId) return;
 
     const steadyCap = getSettingsValue('freeTierDailySpendCapCredits', settings) ?? 0;
-    if (steadyCap <= 0) return;
+    const systemCapUsd = getSettingsValue('freeTierDailySystemCostCapUsd', settings) ?? 0;
+    if (steadyCap <= 0 && systemCapUsd <= 0) return;
 
     // Reuse a resolved user; ID-only callers defer their lookup until enforcement is enabled.
     const user = 'user' in input && input.user ? input.user : await input.userRepository.findById(input.userId);
@@ -83,33 +87,47 @@ export async function checkFreeTierDailySpendCap({
     if (tier !== 'free') return;
 
     const now = new Date();
-    // A legacy user without createdAt predates the ramp, so it gets the steady-state cap.
-    const accountAgeMs = user.createdAt ? now.getTime() - new Date(user.createdAt).getTime() : Infinity;
-    let cap: number;
-    if (accountAgeMs < DAY_MS) {
-      cap = getSettingsValue('freeTierDay1SpendCapCredits', settings) ?? steadyCap;
-      if (cap <= 0) cap = steadyCap;
-    } else if (accountAgeMs < 7 * DAY_MS) {
-      cap = getSettingsValue('freeTierDays2To7SpendCapCredits', settings) ?? steadyCap;
-      if (cap <= 0) cap = steadyCap;
-    } else {
-      cap = steadyCap;
+    const startOfDay = utcMidnight(now);
+    const capReached = (message: string, detail: Record<string, unknown>) => {
+      logger.info('[freeTierDailyCapGate] daily cap reached', { userId: user.id, ...detail });
+      return new TooManyRequestsError(message, {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        // Seconds until the next UTC midnight; becomes the Retry-After header.
+        retryAfter: Math.ceil((startOfDay.getTime() + DAY_MS - now.getTime()) / 1000),
+      });
+    };
+
+    if (steadyCap > 0) {
+      // A legacy user without createdAt predates the ramp, so it gets the steady-state cap.
+      const accountAgeMs = user.createdAt ? now.getTime() - new Date(user.createdAt).getTime() : Infinity;
+      let cap: number;
+      if (accountAgeMs < DAY_MS) {
+        cap = getSettingsValue('freeTierDay1SpendCapCredits', settings) ?? steadyCap;
+        if (cap <= 0) cap = steadyCap;
+      } else if (accountAgeMs < 7 * DAY_MS) {
+        cap = getSettingsValue('freeTierDays2To7SpendCapCredits', settings) ?? steadyCap;
+        if (cap <= 0) cap = steadyCap;
+      } else {
+        cap = steadyCap;
+      }
+
+      const todaySpend = await usageEventRepository.findDailySpendByUser(user.id, startOfDay);
+      if (todaySpend >= cap) {
+        throw capReached('Daily free-tier credit limit reached. Try again tomorrow.', {
+          spentToday: todaySpend,
+          dailyCap: cap,
+        });
+      }
     }
 
-    const startOfDay = utcMidnight(now);
-    const todaySpend = await usageEventRepository.findDailySpendByUser(user.id, startOfDay);
-    if (todaySpend >= cap) {
-      // Seconds until the next UTC midnight; becomes the Retry-After header.
-      const retryAfter = Math.ceil((startOfDay.getTime() + DAY_MS - now.getTime()) / 1000);
-      logger.info('[freeTierDailyCapGate] daily cap reached', {
-        userId: user.id,
-        spentToday: todaySpend,
-        dailyCap: cap,
-      });
-      throw new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
-        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
-        retryAfter,
-      });
+    if (systemCapUsd > 0) {
+      const systemCostUsd = await usageEventRepository.systemCostUsdByUserSince(user.id, startOfDay);
+      if (systemCostUsd >= systemCapUsd) {
+        throw capReached('Daily free-tier usage limit reached. Try again tomorrow.', {
+          systemCostUsdToday: systemCostUsd,
+          dailySystemCostCapUsd: systemCapUsd,
+        });
+      }
     }
   } catch (err) {
     if (err instanceof TooManyRequestsError) throw err;

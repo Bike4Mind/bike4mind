@@ -49,6 +49,7 @@ const SUMMARY: AdminCreditSummary = {
     { key: 'web', last7d: 600, last30d: 2600, last90d: 3000 },
     { key: null, last7d: 100, last30d: 400, last90d: 600 },
   ],
+  systemCost: { todayUsd: 0.0425, last7dUsd: 0.5, last30dUsd: 1.25, dailyCapUsd: 0.1 },
 };
 
 const ROWS: AdminLedgerRow[] = [
@@ -122,6 +123,39 @@ describe('CreditsTab', () => {
     expect(screen.getByTestId('user-credits-total-24h')).toHaveTextContent('412 in the last 24 hours');
   });
 
+  it('shows system-sourced provider cost next to credit spend', () => {
+    renderTab();
+
+    expect(screen.getByTestId('user-credits-system-cost-today')).toHaveTextContent('$0.0425');
+    expect(screen.getByTestId('user-credits-system-cost-7d')).toHaveTextContent('$0.50');
+    expect(screen.getByTestId('user-credits-system-cost-30d')).toHaveTextContent('$1.25');
+    expect(screen.getByTestId('user-credits-system-cost-cap')).toHaveTextContent('$0.10');
+    expect(screen.getByTestId('user-credits-system-cost')).not.toHaveTextContent('Daily cap reached');
+  });
+
+  it('flags a reached system cost cap and shows an unset cap as off', () => {
+    mocks.summary.mockReturnValue(
+      summaryResult({ data: { ...SUMMARY, systemCost: { ...SUMMARY.systemCost, todayUsd: 0.1 } } })
+    );
+    const { unmount } = renderTab();
+    expect(screen.getByTestId('user-credits-system-cost')).toHaveTextContent('Daily cap reached');
+    unmount();
+
+    mocks.summary.mockReturnValue(
+      summaryResult({ data: { ...SUMMARY, systemCost: { ...SUMMARY.systemCost, todayUsd: 5, dailyCapUsd: 0 } } })
+    );
+    renderTab();
+    expect(screen.getByTestId('user-credits-system-cost-cap')).toHaveTextContent('Off');
+    expect(screen.getByTestId('user-credits-system-cost')).not.toHaveTextContent('Daily cap reached');
+  });
+
+  it('shows dashes for system cost while the summary is unavailable', () => {
+    mocks.summary.mockReturnValue(summaryResult({ data: undefined, isLoading: true }));
+    renderTab();
+    expect(screen.getByTestId('user-credits-system-cost-today')).toHaveTextContent('-');
+    expect(screen.getByTestId('user-credits-system-cost-cap')).toHaveTextContent('-');
+  });
+
   it('charts the chosen range: 30 days by default, then 7 and 90', () => {
     renderTab();
 
@@ -189,9 +223,75 @@ describe('CreditsTab', () => {
     expect(screen.getByText('No credit transactions yet.')).toBeInTheDocument();
     unmount();
 
-    mocks.ledger.mockReturnValue(ledgerResult({ data: undefined, isError: true }));
+    const refetch = vi.fn();
+    mocks.ledger.mockReturnValue(ledgerResult({ data: undefined, isError: true, refetch }));
     renderTab();
     expect(screen.getByText('The ledger could not be loaded.')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it('renders a sparse API row with its request id and dashes for the missing detail and balance', () => {
+    mocks.summary.mockReturnValue(
+      summaryResult({ data: { ...SUMMARY, byModel: [{ key: null, last7d: 1, last30d: 1, last90d: 1 }] } })
+    );
+    mocks.ledger.mockReturnValue(
+      ledgerResult({
+        data: {
+          pages: [
+            {
+              rows: [
+                {
+                  id: 'tx-3',
+                  type: 'text_generation_usage',
+                  kind: 'usage',
+                  createdAt: '2026-10-27T11:00:00Z',
+                  credits: -3,
+                  requestId: 'req-abc',
+                },
+              ],
+              nextCursor: null,
+            },
+          ],
+        },
+        hasNextPage: false,
+      })
+    );
+    render(<CreditsTab user={buildProfile({ currentCredits: undefined })} onAdjust={vi.fn()} />, {
+      wrapper: ProfileTestWrapper,
+    });
+
+    const row = screen.getByTestId('admin-table-row-tx-3');
+    expect(row).toHaveTextContent('req-abc');
+    expect(row).not.toHaveTextContent('undefined');
+  });
+
+  it('sorts the loaded ledger rows by time and by change', () => {
+    renderTab();
+    const rowIds = () =>
+      within(screen.getByTestId('user-credits-ledger'))
+        .getAllByTestId(/^admin-table-row-/)
+        .map(row => row.dataset.testid);
+
+    fireEvent.click(screen.getByTestId('admin-table-sort-when-btn'));
+    const byWhen = rowIds();
+    fireEvent.click(screen.getByTestId('admin-table-sort-when-btn'));
+    expect(rowIds()).toEqual([...byWhen].reverse());
+
+    fireEvent.click(screen.getByTestId('admin-table-sort-change-btn'));
+    const byChange = rowIds();
+    fireEvent.click(screen.getByTestId('admin-table-sort-change-btn'));
+    expect(rowIds()).toEqual([...byChange].reverse());
+  });
+
+  it('reports a failed export', async () => {
+    mocks.exportCsv.mockRejectedValue(new Error('network'));
+    renderTab();
+
+    fireEvent.click(screen.getByTestId('user-credits-export-btn'));
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('The export failed. Try again.'));
+    expect(screen.getByTestId('user-credits-export-btn')).not.toBeDisabled();
   });
 
   it('exports the current filter and states the row cap', async () => {

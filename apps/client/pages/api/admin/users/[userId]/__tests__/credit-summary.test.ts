@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 
-const h = vi.hoisted(() => ({ summarize: vi.fn(), latestTopUp: vi.fn(), findUser: vi.fn() }));
+const h = vi.hoisted(() => ({
+  summarize: vi.fn(),
+  latestTopUp: vi.fn(),
+  findUser: vi.fn(),
+  systemCost: vi.fn(),
+  settingValue: vi.fn(),
+}));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
@@ -23,8 +29,14 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   AI_SPEND_DAILY_WINDOW_DAYS: 90,
+  adminSettingsRepository: {},
   creditTransactionRepository: { summarizeAiSpend: h.summarize, findLatestTopUp: h.latestTopUp },
+  usageEventRepository: { systemCostUsdByUserSince: h.systemCost },
   userRepository: { findById: h.findUser },
+}));
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsMap: async () => ({}),
+  getSettingsValue: h.settingValue,
 }));
 
 import handler from '../credit-summary';
@@ -56,6 +68,12 @@ beforeEach(() => {
     bySource: [{ key: 'web', last7d: 2, last30d: 3, last90d: 4 }],
   });
   h.latestTopUp.mockResolvedValue(null);
+  h.systemCost.mockImplementation(async (_userId: string, since: Date) => {
+    if (since.toISOString() === '2026-06-15T00:00:00.000Z') return 0.04;
+    if (since.toISOString() === '2026-06-08T12:00:00.000Z') return 0.5;
+    return 1.25;
+  });
+  h.settingValue.mockReturnValue(0.1);
 });
 
 afterEach(() => {
@@ -99,6 +117,13 @@ describe('GET /api/admin/users/[userId]/credit-summary', () => {
     expect(res._getJSONData().lastTopUp).toEqual({ at: '2026-06-01T00:00:00.000Z', credits: 250, type: 'purchase' });
   });
 
+  it('reports no top-up when the latest top-up row is neither a purchase nor a plan renewal', async () => {
+    h.latestTopUp.mockResolvedValue({ type: 'generic_add', credits: 50, createdAt: new Date('2026-06-01T00:00:00Z') });
+    const { res, promise } = run();
+    await promise;
+    expect(res._getJSONData().lastTopUp).toBeNull();
+  });
+
   it('passes the per-model and per-source spend buckets through, unknown model included', async () => {
     const { res, promise } = run();
     await promise;
@@ -109,5 +134,27 @@ describe('GET /api/admin/users/[userId]/credit-summary', () => {
       { key: null, last7d: 0, last30d: 0, last90d: 1 },
     ]);
     expect(body.bySource).toEqual([{ key: 'web', last7d: 2, last30d: 3, last90d: 4 }]);
+  });
+
+  it('reports system-sourced provider cost for today, 7 and 30 days next to the configured daily cap', async () => {
+    const { res, promise } = run();
+    await promise;
+
+    expect(res._getJSONData().systemCost).toEqual({
+      todayUsd: 0.04,
+      last7dUsd: 0.5,
+      last30dUsd: 1.25,
+      dailyCapUsd: 0.1,
+    });
+    expect(h.systemCost).toHaveBeenCalledWith('u1', new Date('2026-05-16T12:00:00Z'));
+    expect(h.settingValue).toHaveBeenCalledWith('freeTierDailySystemCostCapUsd', {});
+  });
+
+  it('reports a zero daily cap when the setting is unset', async () => {
+    h.settingValue.mockReturnValue(undefined);
+    const { res, promise } = run();
+    await promise;
+
+    expect(res._getJSONData().systemCost.dailyCapUsd).toBe(0);
   });
 });

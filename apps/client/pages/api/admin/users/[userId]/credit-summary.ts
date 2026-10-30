@@ -5,18 +5,28 @@ import {
   ForbiddenError,
   NotFoundError,
 } from '@bike4mind/common';
-import { creditTransactionRepository, userRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  creditTransactionRepository,
+  usageEventRepository,
+  userRepository,
+} from '@bike4mind/database';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { utcMidnight } from '@server/billing/freeTierDailyCapGate';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { zeroFilledDailySpend } from '@server/utils/adminCreditSummary';
 import { respond } from '@server/utils/respond';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * GET /api/admin/users/[userId]/credit-summary
  *
  * Balance, AI spend over rolling 24h/7d/30d, the 30-day top model, the last completed top-up, a
  * 90-day zero-filled daily spend series, and spend per model and per source over 7/30/90 UTC days.
- * Spend counts AI usage rows only (never transfers or expiries), as magnitudes.
+ * Spend counts AI usage rows only (never transfers or expiries), as magnitudes. systemCost is the
+ * provider USD of system-sourced work, read from usage events since that work often bills 0 credits.
  */
 const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler(async (req, res) => {
@@ -29,9 +39,14 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
     if (!user) throw new NotFoundError('User not found');
 
     const now = new Date();
-    const [spend, topUp] = await Promise.all([
+    const daysAgo = (days: number) => new Date(now.getTime() - days * DAY_MS);
+    const [spend, topUp, systemToday, system7d, system30d, settings] = await Promise.all([
       creditTransactionRepository.summarizeAiSpend(user.id, CreditHolderType.User, now),
       creditTransactionRepository.findLatestTopUp(user.id, CreditHolderType.User),
+      usageEventRepository.systemCostUsdByUserSince(user.id, utcMidnight(now)),
+      usageEventRepository.systemCostUsdByUserSince(user.id, daysAgo(7)),
+      usageEventRepository.systemCostUsdByUserSince(user.id, daysAgo(30)),
+      getSettingsMap({ adminSettings: adminSettingsRepository }),
     ]);
 
     return respond(res, adminCreditSummarySchema, {
@@ -45,6 +60,12 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
       daily: zeroFilledDailySpend(spend.dailyCredits, now),
       byModel: spend.byModel,
       bySource: spend.bySource,
+      systemCost: {
+        todayUsd: systemToday,
+        last7dUsd: system7d,
+        last30dUsd: system30d,
+        dailyCapUsd: getSettingsValue('freeTierDailySystemCostCapUsd', settings) ?? 0,
+      },
     });
   })
 );
