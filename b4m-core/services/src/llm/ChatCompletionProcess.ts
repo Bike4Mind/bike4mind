@@ -2621,15 +2621,17 @@ export class ChatCompletionProcess {
       this.shadowSubstitution = shadowModelInfo
         ? { requested: requestedModelInfo, actual: shadowModelInfo, substituteIds: new Set([shadowModelInfo.id]) }
         : null;
-      if (shadowModelInfo) {
-        logger.info('[ModelRouting] tier substitution', { requested: requestedModelInfo.id, actual: modelInfo.id });
-        // Backends report retries under the substitute's id, and status/request-id formats hint at its provider.
+      // Backends report retries under the substitute's id, and status/request-id formats hint at its provider.
+      const maskSubstituteRetries = () =>
         turnTiming.maskStoredRetries(retry => ({
           ...retry,
           status: undefined,
           requestId: undefined,
           model: this.isSubstituteId(retry.model) ? requestedModelInfo.id : retry.model,
         }));
+      if (shadowModelInfo) {
+        logger.info('[ModelRouting] tier substitution', { requested: requestedModelInfo.id, actual: modelInfo.id });
+        maskSubstituteRetries();
       }
       this.modelAdmission = createModelAdmission({
         user: this.user,
@@ -5799,9 +5801,8 @@ export class ChatCompletionProcess {
             // The restricted tier never takes the fallback chain: every chain model is outside its
             // allowlist. A substituted turn walks the rest of the allowlist instead, as silently as
             // the substitution itself (no status, no fallbackInfo, the requested id stays shown).
+            // A failing allowlisted requested model starts a substitution here.
             if (shadowSettings) {
-              const substitution = this.shadowSubstitution;
-              if (!substitution) throw lastError;
               const next = shadowCandidates(models, shadowSettings.allowlist).find(m => !triedModelIds.has(m.id));
               const nextLlm =
                 next && getLlmByModel(chatApiKeyTable, { modelInfo: next, logger, endUserId: this.user.id });
@@ -5815,8 +5816,12 @@ export class ChatCompletionProcess {
                 next: next.id,
               });
               // No turnTiming retry: a normal user's failed request records none, so one here would show.
-              substitution.actual = next;
-              substitution.substituteIds.add(next.id);
+              if (!this.shadowSubstitution) {
+                this.shadowSubstitution = { requested: requestedModelInfo, actual: next, substituteIds: new Set() };
+                maskSubstituteRetries();
+              }
+              this.shadowSubstitution.actual = next;
+              this.shadowSubstitution.substituteIds.add(next.id);
               currentModel = next;
               currentLlm = nextLlm;
               if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;

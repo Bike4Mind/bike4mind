@@ -1326,6 +1326,27 @@ describe('ChatCompletionProcess', () => {
         expect(mockDb.quests.update.mock.calls.at(-1)?.[0].reply).toBe(MODEL_UNAVAILABLE_ERROR_REPLY);
       });
 
+      it('falls through to the rest of the allowlist when an allowlisted requested model fails', async () => {
+        const { body, complete, requested } = await wireFailingSubstitute([ChatModels.GPT4]);
+        restrict({}, [requested.id, 'cheap-model', 'cheap-model-2']);
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual([requested.id, 'cheap-model']);
+        expect(complete.mock.calls[1][2]).toMatchObject({
+          modelDisplayName: requested.name,
+          modelIdentityId: requested.id,
+          identityViaTool: false,
+        });
+        expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+        const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+        expect(lastSave.type).not.toBe('error');
+        expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
+        expect(lastSave.fallbackInfo ?? null).toBeNull();
+        expect(statusText()).not.toMatch(/cheap-model|Trying alternative model/);
+        expect((service as any).ledgerModel(cheapModel as ModelInfo).id).toBe(requested.id); // any: private
+      });
+
       it('keeps mapping the first substitute id to the requested model after a hop', async () => {
         const { body, requested } = await wireFailingSubstitute(['cheap-model']);
 
