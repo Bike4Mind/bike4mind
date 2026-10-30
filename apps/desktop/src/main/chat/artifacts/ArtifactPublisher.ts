@@ -120,7 +120,7 @@ function toSaveFailure(err: unknown): ChatArtifactSave {
       return {
         status: 'disabled',
         reason:
-          'Not saved to your Artifacts library. Artifacts are off in your profile settings (Experimental features in the web app).',
+          'Not saved to your Artifacts library. Artifacts are off in your profile settings (Beta Features in the web app).',
       };
     }
     if (status === 401) {
