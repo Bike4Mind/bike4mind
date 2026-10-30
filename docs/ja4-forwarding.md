@@ -11,6 +11,8 @@ The authentication behaviors inherit the router's cache policy, methods and edge
 functions. Their origin request policy forwards all viewer headers, cookies and
 query strings, plus generated JA4, IP, ASN and country. The default behavior keeps
 its managed policy, including S3's filtering of response override query parameters.
+CloudFront does not generate viewer city, region or coordinates on the
+authentication behaviors, so code under these paths must not rely on geo headers.
 Shared development routers must receive this change through their owning stage.
 
 SST's lazy router preserves the viewer domain in `x-forwarded-host`, then selects
