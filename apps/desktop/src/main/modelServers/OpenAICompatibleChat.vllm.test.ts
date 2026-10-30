@@ -132,6 +132,8 @@ async function startFakeVllm(): Promise<FakeVllm> {
 }
 
 const fetchLike: FetchLike = (input, init) => fetch(input, init);
+const texts = (events: readonly CompletionStreamEvent[]) =>
+  events.flatMap(event => (event.type === 'content' && event.text ? [event.text] : []));
 const RUNTIME = 'srv-vllm01';
 const id = (name: string) => `local:${RUNTIME}:${name}`;
 const WEATHER_TOOL = {
@@ -222,7 +224,7 @@ describe('OpenAICompatibleChat against vLLM', () => {
         },
       ],
     });
-    expect(second.filter(event => event.text).map(event => event.text)).toEqual(['It is 21C ', 'in Paris.']);
+    expect(texts(second)).toEqual(['It is 21C ', 'in Paris.']);
     expect(second.at(-1)).toMatchObject({ stopReason: 'stop' });
     expect(vllm.requests[1]).toMatchObject({
       model: 'qwen-small',
@@ -257,7 +259,7 @@ describe('OpenAICompatibleChat against vLLM', () => {
       sessionId: 's1',
     };
     const events = await turn(chat, ask, notices);
-    expect(events.find(event => event.text)?.text).toBe('Hello.');
+    expect(texts(events)).toEqual(['Hello.']);
     await turn(chat, ask, notices);
     await turn(chat, { ...ask, tools: [], sessionId: 's2' }, notices);
     expect(vllm.requests.map(request => 'tools' in request)).toEqual([true, false, false, false]);
@@ -310,7 +312,7 @@ describe('OpenAICompatibleChat against vLLM', () => {
     vllm.toolFlags = false;
     const notices: string[] = [];
     const events = await turn(chat, ask, notices);
-    expect(events.find(event => event.text)?.text).toBe('Hello.');
+    expect(texts(events)).toEqual(['Hello.']);
     expect(notices).toHaveLength(1);
   });
 

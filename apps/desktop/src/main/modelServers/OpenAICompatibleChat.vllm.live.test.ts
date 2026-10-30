@@ -5,8 +5,8 @@ import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
 
-// Opt-in check against a real vLLM started as in .claude/work/vllm-desktop/start-vllm.sh: served names
-// `qwen-small qwen`, LoRA `sql-lora`, --max-model-len 4096. DESKTOP_LIVE_VLLM_TOOLS says whether it has tool flags.
+// Opt-in check against a real vLLM serving `--served-model-name qwen-small qwen --lora-modules sql-lora=<adapter>
+// --max-model-len 4096`. DESKTOP_LIVE_VLLM_TOOLS=on when it also has --enable-auto-tool-choice --tool-call-parser.
 const URL = process.env.DESKTOP_LIVE_VLLM_URL;
 const TOOLS = process.env.DESKTOP_LIVE_VLLM_TOOLS === 'on';
 
@@ -25,6 +25,9 @@ function memoryFile(): StoreFile {
     },
   };
 }
+
+const texts = (events: readonly CompletionStreamEvent[]) =>
+  events.flatMap(event => (event.type === 'content' && event.text ? [event.text] : []));
 
 const WEATHER_TOOL = {
   toolSchema: {
@@ -103,6 +106,7 @@ describe.runIf(URL)('live vLLM through ModelServerRegistry', () => {
       const use = first.find(event => event.type === 'tool_use');
       expect(use?.tools?.[0]).toMatchObject({ name: 'get_weather' });
       const call = use!.tools![0];
+      const callId = call.id ?? 'call_1';
       const second = await turn(
         chat,
         {
@@ -111,14 +115,14 @@ describe.runIf(URL)('live vLLM through ModelServerRegistry', () => {
             ...ask.messages,
             {
               role: 'assistant',
-              content: [{ type: 'tool_use', id: call.id, name: call.name, input: JSON.parse(call.arguments) }],
+              content: [{ type: 'tool_use', id: callId, name: call.name, input: JSON.parse(call.arguments ?? '{}') }],
             },
-            { role: 'user', content: [{ type: 'tool_result', tool_use_id: call.id, content: '21C and clear' }] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: callId, content: '21C and clear' }] },
           ],
         },
         notices
       );
-      const answer = second.map(event => event.text ?? '').join('');
+      const answer = texts(second).join('');
       console.log('answer', JSON.stringify(answer), JSON.stringify(second.at(-1)));
       expect(answer).toMatch(/21/);
       expect(second.at(-1)).toMatchObject({ stopReason: 'stop' });
@@ -146,7 +150,7 @@ describe.runIf(URL)('live vLLM through ModelServerRegistry', () => {
         },
         notices
       );
-      const text = events.map(event => event.text ?? '').join('');
+      const text = texts(events).join('');
       console.log('reply', JSON.stringify(text), 'notices', JSON.stringify(notices));
       expect(text.length).toBeGreaterThan(0);
       expect(notices).toHaveLength(1);
