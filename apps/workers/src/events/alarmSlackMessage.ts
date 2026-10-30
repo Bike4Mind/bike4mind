@@ -4,7 +4,8 @@
  *
  * Layout: a top-level header carries stage and level at a glance; the details sit in a
  * colour-barred attachment (red page / amber warn / blue info on production, grey on any other
- * stage, green when resolved). Mentions only ever apply to production page-level alarms.
+ * stage, green when resolved). Mentions only ever apply to production alarms, at page level
+ * unless the setting widens them to warn (see parseMentionSetting).
  */
 
 import { classifyStage } from '@bike4mind/common';
@@ -36,7 +37,7 @@ export interface AlarmCatalogEntry {
 export interface FormatOptions {
   /** Origin of the app (https://app.example.com). Admin buttons are omitted when unset. */
   appUrl?: string;
-  /** Slack mention token such as <!channel>; applied to production page-level alarms only. */
+  /** Mention setting, as parseMentionSetting reads it; applied to production alarms only. */
   mention?: string;
 }
 
@@ -610,12 +611,40 @@ export function normalizeMentionToken(raw: string | undefined): string | undefin
   return undefined;
 }
 
+export interface MentionSetting {
+  token: string;
+  /** Least urgent level that still gets the mention: page (the default) or warn. */
+  level: Extract<AlarmLevel, 'page' | 'warn'>;
+}
+
+/** Lower is more urgent; a mention applies to every level at or above the setting's. */
+const LEVEL_RANK: Record<AlarmLevel, number> = { page: 0, warn: 1, info: 2 };
+
+const MENTION_LINE: Record<AlarmLevel, string> = {
+  page: 'production is paging',
+  warn: 'production needs attention',
+  info: 'production notice',
+};
+
+/**
+ * Parses the operator-supplied setting: a mention target (see normalizeMentionToken), optionally
+ * followed by a space and the level the mention extends down to. `here` mentions on page-level
+ * alarms only; `here warn` also mentions on warnings. Any other level word is ignored rather than
+ * silencing the page mention, since a typo in the parameter gives no feedback.
+ */
+export function parseMentionSetting(raw: string | undefined): MentionSetting | undefined {
+  const [target, levelWord] = (raw ?? '').trim().split(/\s+/, 2);
+  const token = normalizeMentionToken(target);
+  if (!token) return undefined;
+  return { token, level: levelWord?.toLowerCase() === 'warn' ? 'warn' : 'page' };
+}
+
 export interface ComposeParams {
   stage: string;
   level: AlarmLevel;
   /** Raw text: it goes into a plain_text header, and is escaped for the mrkdwn fallback. */
   title: string;
-  /** Mention token; only honoured on production page-level messages. */
+  /** Mention setting; only honoured on production messages at or above its level. */
   mention?: string;
   /** mrkdwn field cells (two per row). */
   fields?: string[];
@@ -636,11 +665,12 @@ export function composeAlarmMessage(params: ComposeParams): SlackAlarmMessage {
     : `:small_blue_diamond: ${stageLabel(params.stage)} alarm`;
   const color = production ? COLOR[params.level] : COLOR.nonprod;
   const headerText = `${prefix}: ${params.title}`;
-  const mention = production && params.level === 'page' ? normalizeMentionToken(params.mention) : undefined;
+  const setting = production ? parseMentionSetting(params.mention) : undefined;
+  const mention = setting && LEVEL_RANK[params.level] <= LEVEL_RANK[setting.level] ? setting.token : undefined;
 
   const blocks: unknown[] = [];
   if (mention) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `${mention} production is paging` } });
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `${mention} ${MENTION_LINE[params.level]}` } });
   }
   blocks.push({ type: 'header', text: { type: 'plain_text', text: headerText.slice(0, 150), emoji: true } });
 
