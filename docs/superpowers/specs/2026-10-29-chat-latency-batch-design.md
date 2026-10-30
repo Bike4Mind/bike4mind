@@ -45,14 +45,15 @@ throttle with leading edge, 10 s heartbeat save, optimistic prompt bubble.
   React identity (and per-block state such as an approved image) when it settles; node
   positions are shifted back to reply-relative lines. A reply that streamed in this view
   keeps that structure once complete, so no block remounts at the end of the stream, unless
-  the text holds a footnote, a link reference definition or an HTML block; then, and for any
-  reply mounted already complete, the whole reply renders through one `ReactMarkdown` exactly
-  as today, so footnotes, citation markers and heading ids resolve identically to the current
-  final render.
-- Split rule: a block ends at a blank line (spaces and tabs only) followed by a line that
-  starts a new top-level block. Blank lines inside a fence (CommonMark opener/closer rules),
-  a `$$` block or a list, and a blank line before a link reference definition, never end a
-  block. Footnote references render raw until completion.
+  the parse holds a link reference or footnote definition; then, and for any reply mounted
+  already complete, the whole reply renders through one `ReactMarkdown` exactly as today, so
+  footnotes, citation markers and heading ids resolve identically to the current final
+  render.
+- Split rule: the tail is parsed with the reply's own remark plugins and a block is one or
+  more whole top-level mdast nodes. A node settles once a blank line separates it from the
+  next node (a list also waits for the next node's first line to end). Reference links and
+  footnotes render raw until completion; a reply holding a definition is one parse once
+  complete.
 - **Reasoning text** renders as it arrives (server already throttles at 100 ms). The
   framer-motion reveal is removed, not slowed.
 - **Keep-alive**: one shared `undici.Agent` (60 s keep-alive, 10 min max) passed to the

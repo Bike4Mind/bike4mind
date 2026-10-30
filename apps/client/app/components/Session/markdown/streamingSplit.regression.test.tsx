@@ -92,9 +92,10 @@ describe('splitStreamingMarkdown never cuts inside a block (render oracle)', () 
     expect(splitRender(text)).not.toContain('<pre>');
   });
 
-  it('resolves a reference-style link whose definition is already streamed', () => {
+  it('leaves a reference-style link raw until completion; its definition is its own block', () => {
     const text = 'See [the docs][d] for more.\n\n[d]: https://example.com/docs\n';
-    expect(splitRender(text)).toBe(md(text));
+    expect(splitRender(text)).toBe('<p>See [the docs][d] for more.</p>');
+    expect(md(text)).toContain('<a href="https://example.com/docs">');
   });
 
   it('leaves a footnote reference raw until completion and renders no section mid-stream', () => {

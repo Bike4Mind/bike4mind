@@ -75,6 +75,19 @@ is dropped by the seq guard and shows up on the next full frame (up to 20 frames
 a quest left `running` by a crashed worker renders per block until timeout recovery flips it
 (at most the 2 minute quest timeout).
 
+## Regression pass, round 3 (2026-10-30), per pull request
+
+The batch was split into five branches (one per area) and a fresh agent reviewed each as a
+PR that must ship alone on top of main. Their suites stay in as `*.regression3.test.ts(x)`.
+
+| PR | Finding | Fix |
+|---|---|---|
+| Render (`perf/chat-stream-render`) | The regex gate for cross-block constructs matched code (`[^a-z]`, `[key: string]:`, column-0 XML), so those replies still collapsed to one parse on completion and remounted; keeping blocks after completion made the splitter's heuristic divergences permanent (lazy list continuation lines, a fence or `$$` opened on a list-marker line, definitions nested in a blockquote or list item); the gate ran unmemoised on every re-render with quadratic backtracking | The splitter now parses the tail with the caller's remark plugins (`remark-parse` is already a client dependency) and settles whole top-level mdast nodes, so block boundaries are the parser's own; the cross-block flag comes from `definition` / `footnoteDefinition` nodes in the tree; settled blocks carry over between frames in component state, so only the tail is parsed and nothing runs per re-render. Reference links are no longer glued to the block before them (raw until completion, like footnotes). Render benchmark: 60 frames 297 ms (A) vs 101 ms (B); the extra parse of the tail costs about 50 ms over round 2's 55 ms |
+| WebSocket frames (`perf/ws-frame-dedupe`) | With two concurrent runs of one quest (duplicate dispatch, a pre-existing hazard) and another quest's frame in between, the client's remembered statics were overwritten per quest and restored nothing | Statics are remembered per quest id and streamId, so interleaved runs keep their own |
+| Images (`perf/image-upload-downscale`) | With real encoders, a PNG screenshot re-encodes 2.5-5x larger than the original, so the in-budget guard returned the original after two decodes and a full encode on the send path; a PNG over 3 MB went through the 2576 px render before the legacy loop; the decode bitmap leaked when `getContext` or `drawImage` failed | PNG keeps the size-only rule it had at base (no decode, no render); the bitmap is closed in `finally` |
+| Preamble (`perf/chat-preamble-overlap`) | None | Ships alone |
+| Provider transport (`perf/provider-keepalive-retries`) | None. Noted: the non-streaming Anthropic call keeps `withRetry` 3, so 12 attempts; a socket idle under 60 s can be stale after a NAT drop, and the transparent transport retry covers it | Ships alone |
+
 ## Browser A/B on the local host-dev stack (2026-10-29)
 
 Same machine, same Docker backing services (Mongo, WS gateway, MinIO, SQS), same user and
