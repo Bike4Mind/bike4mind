@@ -41,6 +41,16 @@ describe('reasoningEffortsFor', () => {
     }
   });
 
+  it('advertises the OpenAI levels for a catalog-only model whose record says openai-effort', () => {
+    expect(
+      reasoningEffortsFor(model('gpt-6-sol', ModelBackend.OpenAI, { can_think: true, openaiReasoningEffort: true }))
+    ).toEqual(OPENAI_LEVELS);
+  });
+
+  it('never infers OpenAI effort support from can_think alone', () => {
+    expect(reasoningEffortsFor(model('gpt-6-sol', ModelBackend.OpenAI, { can_think: true }))).toEqual([]);
+  });
+
   it('is empty on an OpenAI reasoning id served by another backend, which never sends the option', () => {
     expect(reasoningEffortsFor(model(ChatModels.O3, ModelBackend.Ollama, { can_think: true }))).toEqual([]);
   });
