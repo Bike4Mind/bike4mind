@@ -29,6 +29,7 @@ import {
   HTTPError,
   type CompletionSource,
   UNKNOWN_MODEL_ERROR_CODE,
+  MAX_MODEL_ID_LENGTH,
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   completionsSupportsToolSearch,
@@ -463,6 +464,12 @@ export function withholdReasoningFromFrame(
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
+  if (params.model.length > MAX_MODEL_ID_LENGTH) {
+    throw new BadRequestError(
+      `Model id exceeds ${MAX_MODEL_ID_LENGTH} characters. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
   const model = resolveOpenAiBareModelAlias(params.model);
   // Callers write multimodal parts in whichever dialect their SDK speaks and the wire
   // schema accepts any of them (z.array(z.any())). Canonicalize once, here, so the

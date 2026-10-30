@@ -862,7 +862,8 @@
             "type": "string"
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 256
           },
           "temperature": {
             "type": "number",
@@ -1989,6 +1990,7 @@
         "properties": {
           "model": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 256
           },
           "messages": {
@@ -4221,6 +4223,7 @@
               },
               {
                 "type": "string",
+                "maxLength": 256,
                 "pattern": "^local-image\\/(?=.*\\S)[\\w.:/ -]+$"
               }
             ]
@@ -4622,6 +4625,7 @@
               },
               {
                 "type": "string",
+                "maxLength": 256,
                 "pattern": "^local-image\\/(?=.*\\S)[\\w.:/ -]+$"
               }
             ]
@@ -5926,7 +5930,7 @@
           "model": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 128,
+            "maxLength": 256,
             "description": "A decision model id from `GET /api/v1/decision-models`."
           },
           "input": {
@@ -8007,6 +8011,7 @@
           "model": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 256,
             "description": "A model id from GET /api/v1/video-models."
           },
           "prompt": {
@@ -9343,6 +9348,7 @@
           "model": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 256,
             "description": "A model id from GET /api/v1/music-models."
           },
           "prompt": {
@@ -11876,6 +11882,7 @@
           "preferred_model": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 256,
             "description": "A chat model id. An unknown model is rejected with a 422."
           },
           "temperature": {
@@ -12044,6 +12051,7 @@
               "null"
             ],
             "minLength": 1,
+            "maxLength": 256,
             "description": "A chat model id. An unknown model is rejected with a 422."
           },
           "temperature": {
@@ -12116,6 +12124,7 @@
           "image_model": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 256,
             "description": "An image model id. Omit to use the deployment image model. An unknown or non-image model is rejected with a 400."
           }
         },
