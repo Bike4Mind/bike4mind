@@ -102,6 +102,18 @@ describe('seed signup grant schedule migration', () => {
     expect(await stored()).toMatchObject({ signupGrantDripCap: '9000', signupGrantDailyCredits: '0' });
   });
 
+  it('keeps the verification unlock when a 0 activity max stopped an enabled drip', async () => {
+    await seed({
+      stagedSignupGrantEnabled: 'true',
+      signupGrantActivityEnabled: 'true',
+      signupGrantActivityDailyCredits: '1000',
+      signupGrantActivityMaxCredits: '0',
+      verifiedUnlockCredits: '9000',
+    });
+    await migration.up();
+    expect(await stored()).toMatchObject({ signupGrantDripCap: '9000', signupGrantDailyCredits: '0' });
+  });
+
   it('seeds the default cap for a staged environment with no legacy cap keys', async () => {
     await seed({ stagedSignupGrantEnabled: 'true', signupGrantActivityEnabled: 'true' });
     await migration.up();

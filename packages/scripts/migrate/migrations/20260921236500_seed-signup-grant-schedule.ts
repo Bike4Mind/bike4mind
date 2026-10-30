@@ -32,11 +32,13 @@ const migration: MigrationFile = {
       staged: isStoredToggleOn(await raw('stagedSignupGrantEnabled')),
       activity: isStoredToggleOn(await raw('signupGrantActivityEnabled')),
     });
+    // A legacy cap of 0 (activity max 0) stopped the drip even with a daily amount set.
+    const dripOn = schedule.dailyCredits > 0 && schedule.dripCap > 0;
     const values = {
       signupGrantInitialCredits: schedule.initialCredits,
-      signupGrantDailyCredits: schedule.dailyCredits,
+      signupGrantDailyCredits: dripOn ? schedule.dailyCredits : 0,
       // With no drip the cap only sets what verification releases, so a 0 activity max must not zero it.
-      signupGrantDripCap: schedule.dailyCredits > 0 ? schedule.dripCap : schedule.unlockCredits,
+      signupGrantDripCap: dripOn ? schedule.dripCap : schedule.unlockCredits,
       signupGrantInviteBonusCredits: 0,
     };
     for (const [settingName, value] of Object.entries(values)) {

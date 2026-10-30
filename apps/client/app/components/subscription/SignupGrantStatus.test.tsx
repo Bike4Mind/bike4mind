@@ -19,7 +19,8 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({
     data: [
       { settingName: 'signupGrantActivityEnabled', settingValue: h.activity },
-      { settingName: 'signupGrantActivityDailyCredits', settingValue: h.daily },
+      { settingName: 'signupGrantDailyCredits', settingValue: h.daily },
+      { settingName: 'signupGrantDripCap', settingValue: '9000' },
     ],
   }),
 }));

@@ -115,6 +115,20 @@ describe('advertisedDripCredits', () => {
 
   it('advertises only what the cap still leaves when that is below the daily amount', () => {
     expect(advertisedDripCredits({ dailyCredits: 1000, dripCap: 400, grant: {} })).toBe(400);
+    expect(
+      advertisedDripCredits({
+        dailyCredits: 1000,
+        dripCap: 9000,
+        grant: { stage: 'unlocked', unlockedBy: 'card_verified' },
+      })
+    ).toBe(0);
+    expect(
+      advertisedDripCredits({
+        dailyCredits: 1000,
+        dripCap: 9000,
+        grant: { stage: 'unlocked', unlockedBy: 'activity_drip', dripCredits: 8500 },
+      })
+    ).toBe(500);
     expect(advertisedDripCredits({ ...on, grant: { dripCredits: 8500 } })).toBe(500);
   });
 

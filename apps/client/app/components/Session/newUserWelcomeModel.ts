@@ -1,4 +1,9 @@
-import { signupActiveSeconds, signupGrantDripRemaining, type SignupGrant } from '@bike4mind/common';
+import {
+  signupActiveSeconds,
+  signupGrantDripOpen,
+  signupGrantDripRemaining,
+  type SignupGrant,
+} from '@bike4mind/common';
 import { formatCreditBalance } from '@client/app/utils/formatCredits';
 
 export interface StarterPrompt {
@@ -74,8 +79,11 @@ export function advertisedDripCredits({
 }: {
   dailyCredits: number;
   dripCap: number;
-  grant: Pick<SignupGrant, 'dripCredits'> | undefined;
+  grant: (Pick<SignupGrant, 'dripCredits'> & Partial<Pick<SignupGrant, 'stage' | 'unlockedBy'>>) | undefined;
 }): number {
+  // A verification unlock closes the drip for good; pending_email still advertises what verifying will start.
+  if (grant?.stage === 'unlocked' && !signupGrantDripOpen({ stage: grant.stage, unlockedBy: grant.unlockedBy }))
+    return 0;
   return dailyCredits > 0 ? Math.min(dailyCredits, signupGrantDripRemaining(grant ?? {}, dripCap)) : 0;
 }
 
