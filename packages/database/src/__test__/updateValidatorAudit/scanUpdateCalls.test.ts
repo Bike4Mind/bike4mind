@@ -85,6 +85,16 @@ describe('scanSource', () => {
     expect(sites[0].model).toBe('Gadget');
   });
 
+  it('does not let a function-local const shadow a module-scope model name', () => {
+    const { sites } = scan(`
+      const ModelName = 'Gadget';
+      const Gadget = model<IGadgetDocument>(ModelName, GadgetSchema);
+      function other() { const ModelName = 'Other'; return ModelName; }
+      Gadget.updateOne({}, { a: 1 });
+    `);
+    expect(sites[0].model).toBe('Gadget');
+  });
+
   it('leaves an unrecognised receiver unresolved instead of dropping the call', () => {
     const { sites } = scan(`${HEADER}
       mystery.updateOne({}, { a: 1 });
