@@ -625,6 +625,18 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     );
   });
 
+  it('treats a whitespace-only model as model-less and starts on the default', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockResolveDefaultChatModel.mockResolvedValueOnce({ model: 'admin-default' });
+    mockResolveCallerDefaultModel.mockResolvedValueOnce('admin-default');
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', model: '   ' } });
+    await handler(req, res);
+    expect(res.statusCode).toBeLessThan(300);
+    expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
+      'admin-default'
+    );
+  });
+
   it('returns 400 when the resolved default chat model is unusable (self-host, no key, no local model)', async () => {
     // Self-host resolver shape: apiKeys/models ARE present (unlike the hosted default),
     // so chat.ts runs its no-usable-model guard. An empty model list plus an unusable
