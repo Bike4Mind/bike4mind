@@ -440,6 +440,8 @@ export const SettingKeySchema = z.enum([
   'blockedEmailDomains',
   'apiKeyTrustGateEnabled',
   'apiKeyMinAccountAgeDays',
+  'requireThreeDSecureOnFirstPurchase',
+  'threeDSecureNewAccountDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
   'apiKeyUntrustedRequestsPerDay',
@@ -2231,6 +2233,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'paymentRiskMaxCardsPerWindow', order: 35 },
       { key: 'paymentRiskCardWindowMinutes', order: 36 },
       { key: 'paymentRiskFlagHostingNetwork', order: 37 },
+      { key: 'requireThreeDSecureOnFirstPurchase', order: 38 },
+      { key: 'threeDSecureNewAccountDays', order: 39 },
     ],
   },
   KNOWLEDGE: {
@@ -4767,6 +4771,31 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description: 'Flag a payment started from a datacenter network or a WAF anonymous-IP (VPN/proxy/hosting) address.',
+  }),
+  // Read by apps/client/server/integrations/stripe/threeDSecure.ts at every checkout and credit purchase.
+  requireThreeDSecureOnFirstPurchase: makeBooleanSetting({
+    key: 'requireThreeDSecureOnFirstPurchase',
+    name: 'Require 3-D Secure on First Purchase',
+    defaultValue: true,
+    description:
+      'Asks the card issuer for a 3-D Secure challenge when an account buys a subscription or credits for the first time: the paying Stripe customer has no prior successful charge, or the account is younger than the new-account window. A passed challenge usually shifts fraud-chargeback liability to the issuer. Turn off if checkout conversion suffers.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    order: 38,
+  }),
+  threeDSecureNewAccountDays: makeNumberSetting({
+    key: 'threeDSecureNewAccountDays',
+    name: '3-D Secure: New-Account Window (days)',
+    defaultValue: 7,
+    min: 0,
+    max: 365,
+    int: true,
+    description:
+      'Every purchase by an account younger than this many days requests 3-D Secure, even after a successful one, so a second card on a fresh account is challenged too. 0 limits the challenge to the first successful purchase.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    order: 39,
+    dependsOn: 'requireThreeDSecureOnFirstPurchase',
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',

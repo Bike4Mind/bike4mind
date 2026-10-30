@@ -79,12 +79,21 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   },
 }));
 
+const mockFirstPurchaseCardOptions = vi.fn();
+vi.mock('@server/integrations/stripe/threeDSecure', () => ({
+  firstPurchaseCardOptions: (...args: unknown[]) => mockFirstPurchaseCardOptions(...args),
+}));
+
 import Stripe from 'stripe';
 import handler from '../subscribe';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
 const CALLBACK_URL = 'https://app.example.com/cb';
+
+beforeEach(() => {
+  mockFirstPurchaseCardOptions.mockResolvedValue({});
+});
 
 function makeReq(priceId: string, callbackUrl = CALLBACK_URL, userOverrides: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method: 'POST' });
@@ -429,5 +438,41 @@ describe('POST /api/subscriptions/subscribe - acquisition touches', () => {
     req.body.surface = 'Not A Surface!';
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
     expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/subscriptions/subscribe - 3-D Secure on first purchase', () => {
+  const accountCreatedAt = new Date('2026-10-01T00:00:00Z');
+  const challengeOptions = { payment_method_options: { card: { request_three_d_secure: 'challenge' } } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFirstPurchaseCardOptions.mockResolvedValue({});
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindUserSubByPrice.mockResolvedValue(null);
+    mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing' });
+    mockPricesRetrieve.mockResolvedValue({ id: 'price_open', active: true });
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  it('adds the challenge options to the checkout session and asks the helper about this account', async () => {
+    mockFirstPurchaseCardOptions.mockResolvedValue(challengeOptions);
+    const { req, res } = makeReq('price_open', CALLBACK_URL, { createdAt: accountCreatedAt });
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockFirstPurchaseCardOptions.mock.calls[0][0]).toEqual({
+      stripeCustomerId: 'cus_existing',
+      accountCreatedAt,
+    });
+    expect(mockSessionsCreate).toHaveBeenCalledWith(expect.objectContaining(challengeOptions));
+  });
+
+  it('leaves payment_method_options off when the helper returns nothing', async () => {
+    const { req, res } = makeReq('price_open', CALLBACK_URL, { createdAt: accountCreatedAt });
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate.mock.calls[0][0]).not.toHaveProperty('payment_method_options');
   });
 });
