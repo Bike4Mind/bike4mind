@@ -55,6 +55,7 @@ function setup() {
     // Not used by registerModels; here so a send after a recheck would show up as a second call.
     check: vi.fn(async () => []),
     hubServer: vi.fn(() => null),
+    specs: vi.fn(() => null),
     onServerSaved: vi.fn((listener: (id: string) => void) => {
       saved = listener;
       return () => {};

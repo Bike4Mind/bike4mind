@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { publicVideoModel } from '../media/__fixtures__/videoModels';
-import { findTool, isOfferedEditTool, toolsForRequest } from './registry';
+import { findTool, isOfferedEditTool, offeredMediaToolNames, toolsForRequest } from './registry';
 import type { ToolSchema } from './types';
 
 const names = (options: Parameters<typeof toolsForRequest>[0]) =>
@@ -147,5 +147,21 @@ describe('toolsForRequest', () => {
       expect(isOfferedEditTool('file_write', false)).toBe(true);
       expect(isOfferedEditTool('file_read', true)).toBe(true);
     });
+  });
+});
+
+describe('offeredMediaToolNames', () => {
+  const MEDIA = /^generate_/;
+
+  it('names exactly the generation tools toolsForRequest declares for the same inputs', () => {
+    const gemini = publicVideoModel('gemini-omni-1.1-flash');
+    for (const options of [
+      { media: false, video: [gemini] },
+      { media: true, video: [] },
+      { media: true, video: [gemini] },
+    ]) {
+      const declared = names({ roots: [], host: false, ...options }).filter(name => MEDIA.test(name));
+      expect(offeredMediaToolNames(options)).toEqual(declared);
+    }
   });
 });

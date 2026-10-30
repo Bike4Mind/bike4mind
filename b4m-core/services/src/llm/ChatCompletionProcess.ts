@@ -16,7 +16,6 @@ import {
   getTextModelCost,
   getTurnsCost,
   buildUsagePriceStamp,
-  CACHE_READ_MULTIPLIER,
   ModelInfo,
   ModelBackend,
   b4mLLMTools,
@@ -6372,8 +6371,9 @@ export class ChatCompletionProcess {
         // zeroed axis as free.
         // Anything less than full positive usage falls back to the local
         // estimate, which also remains the pre-reservation basis. The fallback
-        // keeps the capped cache-read discount and never bills cache creation,
-        // exactly the pre-provider-basis behavior. The bases never blend.
+        // bills capped cache reads at the model's own cache-read rate (the same
+        // one the provider basis uses) and never bills cache creation. The bases
+        // never blend.
         //
         // Disjoint-fields assumption: whatever an adapter forwards as
         // cacheReadInputTokens must NOT also be counted in inputTokens. Anthropic-family
@@ -6427,9 +6427,9 @@ export class ChatCompletionProcess {
               )
           : getTextModelCost(
               currentModel,
-              localInputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
+              localInputTokens - cacheReadInputTokens,
               outputTokens,
-              0,
+              cacheReadInputTokens,
               0,
               // The local estimate is one whole prompt; the cache discount above must not lower its tier.
               localInputTokens

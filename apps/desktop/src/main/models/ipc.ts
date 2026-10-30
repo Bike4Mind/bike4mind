@@ -62,9 +62,10 @@ export function registerModelsIpc(
     if (query === null) return invalid;
     return service.search({ query, cursor: text(body?.cursor) });
   });
-  ipc.handle(IPC_CHANNELS.modelsGetDetail, (_event, repo: unknown) => {
+  ipc.handle(IPC_CHANNELS.modelsGetDetail, (_event, repo: unknown, value: unknown) => {
     const id = text(repo);
-    return id ? service.detail(id) : invalid;
+    const target = serverArg(value);
+    return id && target ? service.detail(id, target.id) : invalid;
   });
   ipc.handle(IPC_CHANNELS.modelsGetCuratedPull, (_event, entryId: unknown, buildId: unknown, value: unknown) => {
     const entry = text(entryId);
