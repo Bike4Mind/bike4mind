@@ -24,6 +24,16 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./servers": {
+      "import": {
+        "types": "./dist/servers.d.mts",
+        "default": "./dist/servers.mjs"
+      },
+      "require": {
+        "types": "./dist/servers.d.cts",
+        "default": "./dist/servers.cjs"
+      }
+    },
     "./testing": {
       "import": {
         "types": "./dist/testing.d.mts",
