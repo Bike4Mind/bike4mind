@@ -97,6 +97,17 @@ describe('buildRoster', () => {
     expect(buildRoster({ sessions, rootId: 'root', ...noInput })).toEqual([]);
   });
 
+  it('never lists the root in its own roster, even on a loop through it', () => {
+    const sessions = [summary('root', 'a'), summary('a', 'root'), summary('self', 'self')];
+    expect(buildRoster({ sessions, rootId: 'root', ...noInput }).map(agent => agent.id)).toEqual(['a']);
+    expect(buildRoster({ sessions, rootId: 'self', ...noInput })).toEqual([]);
+  });
+
+  it('falls back for a whitespace-only title', () => {
+    const sessions = [summary('root', undefined), summary('c', 'root', { title: '   ' })];
+    expect(buildRoster({ sessions, rootId: 'root', ...noInput })[0]?.title).toBe('Untitled agent');
+  });
+
   it('leaves out a child whose parent was deleted, for every root', () => {
     const sessions = [summary('root', undefined), summary('orphan', 'deleted'), summary('x', undefined)];
     expect(buildRoster({ sessions, rootId: 'root', ...noInput })).toEqual([]);
