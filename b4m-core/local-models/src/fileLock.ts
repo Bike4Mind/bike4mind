@@ -139,6 +139,7 @@ async function clearStaleGuard(guard: string, nonce: string, staleMs: number): P
   if (moved !== text || (moved === '' && Date.now() - movedAt < EMPTY_GUARD_GRACE_MS)) {
     await putBack(aside, guard);
     // An owner that finished while its guard was aside removed nothing, and checks for the guard only after its draft.
+    // An empty `moved` is the grace case above, a guard still being written, so it is never ours to remove.
     const ownerDone = moved && !(await readText(draftOf(guard, moved)));
     if (ownerDone && (await readText(guard)) === moved) await rm(guard, { force: true });
   }
