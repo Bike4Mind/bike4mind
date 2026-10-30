@@ -3,6 +3,7 @@ import {
   ILoopEvent,
   ILoopEventRepository,
   LOOP_EVENT_KINDS,
+  LoopAutoResumedFields,
   LoopGateOutcome,
   LoopUnsureFields,
 } from '@bike4mind/common';
@@ -24,6 +25,10 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
       { $setOnInsert: { ...fields, kind: 'unsure' } },
       { upsert: true }
     );
+  }
+
+  async recordAutoResumed(fields: LoopAutoResumedFields): Promise<void> {
+    await this.loopEventModel.create({ ...fields, kind: 'auto_resumed' });
   }
 
   async resolveUnsure(
@@ -61,6 +66,10 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
   }
 }
 
+function isUnsure(this: ILoopEvent): boolean {
+  return this.kind === 'unsure';
+}
+
 export const LoopEventSchema = new Schema<ILoopEvent, ILoopEventModel>(
   {
     loopId: { type: String, required: true },
@@ -69,8 +78,8 @@ export const LoopEventSchema = new Schema<ILoopEvent, ILoopEventModel>(
     executionId: { type: String, required: true },
     workItemId: { type: String },
     ticketTitle: { type: String },
-    iteration: { type: Number, required: true },
-    confidence: { type: Number, required: true },
+    iteration: { type: Number, required: isUnsure },
+    confidence: { type: Number, required: isUnsure },
     reason: { type: String, required: true },
     requestedAt: { type: Date, required: true },
     resolution: {

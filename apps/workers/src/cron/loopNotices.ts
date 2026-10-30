@@ -22,6 +22,12 @@ export interface LoopNotice {
 
 type BlockedTicket = Pick<IWorkItem, 'id' | 'loopId' | 'title' | 'statusReason' | 'executionId'>;
 
+const NEXT_STEP: Record<NonNullable<ILoop['autoResume']> | 'owner', string> = {
+  budget: 'Raise the budget and set it live to run sooner.',
+  credits: 'It resumes by itself once the account has credits.',
+  owner: 'Open the loop and set it live again once fixed.',
+};
+
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 3)}...` : text);
 
 /**
@@ -39,7 +45,7 @@ export function desiredLoopNotices(
     receiverId: loop.userId,
     title: clip(`Loop "${loop.name}" ${STATUS_TITLES[loop.status]}`, TITLE_CHARS),
     message: clip(
-      `${loop.statusReason ?? 'The loop stopped.'}\nOpen the loop and set it live again once fixed.`,
+      `${loop.statusReason ?? 'The loop stopped.'}\n${NEXT_STEP[loop.autoResume ?? 'owner']}`,
       MESSAGE_CHARS
     ),
     link: `/loops/${loop.id}`,

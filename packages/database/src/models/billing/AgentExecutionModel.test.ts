@@ -88,6 +88,25 @@ describe('AgentExecutionRepository', () => {
       });
     });
 
+    it('counts only runs created since the given time', async () => {
+      const since = new Date('2026-10-30T00:00:00.000Z');
+      const runAt = async (createdAt: string, totalCreditsUsed: number) => {
+        const run = await agentExecutionRepository.create(
+          makeBaseExecution({ sessionId: 'sa', loopId: 'loopA', totalCreditsUsed })
+        );
+        await AgentExecutionModel.collection.updateOne(
+          { _id: new mongoose.Types.ObjectId(run.id) },
+          { $set: { createdAt: new Date(createdAt) } }
+        );
+      };
+      await runAt('2026-10-29T23:59:59.999Z', 100);
+      await runAt('2026-10-30T00:00:00.000Z', 3);
+      await runAt('2026-10-30T12:00:00.000Z', 4);
+
+      expect(await agentExecutionRepository.sumCreditsByLoop(['loopA'], ['sa'], since)).toEqual({ loopA: 7 });
+      expect(await agentExecutionRepository.sumCreditsByLoop(['loopA'], ['sa'])).toEqual({ loopA: 107 });
+    });
+
     it('returns nothing for no loops', async () => {
       expect(await agentExecutionRepository.sumCreditsByLoop([], [])).toEqual({});
     });

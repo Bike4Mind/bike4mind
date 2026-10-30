@@ -67,6 +67,7 @@ const loop = (overrides: Record<string, unknown> = {}) => ({
   memory: { notes: '', nextAction: '' },
   runCount: 2,
   creditsUsed: 0,
+  creditsToday: 0,
   lastExecutionId: 'last-run',
   ...overrides,
 });
@@ -81,6 +82,12 @@ beforeEach(() => {
 });
 
 describe('LoopDetailPage states', () => {
+  it('shows spend today against the budget', () => {
+    loopState.data = loop({ creditsToday: 5, budgetCreditsPerDay: 10 });
+    renderPage();
+    expect(screen.getByTestId('loop-detail-spend-today')).toHaveTextContent('5 / 10 credits today');
+  });
+
   it('says not found on a 404 and links back to the list', () => {
     loopState.data = undefined;
     loopState.error = Object.assign(new Error('nope'), { isAxiosError: true, response: { status: 404 } });

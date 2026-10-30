@@ -160,6 +160,17 @@ describe('loop notices', () => {
     expect(await Inbox.collection.countDocuments({})).toBe(2);
   });
 
+  it('tells the owner what to do about a pause the scheduler lifts itself', async () => {
+    await createLoop({ statusReason: 'Daily budget reached; resumes 00:00 UTC', autoResume: 'budget' });
+    await createLoop({ name: 'Other', statusReason: 'Out of credits', autoResume: 'credits' });
+    await tick();
+    const messages = (await openNotices()).map(n => n.message.split('\n')[1]).sort();
+    expect(messages).toEqual([
+      'It resumes by itself once the account has credits.',
+      'Raise the budget and set it live to run sooner.',
+    ]);
+  });
+
   it('replaces the notice when the status changes', async () => {
     const loop = await createLoop({ status: 'paused', statusReason: 'Out of credits' });
     await tick();

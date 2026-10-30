@@ -85,8 +85,8 @@ export function validateLoopInterval(value: unknown): number {
 }
 
 export function validateLoopBudget(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw new BadRequestError('budgetCreditsPerDay must be a non-negative number');
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new BadRequestError('budgetCreditsPerDay must be a positive number');
   }
   return value;
 }
@@ -100,17 +100,26 @@ const CLIENT_TRANSITIONS: Partial<Record<LoopStatus, readonly LoopStatus[]>> = {
 /**
  * The patch for a client-requested status change. Going `live` schedules the next run
  * (now if the loop never ran, else one interval after the last run) and clears the
- * failure state, so an errored loop the owner has fixed starts clean.
+ * failure state, so an errored loop the owner has fixed starts clean. Every owner move
+ * clears `autoResume`: pausing a loop the scheduler paused makes it an owner pause.
  */
 export function nextStatusPatch(loop: ILoop, requested: unknown, now: Date): Record<string, unknown> {
-  if (requested === loop.status) return {};
+  if (requested === loop.status) {
+    return requested === 'paused' && loop.autoResume ? { statusReason: null, autoResume: null } : {};
+  }
   const allowedFrom = CLIENT_TRANSITIONS[requested as LoopStatus];
   if (!allowedFrom?.includes(loop.status)) {
     throw new BadRequestError(`Cannot move a loop from ${loop.status} to ${String(requested)}`);
   }
-  if (requested === 'paused') return { status: 'paused', statusReason: null };
+  if (requested === 'paused') return { status: 'paused', statusReason: null, autoResume: null };
 
-  return { status: 'live', nextRunAt: nextRunAtFor(loop, now), consecutiveFailures: 0, statusReason: null };
+  return {
+    status: 'live',
+    nextRunAt: nextRunAtFor(loop, now),
+    consecutiveFailures: 0,
+    statusReason: null,
+    autoResume: null,
+  };
 }
 
 /** Now if the loop never ran, else one interval after its last run (never in the past). */

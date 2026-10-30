@@ -43,6 +43,7 @@ const values = (overrides: Partial<LoopFormValues> = {}): LoopFormValues => ({
   stages: ['todo', 'doing', 'done'],
   agentId: '',
   oversees: [],
+  budget: '',
   ...overrides,
 });
 
@@ -90,6 +91,16 @@ describe('validateLoopForm', () => {
     expect(
       validateLoopForm(values({ oversees: ['1', '2', '3', '4', '5', '6'] }), 'edit').errors.oversees
     ).toBeDefined();
+  });
+
+  it.each([['0'], ['-1'], ['abc']])('rejects a budget of %s', budget => {
+    expect(validateLoopForm(values({ budget }), 'create').errors.budget).toBeDefined();
+  });
+
+  it('omits no budget on create, clears it with null on edit, and sends a positive one', () => {
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('budgetCreditsPerDay');
+    expect(validateLoopForm(values(), 'edit').payload?.budgetCreditsPerDay).toBeNull();
+    expect(validateLoopForm(values({ budget: '2.5' }), 'create').payload?.budgetCreditsPerDay).toBe(2.5);
   });
 });
 
@@ -153,8 +164,11 @@ describe('LoopFormModal', () => {
       intervalMinutes: 120,
       tools: ['github__create_issue'],
       stages: ['todo', 'doing', 'done'],
+      budgetCreditsPerDay: 50,
     } as never);
     expect(screen.getByTestId('loop-form-interval-input')).toHaveValue(2);
+    expect(screen.getByTestId('loop-form-budget-input')).toHaveValue(50);
+    fireEvent.change(screen.getByTestId('loop-form-budget-input'), { target: { value: '' } });
     fireEvent.click(screen.getByTestId('loop-form-stage-remove-1'));
     expect(screen.getByTestId('loop-form-stage-removed-warning')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
@@ -165,6 +179,7 @@ describe('LoopFormModal', () => {
         tools: ['github__create_issue'],
         stages: ['todo', 'done'],
         agentId: null,
+        budgetCreditsPerDay: null,
       }),
       expect.anything()
     );

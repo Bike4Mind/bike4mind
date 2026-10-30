@@ -70,6 +70,8 @@ export default function LoopEventLog({ data, onViewRun, loopId, loops, onOverrid
                 onOverride={onOverride}
               />
             );
+          case 'auto_resumed':
+            return <AutoResumedRow key={event.id} event={event} onViewRun={onViewRun} />;
           default:
             return null;
         }
@@ -89,7 +91,8 @@ function UnsureRow({ event, onViewRun }: { event: ILoopUnsureRow; onViewRun: (ex
             {resolution.label}
           </Chip>
           <Typography level="body-xs">
-            Unsure ({Math.round(event.confidence * 100)}% confidence) - {relativeTimeFormat(new Date(event.createdAt))}
+            Unsure ({Math.round((event.confidence ?? 0) * 100)}% confidence) -{' '}
+            {relativeTimeFormat(new Date(event.createdAt))}
           </Typography>
         </Stack>
         <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap' }}>
@@ -219,6 +222,27 @@ function DirectiveRow({
           </Stack>
         )
       )}
+    </Stack>
+  );
+}
+
+function AutoResumedRow({ event, onViewRun }: { event: ILoopEventRow; onViewRun: (executionId: string) => void }) {
+  return (
+    <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" data-testid="loop-log-row">
+      <Chip size="sm" variant="soft" color="success" data-testid="loop-log-resolution">
+        Auto-resumed
+      </Chip>
+      <Typography level="body-sm" sx={{ flex: 1, minWidth: 0 }}>
+        {event.reason} - {relativeTimeFormat(new Date(event.createdAt))}
+      </Typography>
+      <Button
+        size="sm"
+        variant="plain"
+        onClick={() => onViewRun(event.executionId)}
+        data-testid="loop-log-view-run-btn"
+      >
+        View run
+      </Button>
     </Stack>
   );
 }

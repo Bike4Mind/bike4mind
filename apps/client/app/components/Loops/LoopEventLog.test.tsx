@@ -50,6 +50,18 @@ describe('LoopEventLog', () => {
     expect(screen.getByTestId('loop-log-resolution').textContent).toBe(label);
   });
 
+  it('shows a scheduler resume with its reason', () => {
+    const onViewRun = vi.fn();
+    renderLog(
+      [event({ kind: 'auto_resumed', reason: 'Daily budget reset', iteration: undefined, confidence: undefined })],
+      onViewRun
+    );
+    expect(screen.getByTestId('loop-log-resolution').textContent).toBe('Auto-resumed');
+    expect(screen.getByTestId('loop-log-row').textContent).toContain('Daily budget reset');
+    fireEvent.click(screen.getByTestId('loop-log-view-run-btn'));
+    expect(onViewRun).toHaveBeenCalledWith('exec-1');
+  });
+
   it('opens the run from "View run"', () => {
     const onViewRun = vi.fn();
     renderLog([event()], onViewRun);

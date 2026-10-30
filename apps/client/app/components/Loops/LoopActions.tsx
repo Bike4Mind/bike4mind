@@ -33,7 +33,7 @@ export default function LoopActions({ loop, onDeleted }: { loop: ILoop; onDelete
           Set live
         </Button>
       )}
-      {canPause(loop.status) && (
+      {canPause(loop) && (
         <Button
           size="sm"
           color="warning"

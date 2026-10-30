@@ -1,5 +1,13 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
-import { DEFAULT_LOOP_STAGES, ILoop, ILoopRepository, LOOP_STATUSES, LoopStatus } from '@bike4mind/common';
+import {
+  DEFAULT_LOOP_STAGES,
+  ILoop,
+  ILoopRepository,
+  LOOP_AUTO_RESUME_KINDS,
+  LOOP_STATUSES,
+  LoopAutoResume,
+  LoopStatus,
+} from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 const ModelName = 'Loop';
@@ -116,6 +124,19 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   async removeFromOversees(userId: string, loopId: string): Promise<void> {
     await this.loopModel.updateMany({ userId, oversees: loopId }, { $pull: { oversees: loopId } });
   }
+
+  async listAutoPaused(): Promise<ILoop[]> {
+    const results = await this.loopModel.find({ status: 'paused', autoResume: { $exists: true } });
+    return results.map(doc => doc.toJSON());
+  }
+
+  async resumeAutoPaused(id: string, kind: LoopAutoResume, now: Date): Promise<boolean> {
+    const result = await this.loopModel.updateOne(
+      { _id: id, status: 'paused', autoResume: kind },
+      { $set: { status: 'live', nextRunAt: now }, $unset: { autoResume: '', statusReason: '' } }
+    );
+    return result.modifiedCount > 0;
+  }
 }
 
 export const LoopSchema = new Schema<ILoop, ILoopModel>(
@@ -135,9 +156,14 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     },
     tools: { type: [String], default: [] },
     stages: { type: [String], default: () => [...DEFAULT_LOOP_STAGES] },
-    budgetCreditsPerDay: { type: Number, min: 0 },
+    // Kept in sync with validateLoopBudget (apps/client/server/utils/loopValidation.ts).
+    budgetCreditsPerDay: {
+      type: Number,
+      validate: { validator: (value: number) => value > 0, message: 'budgetCreditsPerDay must be positive' },
+    },
     status: { type: String, enum: LOOP_STATUSES, required: true, default: 'draft' },
     statusReason: { type: String },
+    autoResume: { type: String, enum: LOOP_AUTO_RESUME_KINDS },
     memory: {
       type: new Schema(
         { notes: { type: String, default: '' }, nextAction: { type: String, default: '' }, updatedAt: Date },

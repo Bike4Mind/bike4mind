@@ -50,9 +50,13 @@ export interface LoopFormValues {
   agentId: string;
   /** Ids of the owner's other loops this one oversees. */
   oversees: string[];
+  /** '' means no daily budget. */
+  budget: string;
 }
 
-export type LoopFormErrors = Partial<Record<'name' | 'goal' | 'interval' | 'tools' | 'stages' | 'oversees', string>>;
+export type LoopFormErrors = Partial<
+  Record<'name' | 'goal' | 'interval' | 'tools' | 'stages' | 'oversees' | 'budget', string>
+>;
 
 /** Checks the form against the API's limits; `payload` is set only when there are no errors. */
 export function validateLoopForm(
@@ -86,9 +90,16 @@ export function validateLoopForm(
     errors.stages = 'Stage names must be unique';
   }
 
+  // Mirrors validateLoopBudget (apps/client/server/utils/loopValidation.ts).
+  const budget = Number(values.budget);
+  if (values.budget.trim() && !(Number.isFinite(budget) && budget > 0)) {
+    errors.budget = 'Budget must be a positive number of credits';
+  }
+
   if (Object.keys(errors).length > 0) return { errors };
   const agentId = values.agentId || (mode === 'edit' ? null : undefined);
   const oversees = values.oversees.length > 0 ? values.oversees : mode === 'edit' ? null : undefined;
+  const budgetCreditsPerDay = values.budget.trim() ? budget : mode === 'edit' ? null : undefined;
   return {
     errors,
     payload: {
@@ -99,6 +110,7 @@ export function validateLoopForm(
       stages,
       ...(agentId !== undefined && { agentId }),
       ...(oversees !== undefined && { oversees }),
+      ...(budgetCreditsPerDay !== undefined && { budgetCreditsPerDay }),
     },
   };
 }
@@ -114,6 +126,7 @@ function initialValues(loop?: ILoop): LoopFormValues {
       stages: [...DEFAULT_LOOP_STAGES],
       agentId: '',
       oversees: [],
+      budget: '',
     };
   }
   const unit: IntervalUnit =
@@ -127,6 +140,7 @@ function initialValues(loop?: ILoop): LoopFormValues {
     stages: loop.stages,
     agentId: loop.agentId ?? '',
     oversees: loop.oversees ?? [],
+    budget: String(loop.budgetCreditsPerDay ?? ''),
   };
 }
 
@@ -338,6 +352,20 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
             <FormHelperText>
               {errors.oversees ??
                 'Runs of this loop can check the loops picked here and send them directives. They never do their work.'}
+            </FormHelperText>
+          </FormControl>
+          <FormControl error={!!errors.budget}>
+            <FormLabel>Daily budget (credits)</FormLabel>
+            <Input
+              type="number"
+              placeholder="No budget"
+              value={values.budget}
+              onChange={e => set('budget', e.target.value)}
+              sx={{ width: 160 }}
+              slotProps={{ input: { min: 0, 'data-testid': 'loop-form-budget-input' } }}
+            />
+            <FormHelperText>
+              {errors.budget ?? 'Optional. The loop pauses for the rest of the UTC day once it is spent.'}
             </FormHelperText>
           </FormControl>
           <Stack direction="row" gap={1} justifyContent="flex-end">

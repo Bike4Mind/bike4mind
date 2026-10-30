@@ -7,7 +7,7 @@ import {
   loopRepository,
   workItemRepository,
 } from '@bike4mind/database';
-import { ILoop, ILoopWithUsage } from '@bike4mind/common';
+import { ILoop, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
   assertLoopsEnabled,
@@ -36,13 +36,15 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const id = String(req.query.id);
     const loop = await loopRepository.findByIdAndUserId(id, req.user!.id);
     if (!loop) throw notFound(id);
-    const [credits, blocked] = await Promise.all([
+    const [credits, creditsToday, blocked] = await Promise.all([
       agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId]),
+      agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId], startOfUtcDay(new Date())),
       workItemRepository.countBlockedByLoop(req.user!.id, [loop.id]),
     ]);
     res.json({
       ...loop,
       creditsUsed: credits[loop.id] ?? 0,
+      creditsToday: creditsToday[loop.id] ?? 0,
       blockedTickets: blocked[loop.id] ?? 0,
     } satisfies ILoopWithUsage);
   })

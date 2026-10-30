@@ -9,8 +9,9 @@ import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@serve
 export const LOOP_EVENT_LIMIT = 100;
 
 /**
- * A loop's event log, newest first: unsure runs and how their owner answered, plus directives the loop sent
- * or received. Directives live in their own collection (LoopDirectiveModel) and are merged in here.
+ * A loop's event log, newest first: unsure runs and how their owner answered, scheduler auto-resumes, plus
+ * directives the loop sent or received. Directives live in their own collection (LoopDirectiveModel) and are
+ * merged in here.
  */
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: LOOP_RATE_LIMIT, windowMs: LOOP_RATE_WINDOW_MS, bucket: 'loops-events' }))
