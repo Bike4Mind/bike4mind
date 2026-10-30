@@ -82,7 +82,7 @@ const SEARCH_DEBOUNCE_MS = 250;
 // table to widen (and scroll) instead of letting the per-key "Allowed" cells overflow it.
 const ALLOWED_KEY_WIDTH_PX = 60;
 const ALLOWED_KEY_GAP_PX = 2;
-// 8px cell padding on each side plus the 12px inner indent.
+// The Allowed cells set their own 8px side padding (not Joy's theme default), plus a 12px inner indent.
 const ALLOWED_CELL_CHROME_PX = 28;
 // Room for the wrapped header label and the "none configured" placeholder.
 const ALLOWED_CELL_MIN_PX = 140;
@@ -892,6 +892,7 @@ const LLMDashboardTab: React.FC = () => {
                   top: 0,
                   zIndex: 1001,
                   paddingLeft: '8px',
+                  paddingRight: '8px',
                 }}
               >
                 <Box
@@ -953,6 +954,7 @@ const LLMDashboardTab: React.FC = () => {
                   top: 0,
                   zIndex: 1001,
                   paddingLeft: '8px',
+                  paddingRight: '8px',
                 }}
               >
                 <Box sx={{ display: 'flex', flexDirection: 'column', paddingLeft: '12px' }}>
@@ -1113,7 +1115,7 @@ const LLMDashboardTab: React.FC = () => {
                       : '-'}
                   </Typography>
                 </td>
-                <td style={{ paddingLeft: '8px' }}>
+                <td style={{ paddingLeft: '8px', paddingRight: '8px' }}>
                   <Box
                     sx={{
                       display: 'flex',
@@ -1150,7 +1152,7 @@ const LLMDashboardTab: React.FC = () => {
                     ))}
                   </Box>
                 </td>
-                <td style={{ paddingLeft: '8px' }}>
+                <td style={{ paddingLeft: '8px', paddingRight: '8px' }}>
                   <Box
                     sx={{
                       display: 'flex',
