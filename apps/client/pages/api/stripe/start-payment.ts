@@ -13,6 +13,7 @@ import { logEventSafe } from '@server/utils/analyticsLog';
 import { recordPaymentStart } from '@server/billing/paymentRisk';
 import { readNetworkMeta } from '@server/auth/networkMeta';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 import type Stripe from 'stripe';
 
 const handler = baseApi()
@@ -20,6 +21,8 @@ const handler = baseApi()
   .use(refuseBlockedAccount())
   .post(async (req, res) => {
     const parsedBody = transactionSchema.parse(req.body);
+
+    await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'credit_purchase');
 
     const metadata: PaymentDetails['metadata'] = {
       userId: req.user.id,

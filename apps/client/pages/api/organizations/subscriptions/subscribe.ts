@@ -21,6 +21,8 @@ import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgSt
 import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { readNetworkMeta } from '@server/auth/networkMeta';
+import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
@@ -71,6 +73,8 @@ const handler = baseApi()
     // block below still keys off organizationData (#3166). Pre-existing billing-attribution bug,
     // not an authorization one; this gate does not widen it.
     const organization = organizationId ? await verifyOrgOwner(req.user, organizationId) : null;
+    // The buyer is the signed-in user, whichever org the plan is for.
+    await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'team_subscription');
 
     // Everything below keys off the CANONICAL id from the gated document, never the raw body
     // string. `isValidObjectId` accepts uppercase hex and findById casts it, so an owner could

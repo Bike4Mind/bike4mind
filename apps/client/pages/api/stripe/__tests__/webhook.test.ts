@@ -97,6 +97,8 @@ vi.mock('@server/billing/paymentRisk', () => ({
   radarRiskLine: vi.fn().mockResolvedValue(null),
   screenPaymentOutcome: vi.fn(),
 }));
+vi.mock('@server/billing/earlyFraudWarning', () => ({ respondToEarlyFraudWarning: vi.fn() }));
+vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: vi.fn() }));
 vi.mock('@server/analytics/signupEvents', () => ({
   emitPurchaseEvents: vi.fn(),
   emitBillingEvent: mocks.emitBillingEvent,
