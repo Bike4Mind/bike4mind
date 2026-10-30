@@ -152,6 +152,20 @@ If a download connection drops or stops reporting progress, the download pauses.
 
 Removing a saved server or changing its Access to Chat only stops its downloads in Desktop and closes open download and removal dialogs. It does not remove models already stored on the server.
 
+## Rate models for a server's hardware
+
+Desktop cannot measure a remote server's memory, so by default the Models screen shows no fit badges for a saved server and its Curated picks are not chosen for it. To rate models for the server, enter its hardware:
+
+1. In Settings > Model servers, select Hardware on the server.
+2. Enter its RAM and, if it has one, its GPU memory, in GB as the hardware is sold. Tick The GPU shares this RAM for a machine with unified memory, such as an Apple silicon Mac. For a machine whose GPU can use only part of that memory, enter that part as GPU memory.
+3. Select Save hardware.
+
+The Curated tab then picks models for that server and shows fit badges for it, as it does for your own computer. Explore and the download dialog use the same figures. RAM is required; without it the server stays unrated.
+
+This computer has the same Hardware fields. Desktop detects this computer's hardware itself and shows what it found next to the fields. Fill in only what it got wrong: an entered figure replaces the detected one for fit badges, Curated picks and the context size local chat uses. Select Use detected hardware to go back.
+
+You can also enter memory bandwidth in GB/s. Desktop saves it, but it does not change ratings yet.
+
 ## Troubleshooting
 
 - Download or Remove is missing: select an Ollama server with Access set to Chat and manage. Chat only and OpenAI-compatible servers do not offer these controls.

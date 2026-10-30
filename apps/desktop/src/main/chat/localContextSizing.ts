@@ -8,14 +8,26 @@ export class HardwareProbe {
   private pending: Promise<HardwareProfile | null> | undefined;
   private result: HardwareProfile | null | undefined;
   private retryAt = 0;
+  private override: (probed: HardwareProfile) => HardwareProfile = probed => probed;
 
   constructor(
     private readonly probe: () => Promise<HardwareProfile> = () => probeHardware(),
     private readonly now: () => number = Date.now
   ) {}
 
-  /** Null after a failed probe, which is tried again a minute later. */
-  profile(): Promise<HardwareProfile | null> {
+  /** What sizing reads in place of the probe, such as hardware entered in Settings. */
+  setOverride(override: (probed: HardwareProfile) => HardwareProfile): void {
+    this.override = override;
+  }
+
+  /** The probe with any override applied; null after a failed probe, which is tried again a minute later. */
+  async profile(): Promise<HardwareProfile | null> {
+    const probed = await this.probed();
+    return probed && this.override(probed);
+  }
+
+  /** What the probe found, before any override. */
+  probed(): Promise<HardwareProfile | null> {
     if (this.result === null && this.now() >= this.retryAt) this.pending = undefined;
     this.pending ??= this.probe().then(
       profile => (this.result = profile),
@@ -29,7 +41,7 @@ export class HardwareProbe {
 
   /** Undefined while the probe has not finished. */
   known(): HardwareProfile | null | undefined {
-    return this.result;
+    return this.result && this.override(this.result);
   }
 }
 

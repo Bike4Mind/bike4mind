@@ -164,6 +164,7 @@ const youngAccountSpendAlert =
           target: {
             ...youngAccountSpendAlertDeadLetter.ruleTarget.target,
             // SST defaults to a literal {} input; omit it to retain EventBridge's scheduled time.
+            // The handler's window, its DLQ message body and replay all depend on it.
             input: undefined,
           },
         },
@@ -423,6 +424,28 @@ const adminAuditAlertsCron = runsScheduledJobs
           ...DEFAULT_LAMBDA_ENVIRONMENT,
           APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
         },
+        logging: {
+          retention: '1 month',
+        },
+      },
+    })
+  : undefined;
+
+// OAuth Abuse Auto-Block - blocks IPs whose failed OAuth sign-ins reach the admin-set threshold, with
+// escalating durations. The admin evaluate endpoint runs the same code on demand.
+// Self-host twin: apps/workers/src/selfhost/oauthAbuseAutoBlock.ts; keep the schedules in step.
+const oauthAbuseAutoBlockCron = runsScheduledJobs
+  ? new sst.aws.Cron('oauthAbuseAutoBlockCron', {
+      schedule: 'rate(1 minute)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/oauthAbuseAutoBlock.handler',
+        runtime: 'nodejs24.x',
+        timeout: '50 seconds',
+        // The next minute's run is the retry; Lambda's async retries would overlap it.
+        retries: 0,
+        link: [...allSecrets],
+        environment: DEFAULT_LAMBDA_ENVIRONMENT,
         logging: {
           retention: '1 month',
         },
@@ -1271,6 +1294,7 @@ const lakeInconsistencySweepCron = runsScheduledJobs
 
 export {
   adminAuditAlertsCron,
+  oauthAbuseAutoBlockCron,
   signupGrantHeldRelease,
   disposableDomainRefreshCron,
   dataLakeVectorIndexKeepWarmCron,
