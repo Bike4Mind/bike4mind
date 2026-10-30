@@ -23,6 +23,13 @@ const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
 // Text models appended to the accessible list per test; reset in afterEach below.
 const extraTextModels = vi.hoisted(() => [] as ModelInfo[]);
 const favoriteModelIds = vi.hoisted(() => new Set<string>());
+// Paid-only models served in /api/models' lockedModels; reset in the locked-models describe.
+const locked = vi.hoisted(() => ({
+  models: [] as ModelInfo[],
+  billingEnabled: true,
+  openView: vi.fn(),
+  noAccessibleModels: false,
+}));
 const adminSettings = vi.hoisted(() => ({
   recommendedModelIds: [] as string[],
   DefaultAPIModel: undefined as string | undefined,
@@ -48,14 +55,24 @@ const imageModel = {
 
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ isLoading: false, error: null }),
+  useLockedModels: () => ({ data: locked.models }),
+}));
+
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? locked.billingEnabled : undefined),
+}));
+
+vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
+  useBillingView: () => ({ openView: locked.openView }),
 }));
 
 vi.mock('@client/app/hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({
-    accessibleModels: [textModel, imageModel, ...extraTextModels],
-    accessibleTextModels: [textModel, ...extraTextModels],
-    accessibleImageModels: [imageModel],
+    accessibleModels: locked.noAccessibleModels ? [] : [textModel, imageModel, ...extraTextModels],
+    accessibleTextModels: locked.noAccessibleModels ? [] : [textModel, ...extraTextModels],
+    accessibleImageModels: locked.noAccessibleModels ? [] : [imageModel],
     accessibleVideoModels: [],
+    lockedModels: locked.models,
     isLoading: false,
   }),
 }));
@@ -122,6 +139,9 @@ type SelectionProps = {
   setModel?: (model: ModelName) => void;
   onSelectionComplete?: () => void;
   onSettingsClick?: (model: ModelInfo) => void;
+  imageModel?: boolean;
+  showAllModels?: boolean;
+  modelFilter?: 'all' | 'text' | 'image' | 'video';
 };
 
 const selectionTree = (props: SelectionProps) => (
@@ -130,9 +150,9 @@ const selectionTree = (props: SelectionProps) => (
       model={props.model ?? textModel.id}
       setModel={props.setModel ?? vi.fn()}
       onSelectionComplete={props.onSelectionComplete}
-      imageModel={false}
-      showAllModels
-      modelFilter="all"
+      imageModel={props.imageModel ?? false}
+      showAllModels={props.showAllModels ?? true}
+      modelFilter={props.modelFilter ?? 'all'}
       onSettingsClick={props.onSettingsClick}
     />
   </CssVarsProvider>
@@ -809,5 +829,148 @@ describe('ModelSelection older models', () => {
     renderSelection({});
     fireEvent.click(screen.getByTestId('older-models-toggle-OpenAI'));
     expect(screen.queryByTestId('model-card-gpt-expired')).not.toBeInTheDocument();
+  });
+});
+
+describe('ModelSelection locked (paid-only) models', () => {
+  const paidModel = {
+    id: 'paid-text-model',
+    name: 'Paid Text Model',
+    type: 'text',
+    contextWindow: 200000,
+    max_tokens: 8192,
+    access: { locked: true, reason: 'requires_paid_plan' },
+  } as ModelInfo;
+
+  beforeEach(() => {
+    locked.models = [paidModel];
+    locked.billingEnabled = true;
+    locked.noAccessibleModels = false;
+    locked.openView.mockClear();
+  });
+
+  afterEach(() => {
+    locked.models = [];
+    locked.noAccessibleModels = false;
+  });
+
+  it('renders a locked row that cannot select the model', () => {
+    const setModel = vi.fn();
+    const onSelectionComplete = vi.fn();
+    renderSelection({ setModel, onSelectionComplete });
+
+    const row = screen.getByTestId(`locked-model-row-${paidModel.id}`);
+    expect(within(row).getByText('(requires a paid plan)')).toBeInTheDocument();
+    expect(within(row).getByText('Paid Text Model')).toBeInTheDocument();
+    expect(within(row).queryByRole('button')).toBeNull();
+    // Not offered as a selectable card anywhere in the picker either.
+    expect(screen.queryByTestId(`model-card-${paidModel.id}`)).toBeNull();
+
+    fireEvent.click(row);
+
+    expect(setModel).not.toHaveBeenCalled();
+    expect(onSelectionComplete).not.toHaveBeenCalled();
+  });
+
+  it('opens the billing plans and closes the picker from the upgrade CTA', () => {
+    const setModel = vi.fn();
+    const onSelectionComplete = vi.fn();
+    renderSelection({ setModel, onSelectionComplete });
+
+    fireEvent.click(screen.getByTestId('locked-models-upgrade-btn'));
+
+    expect(locked.openView).toHaveBeenCalledWith('plans');
+    expect(onSelectionComplete).toHaveBeenCalledOnce();
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('hides the CTA when billing is off, but still explains the locked rows', () => {
+    locked.billingEnabled = false;
+    renderSelection({});
+
+    expect(screen.getByTestId('locked-models-section')).toBeInTheDocument();
+    expect(screen.queryByTestId('locked-models-upgrade-btn')).toBeNull();
+  });
+
+  it('renders no locked group when the caller has no locked models', () => {
+    locked.models = [];
+    renderSelection({});
+
+    expect(screen.queryByTestId('locked-models-section')).toBeNull();
+  });
+
+  it('keeps matching locked rows when a search matches no accessible model', async () => {
+    locked.models = [paidModel, { ...paidModel, id: 'paid-opus', name: 'Claude Opus X', description: '' }];
+    renderSelection({});
+
+    fireEvent.change(screen.getByTestId('model-search-input').querySelector('input') as HTMLInputElement, {
+      target: { value: 'opus' },
+    });
+
+    await waitFor(() => expect(screen.queryByTestId('locked-model-row-paid-text-model')).toBeNull());
+    expect(screen.getByTestId('locked-model-row-paid-opus')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-selection-no-results')).toBeNull();
+  });
+
+  it('shows the locked group instead of the no-access message when only locked models exist', () => {
+    locked.noAccessibleModels = true;
+    renderSelection({});
+
+    expect(screen.getByTestId('locked-model-row-paid-text-model')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-selection-no-access')).toBeNull();
+  });
+
+  it('shows the no-access message when there are neither accessible nor locked models', () => {
+    locked.noAccessibleModels = true;
+    locked.models = [];
+    renderSelection({});
+
+    expect(screen.getByTestId('model-selection-no-access')).toBeInTheDocument();
+  });
+
+  it('collapses locked twins and drops disabled locked models', () => {
+    locked.models = [
+      { ...paidModel, id: 'gpt-4.1', name: 'GPT-4.1' },
+      { ...paidModel, id: 'gpt-4.1-2025-04-14', name: 'GPT-4.1' },
+      { ...paidModel, id: 'retired-x', name: 'Retired X', disabled: true },
+    ];
+    renderSelection({});
+
+    const section = screen.getByTestId('locked-models-section');
+    expect(within(section).getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.queryByTestId('locked-model-row-retired-x')).toBeNull();
+  });
+
+  describe('by shown modality', () => {
+    const lockedOf = (id: string, type: ModelInfo['type']) => ({ ...paidModel, id, name: id, type }) as ModelInfo;
+
+    it('shows only locked video models under the video filter', () => {
+      locked.models = [lockedOf('locked-video', 'video'), lockedOf('locked-text', 'text')];
+      renderSelection({ showAllModels: false, modelFilter: 'video' });
+
+      expect(screen.getByTestId('locked-model-row-locked-video')).toBeInTheDocument();
+      expect(screen.queryByTestId('locked-model-row-locked-text')).toBeNull();
+    });
+
+    it('shows only locked image models for the image picker', () => {
+      locked.models = [lockedOf('locked-image', 'image'), lockedOf('locked-text', 'text')];
+      renderSelection({ showAllModels: false, modelFilter: 'image', imageModel: true });
+
+      expect(screen.getByTestId('locked-model-row-locked-image')).toBeInTheDocument();
+      expect(screen.queryByTestId('locked-model-row-locked-text')).toBeNull();
+    });
+
+    it('shows locked models of every modality under the All filter', () => {
+      const ids = ['locked-text', 'locked-image', 'locked-video', 'locked-stt'];
+      locked.models = [
+        lockedOf(ids[0], 'text'),
+        lockedOf(ids[1], 'image'),
+        lockedOf(ids[2], 'video'),
+        lockedOf(ids[3], 'speech-to-text'),
+      ];
+      renderSelection({ showAllModels: true, modelFilter: 'all' });
+
+      for (const id of ids) expect(screen.getByTestId(`locked-model-row-${id}`)).toBeInTheDocument();
+    });
   });
 });

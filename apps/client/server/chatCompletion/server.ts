@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from 'express';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { hasModelCatalogProvider } from '@bike4mind/llm-adapters';
@@ -109,6 +110,10 @@ export function createApp() {
   // Only the CloudFront-routed paths are gated; /health and /process are reached directly (ALB
   // health check, frontend Lambda via NAT).
   app.use(['/api/ai/v1/completions', '/api/ai/v1/ws-completions', '/api/embed/chat'], requireOriginVerify);
+
+  // Every user-facing route below (completions, CLI WS completions, embed chat) refuses a caller
+  // on an admin's `all` IP block; the internal route above is service-to-service and is not.
+  app.use(checkBlockedIP({ surface: 'app' }));
 
   // External CLI/3rd-party completions endpoint (user-authenticated SSE stream). Registered on
   // the always-on service so it has no cold start / 15-min Lambda ceiling. Its in-flight streams

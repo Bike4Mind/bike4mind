@@ -6,8 +6,10 @@ import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
 
 // Read at render time, so a test can seed the stored platform rows.
 let serverSettings: { settingName: string; settingValue: unknown }[] = [];
+let serverConfig: { hiddenAdminSettingKeys?: string[] } | undefined = { hiddenAdminSettingKeys: [] };
 vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({ data: serverSettings, isLoading: false }),
+  useConfig: () => ({ data: serverConfig }),
 }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => null }));
@@ -98,6 +100,7 @@ const renderSecurityTab = () => renderTab(securityTab);
 
 beforeEach(() => {
   serverSettings = [];
+  serverConfig = { hiddenAdminSettingKeys: [] };
   router.search = {};
   router.navigate.mockReset();
 });
@@ -356,5 +359,48 @@ describe('AdminSettingsTab Credits System group', () => {
     renderSettings();
 
     expect(screen.queryByTestId('admin-settings-search-growth-pricing-hint')).toBeNull();
+  });
+});
+
+describe('AdminSettingsTab stage-hidden settings', () => {
+  const stageGated = [
+    'signupGrantActivityMinMessages',
+    'signupGrantActivityMinDays',
+    'signupGrantActivityPreviewTestMode',
+  ] as const;
+  const renderUsersTab = () => renderTab(findTab(settingsMap.signupGrantActivityMinMessages.category));
+
+  it('hides the keys the server reports for this stage', () => {
+    serverConfig = { hiddenAdminSettingKeys: [...stageGated] };
+    renderUsersTab();
+
+    for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
+    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+  });
+
+  it('shows them when the server hides nothing', () => {
+    renderUsersTab();
+
+    for (const key of stageGated) expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
+  });
+
+  it.each([
+    ['config still loading', undefined],
+    ['config without the field', {}],
+  ])('hides them while the stage is unknown (%s)', (_label, config) => {
+    serverConfig = config;
+    renderUsersTab();
+
+    for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
+  });
+
+  it('keeps them out of an All Tabs search', () => {
+    serverConfig = { hiddenAdminSettingKeys: [...stageGated] };
+    router.search = { tab: 'admin-settings', q: 'signup activity' };
+    renderSettings();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'All Tabs' }));
+
+    expect(screen.getByTestId('generic-setting-signupGrantActivityMinActiveSeconds')).toBeTruthy();
+    for (const key of stageGated) expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
   });
 });

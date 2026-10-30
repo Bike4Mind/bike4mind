@@ -7,6 +7,7 @@ import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { setImportedInline } from './importedInline';
+import { foldedParents, setNestingEnabled, toggleFolded } from './nestedSessions';
 import { SessionList } from './SessionList';
 import { useSessions } from './useChat';
 
@@ -88,7 +89,8 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
 async function mount(
   sessions: ChatSessionSummary[],
   mode: ChatSessionMode = 'chat',
-  extra: Record<string, unknown> = {}
+  extra: Record<string, unknown> = {},
+  activeId: string | null = null
 ) {
   (window as unknown as { b4m: unknown }).b4m = {
     chat: {
@@ -105,7 +107,7 @@ async function mount(
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <Harness activeId={null} mode={mode} />
+        <Harness activeId={activeId} mode={mode} />
       </CssVarsProvider>
     );
   });
@@ -122,7 +124,9 @@ const titles = () => all('chat-session-title-text').map(node => node.textContent
 const renameInput = () => el('chat-session-rename-input') as HTMLInputElement;
 
 const rowOf = (title: string) => {
-  const row = all('chat-session-item').find(item => item.textContent === title);
+  const row = all('chat-session-item').find(
+    item => item.querySelector('[data-testid="chat-session-title-text"]')?.textContent === title
+  );
   if (!row) throw new Error(`no row ${title}`);
   return row;
 };
@@ -444,5 +448,98 @@ describe('sessions imported from Claude, in their own section', () => {
     await act(async () => listener?.());
     await settle();
     expect(el('sidebar-imported-toggle-btn').textContent).toContain('(1)');
+  });
+});
+
+describe('sub-sessions an agent spawned', () => {
+  const spawned = (id: string, title: string, parentSessionId: string) =>
+    summary(id, title, { origin: { parentSessionId, depth: 1, seedPrompt: 'go' } });
+  const sessions = () => [
+    summary('root', 'Root'),
+    spawned('kid-a', 'Kid A', 'root'),
+    spawned('kid-b', 'Kid B', 'root'),
+    spawned('grandkid', 'Grandkid', 'kid-a'),
+  ];
+  const depthOf = (title: string) => rowOf(title).closest('li')?.getAttribute('data-nest-depth') ?? null;
+  const foldButton = () => el('chat-session-fold-btn');
+
+  afterEach(() => {
+    for (const id of [...foldedParents()]) toggleFolded(id);
+    setNestingEnabled(true);
+  });
+
+  it('draw indented under their parent, which counts them on its fold pill', async () => {
+    await mount(sessions());
+    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+    expect([depthOf('Root'), depthOf('Kid A'), depthOf('Grandkid'), depthOf('Kid B')]).toEqual([null, '1', '2', '1']);
+    const pills = all('chat-session-fold-btn');
+    expect(pills.map(pill => pill.textContent)).toEqual(['3', '1']);
+  });
+
+  it('fold away and come back from the pill, without opening the parent', async () => {
+    await mount(sessions());
+    act(() => foldButton().click());
+    expect(titles()).toEqual(['Root']);
+    expect(foldButton().getAttribute('data-folded')).toBe('true');
+    expect(onSelect).not.toHaveBeenCalled();
+
+    act(() => foldButton().click());
+    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+  });
+
+  it('fold and unfold from the keyboard on the parent row', async () => {
+    await mount(sessions());
+    const key = (key: string) =>
+      act(() => {
+        rowOf('Root').dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      });
+    key('ArrowLeft');
+    expect(titles()).toEqual(['Root']);
+    key('ArrowRight');
+    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+  });
+
+  it('open up under a search so a matching child is never hidden', async () => {
+    toggleFolded('root');
+    await mount(sessions());
+    expect(titles()).toEqual(['Root']);
+    const input = el('chat-search-input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, 'Kid');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // The parent does not match, so its children stand on their own rows.
+    expect(titles()).toEqual(['Kid A', 'Grandkid', 'Kid B']);
+  });
+
+  it('leave the pill inert under a search, where a fold could not show', async () => {
+    await mount(sessions());
+    const input = el('chat-search-input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, 'Kid');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => foldButton().click());
+    expect(foldedParents().has('kid-a')).toBe(false);
+    expect(titles()).toEqual(['Kid A', 'Grandkid', 'Kid B']);
+  });
+
+  it('unfold the branches holding the open session, and still fold on request', async () => {
+    toggleFolded('root');
+    await mount(sessions(), 'chat', {}, 'grandkid');
+    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+    expect(foldedParents().has('root')).toBe(false);
+
+    act(() => all('chat-session-fold-btn')[0].click());
+    expect(titles()).toEqual(['Root']);
+  });
+
+  it('list flat when the setting is off', async () => {
+    setNestingEnabled(false);
+    await mount(sessions());
+    expect(titles()).toEqual(['Root', 'Kid A', 'Kid B', 'Grandkid']);
+    expect(query('chat-session-fold-btn')).toBeNull();
   });
 });

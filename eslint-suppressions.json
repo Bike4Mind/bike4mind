@@ -9,6 +9,11 @@
       "count": 4
     }
   },
+  "apps/client/pages/api/admin/agent-ops-settings/repair.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
   "apps/client/pages/api/admin/agent-ops-settings/seed.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -330,66 +335,6 @@
     }
   },
   "apps/client/pages/api/credits/transactions.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/articles.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/findings/[findingId].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/findings/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/proposals/[proposalId].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 3
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/proposals/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/research/configs/[configId].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/research/configs/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/research/runs/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/transfer-ownership.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/data-lakes/batches/[batchId].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/batches/[batchId]/reanalyze-taxonomy.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/batches/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }

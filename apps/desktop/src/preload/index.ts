@@ -380,6 +380,7 @@ const api: DesktopApi = {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsGetState),
     setRules: (scope, lists) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetRules, scope, lists),
     setSharing: (share: boolean) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetSharing, share),
+    exportApprovalSummary: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsExportApprovalSummary),
   },
   capabilities: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.capabilitiesGetState),

@@ -33,16 +33,16 @@ import { firstUsableStudioModality } from '@client/app/components/Studio/studioM
 import { useAudioProviders } from '@client/app/hooks/data/audioProviders';
 import { useMusicModels } from '@client/app/hooks/data/musicGenerations';
 import { useVideoModels } from '@client/app/hooks/data/videoGenerations';
-import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
-import { gray } from '@client/app/utils/themes/colors';
+import { inviteBlue, rewardGreen } from '@client/app/components/common/gearRewardStyles';
 import { useNotebookLayout } from '..';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
 
 const NAV_ROW_HEIGHT = 32;
 const NAV_TAG_HEIGHT = 24;
-/** A row's right padding when it carries a tag: the gap left above and below
- *  the tag, so it sits evenly inset on three sides. */
+const NAV_ROW_PAD_X = 12;
+/** A tag's gap to the row's right edge: the gap left above and below it, so it
+ *  sits evenly inset on three sides. */
 const NAV_TAG_INSET = (NAV_ROW_HEIGHT - NAV_TAG_HEIGHT) / 2;
 
 /** Shared by the tags on the right of a row: labels, not controls - the row
@@ -54,19 +54,29 @@ const navTagSx = {
   pointerEvents: 'none',
 } as const;
 
-/**
- * Start here: the Gears page's neutral marker in dark mode. In light mode that
- * tint vanishes on the active row's blue wash, so it gets a white fill and the
- * theme's solid light border instead - the same white the Gears cards use.
- */
-const startHereTagSx = (theme: Theme) =>
-  theme.palette.mode === 'dark'
-    ? { ...neutralFrame(theme), color: theme.palette.text.primary }
-    : {
-        backgroundColor: gray[0],
-        border: `1px solid ${theme.palette.border.light}`,
-        color: theme.palette.text.primary,
-      };
+/** Start here, and the tags overlays put on their rows: an invitation, outlined in the primary blue. */
+const inviteTagSx = (theme: Theme) => {
+  const blue = inviteBlue(theme);
+  return {
+    color: blue.ink,
+    backgroundColor: blue.fill,
+    backgroundImage: blue.wash,
+    border: `1px solid ${blue.stroke}`,
+  };
+};
+
+/** The tag an overlay's nav item names for its row (`PremiumNavDescriptor.useSidebarTag`). A component
+ *  of its own so the overlay's hook runs unconditionally, whichever rows the user can see. */
+const PremiumNavTag = ({ useTag, testId }: { useTag: () => string | null; testId: string }) => {
+  const theme = useTheme();
+  const label = useTag();
+  if (!label) return null;
+  return (
+    <Chip size="sm" variant="soft" color="neutral" data-testid={testId} sx={{ ...navTagSx, ...inviteTagSx(theme) }}>
+      {label}
+    </Chip>
+  );
+};
 
 type NavItem = {
   key: string;
@@ -235,6 +245,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             label: 'Bob',
             icon: iconSlot(BobIcon ? <BobIcon /> : <Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname.startsWith('/bob'),
+            trailing: bobNavItem.useSidebarTag && (
+              <PremiumNavTag useTag={bobNavItem.useSidebarTag} testId="sidenav-nav-bob-tag" />
+            ),
             onClick: () => {
               closeOnMobile();
               // `/bob` is a codegen-mounted premium route (no core route file), so it is not in
@@ -280,6 +293,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         label: item.label,
         icon: iconSlot(ContributedIcon ? <ContributedIcon /> : <ExtensionOutlinedIcon sx={{ fontSize: '18px' }} />),
         isActive: location.pathname === item.path || location.pathname.startsWith(`${item.path}/`),
+        trailing: item.useSidebarTag && <PremiumNavTag useTag={item.useSidebarTag} testId={`sidenav-nav-${key}-tag`} />,
         onClick: () => {
           closeOnMobile();
           // Codegen-mounted, so not in Tanstack's statically-typed route union - same cast as /bob.
@@ -421,9 +435,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             data-testid="sidenav-gears-start-here"
             sx={{
               ...navTagSx,
-              // An invitation, kept quiet so the green Claim tag stays the only
-              // one asking for something.
-              ...startHereTagSx(theme),
+              ...inviteTagSx(theme),
             }}
           >
             {gearsSignal.startHereCredits > 0
@@ -476,8 +488,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               display: 'flex',
               alignItems: 'center',
               gap: '12px',
-              pl: '12px',
-              pr: item.trailing ? `${NAV_TAG_INSET}px` : '12px',
+              px: `${NAV_ROW_PAD_X}px`,
               height: `${NAV_ROW_HEIGHT}px`,
               minHeight: `${NAV_ROW_HEIGHT}px`,
               borderRadius: '8px',
@@ -497,7 +508,21 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             <Typography level="body-sm" sx={{ fontSize: '14px', fontWeight: 400, color: 'inherit' }} noWrap>
               {item.label}
             </Typography>
-            {item.trailing && <Box sx={{ ml: 'auto', display: 'flex', flexShrink: 0 }}>{item.trailing}</Box>}
+            {/* Pulled into the row's padding and dropped when empty, so a tag that renders nothing
+                (an overlay's tag hook returning null) leaves the row as if it had none. */}
+            {item.trailing && (
+              <Box
+                sx={{
+                  ml: 'auto',
+                  mr: `${NAV_TAG_INSET - NAV_ROW_PAD_X}px`,
+                  display: 'flex',
+                  flexShrink: 0,
+                  '&:empty': { display: 'none' },
+                }}
+              >
+                {item.trailing}
+              </Box>
+            )}
           </Box>
         </Fragment>
       ))}

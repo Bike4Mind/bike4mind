@@ -1,4 +1,10 @@
-import { DEVELOPER_USER_TAGS, hasDeveloperUserTag, type ILoginRecord, type IUserDocument } from '@bike4mind/common';
+import {
+  DEVELOPER_USER_TAGS,
+  hasDeveloperUserTag,
+  type ILoginRecord,
+  type IUserDocument,
+  type OrganizationMemberRole,
+} from '@bike4mind/common';
 export { isManagedTag } from '@client/lib/entitlements/managedUserTags';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
@@ -55,6 +61,19 @@ export const initials = (name: string): string => {
 
 export const organizationName = (user: Pick<AdminUserListItem, 'organizationId'>): string | null =>
   user.organizationId && typeof user.organizationId === 'object' ? (user.organizationId.name ?? null) : null;
+
+/** The id of the org the user is currently acting in; membership itself lives on the org documents. */
+export const activeOrganizationId = (user: Pick<AdminUserListItem, 'organizationId'>): string | null => {
+  const org: unknown = user.organizationId;
+  if (typeof org === 'string') return org;
+  return org && typeof org === 'object' && 'id' in org && typeof org.id === 'string' ? org.id : null;
+};
+
+export const ORGANIZATION_ROLE_LABELS: Readonly<Record<OrganizationMemberRole, string>> = {
+  owner: 'Owner',
+  manager: 'Manager',
+  member: 'Member',
+};
 
 export const LEVEL_LABELS: Readonly<Record<string, string>> = {
   DemoUser: 'Demo',

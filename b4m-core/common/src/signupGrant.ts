@@ -14,6 +14,17 @@ export const SIGNUP_GRANT_UNLOCK_REASONS = [
 
 export type SignupGrantUnlockReason = (typeof SIGNUP_GRANT_UNLOCK_REASONS)[number];
 
+/** Unlocks bought with a payment, which a stolen card can fake until the payment settles. */
+export const PAYMENT_UNLOCK_REASONS = ['card_verified', 'subscription'] as const;
+export type PaymentUnlockReason = (typeof PAYMENT_UNLOCK_REASONS)[number];
+
+export const isPaymentUnlockReason = (reason: unknown): reason is PaymentUnlockReason =>
+  (PAYMENT_UNLOCK_REASONS as readonly unknown[]).includes(reason);
+
+/** Payment events that cancel a held payment unlock and close payment unlocks for the account. */
+export const SIGNUP_UNLOCK_FORFEIT_CAUSES = ['dispute', 'refund', 'fraud_warning'] as const;
+export type SignupUnlockForfeitCause = (typeof SIGNUP_UNLOCK_FORFEIT_CAUSES)[number];
+
 export interface SignupGrantAssessment {
   band: 'full' | 'reduced' | 'review';
   credits: number;
@@ -41,6 +52,10 @@ export interface SignupGrant {
   lastDripPeriod?: string;
   /** Active-session time accrued on one UTC day, advanced by the server from heartbeat pings. */
   activity?: { day: string; ms: number; lastAt: Date; period?: string };
+  /** A payment unlock waiting for its payment to settle; the held-release job pays it from `releaseAt`. */
+  heldUnlock?: { reason: PaymentUnlockReason; heldAt: Date; releaseAt: Date };
+  /** A disputed, refunded or fraud-warned payment: no later payment can unlock the remainder. */
+  unlockForfeited?: { cause: SignupUnlockForfeitCause; at: Date };
 }
 
 export function hasPaidSignupDrip(

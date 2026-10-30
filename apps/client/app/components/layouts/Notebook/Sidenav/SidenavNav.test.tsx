@@ -41,6 +41,7 @@ const {
     icon?: ComponentType;
     requireEntitlement?: string;
     sidebar?: boolean;
+    useSidebarTag?: () => string | null;
   }>,
   entitlements: [] as string[],
   // The real useOptiAccess/useOptiVisible read this store, so the Opti row tests exercise both.
@@ -369,6 +370,18 @@ describe('SidenavNav Bob row', () => {
     renderNav();
     expect(bobRow()).toContainElement(screen.getByTestId('Diversity3OutlinedIcon'));
   });
+
+  it('shows the tag its nav item names, and none when the hook returns null', () => {
+    let tag: string | null = 'New';
+    navItems.push({ path: '/bob', label: 'Bob', useSidebarTag: () => tag });
+    renderNav();
+    expect(bobRow()).toContainElement(screen.getByTestId('sidenav-nav-bob-tag'));
+    expect(screen.getByTestId('sidenav-nav-bob-tag')).toHaveTextContent('New');
+
+    tag = null;
+    renderNav();
+    expect(screen.getAllByTestId('sidenav-nav-bob').at(-1)).toHaveTextContent(/^Bob$/);
+  });
 });
 
 describe('SidenavNav overlay-contributed sidebar rows', () => {
@@ -411,6 +424,12 @@ describe('SidenavNav overlay-contributed sidebar rows', () => {
     expect(screen.getAllByTestId('sidenav-nav-premium-launch').at(-1)).toContainElement(
       screen.getByTestId('contributed-sidebar-icon')
     );
+  });
+
+  it('shows the tag a contributed row names', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', sidebar: true, useSidebarTag: () => 'New' });
+    renderNav();
+    expect(contributedRow()).toContainElement(screen.getByTestId('sidenav-nav-premium-launch-tag'));
   });
 
   it('does not draw Bob twice when its nav item opts in too', () => {

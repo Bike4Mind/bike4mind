@@ -6,6 +6,7 @@
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
 import { DATA_LAKE_TOOL_NAMES, questGenerationJobs } from '@bike4mind/common';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { adminSettingsRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import {
   ChatCompletionFeature,
@@ -265,7 +266,10 @@ export const config = {
   },
 };
 
-const handler = baseApi({ auth: false }).post(async (req, res) => {
+// Anonymous by design (the voice session token is the auth), so it opts into the network block itself.
+const ipGatedApi = baseApi({ auth: false }).use(checkBlockedIP({ surface: 'app' }));
+
+const handler = ipGatedApi.post(async (req, res) => {
   const body = req.body as OpenAIChatRequest & {
     elevenlabs_extra_body?: { b4m_session?: unknown };
   };
