@@ -17,6 +17,7 @@ interface ServerValue {
 const SETTINGS_PATH = '/api/settings/fetch';
 const ENABLED_KEY = 'EnableDeferredToolLoading';
 const START_KEY = 'DeferredToolStartSetMaxTokens';
+const DEFAULT_START_SET_MAX_TOKENS = settingsMap[START_KEY].defaultValue ?? 100_000;
 
 /** How long a server answer is trusted before the next turn asks again (ms). */
 const FRESH_MS = 10 * 60_000;
@@ -49,9 +50,7 @@ export function readServerValue(rows: unknown): ServerValue | undefined {
   return {
     enabled: enabled.success ? enabled.data === true : settingsMap[ENABLED_KEY].defaultValue === true,
     startSetMaxTokens:
-      limit.success && typeof limit.data === 'number' && limit.data >= 0
-        ? limit.data
-        : (settingsMap[START_KEY].defaultValue ?? 100_000),
+      limit.success && typeof limit.data === 'number' && limit.data >= 0 ? limit.data : DEFAULT_START_SET_MAX_TOKENS,
   };
 }
 
@@ -73,6 +72,7 @@ export interface DeferredToolsSettingDeps {
 export class DeferredToolsSetting {
   private known: Record<string, ServerValue> | undefined;
   private readonly checkedAt = new Map<string, number>();
+  /** Shared across environments: a switch mid-refresh waits for a later turn to ask the new server. */
   private inFlight: Promise<void> | undefined;
 
   constructor(private readonly deps: DeferredToolsSettingDeps) {}
@@ -80,7 +80,8 @@ export class DeferredToolsSetting {
   current(): DeferredToolsConfig | undefined {
     const { override } = this.deps;
     if (override?.enabled === false) return undefined;
-    if (override?.enabled === true) return { startSetMaxTokens: override.startSetMaxTokens ?? 100_000 };
+    if (override?.enabled === true)
+      return { startSetMaxTokens: override.startSetMaxTokens ?? DEFAULT_START_SET_MAX_TOKENS };
     const environmentUrl = this.deps.getEnvironmentUrl();
     const checked = this.checkedAt.get(environmentUrl);
     if (checked === undefined || this.now() - checked >= FRESH_MS) void this.refresh();
