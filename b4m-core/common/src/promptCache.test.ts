@@ -17,8 +17,10 @@ describe('supportsOneHourPromptCache', () => {
     ['claude-opus-4-6', true],
     ['claude-sonnet-4-6', true],
     ['claude-haiku-4-5', true],
-    ['claude-sonnet-4-5', false],
+    ['claude-sonnet-4-5', true],
+    ['claude-opus-4-5', true],
     ['claude-opus-4-1', false],
+    ['claude-sonnet-4', false],
     ['claude-3-7-sonnet-20250219', false],
   ])('%s on the direct API: %s', (id, expected) => {
     expect(supportsOneHourPromptCache(claude(id))).toBe(expected);
@@ -42,9 +44,7 @@ describe('resolvePromptCacheTtl', () => {
   });
 
   it('stays at 5 minutes on a model without the 1-hour TTL', () => {
-    expect(resolvePromptCacheTtl({ model: claude('claude-sonnet-4-5'), chatTtl: '1h', userDefaultTtl: '1h' })).toBe(
-      '5m'
-    );
+    expect(resolvePromptCacheTtl({ model: claude('claude-opus-4-1'), chatTtl: '1h', userDefaultTtl: '1h' })).toBe('5m');
   });
 });
 

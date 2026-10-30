@@ -385,7 +385,7 @@ describe('executeCompletion - 1-hour cache TTL', () => {
   });
 
   it('keeps 5 minutes on a model without the 1-hour TTL, and by default', async () => {
-    await run(CLAUDE_DIRECT, { options: { cacheTtl: '1h' } });
+    await run(modelInfo(ChatModels.CLAUDE_4_OPUS, ModelBackend.Anthropic), { options: { cacheTtl: '1h' } });
     expect(capturedOptions?.cacheStrategy).toMatchObject({ cacheTTL: '5m' });
     await run(OPUS_DIRECT);
     expect(capturedOptions?.cacheStrategy).toMatchObject({ cacheTTL: '5m' });

@@ -18,8 +18,8 @@ export function isPromptCacheTtl(value: unknown): value is PromptCacheTtl {
 
 /**
  * Whether a model can be sent `cache_control.ttl: "1h"`: Claude on the direct API or Bedrock, limited
- * to the models the Claude API reference lists as current (Haiku 4.5, the 4.6+ Sonnet and Opus, and
- * every 5.x family), so an older model never sees a TTL it may reject.
+ * to 4.5 and later, the oldest models Bedrock accepts the 1-hour TTL on, so an older model never sees
+ * a TTL it may reject.
  */
 export function supportsOneHourPromptCache(model: { id: string; backend?: string } | undefined): boolean {
   if (!model || (model.backend !== ModelBackend.Anthropic && model.backend !== ModelBackend.Bedrock)) return false;
@@ -27,8 +27,7 @@ export function supportsOneHourPromptCache(model: { id: string; backend?: string
   if (!parsed) return false;
   if (parsed.major >= 5) return true;
   if (parsed.major < 4) return false;
-  const minor = parsed.minor ?? 0;
-  return parsed.family === 'haiku' ? minor >= 5 : minor >= 6;
+  return (parsed.minor ?? 0) >= 5;
 }
 
 /**
