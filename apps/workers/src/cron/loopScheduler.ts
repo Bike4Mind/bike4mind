@@ -68,6 +68,8 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
     return;
   }
 
+  // ponytail: oldest first and still-running resumed runs are skipped unfolded, so 100+ of those across all
+  // users would hold back newer folds; page past skipped events if that ever happens.
   for (const event of await loopEventRepository.listResumedUnfolded(MAX_RESUMED_FOLDS_PER_TICK)) {
     try {
       await foldResumedRun(event, now);
@@ -130,8 +132,13 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
   if (execution?.status === 'completed' && stoppedByGate(execution)) {
     // The owner stopped it at the gate before a tick detached it: a rejected unsure, not a success.
     const gate = execution.gateHistory?.at(-1);
+    // Resolved from gateHistory too, in case gate_response's best-effort log write failed.
     if (gate)
-      await loopEventRepository.recordUnsure(unsureEventFields(runOf(loop.id, execution, executionId), gate, ticket));
+      await loopEventRepository.resolveUnsure(unsureEventFields(runOf(loop.id, execution, executionId), gate, ticket), {
+        outcome: gate.resolution,
+        by: gate.resolvedBy,
+        at: gate.resolvedAt,
+      });
     if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, gateStopPatch(execution));
     await loopRepository.foldRun(loop.id, executionId, { $set: { lastRunAt: execution.completedAt ?? now } });
     if (ticket) await makeDueIfReady(loop, now);

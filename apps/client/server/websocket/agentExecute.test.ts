@@ -685,6 +685,18 @@ describe('gate response on a loop run', () => {
     expect(mockResumeBlockedRun).not.toHaveBeenCalled();
   });
 
+  it('still resolves the gate when the loop log write fails', async () => {
+    mockFindById.mockResolvedValue(loopRun);
+    mockResolveUnsure.mockRejectedValueOnce(new Error('db down'));
+    await respond('stop');
+
+    expect(mockMarkComplete).toHaveBeenCalledWith('exec-1', expect.objectContaining({ stoppedByGate: true }));
+    expect(noopLogger.warn).toHaveBeenCalledWith(
+      '[Gate] Could not record the gate answer in the loop log',
+      expect.objectContaining({ executionId: 'exec-1' })
+    );
+  });
+
   it.each(['continue', 'stop'] as const)('%s on a chat run touches no loop event or ticket', async decision => {
     mockFindById.mockResolvedValue({ ...loopRun, loopId: undefined });
     await respond(decision);

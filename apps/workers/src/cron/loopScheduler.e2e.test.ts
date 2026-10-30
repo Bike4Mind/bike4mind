@@ -627,7 +627,7 @@ describe('runLoopSchedulerTick - unsure', () => {
       userId: 'user-1',
       status: 'completed',
       result: { answer: 'partial', stoppedByGate: true },
-      gateHistory: [{ ...gate(new Date(1000)), resolution: 'rejected', resolvedAt: NOW }],
+      gateHistory: [{ ...gate(new Date(1000)), resolution: 'rejected', resolvedAt: NOW, resolvedBy: 'user-1' }],
     };
 
     await runLoopSchedulerTick(NOW, logger);
@@ -640,6 +640,8 @@ describe('runLoopSchedulerTick - unsure', () => {
     const after = await reload(loop.id);
     expect(after).toMatchObject({ runCount: 0, consecutiveFailures: 0, memory: { notes: '' } });
     expect(after.activeExecutionId).toBeUndefined();
-    expect(await eventsOf(loop.id)).toHaveLength(1);
+    const events = await eventsOf(loop.id);
+    expect(events).toHaveLength(1);
+    expect(events[0].resolution).toMatchObject({ outcome: 'rejected', by: 'user-1', at: NOW });
   });
 });
