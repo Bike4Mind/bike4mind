@@ -76,6 +76,8 @@ function quietBridge(overrides: Record<string, unknown>) {
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
+const streamUnsubscribe = vi.fn();
+const onStreamEvent = vi.fn(() => streamUnsubscribe);
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -94,6 +96,7 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
       chat: quietBridge({
+        onStreamEvent,
         listSessions: async () => SESSIONS,
         getSession: async (id: string) =>
           ({ ...(SESSIONS.find(session => session.id === id) ?? PARENT), messages: [] }) as unknown as ChatSession,
@@ -216,6 +219,34 @@ describe('orchestrate mode in the chat shell', () => {
     expect(window.localStorage.getItem(INTRO_SEEN_KEY)).toBeNull();
     act(() => vi.advanceTimersByTime(900));
     expect(window.localStorage.getItem(INTRO_SEEN_KEY)).toBe('1');
+  });
+
+  it('subscribes to agent activity only while orchestrating', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    const chatSubscriptions = onStreamEvent.mock.calls.length;
+
+    await enterOrchestrate();
+    expect(onStreamEvent).toHaveBeenCalledTimes(chatSubscriptions + 1);
+
+    const unsubscribedBefore = streamUnsubscribe.mock.calls.length;
+    act(() => el('chat-surface-toggle-chat').click());
+    expect(streamUnsubscribe).toHaveBeenCalledTimes(unsubscribedBefore + 1);
+  });
+
+  it('starts a fresh stage when switching between orchestrating parents', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    for (const parent of [PARENT, PARENT_B]) {
+      window.localStorage.setItem(`b4m.orchestrator.view.${parent.id}`, 'table');
+      window.localStorage.setItem(`b4m.orchestrator.surface.${parent.id}`, 'orchestrate');
+    }
+    await openParent();
+    act(() => el('orchestrator-table-sort-agent').click());
+    expect(el('orchestrator-table-sort-agent').getAttribute('aria-sort')).toBe('ascending');
+
+    await clickSessionRow(PARENT_B.title);
+    expect(query(`orchestrator-table-row-${CHILD_B.id}`)).not.toBeNull();
+    expect(el('orchestrator-table-sort-agent').getAttribute('aria-sort')).toBe('none');
   });
 
   it('opens an agent session from the stage', async () => {

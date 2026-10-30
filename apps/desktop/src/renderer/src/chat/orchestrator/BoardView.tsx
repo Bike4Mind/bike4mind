@@ -1,7 +1,7 @@
 import Box from '@mui/joy/Box';
 import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import { prefersReducedMotion } from './motion';
@@ -43,11 +43,12 @@ function visualPosition(node: HTMLElement, board: HTMLElement): Point {
 }
 
 /**
- * FLIP: after every commit, compare each card's visual position with the last snapshot and slide moved
- * cards from the old spot. The snapshot is also refreshed on scroll so scrolling alone never reads as a move.
- * Skips the first mount (nothing remembered) and reduced motion.
+ * FLIP: after a commit that changes `layoutSignature` (column membership or order), compare each card's
+ * visual position with the last snapshot and slide moved cards from the old spot. Other commits measure
+ * nothing, so live activity updates stay cheap. The snapshot is also refreshed on scroll so scrolling
+ * alone never reads as a move. Skips the first mount (nothing remembered) and reduced motion.
  */
-function useFlip() {
+function useFlip(layoutSignature: string) {
   const boardRef = useRef<HTMLElement | null>(null);
   const nodes = useRef(new Map<string, HTMLElement>());
   const refCallbacks = useRef(new Map<string, (node: HTMLElement | null) => void>());
@@ -88,7 +89,10 @@ function useFlip() {
       );
     });
     previous.current = next;
-  });
+    refCallbacks.current.forEach((_callback, id) => {
+      if (!nodes.current.has(id)) refCallbacks.current.delete(id);
+    });
+  }, [layoutSignature]);
 
   useEffect(() => {
     const board = boardRef.current;
@@ -130,7 +134,7 @@ function BoardCard({
   cardRef(node: HTMLElement | null): void;
 }) {
   const now = agentNowText(agent);
-  const cost = formatAgentCost(agent.usdCost, agent.credits);
+  const costKnown = agent.usdCost !== undefined || agent.credits !== undefined;
   return (
     <Box
       ref={cardRef}
@@ -168,9 +172,9 @@ function BoardCard({
       )}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
         {(agent.state === 'stopped' || agent.state === 'idle') && <AgentStateChip state={agent.state} muted />}
-        {cost && (
+        {costKnown && (
           <Typography level="body-xs" textColor="text.tertiary">
-            {cost}
+            {formatAgentCost(agent.usdCost, agent.credits)}
           </Typography>
         )}
         {agent.pr && <Chip size="sm" variant="outlined">{`#${agent.pr.number} ${agent.pr.state}`}</Chip>}
@@ -179,8 +183,22 @@ function BoardCard({
   );
 }
 
+function columnCards(agents: readonly AgentView[], states: readonly AgentState[]): AgentView[] {
+  return agents.filter(agent => states.includes(agent.state));
+}
+
 export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProps) {
-  const { boardRef, refFor } = useFlip();
+  const layoutSignature = useMemo(
+    () =>
+      COLUMNS.map(
+        column =>
+          `${column.id}:${columnCards(agents, column.states)
+            .map(agent => agent.id)
+            .join(',')}`
+      ).join('|'),
+    [agents]
+  );
+  const { boardRef, refFor } = useFlip(layoutSignature);
 
   return (
     <Box
@@ -189,7 +207,7 @@ export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProp
       sx={{ display: 'flex', gap: 1.5, flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden', p: 1.5 }}
     >
       {COLUMNS.map(column => {
-        const cards = agents.filter(agent => column.states.includes(agent.state));
+        const cards = columnCards(agents, column.states);
         return (
           <Box
             key={column.id}
