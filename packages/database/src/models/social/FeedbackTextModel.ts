@@ -31,7 +31,7 @@ const feedbackTextSchema = new Schema<IFeedbackTextDocument>(
 
 feedbackTextSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, name: 'feedback_text_ttl' });
 
-export const FeedbackTextModel =
+export const FeedbackTextModel: mongoose.Model<IFeedbackTextDocument> =
   (mongoose.models[ModelName] as unknown as mongoose.Model<IFeedbackTextDocument>) ||
   mongoose.model<IFeedbackTextDocument>(ModelName, feedbackTextSchema);
 

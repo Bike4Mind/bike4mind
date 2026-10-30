@@ -14,9 +14,9 @@ import {
 import '@server/deepAgent/contributedToolbelts';
 import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
-import { loadLinkedAgentContext } from './missions';
+import { loadLinkedAgentContext } from '@server/deepAgent/missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
-import { createDeepAgentToolMaterializer } from './toolMaterializer';
+import { createDeepAgentToolMaterializer } from '@server/deepAgent/toolMaterializer';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { isFreeTierDailyCapError } from '@server/billing/freeTierDailyCapGate';
 import {
@@ -27,7 +27,7 @@ import {
   MissionModelRefusedError,
   missionWakeMeter,
   pauseMission,
-} from './wakeMetering';
+} from '@server/deepAgent/wakeMetering';
 import type { CompletionMeter } from '@bike4mind/services';
 import { resolveThinkingVisibilityForUserId } from '@server/utils/thinkingVisibility';
 

@@ -140,6 +140,8 @@ import {
   isTurnEndingTool,
   ResponsesStreamTruncatedError,
   LlmTimeoutError,
+  isLlmTimeoutError,
+  isKeepaliveStreamTimeout,
   isOutputBudgetExhaustedError,
   isStreamEndedWithoutFinishError,
   type OutputBudgetExhaustedError,
@@ -5130,6 +5132,50 @@ export class ChatCompletionProcess {
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
       let streamEndedWithoutFinishRetried = false;
+      // A timed-out stream rejects before reporting usage and the next attempt resets
+      // actualTokenUsage, so the prompt the provider billed for it is recorded here as COGS only.
+      // Called only when the loop moves on to another attempt: a timeout that ends the turn is
+      // settled by settleAbortedReservation, and recording it here too would count it twice.
+      const recordTimedOutAttempt = (error: Error, attemptModel: typeof currentModel) => {
+        if (!adminSettingsEnforceCredits || !isLlmTimeoutError(error) || !error.usage) return;
+        const { inputTokens: providerInputTokens, cacheReadInputTokens, cacheCreationInputTokens } = error.usage;
+        const promptTokens = providerInputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+        this.db.usageEvents
+          ?.record({
+            requestId: quest.id,
+            userId: this.user.id,
+            ownerId: this.reservedCreditsOwnerId || this.user.id,
+            ownerType: this.reservedCreditsOwnerType,
+            sessionId: quest.sessionId,
+            feature: 'chat',
+            provider: this.ledgerModel(attemptModel).backend,
+            model: this.ledgerModel(attemptModel).id,
+            source: 'web',
+            // inputTokens is the local estimate and counts toward the user's token quota; this
+            // attempt is ours to absorb, so the provider count goes in providerInputTokens only.
+            inputTokens: 0,
+            // The provider reports output only in message_delta, which a cut stream never reached.
+            outputTokens: 0,
+            providerInputTokens,
+            cachedInputTokens: cacheReadInputTokens,
+            cacheWriteTokens: cacheCreationInputTokens,
+            costUsd: getTextModelCost(
+              attemptModel,
+              providerInputTokens,
+              0,
+              cacheReadInputTokens,
+              cacheCreationInputTokens,
+              promptTokens
+            ),
+            creditsCharged: 0,
+            ...buildUsagePriceStamp(attemptModel, { tierBasisTokens: promptTokens }),
+            status: 'timeout',
+            latencyMs: Date.now() - processStartTime,
+          })
+          .catch((usageEventError: unknown) => {
+            logger.warn('Failed to record timed-out attempt usage event', usageEventError);
+          });
+      };
       // Where the last tool call landed in the visible reply, so the end of the turn can tell
       // an answer written after the tools ran from a preamble written before them. The slots
       // themselves can't say this: every iteration appends into the same indices.
@@ -5689,8 +5735,15 @@ export class ChatCompletionProcess {
             // Stream idle timeout retry: for mid-stream stalls, retry once with short backoff.
             // Unlike request timeouts (model never started), stream idle timeouts mean the model
             // started responding but stalled. One retry, then fall back: repeating the same stall
-            // on the same model wastes minutes.
-            if (isStreamIdleTimeoutError(lastError) && !streamIdleTimeoutRetried) {
+            // on the same model wastes minutes. A keepalive timeout is no stall: the same model
+            // would think just as long again, so it goes straight to the fallback.
+            const isKeepaliveTimeout = isKeepaliveStreamTimeout(lastError);
+            if (isKeepaliveTimeout) {
+              logger.info(
+                `[Stream Idle Retry] ${currentModel.id} was still generating when the keepalive ceiling cut the stream; skipping the same-model retry, which would re-bill the thinking phase`
+              );
+            }
+            if (isStreamIdleTimeoutError(lastError) && !streamIdleTimeoutRetried && !isKeepaliveTimeout) {
               streamIdleTimeoutRetried = true;
               const STREAM_IDLE_RETRY_DELAY_MS = 3000;
               const jitter = Math.floor(Math.random() * 1000);
@@ -5702,6 +5755,7 @@ export class ChatCompletionProcess {
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
               turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, this.ledgerModel(currentModel).id);
+              recordTimedOutAttempt(lastError, currentModel);
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5784,8 +5838,9 @@ export class ChatCompletionProcess {
                 chatApiKeyTable,
                 logger,
                 {
-                  // A timeout that reaches here has spent its one same-model retry. triedModelIds
-                  // already excludes the failed model; forceSwitch states that intent outright.
+                  // A timeout that reaches here has spent its one same-model retry, or skipped it
+                  // because the model was still generating (isSlowModelTimeout covers both).
+                  // triedModelIds already excludes the failed model; forceSwitch states that intent outright.
                   forceSwitch: overloadRetriesExhausted || isSlowModelTimeout,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
@@ -5801,6 +5856,8 @@ export class ChatCompletionProcess {
                 logger.warn(`🚫 [Fallback] No suitable fallback model available`);
                 throw lastError;
               }
+
+              recordTimedOutAttempt(lastError, failedModel);
 
               // Update to the fallback model
               currentModel = fallbackResult.model;

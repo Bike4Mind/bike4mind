@@ -183,6 +183,7 @@ vi.mock('@bike4mind/services', () => ({
     registerViaOTC: (...a: any[]) => mockRegisterViaOTC(...a),
     setThrottleTier: (...a: any[]) => mockSetThrottleTier(...a),
     releasePendingFreeCredits: (...a: unknown[]) => mockReleasePending(...a),
+    refundBudgetOnFailure: <T>(fn: () => Promise<T>) => fn(),
   },
   creditService: { addCredits: (...a: any[]) => mockAddCredits(...a) },
   organizationService: { applyPartnerRuleMembership: (...a: unknown[]) => mockApplyPartnerRuleMembership(...a) },

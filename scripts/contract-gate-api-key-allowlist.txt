@@ -548,7 +548,6 @@ apps/client/pages/api/oauth/openid-configuration.ts
 apps/client/pages/api/oauth/refresh.ts
 apps/client/pages/api/oauth/token.ts
 apps/client/pages/api/oauth/userinfo.ts
-apps/client/pages/api/ollama/models.ts
 apps/client/pages/api/organizations/[id]/addUser.ts
 apps/client/pages/api/organizations/[id]/admins.ts
 apps/client/pages/api/organizations/[id]/feedback-report.ts

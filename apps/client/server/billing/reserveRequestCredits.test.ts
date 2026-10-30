@@ -145,6 +145,24 @@ describe('reserveRequestCredits', () => {
     expect(recordHold).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])(
+    'refuses a signup review hold before any billing (enforceCredits %s)',
+    async enforceCredits => {
+      const req = userReq({ keyId: 'key1', billingOwnerType: CreditHolderType.User });
+      req.user = {
+        ...req.user!,
+        riskScore: { score: 70, signals: [], computedAt: new Date(), reviewState: 'pending' },
+      };
+      await expect(
+        reserveRequestCredits({ req, requiredCredits: 5, enforceCredits, featureLabel: 'embeddings' })
+      ).rejects.toMatchObject({ statusCode: 403, message: expect.stringContaining('awaits review') });
+      expect(checkDailyCap).not.toHaveBeenCalled();
+      expect(userIncrement).not.toHaveBeenCalled();
+      expect(orgIncrement).not.toHaveBeenCalled();
+      expect(recordHold).not.toHaveBeenCalled();
+    }
+  );
+
   it('reserves nothing and touches no balance when credits are not enforced', async () => {
     const reservation = await reserveRequestCredits({
       req: userReq(),
