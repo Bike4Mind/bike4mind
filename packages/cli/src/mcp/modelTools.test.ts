@@ -16,6 +16,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ElicitRequestSchema, type ElicitRequest, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import type { OllamaManifestInfo } from '../commands/ollamaRegistry';
 import type { HubClient, RuntimeTarget } from '../models/localModels';
+import { reviewable, reviewedInspection, reviewedLayers } from '../test-utils/curatedReviewed';
 import { MODEL_TOOL_NAMES, registerModelTools, type ModelToolsDeps } from './modelTools';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
@@ -117,6 +118,7 @@ function fakeHub(model: HubModelDetail = detail()): HubClient {
     }),
     getModel: vi.fn().mockResolvedValue(model),
     verifyOllamaRef: vi.fn(async (d: Pick<HubModelDetail, 'id'>, b: HubGgufBuild) => `hf.co/${d.id}:${b.quant}`),
+    ollamaLayers: vi.fn().mockResolvedValue(null),
   };
 }
 
@@ -137,6 +139,7 @@ async function setup(
     elicit?: Answer;
     source?: RuntimeTarget['source'];
     registry?: ModelToolsDeps['ollamaRegistry'];
+    libraryLayers?: ModelToolsDeps['libraryLayers'];
     defaultModel?: string;
     machine?: ModelToolsDeps['machine'];
     curated?: ModelToolsDeps['curated'];
@@ -147,6 +150,7 @@ async function setup(
   const deps: ModelToolsDeps = {
     hub: () => hub,
     ollamaRegistry: options.registry ?? (async () => manifest()),
+    libraryLayers: options.libraryLayers ?? (async () => null),
     resolveRuntime: async () => ({ runtime, source: options.source ?? 'env' }),
     defaultModel: async () => options.defaultModel ?? 'qwen2.5:0.5b',
     machine: options.machine ?? (async () => ({ hardware: CPU_64 })),
@@ -325,6 +329,51 @@ describe('model tools', () => {
           acknowledgementRequired: true,
         })
       );
+    });
+  });
+
+  describe('models_pull of a curated build', () => {
+    const reviewedList = () => reviewable(structuredClone(loadCuratedManifest(() => {})));
+
+    it('pulls only while the registry serves the reviewed layers, then checks what Ollama installed', async () => {
+      const curated = reviewedList();
+      const build = curated.entries[0].builds[0];
+      const ref = curatedSource(build).ollamaRef;
+      const { call, runtime } = await setup({
+        elicit: accept,
+        curated: () => curated,
+        libraryLayers: async () => reviewedLayers(build),
+      });
+      vi.mocked(runtime.inspect).mockImplementation(async name => reviewedInspection(build, name));
+      const { data } = await call('models_pull', { ref });
+      expect(data).toEqual(expect.objectContaining({ status: 'pulled', downloaded: true }));
+      expect(runtime.inspect).toHaveBeenCalledWith(ref, expect.objectContaining({ tags: false }));
+    });
+
+    it('downloads nothing when the registry serves other weights', async () => {
+      const curated = reviewedList();
+      const build = curated.entries[0].builds[0];
+      const { call, runtime } = await setup({
+        elicit: accept,
+        curated: () => curated,
+        libraryLayers: async () => ({ ...reviewedLayers(build), model: 'f'.repeat(64) }),
+      });
+      const { isError, text } = await call('models_pull', { ref: curatedSource(build).ollamaRef });
+      expect(isError).toBe(true);
+      expect(text).toContain('changed at its source since Bike4Mind reviewed it, so nothing was downloaded.');
+      expect(runtime.pull).not.toHaveBeenCalled();
+    });
+
+    it('refuses a build this Ollama is too old for before asking the user', async () => {
+      const curated = reviewedList();
+      const build = curated.entries[0].builds[0];
+      const { call, runtime, prompts } = await setup({ elicit: accept, curated: () => curated });
+      vi.mocked(runtime.health).mockResolvedValue({ ok: true, version: '0.1.0', error: null });
+      const { isError, text } = await call('models_pull', { ref: curatedSource(build).ollamaRef });
+      expect(isError).toBe(true);
+      expect(text).toContain(`Needs Ollama ${build.runtimeMin?.ollama} or newer`);
+      expect(prompts).toEqual([]);
+      expect(runtime.pull).not.toHaveBeenCalled();
     });
   });
 

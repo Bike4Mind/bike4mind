@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   HubAccessError,
   ModelNotFoundError,
+  curatedLibrary,
   curatedListing,
   curatedPicks,
   curatedSource,
@@ -15,6 +16,7 @@ import {
   type HubModelDetail,
   type InstalledModel,
   type LocalRuntime,
+  type OllamaRegistryLayers,
   type PullOptions,
 } from '@bike4mind/local-models';
 import {
@@ -37,6 +39,8 @@ import {
 } from '../models/localModels.js';
 import { machineReader, type MachineReader } from '../models/fit.js';
 import type { OllamaManifestInfo } from './ollamaRegistry.js';
+import type { HubBuild } from '@bike4mind/common';
+import { curatedBuilds, reviewable, reviewedInspection, reviewedLayers } from '../test-utils/curatedReviewed.js';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const ENDPOINT = 'https://huggingface.co';
@@ -192,6 +196,7 @@ function fakeHub(overrides: Partial<HubClient> = {}): HubClient {
     }),
     getModel: vi.fn().mockResolvedValue(detail()),
     verifyOllamaRef: vi.fn(async (d: Pick<HubModelDetail, 'id'>, b: HubGgufBuild) => `hf.co/${d.id}:${b.quant}`),
+    ollamaLayers: vi.fn().mockResolvedValue(null),
     ...overrides,
   };
 }
@@ -221,6 +226,7 @@ interface Harness {
   runtime: LocalRuntime;
   hub: HubClient;
   registry: ReturnType<typeof vi.fn<ModelsDeps['ollamaRegistry']>>;
+  libraryLayers: ReturnType<typeof vi.fn<ModelsDeps['libraryLayers']>>;
   controller: AbortController;
 }
 
@@ -229,6 +235,7 @@ function harness(
     runtime?: LocalRuntime;
     hub?: HubClient;
     registry?: ModelsDeps['ollamaRegistry'];
+    libraryLayers?: ModelsDeps['libraryLayers'];
     resolveRuntime?: ModelsDeps['resolveRuntime'];
     confirm?: ModelsDeps['confirm'];
     curated?: ModelsDeps['curated'];
@@ -245,7 +252,25 @@ function harness(
   const questions: string[] = [];
   const progress: string[] = [];
   const saved: Harness['saved'] = [];
-  const runtime = options.runtime ?? fakeRuntime();
+  const reviewedList = reviewable(structuredClone(loadCuratedManifest(() => {})));
+  const curated = options.curated ?? (() => reviewedList);
+  const curatedBuild = (match: (build: HubBuild) => boolean) => curatedBuilds(curated()).find(match);
+  const runtime =
+    options.runtime ??
+    fakeRuntime({
+      inspect: vi.fn(async (name: string) => {
+        const reviewed = curatedBuild(build => curatedSource(build).ollamaRef === name);
+        if (!reviewed) throw new Error(`${name} is not installed`);
+        return reviewedInspection(reviewed, name);
+      }),
+    });
+  const libraryLayers = vi.fn<ModelsDeps['libraryLayers']>(
+    options.libraryLayers ??
+      (async ref => {
+        const reviewed = curatedBuild(build => curatedLibrary(build)?.ref === ref);
+        return reviewed ? reviewedLayers(reviewed) : null;
+      })
+  );
   const hub = options.hub ?? fakeHub();
   const answers = [...(options.answers ?? [])];
   const controller = new AbortController();
@@ -255,6 +280,7 @@ function harness(
   const deps: ModelsDeps = {
     hub: () => hub,
     ollamaRegistry: registry,
+    libraryLayers,
     resolveRuntime: options.resolveRuntime ?? (async () => ({ runtime, source: options.source ?? 'config' })),
     config: {
       defaultModel: options.config?.defaultModel,
@@ -274,11 +300,11 @@ function harness(
     progress: { update: line => progress.push(line), end: () => progress.push('<end>') },
     machine: options.machine ?? (async () => ({ hardware: cpuMachine(64) })),
     runtimeHost: () => options.runtimeHost ?? null,
-    curated: options.curated ?? (() => loadCuratedManifest(() => {})),
+    curated,
     hardware: options.hardware ?? (async () => machine()),
     signal: controller.signal,
   };
-  return { deps, lines, questions, progress, saved, runtime, hub, registry, controller };
+  return { deps, lines, questions, progress, saved, runtime, hub, registry, libraryLayers, controller };
 }
 
 const OPTS: ModelsOptions = { json: false, yes: false, force: false, acceptLicense: false, includeAbliterated: false };
@@ -713,7 +739,7 @@ describe('models show', () => {
 });
 
 describe('models curated', () => {
-  const bundled = () => structuredClone(loadCuratedManifest(() => {}));
+  const bundled = () => reviewable(structuredClone(loadCuratedManifest(() => {})));
   const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const offline = () => {
     const resolveRuntime = vi.fn<ModelsDeps['resolveRuntime']>().mockRejectedValue(new Error('no runtime'));
@@ -756,8 +782,7 @@ describe('models curated', () => {
     expect(rows.length).toBeGreaterThan(0);
     rows.forEach(({ ollamaRef }, index) => expect(h.lines[allStart + 2 + index]).toContain(ollamaRef));
     expect(h.lines[h.lines.length - 1]).toBe(
-      `Pull one with: b4m models pull ${curatedSource(picks[0].build).ollamaRef} ` +
-        '(pull does not check the build against the reviewed one)'
+      `Pull one with: b4m models pull ${curatedSource(picks[0].build).ollamaRef}`
     );
   });
 
@@ -853,6 +878,163 @@ describe('models curated', () => {
     expect(asked.questions[0]).toBe('Do you accept the gemma license? [y/N] ');
   });
 
+  it('keeps the base license the list records for a fine-tune that Curated does not offer', async () => {
+    const manifest = bundled();
+    const [entry] = manifest.entries;
+    const ref = curatedSource(entry.builds[0]).ollamaRef;
+    entry.flags.abliterated = true;
+    entry.license.base.class = 'restricted-commercial';
+    entry.license.base.id = 'llama3.1';
+
+    const asked = harness({ answers: [true, true], curated: () => manifest });
+    expect(await runModelsCommand('pull', { _: [], ref }, asked.deps)).toBe(0);
+    expect(asked.lines).toContain('License:  Apache-2.0 (base: llama3.1)');
+    expect(asked.questions[0]).toBe('Do you accept the Apache-2.0 and base model llama3.1 licenses? [y/N] ');
+    // Not offered, so it is not held to the reviewed pins either.
+    expect(asked.libraryLayers).not.toHaveBeenCalled();
+  });
+
+  it('refuses a curated build this Ollama is too old for, naming the version it needs', async () => {
+    const manifest = bundled();
+    const build = manifest.entries[0].builds[0];
+    const ref = curatedSource(build).ollamaRef;
+    const minimum = build.runtimeMin?.ollama;
+    expect(minimum).toBeTruthy();
+
+    for (const version of ['0.1.0', null]) {
+      const runtime = fakeRuntime({ health: vi.fn().mockResolvedValue({ ok: true, version, error: null }) });
+      const h = harness({ runtime, curated: () => manifest });
+      await expect(runModelsCommand('pull', { _: [], ref, yes: true }, h.deps)).rejects.toThrow(
+        `Needs Ollama ${minimum} or newer${version ? '' : ', and Ollama did not report its version'} for ${manifest.entries[0].name}, so nothing was downloaded. Update Ollama at http://127.0.0.1:11500, then pull it again.`
+      );
+      expect(h.registry).not.toHaveBeenCalled();
+      expect(h.questions).toEqual([]);
+      expect(runtime.pull).not.toHaveBeenCalled();
+    }
+
+    const current = fakeRuntime({ health: vi.fn().mockResolvedValue({ ok: true, version: minimum, error: null }) });
+    const h = harness({ runtime: current, curated: () => manifest });
+    current.inspect = vi.fn(async (name: string) => reviewedInspection(build, name));
+    expect(await runModelsCommand('pull', { _: [], ref, yes: true }, h.deps)).toBe(0);
+    expect(current.pull).toHaveBeenCalledWith(ref, expect.anything());
+
+    const old = fakeRuntime({ health: vi.fn().mockResolvedValue({ ok: true, version: '0.1.0', error: null }) });
+    expect(
+      await runModelsCommand('pull', { _: [], ref: 'qwen2.5:0.5b', yes: true }, harness({ runtime: old }).deps)
+    ).toBe(0);
+  });
+
+  it('checks a curated library build against its reviewed layers before pulling and its contents after', async () => {
+    const manifest = bundled();
+    const build = manifest.entries[0].builds[0];
+    const ref = curatedSource(build).ollamaRef;
+    const h = harness({ curated: () => manifest });
+    expect(await runModelsCommand('pull', { _: [], ref, yes: true }, h.deps)).toBe(0);
+    expect(h.libraryLayers).toHaveBeenCalledWith(ref, expect.any(AbortSignal));
+    expect(h.runtime.inspect).toHaveBeenCalledWith(ref, expect.objectContaining({ tags: false }));
+    expect(h.lines).toContain('Checking the installed model against the reviewed build.');
+    expect(h.lines[h.lines.length - 1]).toBe(`Pulled ${ref}. Chat with it by default: b4m models use ${ref}`);
+  });
+
+  it.each([
+    ['serves other weights', (layers: OllamaRegistryLayers) => ({ ...layers, model: 'f'.repeat(64) })],
+    [
+      'adds a layer',
+      (layers: OllamaRegistryLayers) => ({
+        ...layers,
+        others: [...layers.others, { mediaType: 'application/vnd.ollama.image.adapter', digest: 'f'.repeat(64) }],
+      }),
+    ],
+    ['no longer serves the tag', () => null],
+  ])('downloads nothing when the registry %s', async (_case, change) => {
+    const manifest = bundled();
+    const build = manifest.entries[0].builds[0];
+    const ref = curatedSource(build).ollamaRef;
+    const h = harness({ curated: () => manifest, libraryLayers: async () => change(reviewedLayers(build)) });
+    await expect(runModelsCommand('pull', { _: [], ref, yes: true }, h.deps)).rejects.toThrow(
+      /(changed at its source since Bike4Mind reviewed it|no longer serves .* as Bike4Mind reviewed it), so nothing was downloaded\./
+    );
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('removes what Ollama installed when it is not the reviewed build, unless the tag was there before', async () => {
+    const manifest = bundled();
+    const build = manifest.entries[0].builds[0];
+    const ref = curatedSource(build).ollamaRef;
+    const changed = (name: string) => {
+      const inspection = reviewedInspection(build, name);
+      return { ...inspection, contents: inspection.contents && { ...inspection.contents, modelBlob: 'f'.repeat(64) } };
+    };
+
+    const fresh = fakeRuntime({ inspect: vi.fn(async (name: string) => changed(name)) });
+    const absent = harness({ runtime: fresh, curated: () => manifest });
+    await expect(runModelsCommand('pull', { _: [], ref, yes: true }, absent.deps)).rejects.toThrow(
+      /changed at its source since Bike4Mind reviewed it, so what Ollama downloaded was removed\./
+    );
+    expect(fresh.pull).toHaveBeenCalled();
+    expect(fresh.remove).toHaveBeenCalledWith(ref);
+    expect(absent.lines.some(line => line.startsWith('Pulled '))).toBe(false);
+
+    const theirs = fakeRuntime({
+      list: vi.fn().mockResolvedValue([installed(ref)]),
+      inspect: vi.fn(async (name: string) => changed(name)),
+    });
+    await expect(
+      runModelsCommand('pull', { _: [], ref, yes: true }, harness({ runtime: theirs, curated: () => manifest }).deps)
+    ).rejects.toThrow(`${ref} was installed before this download, so it was left in place.`);
+    expect(theirs.remove).not.toHaveBeenCalled();
+
+    const unread = fakeRuntime({ inspect: vi.fn().mockRejectedValue(new Error('timed out')) });
+    await expect(
+      runModelsCommand('pull', { _: [], ref, yes: true }, harness({ runtime: unread, curated: () => manifest }).deps)
+    ).rejects.toThrow(/could not describe .* after downloading it/);
+    expect(unread.remove).not.toHaveBeenCalled();
+  });
+
+  it('checks a curated Hugging Face build against the layers hf.co serves for its tag', async () => {
+    const manifest = bundled();
+    const entry = manifest.entries.find(candidate => candidate.builds.some(build => build.hf));
+    const build = entry?.builds.find(candidate => candidate.hf);
+    if (!entry || !build?.hf) throw new Error('the bundled list lost its Hugging Face build');
+    const file = build.weights[0];
+    const repoDetail = detail({
+      id: build.hf.repo,
+      licenses: ['apache-2.0'],
+      builds: [
+        {
+          id: file.path.replace(/\.gguf$/, ''),
+          quant: build.quant.label,
+          label: build.quant.label,
+          files: [{ path: file.path, sizeBytes: file.sizeBytes, sha256: file.sha256, url: `${ENDPOINT}/x` }],
+          sizeBytes: file.sizeBytes,
+          split: false,
+          complete: true,
+          ollamaRef: `hf.co/${build.hf.repo}:${build.quant.label}`,
+          ollamaRefIssue: null,
+        },
+      ],
+    });
+    const ref = curatedSource(build).ollamaRef;
+    const served = vi.fn(async () => reviewedLayers(build));
+    const h = harness({
+      curated: () => manifest,
+      hub: fakeHub({ getModel: vi.fn().mockResolvedValue(repoDetail), ollamaLayers: served }),
+    });
+    expect(await runModelsCommand('pull', { _: [], ref, yes: true, force: true }, h.deps)).toBe(0);
+    expect(served).toHaveBeenCalledWith(build.hf.repo, build.quant.label, expect.anything());
+    expect(h.runtime.pull).toHaveBeenCalledWith(ref, expect.anything());
+
+    served.mockResolvedValue({ ...reviewedLayers(build), model: 'f'.repeat(64) });
+    const changed = harness({
+      curated: () => manifest,
+      hub: fakeHub({ getModel: vi.fn().mockResolvedValue(repoDetail), ollamaLayers: served }),
+    });
+    await expect(runModelsCommand('pull', { _: [], ref, yes: true, force: true }, changed.deps)).rejects.toThrow(
+      /changed at its source/
+    );
+    expect(changed.runtime.pull).not.toHaveBeenCalled();
+  });
+
   it('tags tool support from the catalog', async () => {
     const manifest = bundled();
     const [first, second] = manifest.entries;
@@ -890,9 +1072,7 @@ describe('models curated', () => {
     const [smallest] = curatedListing(manifest)[0]
       .builds.map(curatedSource)
       .sort((a, b) => a.sizeBytes - b.sizeBytes);
-    expect(h.lines[h.lines.length - 1]).toBe(
-      `Pull one with: b4m models pull ${smallest.ollamaRef} (pull does not check the build against the reviewed one)`
-    );
+    expect(h.lines[h.lines.length - 1]).toBe(`Pull one with: b4m models pull ${smallest.ollamaRef}`);
   });
 
   it('describes a CPU-only machine', async () => {

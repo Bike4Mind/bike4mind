@@ -4,6 +4,7 @@ import {
   HuggingFaceHub,
   isAbliteratedModel,
   loadCuratedManifest,
+  ollamaLibraryLayers,
   type PullOptions,
 } from '@bike4mind/local-models';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -22,6 +23,7 @@ import {
   buildTag,
   clean,
   formatBytes,
+  hadTagBefore,
   hiddenAbliteratedMessage,
   hubAccessMessage,
   licenseName,
@@ -30,7 +32,9 @@ import {
   planPull,
   rankSearchHits,
   removeInstalled,
+  requireInstalledReviewed,
   requireRemovable,
+  requireReviewedLayers,
   requireUnchangedLicenses,
   requireUnchangedManifest,
   resolveRuntimeTarget,
@@ -237,6 +241,7 @@ export function localModelToolsDeps(configStore: ConfigStore | undefined): Model
   return {
     hub: () => (hub ??= new HuggingFaceHub({ token: process.env.HF_TOKEN })),
     ollamaRegistry: (name, signal) => readOllamaManifest(name, signal),
+    libraryLayers: (ref, signal) => ollamaLibraryLayers(ref, { signal }),
     resolveRuntime: async () =>
       resolveRuntimeTarget({ env: process.env.B4M_OLLAMA_HOST, config: (await configStore?.load())?.ollamaHost }),
     defaultModel: async () => (await configStore?.load())?.defaultModel,
@@ -392,8 +397,14 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
             `Hugging Face's registry does not serve this exact ${summary.model} file to Ollama, so nothing was downloaded. Pick another quant.`
           );
         }
+        let hadTag: boolean | null = null;
+        if (plan.curated) {
+          await requireReviewedLayers(plan.curated, ref, sources(extra.signal));
+          hadTag = await hadTagBefore(plan.target, ref, extra.signal);
+        }
         try {
           await plan.target.runtime.pull(ref, { signal: extra.signal, onProgress: pullProgress(extra) });
+          if (plan.curated) await requireInstalledReviewed(plan.target, plan.curated, ref, hadTag, extra.signal);
         } catch (error) {
           if (extra.signal.aborted) {
             return errorResult(
