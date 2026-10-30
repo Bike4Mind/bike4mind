@@ -1516,9 +1516,6 @@ importers:
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
-      '@bike4mind/local-models':
-        specifier: workspace:*
-        version: link:../local-models
       '@bike4mind/observability':
         specifier: workspace:*
         version: link:../observability
@@ -1543,7 +1540,13 @@ importers:
       uuid:
         specifier: ^14.0.2
         version: 14.0.2
+      zod:
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
+      '@bike4mind/local-models':
+        specifier: workspace:*
+        version: link:../local-models
       '@types/lodash':
         specifier: ^4.17.24
         version: 4.17.24
