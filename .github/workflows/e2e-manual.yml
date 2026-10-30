@@ -21,6 +21,7 @@ on:
         options:
           - All tests
           - Auth
+          - Existing User Login
           - Signup
           - Admin
           - Notebook
@@ -74,11 +75,12 @@ jobs:
           GATE_RUN: ${{ inputs.gate_run }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          # Map the dropdown to Playwright args (whole projects; Auth/Signup add a
+          # Map the dropdown to Playwright args (whole projects; Auth/Existing User Login/Signup add a
           # spec-file filter). Scheduled runs have no test_project -> full suite.
           case "$TEST_PROJECT" in
             ""|"All tests")     ARGS="" ;;
             "Auth")             ARGS="--project=unauthenticated e2e/auth.spec.ts" ;;
+            "Existing User Login") ARGS="--project=unauthenticated e2e/existing-user-login.spec.ts" ;;
             "Signup")           ARGS="--project=unauthenticated e2e/signup.spec.ts" ;;
             "Admin")            ARGS="--project=admin" ;;
             "Notebook")         ARGS="--project=notebook" ;;
