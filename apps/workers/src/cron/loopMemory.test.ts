@@ -39,6 +39,7 @@ describe('buildLoopQuery', () => {
     expect(context).toContain('saw 3 issues');
     expect(context).toContain('triage #2');
     expect(context).toContain('```loop-memory');
+    expect(context).toContain('"status": "blocked" and a "reason"');
   });
 
   it('quotes a ticket as data and tells the run how to block it', () => {

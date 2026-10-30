@@ -12,6 +12,14 @@ export const LOOP_STATUSES = ['draft', 'live', 'paused', 'needs_you', 'error'] a
 export type LoopStatus = (typeof LOOP_STATUSES)[number];
 
 /**
+ * True when the loop's own status needs its owner: stopped by the scheduler (`needs_you`, `error`) or
+ * paused with a reason. An owner pause clears `statusReason`, so it never counts. Shared by the notice
+ * sweep (`apps/workers/src/cron/loopNotices.ts`) and the loop list marker (`loopNeedsOwner`).
+ */
+export const loopStatusNeedsOwner = (loop: Pick<ILoop, 'status' | 'statusReason'>): boolean =>
+  loop.status === 'needs_you' || loop.status === 'error' || (loop.status === 'paused' && !!loop.statusReason);
+
+/**
  * Server agent tools offered only on loop runs (`apps/workers/src/queueHandlers/agentExecutor.loopTicketTools.ts`).
  * Pre-approved on headless loop runs in `startAgentExecution`.
  */
@@ -66,8 +74,11 @@ export interface ILoop {
   updatedAt: Date;
 }
 
-/** A loop as the loops API returns it: `creditsUsed` sums its top-level runs still within the execution TTL. */
-export type ILoopWithUsage = ILoop & { creditsUsed: number };
+/**
+ * A loop as the loops API returns it: `creditsUsed` sums its top-level runs still within the execution TTL;
+ * `blockedTickets` counts its live blocked tickets.
+ */
+export type ILoopWithUsage = ILoop & { creditsUsed: number; blockedTickets: number };
 
 export interface ILoopRepository extends IBaseRepository<ILoop> {
   listForUser(userId: string): Promise<ILoop[]>;

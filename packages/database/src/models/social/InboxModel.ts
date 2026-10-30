@@ -1,5 +1,6 @@
 import { IInboxDocument, InboxType, IInboxRepository, SAFE_USER_LOOKUP_PROJECT } from '@bike4mind/common';
 import mongoose, { PipelineStage } from 'mongoose';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -17,6 +18,8 @@ const InboxSchema = new mongoose.Schema<IInboxObject>(
     title: { type: String, required: true },
     message: { type: String, required: true },
     readAt: { type: Date, default: null },
+    sourceKey: { type: String },
+    link: { type: String },
   },
   {
     timestamps: true,
@@ -30,6 +33,9 @@ const InboxSchema = new mongoose.Schema<IInboxObject>(
 );
 
 InboxSchema.plugin(softDeletePlugin);
+
+// Dedupes keyed system notices at the DB: only open notices carry a sourceKey (resolve unsets it).
+InboxSchema.index({ sourceKey: 1 }, { unique: true, partialFilterExpression: { sourceKey: { $exists: true } } });
 
 export const Inbox: IInboxModel =
   mongoose.models.Inbox ?? mongoose.model<IInboxObject, IInboxModel>('Inbox', InboxSchema);
@@ -141,6 +147,37 @@ class InboxRepository extends BaseRepository<IInboxDocument> implements IInboxRe
     }
     const result = await query;
     return !!result;
+  }
+
+  async upsertKeyedNotice(data: {
+    userId: string;
+    receiverId: string;
+    title: string;
+    message: string;
+    type: InboxType;
+    sourceKey: string;
+    link?: string;
+  }): Promise<boolean> {
+    try {
+      await this.model.create(data);
+      return true;
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000) return false;
+      throw error;
+    }
+  }
+
+  async listOpenKeyed(prefix: string): Promise<{ id: string; sourceKey: string }[]> {
+    const docs = await this.model.find(
+      { sourceKey: { $regex: `^${escapeRegex(prefix)}` }, deletedAt: null },
+      { sourceKey: 1 }
+    );
+    return docs.map(doc => ({ id: doc.id, sourceKey: doc.sourceKey! }));
+  }
+
+  async resolveKeyed(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: new Date() }, $unset: { sourceKey: '' } });
   }
 }
 

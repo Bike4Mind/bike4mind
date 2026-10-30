@@ -150,13 +150,22 @@ export function buildLoopTicketTools({ userId, loopId }: LoopTicketScope): Recor
             loopId?: unknown;
             stage?: unknown;
             dependencies?: unknown;
+            status?: unknown;
+            reason?: unknown;
           };
           const loop = await ownLoop(params.loopId ?? loopId);
+          if (params.status !== undefined && !['open', 'blocked'].includes(params.status as string)) {
+            throw new BadRequestError('status must be one of: open, blocked');
+          }
           const title = validateWorkItemTitle(params.title);
           const description = validateWorkItemDescription(params.description);
           const dependencies = validateWorkItemDependencies(params.dependencies) ?? [];
           await assertDependenciesUsable(userId, dependencies);
-          const move = ticketMovePatch(loop, undefined, { stage: params.stage });
+          const move = ticketMovePatch(loop, undefined, {
+            stage: params.stage,
+            status: params.status as WorkItemStatus | undefined,
+            reason: params.reason,
+          });
 
           creates++;
           const created = await workItemRepository.create({
@@ -168,6 +177,7 @@ export function buildLoopTicketTools({ userId, loopId }: LoopTicketScope): Recor
             stage: move.stage!,
             status: move.status!,
             ...(move.closedAt && { closedAt: move.closedAt }),
+            ...(move.statusReason && { statusReason: move.statusReason }),
           } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
           await makeDueIfReady(loop);
           return summarize(created);
@@ -175,7 +185,7 @@ export function buildLoopTicketTools({ userId, loopId }: LoopTicketScope): Recor
       toolSchema: {
         name: 'loop_ticket_create',
         description:
-          "File a ticket into this loop or another of the owner's loops (by loopId). A ticket starts in the loop's first stage unless a stage is given; the target loop works it on its next run.",
+          "File a ticket into this loop or another of the owner's loops (by loopId). A ticket starts in the loop's first stage unless a stage is given; the target loop works it on its next run. To file a step only the owner can do (a decision, credentials, a human-only action), set status blocked with a reason: the owner is notified.",
         parameters: {
           type: 'object',
           properties: {
@@ -183,6 +193,8 @@ export function buildLoopTicketTools({ userId, loopId }: LoopTicketScope): Recor
             description: { type: 'string', description: 'What needs doing (10,000 characters max).' },
             loopId: { type: 'string', description: 'Target loop. Defaults to the loop this run belongs to.' },
             stage: { type: 'string', description: "One of the target loop's stages. Defaults to its first stage." },
+            status: { type: 'string', enum: ['open', 'blocked'], description: 'Defaults to open.' },
+            reason: { type: 'string', description: 'Required when status is blocked: what the owner needs to do.' },
             dependencies: {
               type: 'array',
               items: { type: 'string' },

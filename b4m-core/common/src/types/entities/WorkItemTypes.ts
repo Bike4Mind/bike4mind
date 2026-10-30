@@ -175,6 +175,9 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
 
   softDeleteByLoop(userId: string, loopId: string): Promise<number>;
 
+  /** Live blocked tickets per loop id; loops with none are absent. */
+  countBlockedByLoop(userId: string, loopIds: string[]): Promise<Record<string, number>>;
+
   /**
    * True when pointing `itemId` at `dependencies` would close a cycle. `itemId`
    * is undefined for a not-yet-created item, which can only cycle if the

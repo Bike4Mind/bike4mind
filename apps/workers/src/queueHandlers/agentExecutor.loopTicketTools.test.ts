@@ -105,6 +105,17 @@ describe('loop_ticket_create', () => {
     expect(await run(tools, 'loop_ticket_create', { title: 'one too many' })).toMatch(/^Error: at most/);
     expect(items.create).toHaveBeenCalledTimes(MAX_TICKET_CREATES_PER_INVOCATION);
   });
+  it('files a blocked owner step with its reason, and requires the reason', async () => {
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+    expect(await run(tools, 'loop_ticket_create', { title: 'A', status: 'blocked' })).toMatch(/reason is required/);
+    expect(await run(tools, 'loop_ticket_create', { title: 'A', status: 'closed' })).toMatch(/^Error: status must be/);
+    expect(items.create).not.toHaveBeenCalled();
+
+    await run(tools, 'loop_ticket_create', { title: 'Approve spend', status: 'blocked', reason: ' needs a yes ' });
+    expect(items.create).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'blocked', statusReason: 'needs a yes', stage: 'todo' })
+    );
+  });
 });
 
 describe('loop_ticket_update', () => {

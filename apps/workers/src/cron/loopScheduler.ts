@@ -17,6 +17,7 @@ import { toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
 import { advancePatch, lastStageOf, makeDueIfReady } from '@server/utils/loopTickets';
 import { Resource } from 'sst';
 import { buildLoopQuery, parseLoopMemory } from './loopMemory';
+import { syncLoopNotices } from './loopNotices';
 
 /** Claim lease; covers one dispatch, after which `activeExecutionId` keeps the loop from overlapping. */
 export const LOOP_LEASE_MS = 5 * 60 * 1000;
@@ -70,6 +71,9 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
       logger.error(`[Loops] Failed to dispatch loop ${loop.id}`, error as Error);
     }
   }
+
+  // Last, so notices reflect this tick's state changes.
+  await syncLoopNotices(logger).catch(error => logger.error('[Loops] Notice sync failed', error as Error));
 }
 
 /** Parents waiting on children legitimately idle for hours; the executor's own stale sweep skips them too. */

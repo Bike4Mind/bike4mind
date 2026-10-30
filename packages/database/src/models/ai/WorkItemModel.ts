@@ -187,6 +187,14 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return result.modifiedCount;
   }
 
+  async countBlockedByLoop(userId: string, loopIds: string[]): Promise<Record<string, number>> {
+    const rows = await this.workItemModel.aggregate<{ _id: string; count: number }>([
+      { $match: { userId, loopId: { $in: loopIds }, deletedAt: null, status: 'blocked' } },
+      { $group: { _id: '$loopId', count: { $sum: 1 } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [row._id, row.count]));
+  }
+
   async updateForUser(
     id: string,
     userId: string,

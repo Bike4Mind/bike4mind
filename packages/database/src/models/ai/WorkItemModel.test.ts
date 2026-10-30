@@ -454,5 +454,20 @@ describe('WorkItemRepository', () => {
       expect(await workItemRepository.softDeleteByLoop(USER, LOOP)).toBe(1);
       expect(await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done')).toBeNull();
     });
+
+    it('countBlockedByLoop counts live blocked tickets per loop for the user only', async () => {
+      await ticket('A', { status: 'blocked', statusReason: 'x' });
+      await ticket('B', { status: 'blocked', statusReason: 'x' });
+      await ticket('Open');
+      const gone = await ticket('Deleted', { status: 'blocked', statusReason: 'x' });
+      await workItemRepository.softDeleteForUser(gone.id, USER);
+      await create('Other loop', { loopId: 'loop-2', stage: 'todo', status: 'blocked', statusReason: 'x' });
+      await create('Theirs', { userId: OTHER_USER, loopId: LOOP, stage: 'todo', status: 'blocked' });
+
+      expect(await workItemRepository.countBlockedByLoop(USER, [LOOP, 'loop-2', 'loop-3'])).toEqual({
+        [LOOP]: 2,
+        'loop-2': 1,
+      });
+    });
   });
 });
