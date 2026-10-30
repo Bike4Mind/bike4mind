@@ -18,6 +18,9 @@ const COLUMNS: ReadonlyArray<{ id: ColumnId; label: string; states: readonly Age
 ];
 
 const FLIP_MS = 250;
+// Columns share the board's width and shrink to this before it scrolls sideways: four of them still
+// fit beside the 380px conversation dock in a 1440px window with the default sidebar.
+const COLUMN_MIN_WIDTH = 160;
 
 const lineClamp = (lines: number) =>
   ({
@@ -212,7 +215,14 @@ export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProp
           <Box
             key={column.id}
             data-testid={`orchestrator-board-column-${column.id}`}
-            sx={{ flex: '1 1 0', minWidth: 200, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 1 }}
+            sx={{
+              flex: '1 1 0',
+              minWidth: COLUMN_MIN_WIDTH,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1,
+            }}
           >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
               <Typography level="title-sm">{column.label}</Typography>

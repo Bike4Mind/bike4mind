@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activityLabel } from './activity';
+import { SIDEBAR_DEFAULT_WIDTH } from '../sidebarWidth';
 import { BoardView } from './BoardView';
 import type { AgentView } from './roster';
 import { agentFixture, createThemedMount, el, query } from './testUtils';
@@ -73,6 +74,22 @@ describe('BoardView', () => {
     await renderBoard([agentFixture('b', 'working'), agentFixture('a', 'done')]);
     expect(el('orchestrator-board-column-done').contains(el('orchestrator-board-card-a'))).toBe(true);
     expect(query('orchestrator-board')).not.toBeNull();
+  });
+
+  it('fits all four columns beside the docked conversation in a 1440px window', async () => {
+    await renderBoard([]);
+    const px = (value: string) => Number.parseFloat(value) || 0;
+    const board = getComputedStyle(el('orchestrator-board'));
+    const columns = ['needs-you', 'working', 'done', 'failed'].map(id =>
+      getComputedStyle(el(`orchestrator-board-column-${id}`))
+    );
+    const needed =
+      columns.reduce((sum, column) => sum + px(column.minWidth), 0) +
+      3 * px(board.gap) +
+      px(board.paddingLeft) +
+      px(board.paddingRight);
+    // The window less the default sidebar, ChatShell's 380px dock and its 1px border.
+    expect(needed).toBeLessThanOrEqual(1440 - SIDEBAR_DEFAULT_WIDTH - 380 - 1);
   });
 
   describe('FLIP', () => {
