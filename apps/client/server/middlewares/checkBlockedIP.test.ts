@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   clientIp: '203.0.113.9',
 }));
 
+// vitest.setup.ts passes the app surface through for every other suite.
+vi.unmock('./checkBlockedIP');
 vi.mock('@bike4mind/database', () => ({
   blockedIPRepository: { isBlocked: h.isBlocked, listActiveAllScope: h.listActiveAllScope },
 }));
