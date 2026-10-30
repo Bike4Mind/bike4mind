@@ -6,6 +6,7 @@ import {
   IUserDocument,
   IOrganizationDocument,
   IUsageEventInput,
+  IUsageEventRepository,
   UsageEventFeature,
   ModelInfo,
   materializePromptMetaSession,
@@ -54,9 +55,9 @@ import { executedModelFields } from '../shadowTier';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
-  quest: IChatHistoryItemDocument;
-  user: IUserDocument;
-  organization?: IOrganizationDocument | null;
+  quest: Pick<IChatHistoryItemDocument, 'id' | 'sessionId'>;
+  user: Pick<IUserDocument, 'id'>;
+  organization?: Pick<IOrganizationDocument, 'id'> | null;
   provider: string;
   model: string;
   /** The substitute that ran instead of `model` (executedModelFields); costUsd prices it. */
@@ -104,14 +105,21 @@ export function buildToolUsageEvent(params: {
   };
 }
 
-/** Fire-and-forget dual-write: a failed analytics record must never throw into billing. */
-export function recordToolUsageEvent(
-  db: IChatCompletionServiceOptions['db'],
+/**
+ * Dual-write that never rejects: a failed analytics record must never throw into billing. Callers
+ * may leave it unawaited; a Lambda that can freeze after returning awaits it.
+ */
+export async function recordToolUsageEvent(
+  db: { usageEvents?: Pick<IUsageEventRepository, 'record'> },
   logger: Logger,
   toolName: string,
   event: IUsageEventInput
-): void {
-  db.usageEvents?.record(event).catch(err => logger.warn(`[toolUsageEvent] failed for ${toolName}:`, err));
+): Promise<void> {
+  try {
+    await db.usageEvents?.record(event);
+  } catch (err) {
+    logger.warn(`[toolUsageEvent] failed for ${toolName}:`, err);
+  }
 }
 
 type SendStatusUpdate = (

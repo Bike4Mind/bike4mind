@@ -973,6 +973,11 @@ export interface BaseSetting {
   /** Whether the setting is sensitive and should be hidden from users. */
   isSensitive?: boolean;
   /**
+   * Hide from the admin settings list on production stages (PRODUCTION_STAGES in
+   * @bike4mind/infra). Display only: the stored value and the update route are unchanged.
+   */
+  hideOnProductionStages?: boolean;
+  /**
    * Opt-in: include this setting in the PUBLIC, unauthenticated CDN config artifact
    * (see docs/perf/mobile-startup-latency.md, M2.5). Fail-closed - a setting is NEVER
    * public unless explicitly tagged here, regardless of isSensitive. Only tag settings
@@ -3447,7 +3452,7 @@ export const settingsMap = {
   }),
   ReferralCreditsAmount: makeNumberSetting({
     key: 'ReferralCreditsAmount',
-    name: 'Referal Credits Amount',
+    name: 'Referral Credits Amount',
     defaultValue: 10000,
     description: 'Credits to give to the referred user.',
     category: 'Referrals',
@@ -4236,7 +4241,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits released after email verification for newly enrolled staged accounts. Migrated from the installed default grant without increasing it.',
+      'Credits released after email verification for newly enrolled staged accounts. Copied once from Default Free Credits when staged grants were installed; later changes to Default Free Credits do not update it. 0 grants nothing.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4302,6 +4307,7 @@ export const settingsMap = {
     int: true,
     description:
       'Deprecated and unused: the activity drip qualifies on active time, not chat turns. Use Signup Activity Minimum Active Seconds.',
+    hideOnProductionStages: true,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4327,6 +4333,7 @@ export const settingsMap = {
     int: true,
     description:
       'Deprecated and unused: the activity drip is paid per qualifying UTC day and no longer reads this value. Leave at zero.',
+    hideOnProductionStages: true,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4360,6 +4367,7 @@ export const settingsMap = {
     defaultValue: false,
     description:
       'PR previews only: use five-minute earning windows instead of UTC days to test the activity drip. Each window still requires the configured active time; use a minimum below five minutes. Production, staging and personal environments always use UTC days. The platform daily budget is unchanged. Reload the test user tab after toggling this switch.',
+    hideOnProductionStages: true,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4394,7 +4402,7 @@ export const settingsMap = {
     name: 'Default Free Credits',
     defaultValue: 0,
     description:
-      'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
+      'Flat credits granted after email verification to a user who registers WITHOUT an invite code and is not enrolled in staged grants (Staged Signup Grants OFF, or the account has no staged grant). Includes eligible partner signups when Allow Open Registration is OFF; partner-rule credits are added on top. Does not set the staged amount: that is Signup Grant Credits, which was copied from this value once and is edited separately. 0 grants nothing. An unverified account receives no credits.',
     category: 'Users',
   }),
   noCardUnlockEnabled: makeBooleanSetting({
@@ -7022,4 +7030,12 @@ export function isRegisteredSettingKey(key: string): boolean {
 /** Core definitions followed by contributed ones. */
 export function allSettingDefinitions(): SettingDefinition<string>[] {
   return [...(Object.values(settingsMap) as SettingDefinition<string>[]), ...contributedSettings.values()];
+}
+
+/** Keys the admin settings list hides on this stage; see BaseSetting.hideOnProductionStages. */
+export function stageHiddenSettingKeys(isProductionStage: boolean): string[] {
+  if (!isProductionStage) return [];
+  return allSettingDefinitions()
+    .filter(definition => definition.hideOnProductionStages)
+    .map(definition => definition.key);
 }

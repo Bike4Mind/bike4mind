@@ -150,3 +150,27 @@ describe('turnstileSecretConfigured', () => {
     expect(JSON.stringify(payload)).not.toContain('real-key');
   });
 });
+
+describe('hiddenAdminSettingKeys', () => {
+  const callHandler = async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({});
+    resolveEffectiveEmbeddingModel.mockResolvedValue('m');
+    const json = vi.fn();
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)({ user: { id: 'u' } }, { json });
+    return json.mock.calls[0][0].hiddenAdminSettingKeys as string[];
+  };
+
+  it.each(['production', 'dev'])('hides the deprecated drip settings on %s', async stage => {
+    mockConfig.STAGE = stage;
+    expect([...(await callHandler())].sort()).toEqual([
+      'signupGrantActivityMinDays',
+      'signupGrantActivityMinMessages',
+      'signupGrantActivityPreviewTestMode',
+    ]);
+  });
+
+  it.each(['pr6157', 'my-personal-stage'])('hides nothing on %s', async stage => {
+    mockConfig.STAGE = stage;
+    expect(await callHandler()).toEqual([]);
+  });
+});
