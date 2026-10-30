@@ -2,14 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { AgentState, AgentView } from '../roster';
 import {
   DOOR_POINT,
-  LABEL_ROW_SPAN,
+  LABEL_SPAN,
   NAME_LABEL_MAX_WIDTH,
+  NAME_LABEL_MIN_WIDTH,
   TAVERN_SLOTS,
   characterFor,
-  nameLabelWidths,
+  nameLabelLayout,
   placeAgents,
   poseFor,
   zoneFor,
+  type NameLabel,
   type Placement,
   type SlotPoint,
 } from './scene';
@@ -144,45 +146,71 @@ describe('placeAgents', () => {
   });
 });
 
-describe('nameLabelWidths', () => {
-  /** Labels are centred under their point; two overlap when they share a row and their half-widths meet. */
-  function overlapping(points: ReadonlyMap<string, SlotPoint>, widths: ReadonlyMap<string, number>): string[] {
-    const entries = [...points];
+describe('nameLabelLayout', () => {
+  /**
+   * Labels drawn at rest: centred under their point, `lane` label-spans lower, at most LABEL_SPAN tall.
+   * Two clash when their bands meet vertically and their half-widths meet horizontally.
+   */
+  function overlapping(points: ReadonlyMap<string, SlotPoint>, layout: ReadonlyMap<string, NameLabel>): string[] {
+    const drawn = [...points].filter(([id]) => layout.get(id)?.shown);
     const clashes: string[] = [];
-    entries.forEach(([idA, a], index) => {
-      for (const [idB, b] of entries.slice(index + 1)) {
-        if (Math.abs(a.y - b.y) >= LABEL_ROW_SPAN) continue;
-        const reach = ((widths.get(idA) ?? Infinity) + (widths.get(idB) ?? Infinity)) / 2;
-        if (reach > Math.abs(a.x - b.x)) clashes.push(`${idA}/${idB}`);
+    drawn.forEach(([idA, a], index) => {
+      const labelA = layout.get(idA);
+      for (const [idB, b] of drawn.slice(index + 1)) {
+        const labelB = layout.get(idB);
+        if (!labelA || !labelB) continue;
+        const topA = a.y + labelA.lane * LABEL_SPAN;
+        const topB = b.y + labelB.lane * LABEL_SPAN;
+        if (Math.abs(topA - topB) >= LABEL_SPAN) continue;
+        if ((labelA.maxWidth + labelB.maxWidth) / 2 > Math.abs(a.x - b.x)) clashes.push(`${idA}/${idB}`);
       }
     });
     return clashes;
   }
 
-  it('gives a lone agent the full width', () => {
-    expect(nameLabelWidths(new Map([['a', { x: 50, y: 50 }]])).get('a')).toBe(NAME_LABEL_MAX_WIDTH);
-  });
-
-  it('caps neighbours on a row to the gap between them, leaving distant rows alone', () => {
-    const points = new Map<string, SlotPoint>([
-      ['a', { x: 53, y: 45 }],
-      ['b', { x: 59, y: 45 }],
-      ['far', { x: 59, y: 45 + LABEL_ROW_SPAN }],
-    ]);
-    const widths = nameLabelWidths(points);
-    expect(widths.get('a')).toBeLessThanOrEqual(6);
-    expect(widths.get('a')).toBeGreaterThan(5);
-    expect(widths.get('far')).toBe(NAME_LABEL_MAX_WIDTH);
-    expect(overlapping(points, widths)).toEqual([]);
-  });
-
-  it('keeps every label clear of every other with every seat and the door taken', () => {
+  const allSeats = () => {
     const points = new Map<string, SlotPoint>([['door', DOOR_POINT]]);
     for (const [zone, slots] of Object.entries(TAVERN_SLOTS)) {
       slots.forEach((point, slot) => points.set(`${zone}-${slot}`, point));
     }
-    const widths = nameLabelWidths(points);
-    expect(overlapping(points, widths)).toEqual([]);
-    for (const width of widths.values()) expect(width).toBeGreaterThan(0);
+    return points;
+  };
+
+  it('gives a lone agent the full width on the first line', () => {
+    expect(nameLabelLayout(new Map([['a', { x: 50, y: 50 }]])).get('a')).toEqual({
+      lane: 0,
+      maxWidth: NAME_LABEL_MAX_WIDTH,
+      shown: true,
+    });
+  });
+
+  it('staggers alternate neighbours in a row, so each is capped by the next-but-one', () => {
+    const points = new Map(TAVERN_SLOTS.bar.map((point, slot) => [`bar-${slot}`, point] as const));
+    const layout = nameLabelLayout(points);
+    expect([...layout.values()].map(label => label.lane)).toEqual([0, 1, 0, 1]);
+    const gap = TAVERN_SLOTS.bar[1].x - TAVERN_SLOTS.bar[0].x;
+    for (const label of layout.values()) expect(label.maxWidth).toBeGreaterThan(gap * 1.9);
+    expect(overlapping(points, layout)).toEqual([]);
+  });
+
+  it('keeps every drawn label clear of every other with every seat and the door taken', () => {
+    const points = allSeats();
+    const layout = nameLabelLayout(points);
+    expect(overlapping(points, layout)).toEqual([]);
+    for (const label of layout.values()) expect(label.maxWidth).toBeGreaterThanOrEqual(7);
+  });
+
+  it('hides a label squeezed below the minimum rather than drawing an empty pill', () => {
+    const points = new Map<string, SlotPoint>([
+      ['left', { x: 50, y: 50 }],
+      ['middle', { x: 51, y: 50 }],
+      ['right', { x: 52, y: 50 }],
+    ]);
+    const layout = nameLabelLayout(points);
+    expect(layout.get('left')?.shown).toBe(false);
+    expect(layout.get('middle')?.shown).toBe(true);
+    expect(layout.get('right')?.shown).toBe(false);
+    expect(layout.get('left')?.maxWidth).toBeLessThan(NAME_LABEL_MIN_WIDTH);
+    expect(overlapping(points, layout)).toEqual([]);
   });
 });

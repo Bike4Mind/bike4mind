@@ -140,28 +140,54 @@ export function placeAgents(
 }
 
 /**
- * Name labels closer than this vertically (percent of scene height) share a row. TavernView caps a
- * label's height to it, so labels in different rows can never meet.
+ * A name label's height cap and the drop of its second line, as a percent of scene height. Labels
+ * whose tops are at least this far apart can never meet.
  */
-export const LABEL_ROW_SPAN = 7;
+export const LABEL_SPAN = 4.5;
 /** Widest a name label gets, as a percent of scene width. */
 export const NAME_LABEL_MAX_WIDTH = 16;
+/** Below this width (percent of scene width) a label would show only an ellipsis, so it is not drawn. */
+export const NAME_LABEL_MIN_WIDTH = 4;
 const LABEL_GUTTER = 0.5;
 
-/**
- * Each label's max width (percent of scene width) so that no two labels, centred under their points,
- * overlap: a label sharing a row with a neighbour is capped to the horizontal gap between them, less
- * a gutter. Pure geometry in scene units, so it holds at any stage size.
- */
-export function nameLabelWidths(points: ReadonlyMap<string, SlotPoint>): Map<string, number> {
-  const widths = new Map<string, number>();
-  for (const [id, point] of points) {
-    let width = NAME_LABEL_MAX_WIDTH;
-    for (const [otherId, other] of points) {
-      if (otherId === id || Math.abs(other.y - point.y) >= LABEL_ROW_SPAN) continue;
-      width = Math.min(width, Math.abs(other.x - point.x) - LABEL_GUTTER);
-    }
-    widths.set(id, Math.max(0, width));
+/** `lane` 1 drops the label one LABEL_SPAN below its usual line; `maxWidth` is a percent of scene width. */
+export type NameLabel = { lane: 0 | 1; maxWidth: number; shown: boolean };
+
+type LaidOut = { point: SlotPoint; lane: 0 | 1 };
+
+/** Widest a label at `point` on `lane` can be without meeting any of `others`, all centred under their points. */
+function labelCap(point: SlotPoint, lane: 0 | 1, others: Iterable<LaidOut>): number {
+  const top = point.y + lane * LABEL_SPAN;
+  let cap = NAME_LABEL_MAX_WIDTH;
+  for (const other of others) {
+    if (Math.abs(other.point.y + other.lane * LABEL_SPAN - top) >= LABEL_SPAN) continue;
+    cap = Math.min(cap, Math.abs(other.point.x - point.x) - LABEL_GUTTER);
   }
-  return widths;
+  return Math.max(0, cap);
+}
+
+/**
+ * Lays out the name labels so no two drawn ones overlap at rest. Left to right, each label takes the
+ * line (its own, or one span lower) that leaves it wider, which staggers alternate neighbours in a
+ * crowded row; then each is capped to its gap to every label it shares a line with. All in scene
+ * units, so it holds at any stage size.
+ */
+export function nameLabelLayout(points: ReadonlyMap<string, SlotPoint>): Map<string, NameLabel> {
+  const lanes = new Map<string, LaidOut>();
+  const leftToRight = [...points].sort(([, a], [, b]) => a.x - b.x || a.y - b.y);
+  for (const [id, point] of leftToRight) {
+    const placed = [...lanes.values()];
+    const lane = labelCap(point, 1, placed) > labelCap(point, 0, placed) ? 1 : 0;
+    lanes.set(id, { point, lane });
+  }
+
+  const layout = new Map<string, NameLabel>();
+  for (const [id, point] of points) {
+    const own = lanes.get(id);
+    if (!own) continue;
+    const others = [...lanes].filter(([otherId]) => otherId !== id).map(([, other]) => other);
+    const maxWidth = labelCap(point, own.lane, others);
+    layout.set(id, { lane: own.lane, maxWidth, shown: maxWidth >= NAME_LABEL_MIN_WIDTH });
+  }
+  return layout;
 }

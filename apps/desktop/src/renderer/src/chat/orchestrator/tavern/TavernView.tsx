@@ -1,17 +1,18 @@
 import Box from '@mui/joy/Box';
 import { keyframes } from '@mui/system';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import { AGENT_STATE_LABEL, type AgentView } from '../roster';
 import {
   DOOR_POINT,
-  LABEL_ROW_SPAN,
+  LABEL_SPAN,
   characterFor,
-  nameLabelWidths,
+  nameLabelLayout,
   placeAgents,
   poseFor,
+  type NameLabel,
   type Placement,
   type SlotPoint,
 } from './scene';
@@ -23,6 +24,13 @@ const WALK = '1.2s ease-in-out';
 // Of the scene height, so sprites scale with the window; sprite canvases are square.
 const SPRITE_HEIGHT = '15%';
 const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
+// Pointing at, focusing or selecting an agent brings it forward and shows its label uncapped.
+const LIFTED = '&:hover, &:focus-visible, &[aria-pressed="true"]';
+// Above every seated sprite (zIndex is its y, at most 100) and the door overflow chip.
+const LIFTED_Z = 102;
+
+type CssVars = CSSProperties & Record<`--${string}`, string | number>;
+const HIDDEN_LABEL: NameLabel = { lane: 0, maxWidth: 0, shown: false };
 
 const SPARK_COLOR: Record<ToolKind, string> = {
   edit: '#f28c28',
@@ -148,15 +156,14 @@ function Spark({ kind }: { kind: ToolKind }) {
 function Sprite({
   agent,
   point,
-  labelWidth,
+  label,
   walkIn,
   selected,
   onSelect,
 }: {
   agent: AgentView;
   point: SlotPoint;
-  /** Percent of scene width, from `nameLabelWidths`. */
-  labelWidth: number;
+  label: NameLabel;
   /** Mount at the door and walk to `point`; read on mount only. */
   walkIn: boolean;
   selected: boolean;
@@ -175,9 +182,10 @@ function Sprite({
       aria-pressed={selected}
       title={agent.title}
       onClick={() => onSelect(agent.id)}
-      style={{ left: `${at.x}%`, top: `${at.y}%`, zIndex: Math.round(at.y) }}
+      style={{ left: `${at.x}%`, top: `${at.y}%`, '--sprite-z': Math.round(at.y) } as CssVars}
       sx={{
         position: 'absolute',
+        zIndex: 'var(--sprite-z)',
         height: SPRITE_HEIGHT,
         aspectRatio: '1',
         transform: 'translate(-50%, -100%)',
@@ -188,6 +196,7 @@ function Sprite({
         transition: `left ${WALK}, top ${WALK}`,
         [NO_MOTION]: { transition: 'none' },
         '&:focus-visible': { outline: '2px solid #f5c542', outlineOffset: 2, borderRadius: '4px' },
+        [LIFTED]: { zIndex: LIFTED_Z, '& [data-name-label]': { display: 'block', maxWidth: 'none' } },
       }}
     >
       <Box
@@ -209,11 +218,16 @@ function Sprite({
       {bubble && <Bubble agent={agent} text={bubble} />}
       <Box
         data-testid={`orchestrator-tavern-name-${agent.id}`}
+        data-name-label
+        data-lane={label.lane}
         // cqw/cqh resolve against the scene box, the nearest size container.
-        style={{ maxWidth: `${labelWidth}cqw`, maxHeight: `${LABEL_ROW_SPAN}cqh` }}
+        style={{ '--label-max': `${label.maxWidth}cqw`, '--label-drop': `${label.lane * LABEL_SPAN}cqh` } as CssVars}
         sx={{
+          display: label.shown ? 'block' : 'none',
           position: 'absolute',
-          top: '96%',
+          top: 'calc(96% + var(--label-drop))',
+          maxWidth: 'var(--label-max)',
+          maxHeight: `${LABEL_SPAN}cqh`,
           left: '50%',
           transform: 'translateX(-50%)',
           boxSizing: 'border-box',
@@ -266,7 +280,7 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying }: Orche
     return placement && (placement.zone !== 'door' || agent === atDoor) ? [{ agent, placement }] : [];
   });
   // Laid out for where everyone stands once seated; labels may brush in passing while walking.
-  const labelWidths = nameLabelWidths(new Map(visible.map(({ agent, placement }) => [agent.id, placement.point])));
+  const labels = nameLabelLayout(new Map(visible.map(({ agent, placement }) => [agent.id, placement.point])));
 
   return (
     <Box
@@ -311,7 +325,7 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying }: Orche
             key={agent.id}
             agent={agent}
             point={arrived ? placement.point : DOOR_POINT}
-            labelWidth={labelWidths.get(agent.id) ?? 0}
+            label={labels.get(agent.id) ?? HIDDEN_LABEL}
             walkIn={mounted.current && !prefersReducedMotion()}
             selected={agent.id === selectedId}
             onSelect={onSelect}

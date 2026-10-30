@@ -6,6 +6,18 @@ import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { DOOR_POINT, TAVERN_SLOTS } from './scene';
 import { TavernView } from './TavernView';
 
+type SceneModule = typeof import('./scene');
+// Lets one test squeeze a label below the minimum, which no real seat pair does.
+const labelLayoutOverride = vi.hoisted(() => ({ current: null as SceneModule['nameLabelLayout'] | null }));
+vi.mock('./scene', async importOriginal => {
+  const actual = await importOriginal<SceneModule>();
+  return {
+    ...actual,
+    nameLabelLayout: (points: Parameters<SceneModule['nameLabelLayout']>[0]) =>
+      (labelLayoutOverride.current ?? actual.nameLabelLayout)(points),
+  };
+});
+
 const onSelect = vi.fn();
 const themed = createThemedMount();
 
@@ -51,21 +63,38 @@ describe('TavernView', () => {
     expect(el('orchestrator-tavern-agent-d').getAttribute('aria-label')).toBe('Agent d: Failed');
   });
 
-  it('caps crowded name labels to the gap between them, keeping the full title on the button', async () => {
+  it('staggers crowded name labels and caps them through a CSS variable, keeping the full title', async () => {
     const title = 'Seeded demo agent with a long name';
-    await renderTavern([
-      agentFixture('a', 'needs-you', { title }),
-      agentFixture('b', 'needs-you', { title }),
-      agentFixture('lone', 'done'),
-    ]);
+    await renderTavern([agentFixture('a', 'needs-you', { title }), agentFixture('b', 'needs-you', { title })]);
     const gap = TAVERN_SLOTS.bar[1].x - TAVERN_SLOTS.bar[0].x;
+    const lanes = ['a', 'b'].map(id => el(`orchestrator-tavern-name-${id}`).getAttribute('data-lane'));
+    expect(lanes).toEqual(['0', '1']);
     for (const id of ['a', 'b']) {
-      const label = el(`orchestrator-tavern-name-${id}`);
-      expect(Number.parseFloat(label.style.maxWidth)).toBeLessThanOrEqual(gap);
-      expect(label.style.maxWidth.endsWith('cqw')).toBe(true);
+      const cap = el(`orchestrator-tavern-name-${id}`).style.getPropertyValue('--label-max');
+      expect(cap.endsWith('cqw')).toBe(true);
+      expect(Number.parseFloat(cap)).toBeGreaterThan(gap);
       expect(el(`orchestrator-tavern-agent-${id}`).getAttribute('title')).toBe(title);
     }
-    expect(Number.parseFloat(el('orchestrator-tavern-name-lone').style.maxWidth)).toBeGreaterThan(gap);
+  });
+
+  it('lifts the cap on the selected agent label', async () => {
+    await renderTavern([agentFixture('a', 'needs-you'), agentFixture('b', 'needs-you')], false, 'a');
+    expect(getComputedStyle(el('orchestrator-tavern-name-a')).maxWidth).toBe('none');
+    expect(getComputedStyle(el('orchestrator-tavern-name-b')).maxWidth).not.toBe('none');
+  });
+
+  it('draws no label when its cap is below the minimum, but shows it once selected', async () => {
+    labelLayoutOverride.current = points =>
+      new Map([...points.keys()].map(id => [id, { lane: 0, maxWidth: id === 'a' ? 2 : 10, shown: id !== 'a' }]));
+    try {
+      await renderTavern([agentFixture('a', 'needs-you'), agentFixture('b', 'needs-you')]);
+      expect(getComputedStyle(el('orchestrator-tavern-name-a')).display).toBe('none');
+      expect(getComputedStyle(el('orchestrator-tavern-name-b')).display).not.toBe('none');
+      await renderTavern([agentFixture('a', 'needs-you'), agentFixture('b', 'needs-you')], false, 'a');
+      expect(getComputedStyle(el('orchestrator-tavern-name-a')).display).not.toBe('none');
+    } finally {
+      labelLayoutOverride.current = null;
+    }
   });
 
   it("shows 'Needs you!' in a needs-you agent's bubble", async () => {
