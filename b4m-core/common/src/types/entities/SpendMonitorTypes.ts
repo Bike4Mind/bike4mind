@@ -1,3 +1,5 @@
+import { IBaseRepository } from './BaseTypes';
+
 export const SPEND_ROLLUP_SCOPE_TYPES = ['platform', 'User', 'Organization', 'Agent', 'apiKey', 'model'] as const;
 export type SpendRollupScopeType = (typeof SPEND_ROLLUP_SCOPE_TYPES)[number];
 
@@ -48,8 +50,27 @@ export interface ISpendAlert {
   context: Record<string, unknown>;
 }
 
-// Placeholders: filled in by the rollup and alert repository tasks.
-export interface ISpendRollupRepository {}
+export interface ISpendRollupRepository extends IBaseRepository<ISpendRollup> {
+  /** Recompute every scope's totals for the bucket starting at `bucketStart`. Idempotent. */
+  rollupBucket(bucketStart: Date): Promise<{ docs: number }>;
+  /** Newest bucketStart that has a platform doc, or null when nothing has been rolled up. */
+  latestBucketStart(): Promise<Date | null>;
+  /** Totals per scopeId summed over buckets in [from, to). */
+  sumWindow(
+    scopeType: SpendRollupScopeType,
+    from: Date,
+    to: Date,
+    scopeIds?: string[]
+  ): Promise<Map<string, ISpendRollup>>;
+  /** Per-bucket docs per scopeId over [from, to), ascending by bucketStart. */
+  windowSeries(
+    scopeType: SpendRollupScopeType,
+    scopeIds: string[],
+    from: Date,
+    to: Date
+  ): Promise<Map<string, ISpendRollup[]>>;
+}
+// Placeholder: filled in by the alert repository task.
 export interface ISpendAlertRepository {}
 
 export function floorToBucket(date: Date): Date {
