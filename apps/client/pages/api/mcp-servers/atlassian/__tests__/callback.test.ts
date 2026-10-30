@@ -113,5 +113,24 @@ describe('GET /api/mcp-servers/atlassian/callback - malformed state', () => {
     expect(mockAuditFailure).toHaveBeenCalledWith('invalid_state');
     expect(warnSpy).toHaveBeenCalledWith('❌ Failed to parse state parameter:', expect.any(SyntaxError));
     expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('rejects a state that is absent entirely at warn level', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { req, res } = createMocks({ method: 'GET', query: { code: 'auth-code' } });
+
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<void>)(req, res);
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
+    expect(mockAuditFailure).toHaveBeenCalledWith('missing_state');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Missing state parameter'));
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });
