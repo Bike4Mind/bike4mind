@@ -138,3 +138,30 @@ export function placeAgents(
   }
   return placements;
 }
+
+/**
+ * Name labels closer than this vertically (percent of scene height) share a row. TavernView caps a
+ * label's height to it, so labels in different rows can never meet.
+ */
+export const LABEL_ROW_SPAN = 7;
+/** Widest a name label gets, as a percent of scene width. */
+export const NAME_LABEL_MAX_WIDTH = 16;
+const LABEL_GUTTER = 0.5;
+
+/**
+ * Each label's max width (percent of scene width) so that no two labels, centred under their points,
+ * overlap: a label sharing a row with a neighbour is capped to the horizontal gap between them, less
+ * a gutter. Pure geometry in scene units, so it holds at any stage size.
+ */
+export function nameLabelWidths(points: ReadonlyMap<string, SlotPoint>): Map<string, number> {
+  const widths = new Map<string, number>();
+  for (const [id, point] of points) {
+    let width = NAME_LABEL_MAX_WIDTH;
+    for (const [otherId, other] of points) {
+      if (otherId === id || Math.abs(other.y - point.y) >= LABEL_ROW_SPAN) continue;
+      width = Math.min(width, Math.abs(other.x - point.x) - LABEL_GUTTER);
+    }
+    widths.set(id, Math.max(0, width));
+  }
+  return widths;
+}

@@ -51,6 +51,23 @@ describe('TavernView', () => {
     expect(el('orchestrator-tavern-agent-d').getAttribute('aria-label')).toBe('Agent d: Failed');
   });
 
+  it('caps crowded name labels to the gap between them, keeping the full title on the button', async () => {
+    const title = 'Seeded demo agent with a long name';
+    await renderTavern([
+      agentFixture('a', 'needs-you', { title }),
+      agentFixture('b', 'needs-you', { title }),
+      agentFixture('lone', 'done'),
+    ]);
+    const gap = TAVERN_SLOTS.bar[1].x - TAVERN_SLOTS.bar[0].x;
+    for (const id of ['a', 'b']) {
+      const label = el(`orchestrator-tavern-name-${id}`);
+      expect(Number.parseFloat(label.style.maxWidth)).toBeLessThanOrEqual(gap);
+      expect(label.style.maxWidth.endsWith('cqw')).toBe(true);
+      expect(el(`orchestrator-tavern-agent-${id}`).getAttribute('title')).toBe(title);
+    }
+    expect(Number.parseFloat(el('orchestrator-tavern-name-lone').style.maxWidth)).toBeGreaterThan(gap);
+  });
+
   it("shows 'Needs you!' in a needs-you agent's bubble", async () => {
     await renderTavern([agentFixture('b', 'needs-you')]);
     expect(el('orchestrator-tavern-bubble-b').textContent).toBe('Needs you!');

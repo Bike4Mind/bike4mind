@@ -5,7 +5,16 @@ import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import { AGENT_STATE_LABEL, type AgentView } from '../roster';
-import { DOOR_POINT, characterFor, placeAgents, poseFor, type Placement, type SlotPoint } from './scene';
+import {
+  DOOR_POINT,
+  LABEL_ROW_SPAN,
+  characterFor,
+  nameLabelWidths,
+  placeAgents,
+  poseFor,
+  type Placement,
+  type SlotPoint,
+} from './scene';
 import { TAVERN_BACKDROP, characterSprite } from './tavernArt';
 
 const BUBBLE_MAX = 28;
@@ -139,12 +148,15 @@ function Spark({ kind }: { kind: ToolKind }) {
 function Sprite({
   agent,
   point,
+  labelWidth,
   walkIn,
   selected,
   onSelect,
 }: {
   agent: AgentView;
   point: SlotPoint;
+  /** Percent of scene width, from `nameLabelWidths`. */
+  labelWidth: number;
   /** Mount at the door and walk to `point`; read on mount only. */
   walkIn: boolean;
   selected: boolean;
@@ -196,11 +208,17 @@ function Sprite({
       {agent.state === 'working' && <Spark kind={sparkKind(agent)} />}
       {bubble && <Bubble agent={agent} text={bubble} />}
       <Box
+        data-testid={`orchestrator-tavern-name-${agent.id}`}
+        // cqw/cqh resolve against the scene box, the nearest size container.
+        style={{ maxWidth: `${labelWidth}cqw`, maxHeight: `${LABEL_ROW_SPAN}cqh` }}
         sx={{
           position: 'absolute',
           top: '96%',
           left: '50%',
           transform: 'translateX(-50%)',
+          boxSizing: 'border-box',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
           px: '0.5em',
           borderRadius: '4px',
@@ -243,6 +261,12 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying }: Orche
   const hiddenNeedsYou = queue.filter(agent => agent !== atDoor && agent.state === 'needs-you').length;
   const urgent = hiddenNeedsYou > 0;
   const urgentNote = urgent ? `, ${hiddenNeedsYou} ${hiddenNeedsYou === 1 ? 'needs' : 'need'} you` : '';
+  const visible = agents.flatMap(agent => {
+    const placement = placements.get(agent.id);
+    return placement && (placement.zone !== 'door' || agent === atDoor) ? [{ agent, placement }] : [];
+  });
+  // Laid out for where everyone stands once seated; labels may brush in passing while walking.
+  const labelWidths = nameLabelWidths(new Map(visible.map(({ agent, placement }) => [agent.id, placement.point])));
 
   return (
     <Box
@@ -282,20 +306,17 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying }: Orche
             transition: 'opacity 0.6s ease-in',
           }}
         />
-        {agents.map(agent => {
-          const placement = placements.get(agent.id);
-          if (!placement || (placement.zone === 'door' && agent !== atDoor)) return null;
-          return (
-            <Sprite
-              key={agent.id}
-              agent={agent}
-              point={arrived ? placement.point : DOOR_POINT}
-              walkIn={mounted.current && !prefersReducedMotion()}
-              selected={agent.id === selectedId}
-              onSelect={onSelect}
-            />
-          );
-        })}
+        {visible.map(({ agent, placement }) => (
+          <Sprite
+            key={agent.id}
+            agent={agent}
+            point={arrived ? placement.point : DOOR_POINT}
+            labelWidth={labelWidths.get(agent.id) ?? 0}
+            walkIn={mounted.current && !prefersReducedMotion()}
+            selected={agent.id === selectedId}
+            onSelect={onSelect}
+          />
+        ))}
         {waiting > 0 && (
           <Box
             component="button"
