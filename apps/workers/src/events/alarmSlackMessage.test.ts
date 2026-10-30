@@ -346,6 +346,8 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG.SuccessfulSignups.level).toBe('page');
     expect(ALARM_CATALOG.NewAccountApiKeys.level).toBe('page');
     expect(ALARM_CATALOG['young-account-spend-rate'].level).toBe('page');
+    expect(ALARM_CATALOG['provider-reported-spend-hourly'].level).toBe('page');
+    expect(ALARM_CATALOG['provider-usage-poll-errors'].level).toBe('warn');
   });
 });
 
@@ -459,6 +461,18 @@ describe('lookupCatalog', () => {
     expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
     expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
     expect(lookupCatalog('account-creation-metrics-missing')).toBe(ALARM_CATALOG['account-creation-metrics-missing']);
+  });
+
+  it('covers the provider-reported spend alarms by provider prefix and the poller alarm by name', () => {
+    for (const provider of ['anthropic', 'openai']) {
+      expect(lookupCatalog(`provider-reported-spend-hourly-${provider}`)).toBe(
+        ALARM_CATALOG['provider-reported-spend-hourly']
+      );
+    }
+    expect(lookupCatalog('provider-usage-poll-errors')).toBe(ALARM_CATALOG['provider-usage-poll-errors']);
+    expect(alarmSuffix('bike4mind-production-provider-reported-spend-hourly-anthropic', 'production')).toBe(
+      'provider-reported-spend-hourly-anthropic'
+    );
   });
 
   it('renders a dead-letter queue alarm with the queue name and the replay button', () => {

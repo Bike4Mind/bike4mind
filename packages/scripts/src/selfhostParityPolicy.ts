@@ -864,6 +864,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'f906894c42c72f63c47bff4cd0214d9803e241702098291f3a30a67204b0da99',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
+  hostedOnly(
+    'schedule:infra/cron.ts:providerUsagePoll',
+    'f9125f32b52a6ffb55b719c473439e3b4746edeef5f6fb26f774ab78fa496340',
+    'Publishes provider-reported spend to hosted CloudWatch alarms on monitored stages; no local metric or alarm destination is configured.',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
   wired(
     'schedule:infra/cron.ts:questTimeoutSweep',
     'd139c008ae202db6723c79bce5a00857e3ef35cde2c7a7501e52ce7846456889',
