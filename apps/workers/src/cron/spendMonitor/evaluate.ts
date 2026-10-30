@@ -25,7 +25,8 @@ const WINDOWS_PER_DAY = DAY_MS / WINDOW_MS;
 const SAME_SLOT_DAYS = [7, 14, 21, 28] as const;
 const SCOPE_BASELINE_DAYS = 7;
 const ACCOUNT_SCOPE_TYPES = ['User', 'Organization', 'Agent', 'apiKey'] as const;
-const BREAKDOWN_SIZE = 3;
+const TOP_ACCOUNTS = 5;
+const TOP_MODELS = 3;
 const PLATFORM_SCOPE_ID = 'all';
 const MONGO_DUPLICATE_KEY = 11000;
 
@@ -33,7 +34,7 @@ type SpendLogger = { log: (...args: unknown[]) => void; error: (...args: unknown
 
 export type EvaluateDeps = {
   rollups: Pick<ISpendRollupRepository, 'sumWindow' | 'windowSeries' | 'latestBucketStart'>;
-  alerts: Pick<ISpendAlertRepository, 'findActive' | 'create' | 'update'>;
+  alerts: Pick<ISpendAlertRepository, 'findActive' | 'create' | 'update' | 'applyEvaluation'>;
   resolveScopeDeps: ResolveScopeDeps;
   /** Posting is best effort; a disabled Slack integration passes a no-op, which counts as success. */
   post: (message: SlackAlarmMessage) => Promise<void>;
@@ -42,6 +43,12 @@ export type EvaluateDeps = {
 };
 
 type Notification = { kind: 'open' | 'escalate' | 'resolve'; alert: SpendAlertRecord };
+
+type AccountTotals = Map<string, ISpendRollup>;
+type AccountScopeType = (typeof ACCOUNT_SCOPE_TYPES)[number];
+/** Window totals per account scope type, summed once for detection and reused for the platform breakdown. */
+type WindowAccountTotals = Map<AccountScopeType, AccountTotals>;
+type EvaluatedWindow = { start: Date; end: Date; accountTotals: WindowAccountTotals };
 
 const isDuplicateKeyError = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === MONGO_DUPLICATE_KEY;
@@ -84,13 +91,13 @@ async function platformBreaches(
 }
 
 async function scopeBreachesForType(
-  scopeType: (typeof ACCOUNT_SCOPE_TYPES)[number],
+  scopeType: AccountScopeType,
   windowStart: Date,
   windowEnd: Date,
   active: SpendAlertRecord[],
   deps: EvaluateDeps,
   thresholds: SpendThresholds
-): Promise<{ breaches: SpendBreach[]; values: Map<string, number> }> {
+): Promise<{ breaches: SpendBreach[]; totals: AccountTotals }> {
   const totals = await deps.rollups.sumWindow(scopeType, windowStart, windowEnd);
   const candidateFloor = Math.min(thresholds.accountSpikeFloorCredits, thresholds.accountCeilingCredits);
 
@@ -99,8 +106,7 @@ async function scopeBreachesForType(
   // An active incident keeps being observed even when its scope fell out of the window, so it can clear.
   for (const alert of active) if (alert.scopeType === scopeType) candidates.add(alert.scopeId);
 
-  const values = new Map([...candidates].map(scopeId => [scopeId, creditsOf(totals.get(scopeId))]));
-  if (candidates.size === 0) return { breaches: [], values };
+  if (candidates.size === 0) return { breaches: [], totals };
 
   const history = await deps.rollups.windowSeries(
     scopeType,
@@ -110,9 +116,9 @@ async function scopeBreachesForType(
   );
   const breaches = [...candidates].flatMap(scopeId => {
     const baseline = scopeBaseline(windowSums(history.get(scopeId) ?? [], windowStart, SCOPE_BASELINE_DAYS, 'credits'));
-    return evaluateScope({ scopeType, scopeId, value: values.get(scopeId) ?? 0, baseline }, thresholds);
+    return evaluateScope({ scopeType, scopeId, value: creditsOf(totals.get(scopeId)), baseline }, thresholds);
   });
-  return { breaches, values };
+  return { breaches, totals };
 }
 
 /** Writes each decision; returns what to announce. A failed write is reported, never silently dropped. */
@@ -155,15 +161,20 @@ async function persistDecision(
   const existing = activeById.get(decision.id);
   if (!existing) throw new Error(`spend alert ${decision.id} is not active`);
   const merged: SpendAlertRecord = { ...existing, ...decision.patch };
-  const patch = { id: decision.id, ...decision.patch };
 
-  if (decision.kind === 'resolve') {
-    // The patch cannot express removal; freeing openKey is what lets the next breach open a new incident.
-    await deps.alerts.update(patch, { unset: ['openKey'] });
-    return { kind: 'resolve', alert: merged };
+  // The patch cannot express removal; freeing openKey on resolve is what lets the next breach open a new incident.
+  const applied = await deps.alerts.applyEvaluation(
+    { id: decision.id, ...decision.patch },
+    decision.kind === 'resolve' ? { unset: ['openKey'] } : undefined
+  );
+  if (!applied) {
+    deps.logger.log('spend-monitor-evaluation-lost-race', { alertId: decision.id, kind: decision.kind });
+    return null;
   }
-  await deps.alerts.update(patch);
-  return decision.kind === 'escalate' ? { kind: 'escalate', alert: merged } : null;
+  if (decision.kind === 'resolve') return { kind: 'resolve', alert: merged };
+  if (decision.kind === 'update') return null;
+  // An incident whose opening post never landed is still announced as an open.
+  return { kind: existing.lastNotifiedAt ? 'escalate' : 'open', alert: merged };
 }
 
 const platformScope: ResolvedScope = { label: 'Platform', payerType: 'unknown', payerId: null, adminPath: null };
@@ -180,33 +191,28 @@ const topEntries = (totals: Map<string, ISpendRollup>, size: number): [string, n
  * The rollup carries no source dimension, so no source mix is produced.
  */
 async function platformBreakdown(
-  windowStart: Date,
-  windowEnd: Date,
+  { start, end, accountTotals }: EvaluatedWindow,
   deps: EvaluateDeps
 ): Promise<{ breakdown: NonNullable<SpendAlertMessageInput['breakdown']>; accountKeys: ScopeKey[] }> {
-  const [models, users, organizations] = await Promise.all([
-    deps.rollups.sumWindow('model', windowStart, windowEnd),
-    deps.rollups.sumWindow('User', windowStart, windowEnd),
-    deps.rollups.sumWindow('Organization', windowStart, windowEnd),
-  ]);
+  const models = await deps.rollups.sumWindow('model', start, end);
   const accounts = [
-    ...topEntries(users, BREAKDOWN_SIZE).map(([scopeId, credits]) => ({
+    ...topEntries(accountTotals.get('User') ?? new Map(), TOP_ACCOUNTS).map(([scopeId, credits]) => ({
       scopeType: 'User' as const,
       scopeId,
       credits,
     })),
-    ...topEntries(organizations, BREAKDOWN_SIZE).map(([scopeId, credits]) => ({
+    ...topEntries(accountTotals.get('Organization') ?? new Map(), TOP_ACCOUNTS).map(([scopeId, credits]) => ({
       scopeType: 'Organization' as const,
       scopeId,
       credits,
     })),
   ]
     .sort((a, b) => b.credits - a.credits)
-    .slice(0, BREAKDOWN_SIZE);
+    .slice(0, TOP_ACCOUNTS);
 
   return {
     breakdown: {
-      topModels: topEntries(models, BREAKDOWN_SIZE).map(([model, credits]) => ({ model, credits })),
+      topModels: topEntries(models, TOP_MODELS).map(([model, credits]) => ({ model, credits })),
       // Labels are filled in once the accounts are resolved.
       topAccounts: accounts.map(({ scopeType, scopeId, credits }) => ({
         label: scopeMapKey(scopeType, scopeId),
@@ -219,12 +225,11 @@ async function platformBreakdown(
 
 async function buildMessages(
   notifications: Notification[],
-  windowStart: Date,
-  windowEnd: Date,
+  window: EvaluatedWindow,
   deps: EvaluateDeps
 ): Promise<{ notification: Notification; message: SlackAlarmMessage }[]> {
   const needsPlatformBreakdown = notifications.some(n => n.kind !== 'resolve' && n.alert.scopeType === 'platform');
-  const platform = needsPlatformBreakdown ? await platformBreakdown(windowStart, windowEnd, deps) : null;
+  const platform = needsPlatformBreakdown ? await platformBreakdown(window, deps) : null;
 
   const accountKeys: ScopeKey[] = notifications
     .filter(n => n.alert.scopeType !== 'platform')
@@ -253,22 +258,26 @@ async function buildMessages(
   });
 }
 
-/** Posts best effort. Only a successful post records lastNotifiedValue, so a failed one re-notifies next run. */
+/**
+ * Posts best effort. Only a successful post records lastNotifiedValue, so a failed one re-notifies next run.
+ * A failed post is logged only; a failed bookkeeping write after a post is returned so the run fails loudly,
+ * since the next run would otherwise announce the same incident again.
+ */
 async function announce(
   notifications: Notification[],
-  windowStart: Date,
-  windowEnd: Date,
+  window: EvaluatedWindow,
   now: Date,
   deps: EvaluateDeps
-): Promise<number> {
-  if (notifications.length === 0) return 0;
+): Promise<{ posted: number; errors: unknown[] }> {
+  const errors: unknown[] = [];
+  if (notifications.length === 0) return { posted: 0, errors };
 
   let messages: Awaited<ReturnType<typeof buildMessages>>;
   try {
-    messages = await buildMessages(notifications, windowStart, windowEnd, deps);
+    messages = await buildMessages(notifications, window, deps);
   } catch (error) {
     deps.logger.error('spend-monitor-message-build-failed', { error });
-    return 0;
+    return { posted: 0, errors };
   }
 
   let posted = 0;
@@ -276,15 +285,20 @@ async function announce(
     const { kind, alert } = notification;
     try {
       await deps.post(message);
-      posted += 1;
-      if (kind !== 'resolve') {
-        await deps.alerts.update({ id: alert.id, lastNotifiedValue: alert.lastValue, lastNotifiedAt: now });
-      }
     } catch (error) {
       deps.logger.error('spend-monitor-post-failed', { kind, alertId: alert.id, error });
+      continue;
+    }
+    posted += 1;
+    if (kind === 'resolve') continue;
+    try {
+      await deps.alerts.update({ id: alert.id, lastNotifiedValue: alert.lastValue, lastNotifiedAt: now });
+    } catch (error) {
+      errors.push(error);
+      deps.logger.error('spend-monitor-notify-bookkeeping-failed', { kind, alertId: alert.id, error });
     }
   }
-  return posted;
+  return { posted, errors };
 }
 
 export async function evaluateSpend(
@@ -300,15 +314,19 @@ export async function evaluateSpend(
   const active = await deps.alerts.findActive();
 
   const breaches = await platformBreaches(windowStart, windowEnd, deps, thresholds);
+  const accountTotals: WindowAccountTotals = new Map();
   for (const scopeType of ACCOUNT_SCOPE_TYPES) {
     const result = await scopeBreachesForType(scopeType, windowStart, windowEnd, active, deps, thresholds);
     breaches.push(...result.breaches);
+    accountTotals.set(scopeType, result.totals);
   }
+  const window: EvaluatedWindow = { start: windowStart, end: windowEnd, accountTotals };
 
-  const decisions = decideIncidents(active, breaches, now);
-  const { notifications, errors } = await persistDecisions(decisions, active, deps);
-  const posted = await announce(notifications, windowStart, windowEnd, now, deps);
+  const decisions = decideIncidents(active, breaches, now, windowEnd);
+  const persisted = await persistDecisions(decisions, active, deps);
+  const announced = await announce(persisted.notifications, window, now, deps);
 
+  const errors = [...persisted.errors, ...announced.errors];
   if (errors.length > 0) throw new AggregateError(errors, 'spend-monitor-persist-failed');
-  return { breaches: breaches.length, posted };
+  return { breaches: breaches.length, posted: announced.posted };
 }

@@ -44,10 +44,27 @@ import { handler } from './spendMonitor';
 
 const event = { time: '2026-10-30T10:12:00Z' };
 
+const defaultSettings: Record<string, boolean | number> = {
+  spendMonitorEnabled: true,
+  spendMonitorSlackEnabled: false,
+  spendMonitorPlatformSpikeRatio: 3,
+  spendMonitorPlatformCriticalRatio: 6,
+  spendMonitorPlatformSpikeFloorCredits: 5000,
+  spendMonitorPlatformCostFloorUsd: 20,
+  spendMonitorAccountSpikeRatio: 10,
+  spendMonitorAccountSpikeFloorCredits: 1000,
+  spendMonitorAccountCeilingCredits: 5000,
+};
+
+const useSettings = (overrides: Record<string, boolean | number> = {}) => {
+  const settings = { ...defaultSettings, ...overrides };
+  mocks.getSettingsValue.mockImplementation((key: string) => settings[key]);
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getSettingsMap.mockResolvedValue({});
-  mocks.getSettingsValue.mockReturnValue(true);
+  useSettings();
   mocks.rollupBucket.mockResolvedValue({ docs: 3 });
   mocks.evaluateSpend.mockResolvedValue({ breaches: 0, posted: 0 });
 });
@@ -73,22 +90,51 @@ describe('spendMonitor handler', () => {
   });
 
   it('does not roll when spendMonitorEnabled is false', async () => {
-    mocks.getSettingsValue.mockReturnValue(false);
+    useSettings({ spendMonitorEnabled: false });
 
     await expect(handler(event)).resolves.toEqual({ status: 'disabled', rolled: 0 });
+    expect(mocks.getSettingsValue.mock.calls.map(([key]) => key)).toEqual(['spendMonitorEnabled']);
     expect(mocks.rollupBucket).not.toHaveBeenCalled();
+  });
+
+  it('logs the buckets the catch-up cap leaves unrolled after an outage', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T07:00:00.000Z'));
+
+    await expect(handler(event)).resolves.toEqual({ status: 'ok', rolled: 24 });
+
+    expect(mocks.log).toHaveBeenCalledWith('spend-monitor-catch-up-capped', {
+      latestRolled: '2026-10-30T07:00:00.000Z',
+      firstRolled: '2026-10-30T08:10:00.000Z',
+      droppedBuckets: 13,
+    });
+  });
+
+  it('does not log a capped catch-up when the rolled buckets are contiguous', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T09:55:00.000Z'));
+
+    await handler(event);
+
+    expect(mocks.log).not.toHaveBeenCalledWith('spend-monitor-catch-up-capped', expect.anything());
   });
 
   it('evaluates after rolling, with thresholds read from settings', async () => {
     mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T09:55:00.000Z'));
-    mocks.getSettingsValue.mockImplementation((key: string) => (key === 'spendMonitorPlatformSpikeRatio' ? 4 : true));
+    useSettings({ spendMonitorPlatformSpikeRatio: 4 });
 
     await handler(event);
 
     expect(mocks.evaluateSpend).toHaveBeenCalledTimes(1);
     const [now, , thresholds] = mocks.evaluateSpend.mock.calls[0];
     expect(now).toEqual(new Date(event.time));
-    expect(thresholds).toMatchObject({ platformSpikeRatio: 4, accountCeilingCredits: true });
+    expect(thresholds).toEqual({
+      platformSpikeRatio: 4,
+      platformCriticalRatio: 6,
+      platformSpikeFloorCredits: 5000,
+      platformCostFloorUsd: 20,
+      accountSpikeRatio: 10,
+      accountSpikeFloorCredits: 1000,
+      accountCeilingCredits: 5000,
+    });
     expect(mocks.rollupBucket.mock.invocationCallOrder[1]).toBeLessThan(
       mocks.evaluateSpend.mock.invocationCallOrder[0]
     );
@@ -97,9 +143,7 @@ describe('spendMonitor handler', () => {
   it('wires the post to Slack only when spendMonitorSlackEnabled is true', async () => {
     mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T10:05:00.000Z'));
     const sendWith = async (slackEnabled: boolean) => {
-      mocks.getSettingsValue.mockImplementation((key: string) =>
-        key === 'spendMonitorSlackEnabled' ? slackEnabled : true
-      );
+      useSettings({ spendMonitorSlackEnabled: slackEnabled });
       mocks.evaluateSpend.mockClear();
       await handler(event);
       const [, deps] = mocks.evaluateSpend.mock.calls[0];
@@ -121,7 +165,7 @@ describe('spendMonitor handler', () => {
   });
 
   it('does not evaluate when spendMonitorEnabled is false', async () => {
-    mocks.getSettingsValue.mockReturnValue(false);
+    useSettings({ spendMonitorEnabled: false });
     await handler(event);
     expect(mocks.evaluateSpend).not.toHaveBeenCalled();
   });

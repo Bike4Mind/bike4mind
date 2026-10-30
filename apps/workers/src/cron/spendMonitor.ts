@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { MIN_PRICE_PER_CREDIT_USD } from '@bike4mind/common';
+import { MIN_PRICE_PER_CREDIT_USD, SPEND_BUCKET_MS } from '@bike4mind/common';
 import { connectDB, adminSettingsRepository, spendAlertRepository, spendRollupRepository } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
@@ -42,6 +42,19 @@ function readThresholds(settings: SettingsMap): SpendThresholds {
   };
 }
 
+/** The catch-up cap leaves the buckets it skips empty for good, so baselines spanning them read low until they age out. */
+function logCappedCatchUp(logger: Pick<Logger, 'log'>, latestRolled: Date | null, buckets: Date[]): void {
+  const [firstRolled] = buckets;
+  if (!latestRolled || !firstRolled) return;
+  const droppedBuckets = (firstRolled.getTime() - latestRolled.getTime()) / SPEND_BUCKET_MS - 1;
+  if (droppedBuckets <= 0) return;
+  logger.log('spend-monitor-catch-up-capped', {
+    latestRolled: latestRolled.toISOString(),
+    firstRolled: firstRolled.toISOString(),
+    droppedBuckets,
+  });
+}
+
 export async function handler(event: unknown): Promise<{ status: 'ok' | 'disabled'; rolled: number }> {
   const logger = new Logger().withMetadata({ cron: 'spendMonitor', stage: Resource.App.stage });
   // Event time stays fixed across delayed delivery and retries, so the closed-bucket set is stable.
@@ -56,6 +69,7 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
 
   const latestRolled = await spendRollupRepository.latestBucketStart();
   const buckets = bucketsToRoll(now, latestRolled);
+  logCappedCatchUp(logger, latestRolled, buckets);
   // Sequential, oldest first: a failure leaves a contiguous rolled prefix for the next run to extend.
   for (const bucketStart of buckets) {
     const { docs } = await spendRollupRepository.rollupBucket(bucketStart);

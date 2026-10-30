@@ -28,6 +28,7 @@ const SpendAlertSchema = new Schema<ISpendAlertDocument>(
     acknowledgedBy: { type: String },
     acknowledgedAt: { type: Date },
     resolvedAt: { type: Date },
+    lastEvaluatedWindowEnd: { type: Date },
     context: { type: Schema.Types.Mixed, required: true, default: {} },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
@@ -48,6 +49,27 @@ export class SpendAlertRepository extends BaseRepository<ISpendAlertDocument> im
   async findActive(): Promise<SpendAlertRecord[]> {
     const docs = await this.model.find({ status: { $in: ['open', 'acknowledged'] } });
     return docs.map(doc => doc.toJSON() as SpendAlertRecord);
+  }
+
+  async applyEvaluation(
+    { id, ...fields }: Partial<ISpendAlert> & { id: string; lastEvaluatedWindowEnd: Date },
+    options: { unset?: (keyof ISpendAlert)[] } = {}
+  ): Promise<boolean> {
+    const unset = options.unset ?? [];
+    const result = await this.model.updateOne(
+      {
+        _id: id,
+        $or: [
+          { lastEvaluatedWindowEnd: { $exists: false } },
+          { lastEvaluatedWindowEnd: { $lt: fields.lastEvaluatedWindowEnd } },
+        ],
+      },
+      {
+        $set: fields,
+        ...(unset.length > 0 ? { $unset: Object.fromEntries(unset.map(field => [field, 1])) } : {}),
+      }
+    );
+    return result.matchedCount === 1;
   }
 }
 
