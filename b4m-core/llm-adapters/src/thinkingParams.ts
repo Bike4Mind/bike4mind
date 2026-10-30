@@ -444,6 +444,30 @@ const LEGACY_EFFORT_BUDGET_TOKENS: Record<PlannedAnthropicEffort, number> = {
 /** The API rejects a legacy thinking budget below this. */
 export const LEGACY_THINKING_MIN_BUDGET_TOKENS = 1024;
 
+const isLegacyThinking = (thinking: unknown): thinking is { type: 'enabled'; budget_tokens: number } =>
+  typeof thinking === 'object' &&
+  thinking !== null &&
+  (thinking as { type?: unknown }).type === 'enabled' &&
+  typeof (thinking as { budget_tokens?: unknown }).budget_tokens === 'number';
+
+/**
+ * Lowers an Anthropic request body's max_tokens to `ceiling` (ICompletionOptions.outputTokenCeiling),
+ * after buildThinkingParams may have raised it. A legacy thinking budget comes down with it under the
+ * same answer headroom; one that no longer fits the API minimum turns thinking off rather than lifting
+ * the ceiling, since the ceiling is what the caller can pay for. Shared by the direct and Bedrock paths.
+ */
+export function applyAnthropicOutputCeiling(
+  body: { max_tokens?: unknown; thinking?: unknown },
+  ceiling: number | undefined
+): void {
+  if (ceiling === undefined || typeof body.max_tokens !== 'number' || body.max_tokens <= ceiling) return;
+  body.max_tokens = ceiling;
+  if (!isLegacyThinking(body.thinking)) return;
+  const budget = Math.min(body.thinking.budget_tokens, ceiling - THINKING_ANSWER_HEADROOM_TOKENS);
+  if (budget >= LEGACY_THINKING_MIN_BUDGET_TOKENS) body.thinking.budget_tokens = budget;
+  else delete body.thinking;
+}
+
 /**
  * What a caller's `reasoningEffort` does to an Anthropic request.
  *
