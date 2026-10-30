@@ -34,6 +34,7 @@ vi.mock('@bike4mind/services', async importActual => {
     },
   };
 });
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({ getStripe: vi.fn() }));
 vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
 vi.mock('./firstAnswerReward', async importActual => ({
   ...(await importActual<typeof import('./firstAnswerReward')>()),
@@ -70,6 +71,7 @@ afterEach(async () => {
 
 const NOW = new Date('2026-11-20T00:00:00.000Z');
 const REWARD_CREDITS = 6000;
+const stillPaid = async () => 'paid' as const;
 
 const newUser = (name: string, currentCredits = 0) =>
   User.create({
@@ -102,7 +104,7 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
   it('claims the reward and credits the inviter together', async () => {
     const inviter = await seedDueReward();
 
-    const result = await releaseDueSubscriptionRewards({ now: NOW });
+    const result = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
 
     expect(result).toMatchObject({ candidates: 1, released: 1, failed: 0 });
     expect((await User.findById(inviter.id))?.currentCredits).toBe(REWARD_CREDITS);
@@ -113,14 +115,20 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
     const inviter = await seedDueReward();
     grantFailure.next = true;
 
-    const failedRun = await releaseDueSubscriptionRewards({ now: NOW });
+    const failedRun = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
 
     expect(failedRun).toMatchObject({ released: 0, failed: 1 });
     expect(await referralSubscriptionRewardRepository.findByInvoiceId('in_1')).toMatchObject({ status: 'pending' });
     expect((await User.findById(inviter.id))?.currentCredits).toBe(0);
 
-    expect(await releaseDueSubscriptionRewards({ now: NOW })).toMatchObject({ released: 1, failed: 0 });
-    expect(await releaseDueSubscriptionRewards({ now: NOW })).toMatchObject({ candidates: 0, released: 0 });
+    expect(await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid })).toMatchObject({
+      released: 1,
+      failed: 0,
+    });
+    expect(await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid })).toMatchObject({
+      candidates: 0,
+      released: 0,
+    });
     expect((await User.findById(inviter.id))?.currentCredits).toBe(REWARD_CREDITS);
     expect(await CreditTransaction.countDocuments({ ownerId: inviter.id })).toBe(1);
   });
@@ -137,7 +145,7 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
 
     it('shrinks the reward lot together with the balance', async () => {
       const inviter = await seedDueReward();
-      await releaseDueSubscriptionRewards({ now: NOW });
+      await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
       expect(await lotOf(inviter.id)).toMatchObject({ amount: REWARD_CREDITS });
 
       await refundAll();
@@ -148,7 +156,7 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
 
     it('never shrinks the lot below what was already spent from it', async () => {
       const inviter = await seedDueReward();
-      await releaseDueSubscriptionRewards({ now: NOW });
+      await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
       const lot = await lotOf(inviter.id);
       await creditLotRepository.update({ id: lot.id, consumedAssigned: 2000 });
       await User.updateOne({ _id: inviter.id }, { currentCredits: REWARD_CREDITS - 2000 });

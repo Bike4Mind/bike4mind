@@ -2,29 +2,39 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type Stripe from 'stripe';
 
-const { mockFindById, mockRepo, mockAddCredits, mockSubtractCredits, mockClawbackLots, mockGetSettingsMap, mockAlert } =
-  vi.hoisted(() => ({
-    mockFindById: vi.fn(),
-    mockRepo: {
-      create: vi.fn(),
-      findByInvoiceId: vi.fn(),
-      findByPaymentIntentId: vi.fn(),
-      countClaimedSteps: vi.fn(),
-      findDue: vi.fn(),
-      claimForRelease: vi.fn(),
-      cancelPending: vi.fn(),
-      recordTakeBack: vi.fn(),
-    },
-    mockAddCredits: vi.fn(),
-    mockSubtractCredits: vi.fn(),
-    mockClawbackLots: vi.fn(),
-    mockGetSettingsMap: vi.fn(),
-    mockAlert: vi.fn(),
-  }));
+const {
+  mockFindById,
+  mockRepo,
+  mockFindLots,
+  mockAddCredits,
+  mockSubtractCredits,
+  mockClawbackLots,
+  mockGetSettingsMap,
+  mockAlert,
+} = vi.hoisted(() => ({
+  mockFindById: vi.fn(),
+  mockRepo: {
+    create: vi.fn(),
+    findByInvoiceId: vi.fn(),
+    findByPaymentIntentId: vi.fn(),
+    findClaimedSteps: vi.fn(),
+    findDue: vi.fn(),
+    claimForRelease: vi.fn(),
+    cancelPending: vi.fn(),
+    recordTakeBack: vi.fn(),
+  },
+  mockFindLots: vi.fn(),
+  mockAddCredits: vi.fn(),
+  mockSubtractCredits: vi.fn(),
+  mockClawbackLots: vi.fn(),
+  mockGetSettingsMap: vi.fn(),
+  mockAlert: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
-  creditLotRepository: {},
+  creditLotRepository: { findByStripeRef: mockFindLots },
+  REFERRAL_REWARD_STEPS: ['first_payment', 'second_payment'],
   creditTransactionRepository: {},
   userRepository: {},
   referralSubscriptionRewardRepository: mockRepo,
@@ -51,6 +61,7 @@ vi.mock('@bike4mind/observability', () => {
   }
   return { Logger };
 });
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({ getStripe: vi.fn() }));
 vi.mock('@client/lib/userSubscriptions/constants', () => ({ PROFESSIONAL_PRICE_ID: 'price_pro' }));
 vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
 vi.mock('./firstAnswerReward', async importActual => ({
@@ -98,7 +109,7 @@ beforeEach(() => {
   });
   givenUsers({ referredByUserId: 'inviter1' });
   mockRepo.findByInvoiceId.mockResolvedValue(null);
-  mockRepo.countClaimedSteps.mockResolvedValue(0);
+  mockRepo.findClaimedSteps.mockResolvedValue([]);
   mockRepo.create.mockResolvedValue({ id: 'r1' });
   mockAddCredits.mockResolvedValue({ creditTransactionId: 'tx1' });
 });
@@ -158,7 +169,7 @@ describe('recordSubscriptionPaymentReward', () => {
   });
 
   it('uses the second-payment amount once one reward is already counted', async () => {
-    mockRepo.countClaimedSteps.mockResolvedValue(1);
+    mockRepo.findClaimedSteps.mockResolvedValue(['first_payment']);
     await record();
     expect(mockRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({ step: 'second_payment', credits: 7000 }),
@@ -166,8 +177,17 @@ describe('recordSubscriptionPaymentReward', () => {
     );
   });
 
+  it('takes the first step when a refund in the hold freed it and only the second is used', async () => {
+    mockRepo.findClaimedSteps.mockResolvedValue(['second_payment']);
+    await record();
+    expect(mockRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ step: 'first_payment', credits: 6000 }),
+      NOW
+    );
+  });
+
   it('pays nothing past the second payment', async () => {
-    mockRepo.countClaimedSteps.mockResolvedValue(2);
+    mockRepo.findClaimedSteps.mockResolvedValue(['first_payment', 'second_payment']);
     await record();
     expect(mockRepo.create).not.toHaveBeenCalled();
   });
@@ -184,7 +204,7 @@ describe('recordSubscriptionPaymentReward', () => {
     await record();
     expect(mockRepo.create).toHaveBeenCalledWith(expect.objectContaining({ step: 'first_payment', credits: 0 }), NOW);
 
-    mockRepo.countClaimedSteps.mockResolvedValue(1);
+    mockRepo.findClaimedSteps.mockResolvedValue(['first_payment']);
     await record();
     expect(mockRepo.create).toHaveBeenLastCalledWith(
       expect.objectContaining({ step: 'second_payment', credits: 7000 }),
@@ -193,7 +213,7 @@ describe('recordSubscriptionPaymentReward', () => {
   });
 
   it('retries at the next step when a concurrent invoice of the payer took the step', async () => {
-    mockRepo.countClaimedSteps.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+    mockRepo.findClaimedSteps.mockResolvedValueOnce([]).mockResolvedValueOnce(['first_payment']);
     mockRepo.create.mockResolvedValueOnce(null);
     await record();
     expect(mockRepo.create).toHaveBeenCalledTimes(2);
@@ -201,6 +221,12 @@ describe('recordSubscriptionPaymentReward', () => {
       expect.objectContaining({ step: 'second_payment', credits: 7000 }),
       NOW
     );
+  });
+
+  it('gives up without throwing when both attempts lose the step to a concurrent invoice', async () => {
+    mockRepo.create.mockResolvedValue(null);
+    await expect(record()).resolves.toBeUndefined();
+    expect(mockRepo.create).toHaveBeenCalledTimes(2);
   });
 
   it('skips an invoice that already has a reward', async () => {
@@ -268,6 +294,8 @@ describe('releaseDueSubscriptionRewards', () => {
     mockRepo.cancelPending.mockResolvedValue(true);
   });
 
+  const withPayment = { ...due, paymentIntentId: 'pi_1' };
+
   it('credits a due reward once with a stable key and the locked amount, then checks the alert', async () => {
     const result = await releaseDueSubscriptionRewards({ now: NOW });
 
@@ -316,6 +344,40 @@ describe('releaseDueSubscriptionRewards', () => {
     expect(mockAddCredits).not.toHaveBeenCalled();
   });
 
+  it('releases a reward without a payment intent without asking Stripe', async () => {
+    const paymentOutcome = vi.fn();
+    const result = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome });
+    expect(result).toMatchObject({ released: 1, cancelled: 0 });
+    expect(paymentOutcome).not.toHaveBeenCalled();
+  });
+
+  it('releases a reward whose payment is still paid', async () => {
+    mockRepo.findDue.mockResolvedValue([withPayment]);
+    const paymentOutcome = vi.fn().mockResolvedValue('paid');
+    const result = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome });
+    expect(paymentOutcome).toHaveBeenCalledWith('pi_1');
+    expect(result).toMatchObject({ released: 1, cancelled: 0 });
+  });
+
+  it.each(['refunded', 'disputed'] as const)('cancels instead of paying when the payment is %s', async outcome => {
+    mockRepo.findDue.mockResolvedValue([withPayment]);
+    const result = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: async () => outcome });
+    expect(result).toMatchObject({ released: 0, cancelled: 1, failed: 0 });
+    expect(mockRepo.cancelPending).toHaveBeenCalledWith('r1', outcome, NOW);
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('counts a failed Stripe lookup and pays nothing, so the reward is retried', async () => {
+    mockRepo.findDue.mockResolvedValue([withPayment]);
+    const result = await releaseDueSubscriptionRewards({
+      now: NOW,
+      paymentOutcome: () => Promise.reject(new Error('stripe down')),
+    });
+    expect(result).toMatchObject({ released: 0, cancelled: 0, failed: 1 });
+    expect(mockRepo.cancelPending).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
   it('counts a failed grant and carries on with the next reward', async () => {
     mockRepo.findDue.mockResolvedValue([due, { ...due, id: 'r2', invoiceId: 'in_2' }]);
     mockRepo.claimForRelease.mockImplementation((id: string) => Promise.resolve({ ...due, id }));
@@ -351,6 +413,7 @@ describe('reverseSubscriptionRewardForRefund', () => {
     mockRepo.findByPaymentIntentId.mockResolvedValue(released);
     mockRepo.recordTakeBack.mockResolvedValue(true);
     givenUsers({}, { currentCredits: 100_000 });
+    mockFindLots.mockResolvedValue([{ amount: 6000, consumedAssigned: 0 }]);
   });
 
   it('cancels a reward that is still held, on any refund', async () => {
@@ -366,7 +429,7 @@ describe('reverseSubscriptionRewardForRefund', () => {
     expect(mockRepo.recordTakeBack).not.toHaveBeenCalled();
   });
 
-  it('takes back the whole reward on a full refund and frees the step', async () => {
+  it('takes back the whole reward on a full refund', async () => {
     await refund(3000);
     expect(mockRepo.recordTakeBack).toHaveBeenCalledWith(
       'r1',
@@ -408,6 +471,23 @@ describe('reverseSubscriptionRewardForRefund', () => {
 
     givenUsers({}, { currentCredits: 0 });
     mockSubtractCredits.mockClear();
+    await refund(3000);
+    expect(mockSubtractCredits).not.toHaveBeenCalled();
+  });
+
+  it('takes back only what is left of the reward lot when part of it was spent', async () => {
+    mockFindLots.mockResolvedValue([{ amount: 6000, consumedAssigned: 4000 }]);
+    givenUsers({}, { currentCredits: 10_000 });
+    await refund(3000);
+    expect(mockSubtractCredits.mock.calls[0][0].credits).toBe(2000);
+    expect(mockRepo.recordTakeBack.mock.calls[0][2]).toMatchObject({
+      refundTargetCredits: 6000,
+      takenBackCredits: 2000,
+    });
+  });
+
+  it('takes back nothing when the whole reward lot was spent', async () => {
+    mockFindLots.mockResolvedValue([{ amount: 6000, consumedAssigned: 6000 }]);
     await refund(3000);
     expect(mockSubtractCredits).not.toHaveBeenCalled();
   });

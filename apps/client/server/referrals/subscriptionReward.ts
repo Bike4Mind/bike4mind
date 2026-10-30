@@ -3,15 +3,16 @@ import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
+  REFERRAL_REWARD_STEPS,
   referralSubscriptionRewardRepository,
   User,
   userRepository,
   withTransaction,
   type ReferralRewardCloseReason,
-  type ReferralRewardStep,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { creditService } from '@bike4mind/services';
+import { getStripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { PROFESSIONAL_PRICE_ID } from '@client/lib/userSubscriptions/constants';
 import type Stripe from 'stripe';
@@ -117,11 +118,11 @@ export async function recordSubscriptionPaymentReward({
     );
 
     // A null create means the invoice is taken or a concurrent invoice of this payer took the step; in the
-    // second case the step is recounted and this invoice takes the next one.
+    // second case the used steps are re-read and this invoice takes the next free one. The first free step
+    // is picked, not the used count, because a refund inside the hold frees an earlier step out of order.
     for (let attempt = 0; attempt < 2; attempt++) {
-      const stepsUsed = await referralSubscriptionRewardRepository.countClaimedSteps(payerId);
-      const step: ReferralRewardStep | null =
-        stepsUsed === 0 ? 'first_payment' : stepsUsed === 1 ? 'second_payment' : null;
+      const usedSteps = await referralSubscriptionRewardRepository.findClaimedSteps(payerId);
+      const step = REFERRAL_REWARD_STEPS.find(candidate => !usedSteps.includes(candidate));
       if (!step) return;
 
       const reward = await referralSubscriptionRewardRepository.create(
@@ -142,9 +143,24 @@ export async function recordSubscriptionPaymentReward({
       }
       if (await referralSubscriptionRewardRepository.findByInvoiceId(invoice.id)) return;
     }
+    logger.warn('[referral] subscription reward not recorded after concurrent step claims', {
+      invoiceId: invoice.id,
+      payerId,
+    });
   } catch (err) {
     logger.error('[referral] recording subscription reward failed', { invoiceId: invoice.id, payerId, err });
   }
+}
+
+export type PaymentOutcome = 'paid' | Extract<ReferralRewardCloseReason, 'refunded' | 'disputed'>;
+
+/** Reads a payment's refund and dispute state from Stripe. */
+export async function fetchStripePaymentOutcome(paymentIntentId: string): Promise<PaymentOutcome> {
+  const intent = await getStripe().paymentIntents.retrieve(paymentIntentId, { expand: ['latest_charge'] });
+  const charge = intent.latest_charge;
+  if (!charge || typeof charge === 'string') return 'paid';
+  if (charge.disputed) return 'disputed';
+  return charge.amount_refunded > 0 ? 'refunded' : 'paid';
 }
 
 export interface ReleaseSubscriptionRewardsResult {
@@ -156,14 +172,21 @@ export interface ReleaseSubscriptionRewardsResult {
 
 /**
  * Credits every held reward whose hold has ended. An inviter or payer who has since been deleted,
- * suspended, banned or put under a chargeback earns nothing and the reward is cancelled. Each claim and
- * grant commit in one transaction, and the grant's transactionId is stable, so overlapping runs and
- * retries never pay twice.
+ * suspended, banned or put under a chargeback earns nothing and the reward is cancelled. So is a reward
+ * whose payment Stripe shows as refunded or disputed: the refund webhook cancels it too, but it misses a
+ * refund that arrived before the reward was recorded or whose handling failed. Each claim and grant commit
+ * in one transaction, and the grant's transactionId is stable, so overlapping runs and retries never pay
+ * twice.
  */
 export async function releaseDueSubscriptionRewards({
   now = new Date(),
   limit = 200,
-}: { now?: Date; limit?: number } = {}): Promise<ReleaseSubscriptionRewardsResult> {
+  paymentOutcome = fetchStripePaymentOutcome,
+}: {
+  now?: Date;
+  limit?: number;
+  paymentOutcome?: (paymentIntentId: string) => Promise<PaymentOutcome>;
+} = {}): Promise<ReleaseSubscriptionRewardsResult> {
   const due = await referralSubscriptionRewardRepository.findDue(now, limit);
   const result: ReleaseSubscriptionRewardsResult = { candidates: due.length, released: 0, cancelled: 0, failed: 0 };
   if (due.length === 0) return result;
@@ -192,6 +215,13 @@ export async function releaseDueSubscriptionRewards({
             : null;
       if (blocked) {
         if (await referralSubscriptionRewardRepository.cancelPending(candidate.id, blocked, now)) result.cancelled++;
+        continue;
+      }
+
+      // A Stripe failure throws into the catch below, so the reward is retried next run rather than paid.
+      const outcome = candidate.paymentIntentId ? await paymentOutcome(candidate.paymentIntentId) : 'paid';
+      if (outcome !== 'paid') {
+        if (await referralSubscriptionRewardRepository.cancelPending(candidate.id, outcome, now)) result.cancelled++;
         continue;
       }
 
@@ -244,10 +274,12 @@ export async function releaseDueSubscriptionRewards({
 /**
  * Applies a Stripe refund (or a chargeback, passed as a full refund with reason 'disputed') to the reward
  * for that payment. Inside the hold it cancels the reward; only a refund frees the payer's step. After
- * release only the refunded share is taken back, and only what the inviter still has: an already spent part
- * is not recovered and the balance never goes negative. Takes the charge's cumulative refunded amount, so a
- * redelivered or repeated event applies once; when the release job or another event moves the reward first
- * it is re-read and retried. Never throws, so the payer's own clawback is unaffected.
+ * release only the refunded share is taken back, capped at what is left unspent of the reward's own lot and
+ * at the inviter's balance: an already spent part is not recovered from other credits and the balance never
+ * goes negative. Takes the charge's cumulative refunded amount, so a redelivered or repeated event applies
+ * once; when the release job or another event moves the reward first it is re-read and retried. A dispute
+ * the payer later wins does not restore a cancelled or taken-back reward. Never throws, so the payer's own
+ * clawback is unaffected.
  */
 export async function reverseSubscriptionRewardForRefund({
   paymentIntentId,
@@ -281,10 +313,12 @@ export async function reverseSubscriptionRewardForRefund({
       if (newlyDue <= 0) return;
 
       const recorded = await withTransaction(async () => {
-        const inviter = await User.findById(reward.inviterId)
-          .select('currentCredits')
-          .lean<{ currentCredits?: number }>();
-        const takeBack = Math.min(newlyDue, Math.max(0, inviter?.currentCredits ?? 0));
+        const [inviter, rewardLots] = await Promise.all([
+          User.findById(reward.inviterId).select('currentCredits').lean<{ currentCredits?: number }>(),
+          creditLotRepository.findByStripeRef(rewardGrantRef(reward)),
+        ]);
+        const unspentReward = rewardLots.reduce((sum, lot) => sum + Math.max(0, lot.amount - lot.consumedAssigned), 0);
+        const takeBack = Math.max(0, Math.min(newlyDue, unspentReward, inviter?.currentCredits ?? 0));
 
         const applied = await referralSubscriptionRewardRepository.recordTakeBack(
           reward.id,

@@ -128,8 +128,8 @@ export class ReferralSubscriptionRewardRepository {
   }
 
   /** Steps of this payer that are used: the 1st and 2nd payment each count once. */
-  async countClaimedSteps(payerId: string): Promise<number> {
-    return this.model.countDocuments({ payerId, stepKey: { $exists: true } });
+  async findClaimedSteps(payerId: string): Promise<ReferralRewardStep[]> {
+    return this.model.distinct('step', { payerId, stepKey: { $exists: true } });
   }
 
   /** Oldest first, so a backlog drains in release order over successive runs. */

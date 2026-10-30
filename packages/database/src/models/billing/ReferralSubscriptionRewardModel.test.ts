@@ -34,14 +34,14 @@ describe('ReferralSubscriptionRewardModel', () => {
 
       expect(created).toMatchObject({ status: 'pending', credits: 6000, refundTargetCredits: 0, takenBackCredits: 0 });
       expect(created?.releasedAt).toBeUndefined();
-      expect(await repo.countClaimedSteps('friend1')).toBe(1);
+      expect(await repo.findClaimedSteps('friend1')).toHaveLength(1);
     });
 
     it('records a step with no credits as already released, still counting the step', async () => {
       const created = await repo.create(reward({ credits: 0 }), now);
 
       expect(created).toMatchObject({ status: 'released', releasedAt: now });
-      expect(await repo.countClaimedSteps('friend1')).toBe(1);
+      expect(await repo.findClaimedSteps('friend1')).toHaveLength(1);
       expect(await repo.findDue(days(30), 10)).toEqual([]);
     });
 
@@ -57,13 +57,13 @@ describe('ReferralSubscriptionRewardModel', () => {
       ]);
 
       expect(results.filter(Boolean)).toHaveLength(1);
-      expect(await repo.countClaimedSteps('friend1')).toBe(1);
+      expect(await repo.findClaimedSteps('friend1')).toHaveLength(1);
     });
 
     it('keeps one payer separate from another', async () => {
       await repo.create(reward());
       expect(await repo.create(reward({ invoiceId: 'in_2', payerId: 'friend2' }))).not.toBeNull();
-      expect(await repo.countClaimedSteps('friend1')).toBe(1);
+      expect(await repo.findClaimedSteps('friend1')).toHaveLength(1);
     });
   });
 
@@ -117,7 +117,7 @@ describe('ReferralSubscriptionRewardModel', () => {
       const created = await repo.create(reward());
 
       expect(await repo.cancelPending(created!.id, 'refunded', now)).toBe(true);
-      expect(await repo.countClaimedSteps('friend1')).toBe(0);
+      expect(await repo.findClaimedSteps('friend1')).toHaveLength(0);
       expect(await repo.findByInvoiceId('in_1')).toMatchObject({
         status: 'cancelled',
         closeReason: 'refunded',
@@ -132,7 +132,7 @@ describe('ReferralSubscriptionRewardModel', () => {
         const created = await repo.create(reward());
 
         expect(await repo.cancelPending(created!.id, reason, now)).toBe(true);
-        expect(await repo.countClaimedSteps('friend1')).toBe(1);
+        expect(await repo.findClaimedSteps('friend1')).toHaveLength(1);
         expect(await repo.create(reward({ invoiceId: 'in_2', paymentIntentId: 'pi_2' }))).toBeNull();
       }
     );
@@ -145,7 +145,7 @@ describe('ReferralSubscriptionRewardModel', () => {
       const cancelled = await repo.create(reward({ invoiceId: 'in_2', paymentIntentId: 'pi_2', payerId: 'friend2' }));
       await repo.cancelPending(cancelled!.id, 'disputed', now);
       expect(await repo.cancelPending(cancelled!.id, 'refunded', now)).toBe(false);
-      expect(await repo.countClaimedSteps('friend2')).toBe(1);
+      expect(await repo.findClaimedSteps('friend2')).toHaveLength(1);
     });
   });
 
@@ -180,7 +180,7 @@ describe('ReferralSubscriptionRewardModel', () => {
       await repo.recordTakeBack(id, 0, { refundTargetCredits: 6000, takenBackCredits: 6000, fullyRefunded: true }, now);
 
       expect(await repo.findByInvoiceId('in_1')).toMatchObject({ status: 'taken_back', closeReason: 'refunded' });
-      expect(await repo.countClaimedSteps('friend1')).toBe(1);
+      expect(await repo.findClaimedSteps('friend1')).toHaveLength(1);
       expect(await repo.create(reward({ invoiceId: 'in_2', paymentIntentId: 'pi_2' }))).toBeNull();
     });
 
