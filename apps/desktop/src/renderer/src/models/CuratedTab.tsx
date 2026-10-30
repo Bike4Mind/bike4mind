@@ -53,7 +53,7 @@ function machineText(machine: MachineView): string {
   }
   if (machine.memoryKind === 'unified')
     return machine.confidence === 'low'
-      ? `This computer has ${memory} of memory, shared with its GPU. How much of it the GPU can use could not be measured.`
+      ? `This computer has ${memory} of memory, shared with its GPU. How much of it the GPU can use could not be determined.`
       : `This computer has ${memory} of memory, shared with its GPU.`;
   if (machine.memoryKind === 'discrete' && machine.gpuMemoryBytes)
     return `This computer has ${memory} of RAM and ${formatMemory(machine.gpuMemoryBytes)} of GPU memory${gpuName}.`;

@@ -14,7 +14,8 @@ export interface HardwareClass {
 /** A discrete machine whose GPU memory is unknown is planned, and so classed, as CPU only. */
 export function hardwareClass(hw: HardwareProfile): HardwareClass {
   // Only AMD unified memory reports gpuMemoryBytes: what ROCm can allocate, which a firmware carve-out keeps outside
-  // totalMemoryBytes. A low-confidence figure is already the smaller of the pools ROCm might use.
+  // totalMemoryBytes. A low-confidence figure is already the smaller of the pools ROCm might use. Must pick the same
+  // pool as memoryBudgets in fit.ts, or the Curated tier and the fit badges disagree.
   if (hw.memoryKind === 'unified')
     return {
       memoryKind: 'unified',

@@ -625,7 +625,7 @@ describe('ModelsScreen curated', () => {
     [
       'unified memory whose GPU budget could not be measured',
       { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'low' },
-      'This computer has 62 GiB of memory, shared with its GPU. How much of it the GPU can use could not be measured.',
+      'This computer has 62 GiB of memory, shared with its GPU. How much of it the GPU can use could not be determined.',
     ],
   ] satisfies [string, MachineView, string][])('describes %s', async (_label, machine, text) => {
     bridge.curated.machine = machine;
