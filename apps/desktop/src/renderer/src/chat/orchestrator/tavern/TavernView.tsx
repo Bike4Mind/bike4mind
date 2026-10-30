@@ -5,6 +5,7 @@ import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import { AGENT_STATE_LABEL, type AgentView } from '../roster';
+import type { AgentPersona } from './agentPersona';
 import {
   DOOR_POINT,
   LABEL_SPAN,
@@ -19,7 +20,7 @@ import {
 import { TAVERN_BACKDROP, characterSprite } from './tavernArt';
 
 const BUBBLE_MAX = 28;
-const NAME_MAX = 18;
+const NAME_MAX = 26;
 const WALK = '1.2s ease-in-out';
 // Of the scene height, so sprites scale with the window; sprite canvases are square.
 const SPRITE_HEIGHT = '15%';
@@ -157,6 +158,7 @@ function Sprite({
   agent,
   point,
   label,
+  persona,
   walkIn,
   selected,
   onSelect,
@@ -164,6 +166,7 @@ function Sprite({
   agent: AgentView;
   point: SlotPoint;
   label: NameLabel;
+  persona: AgentPersona | undefined;
   /** Mount at the door and walk to `point`; read on mount only. */
   walkIn: boolean;
   selected: boolean;
@@ -173,14 +176,16 @@ function Sprite({
   const at = entered ? point : DOOR_POINT;
   const pose = poseFor(agent.state);
   const bubble = bubbleText(agent);
+  const displayName = persona?.label ?? agent.title;
+  const fullName = persona ? `${persona.label}: ${agent.title}` : agent.title;
   return (
     <Box
       component="button"
       type="button"
       data-testid={`orchestrator-tavern-agent-${agent.id}`}
-      aria-label={`${agent.title}: ${AGENT_STATE_LABEL[agent.state]}`}
+      aria-label={`${fullName}: ${AGENT_STATE_LABEL[agent.state]}`}
       aria-pressed={selected}
-      title={agent.title}
+      title={fullName}
       onClick={() => onSelect(agent.id)}
       style={{ left: `${at.x}%`, top: `${at.y}%`, '--sprite-z': Math.round(at.y) } as CssVars}
       sx={{
@@ -201,7 +206,7 @@ function Sprite({
     >
       <Box
         component="img"
-        src={characterSprite(characterFor(agent.id), pose)}
+        src={characterSprite(characterFor(agent.id, persona?.epithet), pose)}
         alt=""
         draggable={false}
         sx={{
@@ -243,13 +248,13 @@ function Sprite({
           pointerEvents: 'none',
         }}
       >
-        {truncate(agent.title, NAME_MAX)}
+        {truncate(displayName, NAME_MAX)}
       </Box>
     </Box>
   );
 }
 
-export function TavernView({ agents, onSelect, selectedId, introPlaying }: OrchestratorViewProps) {
+export function TavernView({ agents, onSelect, selectedId, introPlaying, personas }: OrchestratorViewProps) {
   const placements = usePlacements(agents);
   const arrived = useArrived(introPlaying);
   const mounted = useRef(false);
@@ -326,6 +331,7 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying }: Orche
             agent={agent}
             point={arrived ? placement.point : DOOR_POINT}
             label={labels.get(agent.id) ?? HIDDEN_LABEL}
+            persona={personas.get(agent.id)}
             walkIn={mounted.current && !prefersReducedMotion()}
             selected={agent.id === selectedId}
             onSelect={onSelect}

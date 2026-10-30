@@ -4,6 +4,7 @@ import type { ChatMessage, ChatQueueEvent, ChatQueuedMessage, ChatToolCall } fro
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import type { AgentView } from './roster';
+import { assignPersonas } from './tavern/agentPersona';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
 let queueListener: ((event: ChatQueueEvent) => void) | null = null;
@@ -24,7 +25,14 @@ const onClose = vi.fn();
 const themed = createThemedMount();
 
 const renderDrawer = (agent: AgentView) =>
-  themed.render(<AgentPeekDrawer agent={agent} onClose={onClose} actions={actions} />);
+  themed.render(
+    <AgentPeekDrawer
+      agent={agent}
+      persona={assignPersonas([agent]).get(agent.id)}
+      onClose={onClose}
+      actions={actions}
+    />
+  );
 
 const sessionWith = (...contents: string[]) => ({
   messages: contents.map((content, index) => ({ id: `m${index}`, role: 'assistant', content })),
@@ -69,6 +77,14 @@ beforeEach(() => {
 afterEach(() => themed.unmount());
 
 describe('AgentPeekDrawer', () => {
+  it('keeps the task title as the heading and shows the persona beneath it', async () => {
+    const agent = agentFixture('a1', 'working', { title: 'Fix the flaky login test' });
+    await renderDrawer(agent);
+    expect(el('orchestrator-peek-persona').textContent).toBe(assignPersonas([agent]).get('a1')?.label);
+    expect(el('orchestrator-peek-persona').textContent).toMatch(/ the Tinkerer$/);
+    expect(document.body.textContent).toContain('Fix the flaky login test');
+  });
+
   it('shows the last three messages', async () => {
     await renderDrawer(agentFixture('a1'));
     const text = document.body.textContent ?? '';

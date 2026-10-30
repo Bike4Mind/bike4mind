@@ -67,6 +67,15 @@ describe('characterFor', () => {
     }
   });
 
+  it('maps epithets to a fixed sprite and keeps the id pick for Wanderer', () => {
+    expect(characterFor('x', 'Scribe')).toBe(2);
+    expect(characterFor('x', 'Seeker')).toBe(2);
+    expect(characterFor('x', 'Warden')).toBe(3);
+    expect(characterFor('x', 'Tinkerer')).toBe(4);
+    expect(characterFor('x', 'Cartographer')).toBe(1);
+    expect(characterFor('agent-7', 'Wanderer')).toBe(characterFor('agent-7'));
+  });
+
   it('spreads ids over more than one character', () => {
     const characters = new Set(Array.from({ length: 20 }, (_, index) => characterFor(`agent-${index}`)));
     expect(characters.size).toBeGreaterThan(1);

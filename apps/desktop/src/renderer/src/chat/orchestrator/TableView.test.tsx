@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentView } from './roster';
+import { assignPersonas } from './tavern/agentPersona';
 import { TableView } from './TableView';
 import { agentFixture, createThemedMount, el } from './testUtils';
 
@@ -9,7 +10,15 @@ const onSelect = vi.fn();
 const themed = createThemedMount();
 
 const renderTable = (agents: AgentView[]) =>
-  themed.render(<TableView agents={agents} onSelect={onSelect} selectedId={null} introPlaying={false} />);
+  themed.render(
+    <TableView
+      agents={agents}
+      onSelect={onSelect}
+      selectedId={null}
+      introPlaying={false}
+      personas={assignPersonas(agents)}
+    />
+  );
 
 const rowIds = () =>
   Array.from(document.querySelectorAll('[data-testid^="orchestrator-table-row-"]')).map(row =>

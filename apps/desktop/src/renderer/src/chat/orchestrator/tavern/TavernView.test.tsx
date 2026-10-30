@@ -3,6 +3,7 @@ import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
+import { assignPersonas } from './agentPersona';
 import { DOOR_POINT, TAVERN_SLOTS } from './scene';
 import { TavernView } from './TavernView';
 
@@ -22,7 +23,15 @@ const onSelect = vi.fn();
 const themed = createThemedMount();
 
 const renderTavern = (agents: AgentView[], introPlaying = false, selectedId: string | null = null) =>
-  themed.render(<TavernView agents={agents} onSelect={onSelect} selectedId={selectedId} introPlaying={introPlaying} />);
+  themed.render(
+    <TavernView
+      agents={agents}
+      onSelect={onSelect}
+      selectedId={selectedId}
+      introPlaying={introPlaying}
+      personas={assignPersonas(agents)}
+    />
+  );
 
 const setReducedMotion = (matches: boolean) =>
   vi.spyOn(window, 'matchMedia').mockImplementation(media => ({
@@ -49,6 +58,18 @@ afterEach(() => {
 });
 
 describe('TavernView', () => {
+  it('shows the persona on the plate and keeps the full title in the aria-label and tooltip', async () => {
+    const agent = agentFixture('a', 'working', { title: 'Review the auth middleware' });
+    await renderTavern([agent]);
+    const label = assignPersonas([agent]).get('a')?.label ?? '';
+    expect(label).toMatch(/ the Warden$/);
+    expect(el('orchestrator-tavern-name-a').textContent).toBe(label);
+    expect(el('orchestrator-tavern-agent-a').getAttribute('aria-label')).toBe(
+      `${label}: Review the auth middleware: Working`
+    );
+    expect(el('orchestrator-tavern-agent-a').getAttribute('title')).toBe(`${label}: Review the auth middleware`);
+  });
+
   it('renders one button per agent labelled with its title and state', async () => {
     await renderTavern([
       agentFixture('a', 'working'),
@@ -57,10 +78,10 @@ describe('TavernView', () => {
       agentFixture('d', 'failed'),
     ]);
     expect(sprites()).toHaveLength(4);
-    expect(el('orchestrator-tavern-agent-a').getAttribute('aria-label')).toBe('Agent a: Working');
-    expect(el('orchestrator-tavern-agent-b').getAttribute('aria-label')).toBe('Agent b: Needs you');
-    expect(el('orchestrator-tavern-agent-c').getAttribute('aria-label')).toBe('Agent c: Done');
-    expect(el('orchestrator-tavern-agent-d').getAttribute('aria-label')).toBe('Agent d: Failed');
+    expect(el('orchestrator-tavern-agent-a').getAttribute('aria-label')).toContain('Agent a: Working');
+    expect(el('orchestrator-tavern-agent-b').getAttribute('aria-label')).toContain('Agent b: Needs you');
+    expect(el('orchestrator-tavern-agent-c').getAttribute('aria-label')).toContain('Agent c: Done');
+    expect(el('orchestrator-tavern-agent-d').getAttribute('aria-label')).toContain('Agent d: Failed');
   });
 
   it('staggers crowded name labels and caps them through a CSS variable, keeping the full title', async () => {
@@ -73,7 +94,7 @@ describe('TavernView', () => {
       const cap = el(`orchestrator-tavern-name-${id}`).style.getPropertyValue('--label-max');
       expect(cap.endsWith('cqw')).toBe(true);
       expect(Number.parseFloat(cap)).toBeGreaterThan(gap);
-      expect(el(`orchestrator-tavern-agent-${id}`).getAttribute('title')).toBe(title);
+      expect(el(`orchestrator-tavern-agent-${id}`).getAttribute('title')).toContain(title);
     }
   });
 
@@ -112,11 +133,6 @@ describe('TavernView', () => {
     expect(text).toHaveLength(28);
     expect(text.startsWith('bash pnpm --filter')).toBe(true);
     expect(text.endsWith('\u2026')).toBe(true);
-  });
-
-  it('truncates the name plate to 18 characters', async () => {
-    await renderTavern([agentFixture('a', 'done', { title: 'A very long agent title indeed' })]);
-    expect(el('orchestrator-tavern-agent-a').textContent).toContain('A very long agent\u2026');
   });
 
   it('queues agents past the workbenches at the door with a +N badge', async () => {

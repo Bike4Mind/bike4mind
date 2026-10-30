@@ -12,6 +12,7 @@ import { activityLabel } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import type { AgentActions } from './OrchestratorStage';
 import type { AgentView } from './roster';
+import type { AgentPersona } from './tavern/agentPersona';
 
 const RECENT_MESSAGES = 3;
 const MESSAGE_SNIPPET_MAX = 280;
@@ -19,6 +20,7 @@ const QUEUED_NOTE = 'Queued - it will send when this agent finishes its current 
 
 interface AgentPeekDrawerProps {
   agent: AgentView;
+  persona: AgentPersona | undefined;
   onClose(): void;
   actions: AgentActions;
 }
@@ -237,7 +239,7 @@ function ReplyBox({ agentId }: { agentId: string }) {
   );
 }
 
-export function AgentPeekDrawer({ agent, onClose, actions }: AgentPeekDrawerProps) {
+export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekDrawerProps) {
   const { messages, loadError } = useSessionMessages(agent.id, refreshKeyOf(agent));
   // The snapshot can trail the status push, so the state decides whether anything is still waiting.
   const pending = agent.state === 'needs-you' ? pendingCallsIn(messages) : [];
@@ -269,13 +271,20 @@ export function AgentPeekDrawer({ agent, onClose, actions }: AgentPeekDrawerProp
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Typography
-          level="title-md"
-          sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          title={agent.title}
-        >
-          {agent.title}
-        </Typography>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography
+            level="title-md"
+            sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            title={agent.title}
+          >
+            {agent.title}
+          </Typography>
+          {persona && (
+            <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-peek-persona">
+              {persona.label}
+            </Typography>
+          )}
+        </Box>
         <AgentStateChip state={agent.state} />
         <IconButton
           size="sm"

@@ -4,9 +4,10 @@ import Switch from '@mui/joy/Switch';
 import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import { useEffect, type ReactNode, useState } from 'react';
+import { useEffect, useMemo, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
+import { assignPersonas, type AgentPersona } from './tavern/agentPersona';
 import { formatAgentCost, summarizeRoster, type AgentView } from './roster';
 import { TableView } from './TableView';
 
@@ -21,6 +22,7 @@ export interface OrchestratorViewProps {
   onSelect(id: string): void;
   selectedId: string | null;
   introPlaying: boolean;
+  personas: ReadonlyMap<string, AgentPersona>;
 }
 
 export interface OrchestratorStageProps {
@@ -55,6 +57,10 @@ export function OrchestratorStage({
   delegate,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Keyed on ids and creation times so status churn does not recompute names; titles and prompts feed
+  // only the epithet, which is fixed once an agent is created.
+  const personaKey = agents.map(agent => `${agent.id}@${agent.createdAt}`).join('\n');
+  const personas = useMemo(() => assignPersonas(agents), [personaKey]);
   const selected = agents.find(agent => agent.id === selectedId) ?? null;
   const hasSelection = selected !== null;
 
@@ -72,7 +78,7 @@ export function OrchestratorStage({
   const needsYou = counts['needs-you'];
   const firstNeedsYou = agents.find(agent => agent.state === 'needs-you');
 
-  const viewProps: OrchestratorViewProps = { agents, onSelect: setSelectedId, selectedId, introPlaying };
+  const viewProps: OrchestratorViewProps = { agents, onSelect: setSelectedId, selectedId, introPlaying, personas };
 
   return (
     <Box
@@ -144,7 +150,13 @@ export function OrchestratorStage({
           )}
         </Box>
         {selected && (
-          <AgentPeekDrawer key={selected.id} agent={selected} onClose={() => setSelectedId(null)} actions={actions} />
+          <AgentPeekDrawer
+            key={selected.id}
+            agent={selected}
+            persona={personas.get(selected.id)}
+            onClose={() => setSelectedId(null)}
+            actions={actions}
+          />
         )}
       </Box>
     </Box>

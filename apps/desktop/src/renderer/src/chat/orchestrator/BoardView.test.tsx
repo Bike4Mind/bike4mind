@@ -3,6 +3,7 @@ import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activityLabel } from './activity';
 import { SIDEBAR_DEFAULT_WIDTH } from '../sidebarWidth';
+import { assignPersonas } from './tavern/agentPersona';
 import { BoardView } from './BoardView';
 import type { AgentView } from './roster';
 import { agentFixture, createThemedMount, el, query } from './testUtils';
@@ -11,7 +12,15 @@ const onSelect = vi.fn();
 const themed = createThemedMount();
 
 const renderBoard = (agents: AgentView[]) =>
-  themed.render(<BoardView agents={agents} onSelect={onSelect} selectedId={null} introPlaying={false} />);
+  themed.render(
+    <BoardView
+      agents={agents}
+      onSelect={onSelect}
+      selectedId={null}
+      introPlaying={false}
+      personas={assignPersonas(agents)}
+    />
+  );
 
 afterEach(() => {
   themed.unmount();

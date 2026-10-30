@@ -1,4 +1,5 @@
 import type { AgentState, AgentView } from '../roster';
+import type { Epithet } from './agentPersona';
 import type { CharacterId, Pose } from './tavernArt';
 
 export type TavernZone = 'workbench' | 'bar' | 'hearth' | 'benches' | 'door';
@@ -71,7 +72,19 @@ export function poseFor(state: AgentState): Pose {
   return POSE[state];
 }
 
-export function characterFor(agentId: string): CharacterId {
+// Wanderer is absent on purpose: with no craft to show it keeps the id-based pick, so the fallback
+// epithet does not turn the roster into clones of one sprite.
+const EPITHET_CHARACTER: Partial<Record<Epithet, CharacterId>> = {
+  Warden: 3,
+  Scribe: 2,
+  Seeker: 2,
+  Tinkerer: 4,
+  Cartographer: 1,
+};
+
+export function characterFor(agentId: string, epithet?: Epithet): CharacterId {
+  const byCraft = epithet ? EPITHET_CHARACTER[epithet] : undefined;
+  if (byCraft) return byCraft;
   let hash = 0;
   for (let index = 0; index < agentId.length; index++) hash = (hash * 31 + agentId.charCodeAt(index)) >>> 0;
   return ((hash % 4) + 1) as CharacterId;
