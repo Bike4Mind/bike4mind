@@ -10,7 +10,10 @@ import { newAccountSpendCapAdaptersWithAlert } from './newAccountSpendCapWithAle
 
 describe('newAccountSpendCapAdaptersWithAlert', () => {
   it('keeps the database adapters and alerts LiveOps on a refusal', async () => {
-    expect(newAccountSpendCapAdaptersWithAlert.personalSpendSince).toBe(mocks.personalSpendSince);
+    expect(newAccountSpendCapAdaptersWithAlert.adminSettings).toEqual({ name: 'settings' });
+    const since = new Date('2026-10-31T00:00:00.000Z');
+    await newAccountSpendCapAdaptersWithAlert.personalSpendSince('u1', since);
+    expect(mocks.personalSpendSince).toHaveBeenCalledWith('u1', since);
 
     await newAccountSpendCapAdaptersWithAlert.onRefused?.({
       userId: 'u1',

@@ -1,15 +1,21 @@
 import { newAccountSpendCapAdapters } from '@bike4mind/database';
 import type { creditService } from '@bike4mind/services';
-import { alertFraudBlock } from '@server/billing/fraudBlockAlert';
 
 /**
  * The deployed spend-cap adapters plus a LiveOps alert on each refusal. Every hold path in the apps
- * passes these rather than the bare database adapters.
+ * passes these rather than the bare database adapters. They delegate on use rather than spreading at
+ * import, so a module that only imports a hold path does not read the database adapters.
  */
 export const newAccountSpendCapAdaptersWithAlert: creditService.NewAccountSpendCapAdapters = {
-  ...newAccountSpendCapAdapters,
-  onRefused: ({ userId, refusal, requestedCredits }) =>
-    alertFraudBlock({
+  get adminSettings() {
+    return newAccountSpendCapAdapters.adminSettings;
+  },
+  personalSpendSince: (userId, since) => newAccountSpendCapAdapters.personalSpendSince(userId, since),
+  // Loaded on first refusal: the Slack module reads deploy config at import, and every hold path
+  // (and every suite that imports one) would otherwise pull it in.
+  onRefused: async ({ userId, refusal, requestedCredits }) => {
+    const { alertFraudBlock } = await import('@server/billing/fraudBlockAlert');
+    await alertFraudBlock({
       kind: 'newAccountSpendCap',
       userId,
       details: [
@@ -17,5 +23,6 @@ export const newAccountSpendCapAdaptersWithAlert: creditService.NewAccountSpendC
           `${Math.ceil(refusal.spentCredits).toLocaleString('en-US')} spent, ` +
           `${Math.ceil(requestedCredits).toLocaleString('en-US')} requested`,
       ],
-    }),
+    });
+  },
 };
