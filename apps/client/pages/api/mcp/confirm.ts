@@ -11,6 +11,9 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
+import { assertCustomMcpEnabled } from '@server/mcpConnections/customMcpAccess';
+import { customMcpToolHost, isCustomToolStillOffered } from '@server/mcpConnections/customMcpToolHost';
+import { describeCustomCallFailure } from '@server/mcpConnections/describeRemoteMcpError';
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
@@ -115,6 +118,47 @@ const handler = baseApi().post(async (req, res) => {
     }
     logger.info('[Web MCP Confirm] User cancelled action', { questId, tool: pendingAction.tool });
     return res.status(200).json({ success: true, message: 'Action cancelled' });
+  }
+
+  // A custom connector action never reaches the built-in routing below. The host call re-checks policy
+  // and passes `approved: true` because this click is the approval.
+  if (pendingAction.customConnector) {
+    const { connectionId, displayName } = pendingAction.customConnector;
+    // Before the claim, so a disabled feature leaves the action in place.
+    await assertCustomMcpEnabled(user);
+    // Also before the claim: a connection or tool that is no longer usable would fail after the
+    // action was consumed, and the user could not retry.
+    if (!(await isCustomToolStillOffered(user.id, connectionId, pendingAction.tool))) {
+      logger.warn('[Web MCP Confirm] Custom connector tool is no longer available', { questId });
+      return res.status(409).json({ error: `${displayName} no longer offers this action.` });
+    }
+    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+      logger.warn('[Web MCP Confirm] Pending action already claimed', { questId });
+      return res.status(409).json({ error: 'This action has already been processed.' });
+    }
+    try {
+      const { result } = await customMcpToolHost.callTool({
+        connectionId,
+        userId: user.id,
+        toolName: pendingAction.tool,
+        args: pendingAction.params,
+        approved: true,
+      });
+      return res
+        .status(200)
+        .json(
+          result.isError
+            ? { success: false, message: `${displayName} reported an error running ${pendingAction.tool}` }
+            : { success: true, message: `${displayName}: ${pendingAction.tool} completed` }
+        );
+    } catch (error) {
+      logger.error('[Web MCP Confirm] Custom connector call failed', {
+        tool: pendingAction.tool,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Never the server's own text: describeCustomCallFailure maps to fixed lines.
+      return res.status(200).json({ success: false, message: describeCustomCallFailure(error) });
+    }
   }
 
   // After the cancel branch: cancelling executes nothing, so it stays available with the flag off.

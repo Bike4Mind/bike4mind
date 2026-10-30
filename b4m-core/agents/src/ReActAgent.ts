@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import {
+  CUSTOM_MCP_DATA_NOTICE,
   PermissionDeniedError,
   type IMessage,
   type MessageContent,
@@ -1020,7 +1021,10 @@ export class ReActAgent extends EventEmitter {
     // prepend it so the agent speaks in character while keeping the operational
     // (ReAct tool-use) guidance below. When no persona, behavior is unchanged.
     const persona = this.context.personaPrompt?.trim();
-    const composed = persona ? `${persona}\n\n${base}` : base;
+    const personaAndBase = persona ? `${persona}\n\n${base}` : base;
+    const composed = this.context.tools.some(tool => tool._isMcpTool)
+      ? `${personaAndBase}\n\n${CUSTOM_MCP_DATA_NOTICE}`
+      : personaAndBase;
 
     // Append artifact-emission guidance LAST (after persona + operational prompt)
     // when the host opted in - parity with chat completions, which inject the

@@ -1169,6 +1169,7 @@ export class ChatCompletionProcess {
   private workspaceSessionSettings: IChatCompletionServiceOptions['workspaceSessionSettings'];
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
+  private customMcp: IChatCompletionServiceOptions['customMcp'];
   private statusManager: StatusManager | null = null;
   private systemFilesCache: Map<string, [string[], string[]]> | null = null;
   private abortControllers: Map<string, AbortController> | null = null;
@@ -1237,6 +1238,7 @@ export class ChatCompletionProcess {
     this.getEntitlements = options.getEntitlements;
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
+    this.customMcp = options.customMcp;
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
     this.slackWebhookUrl = options.slackWebhookUrl;
@@ -3436,6 +3438,7 @@ export class ChatCompletionProcess {
         imageGenerateStorage: this.imageGenerateStorage,
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
+        customMcp: this.customMcp,
         toolCreditsMap: this.toolCreditsMap,
         toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,
@@ -3445,7 +3448,7 @@ export class ChatCompletionProcess {
         decide: this.decide,
       });
 
-      const { mcpToolsByServer, serverAgentConfig } = await toolBuilder.buildMcpTools({
+      const { mcpToolsByServer, serverAgentConfig, customMcpToolNames } = await toolBuilder.buildMcpTools({
         enableMCPServer,
         requestedMcpServers: parsedBody.mcpServers,
         defaultAdminSettings,
@@ -3453,6 +3456,18 @@ export class ChatCompletionProcess {
         logger,
         processStartTime,
         quest,
+        disableUserIntegrations: userIntegrationsDisabled,
+        onPendingAction: async ({ toolName, args, ...customConnector }) => {
+          // The pending action is quest-scoped but the connection is the acting user's, and only the
+          // session owner may confirm: a teammate's write could never run and would show their connector.
+          if (session.userId !== this.user.id) {
+            throw new Error('Custom connector actions that need approval can only be run by the notebook owner.');
+          }
+          // Match the built-in MCP callback: a replaced card must never identify a newer action.
+          const ts = Math.max(Date.now(), (quest.pendingAction?.ts ?? 0) + 1);
+          quest.pendingAction = { tool: toolName, params: args, ts, customConnector };
+          await saveQuest(quest);
+        },
       });
 
       // Construct per-request agent store with user-specific config (e.g., selected repositories)
@@ -3929,6 +3944,7 @@ export class ChatCompletionProcess {
         knowledgeBaseGuidance,
         userTimezone,
         mcpTools: directMcpTools,
+        hasCustomMcpTools: directMcpTools.some(tool => customMcpToolNames.has(tool.name)),
         sessionId,
         message,
         logger,

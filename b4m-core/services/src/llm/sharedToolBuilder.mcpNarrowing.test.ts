@@ -430,6 +430,16 @@ describe('buildSharedTools: the MCP wrapper turns a confirm preview into a pendi
     expect(forModel).not.toContain(token);
   });
 
+  it('returns a custom connector result intact when its text mentions _confirmToken', async () => {
+    const onPendingAction = vi.fn().mockResolvedValue(undefined);
+    const wrappedResult = `<untrusted_tool_result connector="acme" host="mcp.acme.test">\npass _confirmToken to confirm\n</untrusted_tool_result>`;
+
+    const forModel = await runTool('acme__docs', wrappedResult, onPendingAction);
+
+    expect(forModel).toBe(wrappedResult);
+    expect(onPendingAction).not.toHaveBeenCalled();
+  });
+
   it('still returns the stripped result when persisting the action rejects', async () => {
     const onPendingAction = vi.fn().mockRejectedValue(new Error('db down'));
 

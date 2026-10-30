@@ -770,6 +770,16 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
         tool: { type: String, required: true },
         params: { type: Schema.Types.Mixed, required: true },
         ts: { type: Number, required: true },
+        customConnector: {
+          type: {
+            connectionId: { type: String, required: true },
+            slug: { type: String, required: true },
+            displayName: { type: String, required: true },
+            urlHost: { type: String, required: true },
+          },
+          required: false,
+          _id: false,
+        },
       },
       required: false,
     },

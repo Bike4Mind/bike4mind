@@ -22,6 +22,12 @@ import { z } from 'zod';
 import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
+import {
+  CUSTOM_MCP_DATA_NOTICE,
+  generateCustomMcpTools,
+  loadCustomMcpConnections,
+  type CustomMcpApprovalRequest,
+} from './customMcpTools';
 import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';
 import { mergeRetrievalSummary } from './retrievalSummaryMerge';
 import {
@@ -169,6 +175,7 @@ export interface ToolBuilderConfig {
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
   imageProcessorLambdaName?: string;
   getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
+  customMcp?: IChatCompletionServiceOptions['customMcp'];
   // State maps owned by ChatCompletionProcess. Passed by reference so mutations
   // inside tool callbacks (credit accounting, subagent telemetry) propagate back
   // without further synchronization.
@@ -434,6 +441,10 @@ export interface BuildMcpToolsArgs {
   logger: Logger;
   processStartTime: number;
   quest: IChatHistoryItemDocument;
+  /** The turn's resolved `disableUserIntegrations`; withholds custom connector tools like built-in servers. */
+  disableUserIntegrations?: boolean;
+  /** Persists a custom-connector call that waits for a human Confirm; required to offer write tools. */
+  onPendingAction?: (request: CustomMcpApprovalRequest) => Promise<void>;
 }
 
 export interface BuildToolsArgs {
@@ -474,6 +485,8 @@ export interface BuildToolsArgs {
 type ExtraContextMessage = NonNullable<z.infer<typeof QuestStartBodySchema>['extraContextMessages']>[number];
 
 export interface BuildToolPromptArgs {
+  /** True when custom-connector tools are among `mcpTools`; adds the connector-output-is-data notice. */
+  hasCustomMcpTools?: boolean;
   toolPromptId?: string;
   hasContentTransform: boolean;
   hasChessEngine: boolean;
@@ -839,18 +852,22 @@ export class ToolBuilder {
     logger,
     processStartTime,
     quest: _quest,
+    disableUserIntegrations,
+    onPendingAction,
   }: BuildMcpToolsArgs): Promise<{
     mcpToolsByServer: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
     serverAgentConfig: ServerAgentConfig;
+    customMcpToolNames: Set<string>;
   }> {
     const mcpToolsStartTime = Date.now();
     const mcpToolsByServer: Record<string, Array<{ name: string } & ICompletionOptionTools>> = {};
+    const customMcpToolNames = new Set<string>();
 
     if (!enableMCPServer) {
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] MCP tools setup completed (0 tools) in ${Date.now() - mcpToolsStartTime}ms`
       );
-      return { mcpToolsByServer, serverAgentConfig: {} };
+      return { mcpToolsByServer, serverAgentConfig: {}, customMcpToolNames };
     }
 
     logger.info('🛠️ [MCP] Enabling MCP Servers');
@@ -926,6 +943,26 @@ export class ToolBuilder {
       }
     }
 
+    // Custom connectors use their own enabled switch (the composer cannot name their slugs yet). A
+    // failure here drops custom tools only, never the built-ins above.
+    if (this.deps.customMcp && onPendingAction && !disableUserIntegrations) {
+      try {
+        const userId = this.deps.user.id;
+        const connections = await loadCustomMcpConnections(this.deps.customMcp, userId, logger);
+        for (const connection of connections) {
+          const tools = generateCustomMcpTools(connection, {
+            userId,
+            host: this.deps.customMcp,
+            requestApproval: onPendingAction,
+          });
+          mcpToolsByServer[connection.slug] = tools;
+          tools.forEach(tool => customMcpToolNames.add(tool.name));
+        }
+      } catch (customError) {
+        logger.error('[MCP] Failed to load custom connector tools - continuing without them:', customError);
+      }
+    }
+
     const totalTools = Object.values(mcpToolsByServer).reduce((sum, tools) => sum + tools.length, 0);
 
     // Extract selected repositories from GitHub MCP server metadata for agent prompt injection.
@@ -944,7 +981,7 @@ export class ToolBuilder {
       `⏱️ [${Date.now() - processStartTime}ms] MCP tools setup completed (${totalTools} tools) in ${Date.now() - mcpToolsStartTime}ms`
     );
 
-    return { mcpToolsByServer, serverAgentConfig: { selectedRepositories, githubUsername } };
+    return { mcpToolsByServer, serverAgentConfig: { selectedRepositories, githubUsername }, customMcpToolNames };
   }
 
   /**
@@ -1253,6 +1290,7 @@ export class ToolBuilder {
     knowledgeBaseGuidance,
     userTimezone,
     mcpTools,
+    hasCustomMcpTools,
     sessionId,
     message,
     logger,
@@ -1409,18 +1447,16 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
       // Tool/server names come from user-configured MCP servers, so strip control
       // characters and cap length before interpolating into the system prompt.
       const sanitizeToolName = (name: string) => name.replace(/[\r\n\t]+/g, ' ').slice(0, 80);
-      const mcpIntegrations: Record<string, string[]> = {};
+      const mcpIntegrations = new Map<string, string[]>();
       mcpTools.forEach(tool => {
         const safeName = sanitizeToolName(tool.name);
-        const parts = safeName.split('_');
-        const prefix = parts[0];
-        if (!mcpIntegrations[prefix]) {
-          mcpIntegrations[prefix] = [];
-        }
-        mcpIntegrations[prefix].push(safeName);
+        const prefix = safeName.split(safeName.includes('__') ? '__' : '_')[0];
+        const integrationTools = mcpIntegrations.get(prefix) ?? [];
+        integrationTools.push(safeName);
+        mcpIntegrations.set(prefix, integrationTools);
       });
 
-      const integrationList = Object.entries(mcpIntegrations)
+      const integrationList = [...mcpIntegrations.entries()]
         .map(([integration, tools]) => {
           const displayName = integration;
           return `- **${displayName}**: ${tools.length} tools available (${tools.slice(0, 3).join(', ')}${tools.length > 3 ? '...' : ''})`;
@@ -1437,11 +1473,11 @@ ${integrationList}
 1. When the user asks about tasks related to these integrations, you MUST call the appropriate tool
 2. Do not respond that you cannot help - use the available tools to fulfill the request
 3. **Be concise when using tools** - do NOT repeat introductory phrases like "I'll help you with..." before each tool call. Simply execute the tools and present the results
-4. When making multiple tool calls, skip the preamble and just execute them efficiently`);
+4. When making multiple tool calls, skip the preamble and just execute them efficiently${hasCustomMcpTools ? `\n5. ${CUSTOM_MCP_DATA_NOTICE}` : ''}`);
 
       logger.info('🛠️ [MCP] Added integration guidance to tool prompt:', {
-        integrationCount: Object.keys(mcpIntegrations).length,
-        integrations: Object.keys(mcpIntegrations),
+        integrationCount: mcpIntegrations.size,
+        integrations: [...mcpIntegrations.keys()],
       });
     }
 

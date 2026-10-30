@@ -869,7 +869,10 @@ function createMcpToolWrapper(
   return async (args: unknown) => {
     const result = await originalToolFn(args);
 
-    if (callbacks.onPendingAction) {
+    // Custom connector results (customMcpTools.ts wrapUntrusted) are never confirm tokens; scanning
+    // them would discard a result that merely mentions `_confirmToken`.
+    const isCustomConnectorResult = typeof result === 'string' && result.startsWith('<untrusted_tool_result ');
+    if (callbacks.onPendingAction && !isCustomConnectorResult) {
       const extraction = extractMcpPendingAction(name, result);
       if (extraction.kind === 'rejected') {
         logger.warn(`[MCP] Ignored _confirmToken from tool ${name}`, { reason: extraction.reason });

@@ -171,7 +171,7 @@ const SERVER_ONLY_MCP_ARG_KEYS: readonly string[] = ['_executeFromButton', '_con
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
-function stripServerOnlyArgs(args: unknown): unknown {
+export function stripServerOnlyArgs(args: unknown): unknown {
   if (!isPlainObject(args)) return args;
   return Object.fromEntries(Object.entries(args).filter(([key]) => !SERVER_ONLY_MCP_ARG_KEYS.includes(key)));
 }
@@ -181,7 +181,9 @@ function stripServerOnlyArgs(args: unknown): unknown {
  * OpenAI requires 'properties' on object schemas - MCP tools like current_user
  * return { type: 'object' } without it, causing 400 errors.
  */
-function normalizeToolParameters(rest: Record<string, unknown>): ICompletionOptionTools['toolSchema']['parameters'] {
+export function normalizeToolParameters(
+  rest: Record<string, unknown>
+): ICompletionOptionTools['toolSchema']['parameters'] {
   const rawParameters = rest?.input_schema ?? rest?.inputSchema ?? rest?.parameters;
   if (isPlainObject(rawParameters)) {
     const properties = isPlainObject(rawParameters.properties)

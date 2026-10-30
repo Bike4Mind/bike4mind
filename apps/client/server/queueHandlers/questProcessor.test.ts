@@ -148,6 +148,8 @@ describe('questProcessor getStaticOptions', () => {
   it('carries the contributed surface denials into the options', async () => {
     const { getStaticOptions } = await import('./questProcessor');
 
+    // The queue processor is the web chat turn that renders the confirm card.
+    expect(getStaticOptions().customMcp?.listConnections).toBeTypeOf('function');
     expect(getStaticOptions().workspaceDeniedTools).toBe(premiumWorkspaceDeniedTools);
     expect(getStaticOptions().workspaceSessionSettings).toBe(premiumWorkspaceSessionSettings);
   }, 120_000);

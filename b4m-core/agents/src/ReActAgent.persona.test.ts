@@ -11,7 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { ReActAgent } from './ReActAgent';
 import type { AgentContext } from './types';
 import type { ICompletionBackend, CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters';
-import type { IMessage } from '@bike4mind/common';
+import { CUSTOM_MCP_DATA_NOTICE, type IMessage } from '@bike4mind/common';
 
 function createMockLogger() {
   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -127,5 +127,26 @@ describe('ReActAgent getSystemPrompt() artifact-emission composition', () => {
     const prompt = await captureSystemPrompt({ artifactEmissionPrompt: '   ' });
     expect(prompt).toContain('You are an autonomous AI agent with access to tools');
     expect(prompt.endsWith('\n\n')).toBe(false);
+  });
+});
+
+describe('ReActAgent connector output guidance', () => {
+  const connectorTool = {
+    _isMcpTool: true,
+    toolSchema: { name: 'acme__search', description: 'Search', parameters: { type: 'object', properties: {} } },
+    toolFn: vi.fn(),
+  } satisfies AgentContext['tools'][number];
+
+  it.each([undefined, 'Custom subagent instructions'])(
+    'adds the data-only notice with systemPrompt=%s',
+    async systemPrompt => {
+      const prompt = await captureSystemPrompt({ systemPrompt, tools: [connectorTool] });
+      expect(prompt).toContain(CUSTOM_MCP_DATA_NOTICE);
+    }
+  );
+
+  it('keeps the notice out of agents with only native tools', async () => {
+    const prompt = await captureSystemPrompt({ tools: [{ ...connectorTool, _isMcpTool: false }] });
+    expect(prompt).not.toContain(CUSTOM_MCP_DATA_NOTICE);
   });
 });

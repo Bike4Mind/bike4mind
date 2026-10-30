@@ -48,6 +48,8 @@ const {
   mockReleaseReservedCredits,
   mockSendStatusUpdate,
   waitTurnLimits,
+  processCtorOptions,
+  fakeCustomMcpHost,
 } = vi.hoisted(() => ({
   mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
   mockValidate: vi.fn(),
@@ -82,7 +84,12 @@ const {
   mockSendStatusUpdate: vi.fn(),
   // The real 45s/7s by default; the over-budget tests shrink them so the deadline fires at once.
   waitTurnLimits: { budgetMs: 45_000, windDownMs: 7_000 },
+  // Options handed to the inline ChatCompletionProcess constructor.
+  processCtorOptions: { value: undefined as Record<string, unknown> | undefined },
+  fakeCustomMcpHost: { listConnections: () => [] },
 }));
+
+vi.mock('@server/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
 
 vi.mock('@server/utils/waitTurnDeadline', async orig => ({
   ...(await orig<Record<string, unknown>>()),
@@ -178,7 +185,8 @@ vi.mock('@bike4mind/services/llm', async orig => {
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
   class MockChatCompletionProcess {
-    constructor(options: unknown) {
+    constructor(options: Record<string, unknown>) {
+      processCtorOptions.value = options;
       mockProcessOptions(options);
     }
     pipelinePhases = undefined;
@@ -1356,6 +1364,12 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     expect(mockProcess).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.objectContaining({ includeSystemPrompt: true }) })
     );
+  });
+
+  it('registers the custom connector host on the inline process options, matching the queued path', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(processCtorOptions.value?.customMcp).toBe(fakeCustomMcpHost);
   });
 
   it('hands process() an apiKey origin and the key id, matching what the async path stores', async () => {

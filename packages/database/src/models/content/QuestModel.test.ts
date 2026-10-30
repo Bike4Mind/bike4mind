@@ -185,3 +185,38 @@ describe('QuestRepository.recordAttachmentOutcomeByAgentExecutionId', () => {
     ).resolves.not.toThrow();
   });
 });
+
+describe('pendingAction.customConnector', () => {
+  const customConnector = {
+    connectionId: 'conn-1',
+    slug: 'acme',
+    displayName: 'Acme',
+    urlHost: 'mcp.acme.test',
+  };
+
+  it('survives the repository save a chat turn uses, so Confirm can read it back', async () => {
+    const quest = await makeQuest({ status: 'running' });
+
+    await questRepository.updateIfUnfinished({
+      id: quest._id.toString(),
+      pendingAction: { tool: 'create', params: { title: 't' }, ts: 42, customConnector },
+    });
+
+    const raw = await Quest.collection.findOne({ _id: quest._id });
+    expect(raw?.pendingAction).toMatchObject({ tool: 'create', params: { title: 't' }, ts: 42, customConnector });
+  });
+
+  it('refuses a connector ref missing a required field', async () => {
+    const quest = await makeQuest();
+
+    await expect(
+      Quest.create({
+        sessionId: 'session-1',
+        type: 'message',
+        timestamp: new Date(),
+        prompt: quest.prompt,
+        pendingAction: { tool: 'create', params: {}, ts: 1, customConnector: { connectionId: 'c1' } },
+      })
+    ).rejects.toThrow(/slug|displayName|urlHost/);
+  });
+});
