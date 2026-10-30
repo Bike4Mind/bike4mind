@@ -6,16 +6,14 @@ import {
   ISessionDocument,
   ISessionRepository,
   IUserDocument,
-  Permission,
   ShareableAccessShape,
   BadRequestError,
   NotFoundError,
   secureParameters,
 } from '@bike4mind/common';
 import { z } from 'zod';
-import { pushShareable } from '../sharingService';
 import { distinctIdCount, mergeIds } from '../utils/objectIds';
-import { grantCap, updateShareableFiles } from './addFiles';
+import { sharesCappedFor, updateShareableFiles } from './addFiles';
 
 const addSessionsProjectSchema = z.object({
   projectId: z.string().nonempty(),
@@ -132,17 +130,8 @@ const updateShareableSessions = async (
   const { db } = adapters;
 
   for (const { session, files } of knowledge) {
-    const cap = grantCap(session as ShareableAccessShape, user);
-    const push = (userId: string, permissions: Permission[]) => {
-      const capped = cap(permissions);
-      if (capped.length > 0) pushShareable(session, { userId, permissions: capped, projectId: project.id });
-    };
-
-    if (project.userId !== user.id) push(project.userId, [Permission.read, Permission.update]);
-
-    for (const member of project.users) push(member.userId, member.permissions);
-
-    await db.sessions.update({ id: session.id, users: session.users });
+    const add = sharesCappedFor(session as ShareableAccessShape, user, project);
+    if (add.length > 0) await db.sessions.shareable.updateUserShares(session.id, { add });
 
     if (files.length > 0) await updateShareableFiles(user, { project, files }, adapters);
   }

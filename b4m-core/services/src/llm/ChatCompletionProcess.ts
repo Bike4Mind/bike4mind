@@ -60,6 +60,7 @@ import {
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
+  respondFromWorkspace,
   createReasoningWithholder,
   reasoningChannelOf,
   withholdsReasoning,
@@ -274,6 +275,7 @@ import {
   getMemberCreditCap,
   getMemberCreditPeriodEnd,
   isMemberCreditCapExceeded,
+  checkNewAccountSpendCap,
 } from '../creditService';
 import {
   TelemetryBuilder,
@@ -300,6 +302,7 @@ import {
 import { resolveMementoGates } from './mementoGating';
 import { resolveAdminAssistantTools } from './adminAssistantGate';
 import { withAdminAssistantPrompt } from './adminAssistantPrompt';
+import { diffFields, type FieldSnapshot } from './fieldSnapshot';
 import {
   ContextTelemetryAlertsSchema,
   sanitizeTelemetryError,
@@ -538,6 +541,15 @@ export function resolveModelAwareHistoryCount({
 const SESSION_LENGTH_WARNING_THRESHOLD = 100;
 
 const questSaveMutex = new Mutex();
+// Identity and server-owned keys; `deletedAt` belongs to soft delete, never to a turn's save.
+const QUEST_FIELDS_NEVER_SAVED: ReadonlySet<string> = new Set([
+  'id',
+  '_id',
+  '__v',
+  'createdAt',
+  'updatedAt',
+  'deletedAt',
+]);
 
 interface ProcessInitContext {
   parsedBody: z.infer<typeof QuestStartBodySchema>;
@@ -2075,6 +2087,7 @@ export class ChatCompletionProcess {
     });
     let rapidReplyResult: Awaited<typeof rapidReplyPromise> | undefined = undefined;
 
+    let persistedQuestFields: { questId: string; fields: FieldSnapshot } | undefined;
     const saveQuest = async (quest: IChatHistoryItemDocument): Promise<IChatHistoryItemDocument | null> => {
       // Use the mutex to serialize the save operations
       return await questSaveMutex.runExclusive(async () => {
@@ -2087,12 +2100,20 @@ export class ChatCompletionProcess {
             `💾 [saveQuest] Saving quest ${quest.id} with ${quest.researchModeResults.length} Research Mode results`
           );
         }
-        // Deliberate whole-doc write: this is the streaming owner of `quest`, mutated across the
-        // pipeline and by tools, so no fixed field list exists. Narrowing needs a snapshot-diff.
+        // Tools and the pipeline mutate `quest` freely, so the write is the diff against what this
+        // turn last persisted, not a fixed field list; a whole-doc write would revert concurrent edits.
+        const previous = persistedQuestFields?.questId === quest.id ? persistedQuestFields.fields : undefined;
+        const { changed, snapshot } = diffFields(quest, previous, QUEST_FIELDS_NEVER_SAVED);
+        const running = quest.status === 'running';
+        // A running save is also the heartbeat that keeps `updatedAt` fresh, so it writes regardless.
+        if (previous && !running && Object.keys(changed).length === 0) return quest;
         // A mid-turn save must not put 'running' back over a user Stop (stopReply in
         // sessionOperations.ts) before the cancellation watcher reads it.
-        if (quest.status === 'running') return await this.db.quests.updateIfUnfinished(quest);
-        return await this.db.quests.update(quest);
+        const saved = running
+          ? await this.db.quests.updateIfUnfinished({ id: quest.id, ...changed })
+          : await this.db.quests.update({ id: quest.id, ...changed });
+        if (saved) persistedQuestFields = { questId: quest.id, fields: snapshot };
+        return saved;
       });
     };
 
@@ -2285,6 +2306,32 @@ export class ChatCompletionProcess {
         // The finally block's terminal frame carries the record, so end it here rather than
         // leaving a total-less record that would read as "still running" forever.
         turnTiming.finish();
+        return;
+      }
+
+      const workspaceReply = await respondFromWorkspace(
+        {
+          user: this.user,
+          logger,
+          session,
+          quest: { id: questId, prompt: quest.prompt, fabFileIds: quest.fabFileIds },
+        },
+        this.workspaceSessionSettings
+      );
+      if (workspaceReply) {
+        quest.replies = workspaceReply.replies;
+        quest.reply = workspaceReply.replies.join('');
+        if (workspaceReply.structuredReplies) quest.structuredReplies = workspaceReply.structuredReplies;
+        if (workspaceReply.toolResults) quest.toolResults = workspaceReply.toolResults;
+        if (workspaceReply.uiSideEffects) quest.uiSideEffects = workspaceReply.uiSideEffects;
+        // Invoke stamped the session's model; no model wrote this reply.
+        if (quest.promptMeta?.model) {
+          const { model: _unused, ...promptMeta } = quest.promptMeta;
+          quest.promptMeta = promptMeta;
+        }
+        setTerminalQuestStatus(quest, 'done');
+        turnTiming.finish();
+        await saveQuest(quest);
         return;
       }
       quest.status = 'running';
@@ -4675,6 +4722,14 @@ export class ChatCompletionProcess {
               'insufficient_credits'
             );
           }
+        }
+
+        if (!organization) {
+          const spendCapMessage = await checkNewAccountSpendCap(
+            { user: this.user, requestedCredits: requiredCredits, billedToOrganization: false, logger },
+            this.db.newAccountSpendCap
+          );
+          if (spendCapMessage) throw new InsufficientCreditsError(spendCapMessage, 'insufficient_credits');
         }
 
         // Preserve low-credits notification (checks current balance before reservation)

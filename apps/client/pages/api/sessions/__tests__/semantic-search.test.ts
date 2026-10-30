@@ -47,6 +47,11 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: {},
   creditTransactionRepository: {},
   userRepository: {},
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   isCreditsEnforced: async () => false,

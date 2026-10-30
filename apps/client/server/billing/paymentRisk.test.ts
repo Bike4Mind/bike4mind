@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   countRecentCards: vi.fn(),
   chargesRetrieve: vi.fn(),
   postMessageToSlack: vi.fn(),
+  lockIfPaidWithBlockedCard: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -36,6 +37,7 @@ vi.mock('@bike4mind/server-utils/auth/signupNetworkSignals', () => ({
 // Loaded through subscriptionLifecycle (admin links); its model needs a real mongoose.
 vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
+vi.mock('@server/billing/linkedAccounts', () => ({ lockIfPaidWithBlockedCard: mocks.lockIfPaidWithBlockedCard }));
 
 import {
   alertStripeRiskEvent,
@@ -250,12 +252,35 @@ describe('screenPaymentOutcome', () => {
     expect(mocks.recordOutcome).toHaveBeenCalledWith(expect.objectContaining({ cardFingerprint: 'fp_2' }));
   });
 
-  it('does nothing when the admin switch is off', async () => {
+  it('still records, for the checkout gate, but does not alert when the admin switch is off', async () => {
     mocks.settings = { paymentRiskAlertsEnabled: 'false' };
 
     await screenPaymentOutcome(input, logger, now);
 
-    expect(mocks.recordOutcome).not.toHaveBeenCalled();
+    expect(mocks.recordOutcome).toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('marks a Radar-blocked attempt so the checkout gate can count it', async () => {
+    mocks.chargesRetrieve.mockResolvedValue(
+      charge({ outcome: { type: 'blocked', risk_level: 'highest' } as unknown as Stripe.Charge['outcome'] })
+    );
+    mocks.recordOutcome.mockResolvedValue({ attempt: { ...recorded, outcome: 'failed' }, changed: true });
+
+    await screenPaymentOutcome({ ...input, outcome: 'failed' }, logger, now);
+
+    expect(mocks.recordOutcome).toHaveBeenCalledWith(expect.objectContaining({ radarBlocked: true }));
+    expect(mocks.lockIfPaidWithBlockedCard).not.toHaveBeenCalled();
+  });
+
+  it('checks a paid card against blocked accounts', async () => {
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.recordOutcome).toHaveBeenCalledWith(expect.objectContaining({ radarBlocked: false }));
+    expect(mocks.lockIfPaidWithBlockedCard).toHaveBeenCalledWith(
+      { userId: 'u1', paymentIntentId: 'pi_1', cardFingerprints: ['fp_1'] },
+      logger
+    );
   });
 
   it('never throws into the webhook', async () => {
