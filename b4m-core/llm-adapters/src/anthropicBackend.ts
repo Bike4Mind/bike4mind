@@ -1,4 +1,5 @@
 import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
+import { providerFetchOptions } from './providerDispatcher';
 import type {
   MessageCreateParamsBase,
   ContentBlock,
@@ -287,6 +288,7 @@ export class AnthropicBackend implements ICompletionBackend {
         : { apiKey: federated ? undefined : apiKey }),
       maxRetries: 5,
       fetch: retryFetch,
+      fetchOptions: providerFetchOptions(),
     });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
