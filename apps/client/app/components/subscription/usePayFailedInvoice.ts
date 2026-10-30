@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { isAxiosError } from 'axios';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -16,6 +16,9 @@ export function usePayFailedInvoice() {
   const queryClient = useQueryClient();
   const [declineMessage, setDeclineMessage] = useState<string | null>(null);
   const [isPaid, setIsPaid] = useState(false);
+  const refetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => () => clearTimeout(refetchTimer.current), []);
 
   const refreshSubscriptions = () => {
     queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
@@ -36,7 +39,12 @@ export function usePayFailedInvoice() {
       setIsPaid(true);
       toast.success(t('profile.pay_now_success'));
       refreshSubscriptions();
-      setTimeout(refreshSubscriptions, WEBHOOK_LAG_REFETCH_MS);
+      clearTimeout(refetchTimer.current);
+      // Re-enable the button too, so a webhook that never lands does not leave it stuck on "Payment received".
+      refetchTimer.current = setTimeout(() => {
+        setIsPaid(false);
+        refreshSubscriptions();
+      }, WEBHOOK_LAG_REFETCH_MS);
     },
     onError: error => {
       if (isAxiosError(error) && error.response?.status === 402) {
