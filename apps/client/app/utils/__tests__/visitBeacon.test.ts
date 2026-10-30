@@ -58,6 +58,16 @@ describe('beaconVisit', () => {
     expect(sentBody(fetchMock)).toEqual({ landingPath: '/' });
   });
 
+  it('cuts an over-long landing path at a segment boundary, never inside a token', () => {
+    const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+    vi.stubGlobal('fetch', fetchMock);
+    window.history.replaceState(null, '', `/${'page-'.repeat(38)}/aB3dE5fG7hJ9kL1mN3pQ`);
+
+    beaconVisit();
+
+    expect(sentBody(fetchMock).landingPath).toBe(`/${'page-'.repeat(38)}`);
+  });
+
   it('sends neither without consent, as the campaign capture waits for it', () => {
     for (const state of ['denied', 'unset']) {
       mockResolveConsent.mockReturnValue(state);

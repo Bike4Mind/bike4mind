@@ -23,7 +23,10 @@ export function visitLanding(): { referrer?: string; landingPath?: string } {
   } catch {
     // No referrer (typed URL, bookmark, a no-referrer policy), or one that is no URL.
   }
-  return { ...(referrer && { referrer }), landingPath: window.location.pathname.slice(0, MAX_LANDING_PATH) };
+  const path = window.location.pathname;
+  // Cut at a `/`: a token cut mid-way arrives too short for the server to recognise and redact.
+  const landingPath = path.length > MAX_LANDING_PATH ? path.slice(0, path.lastIndexOf('/', MAX_LANDING_PATH)) : path;
+  return { ...(referrer && { referrer }), landingPath };
 }
 
 /**
