@@ -41,10 +41,14 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockRetrieve = vi.fn();
 const mockPay = vi.fn();
+const mockListInvoices = vi.fn();
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     subscriptions: { retrieve: (...args: unknown[]) => mockRetrieve(...args) },
-    invoices: { pay: (...args: unknown[]) => mockPay(...args) },
+    invoices: {
+      pay: (...args: unknown[]) => mockPay(...args),
+      list: (...args: unknown[]) => mockListInvoices(...args),
+    },
   },
 }));
 
@@ -67,7 +71,14 @@ const userRow = (overrides: Record<string, unknown> = {}) => ({
 const liveSubscription = (overrides: Record<string, unknown> = {}) => ({
   id: 'sub_1',
   customer: 'cus_1',
-  latest_invoice: { id: 'in_1', status: 'open', hosted_invoice_url: HOSTED_URL },
+  ...overrides,
+});
+
+const openInvoice = (overrides: Record<string, unknown> = {}) => ({
+  id: 'in_1',
+  status: 'open',
+  created: 1_700_000_000,
+  hosted_invoice_url: HOSTED_URL,
   ...overrides,
 });
 
@@ -90,6 +101,7 @@ describe('POST /api/subscriptions/pay-invoice', () => {
     vi.clearAllMocks();
     mockFindByStripeId.mockResolvedValue(userRow());
     mockRetrieve.mockResolvedValue(liveSubscription());
+    mockListInvoices.mockResolvedValue({ data: [openInvoice()] });
     mockPay.mockResolvedValue({ id: 'in_1', status: 'paid' });
   });
 
@@ -100,7 +112,8 @@ describe('POST /api/subscriptions/pay-invoice', () => {
   it('pays the open invoice for the owning user', async () => {
     const res = await run();
 
-    expect(mockRetrieve).toHaveBeenCalledWith('sub_1', { expand: ['latest_invoice'] });
+    expect(mockRetrieve).toHaveBeenCalledWith('sub_1');
+    expect(mockListInvoices).toHaveBeenCalledWith({ subscription: 'sub_1', status: 'open', limit: 100 });
     expect(mockPay).toHaveBeenCalledWith('in_1');
     expect(res.statusCode).toBe(200);
     expect(res._getJSONData()).toEqual({ status: 'paid' });
@@ -170,13 +183,50 @@ describe('POST /api/subscriptions/pay-invoice', () => {
     expect(mockRetrieve).not.toHaveBeenCalled();
   });
 
-  it.each(['paid', 'void', 'draft'])('answers 409 when the latest invoice is %s', async status => {
-    mockRetrieve.mockResolvedValue(
-      liveSubscription({ latest_invoice: { id: 'in_1', status, hosted_invoice_url: HOSTED_URL } })
-    );
+  it('answers 409 when the subscription has no open invoice', async () => {
+    mockListInvoices.mockResolvedValue({ data: [] });
 
     await expect(run()).rejects.toMatchObject({ constructor: ConflictError, statusCode: 409 });
     expect(mockPay).not.toHaveBeenCalled();
+  });
+
+  it('pays every open invoice oldest first, so an older failed renewal is not left open', async () => {
+    mockListInvoices.mockResolvedValue({
+      data: [openInvoice({ id: 'in_new', created: 1_700_100_000 }), openInvoice({ id: 'in_old' })],
+    });
+
+    const res = await run();
+
+    expect(mockPay.mock.calls).toEqual([['in_old'], ['in_new']]);
+    expect(res._getJSONData()).toEqual({ status: 'paid' });
+  });
+
+  it('stops at the first invoice that needs the hosted page', async () => {
+    mockListInvoices.mockResolvedValue({
+      data: [openInvoice({ id: 'in_new', created: 1_700_100_000 }), openInvoice({ id: 'in_old' })],
+    });
+    mockPay.mockResolvedValueOnce({ id: 'in_old', status: 'open' });
+
+    const res = await run();
+
+    expect(mockPay.mock.calls).toEqual([['in_old']]);
+    expect(res._getJSONData()).toEqual({ status: 'requires_action', hostedInvoiceUrl: HOSTED_URL });
+  });
+
+  it('sends the user to the hosted page when the payment is not settled yet', async () => {
+    mockPay.mockResolvedValue({ id: 'in_1', status: 'open' });
+
+    const res = await run();
+
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData()).toEqual({ status: 'requires_action', hostedInvoiceUrl: HOSTED_URL });
+  });
+
+  it('fails loudly when an invoice needing action has no hosted URL', async () => {
+    mockListInvoices.mockResolvedValue({ data: [openInvoice({ hosted_invoice_url: null })] });
+    mockPay.mockResolvedValue({ id: 'in_1', status: 'open' });
+
+    await expect(run()).rejects.toThrow('Open invoice in_1 has no hosted_invoice_url');
   });
 
   it('answers 402 with the customer-facing message on a card decline', async () => {
@@ -210,6 +260,14 @@ describe('POST /api/subscriptions/pay-invoice', () => {
   it('answers 409 when a second click finds the invoice already settled at Stripe', async () => {
     mockPay.mockRejectedValue(
       new Stripe.errors.StripeInvalidRequestError({ type: 'invalid_request_error', message: 'Invoice is already paid' })
+    );
+
+    await expect(run()).rejects.toMatchObject({ constructor: ConflictError, statusCode: 409 });
+  });
+
+  it('answers 409 when a concurrent click hits the lock the first payment holds', async () => {
+    mockPay.mockRejectedValue(
+      new Stripe.errors.StripeRateLimitError({ type: 'rate_limit_error', code: 'lock_timeout', message: 'locked' })
     );
 
     await expect(run()).rejects.toMatchObject({ constructor: ConflictError, statusCode: 409 });

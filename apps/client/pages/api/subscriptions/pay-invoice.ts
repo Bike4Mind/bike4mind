@@ -32,6 +32,8 @@ const needsAuthentication = (error: Stripe.errors.StripeError): boolean =>
   AUTH_REQUIRED_CODES.has(error.decline_code ?? '') ||
   error.payment_intent?.status === 'requires_action';
 
+type PayableInvoice = Stripe.Invoice & { id: string };
+
 const idOf = (ref: string | { id: string } | null): string | null =>
   typeof ref === 'string' ? ref : (ref?.id ?? null);
 
@@ -62,39 +64,55 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
     if (!isDelinquentSubscriptionStatus(row.status)) throw new ConflictError(NOT_PAYABLE_MESSAGE);
 
-    const live = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['latest_invoice'] });
+    const live = await stripe.subscriptions.retrieve(subscriptionId);
     if (!customerId || idOf(live.customer) !== customerId) {
       req.logger.warn(`pay-invoice: customer mismatch on subscription ${subscriptionId}`);
       throw new BadRequestError(NOT_FOUND_MESSAGE);
     }
 
-    const invoice = typeof live.latest_invoice === 'string' ? null : live.latest_invoice;
-    if (!invoice?.id || invoice.status !== 'open') throw new ConflictError(NOT_PAYABLE_MESSAGE);
+    // Not just latest_invoice: a subscription left delinquent across a renewal keeps the older failed
+    // invoice open, and the newest one may still be a draft.
+    const { data: openInvoices } = await stripe.invoices.list({
+      subscription: subscriptionId,
+      status: 'open',
+      limit: 100,
+    });
+    const invoices = openInvoices
+      .filter((invoice): invoice is PayableInvoice => Boolean(invoice.id))
+      .sort((a, b) => a.created - b.created);
+    if (invoices.length === 0) throw new ConflictError(NOT_PAYABLE_MESSAGE);
 
-    const requiresAction = (): PayInvoiceResult => {
-      // A bearer link to the invoice: returned for this redirect only, never persisted.
-      if (!invoice.hosted_invoice_url) throw new Error(`Open invoice ${invoice.id} has no hosted_invoice_url`);
-      return { status: 'requires_action', hostedInvoiceUrl: invoice.hosted_invoice_url };
-    };
+    const payOne = async (invoice: PayableInvoice): Promise<PayInvoiceResult> => {
+      const requiresAction = (): PayInvoiceResult => {
+        // A bearer link to the invoice: returned for this redirect only, never persisted.
+        if (!invoice.hosted_invoice_url) throw new Error(`Open invoice ${invoice.id} has no hosted_invoice_url`);
+        return { status: 'requires_action', hostedInvoiceUrl: invoice.hosted_invoice_url };
+      };
 
-    let result: PayInvoiceResult;
-    try {
-      const paid = await stripe.invoices.pay(invoice.id);
-      // Anything short of paid (e.g. a bank debit still processing) is left to the hosted page.
-      result = paid.status === 'paid' ? { status: 'paid' } : requiresAction();
-    } catch (error) {
-      if (!(error instanceof Stripe.errors.StripeError)) throw error;
-      if (needsAuthentication(error)) {
-        result = requiresAction();
-      } else if (error instanceof Stripe.errors.StripeCardError) {
-        throw new HTTPError(PAYMENT_REQUIRED, error.message || 'Your card was declined.');
-      } else if (error instanceof Stripe.errors.StripeInvalidRequestError) {
-        // Usually a second click racing the first: the invoice is no longer open.
-        req.logger.warn(`pay-invoice: Stripe refused paying ${invoice.id}`, { code: error.code });
-        throw new ConflictError(NOT_PAYABLE_MESSAGE);
-      } else {
+      try {
+        const paid = await stripe.invoices.pay(invoice.id);
+        // Anything short of paid (e.g. a bank debit still processing) is left to the hosted page.
+        return paid.status === 'paid' ? { status: 'paid' } : requiresAction();
+      } catch (error) {
+        if (!(error instanceof Stripe.errors.StripeError)) throw error;
+        if (needsAuthentication(error)) return requiresAction();
+        if (error instanceof Stripe.errors.StripeCardError) {
+          throw new HTTPError(PAYMENT_REQUIRED, error.message || 'Your card was declined.');
+        }
+        // A second click racing the first: either the invoice is no longer open, or Stripe still holds
+        // the first payment's lock on it (lock_timeout, raised as a rate-limit error).
+        if (error instanceof Stripe.errors.StripeInvalidRequestError || error.code === 'lock_timeout') {
+          req.logger.warn(`pay-invoice: Stripe refused paying ${invoice.id}`, { code: error.code });
+          throw new ConflictError(NOT_PAYABLE_MESSAGE);
+        }
         throw error;
       }
+    };
+
+    let result: PayInvoiceResult = { status: 'paid' };
+    for (const invoice of invoices) {
+      result = await payOne(invoice);
+      if (result.status !== 'paid') break;
     }
 
     return res.status(200).json(result);
