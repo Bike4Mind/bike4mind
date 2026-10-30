@@ -84,9 +84,19 @@ export class AdminPage extends BasePage {
     await expect(this.page.getByTestId('admin-organizations-search-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
+  /** Long sidebar sections hide items past the first few behind a "More" row (see splitSectionItems). */
+  private async revealSidebarItem(testId: string, sectionKey: string) {
+    const link = this.page.getByTestId(testId).filter({ visible: true }).first();
+    if (!(await link.isVisible())) {
+      await this.page.getByTestId(`admin-sidebar-more-${sectionKey}-btn`).filter({ visible: true }).first().click();
+    }
+    await expect(link).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    return link;
+  }
+
   async navigateToInviteCenter() {
     await this.expandUserOps();
-    await this.page.getByTestId('admin-invite-center-tab-btn').filter({ visible: true }).first().click();
+    await (await this.revealSidebarItem('admin-invite-center-tab-btn', 'people')).click();
     await expect(this.page.getByTestId('invite-center-codes-tab')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
