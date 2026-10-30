@@ -1,6 +1,8 @@
 import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 import {
+  ADMIN_ANALYTICS_TAB_SLUG,
+  ADMIN_EVENTS_TAB_SLUG,
   ADMIN_INTEGRATION_DEMAND_TAB_SLUG,
   ADMIN_MODEL_LOGS_TAB_SLUG,
   ADMIN_ORGANIZATIONS_TAB_SLUG,
@@ -23,7 +25,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Users]: ADMIN_USERS_TAB_SLUG,
   [AdminTab.AdminSettings]: ADMIN_SETTINGS_TAB_SLUG,
   [AdminTab.Feedback]: ADMIN_FEEDBACK_TAB_SLUG,
-  [AdminTab.Analytics]: 'analytics',
+  [AdminTab.Analytics]: ADMIN_ANALYTICS_TAB_SLUG,
   [AdminTab.Accounts]: 'accounts',
   [AdminTab.RegistrationInvites]: 'registration-invites',
   [AdminTab.Migrate]: 'migrate',
@@ -40,7 +42,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.BulkImport]: 'bulk-import',
   [AdminTab.ModelLogs]: ADMIN_MODEL_LOGS_TAB_SLUG,
   [AdminTab.ModelMetrics]: 'model-metrics',
-  [AdminTab.EventMetrics]: 'event-metrics',
+  [AdminTab.EventMetrics]: ADMIN_EVENTS_TAB_SLUG,
   [AdminTab.SystemPrompts]: 'system-prompts',
   [AdminTab.IdentityProviders]: 'identity-providers',
   [AdminTab.AgentOps]: 'agent-ops',

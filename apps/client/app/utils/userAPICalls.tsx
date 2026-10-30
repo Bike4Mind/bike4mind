@@ -65,8 +65,6 @@ export interface FetchCounterLogsParams {
   startDate?: string;
   endDate?: string;
   events?: string[];
-  report?: boolean;
-  includeInsights?: boolean;
   orgs?: string[] | null;
   excludeOrgs?: string[] | null;
   /** Drop rows whose counter log carries no organization. */
@@ -75,7 +73,6 @@ export interface FetchCounterLogsParams {
   excludeStaff?: boolean;
   isGated?: boolean;
   isHero?: boolean;
-  weeklyReport?: boolean;
   page?: number;
   limit?: number;
   counterName?: string;
@@ -83,25 +80,9 @@ export interface FetchCounterLogsParams {
   metadataFilters?: MetadataFilter[];
   /**
    * IANA zone startDate/endDate name a day in. Defaults to the viewer's own zone so "today" means
-   * their today rather than a UTC day shifted by their offset. Ignored by the report paths, whose
-   * cached rows are UTC-day-keyed and shared between admins.
+   * their today rather than a UTC day shifted by their offset.
    */
   timezone?: string;
-}
-
-/**
- * Both report modes answer on the same `reports` key with different envelopes: the daily one
- * carries `date`, the weekly one the week's bounds. Hence the optional keys rather than a
- * discriminated union - which key is set follows the request flag, not anything in the payload.
- */
-export interface AnalyticsReport {
-  date?: string;
-  startDate?: string;
-  endDate?: string;
-  report: string;
-  aiInsights?: string | null;
-  /** Daily mode only: generation failed for this date; `report` is empty. */
-  error?: string;
 }
 
 /** One rendered User Activity row: the server groups per day/counter/user/metadata. */
@@ -118,7 +99,6 @@ export interface CounterLogRow {
 
 interface CounterLogsResponse {
   logs?: CounterLogRow[];
-  reports?: AnalyticsReport[];
   total?: number;
 }
 
@@ -126,15 +106,12 @@ export const fetchCounterLogs = async ({
   startDate,
   endDate,
   events,
-  report = false,
-  includeInsights = false,
   orgs = null,
   excludeOrgs = null,
   excludeNoOrg = false,
   excludeStaff = false,
   isGated,
   isHero,
-  weeklyReport = false,
   page,
   limit,
   counterName,
@@ -145,20 +122,13 @@ export const fetchCounterLogs = async ({
   const queryParams: Record<string, string> = {
     startDate: startDate || '',
     endDate: endDate || '',
+    timezone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
   };
-
-  // The report paths stay UTC-keyed: their rows are cached per UTC day and shared between admins.
-  if (!report && !weeklyReport) {
-    queryParams.timezone = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-  }
 
   // Handle arrays by joining with commas and encoding each value
   if (events?.length) {
     queryParams.events = events.map(e => encodeURIComponent(e)).join(',');
   }
-  if (report) queryParams.report = 'true';
-  if (weeklyReport) queryParams.weeklyReport = 'true';
-  if (includeInsights) queryParams.includeInsights = 'true';
   if (orgs?.length) {
     queryParams.orgs = orgs.map(org => encodeURIComponent(org)).join(',');
   }

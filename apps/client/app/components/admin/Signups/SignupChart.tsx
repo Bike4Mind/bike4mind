@@ -22,13 +22,16 @@ export type SignupChartMode = 'status' | 'signals';
  * Likely legit takes the admin accent and suspected the warn tone; the dark steps are deeper than the
  * dark accent/warn tokens, which are text colors and fail the chart lightness band.
  */
-const STATUS_COLORS = {
+export const SIGNUP_STATUS_COLORS = {
   light: { likelyLegit: '#4F46E5', suspected: '#8A4B00' },
   dark: { likelyLegit: '#7B83F2', suspected: '#D95926' },
 } as const;
 
-/** Categorical slots in SIGNUP_SIGNALS order, so a signal keeps its color whatever the range. */
-const SIGNAL_COLORS = {
+/**
+ * Categorical slots in SIGNUP_SIGNALS order, so a signal keeps its color whatever the range. The
+ * Analytics page's by-surface chart takes the same slots in its own fixed order.
+ */
+export const SIGNAL_COLORS = {
   light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#0f8c9e', '#9a6a3a', '#b03fc4'],
   dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#2aa9ba', '#b8875a', '#c869d6'],
 } as const;
@@ -120,7 +123,7 @@ export function SignupChart({
                 dataKey="likelyLegit"
                 name="Likely legit"
                 stackId="signups"
-                fill={STATUS_COLORS[scheme].likelyLegit}
+                fill={SIGNUP_STATUS_COLORS[scheme].likelyLegit}
                 stroke={admin.surface}
                 strokeWidth={1}
                 isAnimationActive={false}
@@ -129,7 +132,7 @@ export function SignupChart({
                 dataKey="suspected"
                 name="Suspected"
                 stackId="signups"
-                fill={STATUS_COLORS[scheme].suspected}
+                fill={SIGNUP_STATUS_COLORS[scheme].suspected}
                 stroke={admin.surface}
                 strokeWidth={1}
                 isAnimationActive={false}

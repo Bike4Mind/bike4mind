@@ -21,7 +21,6 @@ import ModalsAdminTab from './AdminModalTab';
 import EmbedKeysTab from './EmbedKeysTab';
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
 import AdminReleaseNotesTab from './ReleaseNotes/AdminReleaseNotesTab';
-import AnalyticsTab from './Analytics';
 import UsersTab from './Users';
 import dynamic from 'next/dynamic';
 import AdminSubscriptions from './Subscriptions';
@@ -72,6 +71,7 @@ const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), {
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
+const AnalyticsTab = dynamic(() => import('./Analytics'), { ssr: false });
 const SecurityDashboardMock = dynamic(() => import('./SecurityDashboardMock'), { ssr: false });
 const Team = lazy(() => import('./Team'));
 const SlackWorkspacesTab = dynamic(() => import('./SlackWorkspacesTab'), { ssr: false });

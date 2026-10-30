@@ -24,8 +24,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const QUERY_DEADLINE_MS = 120_000;
 const USER_BATCH = 1000;
 const HOUR_MS = 60 * 60 * 1000;
-const MAU_WINDOW_DAYS = 28;
-const WAU_WINDOW_DAYS = 7;
+export const MAU_WINDOW_DAYS = 28;
+export const WAU_WINDOW_DAYS = 7;
 
 export const SIGNUP_REEVALUATION_DAYS = 14;
 
@@ -42,7 +42,8 @@ const dayBounds = (day: string) => {
   return { start, end: new Date(start.getTime() + DAY_MS) };
 };
 
-const shiftDay = (day: string, days: number) => formatDay(new Date(dayBounds(day).start.getTime() + days * DAY_MS));
+export const shiftDay = (day: string, days: number) =>
+  formatDay(new Date(dayBounds(day).start.getTime() + days * DAY_MS));
 
 const bump = (map: Map<string, number>, key: string, by: number) => map.set(key, (map.get(key) ?? 0) + by);
 
@@ -101,7 +102,8 @@ async function loadApiActivity(userIds: string[]): Promise<Map<string, ApiActivi
 
 type CohortResult = { signups: IAnalyticsDailySignups; classifiedIds: string[]; suspectedIds: string[] };
 
-async function classifyCohort(
+/** Signup counts for the accounts created on `day`; read-only, so it also serves the live slice for today. */
+export async function classifyCohort(
   day: string,
   { now = new Date(), logger = console }: RollupOptions
 ): Promise<CohortResult> {
@@ -250,13 +252,20 @@ type EventGroup = {
   credits: number;
 };
 
+type DayUsageAcc = {
+  requests: number;
+  credits: number;
+  features: Set<string>;
+  sources: Set<string>;
+  byOwner: Map<string, { ownerType: IAnalyticsUserDay['ownerType']; ownerId: string; requests: number }>;
+};
+
 /**
- * Rebuilds the user-day rows and the daily row for one UTC day from usageevents. Safe to re-run:
- * every write is an upsert keyed on the day, and rows for users that no longer count are removed.
+ * Counted users' usage on one UTC day, grouped the way rollupDay stores it. Read-only, so the
+ * admin overview reuses it for the live slice of today and its numbers match the rollup.
  */
-export async function rollupDay(day: string, options: RollupOptions = {}) {
+export async function collectDayUsage(day: string) {
   const { start, end } = dayBounds(day);
-  const computedAt = options.now ?? new Date();
   const staffRegex = currentStaffRegex();
 
   const groups = await UsageEvent.aggregate<EventGroup>([
@@ -281,14 +290,7 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
 
   const users = await loadUsers([...new Set(groups.map(g => g._id.userId))]);
 
-  type Acc = {
-    requests: number;
-    credits: number;
-    features: Set<string>;
-    sources: Set<string>;
-    byOwner: Map<string, { ownerType: IAnalyticsUserDay['ownerType']; ownerId: string; requests: number }>;
-  };
-  const perUser = new Map<string, Acc>();
+  const perUser = new Map<string, DayUsageAcc>();
   const byFeature = new Map<string, number>();
   const bySource = new Map<string, number>();
   const byModel = new Map<string, number>();
@@ -297,7 +299,7 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
   for (const group of groups) {
     const { userId, ownerType, ownerId, feature, source, model } = group._id;
     if (!isCountedUser(users.get(userId), staffRegex)) continue;
-    const acc: Acc = perUser.get(userId) ?? {
+    const acc: DayUsageAcc = perUser.get(userId) ?? {
       requests: 0,
       credits: 0,
       features: new Set(),
@@ -318,6 +320,16 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
     bump(byModel, model, group.requests);
     creditsConsumed += group.credits;
   }
+  return { users, perUser, byFeature, bySource, byModel, creditsConsumed };
+}
+
+/**
+ * Rebuilds the user-day rows and the daily row for one UTC day from usageevents. Safe to re-run:
+ * every write is an upsert keyed on the day, and rows for users that no longer count are removed.
+ */
+export async function rollupDay(day: string, options: RollupOptions = {}) {
+  const computedAt = options.now ?? new Date();
+  const { users, perUser, byFeature, bySource, byModel, creditsConsumed } = await collectDayUsage(day);
 
   const suspectedUsers = await resolveSuspected(
     [...perUser.keys()].map(userId => {

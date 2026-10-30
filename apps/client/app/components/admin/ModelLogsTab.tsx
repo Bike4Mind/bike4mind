@@ -21,7 +21,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InfoIcon from '@mui/icons-material/Info';
-import { DateFilterComponent } from './Analytics/filters/DateFilterComponent';
+import { DateFilterComponent } from './EventMetrics/UserActivity/filters/DateFilterComponent';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useModelLogDetail, useModelLogs, ModelLogSummary } from '@client/app/hooks/useModelLogs';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
