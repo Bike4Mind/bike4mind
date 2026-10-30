@@ -121,9 +121,10 @@ const buildReleaseAdapters = () => {
           })),
           update: vi.fn(),
         },
+        adminSettings: { findBySettingNames: vi.fn().mockResolvedValue([]) },
       },
       reason: 'test',
-      logger: { error: vi.fn() },
+      logger: { error: vi.fn(), warn: vi.fn() },
     },
     clearPending: vi.fn().mockResolvedValue(undefined),
     batches: { createBatch: vi.fn().mockResolvedValue({ id: BATCH_ID }) },
@@ -155,6 +156,28 @@ describe('held grant release', () => {
       { maxUsers: 10 }
     );
     expect(cron).toMatchObject({ scanned: 1, failed: 1, withheld: 0 });
+  });
+
+  it('checks the signup protections once per batch, not once per release', async () => {
+    vi.mocked(releasePendingFreeCredits).mockResolvedValue({
+      released: true,
+      creditsGranted: 40,
+      currentCredits: 40,
+      patch: {},
+    });
+    const adapters = buildReleaseAdapters();
+
+    await bulkReleaseHeldGrants({ actorId: 'admin-1', userIds: ['user-1', 'user-2', 'user-3'] }, adapters);
+    expect(adapters.grant.db.adminSettings.findBySettingNames).toHaveBeenCalledOnce();
+
+    await releaseHeldGrantsAgainstBudget(
+      { ...adapters, listHeldIds: vi.fn().mockResolvedValueOnce(['user-1', 'user-2']).mockResolvedValue([]) },
+      { maxUsers: 10 }
+    );
+    expect(adapters.grant.db.adminSettings.findBySettingNames).toHaveBeenCalledTimes(2);
+    for (const [, releaseAdapters] of vi.mocked(releasePendingFreeCredits).mock.calls) {
+      expect(releaseAdapters).toMatchObject({ skipProtectionCheck: true });
+    }
   });
 
   it('keeps a committed payout as released when clearing the hold fails', async () => {

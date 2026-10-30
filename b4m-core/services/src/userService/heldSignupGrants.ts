@@ -4,8 +4,9 @@ import {
   type ICreditTransactionRepository,
   type IUserRepository,
 } from '@bike4mind/common';
-import type { FreeCreditAdapters } from './freeCredits';
+import type { FreeCreditAdapters, FreeCreditLogger } from './freeCredits';
 import { releasePendingFreeCredits } from './freeCredits';
+import { logUnprotectedSignupGrant } from './signupGrantProtectionAlarm';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 
 export const MAX_BULK_RELEASE = 100;
@@ -25,17 +26,28 @@ export type HeldReleaseBatchRepository = {
 };
 
 export type HeldGrantAdapters = {
-  grant: FreeCreditAdapters & { logger: { error: (message: string, ...args: unknown[]) => void; warn: (message: string, ...args: unknown[]) => void } };
+  grant: FreeCreditAdapters & { logger: FreeCreditLogger };
   /** Strips PENDING_FREE_CREDITS_TAG and pendingCreditGrant once a release has paid. */
   clearPending: (userId: string) => Promise<unknown>;
 };
 
 type ReleaseOutcome = { entry: HeldReleaseEntry; budgetExhausted: boolean };
 
+/** Runs the signup protection alarm check at most once per batch, on the first release it reaches. */
+function protectionCheckOnce(adapters: HeldGrantAdapters) {
+  let checked = false;
+  return async () => {
+    if (checked) return;
+    checked = true;
+    await logUnprotectedSignupGrant(adapters.grant.db.adminSettings, adapters.grant.logger);
+  };
+}
+
 async function releaseHeldGrant(
   userId: string,
   adapters: HeldGrantAdapters,
-  bypassBudget: boolean
+  bypassBudget: boolean,
+  checkProtections: () => Promise<void>
 ): Promise<ReleaseOutcome> {
   const { users } = adapters.grant.db;
   const none = (outcome: HeldReleaseEntry['outcome'], budgetExhausted = false): ReleaseOutcome => ({
@@ -46,9 +58,10 @@ async function releaseHeldGrant(
     const user = await users.findById(userId);
     if (!user || !user.tags?.includes(PENDING_FREE_CREDITS_TAG) || !user.signupGrantHeldReason) return none('not_held');
     if (!user.emailVerified || accountBlockReasons(user).length || isAiAccessRevoked(user)) return none('withheld');
+    await checkProtections();
     const result = await releasePendingFreeCredits(
       { id: userId, tags: [...user.tags], pendingCreditGrant: user.pendingCreditGrant ?? null },
-      { ...adapters.grant, bypassBudget }
+      { ...adapters.grant, bypassBudget, skipProtectionCheck: true }
     );
     if (result.failed) return none('failed');
     if (!result.released) return none('withheld', !!result.budgetExhausted);
@@ -76,7 +89,8 @@ export async function bulkReleaseHeldGrants(
 ) {
   const userIds = [...new Set(input.userIds)].slice(0, MAX_BULK_RELEASE);
   const entries: HeldReleaseEntry[] = [];
-  for (const userId of userIds) entries.push((await releaseHeldGrant(userId, adapters, true)).entry);
+  const checkProtections = protectionCheckOnce(adapters);
+  for (const userId of userIds) entries.push((await releaseHeldGrant(userId, adapters, true, checkProtections)).entry);
   const batch = await adapters.batches.createBatch({ actorId: input.actorId, entries });
   return { batchId: batch.id, results: entries };
 }
@@ -93,7 +107,7 @@ export async function revokeHeldGrantRelease(
       decrementCreditsIfCovered: (userId: string, credits: number) => Promise<boolean>;
     };
     creditTransactions: ICreditTransactionRepository;
-    logger: { error: (message: string, ...args: unknown[]) => void; warn: (message: string, ...args: unknown[]) => void };
+    logger: FreeCreditLogger;
   }
 ) {
   const batch = await adapters.batches.findBatch(input.batchId);
@@ -180,12 +194,13 @@ export async function releaseHeldGrantsAgainstBudget(
     stoppedOnBudget: false,
   };
   let afterId: string | undefined;
+  const checkProtections = protectionCheckOnce(adapters);
   while (result.scanned < options.maxUsers) {
     const ids = await adapters.listHeldIds({ afterId, limit: Math.min(pageSize, options.maxUsers - result.scanned) });
     if (!ids.length) break;
     for (const id of ids) {
       result.scanned++;
-      const { entry, budgetExhausted } = await releaseHeldGrant(id, adapters, false);
+      const { entry, budgetExhausted } = await releaseHeldGrant(id, adapters, false, checkProtections);
       if (budgetExhausted) {
         result.stoppedOnBudget = true;
         return result;

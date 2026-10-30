@@ -357,6 +357,15 @@ describe('free credits service', () => {
       expect(adapters.logger.warn).not.toHaveBeenCalled();
     });
 
+    it('skips the protection check when a batch caller already ran it', async () => {
+      const adapters = buildAdapters('100');
+      await releasePendingFreeCredits(
+        { id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG] },
+        { ...adapters, skipProtectionCheck: true }
+      );
+      expect(adapters.db.adminSettings.findBySettingNames).not.toHaveBeenCalled();
+    });
+
     it('still releases the grant when the protection check cannot read settings', async () => {
       const adapters = buildAdapters('100');
       adapters.db.adminSettings.findBySettingNames.mockRejectedValue(new Error('settings unavailable'));

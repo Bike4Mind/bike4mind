@@ -39,7 +39,7 @@ export type FreeCreditAdapters = {
   emitRiskBand?: (band: SignupRiskBand) => Promise<void>;
 };
 
-type FreeCreditLogger = {
+export type FreeCreditLogger = {
   error: (message: string, ...args: unknown[]) => void;
   warn: (message: string, ...args: unknown[]) => void;
 };
@@ -190,7 +190,11 @@ async function grantFlatFreeCredits(
  */
 export const releasePendingFreeCredits = async (
   user: FreeCreditUser,
-  adapters: FreeCreditAdapters & { logger: FreeCreditLogger }
+  adapters: FreeCreditAdapters & {
+    logger: FreeCreditLogger;
+    /** Set by batch callers that ran logUnprotectedSignupGrant once for the whole batch. */
+    skipProtectionCheck?: boolean;
+  }
 ): Promise<ReleasePendingFreeCreditsResult> => {
   const tags = user.tags ?? [];
   try {
@@ -198,7 +202,7 @@ export const releasePendingFreeCredits = async (
       await protectSignupCredits(user.id, adapters.db);
       return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
     }
-    await logUnprotectedSignupGrant(adapters.db.adminSettings, adapters.logger);
+    if (!adapters.skipProtectionCheck) await logUnprotectedSignupGrant(adapters.db.adminSettings, adapters.logger);
     const { creditsGranted, currentCredits, withheld, budgetExhausted } = await grantFreeCredits(user, adapters);
     if (withheld) return { released: false, budgetExhausted, creditsGranted: 0, currentCredits: null, patch: {} };
     return {

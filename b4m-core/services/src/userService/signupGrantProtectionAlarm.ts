@@ -4,11 +4,7 @@ import {
   signupGrantProtectionGap,
   type IAdminSettingsRepository,
 } from '@bike4mind/common';
-
-type AlarmLogger = {
-  warn: (message: string, ...args: unknown[]) => void;
-  error: (message: string, ...args: unknown[]) => void;
-};
+import type { FreeCreditLogger } from './freeCredits';
 
 /**
  * Logs the message the signup alarm counts when a grant is about to be released while a large grant is
@@ -16,7 +12,7 @@ type AlarmLogger = {
  */
 export async function logUnprotectedSignupGrant(
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames'>,
-  logger: AlarmLogger
+  logger: FreeCreditLogger
 ): Promise<void> {
   try {
     const rows = await adminSettings.findBySettingNames([...SIGNUP_GRANT_GUARDED_KEYS]);
