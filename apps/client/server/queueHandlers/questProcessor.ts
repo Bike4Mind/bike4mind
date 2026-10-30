@@ -44,7 +44,7 @@ import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { adminAssistantToolDefinitions } from '@server/adminAssistant';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
@@ -350,6 +350,10 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   const chatCompletion = new ChatCompletionProcess({
     ...staticOptions,
     // Override with request-specific dynamic properties
+    // A tool that re-reads the owner by id must see the same withheld role as `user`.
+    db: params.adminRoleWithheld
+      ? { ...staticOptions.db, users: ownerWithheldUsers(params.userId, staticOptions.db.users) }
+      : staticOptions.db,
     logger,
     tokenizer: getSharedTokenizer(logger),
     sessionId: params.sessionId,
