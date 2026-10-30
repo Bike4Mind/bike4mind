@@ -56,6 +56,7 @@ function build(over: { user?: ArenaUser | null; settings?: Partial<PreferenceAre
     seenPairIds: vi.fn().mockResolvedValue([]),
     serve: vi.fn().mockImplementation(async data => servedRow(data)),
     claim: vi.fn().mockImplementation(async (_u, _p, claimedAt) => servedRow({ claimedAt })),
+    releaseClaim: vi.fn().mockResolvedValue(true),
     recordVote: vi.fn().mockImplementation(async (_u, _p, _c, outcome) => servedRow({ ...outcome, status: 'voted' })),
     goldRecord: vi.fn().mockResolvedValue({ answered: 3, correct: 3 }),
     countCreditedSince: vi.fn().mockResolvedValue(0),
@@ -327,17 +328,13 @@ describe('submitVote', () => {
     }
   });
 
-  it('swallows a grant failure, logs it and awards nothing', async () => {
+  it('releases the claim and throws when the grant fails so a retry can pay', async () => {
     const { service, votes, addCredits, logger } = build();
     addCredits.mockRejectedValue(new Error('db down'));
-    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 0 });
+    await expect(service.submitVote('u1', vote)).rejects.toThrow('db down');
     expect(logger.error).toHaveBeenCalled();
-    expect(votes.recordVote).toHaveBeenCalledWith(
-      'u1',
-      expect.any(String),
-      new Date('2026-01-01T00:00:10Z'),
-      expect.objectContaining({ credited: false, rejectReason: 'grant_failed' })
-    );
+    expect(votes.releaseClaim).toHaveBeenCalledWith('u1', 'aaaaaaaaaaaaaaaaaaaaaaaa', new Date('2026-01-01T00:00:10Z'));
+    expect(votes.recordVote).not.toHaveBeenCalled();
   });
 });
 

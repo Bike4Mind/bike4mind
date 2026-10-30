@@ -24,18 +24,7 @@ export const ARENA_VERIFIED_UNLOCK_REASONS: readonly SignupGrantUnlockReason[] =
 export type ArenaIneligibleReason = 'disabled' | 'unverified' | 'blocked';
 
 export type ArenaRejectReason =
-  | 'rewards_off'
-  | 'too_fast'
-  | 'gold_missed'
-  | 'unqualified'
-  | 'low_gold_accuracy'
-  | 'daily_cap'
-  | 'lifetime_cap'
-  /**
-   * The vote earned but the credit write threw. It still counts toward gold accuracy and the
-   * rejection stats (not toward the credit caps) and is not retried automatically; re-granting with the same transaction id is deduped by the credit ledger.
-   */
-  | 'grant_failed';
+  'rewards_off' | 'too_fast' | 'gold_missed' | 'unqualified' | 'low_gold_accuracy' | 'daily_cap' | 'lifetime_cap';
 
 export const PREFERENCE_ARENA_REWARD_REASON = 'preference_arena_vote';
 

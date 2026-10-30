@@ -154,6 +154,15 @@ export class ArenaVoteRepository extends BaseRepository<IArenaVoteDocument> {
     return claimed?.toObject() ?? null;
   }
 
+  /** Drops this submit's claim so a retry can re-claim, re-judge and pay; no-op once the claim moved or settled. */
+  async releaseClaim(userId: string, pairId: string, claimedAt: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { userId, pairId, status: 'served', claimedAt },
+      { $unset: { claimedAt: 1 } }
+    );
+    return result.modifiedCount > 0;
+  }
+
   /**
    * Atomically flips the claimed row to voted with its judged outcome; null when the claim was lost
    * or the row already settled. The row stays 'served', holding the one-outstanding lock, until the

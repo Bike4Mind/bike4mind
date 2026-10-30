@@ -100,6 +100,27 @@ describe('arenaVoteRepository outstanding-pair invariant', () => {
     expect(await repo.claim('u1', pairId, retry, new Date('2026-03-02T10:01:00Z'))).not.toBeNull();
     expect(await repo.recordVote('u1', pairId, crashed, outcomeAt(crashed))).toBeNull();
   });
+
+  it('releases only its own claim so a retry can claim again', async () => {
+    const pairId = newPairId();
+    await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });
+    const first = new Date('2026-03-02T10:00:00Z');
+    const second = new Date('2026-03-02T10:00:01Z');
+    await repo.claim('u1', pairId, first, longAgo);
+    expect(await repo.releaseClaim('u1', pairId, second)).toBe(false);
+    expect(await repo.claim('u1', pairId, second, longAgo)).toBeNull();
+    expect(await repo.releaseClaim('u1', pairId, first)).toBe(true);
+    expect(await repo.claim('u1', pairId, second, longAgo)).not.toBeNull();
+  });
+
+  it('does not release a settled row', async () => {
+    const pairId = newPairId();
+    await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });
+    const claimedAt = new Date('2026-03-02T10:00:00Z');
+    await repo.claim('u1', pairId, claimedAt, longAgo);
+    await repo.recordVote('u1', pairId, claimedAt, outcomeAt(claimedAt));
+    expect(await repo.releaseClaim('u1', pairId, claimedAt)).toBe(false);
+  });
 });
 
 describe('arenaVoteRepository cap and quality reads', () => {

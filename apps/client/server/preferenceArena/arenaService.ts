@@ -42,6 +42,7 @@ export type ArenaServiceDeps = {
     | 'serve'
     | 'claim'
     | 'recordVote'
+    | 'releaseClaim'
     | 'goldRecord'
     | 'countCreditedSince'
     | 'creditsEarned'
@@ -151,7 +152,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
     return winner ?? { status: 'empty' };
   }
 
-  async function grantCredits(userId: string, voteId: string, pairId: string, credits: number): Promise<boolean> {
+  async function grantCredits(userId: string, voteId: string, pairId: string, credits: number): Promise<void> {
     try {
       await deps.addCredits(
         {
@@ -166,10 +167,9 @@ export function createArenaService(deps: ArenaServiceDeps) {
         },
         deps.creditAdapters
       );
-      return true;
     } catch (err) {
       logger.error('[preference-arena] reward grant failed', err, { userId, voteId });
-      return false;
+      throw err;
     }
   }
 
@@ -221,10 +221,15 @@ export function createArenaService(deps: ArenaServiceDeps) {
     let outcome: { credited: true; creditsAwarded: number } | { credited: false; rejectReason: ArenaRejectReason };
     if (!judgement.accepted) {
       outcome = { credited: false, rejectReason: judgement.reason };
-    } else if (await grantCredits(userId, row.id, pairId, judgement.credits)) {
-      outcome = { credited: true, creditsAwarded: judgement.credits };
     } else {
-      outcome = { credited: false, rejectReason: 'grant_failed' };
+      try {
+        await grantCredits(userId, row.id, pairId, judgement.credits);
+      } catch (err) {
+        // The ledger dedupes on the vote's transaction id, so the retry re-judges and pays once.
+        await votes.releaseClaim(userId, pairId, votedAt);
+        throw err;
+      }
+      outcome = { credited: true, creditsAwarded: judgement.credits };
     }
 
     const recorded = await votes.recordVote(userId, pairId, votedAt, {
