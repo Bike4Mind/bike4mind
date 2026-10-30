@@ -148,6 +148,7 @@ describe('signupGrantDripRemaining', () => {
   it.each([
     [undefined, 9000],
     [NaN, 9000],
+    [-500, 9000],
     [1.5, 9000],
     [2000, 7000],
     [9000, 0],
