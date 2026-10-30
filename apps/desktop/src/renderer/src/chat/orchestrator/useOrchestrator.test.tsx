@@ -112,6 +112,21 @@ describe('useAgentActivity for a just-spawned child', () => {
   });
 });
 
+describe('useAgentActivity pruning', () => {
+  it('drops activity for an id that is no longer tracked', () => {
+    let latest: ReadonlyMap<string, AgentActivity> = new Map();
+    const Probe = ({ tracked }: { tracked: ReadonlySet<string> }) => {
+      latest = useAgentActivity(tracked);
+      return null;
+    };
+    act(() => root.render(<Probe tracked={new Set(['a', 'b'])} />));
+    act(() => listener?.(toolStart('a')));
+    act(() => listener?.(toolStart('b')));
+    act(() => root.render(<Probe tracked={new Set(['b'])} />));
+    expect([...latest.keys()]).toEqual(['b']);
+  });
+});
+
 describe('useOrchestratorRoster', () => {
   it('is empty without a root', () => {
     let latest: unknown[] = [1];

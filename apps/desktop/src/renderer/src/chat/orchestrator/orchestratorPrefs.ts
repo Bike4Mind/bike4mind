@@ -42,6 +42,22 @@ export function writeView(sessionId: string, view: OrchestratorViewId): void {
   writeItem(VIEW_KEY + sessionId, view);
 }
 
+/** Forgets the per-session surface and view of every session not in `knownSessionIds`. */
+export function pruneSessionPrefs(knownSessionIds: ReadonlySet<string>): void {
+  try {
+    const storage = window.localStorage;
+    const stale: string[] = [];
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      const prefix = [SURFACE_KEY, VIEW_KEY].find(candidate => key?.startsWith(candidate));
+      if (key && prefix && !knownSessionIds.has(key.slice(prefix.length))) stale.push(key);
+    }
+    stale.forEach(key => storage.removeItem(key));
+  } catch {
+    // Left for the next launch to try again.
+  }
+}
+
 export function readDockOpen(): boolean {
   return readItem(DOCK_OPEN_KEY) !== '0';
 }

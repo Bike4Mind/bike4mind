@@ -249,6 +249,16 @@ describe('orchestrate mode in the chat shell', () => {
     expect(el('orchestrator-table-sort-agent').getAttribute('aria-sort')).toBe('none');
   });
 
+  it('prunes stored orchestrator prefs for sessions that no longer exist once the list loads', async () => {
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
+    window.localStorage.setItem('b4m.orchestrator.view.deleted-session', 'board');
+    window.localStorage.setItem('b4m.orchestrator.surface.deleted-session', 'orchestrate');
+    await openParent();
+    expect(window.localStorage.getItem(`b4m.orchestrator.view.${PARENT.id}`)).toBe('table');
+    expect(window.localStorage.getItem('b4m.orchestrator.view.deleted-session')).toBeNull();
+    expect(window.localStorage.getItem('b4m.orchestrator.surface.deleted-session')).toBeNull();
+  });
+
   it('opens an agent session from the stage', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
