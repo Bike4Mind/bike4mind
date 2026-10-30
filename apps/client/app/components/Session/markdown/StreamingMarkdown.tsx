@@ -72,7 +72,7 @@ export const StreamingMarkdown = ({ text, streaming, ...options }: StreamingMark
     const streamedHere = state.streamedHere || streaming;
     let split: StreamingBlocks | null = null;
     if (streaming || streamedHere) {
-      split = splitStreamingBlocks(text, parse, state.split ?? undefined);
+      split = splitStreamingBlocks(text, parse, state.split ?? undefined, !streaming);
       if (!streaming && split.crossBlock) split = null;
     }
     current = { text, streaming, streamedHere, split };
