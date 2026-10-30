@@ -12,6 +12,7 @@ import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
+import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
@@ -398,6 +399,21 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         navigate({ to: '/skills/market' });
       },
     },
+    ...(isFeatureEnabled('enableQuestMaster')
+      ? [
+          {
+            key: 'quests',
+            priority: 0,
+            label: t('sidenav.questMaster', 'Quest Master'),
+            icon: iconSlot(<AutoAwesomeOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname === '/quests' || location.pathname.startsWith('/quests/'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/quests' });
+            },
+          },
+        ]
+      : []),
     // Single-gated on the experimental flag:
     // v5 has no gear, and the flag is opt-in-only, so anyone who turned it on
     // asked for the surface and needs a way to reach it.
@@ -405,7 +421,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'quests-v5',
-            priority: 0,
+            priority: 3,
             label: t('sidenav.questsV5', 'Quests v5'),
             icon: iconSlot(<AccountTreeOutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname.startsWith('/quests-v5'),
