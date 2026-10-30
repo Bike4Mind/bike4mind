@@ -24,6 +24,7 @@ import {
   CardVerificationRefused,
   completeCardVerification,
   removeVerificationCard,
+  resumeCardVerificationSetup,
   type CardVerificationContext,
   type CardVerificationDependencies,
 } from './cardVerificationLifecycle';
@@ -339,7 +340,6 @@ export async function reconcileCardVerifications() {
             continue;
           }
           if (!row.setupIntentId) {
-            const { resumeCardVerificationSetup } = await import('./cardVerificationLifecycle');
             await resumeCardVerificationSetup(row.verificationId, row.userId, runtime);
             continue;
           }
