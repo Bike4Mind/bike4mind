@@ -192,7 +192,10 @@ export const arenaVoteRequestSchema = z.object({
 });
 export type ArenaVoteRequest = z.infer<typeof arenaVoteRequestSchema>;
 
-/** Rejection reasons are deliberately absent: low-quality raters are dropped silently. */
+/**
+ * Rejection reasons are deliberately absent: low-quality raters are dropped silently. Accepted
+ * leak: once a rater qualifies, a 0-credit vote that was neither too fast nor capped reveals a missed gold pair.
+ */
 export interface ArenaVoteResponse {
   creditsAwarded: number;
 }
