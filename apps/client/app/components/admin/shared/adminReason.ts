@@ -15,6 +15,7 @@ export const ADMIN_REASON_PRESETS = {
   reinstatement: ['Suspended in error', 'Appeal accepted', 'Issue resolved'],
   restriction: ['Abuse / automated signups', 'Suspicious usage', 'Terms violation', 'Under investigation'],
   emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
+  profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
@@ -27,7 +28,12 @@ export const ADMIN_REASON_PRESETS = {
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
-  waitlistInvite: ['Approved from the waitlist queue', 'Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
+  waitlistInvite: [
+    'Approved from the waitlist queue',
+    'Pilot or partner access',
+    'Sales-approved trial',
+    'Internal testing',
+  ],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
   bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
@@ -36,6 +42,8 @@ export const ADMIN_REASON_PRESETS = {
   subscriptionRemove: ['Duplicate record', 'Comp no longer needed', 'Test or internal record', 'Billing correction'],
   seatChange: ['Customer request', 'Team size changed', 'Seats out of sync with billing', 'Billing correction'],
   paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
+  orgMembership: ['Customer request', 'Joined the team', 'Left the team', 'Account cleanup'],
+  orgRoleChange: ['Customer request', 'Owner request', 'Team lead changed'],
   signupRiskApproval: ['Verified legitimate user', 'Known customer or partner', 'False positive signal'],
 } as const satisfies Record<string, readonly string[]>;
 

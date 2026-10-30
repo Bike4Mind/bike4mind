@@ -67,12 +67,13 @@ import {
   type ModelRuntimeStatus,
   type ModelServerManagement,
 } from '@shared/models';
-import type { LocalContextSetting } from '@shared/localContextSetting';
-import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME } from '@shared/modelServers';
+import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
+import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME, specsRate, type ModelServerSpecs } from '@shared/modelServers';
 import { chatContextTokens, type LocalModelFootprint } from '../chat/localContext';
 import { configuredNumCtx } from '../chat/localChatContext';
 import { ServerCredentialsError, ServerUnreachableError } from '../modelServers/errors';
 import { ServerRedirectError, ServerTransportError } from '../modelServers/serverFetch';
+import { serverHardware, withEnteredSpecs } from './enteredHardware';
 import { fitFromArch, fitFromSize, machineView } from './fit';
 
 export interface ModelRuntimePort {
@@ -107,7 +108,8 @@ export interface HubTokenPort {
 
 /**
  * A saved model server, read fresh for every call so a changed access setting applies at once. Its runtime
- * reports a dropped connection as ServerUnreachableError and a 401 or 403 as ServerCredentialsError.
+ * reports a dropped connection as ServerUnreachableError, a 401 as ServerCredentialsError and a 403 as
+ * ServerForbiddenError.
  */
 export interface ModelHubServer {
   name: string;
@@ -125,8 +127,10 @@ export interface ModelHubServiceDeps {
   tokens: HubTokenPort;
   /** The layers the Ollama library serves for a `name:tag` ref; null when it has no such tag. */
   libraryLayers: (ref: string, options?: { signal?: AbortSignal }) => Promise<OllamaRegistryLayers | null>;
-  /** Probed once, on first use. */
+  /** This computer's probe, before entered specs; probed once, on first use. */
   hardware: () => Promise<HardwareProfile>;
+  /** Hardware entered in Settings by server id, `local` for this computer; read fresh for every call. */
+  specs?: (serverId: string) => ModelServerSpecs | null;
   /** The Settings choice local chat sizes its context with; fit badges plan for that same context. */
   localContext: () => Promise<LocalContextSetting>;
   /**
@@ -288,6 +292,10 @@ interface PullEntry {
 
 /** Per server: two servers can each hold the same tag. */
 const tagKey = (target: Target, ref: string) => `${target.id}\0${ref.toLowerCase()}`;
+
+/** A re-pulled tag changes its modified time or size, so it is read again. */
+const archKey = (target: Target, model: InstalledModel) =>
+  `${target.id}\0${model.name}\0${model.modifiedAt ?? ''}\0${model.sizeBytes}`;
 
 const SERVER_GONE = 'That model server is no longer saved. Pick another under Models.';
 
@@ -485,7 +493,11 @@ function toView(
 }
 
 /** The pull dialog's view of a library build, which has no Hugging Face repo behind it. */
-function libraryView(entry: HubEntry, build: HubBuild, fit: ModelFit): { model: HubModelView; build: HubBuildView } {
+function libraryView(
+  entry: HubEntry,
+  build: HubBuild,
+  fit: ModelFit | null
+): { model: HubModelView; build: HubBuildView } {
   const library = libraryOf(build);
   if (!library) throw new Error(`${entry.id}/${build.id} is not an Ollama library build`);
   const view: HubBuildView = {
@@ -534,16 +546,19 @@ function phaseOf(status: string): ModelPull['phase'] {
 interface Sizing {
   hardware: HardwareProfile;
   setting: LocalContextSetting;
+  /** What chat sizes num_ctx from: this computer's hardware, or null on a saved server, which chat never measures. */
+  chatHardware: HardwareProfile | null;
+  rating: 'probe' | 'entered';
 }
 
 /** The num_ctx OllamaLocal would send this model with, so a badge rates the load chat makes. */
 function chatContext(
-  { hardware, setting }: Sizing,
+  { chatHardware, setting }: Sizing,
   arch: LocalModelFootprint['arch'],
   weightsBytes: number,
   bounds: { modelLimit?: number; configured?: number }
 ): number {
-  return chatContextTokens({ setting, footprint: { arch, weightsBytes, hardware }, ...bounds });
+  return chatContextTokens({ setting, footprint: { arch, weightsBytes, hardware: chatHardware }, ...bounds });
 }
 
 /** A reviewed build's fit from its layer shapes, pinned projector and num_ctx; its row and its pull dialog share it. */
@@ -573,7 +588,7 @@ export class ModelHubService {
   readonly #checks = new Map<string, Promise<CuratedCheckResult>>();
   /** The hf.co ref each curated Hugging Face build was last pulled under, by entry and build id. */
   readonly #pulledRefs = new Map<string, string>();
-  /** Installed models' layer shapes, keyed by name, modified time and size so a re-pulled tag is read again. */
+  /** Installed models' layer shapes by archKey. */
   readonly #archs = new Map<
     string,
     Promise<{ arch: ModelArch | null; parameters: string | null; contextLength: number | null } | null>
@@ -597,20 +612,36 @@ export class ModelHubService {
     return this.#hardware;
   }
 
-  async #sizing(): Promise<Sizing> {
-    const [hardware, setting] = await Promise.all([this.#machine(), this.#deps.localContext()]);
-    return { hardware, setting };
+  /** This computer, with any hardware entered for it in Settings in place of the probe. */
+  async #localSizing(): Promise<Sizing> {
+    const [probed, setting] = await Promise.all([this.#machine(), this.#deps.localContext()]);
+    const specs = this.#deps.specs?.(LOCAL_SERVER_ID) ?? null;
+    const hardware = withEnteredSpecs(probed, specs);
+    return { hardware, setting, chatHardware: hardware, rating: specsRate(specs) ? 'entered' : 'probe' };
   }
 
-  async #installedFit(model: InstalledModel, sizing: Sizing, keep: Set<string>): Promise<ModelFit | null> {
+  /** Null for a saved server without entered hardware: its models are not rated. */
+  async #sizing(target: Target): Promise<Sizing | null> {
+    if (target.local) return this.#localSizing();
+    const hardware = serverHardware(this.#deps.specs?.(target.id) ?? null);
+    // Chat sends a saved server the Auto floor whatever the Settings choice, having no measure of it.
+    return hardware ? { hardware, setting: AUTO_LOCAL_CONTEXT, chatHardware: null, rating: 'entered' } : null;
+  }
+
+  async #installedFit(
+    target: Target,
+    model: InstalledModel,
+    sizing: Sizing,
+    keep: Set<string>
+  ): Promise<ModelFit | null> {
     const { hardware } = sizing;
     if (!model.sizeBytes) return null;
-    const key = `${model.name}\0${model.modifiedAt ?? ''}\0${model.sizeBytes}`;
+    const key = archKey(target, model);
     keep.add(key);
     let shown = this.#archs.get(key);
     if (!shown) {
       // The installed list was just read, so skip inspect's own re-read of it.
-      shown = this.#deps.runtime
+      shown = target.runtime
         .inspect(model.name, { tags: false })
         .then(inspection => ({
           arch: inspection.arch,
@@ -638,10 +669,14 @@ export class ModelHubService {
   }
 
   /** A reviewed curated file is rated as its Curated row is; any other file falls back to its size. */
-  #buildFit(detail: HubModelDetail, sizing: Sizing, manifest: HubManifest): (build: HubGgufBuild) => ModelFit | null {
+  #buildFit(
+    detail: HubModelDetail,
+    sizing: Sizing | null,
+    manifest: HubManifest
+  ): (build: HubGgufBuild) => ModelFit | null {
     const projector = projectorBytes(detail) ?? 0;
     return build => {
-      if (build.sizeBytes <= 0) return null;
+      if (!sizing || build.sizeBytes <= 0) return null;
       const file = build.files.length === 1 ? build.files[0] : null;
       for (const entry of manifest.entries)
         for (const reviewed of entry.builds) {
@@ -845,19 +880,21 @@ export class ModelHubService {
   }
 
   /**
-   * The list's source status is the caller's to add; this service only sees the manifest. Fit and picks rate this
-   * computer; `serverId` only sets which Ollama version decides what can be downloaded.
+   * The list's source status is the caller's to add; this service only sees the manifest. Fit and picks rate the
+   * server's entered hardware, or this computer when it has none; `serverId` also sets which Ollama version decides
+   * what can be downloaded.
    */
   async curated(serverId?: string): Promise<Omit<CuratedList, 'source'>> {
     const manifest = this.#deps.curated();
     const target = this.#target(serverId);
-    const [sizing, health, { hub }] = await Promise.all([
-      this.#sizing(),
+    const [rated, health, { hub }] = await Promise.all([
+      target ? this.#sizing(target) : null,
       target
         ? target.runtime.health()
         : Promise.resolve<RuntimeHealth>({ ok: false, version: null, error: SERVER_GONE }),
       this.#hub(),
     ]);
+    const sizing = rated ?? (await this.#localSizing());
     const { hardware } = sizing;
     const version = health.ok ? health.version : null;
     const entries = curatedListing(manifest).map(({ entry, builds }): CuratedEntryView => {
@@ -885,6 +922,7 @@ export class ModelHubService {
     });
     return {
       updatedAt: manifest.updatedAt,
+      rating: rated?.rating ?? null,
       machine: machineView(hardware),
       picks: this.#picks(manifest, entries, hardware),
       entries,
@@ -906,7 +944,7 @@ export class ModelHubService {
     const { entry, build: reviewed } = picked;
     let token = false;
     try {
-      const [sizing, health, session] = await Promise.all([this.#sizing(), target.runtime.health(), this.#hub()]);
+      const [sizing, health, session] = await Promise.all([this.#sizing(target), target.runtime.health(), this.#hub()]);
       token = session.token;
       const { hub } = session;
       const runtime = runtimeRefusal(health, reviewed, target);
@@ -914,7 +952,7 @@ export class ModelHubService {
       if (libraryOf(reviewed)) {
         const layers = await this.#checkLayers(reviewed, null);
         if (layers) return { ok: false, error: layers };
-        return { ok: true, ...libraryView(entry, reviewed, reviewedFit(entry, reviewed, sizing)) };
+        return { ok: true, ...libraryView(entry, reviewed, sizing && reviewedFit(entry, reviewed, sizing)) };
       }
       const repo = reviewed.hf?.repo ?? '';
       const detail = await hub.getModel(repo);
@@ -1076,13 +1114,13 @@ export class ModelHubService {
         target.runtime.loaded().catch(() => [] as LoadedModel[]),
       ]);
       const loadedNames = new Set(loaded.map(entry => entry.name));
-      // Fit rates this computer's memory, so a saved server's models carry none.
       let fits: (ModelFit | null)[] = models.map(() => null);
-      if (target.local) {
-        const sizing = await this.#sizing();
+      const sizing = await this.#sizing(target);
+      if (sizing) {
         const keep = new Set<string>();
-        fits = await mapLimited(models, INSPECT_CONCURRENCY, model => this.#installedFit(model, sizing, keep));
-        for (const key of this.#archs.keys()) if (!keep.has(key)) this.#archs.delete(key);
+        fits = await mapLimited(models, INSPECT_CONCURRENCY, model => this.#installedFit(target, model, sizing, keep));
+        const prefix = `${target.id}\0`;
+        for (const key of this.#archs.keys()) if (key.startsWith(prefix) && !keep.has(key)) this.#archs.delete(key);
       }
       return {
         ok: true,
@@ -1113,13 +1151,15 @@ export class ModelHubService {
     }
   }
 
-  async detail(repo: string): Promise<HubDetailResult> {
+  /** Fits rate `serverId`'s hardware, and are null for a saved server without entered hardware. */
+  async detail(repo: string, serverId?: string): Promise<HubDetailResult> {
     let token = false;
     try {
       const session = await this.#hub();
       token = session.token;
       const { hub } = session;
-      const [found, sizing] = await Promise.all([hub.getModel(repo), this.#sizing()]);
+      const target = this.#target(serverId);
+      const [found, sizing] = await Promise.all([hub.getModel(repo), target ? this.#sizing(target) : null]);
       // A cached denial would outlive an access grant by up to the cache TTL; re-ask before saying "cannot read".
       const detail =
         token && hubAccess(found, token) === 'denied' ? await hub.getModel(repo, { refresh: true }) : found;

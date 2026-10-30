@@ -80,7 +80,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -108,6 +108,10 @@ import {
   type ChildExecutionStatus,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
+  buildSubagentUsageMeta,
+  buildToolUsageEvent,
+  recordToolUsageEvent,
+  type SubagentUsageMeta,
 } from '@bike4mind/services/llm';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd, sessionService } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services/llm';
@@ -1613,6 +1617,7 @@ async function processExecution(
             questId: execution.questId,
             model: result.model,
             completionInfo: result.completionInfo,
+            usage: subagentUsageMeta(models, result.model, result.completionInfo, logger),
           },
           logger
         );
@@ -1654,6 +1659,7 @@ async function processExecution(
               questId: execution.questId,
               model: partialResult.model,
               completionInfo: partialResult.completionInfo,
+              usage: subagentUsageMeta(models, partialResult.model, partialResult.completionInfo, logger),
             },
             logger
           );
@@ -1837,7 +1843,8 @@ async function processExecution(
         adminSettings: adminSettingsRepository,
         fabfiles: fabFileRepository,
         fabfilechunks: fabFileChunkRepository,
-        users: userRepository,
+        // A tool that re-reads the owner by id must see the role withheld above, not the stored one.
+        users: execution.adminRoleWithheld ? ownerWithheldUsers(execution.userId, userRepository) : userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -2035,6 +2042,7 @@ async function processExecution(
               totalInputTokens: meta?.inputTokens ?? 0,
               totalOutputTokens: meta?.outputTokens ?? 0,
             },
+            usage: meta,
           },
           logger
         );
@@ -3540,10 +3548,27 @@ async function loadRunnableModels(
   return { ok: true, models: filterRunnableModels(models, configurations, user.tags ?? [], isAdmin, entitlementKeys) };
 }
 
+function subagentUsageMeta(
+  models: ModelInfo[],
+  model: string,
+  completionInfo: AgentResult['completionInfo'],
+  logger: Logger
+): SubagentUsageMeta | undefined {
+  const modelInfo = models.find(m => m.id === model);
+  if (!modelInfo) return undefined;
+  try {
+    return buildSubagentUsageMeta(modelInfo, model, completionInfo);
+  } catch (err) {
+    logger.warn('[AgentExecutor] failed to price subagent usage; usage event skipped', { model, err });
+    return undefined;
+  }
+}
+
 /**
  * Debits a subagent's own LLM spend from the run's payer (the org pool when org-billed),
- * the same wallet the parent's iterations settle against. Logged rather than thrown, so a
- * billing failure never replaces the subagent's terminal status.
+ * the same wallet the parent's iterations settle against, and records the usage event the
+ * in-chat delegation path records (ToolBuilder's onSubagentCredits). Logged rather than
+ * thrown, so a billing failure never replaces the subagent's terminal status.
  */
 async function chargeSubagentTokens(
   args: {
@@ -3553,39 +3578,69 @@ async function chargeSubagentTokens(
     questId: string;
     model: string;
     completionInfo: Pick<AgentResult['completionInfo'], 'totalCredits' | 'totalInputTokens' | 'totalOutputTokens'>;
+    /** Absent when the model can't be resolved; no event is fabricated from zeros then. */
+    usage: SubagentUsageMeta | undefined;
   },
   logger: Logger
 ): Promise<void> {
   const credits = args.completionInfo.totalCredits ?? 0;
-  if (credits <= 0) return;
-  await creditService
-    .deductCreditsWithOrgSupport(
-      {
-        type: 'text_generation_usage',
+  if (credits > 0) {
+    await creditService
+      .deductCreditsWithOrgSupport(
+        {
+          type: 'text_generation_usage',
+          user: args.user,
+          organization: args.organization,
+          credits,
+          sessionId: args.sessionId,
+          questId: args.questId,
+          model: args.model,
+          inputTokens: args.completionInfo.totalInputTokens ?? 0,
+          outputTokens: args.completionInfo.totalOutputTokens ?? 0,
+        },
+        {
+          db: {
+            creditTransactions: creditTransactionRepository,
+            users: userRepository,
+            organizations: organizationRepository,
+          },
+        }
+      )
+      .catch(err =>
+        logger.error('[AgentExecutor] failed to charge subagent usage', {
+          credits,
+          model: args.model,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+  }
+  const { usage } = args;
+  // A run that stopped before its first model call reports no tokens; there is nothing to record.
+  const reportedTokens = usage
+    ? usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
+    : 0;
+  if (usage && reportedTokens > 0) {
+    await recordToolUsageEvent(
+      { usageEvents: usageEventRepository },
+      logger,
+      'delegate_to_agent',
+      buildToolUsageEvent({
+        quest: { id: args.questId, sessionId: args.sessionId },
         user: args.user,
         organization: args.organization,
-        credits,
-        sessionId: args.sessionId,
-        questId: args.questId,
-        model: args.model,
-        inputTokens: args.completionInfo.totalInputTokens ?? 0,
-        outputTokens: args.completionInfo.totalOutputTokens ?? 0,
-      },
-      {
-        db: {
-          creditTransactions: creditTransactionRepository,
-          users: userRepository,
-          organizations: organizationRepository,
-        },
-      }
-    )
-    .catch(err =>
-      logger.error('[AgentExecutor] failed to charge subagent usage', {
-        credits,
-        model: args.model,
-        error: err instanceof Error ? err.message : String(err),
+        provider: usage.provider,
+        model: usage.model,
+        costUsd: usage.usdCost,
+        creditsCharged: credits,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cachedInputTokens: usage.cacheReadTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        finishReason: usage.finishReason,
+        priceStamp: usage.priceStamp,
       })
     );
+  }
 }
 
 /**
@@ -3966,7 +4021,8 @@ async function processSubagentDispatch(
         adminSettings: adminSettingsRepository,
         fabfiles: fabFileRepository,
         fabfilechunks: fabFileChunkRepository,
-        users: userRepository,
+        // A tool that re-reads the owner by id must see the role withheld above, not the stored one.
+        users: child.adminRoleWithheld ? ownerWithheldUsers(child.userId, userRepository) : userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -4037,7 +4093,8 @@ async function processSubagentDispatch(
     const grandchildCharges: Promise<void>[] = [];
     const settleTokenCost = async (
       model: string,
-      completionInfo: Parameters<typeof chargeSubagentTokens>[0]['completionInfo']
+      completionInfo: Parameters<typeof chargeSubagentTokens>[0]['completionInfo'],
+      usage: SubagentUsageMeta | undefined
     ): Promise<void> => {
       await chargeSubagentTokens(
         {
@@ -4047,6 +4104,7 @@ async function processSubagentDispatch(
           questId: child.questId,
           model,
           completionInfo,
+          usage,
         },
         logger
       );
@@ -4121,11 +4179,15 @@ async function processSubagentDispatch(
       // This subagent's own in-process delegations (no tracker is wired here, so the
       // orchestrator never dispatches them and this is their only charge).
       onSubagentCredits: async (credits, meta) => {
-        const charge = settleTokenCost(meta?.model ?? childModel, {
-          totalCredits: credits,
-          totalInputTokens: meta?.inputTokens ?? 0,
-          totalOutputTokens: meta?.outputTokens ?? 0,
-        });
+        const charge = settleTokenCost(
+          meta?.model ?? childModel,
+          {
+            totalCredits: credits,
+            totalInputTokens: meta?.inputTokens ?? 0,
+            totalOutputTokens: meta?.outputTokens ?? 0,
+          },
+          meta
+        );
         grandchildCharges.push(charge);
         await charge;
       },
@@ -4400,7 +4462,11 @@ async function processSubagentDispatch(
       await Promise.all(grandchildCharges);
       const credits = result.completionInfo.totalCredits ?? 0;
       // Every exit with a result (completed, aborted, timed out) spent these tokens.
-      await settleTokenCost(result.model, result.completionInfo);
+      await settleTokenCost(
+        result.model,
+        result.completionInfo,
+        subagentUsageMeta(models, result.model, result.completionInfo, logger)
+      );
 
       // If the abort signal fired during the run, treat the result as terminal.
       // The orchestrator's timeout-handling path returns partial results on
@@ -4497,7 +4563,11 @@ async function processSubagentDispatch(
       await Promise.all(grandchildCharges);
       const spent = spentResultOf(err);
       if (spent) {
-        await settleTokenCost(spent.model, spent.completionInfo);
+        await settleTokenCost(
+          spent.model,
+          spent.completionInfo,
+          subagentUsageMeta(models, spent.model, spent.completionInfo, logger)
+        );
       }
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:

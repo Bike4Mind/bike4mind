@@ -57,6 +57,31 @@ export class TurnstileCancelledError extends Error {
   }
 }
 
+/**
+ * Cloudflare's 6xxxxx codes mean the visitor was judged bot-like; 3xxxxx are generic client execution
+ * failures that usually mean the same, though a widget crash can also produce one. Embedded browsers
+ * (in-app panes, Electron webviews with an unknown user-agent token) hit these on every attempt, so once
+ * retries are spent a refresh rarely helps; the message is hedged for the occasional crash.
+ */
+const BROWSER_REJECTED_ERROR_CODE = /^[36]/;
+
+export const TURNSTILE_RETRY_MESSAGE = 'Could not complete the verification check. Please refresh and try again.';
+export const TURNSTILE_BROWSER_REJECTED_MESSAGE =
+  'This browser could not pass the verification check. If it is an in-app browser, open this page in your regular browser.';
+
+/** The sign-in error to show once a challenge has finally failed; cancellation is handled by the caller. */
+export function turnstileFailureMessage(error: unknown): string {
+  if (
+    error instanceof TurnstileError &&
+    error.reason === 'error' &&
+    error.errorCode &&
+    BROWSER_REJECTED_ERROR_CODE.test(error.errorCode)
+  ) {
+    return TURNSTILE_BROWSER_REJECTED_MESSAGE;
+  }
+  return TURNSTILE_RETRY_MESSAGE;
+}
+
 let scriptPromise: Promise<TurnstileApi> | undefined;
 let challengeCount = 0;
 let challengeInFlight: Promise<unknown> = Promise.resolve();

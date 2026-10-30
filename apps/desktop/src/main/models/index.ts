@@ -48,7 +48,7 @@ function curatedSource(onChange: () => void): CuratedSource {
  * Face token never leaves main except as the Authorization header of requests to huggingface.co.
  */
 export function registerModels(
-  servers: Pick<ModelServerRegistry, 'hubServer' | 'onServerSaved'>,
+  servers: Pick<ModelServerRegistry, 'hubServer' | 'onServerSaved' | 'specs'>,
   { localContext }: Pick<ModelHubServiceDeps, 'localContext'>
 ): ModelHubService {
   const send = (channel: string, payload?: ModelPull[] | string) => {
@@ -70,8 +70,9 @@ export function registerModels(
     createHub: token => new HuggingFaceHub(token ? { token } : {}),
     tokens,
     libraryLayers: (ref, options) => ollamaLibraryLayers(ref, options),
-    // Chat's own probe, so badges and chat size context from the same reading of this machine.
-    hardware: () => localHardware.profile().then(profile => profile ?? probeHardware()),
+    // Chat's own probe and entered specs, so badges and chat size context from the same reading of this machine.
+    hardware: () => localHardware.probed().then(profile => profile ?? probeHardware()),
+    specs: id => servers.specs(id),
     localContext,
     curated: () => source.current(),
     onPullsChanged: pulls => send(IPC_CHANNELS.modelsPullsChanged, pulls),
@@ -86,7 +87,12 @@ export function registerModels(
     },
     warn,
   });
-  servers.onServerSaved(id => service.serverChanged(id));
+  servers.onServerSaved(id => {
+    service.serverChanged(id);
+    // Entered hardware may have changed, which re-rates the open lists.
+    send(IPC_CHANNELS.modelsInstalledChanged, id);
+    send(IPC_CHANNELS.modelsCuratedChanged);
+  });
   registerModelsIpc(ipcMain, service);
 
   // Opening Models lists the curated models, so this is where a due check starts; it never blocks the list.

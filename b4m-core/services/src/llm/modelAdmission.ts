@@ -10,10 +10,10 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue, isModelAccessible } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { AI_ACCESS_REVOKED_MESSAGE, isAiAccessRevoked } from '../userService/accountState';
+import { aiAccessDeniedMessage, type AiAccessStateFields } from '../userService/accountState';
 
 export type ModelAdmissionInput = {
-  user: { isAdmin?: boolean | null; tags?: string[] | null; isModerated?: boolean | null };
+  user: AiAccessStateFields & { isAdmin?: boolean | null; tags?: string[] | null };
   /** The llmModelConfigurations admin setting. */
   configs: LLMModelConfig[];
   getEntitlements?: () => Promise<string[]>;
@@ -69,7 +69,7 @@ export async function loadFreeTierAllowedModels(
 }
 
 /** Whether an admission error is the free-tier refusal, as opposed to any other reason a model is refused. */
-export function isModelRequiresSubscriptionError(error: unknown): boolean {
+export function isModelRequiresSubscriptionError(error: unknown): error is ForbiddenError {
   if (!(error instanceof ForbiddenError)) return false;
   return error.additionalInfo?.errorCode === MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE;
 }
@@ -124,7 +124,8 @@ export function createModelAdmission({
   };
 
   const assertAiAccess = (): void => {
-    if (isAiAccessRevoked(user)) throw new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE);
+    const message = aiAccessDeniedMessage(user);
+    if (message) throw new ForbiddenError(message);
   };
 
   const refusal = async (modelId: string): Promise<Error | null> => {

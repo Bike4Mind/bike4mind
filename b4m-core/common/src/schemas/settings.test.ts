@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   ARTIFACT_EMISSION_PROMPT,
   settingsMap,
+  stageHiddenSettingKeys,
   publicSafeSettingKeys,
   userReadableSettingKeys,
   redactSettingSecrets,
@@ -1482,5 +1483,19 @@ describe('preference arena settings exposure', () => {
     const arenaKeys = Object.keys(settingsMap).filter(key => key.startsWith('preferenceArena'));
     expect(arenaKeys.length).toBeGreaterThan(1);
     expect(arenaKeys.filter(key => readable.has(key))).toEqual(['preferenceArenaEnabled']);
+  });
+});
+
+describe('stageHiddenSettingKeys', () => {
+  it('hides the deprecated drip settings and preview test mode on production stages', () => {
+    expect(stageHiddenSettingKeys(true).sort()).toEqual([
+      'signupGrantActivityMinDays',
+      'signupGrantActivityMinMessages',
+      'signupGrantActivityPreviewTestMode',
+    ]);
+  });
+
+  it('hides nothing elsewhere', () => {
+    expect(stageHiddenSettingKeys(false)).toEqual([]);
   });
 });

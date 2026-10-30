@@ -74,6 +74,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.note.deleted': { category: 'support', severity: 'notice', write: 'strict' },
   'user.note.restored': { category: 'support', severity: 'notice', write: 'strict' },
   'user.tags.updated': { category: 'account', severity: 'notice', write: 'strict' },
+  // Name and username as written, plus a requested email change that the user still has to verify.
+  'user.identity.updated': { category: 'identity', severity: 'notice', write: 'strict' },
 
   'org.seats.changed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },
@@ -86,6 +88,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
+  'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.removed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.role_changed': { category: 'org', severity: 'notice', write: 'strict' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },

@@ -87,7 +87,7 @@ export function PullDialog({
                 size="sm"
                 checked={overrideFit}
                 onChange={event => setOverrideFit(event.target.checked)}
-                label="Download it anyway. It may fail to load or make this computer swap."
+                label={`Download it anyway. It may fail to load or make ${server ?? 'this computer'} swap.`}
                 slotProps={{ input: { 'data-testid': 'models-pull-dialog-fit-checkbox' } }}
               />
             )}

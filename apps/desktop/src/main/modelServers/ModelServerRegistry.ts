@@ -22,6 +22,7 @@ import {
   type ModelServerKind,
   type ModelServerProbeInput,
   type ModelServerProbeResult,
+  type ModelServerSpecs,
   type ModelServerUpdateInput,
   type ModelServerView,
 } from '@shared/modelServers';
@@ -37,7 +38,7 @@ import {
   type AddressScope,
   type ParsedAddress,
 } from './addressPolicy';
-import { ServerCredentialsError, ServerUnreachableError } from './errors';
+import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
 import {
@@ -86,6 +87,8 @@ export interface ModelServerRegistryDeps {
   /** For "This computer"; defaults to the global fetch. */
   localFetch?: FetchLike;
   now?(): number;
+  /** This computer's entered hardware was loaded or changed, so whatever was sized from its probe is stale. */
+  localSpecsChanged?(): void;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -103,6 +106,8 @@ interface ProbeOutcome {
   latencyMs: number | null;
   models: number | null;
   auth: boolean;
+  /** A 403 with no 401: the request was refused, not asked for credentials. */
+  forbidden: boolean;
   error: string | null;
   refused: boolean;
 }
@@ -115,6 +120,7 @@ interface ProbeOutcome {
 export class ModelServerRegistry {
   private readonly entries = new Map<string, Entry>();
   private localHealth: ModelServerHealth = { ...UNKNOWN_HEALTH };
+  private localSpecs: ModelServerSpecs | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
   private loaded: Promise<void> | null = null;
   private readonly savedListeners = new Set<(id: string) => void>();
@@ -157,8 +163,15 @@ export class ModelServerRegistry {
       unencrypted: false,
       health: this.localHealth,
       models: [],
+      specs: this.localSpecs,
     };
     return [local, ...[...this.entries.values()].map(entry => this.view(entry))];
+  }
+
+  /** Hardware entered in Settings for a server or this computer; null before the list loads. */
+  specs(id: string): ModelServerSpecs | null {
+    if (id === LOCAL_SERVER_ID) return this.localSpecs;
+    return this.entries.get(id)?.record.specs ?? null;
   }
 
   /** Tests an address without saving it. */
@@ -179,6 +192,11 @@ export class ModelServerRegistry {
     });
     const parsed = parseServerAddress(input.address);
     if (!parsed) return failed('Enter an address like https://host, http://192.168.1.5:11434 or host:port.');
+    if (isLocalOllama(parsed)) {
+      return failed(
+        `${new URL(parsed.baseUrl).host} is ${LOCAL_SERVER_NAME}, which is already listed. To reach another machine through an SSH tunnel, forward a different local port, such as 21434.`
+      );
+    }
     let headers: Record<string, string> | null;
     try {
       headers = credentialHeaders(input.credential);
@@ -204,8 +222,14 @@ export class ModelServerRegistry {
         kind: outcome.kind,
       });
     }
-    if (!outcome.kind)
-      return failed(outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`, base);
+    if (!outcome.kind) {
+      // Some servers answer 403, not 401, when the token is missing.
+      const hint = outcome.forbidden && !headers ? ' If this server needs an API key, enter it and test again.' : '';
+      return failed(
+        `${outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`}${hint}`,
+        base
+      );
+    }
     let openToAnyone = false;
     if (scope === 'public') {
       openToAnyone = headers
@@ -248,6 +272,14 @@ export class ModelServerRegistry {
 
   async update(id: string, input: ModelServerUpdateInput): Promise<ModelServerView[]> {
     await this.load();
+    if (id === LOCAL_SERVER_ID) {
+      if (input.specs === undefined) throw new Error('This computer has no other settings to change here.');
+      this.localSpecs = await this.deps.store.setLocalSpecs(input.specs);
+      this.deps.localSpecsChanged?.();
+      this.saved(id);
+      this.emit();
+      return this.views();
+    }
     const entry = this.entries.get(id);
     if (!entry) throw new Error('That model server is no longer saved.');
     if (input.credential) {
@@ -295,6 +327,12 @@ export class ModelServerRegistry {
     const lists = await Promise.all(
       [...this.entries.values()].map(async entry => {
         const server = { id: entry.record.id, name: entry.record.name };
+        // Asking without the credential would get a 401 that replaces this message with a vaguer one.
+        const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
+        if (missing && (entry.health.state !== missing.state || entry.health.error !== missing.error)) {
+          this.setHealth(entry, missing);
+          this.emit();
+        }
         // A server shown as down may be back: a check already running (say, after a pull) decides, or a
         // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
         const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
@@ -405,12 +443,13 @@ export class ModelServerRegistry {
     }
   }
 
-  /** The runtime's 401/403 as a credentials error, and the cause of a connection error it wrapped. */
+  /** The runtime's 401 as a credentials error, its 403 as a refusal, and the cause of a connection error it wrapped. */
   private unwrapFailure(err: unknown, entry: Entry): unknown {
     const inner = err instanceof RuntimeConnectionError && err.cause !== undefined ? err.cause : err;
-    if (inner instanceof RuntimeHttpError && (inner.status === 401 || inner.status === 403)) {
+    if (inner instanceof RuntimeHttpError && inner.status === 401) {
       return new ServerCredentialsError(entry.record.name, !!this.deps.store.headers(entry.record));
     }
+    if (inner instanceof RuntimeHttpError && inner.status === 403) return new ServerForbiddenError(entry.record.name);
     return inner;
   }
 
@@ -458,15 +497,7 @@ export class ModelServerRegistry {
   private async probeEntry(entry: Entry): Promise<void> {
     entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
     if (this.deps.store.credentialMissing(entry.record)) {
-      this.setHealth(entry, {
-        state: 'credentials',
-        version: null,
-        latencyMs: null,
-        checkedAt: new Date().toISOString(),
-        error: this.deps.store.credentialPersisted()
-          ? 'The saved credential could not be read. Enter it again.'
-          : 'The credential was kept only until Desktop quit. Enter it again.',
-      });
+      this.setHealth(entry, this.missingCredentialHealth());
       return;
     }
     const outcome = await detect(
@@ -520,6 +551,18 @@ export class ModelServerRegistry {
         `MODEL SERVERS: listing ${entry.record.id} failed: ${err instanceof Error ? err.name : 'unknown'}`
       );
     }
+  }
+
+  private missingCredentialHealth(): ModelServerHealth {
+    return {
+      state: 'credentials',
+      version: null,
+      latencyMs: null,
+      checkedAt: new Date().toISOString(),
+      error: this.deps.store.credentialPersisted()
+        ? 'The saved credential could not be read. Enter it again.'
+        : 'The credential was kept only until Desktop quit. Enter it again.',
+    };
   }
 
   private stale(entry: Entry): boolean {
@@ -593,14 +636,17 @@ export class ModelServerRegistry {
       unencrypted: entry.parsed.protocol === 'http:' && entry.scope === 'private',
       health: entry.health,
       models: record.models,
+      specs: record.specs,
     };
   }
 
   private load(): Promise<void> {
-    this.loaded ??= this.deps.store.list().then(records => {
+    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs()]).then(([records, specs]) => {
       for (const record of records) {
         if (parseServerAddress(record.transport.baseUrl)) this.entries.set(record.id, this.build(record));
       }
+      this.localSpecs = specs;
+      if (specs) this.deps.localSpecsChanged?.();
     });
     return this.loaded;
   }
@@ -631,6 +677,17 @@ export class ModelServerRegistry {
       return null;
     }
   }
+}
+
+const LOCAL_OLLAMA_PORT = new URL(LOCAL_OLLAMA_URL).port;
+const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '0.0.0.0', '::', '::ffff:7f00:1']);
+
+/** The port "This computer" already uses: saving it again would list the same Ollama twice. */
+function isLocalOllama(parsed: ParsedAddress): boolean {
+  return (
+    LOOPBACK_NAMES.has(parsed.host.toLowerCase().replace(/\.$/, '')) &&
+    new URL(parsed.origin).port === LOCAL_OLLAMA_PORT
+  );
 }
 
 async function resolveAll(host: string): Promise<string[]> {
@@ -686,7 +743,11 @@ function failureHealth(err: unknown, label: string): ModelServerHealth | null {
   if (err instanceof ServerCredentialsError) {
     return { state: 'credentials', version: null, latencyMs: null, checkedAt, error: err.message };
   }
-  if (err instanceof ServerTransportError || err instanceof ServerRedirectError) {
+  if (
+    err instanceof ServerTransportError ||
+    err instanceof ServerRedirectError ||
+    err instanceof ServerForbiddenError
+  ) {
     return { state: 'refused', version: null, latencyMs: null, checkedAt, error: err.message };
   }
   const connection =
@@ -732,7 +793,7 @@ async function detect(
     expected === 'openai-compatible' ? null : get('/api/version'),
     expected === 'ollama' ? null : get('/v1/models'),
   ]);
-  const auth = [version, models].some(result => result?.status === 401 || result?.status === 403);
+  const auth = [version, models].some(result => result?.status === 401);
   const ollamaVersion = (version?.body as { version?: unknown } | null)?.version;
   if (version && version.status === 200 && typeof ollamaVersion === 'string') {
     const tags = await get('/api/tags');
@@ -744,6 +805,7 @@ async function detect(
       latencyMs: version.latencyMs,
       models: Array.isArray(listed) ? listed.length : null,
       auth: false,
+      forbidden: false,
       error: null,
       refused: false,
     };
@@ -761,12 +823,14 @@ async function detect(
       latencyMs: models.latencyMs,
       models: data.length,
       auth: false,
+      forbidden: false,
       error: null,
       refused: false,
     };
   }
   const failure = [version, models].find(result => result && result.error)?.error;
-  const refused = failure instanceof ServerTransportError || failure instanceof ServerRedirectError;
+  const forbidden = !auth && [version, models].some(result => result?.status === 403);
+  const refused = forbidden || failure instanceof ServerTransportError || failure instanceof ServerRedirectError;
   const status = [version, models].find(result => result && result.status > 0)?.status;
   return {
     kind: null,
@@ -775,14 +839,17 @@ async function detect(
     latencyMs: null,
     models: null,
     auth,
+    forbidden,
     refused,
-    error: failure
-      ? refused
-        ? describeFailure(failure)
-        : `Could not reach ${label}: ${describeFailure(failure)}`
-      : status
-        ? `${label} answered HTTP ${status}, not as Ollama or an OpenAI-compatible server.`
-        : null,
+    error: forbidden
+      ? new ServerForbiddenError(label).message
+      : failure
+        ? refused
+          ? describeFailure(failure)
+          : `Could not reach ${label}: ${describeFailure(failure)}`
+        : status
+          ? `${label} answered HTTP ${status}, not as Ollama or an OpenAI-compatible server.`
+          : null,
   };
 }
 

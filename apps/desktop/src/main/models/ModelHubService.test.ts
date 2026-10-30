@@ -23,7 +23,9 @@ import {
 import type { HubBuild, HubManifest } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
+import type { ModelServerSpecs } from '@shared/modelServers';
 import { describe, expect, it, vi } from 'vitest';
+import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
 import { ServerUnreachableError } from '../modelServers/errors';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import {
@@ -849,6 +851,117 @@ describe('ModelHubService saved servers', () => {
       expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('ModelHubService entered hardware', () => {
+  const GPU_16: ModelServerSpecs = { ramGiB: 32, gpuMemoryGiB: 16, bandwidthGBps: 448, unified: false };
+  const installedModel: InstalledModel = {
+    name: 'small:latest',
+    sizeBytes: 397_821_319,
+    quantization: 'Q4_K_M',
+    family: 'llama',
+    parameterSize: '494M',
+    modifiedAt: '2026-10-01T00:00:00Z',
+    capabilities: { tools: true, vision: false, thinking: false, embeddings: false, completion: true },
+  };
+
+  /** This computer is a 62 GB CPU-only box with chat fixed at 32K; server `a` has whatever `specs.a` says. */
+  function rated(specs: Record<string, ModelServerSpecs | null>) {
+    const local = harness({ hardware: machine('cpu', 62) });
+    const remote = harness();
+    const service = new ModelHubService({
+      runtime: local.runtime,
+      server: id => (id === 'a' ? { name: 'box a', management: 'allowed', runtime: remote.runtime } : null),
+      createHub: local.createHub,
+      tokens: local.tokens,
+      libraryLayers: local.libraryLayers,
+      hardware: local.hardware,
+      specs: id => specs[id] ?? null,
+      localContext: async () => ({ mode: 'fixed', tokens: 32768 }),
+      curated: () => CURATED,
+      onPullsChanged: () => {},
+      onInstalledChanged: () => {},
+      warn: local.warn,
+      progressIntervalMs: 0,
+      checkBackoffMs: [0, 0],
+    });
+    return { service, local, remote };
+  }
+  const picksOf = (list: { picks: { slot: string; entryId: string; buildId: string }[] }) =>
+    list.picks.map(pick => `${pick.slot}:${pick.entryId}/${pick.buildId}`);
+
+  it('picks and rates a saved server from its entered hardware, not this computer', async () => {
+    const { service } = rated({ a: GPU_16 });
+    const list = await service.curated('a');
+    expect(list.rating).toBe('entered');
+    expect(list.machine).toMatchObject({
+      memoryKind: 'discrete',
+      totalMemoryBytes: 32 * GIB,
+      gpuMemoryBytes: 16 * GIB,
+      gpuName: null,
+    });
+    expect(picksOf(list)).toEqual([
+      'best:qwen3-8-27b-gsq/iq3-s',
+      'fast:gemma-4-12b/qat-q4-0',
+      'long-context:qwen3-8-27b-gsq/iq2-xs',
+    ]);
+    // Chat sends a saved server the Auto floor, not this computer's fixed 32K.
+    const contexts = new Set(list.entries.flatMap(entry => entry.builds.map(build => build.fit.context)));
+    expect(contexts.has(32768)).toBe(false);
+  });
+
+  it('keeps a saved server without entered RAM unrated everywhere', async () => {
+    const { service, remote } = rated({ a: null });
+    remote.runtime.list.mockResolvedValue([installedModel]);
+
+    const list = await service.curated('a');
+    expect(list.rating).toBeNull();
+    expect(list.machine.totalMemoryBytes).toBe(62 * GIB);
+    const installed = await service.installed('a');
+    expect(installed.ok && installed.models[0].fit).toBeNull();
+    expect(remote.runtime.inspect).not.toHaveBeenCalled();
+    const detailed = await service.detail(REPO, 'a');
+    expect(detailed.ok && detailed.model.builds.every(candidate => candidate.fit === null)).toBe(true);
+  });
+
+  it("rates a saved server's installed models and Explore builds through its own runtime", async () => {
+    const { service, local, remote } = rated({ a: GPU_16 });
+    remote.runtime.list.mockResolvedValue([installedModel]);
+
+    const installed = await service.installed('a');
+    expect(installed.ok && installed.models[0].fit).toMatchObject({
+      level: 'fits',
+      basis: 'arch',
+      context: LOCAL_CONTEXT_TARGET_TOKENS,
+    });
+    expect(remote.runtime.inspect).toHaveBeenCalledWith('small:latest', { tags: false });
+    expect(local.runtime.inspect).not.toHaveBeenCalled();
+    const detailed = await service.detail(REPO, 'a');
+    expect(detailed.ok && detailed.model.builds[0].fit?.detail).toContain('16 GiB');
+  });
+
+  it("puts this computer's entered memory in place of its probe", async () => {
+    const { service } = rated({ local: { ramGiB: 64, gpuMemoryGiB: 32, bandwidthGBps: null, unified: false } });
+    const list = await service.curated();
+    expect(list.rating).toBe('entered');
+    expect(list.machine).toMatchObject({
+      memoryKind: 'discrete',
+      totalMemoryBytes: 64 * GIB,
+      gpuMemoryBytes: 32 * GIB,
+    });
+    expect(picksOf(list)).toEqual([
+      'best:qwen3-8-27b/q4-k-m',
+      'fast:gemma-4-26b/qat-q4-0',
+      'long-context:qwen3-8-27b-gsq/iq3-s',
+    ]);
+  });
+
+  it('keeps the probe when only bandwidth is entered for this computer', async () => {
+    const { service } = rated({ local: { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: 256, unified: false } });
+    const list = await service.curated();
+    expect(list.rating).toBe('probe');
+    expect(list.machine).toMatchObject({ memoryKind: 'cpu', totalMemoryBytes: 62 * GIB });
+  });
 });
 
 const GSQ_REPO = 'ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF';

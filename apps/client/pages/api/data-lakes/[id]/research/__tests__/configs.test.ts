@@ -116,6 +116,28 @@ describe('/api/data-lakes/[id]/research/configs', () => {
     expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(schedule);
   });
 
+  it('strips undeclared fields from each listed configuration, keeping pendingProposals', async () => {
+    h.listResearchConfigs.mockResolvedValue([{ ...savedConfig, _id: 'raw-object-id', __v: 7, notInSchema: 'secret' }]);
+    const { res, json } = makeRes();
+    await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+    expect(json).toHaveBeenCalledWith({ data: [savedConfig], pendingProposals: 7 });
+  });
+
+  it('strips undeclared fields from the created configuration', async () => {
+    h.createResearchConfig.mockResolvedValue({ ...savedConfig, _id: 'raw-object-id', __v: 7, notInSchema: 'secret' });
+    const { res, json } = makeRes();
+    await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q' }), res);
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(json).toHaveBeenCalledWith({ data: savedConfig });
+  });
+
+  it('strips undeclared fields from the updated configuration', async () => {
+    h.updateResearchConfig.mockResolvedValue({ ...savedConfig, _id: 'raw-object-id', __v: 7, notInSchema: 'secret' });
+    const { res, json } = makeRes();
+    await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { name: 'Weekly sweep' }), res);
+    expect(json).toHaveBeenCalledWith({ data: savedConfig });
+  });
+
   it('refuses a cadence the scheduler does not know', async () => {
     const { res } = makeRes();
     await expect(
