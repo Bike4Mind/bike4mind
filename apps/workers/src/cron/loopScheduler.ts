@@ -1,12 +1,21 @@
 import { Context } from 'aws-lambda';
 import { randomUUID } from 'crypto';
-import { ACTIVE_AGENT_EXECUTION_STATUSES, type ILoop, type IWorkItem } from '@bike4mind/common';
+import {
+  ACTIVE_AGENT_EXECUTION_STATUSES,
+  type ILoop,
+  type ILoopEvent,
+  type IWorkItem,
+  type WorkItemPatch,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   agentExecutionRepository,
   connectDB,
+  loopEventRepository,
   loopRepository,
   workItemRepository,
+  type IAgentExecution,
+  type IPendingGate,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -14,7 +23,14 @@ import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessCo
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
-import { advancePatch, lastStageOf, makeDueIfReady } from '@server/utils/loopTickets';
+import {
+  advancePatch,
+  lastStageOf,
+  makeDueIfReady,
+  unsureEventFields,
+  unsureReason,
+  UNSURE_PREFIX,
+} from '@server/utils/loopTickets';
 import { Resource } from 'sst';
 import { buildLoopQuery, parseLoopMemory } from './loopMemory';
 import { syncLoopNotices } from './loopNotices';
@@ -24,12 +40,15 @@ export const LOOP_LEASE_MS = 5 * 60 * 1000;
 export const MAX_DISPATCH_PER_TICK = 25;
 /** Non-credit failures in a row before a loop stops at `error`. */
 export const MAX_CONSECUTIVE_FAILURES = 3;
+/** Resumed unsure runs folded per tick; the rest wait for the next one. */
+export const MAX_RESUMED_FOLDS_PER_TICK = 100;
 
 const MINUTE_MS = 60 * 1000;
 
 /**
  * Loop scheduler (5-minute cron). Each tick first folds finished runs back into their
- * loops, then claims due `live` loops and dispatches each as a headless agent execution.
+ * loops (and resumed unsure runs back into their tickets), then claims due `live` loops
+ * and dispatches each as a headless agent execution.
  * The executor knows nothing of loops: completion is observed here, by polling the
  * execution doc, the same pull-based approach as QuestMaster v5's reconcileQuestNodes.
  */
@@ -48,6 +67,16 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
   if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) {
     logger.info('[Loops] EnableLoops is off; skipping tick');
     return;
+  }
+
+  // ponytail: oldest first and still-running resumed runs are skipped unfolded, so 100+ of those across all
+  // users would hold back newer folds; page past skipped events if that ever happens.
+  for (const event of await loopEventRepository.listResumedUnfolded(MAX_RESUMED_FOLDS_PER_TICK)) {
+    try {
+      await foldResumedRun(event, now);
+    } catch (error) {
+      logger.error(`[Loops] Failed to fold resumed run ${event.executionId}`, error as Error);
+    }
   }
 
   for (const loop of await loopRepository.listInFlight()) {
@@ -83,6 +112,16 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
   const executionId = loop.activeExecutionId!;
   const execution = await agentExecutionRepository.findById(executionId);
 
+  // A run paused at the confidence gate waits on its owner, possibly for days: park its ticket as unsure
+  // and free the loop for its other tickets. Checked before the stale rule so it is never folded as stalled.
+  if (execution?.status === 'paused' && execution.pendingGate) {
+    const ticket = await workItemRepository.findByExecutionId(executionId);
+    await parkUnsure(loop.id, execution, executionId, execution.pendingGate, ticket);
+    await loopRepository.foldRun(loop.id, executionId, { $set: { lastRunAt: now } });
+    if (ticket) await makeDueIfReady(loop, now);
+    return;
+  }
+
   if (execution && ACTIVE_AGENT_EXECUTION_STATUSES.includes(execution.status)) {
     if (WAITING_ON_CHILDREN.includes(execution.status)) return;
     // ponytail: updatedAt heuristic, same threshold and statuses as the start-time stale sweep, which
@@ -93,6 +132,22 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
   // The ticket this run worked, if any. Its fold is conditional on it still being in_progress under this
   // run, so a run that blocked or closed its own ticket through loop_ticket_update is not overwritten.
   const ticket = await workItemRepository.findByExecutionId(executionId);
+
+  if (execution?.status === 'completed' && stoppedByGate(execution)) {
+    // The owner stopped it at the gate before a tick detached it: a rejected unsure, not a success.
+    const gate = execution.gateHistory?.at(-1);
+    // Resolved from gateHistory too, in case gate_response's best-effort log write failed.
+    if (gate)
+      await loopEventRepository.resolveUnsure(unsureEventFields(runOf(loop.id, execution, executionId), gate, ticket), {
+        outcome: gate.resolution,
+        by: gate.resolvedBy,
+        at: gate.resolvedAt,
+      });
+    if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, gateStopPatch(execution));
+    await loopRepository.foldRun(loop.id, executionId, { $set: { lastRunAt: execution.completedAt ?? now } });
+    if (ticket) await makeDueIfReady(loop, now);
+    return;
+  }
 
   if (execution?.status === 'completed') {
     if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, advancePatch(loop, ticket));
@@ -120,13 +175,7 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
     return;
   }
 
-  const reason = !execution
-    ? 'Run not found'
-    : execution.status === 'aborted'
-      ? 'Run aborted'
-      : execution.status === 'failed'
-        ? (toCallerSafeError(execution.error) ?? 'Run failed')
-        : 'Run stalled';
+  const reason = failureReason(execution);
   if (ticket) {
     await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'blocked', statusReason: reason });
   }
@@ -136,6 +185,92 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
   });
   // A separate conditional write, so an owner's pause landing mid-tick is never overwritten.
   if (folded) await loopRepository.markErroredIfFailing(loop.id, MAX_CONSECUTIVE_FAILURES);
+  if (ticket) await makeDueIfReady(loop, now);
+}
+
+function failureReason(execution: IAgentExecution | null): string {
+  return !execution
+    ? 'Run not found'
+    : execution.status === 'aborted'
+      ? 'Run aborted'
+      : execution.status === 'failed'
+        ? (toCallerSafeError(execution.error) ?? 'Run failed')
+        : 'Run stalled';
+}
+
+const stoppedByGate = (execution: IAgentExecution): boolean =>
+  (execution.result as { stoppedByGate?: unknown } | undefined)?.stoppedByGate === true;
+
+const gateStopPatch = (execution: IAgentExecution): WorkItemPatch => ({
+  status: 'blocked',
+  statusReason: unsureReason(execution.gateHistory?.at(-1)?.reason),
+});
+
+const runOf = (loopId: string, execution: IAgentExecution, executionId: string) => ({
+  loopId,
+  userId: execution.userId,
+  executionId,
+});
+
+/** Logs the gate as an `unsure` loop event and blocks the run's ticket, if it is still in_progress under it. */
+async function parkUnsure(
+  loopId: string,
+  execution: IAgentExecution,
+  executionId: string,
+  gate: IPendingGate,
+  ticket: IWorkItem | null
+): Promise<void> {
+  await loopEventRepository.recordUnsure(unsureEventFields(runOf(loopId, execution, executionId), gate, ticket));
+  if (ticket) {
+    await workItemRepository.foldTicketRun(ticket.id, executionId, {
+      status: 'blocked',
+      statusReason: unsureReason(gate.reason),
+    });
+  }
+}
+
+/**
+ * Folds a run its owner resumed from the gate back into its ticket once the run ends, as `reconcileLoop`
+ * does for a loop's active run, but without touching the loop's memory, run count or failure count:
+ * only the active run feeds those. A resumed run that pauses again is parked under a new event.
+ */
+async function foldResumedRun(event: ILoopEvent, now: Date): Promise<void> {
+  const executionId = event.executionId;
+  const loop = await loopRepository.findById(event.loopId);
+  // Resumed before any tick detached it, the run is still the loop's active run and reconcileLoop folds it.
+  if (!loop || loop.activeExecutionId === executionId) return loopEventRepository.markFolded(event.id, now);
+
+  const execution = await agentExecutionRepository.findById(executionId);
+  const ticket = await workItemRepository.findByExecutionId(executionId);
+
+  if (execution && ACTIVE_AGENT_EXECUTION_STATUSES.includes(execution.status)) {
+    const gate = execution.pendingGate;
+    if (execution.status === 'paused' && gate) {
+      if (new Date(gate.requestedAt).getTime() === new Date(event.requestedAt).getTime()) return;
+      await parkUnsure(loop.id, execution, executionId, gate, ticket);
+      await loopEventRepository.markFolded(event.id, now);
+      return;
+    }
+    // Same stale rule as reconcileLoop, so a resumed run whose executor died does not hold its ticket forever.
+    if (WAITING_ON_CHILDREN.includes(execution.status)) return;
+    if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) return;
+  }
+
+  if (ticket) {
+    // The owner resumed while a tick was parking the run, so the park blocked the ticket after
+    // handleGateResponse tried to move it back: undo that before folding.
+    if (ticket.status === 'blocked' && ticket.statusReason?.startsWith(UNSURE_PREFIX)) {
+      await workItemRepository.resumeBlockedRun(ticket.id, executionId);
+    }
+    const patch =
+      execution?.status === 'completed'
+        ? stoppedByGate(execution)
+          ? gateStopPatch(execution)
+          : advancePatch(loop, ticket)
+        : { status: 'blocked' as const, statusReason: failureReason(execution) };
+    await workItemRepository.foldTicketRun(ticket.id, executionId, patch);
+  }
+  await loopEventRepository.markFolded(event.id, now);
   if (ticket) await makeDueIfReady(loop, now);
 }
 

@@ -13,6 +13,7 @@ import {
   type AudioGenerationToolCall,
   type AuthOrigin,
   AuthOriginSchema,
+  type LoopGateOutcome,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -78,6 +79,13 @@ export interface IPendingGate {
   reason: string;
   requestedAt: Date;
 }
+
+/** A resolved confidence gate, kept on the execution by `clearPendingGate`. */
+export type IGateRecord = IPendingGate & {
+  resolution: LoopGateOutcome;
+  resolvedAt: Date;
+  resolvedBy?: string;
+};
 
 // --- Confidence Telemetry ---
 
@@ -449,6 +457,9 @@ export interface IAgentExecution {
    */
   pendingGate?: IPendingGate;
 
+  /** Every gate this run resolved, oldest first; `pendingGate` moves here on `gate_response`. */
+  gateHistory?: IGateRecord[];
+
   /**
    * Confidence-gate telemetry (issue #56 M1.1). Accumulated every iteration the
    * gate evaluates; backs the fire-rate metrics surfaced in the admin tab.
@@ -600,6 +611,19 @@ const PendingGateSchema = new mongoose.Schema(
     confidence: { type: Number, required: true },
     reason: { type: String, required: true },
     requestedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
+const GateRecordSchema = new mongoose.Schema(
+  {
+    iteration: { type: Number, required: true },
+    confidence: { type: Number, required: true },
+    reason: { type: String, required: true },
+    requestedAt: { type: Date, required: true },
+    resolution: { type: String, enum: ['resumed', 'rejected'], required: true },
+    resolvedAt: { type: Date, required: true },
+    resolvedBy: { type: String },
   },
   { _id: false }
 );
@@ -843,6 +867,7 @@ const AgentExecutionSchema = new mongoose.Schema(
 
     // Confidence-gate state
     pendingGate: { type: PendingGateSchema, required: false },
+    gateHistory: { type: [GateRecordSchema], default: undefined },
 
     // Confidence-gate telemetry (#56 M1.1). `default: () => ({})` instantiates
     // the subdoc so its field defaults (evaluatedCount 0, minConfidence 1, ...)
@@ -1096,6 +1121,14 @@ export function parseExecutionListCursor(cursor: string): { createdAt: Date; id:
 
 const MAX_VIEWER_CONNECTIONS = 10;
 
+/**
+ * A loop run paused at the confidence gate is parked by the loop scheduler and waits on its owner,
+ * possibly for days, so the stale sweeps must not abort it (see `reconcileLoop` in `loopScheduler.ts`).
+ */
+const NOT_LOOP_PARKED = {
+  $nor: [{ status: 'paused', loopId: { $exists: true }, pendingGate: { $exists: true } }],
+};
+
 class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   constructor(private agentExecutionModel: mongoose.Model<IAgentExecution>) {
     super(agentExecutionModel);
@@ -1247,6 +1280,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       userId,
       status: { $in: this.sweepableStatuses },
       updatedAt: { $lt: cutoff },
+      ...NOT_LOOP_PARKED,
     };
     // Ids are read BEFORE the write because callers have to settle the quests
     // these executions leave behind, and `aborted` is terminal: once written,
@@ -1312,6 +1346,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const query: Record<string, unknown> = {
       status: { $in: this.sweepableStatuses },
       updatedAt: { $lt: opts.olderThan },
+      ...NOT_LOOP_PARKED,
     };
     if (opts.userId) query.userId = opts.userId;
     const docs = await this.model.find(query, { _id: 1 }).lean<Array<{ _id: mongoose.Types.ObjectId }>>();
@@ -1781,16 +1816,28 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   }
 
   /**
-   * Clear the gate marker. Caller is responsible for any subsequent status
+   * Clear the gate marker, appending it to `gateHistory` with its resolution in the same
+   * (pipeline) update. Caller is responsible for any subsequent status
    * transition (continuing -> re-invoke Lambda, completed -> markComplete).
    * Mirrors the `clearWaitingOnChild` `abortedAt`-not-exists guard so a
    * concurrent abort doesn't get resurrected.
    */
-  async clearPendingGate(id: string): Promise<boolean> {
-    const result = await this.model.updateOne(
-      { _id: id, abortedAt: { $exists: false } },
-      { $unset: { pendingGate: '' } }
-    );
+  async clearPendingGate(id: string, resolution: IGateRecord['resolution'], resolvedBy?: string): Promise<boolean> {
+    const record = { resolution, resolvedAt: '$$NOW', ...(resolvedBy && { resolvedBy: { $literal: resolvedBy } }) };
+    const result = await this.model.updateOne({ _id: id, abortedAt: { $exists: false } }, [
+      {
+        $set: {
+          gateHistory: {
+            $cond: [
+              { $eq: [{ $type: '$pendingGate' }, 'object'] },
+              { $concatArrays: [{ $ifNull: ['$gateHistory', []] }, [{ $mergeObjects: ['$pendingGate', record] }]] },
+              '$gateHistory',
+            ],
+          },
+        },
+      },
+      { $unset: 'pendingGate' },
+    ]);
     return result.modifiedCount > 0;
   }
 

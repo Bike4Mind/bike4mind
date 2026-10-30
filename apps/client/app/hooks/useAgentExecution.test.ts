@@ -1452,4 +1452,21 @@ describe('useAgentExecutionDispatch -- watching a run by id (subscribe)', () => 
     expect(sent().map(m => m.command)).toEqual(['subscribe']);
     expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('pending');
   });
+
+  it("shows a closed run again when the loop's notebook reconnects to it", async () => {
+    mountSubscriptions();
+    const dispatch = mountDispatch();
+    dispatch.subscribe('run-1');
+    dispatch.unsubscribe('run-1');
+    ws.sendJsonMessage.mockClear();
+
+    dispatch.reconnect('loop-session');
+    expect(sent().map(m => m.command)).toEqual(['reconnect']);
+    await snapshot(sent()[0].requestId, [step(0, 1)]);
+
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBeUndefined();
+    expect(useAgentExecutionStore.getState().executions['run-1']?.status).toBe('running');
+    await handlers['agent_text_delta']({ action: 'agent_text_delta', executionId: 'run-1', iteration: 0, delta: 'x' });
+    expect(useAgentExecutionStore.getState().executions['run-1']).toBeDefined();
+  });
 });

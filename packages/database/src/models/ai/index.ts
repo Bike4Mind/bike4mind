@@ -59,3 +59,4 @@ export * from './ToolModel';
 export * from './TransformBatchModel';
 export * from './WorkItemModel';
 export * from './LoopModel';
+export * from './LoopEventModel';

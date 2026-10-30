@@ -6,6 +6,7 @@ import {
   AccordionGroup,
   AccordionSummary,
   Box,
+  Chip,
   CircularProgress,
   DialogTitle,
   Drawer,
@@ -16,6 +17,7 @@ import {
 } from '@mui/joy';
 import AgentPageHeader from '@client/app/components/Agent/AgentPageHeader';
 import LoopActions from '@client/app/components/Loops/LoopActions';
+import LoopEventLog from '@client/app/components/Loops/LoopEventLog';
 import LoopTicketBoard from '@client/app/components/Loops/LoopTicketBoard';
 import {
   formatCredits,
@@ -24,7 +26,7 @@ import {
   LoopStatusChip,
   nextRunLabel,
 } from '@client/app/components/Loops/loopUi';
-import { useLoop, useLoopTickets } from '@client/app/hooks/data/loops';
+import { countNeedsYou, useLoop, useLoopEvents, useLoopTickets } from '@client/app/hooks/data/loops';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import CloseIcon from '@mui/icons-material/Close';
 import AgentRunViewer from '@client/app/components/Session/AgentExecution/AgentRunViewer';
@@ -39,6 +41,8 @@ export default function LoopDetailPage() {
   // Only mounted inside LoopsGate, so the loops API is never called while EnableLoops is off.
   const { data: loop, isLoading, error } = useLoop(id);
   const { data: tickets } = useLoopTickets(id);
+  const { data: events } = useLoopEvents(id);
+  const needsYou = countNeedsYou(events);
   useDocumentTitle(loop?.name ?? 'Loop');
 
   if (isLoading) return <CircularProgress size="sm" sx={{ m: 2 }} />;
@@ -64,6 +68,11 @@ export default function LoopDetailPage() {
       <Stack gap={2} sx={{ p: 2 }}>
         <Stack direction="row" gap={2} alignItems="flex-start" flexWrap="wrap" data-testid="loop-detail-summary">
           <LoopStatusChip loop={loop} />
+          {needsYou > 0 && (
+            <Chip size="sm" variant="soft" color="warning" data-testid="loop-detail-needs-you">
+              {needsYou} need you
+            </Chip>
+          )}
           <Typography level="body-sm">
             {formatInterval(loop.intervalMinutes)} - last run {lastRunLabel(loop)} - next {nextRunLabel(loop)} -{' '}
             {loop.runCount} runs - {formatCredits(loop.creditsUsed)} (90 days) - {loop.model}
@@ -91,6 +100,12 @@ export default function LoopDetailPage() {
               <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap' }}>
                 {loop.memory.notes || '-'}
               </Typography>
+            </AccordionDetails>
+          </Accordion>
+          <Accordion>
+            <AccordionSummary data-testid="loop-detail-log-toggle">Log</AccordionSummary>
+            <AccordionDetails>
+              <LoopEventLog data={events} onViewRun={setRun} />
             </AccordionDetails>
           </Accordion>
         </AccordionGroup>

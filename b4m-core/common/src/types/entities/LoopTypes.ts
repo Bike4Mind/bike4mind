@@ -114,3 +114,51 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   /** Moves a still-`live` loop to `error` once it has `maxFailures` failures in a row. */
   markErroredIfFailing(id: string, maxFailures: number): Promise<void>;
 }
+
+/**
+ * A per-loop event, kept past the execution TTL. `unsure` is a run the confidence gate paused: the
+ * scheduler parks its ticket as blocked and records it here; `gate_response` records the owner's answer.
+ */
+export const LOOP_EVENT_KINDS = ['unsure'] as const;
+
+export type LoopEventKind = (typeof LOOP_EVENT_KINDS)[number];
+
+export type LoopGateOutcome = 'resumed' | 'rejected';
+
+export interface ILoopEvent {
+  id: string;
+  loopId: string;
+  userId: string;
+  kind: LoopEventKind;
+  executionId: string;
+  workItemId?: string;
+  ticketTitle?: string;
+  iteration: number;
+  confidence: number;
+  reason: string;
+  /** The gate's `requestedAt`; with `executionId` it identifies the event. */
+  requestedAt: Date;
+  resolution?: { outcome: LoopGateOutcome; by?: string; at: Date };
+  /** Set once the scheduler has folded a resumed run back into its ticket. */
+  foldedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type LoopUnsureFields = Omit<ILoopEvent, 'id' | 'kind' | 'resolution' | 'foldedAt' | 'createdAt' | 'updatedAt'>;
+
+export interface ILoopEventRepository extends IBaseRepository<ILoopEvent> {
+  /** Records an unsure event once per gate (`executionId` + `requestedAt`); a repeat is a no-op. */
+  recordUnsure(fields: LoopUnsureFields): Promise<void>;
+  /** Records the event if missing, then its resolution. The first resolution wins. */
+  resolveUnsure(
+    fields: LoopUnsureFields,
+    resolution: { outcome: LoopGateOutcome; by?: string; at: Date }
+  ): Promise<void>;
+  /** Newest first. */
+  listForLoop(userId: string, loopId: string, limit: number): Promise<ILoopEvent[]>;
+  /** Resumed events whose run the scheduler has not folded yet. */
+  listResumedUnfolded(limit: number): Promise<ILoopEvent[]>;
+  markFolded(id: string, now: Date): Promise<void>;
+  deleteManyForLoop(userId: string, loopId: string): Promise<number>;
+}

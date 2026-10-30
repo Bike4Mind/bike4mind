@@ -437,6 +437,16 @@ describe('WorkItemRepository', () => {
       expect(await workItemRepository.findByIdForUser(selfBlocked.id, USER)).toMatchObject({ status: 'blocked' });
     });
 
+    it('resumeBlockedRun moves only a ticket blocked under that run back to in_progress', async () => {
+      const t = await ticket('T', { status: 'blocked', statusReason: 'Unsure: thin results', executionId: 'exec-1' });
+      expect(await workItemRepository.resumeBlockedRun(t.id, 'exec-2')).toBe(false);
+      expect(await workItemRepository.resumeBlockedRun(t.id, 'exec-1')).toBe(true);
+      const resumed = await workItemRepository.findByIdForUser(t.id, USER);
+      expect(resumed).toMatchObject({ status: 'in_progress', executionId: 'exec-1' });
+      expect(resumed?.statusReason).toBeUndefined();
+      expect(await workItemRepository.resumeBlockedRun(t.id, 'exec-1')).toBe(false);
+    });
+
     it('listForLoop returns every open ticket and only the newest closed ones', async () => {
       await ticket('Open');
       await ticket('Old', { stage: 'done', status: 'closed', closedAt: new Date(1000) });

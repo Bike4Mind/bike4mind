@@ -1,5 +1,5 @@
-import type { ILoop, IWorkItem, WorkItemPatch, WorkItemStatus } from '@bike4mind/common';
-import { loopRepository, workItemRepository } from '@bike4mind/database';
+import type { ILoop, IWorkItem, LoopUnsureFields, WorkItemPatch, WorkItemStatus } from '@bike4mind/common';
+import { loopRepository, workItemRepository, type IPendingGate } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLoopsEnabled } from './loopValidation';
 
@@ -106,3 +106,25 @@ export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<voi
   const ready = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, lastStageOf(loop));
   if (ready) await loopRepository.makeDueNow(loop.id, now);
 }
+
+/** A blocked ticket's reason when its run paused at the confidence gate; the full reason is in the loop log. */
+export const UNSURE_PREFIX = 'Unsure';
+export const unsureReason = (gateReason?: string): string =>
+  (gateReason ? `${UNSURE_PREFIX}: ${gateReason}` : UNSURE_PREFIX).slice(0, 1000);
+
+/**
+ * The `unsure` loop event for a gate. Written by the loop scheduler (on detach) and by `gate_response`
+ * (on resolve); both upsert on `executionId` + `requestedAt`, so whichever lands first creates it.
+ */
+export const unsureEventFields = (
+  run: { loopId: string; userId: string; executionId: string },
+  gate: IPendingGate,
+  ticket: Pick<IWorkItem, 'id' | 'title'> | null
+): LoopUnsureFields => ({
+  ...run,
+  iteration: gate.iteration,
+  confidence: gate.confidence,
+  reason: gate.reason,
+  requestedAt: gate.requestedAt,
+  ...(ticket && { workItemId: ticket.id, ticketTitle: ticket.title }),
+});

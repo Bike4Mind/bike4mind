@@ -7,6 +7,8 @@ import {
   adminSettingsRepository,
   agentExecutionRepository,
   Loop,
+  LoopEvent,
+  loopEventRepository,
   loopRepository,
   WorkItem,
   workItemRepository,
@@ -25,6 +27,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: h.startAgentExecution }));
 
 import { LOOP_LEASE_MS, MAX_CONSECUTIVE_FAILURES, runLoopSchedulerTick } from './loopScheduler';
+import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -458,5 +461,187 @@ describe('runLoopSchedulerTick - tickets', () => {
     const after = await ticketOf(ticket.id);
     expect(after.status).toBe('open');
     expect(after.executionId).toBeUndefined();
+  });
+});
+
+describe('runLoopSchedulerTick - unsure', () => {
+  const createTicket = async (loopId: string, overrides: Record<string, unknown> = {}) =>
+    (
+      await WorkItem.create({
+        userId: 'user-1',
+        loopId,
+        title: 'Research X',
+        stage: 'todo',
+        status: 'in_progress',
+        executionId: 'exec-0',
+        dependencies: [],
+        ...overrides,
+      })
+    ).toJSON();
+  const ticketOf = async (id: string) => (await WorkItem.findById(id))!.toJSON();
+  const eventsOf = async (loopId: string) => loopEventRepository.listForLoop('user-1', loopId, 10);
+  const LATER = new Date(NOW.getTime() + 60 * 60_000);
+  const gate = (requestedAt: Date, reason = 'thin results') => ({ iteration: 2, confidence: 0.3, reason, requestedAt });
+  const paused = (requestedAt = new Date(1000), updatedAt = NOW) => ({
+    userId: 'user-1',
+    status: 'paused',
+    pendingGate: gate(requestedAt),
+    updatedAt,
+  });
+
+  it('parks a gate-paused run once: event logged, ticket blocked as unsure, loop freed without a failure', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const ticket = await createTicket(loop.id);
+    executions['exec-0'] = paused();
+
+    await runLoopSchedulerTick(NOW, logger);
+    await Loop.updateOne({ _id: loop.id }, { $set: { activeExecutionId: 'exec-0' } });
+    await runLoopSchedulerTick(NOW, logger);
+
+    const events = await eventsOf(loop.id);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: 'unsure',
+      executionId: 'exec-0',
+      workItemId: ticket.id,
+      ticketTitle: 'Research X',
+      confidence: 0.3,
+      reason: 'thin results',
+    });
+    expect(events[0].resolution).toBeUndefined();
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked', statusReason: 'Unsure: thin results' });
+    const after = await reload(loop.id);
+    expect(after).toMatchObject({ status: 'live', consecutiveFailures: 0, runCount: 0 });
+    expect(after.activeExecutionId).toBeUndefined();
+    expect(after.statusReason).toBeUndefined();
+  });
+
+  it('never folds a gate-paused run as stalled', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const ticket = await createTicket(loop.id);
+    executions['exec-0'] = paused(new Date(1000), new Date(NOW.getTime() - STALE_ACTIVE_MS - 60_000));
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect((await ticketOf(ticket.id)).statusReason).toBe('Unsure: thin results');
+    expect(await reload(loop.id)).toMatchObject({ consecutiveFailures: 0, status: 'live' });
+  });
+
+  it("works the loop's next ready ticket while the unsure one stays blocked", async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const unsure = await createTicket(loop.id);
+    const next = await createTicket(loop.id, { title: 'Next one', status: 'open', executionId: undefined });
+    executions['exec-0'] = paused();
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(h.startAgentExecution.mock.calls[0][0].query).toContain(`Ticket id: ${next.id}`);
+    expect(await ticketOf(next.id)).toMatchObject({ status: 'in_progress', executionId: 'exec-1' });
+    expect(await ticketOf(unsure.id)).toMatchObject({ status: 'blocked' });
+  });
+
+  it('folds a resumed run into its ticket once it completes, without touching loop memory', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    const ticket = await createTicket(loop.id);
+    const fields = {
+      loopId: loop.id,
+      userId: 'user-1',
+      executionId: 'exec-0',
+      ...gate(new Date(1000)),
+    };
+    await loopEventRepository.resolveUnsure(fields, { outcome: 'resumed', by: 'user-1', at: NOW });
+
+    executions['exec-0'] = { userId: 'user-1', status: 'running', updatedAt: NOW };
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await eventsOf(loop.id))[0].foldedAt).toBeUndefined();
+
+    executions['exec-0'] = { userId: 'user-1', status: 'completed', result: { answer: 'done' } };
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing' });
+    expect((await eventsOf(loop.id))[0].foldedAt).toBeInstanceOf(Date);
+    expect(await reload(loop.id)).toMatchObject({ runCount: 0, memory: { notes: '', nextAction: '' } });
+  });
+
+  it('undoes a park that blocked the ticket after the owner had already resumed the run', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, { status: 'blocked', statusReason: 'Unsure: thin results' });
+    await loopEventRepository.resolveUnsure(
+      { loopId: loop.id, userId: 'user-1', executionId: 'exec-0', ...gate(new Date(1000)) },
+      { outcome: 'resumed', at: NOW }
+    );
+    executions['exec-0'] = { userId: 'user-1', status: 'completed', result: { answer: 'done' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing' });
+    expect((await ticketOf(ticket.id)).status).not.toBe('blocked');
+  });
+
+  it('folds a resumed run that went stale as stalled, and leaves a fresh one alone', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    const ticket = await createTicket(loop.id);
+    await loopEventRepository.resolveUnsure(
+      { loopId: loop.id, userId: 'user-1', executionId: 'exec-0', ...gate(new Date(1000)) },
+      { outcome: 'resumed', at: NOW }
+    );
+    executions['exec-0'] = { userId: 'user-1', status: 'awaiting_subagent', updatedAt: new Date(0) };
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await ticketOf(ticket.id)).status).toBe('in_progress');
+
+    executions['exec-0'] = {
+      userId: 'user-1',
+      status: 'running',
+      updatedAt: new Date(NOW.getTime() - STALE_ACTIVE_MS - 60_000),
+    };
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked', statusReason: 'Run stalled' });
+    expect((await eventsOf(loop.id))[0].foldedAt).toBeInstanceOf(Date);
+    expect(await reload(loop.id)).toMatchObject({ consecutiveFailures: 0 });
+  });
+
+  it('parks a resumed run that pauses again under a new event', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    const ticket = await createTicket(loop.id);
+    await loopEventRepository.resolveUnsure(
+      { loopId: loop.id, userId: 'user-1', executionId: 'exec-0', ...gate(new Date(1000)) },
+      { outcome: 'resumed', at: NOW }
+    );
+    executions['exec-0'] = { ...paused(new Date(2000)), pendingGate: gate(new Date(2000), 'still thin') };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    const [second, first] = await LoopEvent.find({ loopId: loop.id }).sort({ requestedAt: -1 });
+    expect(second.toJSON()).toMatchObject({ reason: 'still thin' });
+    expect(second.resolution).toBeUndefined();
+    expect(first.foldedAt).toBeInstanceOf(Date);
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked', statusReason: 'Unsure: still thin' });
+  });
+
+  it('treats a run stopped at the gate before a tick parked it as a rejected unsure, not a success', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const ticket = await createTicket(loop.id);
+    executions['exec-0'] = {
+      userId: 'user-1',
+      status: 'completed',
+      result: { answer: 'partial', stoppedByGate: true },
+      gateHistory: [{ ...gate(new Date(1000)), resolution: 'rejected', resolvedAt: NOW, resolvedBy: 'user-1' }],
+    };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({
+      status: 'blocked',
+      stage: 'todo',
+      statusReason: 'Unsure: thin results',
+    });
+    const after = await reload(loop.id);
+    expect(after).toMatchObject({ runCount: 0, consecutiveFailures: 0, memory: { notes: '' } });
+    expect(after.activeExecutionId).toBeUndefined();
+    const events = await eventsOf(loop.id);
+    expect(events).toHaveLength(1);
+    expect(events[0].resolution).toMatchObject({ outcome: 'rejected', by: 'user-1', at: NOW });
   });
 });

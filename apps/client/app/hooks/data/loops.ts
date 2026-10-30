@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
-import type { ILoop, ILoopWithUsage, LoopStatus, WorkItemStatus } from '@bike4mind/common';
+import type { ILoop, ILoopEvent, ILoopWithUsage, LoopGateOutcome, LoopStatus, WorkItemStatus } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 
@@ -21,15 +21,29 @@ export interface ILoopTicket {
   updatedAt: string;
 }
 
+/** One event as served by GET /api/loops/:id/events (apps/client/pages/api/loops/[id]/events.ts). */
+export type ILoopEventRow = Pick<
+  ILoopEvent,
+  'id' | 'kind' | 'executionId' | 'workItemId' | 'ticketTitle' | 'iteration' | 'confidence' | 'reason'
+> & {
+  resolution?: { outcome: LoopGateOutcome; by?: string; at: string };
+  createdAt: string;
+};
+
+/** Unsure events nobody has answered yet. */
+export const countNeedsYou = (events: ILoopEventRow[] = []) =>
+  events.filter(event => event.kind === 'unsure' && !event.resolution).length;
+
 export interface ILoopTicketsResponse {
   stages: { stage: string; tickets: ILoopTicket[] }[];
 }
 
-/** Every loops query shares the `['loops']` prefix, so one invalidation refreshes list, detail and tickets. */
+/** Every loops query shares the `['loops']` prefix, so one invalidation refreshes list, detail, tickets and events. */
 export const loopKeys = {
   all: ['loops'] as const,
   detail: (id: string) => ['loops', id] as const,
   tickets: (id: string) => ['loops', id, 'tickets'] as const,
+  events: (id: string) => ['loops', id, 'events'] as const,
 };
 
 export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 'tools' | 'stages'> & {
@@ -80,6 +94,14 @@ export const useLoopTickets = (id: string) =>
   useQuery({
     queryKey: loopKeys.tickets(id),
     queryFn: async () => (await api.get<ILoopTicketsResponse>(`/api/loops/${id}/tickets`)).data,
+    enabled: !!id,
+    refetchInterval: DETAIL_POLL_MS,
+  });
+
+export const useLoopEvents = (id: string) =>
+  useQuery({
+    queryKey: loopKeys.events(id),
+    queryFn: async () => (await api.get<ILoopEventRow[]>(`/api/loops/${id}/events`)).data,
     enabled: !!id,
     refetchInterval: DETAIL_POLL_MS,
   });
