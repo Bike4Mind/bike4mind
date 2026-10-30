@@ -54,22 +54,26 @@ export function useAgentActivity(trackedIds: ReadonlySet<string>): ReadonlyMap<s
     });
   }, []);
 
+  // Every session-list change rebuilds the set, so the reconcile below keys on its contents.
+  const trackedKey = useMemo(() => [...trackedIds].sort().join('\n'), [trackedIds]);
+
   // Drops ids that left the roster and adopts any buffered for ids that joined it.
   useEffect(() => {
-    const adopted = [...untracked.current].filter(([id]) => trackedIds.has(id));
+    const ids = tracked.current;
+    const adopted = [...untracked.current].filter(([id]) => ids.has(id));
     if (adopted.length > 0) {
       const remaining = new Map(untracked.current);
       adopted.forEach(([id]) => remaining.delete(id));
       untracked.current = remaining;
     }
     setActivity(current => {
-      const next = new Map([...current].filter(([id]) => trackedIds.has(id)));
+      const next = new Map([...current].filter(([id]) => ids.has(id)));
       adopted.forEach(([id, buffered]) => {
         if (!next.has(id)) next.set(id, buffered);
       });
       return next.size === current.size && adopted.length === 0 ? current : next;
     });
-  }, [trackedIds]);
+  }, [trackedKey]);
 
   return activity;
 }

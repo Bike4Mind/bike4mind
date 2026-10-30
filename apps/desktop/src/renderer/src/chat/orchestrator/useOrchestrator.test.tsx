@@ -148,6 +148,28 @@ describe('useAgentActivity for a just-spawned child', () => {
   });
 });
 
+describe('useAgentActivity and a re-listed roster', () => {
+  it('does not reconcile again when the tracked set is rebuilt with the same ids', () => {
+    // Every session-list change rebuilds the set; `has` calls are the reconcile pass doing its work.
+    class CountingSet extends Set<string> {
+      lookups = 0;
+      override has(value: string) {
+        this.lookups += 1;
+        return super.has(value);
+      }
+    }
+    const Probe = ({ tracked }: { tracked: ReadonlySet<string> }) => {
+      useAgentActivity(tracked);
+      return null;
+    };
+    act(() => root.render(<Probe tracked={new CountingSet(['a', 'b'])} />));
+    act(() => listener?.(toolStart('a')));
+    const rebuilt = new CountingSet(['b', 'a']);
+    act(() => root.render(<Probe tracked={rebuilt} />));
+    expect(rebuilt.lookups).toBe(0);
+  });
+});
+
 describe('useAgentActivity pruning', () => {
   it('drops activity for an id that is no longer tracked', () => {
     let latest: ReadonlyMap<string, AgentActivity> = new Map();
