@@ -19,7 +19,7 @@ const INDENT_PX = 16;
 const COMPARE: Record<SortKey, (a: AgentView, b: AgentView) => number> = {
   agent: (a, b) => a.title.localeCompare(b.title),
   updated: (a, b) => a.updatedAt.localeCompare(b.updatedAt),
-  cost: (a, b) => (a.usdCost ?? a.credits ?? 0) - (b.usdCost ?? b.credits ?? 0),
+  cost: (a, b) => (a.usdCost ?? 0) - (b.usdCost ?? 0),
 };
 
 /** Text sorts A-Z first; time and cost lead with the newest and the priciest. */
@@ -63,6 +63,12 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
   const rows = useMemo(() => {
     if (!sort) return agents;
     const sign = sort.direction === 'asc' ? 1 : -1;
+    if (sort.key === 'cost') {
+      // Only USD is comparable; credit-only and unknown costs trail in roster order whichever way it runs.
+      const priced = agents.filter(agent => agent.usdCost !== undefined);
+      const unpriced = agents.filter(agent => agent.usdCost === undefined);
+      return [...priced.sort((a, b) => sign * COMPARE.cost(a, b)), ...unpriced];
+    }
     return [...agents].sort((a, b) => sign * COMPARE[sort.key](a, b));
   }, [agents, sort]);
 

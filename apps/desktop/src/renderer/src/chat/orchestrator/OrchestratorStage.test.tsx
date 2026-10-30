@@ -1,125 +1,104 @@
 // @vitest-environment jsdom
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { CssVarsProvider } from '@mui/joy/styles';
+import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { desktopTheme } from '../../theme';
 import { OrchestratorStage } from './OrchestratorStage';
-import type { AgentState, AgentView } from './roster';
-
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-window.matchMedia ??= ((query: string) => ({
-  matches: false,
-  media: query,
-  onchange: null,
-  addListener: () => {},
-  removeListener: () => {},
-  addEventListener: () => {},
-  removeEventListener: () => {},
-  dispatchEvent: () => false,
-})) as typeof window.matchMedia;
-
-const agent = (id: string, state: AgentState, extra: Partial<AgentView> = {}): AgentView => ({
-  id,
-  title: `Agent ${id}`,
-  parentId: 'root',
-  depth: 1,
-  seedPrompt: `seed ${id}`,
-  createdAt: '2026-10-01T00:00:00.000Z',
-  updatedAt: '2026-10-01T00:00:00.000Z',
-  model: 'm',
-  state,
-  usdCost: 1,
-  ...extra,
-});
+import type { AgentView } from './roster';
+import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
 const FIXTURE = [
-  agent('n', 'needs-you'),
-  agent('w1', 'working'),
-  agent('w2', 'working'),
-  agent('d', 'done', { usdCost: undefined }),
+  agentFixture('n', 'needs-you', { usdCost: 1 }),
+  agentFixture('w1', 'working', { usdCost: 1 }),
+  agentFixture('w2', 'working', { usdCost: 1 }),
+  agentFixture('d', 'done'),
 ];
 
-let root: Root | null = null;
-let host: HTMLElement | null = null;
 const onViewChange = vi.fn();
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
+const themed = createThemedMount();
 
-function mount(agents: AgentView[], dockControl?: React.ReactNode) {
-  host = document.createElement('div');
-  document.body.appendChild(host);
-  root = createRoot(host);
+const renderStage = (agents: AgentView[], dockControl?: ReactNode) =>
+  themed.render(
+    <OrchestratorStage
+      agents={agents}
+      view="table"
+      onViewChange={onViewChange}
+      actions={actions}
+      introPlaying={false}
+      dockControl={dockControl}
+    />
+  );
+
+const pressEscape = (init: KeyboardEventInit = {}) =>
   act(() => {
-    root?.render(
-      <CssVarsProvider theme={desktopTheme}>
-        <OrchestratorStage
-          agents={agents}
-          view="table"
-          onViewChange={onViewChange}
-          actions={actions}
-          introPlaying={false}
-          dockControl={dockControl}
-        />
-      </CssVarsProvider>
-    );
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, ...init }));
   });
-}
-
-const query = (testId: string) => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
 
 beforeEach(() => {
-  (window as unknown as { b4m: unknown }).b4m = {
-    chat: { getSession: vi.fn().mockResolvedValue(null) },
-  };
+  (window as unknown as { b4m: unknown }).b4m = { chat: { getSession: vi.fn().mockResolvedValue(null) } };
 });
 
 afterEach(() => {
-  act(() => root?.unmount());
-  host?.remove();
-  root = null;
-  host = null;
+  themed.unmount();
   vi.clearAllMocks();
 });
 
 describe('OrchestratorStage', () => {
-  it('summarises the roster, with ~ when a cost is unknown', () => {
-    mount(FIXTURE);
+  it('summarises the roster, with ~ when a cost is unknown', async () => {
+    await renderStage(FIXTURE);
     expect(query('orchestrator-summary-strip')?.textContent).toBe(
       '4 agents \u00B7 2 working \u00B7 1 need you \u00B7 1 done \u00B7 0 failed \u00B7 ~$3.00'
     );
   });
 
-  it('hides the needs-you pill when nothing needs the user', () => {
-    mount([agent('w', 'working')]);
+  it('hides the needs-you pill when nothing needs the user', async () => {
+    await renderStage([agentFixture('w', 'working')]);
     expect(query('orchestrator-needs-you-pill')).toBeNull();
   });
 
   it('opens the drawer for the first needs-you agent from the pill and closes on Escape', async () => {
-    mount(FIXTURE);
+    await renderStage(FIXTURE);
     expect(query('orchestrator-peek-drawer')).toBeNull();
-    await act(async () => query('orchestrator-needs-you-pill')?.click());
-    expect(query('orchestrator-peek-drawer')?.textContent).toContain('Agent n');
+    await act(async () => el('orchestrator-needs-you-pill').click());
+    expect(el('orchestrator-peek-drawer').textContent).toContain('Agent n');
+    await pressEscape();
+    expect(query('orchestrator-peek-drawer')).toBeNull();
+  });
+
+  it('keeps the drawer open for an Escape that is composing or already handled', async () => {
+    await renderStage(FIXTURE);
+    await act(async () => el('orchestrator-needs-you-pill').click());
+    await pressEscape({ isComposing: true });
+    expect(query('orchestrator-peek-drawer')).not.toBeNull();
     act(() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      const handled = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+      handled.preventDefault();
+      window.dispatchEvent(handled);
     });
-    expect(query('orchestrator-peek-drawer')).toBeNull();
+    expect(query('orchestrator-peek-drawer')).not.toBeNull();
   });
 
   it('opens the drawer when a table row is clicked', async () => {
-    mount(FIXTURE);
-    await act(async () => query('orchestrator-table-row-w2')?.click());
-    expect(query('orchestrator-peek-drawer')?.textContent).toContain('Agent w2');
+    await renderStage(FIXTURE);
+    await act(async () => el('orchestrator-table-row-w2').click());
+    expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');
   });
 
-  it('reports a view change', () => {
-    mount(FIXTURE);
-    act(() => query('orchestrator-view-tab-board')?.click());
+  it('starts a fresh reply box when another agent is selected', async () => {
+    await renderStage(FIXTURE);
+    await act(async () => el('orchestrator-table-row-w1').click());
+    await typeInto(el('orchestrator-peek-reply-input') as HTMLTextAreaElement, 'half-written');
+    await act(async () => el('orchestrator-table-row-w2').click());
+    expect((el('orchestrator-peek-reply-input') as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('reports a view change', async () => {
+    await renderStage(FIXTURE);
+    act(() => el('orchestrator-view-tab-board').click());
     expect(onViewChange).toHaveBeenCalledWith('board');
   });
 
-  it('renders the dock control in the header', () => {
-    mount(FIXTURE, <span data-testid="dock-probe" />);
+  it('renders the dock control in the header', async () => {
+    await renderStage(FIXTURE, <span data-testid="dock-probe" />);
     expect(query('dock-probe')).not.toBeNull();
   });
 });
