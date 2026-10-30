@@ -15,6 +15,7 @@ import {
   LOOP_DIRECTIVE_REASON_MAX,
   LOOP_DIRECTIVE_TRANSITIONS,
   LOOP_OVERSEER_TOOL_NAMES,
+  startOfUtcDay,
   WORK_ITEM_STATUSES,
   type ILoop,
   type ILoopDirective,
@@ -92,8 +93,9 @@ const directiveSummary = (directive: ILoopDirective) => ({
 });
 
 async function loopStatus(loop: ILoop, userId: string) {
-  const [credits, tickets, runs, directives] = await Promise.all([
+  const [credits, creditsToday, tickets, runs, directives] = await Promise.all([
     agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId]),
+    agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId], startOfUtcDay(new Date())),
     // ponytail: counts cover the first 100 unclosed tickets; page through if a watched loop ever holds more.
     workItemRepository.listForUser(
       userId,
@@ -123,6 +125,8 @@ async function loopStatus(loop: ILoop, userId: string) {
       nextAction: loop.memory.nextAction.slice(0, MEMORY_CHARS),
     },
     creditsUsed: credits[loop.id] ?? 0,
+    creditsToday: creditsToday[loop.id] ?? 0,
+    ...(loop.budgetCreditsPerDay && { budgetCreditsPerDay: loop.budgetCreditsPerDay }),
     ticketCounts,
     ticketsHasMore: tickets.hasMore,
     blockedTickets: tickets.data

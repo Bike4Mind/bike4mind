@@ -39,6 +39,7 @@ const loopDoc = (id: string, overrides: Record<string, unknown> = {}) => ({
   status: 'live',
   sessionId: `s-${id}`,
   intervalMinutes: 15,
+  budgetCreditsPerDay: 10,
   consecutiveFailures: 0,
   memory: { notes: 'n'.repeat(2000), nextAction: 'next' },
   ...overrides,
@@ -83,7 +84,9 @@ beforeEach(() => {
       replies: [{ by: 'worker', outcome: 'pushed_back', note: 'no', at: new Date() }],
     }),
   ]);
-  executions.sumCreditsByLoop.mockResolvedValue({ [WORKER]: 42 });
+  executions.sumCreditsByLoop.mockImplementation(async (_ids: string[], _sessions: string[], since?: Date) => ({
+    [WORKER]: since ? 7 : 42,
+  }));
   executions.listRecentForLoop.mockResolvedValue([{ id: 'r1', status: 'completed', totalCreditsUsed: 3 }]);
   items.listForUser.mockResolvedValue({
     data: [
@@ -212,6 +215,8 @@ describe('loop_oversee_status', () => {
       status: 'live',
       intervalMinutes: 15,
       creditsUsed: 42,
+      creditsToday: 7,
+      budgetCreditsPerDay: 10,
       ticketCounts: { todo: { open: 1, blocked: 1 }, doing: { in_progress: 1 } },
       blockedTickets: [{ id: 't2', statusReason: 'needs key' }],
       recentRuns: [{ id: 'r1', status: 'completed' }],
