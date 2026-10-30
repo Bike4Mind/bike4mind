@@ -6,6 +6,7 @@ import { Fragment, ReactNode, useEffect, useRef } from 'react';
 import AddIcon from '@mui/icons-material/Add';
 import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
+import AutorenewOutlinedIcon from '@mui/icons-material/AutorenewOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlined';
 import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
@@ -23,6 +24,7 @@ import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.g
 import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
+import { useLoopsEnabled } from '@client/app/components/Loops/LoopsGate';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useOptiVisible } from '@client/app/hooks/data/opti';
 import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
@@ -82,10 +84,10 @@ type NavItem = {
 };
 
 /**
- * Primary sidebar navigation - a vertical icon list (New Chat, Files Manager, Agents, Projects,
- * OptiHashi, Tavern). OptiHashi/Tavern keep the same entitlement gating as the footer menu, and
- * Agents follows the `enableAgents` flag. The active row is highlighted by route (Files Manager
- * by the file-browser drawer's open state, since it isn't a route).
+ * Primary sidebar navigation - a vertical icon list (New Chat, Files Manager, Agents, Loops, Projects,
+ * OptiHashi, Tavern). OptiHashi/Tavern keep the same entitlement gating as the footer menu, Agents
+ * follows the `enableAgents` flag and Loops the admin `EnableLoops` setting. The active row is
+ * highlighted by route (Files Manager by the file-browser drawer's open state, since it isn't a route).
  */
 const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all' }) => {
   const theme = useTheme();
@@ -101,6 +103,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const startHereShownRef = useRef(false);
 
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
+  const isLoopsEnabled = useLoopsEnabled();
   // Mirror the footer gating: entitlement-aware opti access (admin/developer/OptiHashi Pro, plus
   // email-domain grantees) sees OptiHashi without flipping the feature flag, unless the user hid
   // the workspace in Settings (display only; /opti itself stays reachable).
@@ -299,6 +302,20 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             onClick: () => {
               closeOnMobile();
               navigate({ to: '/agents' });
+            },
+          },
+        ]
+      : []),
+    ...(isLoopsEnabled
+      ? [
+          {
+            key: 'loops',
+            label: t('loops.title'),
+            icon: iconSlot(<AutorenewOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname === '/loops' || location.pathname.startsWith('/loops/'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/loops' });
             },
           },
         ]

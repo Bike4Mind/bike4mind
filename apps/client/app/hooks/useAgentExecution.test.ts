@@ -1243,3 +1243,230 @@ describe('useAgentExecutionSubscriptions -- failed run reply', () => {
     expect(failedRunReply('tool_denied')).toBe('Execution stopped: a tool call was denied.');
   });
 });
+
+describe('useAgentExecutionDispatch -- watching a run by id (subscribe)', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  const sent = () => ws.sendJsonMessage.mock.calls.map(c => c[0] as Record<string, unknown>);
+  const mountDispatch = () => renderHook(() => useAgentExecutionDispatch()).result.current;
+  const step = (iteration: number, timestamp: number, content = `step ${timestamp}`) => ({
+    type: 'thought' as const,
+    content,
+    metadata: { timestamp, iteration },
+  });
+  const snapshot = (requestId: unknown, steps: ReturnType<typeof step>[], iterationCount = 0) =>
+    handlers['reconnect_result']({
+      action: 'reconnect_result',
+      requestId,
+      found: true,
+      executionId: 'run-1',
+      sessionId: 'loop-session',
+      status: 'running',
+      iterationCount,
+      steps,
+    });
+
+  it('sends subscribe (never reconnect) and marks the run as viewed', () => {
+    mountDispatch().subscribe('run-1');
+    expect(sent()).toEqual([
+      { action: 'agent_execute', command: 'subscribe', requestId: expect.any(String), executionId: 'run-1' },
+    ]);
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('pending');
+  });
+
+  it('does nothing for a run this tab already streams from chat', () => {
+    useAgentExecutionStore.getState().startExecution('run-1', 'sess-1');
+    mountDispatch().subscribe('run-1');
+    expect(sent()).toEqual([]);
+  });
+
+  it('marks the viewer not found on a bare found:false', async () => {
+    mountSubscriptions();
+    mountDispatch().subscribe('run-1');
+    await handlers['reconnect_result']({ action: 'reconnect_result', requestId: sent()[0].requestId, found: false });
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('not_found');
+  });
+
+  it('leaves a viewed run out of the socket-up sweep (its AgentRunViewer re-subscribes)', async () => {
+    mountDispatch().subscribe('run-1');
+    mountSubscriptions();
+    await snapshot(sent()[0].requestId, []);
+    ws.sendJsonMessage.mockClear();
+
+    ws.readyState = 1; // OPEN
+    mountSubscriptions();
+
+    expect(sent()).toEqual([]);
+  });
+
+  it('renders each step once when the live stream overlaps the snapshot', async () => {
+    mountSubscriptions();
+    mountDispatch().subscribe('run-1');
+    await snapshot(sent()[0].requestId, [step(0, 1), step(0, 2)]);
+
+    for (const s of [step(0, 2), step(1, 3)]) {
+      await handlers['iteration_step']({
+        action: 'iteration_step',
+        executionId: 'run-1',
+        iteration: s.metadata.iteration,
+        step: s,
+        isComplete: false,
+      });
+    }
+
+    const iterations = useAgentExecutionStore.getState().executions['run-1'].iterations;
+    expect(iterations.map(it => it.step.metadata?.timestamp)).toEqual([1, 2, 3]);
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('found');
+  });
+
+  it('re-subscribes exactly once when a live step skips ahead', async () => {
+    mountSubscriptions();
+    mountDispatch().subscribe('run-1');
+    await snapshot(sent()[0].requestId, [step(0, 1)], 0);
+    ws.sendJsonMessage.mockClear();
+
+    for (const [iteration, timestamp] of [
+      [3, 10],
+      [3, 11],
+    ]) {
+      await handlers['iteration_step']({
+        action: 'iteration_step',
+        executionId: 'run-1',
+        iteration,
+        step: step(iteration, timestamp),
+        isComplete: false,
+      });
+    }
+
+    expect(sent().map(m => m.command)).toEqual(['subscribe']);
+  });
+
+  it('does not patch a chat bubble for a viewed run', async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['quests', 'session', 'loop-session'], { pages: [] });
+    const setSpy = vi.spyOn(queryClient, 'setQueryData');
+    mountSubscriptions(queryClient);
+    mountDispatch().subscribe('run-1');
+    await snapshot(sent()[0].requestId, []);
+    setSpy.mockClear();
+
+    await handlers['completed']({ action: 'completed', executionId: 'run-1', answer: 'done', totalCreditsUsed: 4 });
+
+    expect(setSpy).not.toHaveBeenCalled();
+    expect(useAgentExecutionStore.getState().executions['run-1'].status).toBe('completed');
+  });
+
+  it('unsubscribe tells the server and drops the run from the store', async () => {
+    mountSubscriptions();
+    const dispatch = mountDispatch();
+    dispatch.subscribe('run-1');
+    await snapshot(sent()[0].requestId, [step(0, 1)]);
+    ws.sendJsonMessage.mockClear();
+
+    dispatch.unsubscribe('run-1');
+
+    expect(sent()).toEqual([{ action: 'agent_execute', command: 'unsubscribe', executionId: 'run-1' }]);
+    expect(useAgentExecutionStore.getState().executions['run-1']).toBeUndefined();
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('closed');
+  });
+
+  it("keeps a finished run's outcome from the snapshot", async () => {
+    mountSubscriptions();
+    const dispatch = mountDispatch();
+    dispatch.subscribe('run-1');
+    dispatch.subscribe('run-2');
+    const [done, broke] = sent();
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      requestId: done.requestId,
+      found: true,
+      executionId: 'run-1',
+      status: 'completed',
+      steps: [{ type: 'final_answer', content: 'All done', metadata: { timestamp: 1, iteration: 0 } }],
+      answer: 'All done',
+    });
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      requestId: broke.requestId,
+      found: true,
+      executionId: 'run-2',
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      errorMessage: 'Out of credits',
+    });
+
+    const { executions } = useAgentExecutionStore.getState();
+    expect(executions['run-1']).toMatchObject({ status: 'completed', answer: 'All done' });
+    expect(executions['run-2']).toMatchObject({
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      errorMessage: 'Out of credits',
+    });
+  });
+
+  it('takes the answer from the REST trace when the snapshot was truncated', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ answer: 'Big answer', steps: [] }) });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      mountSubscriptions();
+      mountDispatch().subscribe('run-1');
+      await handlers['reconnect_result']({
+        action: 'reconnect_result',
+        requestId: sent()[0].requestId,
+        found: true,
+        executionId: 'run-1',
+        status: 'completed',
+        stepsTruncated: true,
+      });
+
+      await vi.waitFor(() => expect(useAgentExecutionStore.getState().executions['run-1']?.answer).toBe('Big answer'));
+      expect(fetchMock).toHaveBeenCalledWith('/api/agent-executions/run-1', expect.anything());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('drops frames that arrive after unsubscribe, so the run is never taken over on socket-up', async () => {
+    mountSubscriptions();
+    const dispatch = mountDispatch();
+    dispatch.subscribe('run-1');
+    const firstRequest = sent()[0].requestId;
+    dispatch.unsubscribe('run-1');
+    ws.sendJsonMessage.mockClear();
+
+    await handlers['agent_text_delta']({ action: 'agent_text_delta', executionId: 'run-1', iteration: 0, delta: 'x' });
+    await snapshot(firstRequest, [step(0, 1)]);
+    expect(useAgentExecutionStore.getState().executions['run-1']).toBeUndefined();
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('closed');
+
+    ws.readyState = 1; // OPEN
+    mountSubscriptions();
+    expect(sent()).toEqual([]);
+
+    dispatch.subscribe('run-1');
+    expect(sent().map(m => m.command)).toEqual(['subscribe']);
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('pending');
+  });
+
+  it("shows a closed run again when the loop's notebook reconnects to it", async () => {
+    mountSubscriptions();
+    const dispatch = mountDispatch();
+    dispatch.subscribe('run-1');
+    dispatch.unsubscribe('run-1');
+    ws.sendJsonMessage.mockClear();
+
+    dispatch.reconnect('loop-session');
+    expect(sent().map(m => m.command)).toEqual(['reconnect']);
+    await snapshot(sent()[0].requestId, [step(0, 1)]);
+
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBeUndefined();
+    expect(useAgentExecutionStore.getState().executions['run-1']?.status).toBe('running');
+    await handlers['agent_text_delta']({ action: 'agent_text_delta', executionId: 'run-1', iteration: 0, delta: 'x' });
+    expect(useAgentExecutionStore.getState().executions['run-1']).toBeDefined();
+  });
+});

@@ -602,6 +602,9 @@ export const SettingKeySchema = z.enum([
   // AGENT PROACTIVE MESSAGING SETTINGS
   'enableAgentProactiveMessages',
 
+  // LOOPS SETTINGS
+  'EnableLoops',
+
   // TIME MACHINE & NIGHT SKY SETTINGS
   'EnableEnhancedDateTime',
   'EnableHistoricalFeatures',
@@ -2092,6 +2095,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableAgents', order: 10 },
       { key: 'EnableAgentsDefault', order: 11 },
       { key: 'enableAgentProactiveMessages', order: 12 },
+      { key: 'EnableLoops', order: 13 },
       { key: 'EnableAgentMode', order: 15 },
       { key: 'EnableAgentModeDefault', order: 16 },
       { key: 'EnableArtifacts', order: 20 },
@@ -6020,6 +6024,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 12,
+    dependsOn: 'EnableAgents',
+  }),
+  EnableLoops: makeBooleanSetting({
+    key: 'EnableLoops',
+    name: 'Enable Loops',
+    defaultValue: false,
+    description:
+      'Let every user create loops: recurring, unattended agent runs on a schedule, billed to the owner. When disabled, the loops API returns 404 and the scheduler dispatches nothing.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 13,
     dependsOn: 'EnableAgents',
   }),
   // Time Machine & Night Sky Settings

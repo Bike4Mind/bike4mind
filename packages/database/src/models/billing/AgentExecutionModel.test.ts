@@ -59,6 +59,85 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('sumCreditsByLoop', () => {
+    it('sums each loop over its top-level runs only', async () => {
+      const [sessionA, sessionB] = ['sa', 'sb'];
+      const parent = await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionA, loopId: 'loopA', totalCreditsUsed: 10 })
+      );
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionA, loopId: 'loopA', totalCreditsUsed: 5 })
+      );
+      // A child's credits already roll up into its parent.
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionA, loopId: 'loopA', parentExecutionId: parent.id, totalCreditsUsed: 99 })
+      );
+      // A hand-started chat in the loop's notebook carries no loopId.
+      await agentExecutionRepository.create(makeBaseExecution({ sessionId: sessionA, totalCreditsUsed: 50 }));
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionB, loopId: 'loopB', totalCreditsUsed: 7 })
+      );
+      // Same loop id outside the requested notebooks.
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: 'other', loopId: 'loopA', totalCreditsUsed: 1000 })
+      );
+
+      expect(await agentExecutionRepository.sumCreditsByLoop(['loopA', 'loopB'], [sessionA, sessionB])).toEqual({
+        loopA: 15,
+        loopB: 7,
+      });
+    });
+
+    it('counts only runs created since the given time', async () => {
+      const since = new Date('2026-10-30T00:00:00.000Z');
+      const runAt = async (createdAt: string, totalCreditsUsed: number) => {
+        const run = await agentExecutionRepository.create(
+          makeBaseExecution({ sessionId: 'sa', loopId: 'loopA', totalCreditsUsed })
+        );
+        await AgentExecutionModel.collection.updateOne(
+          { _id: new mongoose.Types.ObjectId(run.id) },
+          { $set: { createdAt: new Date(createdAt) } }
+        );
+      };
+      await runAt('2026-10-29T23:59:59.999Z', 100);
+      await runAt('2026-10-30T00:00:00.000Z', 3);
+      await runAt('2026-10-30T12:00:00.000Z', 4);
+
+      expect(await agentExecutionRepository.sumCreditsByLoop(['loopA'], ['sa'], since)).toEqual({ loopA: 7 });
+      expect(await agentExecutionRepository.sumCreditsByLoop(['loopA'], ['sa'])).toEqual({ loopA: 107 });
+    });
+
+    it('returns nothing for no loops', async () => {
+      expect(await agentExecutionRepository.sumCreditsByLoop([], [])).toEqual({});
+    });
+  });
+
+  describe('listRecentForLoop', () => {
+    it("returns a loop's newest top-level runs", async () => {
+      const older = await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: 'sl', loopId: 'loopL', totalCreditsUsed: 1, createdAt: new Date(1000) })
+      );
+      const newer = await agentExecutionRepository.create(
+        makeBaseExecution({
+          sessionId: 'sl',
+          loopId: 'loopL',
+          totalCreditsUsed: 2,
+          failureReason: 'abandoned',
+          createdAt: new Date(2000),
+        })
+      );
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: 'sl', loopId: 'loopL', parentExecutionId: newer.id })
+      );
+      await agentExecutionRepository.create(makeBaseExecution({ sessionId: 'sl', loopId: 'loopOther' }));
+
+      const runs = await agentExecutionRepository.listRecentForLoop('loopL', 'sl', 5);
+      expect(runs.map(run => run.id)).toEqual([newer.id, older.id]);
+      expect(runs[0]).toMatchObject({ failureReason: 'abandoned', totalCreditsUsed: 2 });
+      expect(await agentExecutionRepository.listRecentForLoop('loopL', 'sl', 1)).toHaveLength(1);
+    });
+  });
+
   describe('countActiveByUserId', () => {
     it('counts top-level executions in any active status', async () => {
       const userId = new mongoose.Types.ObjectId().toString();
@@ -268,6 +347,51 @@ describe('AgentExecutionRepository', () => {
       const updated = await agentExecutionRepository.findById(parent.id);
       expect(updated?.childExecutionIds).toHaveLength(1);
       expect(updated?.childExecutionIds.map(String)).toContain(childId);
+    });
+  });
+
+  describe('viewer connections', () => {
+    it('adds a viewer once and removes it', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+      expect(await agentExecutionRepository.findViewerConnectionIds(execution.id)).toEqual([]);
+
+      await agentExecutionRepository.addViewer(execution.id, 'conn-a');
+      await agentExecutionRepository.addViewer(execution.id, 'conn-a');
+      expect(await agentExecutionRepository.findViewerConnectionIds(execution.id)).toEqual(['conn-a']);
+
+      await agentExecutionRepository.removeViewer(execution.id, 'conn-a');
+      expect(await agentExecutionRepository.findViewerConnectionIds(execution.id)).toEqual([]);
+    });
+
+    it('keeps only the newest 10 viewers', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+      for (let i = 0; i < 11; i++) await agentExecutionRepository.addViewer(execution.id, `conn-${i}`);
+      const ids = await agentExecutionRepository.findViewerConnectionIds(execution.id);
+      expect(ids).toHaveLength(10);
+      expect(ids).not.toContain('conn-0');
+      expect(ids[9]).toBe('conn-10');
+    });
+
+    it('does not change connectionId', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ connectionId: 'owner' }));
+      await agentExecutionRepository.addViewer(execution.id, 'viewer');
+      expect((await agentExecutionRepository.findById(execution.id))?.connectionId).toBe('owner');
+    });
+
+    it('ignores a malformed id on remove', async () => {
+      await expect(agentExecutionRepository.removeViewer('not-an-id', 'conn-a')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('findRootExecutionId', () => {
+    it('walks parent and spawnedBy links to the top-level run', async () => {
+      const root = await agentExecutionRepository.create(makeBaseExecution());
+      const child = await agentExecutionRepository.create(makeBaseExecution({ parentExecutionId: root.id }));
+      const grandchild = await agentExecutionRepository.create(
+        makeBaseExecution({ spawnedByExecutionId: child.id, isBackgroundExecution: true })
+      );
+      expect(await agentExecutionRepository.findRootExecutionId(grandchild.id)).toBe(root.id);
+      expect(await agentExecutionRepository.findRootExecutionId(root.id)).toBe(root.id);
     });
   });
 
@@ -1018,6 +1142,27 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('stale sweeps skip loop runs parked at the confidence gate', () => {
+    it('leaves a gate-paused loop run alone but still aborts a gate-paused chat run', async () => {
+      const userId = new mongoose.Types.ObjectId().toString();
+      const pendingGate = { iteration: 1, confidence: 0.2, reason: 'thin', requestedAt: new Date() };
+      const parked = await agentExecutionRepository.create(
+        makeBaseExecution({ userId, status: 'paused', loopId: 'loop-1', pendingGate })
+      );
+      const chat = await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'paused', pendingGate }));
+      await (agentExecutionRepository as unknown as { model: mongoose.Model<unknown> }).model.updateMany(
+        { _id: { $in: [parked.id, chat.id] } },
+        { $set: { updatedAt: new Date(Date.now() - 60 * 60 * 1000) } },
+        { timestamps: false }
+      );
+
+      const olderThan = new Date(Date.now() - 20 * 60 * 1000);
+      expect(await agentExecutionRepository.findStaleActiveIds({ userId, olderThan })).toEqual([chat.id]);
+      expect(await agentExecutionRepository.cleanupStaleActive(userId, 20 * 60 * 1000)).toEqual([chat.id]);
+      expect((await agentExecutionRepository.findById(parked.id))?.status).toBe('paused');
+    });
+  });
+
   describe('claimExecution covers awaiting_dag_children', () => {
     it('atomically transitions awaiting_dag_children → continuing exactly once', async () => {
       const parent = await agentExecutionRepository.create(makeBaseExecution({ status: 'awaiting_dag_children' }));
@@ -1371,6 +1516,46 @@ describe('AgentExecutionRepository', () => {
       expect(await agentExecutionRepository.recordIterationConfidence(exec.id, 0.2, { belowThreshold: true })).toBe(1);
     });
 
+    it('clearPendingGate moves each resolved gate into gateHistory, oldest first', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const gate = (iteration: number) => ({
+        iteration,
+        confidence: 0.2,
+        reason: `low ${iteration}`,
+        requestedAt: new Date(),
+      });
+
+      await agentExecutionRepository.setPendingGate(exec.id, gate(1));
+      expect(await agentExecutionRepository.clearPendingGate(exec.id, 'resumed', 'user-1')).toBe(true);
+      await agentExecutionRepository.setPendingGate(exec.id, gate(3));
+      expect(await agentExecutionRepository.clearPendingGate(exec.id, 'rejected')).toBe(true);
+
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect(updated?.pendingGate).toBeUndefined();
+      expect(updated?.gateHistory).toMatchObject([
+        { iteration: 1, reason: 'low 1', resolution: 'resumed', resolvedBy: 'user-1' },
+        { iteration: 3, reason: 'low 3', resolution: 'rejected' },
+      ]);
+      expect(updated?.gateHistory?.[0].resolvedAt).toBeInstanceOf(Date);
+      expect(updated?.gateHistory?.[1].resolvedBy).toBeUndefined();
+    });
+
+    it('clearPendingGate returns false on an aborted run and leaves its gate in place', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.setPendingGate(exec.id, {
+        iteration: 1,
+        confidence: 0.2,
+        reason: 'low',
+        requestedAt: new Date(),
+      });
+      await AgentExecutionModel.updateOne({ _id: exec.id }, { $set: { abortedAt: new Date() } });
+
+      expect(await agentExecutionRepository.clearPendingGate(exec.id, 'resumed')).toBe(false);
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect(updated?.pendingGate).toMatchObject({ reason: 'low' });
+      expect(updated?.gateHistory).toBeUndefined();
+    });
+
     it('advances only the streak when told not to record telemetry (a scripted score)', async () => {
       const exec = await agentExecutionRepository.create(makeBaseExecution());
       const scripted = (confidence: number, belowThreshold: boolean) =>
@@ -1497,6 +1682,35 @@ describe('AgentExecutionRepository', () => {
       const pollable = await agentExecutionRepository.getPollableStatus(execution.id);
       expect(pollable?.status).toBe('failed');
       expect(pollable?.error?.timedOut).toBe(true);
+    });
+  });
+
+  it('persists loopId so a continuation re-offers the loop ticket tools', async () => {
+    const execution = await agentExecutionRepository.create({ ...makeBaseExecution(), loopId: 'loop-1' });
+    expect((await agentExecutionRepository.findById(execution.id))?.loopId).toBe('loop-1');
+  });
+
+  describe('markFailed - failureReason', () => {
+    it('writes failureReason at the top level, not into the error subdoc', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+
+      await agentExecutionRepository.markFailed(execution.id, {
+        message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
+      });
+
+      const updated = await agentExecutionRepository.findById(execution.id);
+      expect(updated?.failureReason).toBe('insufficient_credits');
+      expect(updated?.error).not.toHaveProperty('failureReason');
+    });
+
+    it('leaves failureReason unset when the caller omits it', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+
+      await agentExecutionRepository.markFailed(execution.id, { message: 'LLM API returned 500' });
+
+      const updated = await agentExecutionRepository.findById(execution.id);
+      expect(updated?.failureReason).toBeUndefined();
     });
   });
 

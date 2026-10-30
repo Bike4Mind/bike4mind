@@ -42,8 +42,15 @@ const repo = vi.hoisted(() => ({
   softDeleteForUser: vi.fn(),
   detectDependencyCycle: vi.fn(),
   create: vi.fn(),
+  findNextReadyForLoop: vi.fn(),
 }));
-vi.mock('@bike4mind/database', () => ({ workItemRepository: repo }));
+const loopRepo = vi.hoisted(() => ({ findByIdAndUserId: vi.fn(), makeDueNow: vi.fn() }));
+const settings = vi.hoisted(() => ({ EnableLoops: true as unknown }));
+vi.mock('@bike4mind/database', () => ({
+  workItemRepository: repo,
+  loopRepository: loopRepo,
+  adminSettingsRepository: { getSettingsValue: async (key: string) => settings[key as 'EnableLoops'] },
+}));
 
 const verifyOrgAccess = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
@@ -60,9 +67,15 @@ await import('@pages/api/work-items/graph');
 const OID_A = '507f1f77bcf86cd799439011';
 const OID_B = '507f1f77bcf86cd799439012';
 
-const call = (module: string, method: 'get' | 'post' | 'patch' | 'delete', options: Record<string, unknown>) => {
+const call = (
+  module: string,
+  method: 'get' | 'post' | 'patch' | 'delete',
+  options: Record<string, unknown>,
+  apiKeyInfo?: unknown
+) => {
   const { req, res } = createMocks({ method: method.toUpperCase(), ...options } as any);
   (req as any).user = { id: 'u1', isAdmin: false };
+  (req as any).apiKeyInfo = apiKeyInfo;
   return { res, result: handlers[module][method]!(req, res) };
 };
 
@@ -264,26 +277,26 @@ describe('PATCH /api/work-items/:id', () => {
   it('patches only the fields supplied', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' }, undefined);
   });
 
   // '' and null are the clearing signal; the repository turns a null into $unset.
   it('turns an empty description into the clearing value', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { description: '' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { description: null });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { description: null }, undefined);
   });
 
   it('turns an explicit null description into the clearing value', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { description: null } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { description: null });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { description: null }, undefined);
   });
 
   it('leaves description alone when the field is absent', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' }, undefined);
   });
 
   it('rejects an empty status rather than silently ignoring it', async () => {
@@ -296,10 +309,12 @@ describe('PATCH /api/work-items/:id', () => {
   it('stamps closedAt when the item is closed', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { status: 'closed' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', {
-      status: 'closed',
-      closedAt: expect.any(Date),
-    });
+    expect(repo.updateForUser).toHaveBeenCalledWith(
+      OID_A,
+      'u1',
+      { status: 'closed', closedAt: expect.any(Date) },
+      undefined
+    );
   });
 
   it('clears closedAt when a closed item is reopened', async () => {
@@ -307,13 +322,13 @@ describe('PATCH /api/work-items/:id', () => {
 
     await call('item', 'patch', { query: { id: OID_A }, body: { status: 'open' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { status: 'open', closedAt: null });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { status: 'open', closedAt: null }, undefined);
   });
 
   it('leaves closedAt alone when the status is unchanged', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { status: 'open', title: 'Renamed' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' }, undefined);
   });
 
   it('refuses a self-dependency', async () => {
@@ -365,7 +380,7 @@ describe('GET /api/work-items/ready and /graph', () => {
     const { res, result } = call('ready', 'get', {});
     await result;
 
-    expect(repo.listReadyForUser).toHaveBeenCalledWith('u1');
+    expect(repo.listReadyForUser).toHaveBeenCalledWith('u1', undefined);
     expect(res._getJSONData()).toMatchObject({ data: [{ id: OID_A }], truncated: false });
   });
 
@@ -392,5 +407,186 @@ describe('GET /api/work-items/ready and /graph', () => {
 
     expect(repo.buildGraphForUser).toHaveBeenCalledWith('u1');
     expect(res._getJSONData()).toEqual(graph);
+  });
+});
+
+describe('loop tickets through the work-items routes', () => {
+  const LOOP = '507f1f77bcf86cd799439099';
+  const loop = { id: LOOP, userId: 'u1', status: 'live', stages: ['todo', 'doing', 'done'] };
+
+  beforeEach(() => {
+    settings.EnableLoops = true;
+    loopRepo.findByIdAndUserId.mockImplementation(async (id: string) => (id === LOOP ? loop : null));
+    repo.create.mockImplementation(async (doc: Record<string, unknown>) => ({ id: OID_B, ...doc }));
+    repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) => patch);
+    repo.findNextReadyForLoop.mockResolvedValue(item({ loopId: LOOP }));
+  });
+
+  it('hides loop tickets from a plain listing and returns them with ?loopId=', async () => {
+    repo.listForUser.mockResolvedValue({ data: [], hasMore: false, total: 0 });
+    await call('collection', 'get', { query: {} }).result;
+    expect(repo.listForUser.mock.calls[0][1]).not.toHaveProperty('loopId');
+
+    await call('collection', 'get', { query: { loopId: LOOP } }).result;
+    expect(repo.listForUser.mock.calls[1][1]).toMatchObject({ loopId: LOOP });
+  });
+
+  it('returns ready tickets of the caller loop from /ready?loopId=, and 404s a foreign loop', async () => {
+    repo.listReadyForUser.mockResolvedValue({ data: [], truncated: false });
+    await call('ready', 'get', { query: { loopId: LOOP } }).result;
+    expect(repo.listReadyForUser).toHaveBeenCalledWith('u1', LOOP);
+
+    await expect(call('ready', 'get', { query: { loopId: OID_A } }).result).rejects.toThrow(/not found/i);
+  });
+
+  it('creates a ticket in the first stage and makes the live loop due', async () => {
+    const { res, result } = call('collection', 'post', { body: { title: 'T', loopId: LOOP } });
+    await result;
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ loopId: LOOP, stage: 'todo', status: 'open' }));
+    expect(loopRepo.makeDueNow).toHaveBeenCalledWith(LOOP, expect.any(Date));
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('creating into the last stage closes the ticket', async () => {
+    await call('collection', 'post', { body: { title: 'T', loopId: LOOP, stage: 'done' } }).result;
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: 'done', status: 'closed', closedAt: expect.any(Date) })
+    );
+  });
+
+  it('rejects an unknown stage', async () => {
+    await expect(
+      call('collection', 'post', { body: { title: 'T', loopId: LOOP, stage: 'nope' } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("is a 404 for another user's loop, for an API key, and with EnableLoops off", async () => {
+    const other = '507f1f77bcf86cd799439098';
+    await expect(call('collection', 'post', { body: { title: 'T', loopId: other } }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(call('collection', 'get', { query: { loopId: LOOP } }, { id: 'key' }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    settings.EnableLoops = false;
+    await expect(call('collection', 'post', { body: { title: 'T', loopId: LOOP } }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+
+  it('a loop ticket does not exist to an API key', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo' }));
+    for (const method of ['get', 'patch', 'delete'] as const) {
+      await expect(
+        call('item', method, { query: { id: OID_A }, body: { status: 'closed' } }, { id: 'key' }).result
+      ).rejects.toMatchObject({ statusCode: 404 });
+    }
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+    expect(repo.softDeleteForUser).not.toHaveBeenCalled();
+  });
+
+  it('moving a ticket to the last stage closes it; reopening puts it back a stage', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'doing' }));
+    await call('item', 'patch', { query: { id: OID_A }, body: { stage: 'done' } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      expect.objectContaining({ stage: 'done', status: 'closed', closedAt: expect.any(Date) }),
+      'open'
+    );
+
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'done', status: 'closed' }));
+    await call('item', 'patch', { query: { id: OID_A }, body: { status: 'open' } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      expect.objectContaining({ stage: 'doing', status: 'open', closedAt: null }),
+      'closed'
+    );
+  });
+
+  it('blocking needs a reason', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo' }));
+    await expect(
+      call('item', 'patch', { query: { id: OID_A }, body: { status: 'blocked' } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await call('item', 'patch', { query: { id: OID_A }, body: { status: 'blocked', reason: 'waiting on X' } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      expect.objectContaining({ status: 'blocked', statusReason: 'waiting on X' }),
+      'open'
+    );
+  });
+
+  it('loopId: null turns a ticket back into a plain item', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo', executionId: 'e1' }));
+    await call('item', 'patch', { query: { id: OID_A }, body: { loopId: null } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      expect.objectContaining({ loopId: null, stage: null, statusReason: null, executionId: null }),
+      'open'
+    );
+  });
+
+  it('writes a ticket only while its status holds, and is a 409 when its loop folded it mid-request', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'doing', status: 'in_progress' }));
+    repo.updateForUser.mockResolvedValue(null);
+    await expect(
+      call('item', 'patch', { query: { id: OID_A }, body: { status: 'blocked', reason: 'stuck' } }).result
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID_A, 'u1', expect.anything(), 'in_progress');
+  });
+
+  it('keeps a plain item write unconditional', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ status: 'open' }));
+    await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID_A, 'u1', expect.anything(), undefined);
+  });
+
+  it('treats loopId: null as not linked on POST, and a stage without a loop as a 400 on POST and PATCH', async () => {
+    await call('collection', 'post', { body: { title: 'T', loopId: null } }).result;
+    expect(repo.create.mock.calls[0][0]).not.toHaveProperty('loopId');
+    expect(repo.create.mock.calls[0][0]).not.toHaveProperty('stage');
+
+    await expect(call('collection', 'post', { body: { title: 'T', stage: 'todo' } }).result).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    await expect(
+      call('collection', 'post', { body: { title: 'T', loopId: null, stage: 'todo' } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'doing', executionId: 'e1' }));
+    await expect(
+      call('item', 'patch', { query: { id: OID_A }, body: { loopId: null, stage: 'todo' } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await call('item', 'patch', { query: { id: OID_A }, body: { loopId: null, stage: null } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      expect.objectContaining({ loopId: null, stage: null, executionId: null }),
+      'open'
+    );
+  });
+
+  it('loopId: null reopens a running ticket and is a 404 with EnableLoops off', async () => {
+    repo.findByIdForUser.mockResolvedValue(
+      item({ loopId: LOOP, stage: 'doing', status: 'in_progress', executionId: 'e1' })
+    );
+    await call('item', 'patch', { query: { id: OID_A }, body: { loopId: null } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      expect.objectContaining({ loopId: null, executionId: null, status: 'open' }),
+      'in_progress'
+    );
+
+    repo.updateForUser.mockClear();
+    settings.EnableLoops = false;
+    await expect(call('item', 'patch', { query: { id: OID_A }, body: { loopId: null } }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
   });
 });

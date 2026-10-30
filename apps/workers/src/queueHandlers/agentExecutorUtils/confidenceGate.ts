@@ -7,6 +7,30 @@ import { usableEvidenceConfidence, type AgentStep, type ScoredToolCall } from '@
  */
 export const LOW_CONFIDENCE_STREAK_TO_PAUSE = 2;
 
+/**
+ * Confidence-gate threshold for the web agent execution flow.
+ * An iteration whose every non-failed tool call scores below this counts toward a
+ * pause for human review (see `evaluateConfidenceGate`).
+ * Shared default across autonomous agent flows - the value below
+ * which a run is considered "not autonomous-safe". A persisted gate stalls
+ * the execution in `paused` until the client responds via `gate_response`,
+ * or until the stale-active sweep reaps it (`cleanupStaleActive` includes
+ * `paused`).
+ */
+export const CONFIDENCE_GATE_THRESHOLD = 0.6;
+
+/**
+ * The run's gate threshold: the profile's override, else the default. A profile threshold of 0 disables
+ * the gate, except on loop runs - an unsure loop run parks its ticket for the owner instead of guessing on.
+ */
+export function gateThresholdFor(
+  profile: { confidenceGateThreshold?: number } | undefined,
+  execution: { loopId?: string }
+): number {
+  const threshold = profile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
+  return threshold === 0 && execution.loopId ? CONFIDENCE_GATE_THRESHOLD : threshold;
+}
+
 export interface ConfidenceGateInput {
   /** Iteration-average confidence the agent reported, or null when no tools ran. */
   gate: { iteration: number; confidence: number } | null;

@@ -123,6 +123,14 @@ const EXTERNAL_REGISTRY_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   lattice_set_value: 'external',
   lattice_create_rule: 'external',
 
+  // Loop runs (pre-approved on headless loop runs by startAgentExecution)
+  loop_ticket_list: 'none',
+  loop_ticket_create: 'external',
+  loop_ticket_update: 'external',
+  loop_oversee_status: 'none',
+  loop_directive_issue: 'external',
+  loop_directive_respond: 'external',
+
   // Slack tool set
   slackbot_help: 'none',
   list_curated_files: 'none',

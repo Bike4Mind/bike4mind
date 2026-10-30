@@ -13,6 +13,7 @@ import {
   type AudioGenerationToolCall,
   type AuthOrigin,
   AuthOriginSchema,
+  type LoopGateOutcome,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -78,6 +79,13 @@ export interface IPendingGate {
   reason: string;
   requestedAt: Date;
 }
+
+/** A resolved confidence gate, kept on the execution by `clearPendingGate`. */
+export type IGateRecord = IPendingGate & {
+  resolution: LoopGateOutcome;
+  resolvedAt: Date;
+  resolvedBy?: string;
+};
 
 // --- Confidence Telemetry ---
 
@@ -331,6 +339,11 @@ export interface IAgentExecution {
    */
   enableLattice?: boolean;
   /**
+   * The loop that dispatched this run. Its presence gives the run the `loop_ticket_*` tools
+   * (re-read on every invocation, like `enableLattice`).
+   */
+  loopId?: string;
+  /**
    * The caller's per-request artifact intent, mirroring the chat surface's `enableArtifacts` body
    * field. Combined with the admin `EnableArtifacts` setting by `resolveArtifactsEnabled`, so only
    * an explicit `false` opts out and `undefined` leaves the admin setting as the only gate.
@@ -418,10 +431,12 @@ export interface IAgentExecution {
    * Coarse classifier for failures that operators / dashboards filter on.
    * `'abandoned'` is set by the scheduled / admin-triggered sweep on stale
    * executions so they can be distinguished from real executor errors.
+   * `'insufficient_credits'` is set when the executor refuses to start a run for
+   * credits (balance or org member cap); the loop scheduler pauses on it.
    * Schema is untyped at the Mongoose level so future variants can be added
    * without a migration; the TS union is the source of truth.
    */
-  failureReason?: 'abandoned';
+  failureReason?: 'abandoned' | 'insufficient_credits';
 
   /**
    * Set when the abandoned-sweep's post-abandonment quest settlement fails for
@@ -441,6 +456,9 @@ export interface IAgentExecution {
    * the gate threshold; cleared when the client responds via `gate_response`.
    */
   pendingGate?: IPendingGate;
+
+  /** Every gate this run resolved, oldest first; `pendingGate` moves here on `gate_response`. */
+  gateHistory?: IGateRecord[];
 
   /**
    * Confidence-gate telemetry (issue #56 M1.1). Accumulated every iteration the
@@ -535,6 +553,12 @@ export interface IAgentExecution {
   // Connection tracking (for WebSocket streaming)
   connectionId?: string;
 
+  /**
+   * WS connections watching this run via the `subscribe` command. The executor fans frames out to them,
+   * but never uses them for decisions (unlike `connectionId`, which drives `hasApprover`).
+   */
+  viewerConnectionIds?: string[];
+
   // Timing
   startedAt?: Date;
   completedAt?: Date;
@@ -587,6 +611,19 @@ const PendingGateSchema = new mongoose.Schema(
     confidence: { type: Number, required: true },
     reason: { type: String, required: true },
     requestedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
+const GateRecordSchema = new mongoose.Schema(
+  {
+    iteration: { type: Number, required: true },
+    confidence: { type: Number, required: true },
+    reason: { type: String, required: true },
+    requestedAt: { type: Date, required: true },
+    resolution: { type: String, enum: ['resumed', 'rejected'], required: true },
+    resolvedAt: { type: Date, required: true },
+    resolvedBy: { type: String },
   },
   { _id: false }
 );
@@ -775,6 +812,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     // Feature-parity flags
     enableMementos: { type: Boolean },
     enableLattice: { type: Boolean },
+    loopId: { type: String },
     enableArtifacts: { type: Boolean },
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
@@ -829,6 +867,7 @@ const AgentExecutionSchema = new mongoose.Schema(
 
     // Confidence-gate state
     pendingGate: { type: PendingGateSchema, required: false },
+    gateHistory: { type: [GateRecordSchema], default: undefined },
 
     // Confidence-gate telemetry (#56 M1.1). `default: () => ({})` instantiates
     // the subdoc so its field defaults (evaluatedCount 0, minConfidence 1, ...)
@@ -867,6 +906,7 @@ const AgentExecutionSchema = new mongoose.Schema(
 
     // Connection tracking
     connectionId: { type: String },
+    viewerConnectionIds: { type: [String], default: undefined },
 
     // Timing
     startedAt: { type: Date },
@@ -1079,6 +1119,16 @@ export function parseExecutionListCursor(cursor: string): { createdAt: Date; id:
 
 // --- Repository ---
 
+const MAX_VIEWER_CONNECTIONS = 10;
+
+/**
+ * A loop run paused at the confidence gate is parked by the loop scheduler and waits on its owner,
+ * possibly for days, so the stale sweeps must not abort it (see `reconcileLoop` in `loopScheduler.ts`).
+ */
+const NOT_LOOP_PARKED = {
+  $nor: [{ status: 'paused', loopId: { $exists: true }, pendingGate: { $exists: true } }],
+};
+
 class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   constructor(private agentExecutionModel: mongoose.Model<IAgentExecution>) {
     super(agentExecutionModel);
@@ -1129,6 +1179,49 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       .select('status parentExecutionId totalCreditsUsed iterationBilling')
       .sort({ createdAt: 1 });
     return results.map(doc => doc.toObject());
+  }
+
+  /**
+   * Credits per loop over its top-level runs, keyed by loop id. Sync children roll up into their parent;
+   * background children carry no loopId, so they are not counted. `sessionIds` are the loops' notebooks:
+   * they narrow the scan to the {sessionId, status} index, while `loopId` leaves out any chat a user starts
+   * by hand in a loop's notebook. With `since`, only runs created since then count, so a run that crosses
+   * midnight counts toward the day it started.
+   */
+  async sumCreditsByLoop(loopIds: string[], sessionIds: string[], since?: Date): Promise<Record<string, number>> {
+    if (loopIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      {
+        $match: {
+          sessionId: { $in: sessionIds },
+          loopId: { $in: loopIds },
+          parentExecutionId: null,
+          ...(since && { createdAt: { $gte: since } }),
+        },
+      },
+      { $group: { _id: '$loopId', credits: { $sum: '$totalCreditsUsed' } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [row._id, row.credits]));
+  }
+
+  /** A loop's newest top-level runs; `sessionId` (its notebook) narrows the scan like `sumCreditsByLoop`. */
+  async listRecentForLoop(
+    loopId: string,
+    sessionId: string,
+    limit: number
+  ): Promise<Pick<IAgentExecution, 'id' | 'status' | 'failureReason' | 'completedAt' | 'totalCreditsUsed'>[]> {
+    const results = await this.model
+      .find({ sessionId, loopId, parentExecutionId: null })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .select({ status: 1, failureReason: 1, completedAt: 1, totalCreditsUsed: 1 });
+    return results.map(doc => ({
+      id: doc.id,
+      status: doc.status,
+      failureReason: doc.failureReason,
+      completedAt: doc.completedAt,
+      totalCreditsUsed: doc.totalCreditsUsed,
+    }));
   }
 
   /**
@@ -1215,6 +1308,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       userId,
       status: { $in: this.sweepableStatuses },
       updatedAt: { $lt: cutoff },
+      ...NOT_LOOP_PARKED,
     };
     // Ids are read BEFORE the write because callers have to settle the quests
     // these executions leave behind, and `aborted` is terminal: once written,
@@ -1280,6 +1374,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const query: Record<string, unknown> = {
       status: { $in: this.sweepableStatuses },
       updatedAt: { $lt: opts.olderThan },
+      ...NOT_LOOP_PARKED,
     };
     if (opts.userId) query.userId = opts.userId;
     const docs = await this.model.find(query, { _id: 1 }).lean<Array<{ _id: mongoose.Types.ObjectId }>>();
@@ -1493,6 +1588,57 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     await this.model.updateOne({ _id: id }, { $set: { connectionId } });
   }
 
+  /** Adds a viewer connection (deduped), keeping only the newest MAX_VIEWER_CONNECTIONS. */
+  async addViewer(id: string, connectionId: string): Promise<void> {
+    await this.model.updateOne({ _id: id }, [
+      {
+        $set: {
+          viewerConnectionIds: {
+            $slice: [
+              {
+                $concatArrays: [
+                  {
+                    $filter: {
+                      input: { $ifNull: ['$viewerConnectionIds', []] },
+                      cond: { $ne: ['$$this', connectionId] },
+                    },
+                  },
+                  [connectionId],
+                ],
+              },
+              -MAX_VIEWER_CONNECTIONS,
+            ],
+          },
+        },
+      },
+    ]);
+  }
+
+  async removeViewer(id: string, connectionId: string): Promise<void> {
+    // The id comes straight from a client (`unsubscribe`); a malformed one would throw a CastError.
+    if (!mongoose.isObjectIdOrHexString(id)) return;
+    await this.model.updateOne({ _id: id }, { $pull: { viewerConnectionIds: connectionId } });
+  }
+
+  async findViewerConnectionIds(id: string): Promise<string[]> {
+    const doc = await this.model.findById(id, { viewerConnectionIds: 1 }).lean<{ viewerConnectionIds?: string[] }>();
+    return doc?.viewerConnectionIds ?? [];
+  }
+
+  /** Walks `parentExecutionId ?? spawnedByExecutionId` up to the top-level run (bounded). */
+  async findRootExecutionId(id: string): Promise<string> {
+    let current = id;
+    for (let hop = 0; hop < 10; hop++) {
+      const doc = await this.model
+        .findById(current, { parentExecutionId: 1, spawnedByExecutionId: 1 })
+        .lean<{ parentExecutionId?: mongoose.Types.ObjectId; spawnedByExecutionId?: mongoose.Types.ObjectId }>();
+      const parent = doc?.parentExecutionId ?? doc?.spawnedByExecutionId;
+      if (!parent) break;
+      current = parent.toString();
+    }
+    return current;
+  }
+
   /** Written atomically with profile provenance when the orchestration profile resolves; continuations re-read it
    *  (see IAgentExecution.profileDeniedTools). */
   async persistProfileDeniedTools(id: string, profileDeniedTools: string[], profileIsPinned?: boolean): Promise<void> {
@@ -1698,16 +1844,28 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   }
 
   /**
-   * Clear the gate marker. Caller is responsible for any subsequent status
+   * Clear the gate marker, appending it to `gateHistory` with its resolution in the same
+   * (pipeline) update. Caller is responsible for any subsequent status
    * transition (continuing -> re-invoke Lambda, completed -> markComplete).
    * Mirrors the `clearWaitingOnChild` `abortedAt`-not-exists guard so a
    * concurrent abort doesn't get resurrected.
    */
-  async clearPendingGate(id: string): Promise<boolean> {
-    const result = await this.model.updateOne(
-      { _id: id, abortedAt: { $exists: false } },
-      { $unset: { pendingGate: '' } }
-    );
+  async clearPendingGate(id: string, resolution: IGateRecord['resolution'], resolvedBy?: string): Promise<boolean> {
+    const record = { resolution, resolvedAt: '$$NOW', ...(resolvedBy && { resolvedBy: { $literal: resolvedBy } }) };
+    const result = await this.model.updateOne({ _id: id, abortedAt: { $exists: false } }, [
+      {
+        $set: {
+          gateHistory: {
+            $cond: [
+              { $eq: [{ $type: '$pendingGate' }, 'object'] },
+              { $concatArrays: [{ $ifNull: ['$gateHistory', []] }, [{ $mergeObjects: ['$pendingGate', record] }]] },
+              '$gateHistory',
+            ],
+          },
+        },
+      },
+      { $unset: 'pendingGate' },
+    ]);
     return result.modifiedCount > 0;
   }
 
@@ -1783,7 +1941,16 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async markFailed(
     id: string,
-    error: { message: string; stack?: string; timedOut?: boolean; callerSafe?: boolean }
+    {
+      failureReason,
+      ...error
+    }: {
+      message: string;
+      stack?: string;
+      timedOut?: boolean;
+      callerSafe?: boolean;
+      failureReason?: IAgentExecution['failureReason'];
+    }
   ): Promise<void> {
     await this.model.updateOne(
       { _id: id },
@@ -1792,6 +1959,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
           status: 'failed',
           error,
           completedAt: new Date(),
+          ...(failureReason && { failureReason }),
         },
       }
     );

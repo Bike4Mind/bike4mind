@@ -206,9 +206,9 @@ export type ReplayConfidenceOutcome = { status: 'proceed' } | { status: 'paused'
  *
  * `confidence: null` means nothing was replayed, nothing scored, or every replayed call
  * failed to run (a human cannot fix those) - proceed without touching the DB. A
- * `confidenceGateThreshold` of 0 (an unattended-loop profile override) always proceeds
- * too, since a real confidence score is never negative. Like the ordinary check, the
- * replay advances the persisted low-confidence streak and pauses only on a streak.
+ * `confidenceGateThreshold` of 0 (a profile override; loop runs never get one, see
+ * `gateThresholdFor`) always proceeds too, since a real confidence score is never
+ * negative. Like the ordinary check, the replay advances the persisted low-confidence streak and pauses only on a streak.
  *
  * `confidenceOverrides` replaces a non-null score, as in `evaluateConfidenceGate`; a
  * scripted score advances the streak but is kept out of the telemetry counters.

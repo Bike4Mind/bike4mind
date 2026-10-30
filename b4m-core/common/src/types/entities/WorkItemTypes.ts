@@ -30,6 +30,14 @@ export interface IWorkItem {
   status: WorkItemStatus;
   /** Ids of WorkItems that must be closed before this one is actionable. */
   dependencies: string[];
+  /** The loop this item is a ticket of. Loop tickets are hidden from plain listings unless filtered by loop. */
+  loopId?: string;
+  /** One of the loop's `stages`; the last stage means closed. Only set on loop tickets. */
+  stage?: string;
+  /** The loop run currently or last working this ticket. */
+  executionId?: string;
+  /** Why the ticket is `blocked`; cleared when it leaves `blocked`. */
+  statusReason?: string;
 
   createdAt: Date;
   updatedAt: Date;
@@ -49,11 +57,17 @@ export interface IWorkItem {
 export type WorkItemPatch = Partial<Pick<IWorkItem, 'title' | 'status' | 'dependencies' | 'organizationId'>> & {
   description?: string | null;
   closedAt?: Date | null;
+  loopId?: string | null;
+  stage?: string | null;
+  statusReason?: string | null;
+  executionId?: string | null;
 };
 
 export interface IWorkItemFilters {
   status?: WorkItemStatus[];
   organizationId?: string;
+  /** Lists that loop's tickets. Without it, loop tickets are excluded. */
+  loopId?: string;
   /** Case-insensitive substring match against title and description. */
   search?: string;
 }
@@ -114,16 +128,58 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
    * Items with status `open` whose every dependency is closed or no longer
    * exists. `in_progress` (already picked up) and `blocked` (held back
    * deliberately) are excluded, so this answers "what can I start now".
+   * Plain items only, unless `loopId` asks for that loop's tickets instead.
    */
-  listReadyForUser(userId: string): Promise<IWorkItemReadyResult>;
+  listReadyForUser(userId: string, loopId?: string): Promise<IWorkItemReadyResult>;
 
   buildGraphForUser(userId: string): Promise<IWorkItemGraph>;
 
-  /** Scoped update - returns null when the item is missing or owned by someone else. */
-  updateForUser(id: string, userId: string, patch: WorkItemPatch): Promise<IWorkItem | null>;
+  /**
+   * Scoped update - returns null when the item is missing or owned by someone else. With `expectedStatus`
+   * it only applies while the item still has that status, so a loop's fold landing mid-request is not overwritten.
+   */
+  updateForUser(
+    id: string,
+    userId: string,
+    patch: WorkItemPatch,
+    expectedStatus?: WorkItemStatus
+  ): Promise<IWorkItem | null>;
 
   /** Soft delete. Returns false when nothing matched. */
   softDeleteForUser(id: string, userId: string): Promise<boolean>;
+
+  /**
+   * The oldest `open` ticket of the loop, outside `lastStage`, whose dependencies are all closed or
+   * gone. This is what the loop scheduler works next.
+   */
+  findNextReadyForLoop(userId: string, loopId: string, lastStage: string): Promise<IWorkItem | null>;
+
+  /** `open -> in_progress`, conditional on still being `open`; null when another tick won the claim. */
+  claimForRun(id: string, loopId: string): Promise<IWorkItem | null>;
+
+  setExecution(id: string, executionId: string): Promise<void>;
+
+  /** Undoes `claimForRun` when the run could not be started. */
+  releaseClaim(id: string): Promise<void>;
+
+  findByExecutionId(executionId: string): Promise<IWorkItem | null>;
+
+  /**
+   * Applies a finished run's outcome, conditional on the ticket still being `in_progress` under that
+   * run - so a run that set its own ticket's status is respected and a second fold is a no-op.
+   */
+  foldTicketRun(id: string, executionId: string, patch: WorkItemPatch): Promise<boolean>;
+
+  /** Moves a ticket blocked under `executionId` back to `in_progress`, for a run its owner resumed. */
+  resumeBlockedRun(id: string, executionId: string): Promise<boolean>;
+
+  /** A loop's live tickets: every non-closed one plus the `closedLimit` most recently closed. */
+  listForLoop(userId: string, loopId: string, closedLimit: number): Promise<IWorkItem[]>;
+
+  softDeleteByLoop(userId: string, loopId: string): Promise<number>;
+
+  /** Live blocked tickets per loop id; loops with none are absent. */
+  countBlockedByLoop(userId: string, loopIds: string[]): Promise<Record<string, number>>;
 
   /**
    * True when pointing `itemId` at `dependencies` would close a cycle. `itemId`

@@ -304,6 +304,15 @@ describe('WorkItemRepository', () => {
       expect(updated?.description).toBe('the old detail');
     });
 
+    it('writes only while the item still has the expected status', async () => {
+      const itemId = (await create('Running', { status: 'in_progress' })).id;
+
+      expect(await workItemRepository.updateForUser(itemId, USER, { title: 'Stale' }, 'open')).toBeNull();
+      expect((await workItemRepository.updateForUser(itemId, USER, { title: 'Fresh' }, 'in_progress'))?.title).toBe(
+        'Fresh'
+      );
+    });
+
     it("refuses to update another user's item", async () => {
       const theirs = await create('Theirs', { userId: OTHER_USER });
 
@@ -341,6 +350,134 @@ describe('WorkItemRepository', () => {
       const theirs = await create('Theirs', { userId: OTHER_USER });
 
       expect(await workItemRepository.softDeleteForUser(theirs.id, USER)).toBe(false);
+    });
+  });
+
+  describe('loop tickets', () => {
+    const LOOP = 'loop-1';
+    const ticket = (title: string, overrides: Record<string, unknown> = {}) =>
+      create(title, { loopId: LOOP, stage: 'todo', ...overrides });
+
+    it('declares the loop and execution indexes', async () => {
+      await WorkItem.syncIndexes();
+      const keys = (await WorkItem.collection.indexes()).map(index => index.key);
+      expect(keys).toEqual(
+        expect.arrayContaining([{ loopId: 1, deletedAt: 1, status: 1, stage: 1 }, { executionId: 1 }])
+      );
+    });
+
+    it('are hidden from list and ready unless filtered by loop, but still gate plain items', async () => {
+      const blocker = await ticket('Loop ticket');
+      await create('Plain', { dependencies: [blocker.id] });
+      await create('Free');
+
+      const plain = await workItemRepository.listForUser(
+        USER,
+        {},
+        { page: 1, limit: 50 },
+        { by: 'createdAt', direction: 'asc' }
+      );
+      expect(plain.data.map(item => item.title)).toEqual(['Plain', 'Free']);
+
+      const loop = await workItemRepository.listForUser(
+        USER,
+        { loopId: LOOP },
+        { page: 1, limit: 50 },
+        { by: 'createdAt', direction: 'asc' }
+      );
+      expect(loop.data.map(item => item.title)).toEqual(['Loop ticket']);
+
+      const ready = await workItemRepository.listReadyForUser(USER);
+      expect(ready.data.map(item => item.title)).toEqual(['Free']);
+      expect((await workItemRepository.listReadyForUser(USER, LOOP)).data.map(item => item.title)).toEqual([
+        'Loop ticket',
+      ]);
+    });
+
+    it('findNextReadyForLoop picks the oldest open ticket with closed deps, outside the last stage', async () => {
+      const otherLoopBlocker = await create('Other loop', { loopId: 'loop-2', stage: 'todo' });
+      await ticket('Waits', { dependencies: [otherLoopBlocker.id] });
+      await ticket('Done already', { stage: 'done' });
+      await ticket('Busy', { status: 'in_progress' });
+      await ticket('Theirs', { userId: OTHER_USER });
+      const next = await ticket('Next');
+
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done'))?.id).toBe(next.id);
+
+      await workItemRepository.updateForUser(otherLoopBlocker.id, USER, { status: 'closed' });
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done'))?.title).toBe('Waits');
+    });
+
+    it('claimForRun wins once; releaseClaim reopens and unlinks', async () => {
+      const t = await ticket('T');
+      expect(await workItemRepository.claimForRun(t.id, 'other-loop')).toBeNull();
+      expect(await workItemRepository.claimForRun(t.id, t.loopId!)).toMatchObject({ status: 'in_progress' });
+      expect(await workItemRepository.claimForRun(t.id, t.loopId!)).toBeNull();
+
+      await workItemRepository.setExecution(t.id, 'exec-1');
+      expect((await workItemRepository.findByExecutionId('exec-1'))?.id).toBe(t.id);
+
+      await workItemRepository.releaseClaim(t.id);
+      const released = await workItemRepository.findByIdForUser(t.id, USER);
+      expect(released).toMatchObject({ status: 'open' });
+      expect(released?.executionId).toBeUndefined();
+    });
+
+    it('foldTicketRun applies only while the ticket is in_progress under that run', async () => {
+      const t = await ticket('T', { status: 'in_progress', executionId: 'exec-1' });
+      expect(await workItemRepository.foldTicketRun(t.id, 'exec-2', { status: 'open' })).toBe(false);
+      expect(
+        await workItemRepository.foldTicketRun(t.id, 'exec-1', { stage: 'doing', status: 'open', statusReason: null })
+      ).toBe(true);
+      expect(await workItemRepository.foldTicketRun(t.id, 'exec-1', { status: 'blocked' })).toBe(false);
+
+      // A run that blocked its own ticket is not overwritten by the fold.
+      const selfBlocked = await ticket('S', { status: 'blocked', statusReason: 'stuck', executionId: 'exec-3' });
+      expect(await workItemRepository.foldTicketRun(selfBlocked.id, 'exec-3', { status: 'open' })).toBe(false);
+      expect(await workItemRepository.findByIdForUser(selfBlocked.id, USER)).toMatchObject({ status: 'blocked' });
+    });
+
+    it('resumeBlockedRun moves only a ticket blocked under that run back to in_progress', async () => {
+      const t = await ticket('T', { status: 'blocked', statusReason: 'Unsure: thin results', executionId: 'exec-1' });
+      expect(await workItemRepository.resumeBlockedRun(t.id, 'exec-2')).toBe(false);
+      expect(await workItemRepository.resumeBlockedRun(t.id, 'exec-1')).toBe(true);
+      const resumed = await workItemRepository.findByIdForUser(t.id, USER);
+      expect(resumed).toMatchObject({ status: 'in_progress', executionId: 'exec-1' });
+      expect(resumed?.statusReason).toBeUndefined();
+      expect(await workItemRepository.resumeBlockedRun(t.id, 'exec-1')).toBe(false);
+    });
+
+    it('listForLoop returns every open ticket and only the newest closed ones', async () => {
+      await ticket('Open');
+      await ticket('Old', { stage: 'done', status: 'closed', closedAt: new Date(1000) });
+      await ticket('New', { stage: 'done', status: 'closed', closedAt: new Date(2000) });
+
+      const listed = await workItemRepository.listForLoop(USER, LOOP, 1);
+      expect(listed.map(item => item.title)).toEqual(['Open', 'New']);
+    });
+
+    it("softDeleteByLoop removes only that loop's tickets", async () => {
+      await ticket('A');
+      await create('Other loop', { loopId: 'loop-2' });
+      await create('Plain');
+
+      expect(await workItemRepository.softDeleteByLoop(USER, LOOP)).toBe(1);
+      expect(await workItemRepository.findNextReadyForLoop(USER, LOOP, 'done')).toBeNull();
+    });
+
+    it('countBlockedByLoop counts live blocked tickets per loop for the user only', async () => {
+      await ticket('A', { status: 'blocked', statusReason: 'x' });
+      await ticket('B', { status: 'blocked', statusReason: 'x' });
+      await ticket('Open');
+      const gone = await ticket('Deleted', { status: 'blocked', statusReason: 'x' });
+      await workItemRepository.softDeleteForUser(gone.id, USER);
+      await create('Other loop', { loopId: 'loop-2', stage: 'todo', status: 'blocked', statusReason: 'x' });
+      await create('Theirs', { userId: OTHER_USER, loopId: LOOP, stage: 'todo', status: 'blocked' });
+
+      expect(await workItemRepository.countBlockedByLoop(USER, [LOOP, 'loop-2', 'loop-3'])).toEqual({
+        [LOOP]: 2,
+        'loop-2': 1,
+      });
     });
   });
 });

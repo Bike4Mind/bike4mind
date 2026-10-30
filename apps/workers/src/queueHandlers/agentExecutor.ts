@@ -117,6 +117,8 @@ import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAcce
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
+import { resolveLoopTicketTools } from './agentExecutor.loopTicketTools';
+import { resolveLoopDirectiveTools } from './agentExecutor.loopDirectiveTools';
 // Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
 // header for why the start-payload/doc precedence is the part worth pinning in a test.
 import {
@@ -137,6 +139,7 @@ import {
   evaluateConfidenceGate,
   formatConfidenceGateReason,
   decideIterationConfidencePause,
+  gateThresholdFor,
 } from './agentExecutorUtils/confidenceGate';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
 import {
@@ -287,18 +290,6 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
 // MAX_CHECKPOINT_DEPTH and CHECKPOINT_DEPTH_WARNING imported from agentExecutor.checkpointDepth
 // (kept in a side-effect-free module so the thresholds can be unit-tested).
 
-/**
- * Confidence-gate threshold for the web agent execution flow.
- * An iteration whose every non-failed tool call scores below this counts toward a
- * pause for human review (see `evaluateConfidenceGate`).
- * Shared default across autonomous agent flows - the value below
- * which a run is considered "not autonomous-safe". A persisted gate stalls
- * the execution in `paused` until the client responds via `gate_response`,
- * or until the stale-active sweep reaps it (`cleanupStaleActive` includes
- * `paused`).
- */
-const CONFIDENCE_GATE_THRESHOLD = 0.6;
-
 // `persistRunAsQuest` moved to `@server/utils/persistRunAsQuest` so the
 // WebSocket `gate_response: stop` handler can share the same chat-history
 // write contract - both code paths produce identical Quest docs.
@@ -349,42 +340,97 @@ const sqsClient = new SQSClient({});
 // WebSocket streaming helpers
 // ---------------------------------------------------------------------------
 
+/** Viewer list cache lifetime (ms). Only these high-rate actions use the cache; every other frame
+ * (steps, status changes) re-reads the list so a new viewer never misses one. */
+const VIEWER_CACHE_MS = 2_000;
+const VIEWER_CACHED_ACTIONS = new Set(['agent_text_delta', 'subagent_text_delta', 'progress', 'subagent_progress']);
+
+function isGoneError(err: unknown): boolean {
+  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } } | undefined;
+  return e?.name === 'GoneException' || e?.$metadata?.httpStatusCode === 410;
+}
+
 /**
- * Exported for `agentExecutor.headless.test.ts`: the headless short-circuit below is
- * the only thing standing between a REST-started run and a failed `PostToConnection`
- * on every single step - which this sender swallows, so the failure would be invisible.
+ * Exported for `agentExecutor.headless.test.ts` and `agentExecutor.viewers.test.ts`: the
+ * headless short-circuit below is the only thing standing between a REST-started run and
+ * a failed `PostToConnection` on every single step - which this sender swallows, so the
+ * failure would be invisible.
+ *
+ * With `viewerExecutionId`, every frame is also sent to that execution's
+ * `viewerConnectionIds` (the WS `subscribe` command in `apps/client/server/websocket/agentExecute.ts`),
+ * even on a headless run. Viewers never change `connectionId` or `hasApprover`.
  */
-export function createWsSender(connectionId: string, logger: Logger) {
+export function createWsSender(connectionId: string, logger: Logger, viewerExecutionId?: string) {
   // A REST-dispatched run has no WebSocket peer. Sending to the sentinel id would fail
   // on every single step - and this sender swallows send errors, so those failures
   // would be invisible noise rather than a signal. Short-circuit instead, with one log
   // line so "no events streamed" stays distinguishable from "events were sent and
   // dropped". See `headlessConnection.ts` for why a later reconnect does not promote
   // a headless run to a streaming one.
-  if (isHeadlessConnection(connectionId)) {
-    logger.info('[WS] Headless execution: streaming disabled; poll GET /api/v1/agent-executions/{id}');
-    // Same signature as the real sender, so a call site that starts passing a new
-    // argument cannot silently type-check against a narrower no-op.
-    return async (_action: string, _payload: Record<string, unknown> = {}) => {};
+  const headless = isHeadlessConnection(connectionId);
+  if (headless) {
+    logger.info('[WS] Headless execution: streaming to viewers only; poll GET /api/v1/agent-executions/{id}');
+    if (!viewerExecutionId) {
+      // Same signature as the real sender, so a call site that starts passing a new
+      // argument cannot silently type-check against a narrower no-op.
+      return async (_action: string, _payload: Record<string, unknown> = {}) => {};
+    }
   }
 
   const wsEndpoint = Resource.websocket.managementEndpoint;
   const client = new ApiGatewayManagementApiClient({ endpoint: wsEndpoint });
 
-  return async (action: string, payload: Record<string, unknown> = {}) => {
+  const viewers: { ids: string[]; at: number; refresh?: Promise<void> } = { ids: [], at: 0 };
+  const post = async (target: string, action: string, data: Buffer) => {
     try {
-      await client.send(
-        new PostToConnectionCommand({
-          ConnectionId: connectionId,
-          Data: Buffer.from(JSON.stringify({ action, ...payload })),
-        })
-      );
+      await client.send(new PostToConnectionCommand({ ConnectionId: target, Data: data }));
     } catch (err) {
+      if (viewerExecutionId && target !== connectionId && isGoneError(err)) {
+        viewers.ids = viewers.ids.filter(id => id !== target);
+        agentExecutionRepository.removeViewer(viewerExecutionId, target).catch(() => {});
+        return;
+      }
       // Connection may be stale - log but don't fail the execution
-      logger.warn(`[WS] Failed to send ${action} to ${connectionId}:`, {
+      logger.warn(`[WS] Failed to send ${action} to ${target}:`, {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  };
+
+  const viewerTargets = async (action: string): Promise<string[]> => {
+    if (!viewerExecutionId) return [];
+    if (!VIEWER_CACHED_ACTIONS.has(action) || Date.now() - viewers.at > VIEWER_CACHE_MS) {
+      // Single-flight: frames emitted in the same tick share one read and keep their emit order.
+      // A step joining a read already in flight can miss a viewer added meanwhile; the client's
+      // gap re-subscribe repairs that.
+      viewers.refresh ??= agentExecutionRepository
+        .findViewerConnectionIds(viewerExecutionId)
+        .then(
+          ids => {
+            viewers.ids = ids;
+          },
+          err => {
+            logger.warn('[WS] Failed to read viewers; keeping the last list', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        )
+        .finally(() => {
+          viewers.at = Date.now();
+          viewers.refresh = undefined;
+        });
+      await viewers.refresh;
+    }
+    // A tab viewing its own chat run already gets the frame as the owner connection.
+    return viewers.ids.filter(id => id !== connectionId);
+  };
+
+  return async (action: string, payload: Record<string, unknown> = {}) => {
+    const data = Buffer.from(JSON.stringify({ action, ...payload }));
+    // The owner's send starts before the viewer read, so its frames keep today's timing and order.
+    const ownerSend = headless ? undefined : post(connectionId, action, data);
+    const targets = await viewerTargets(action);
+    await Promise.all([ownerSend, ...targets.map(target => post(target, action, data))]);
   };
 }
 
@@ -931,7 +977,7 @@ async function processExecution(
   checkpointDepth: number = 0
 ): Promise<void> {
   logger.updateMetadata({ executionId });
-  const sendWs = createWsSender(connectionId, logger);
+  const sendWs = createWsSender(connectionId, logger, executionId);
 
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
   // A runaway agent (infinite tool loop, stuck abort signal) would otherwise chain Lambdas
@@ -1192,6 +1238,7 @@ async function processExecution(
       logger.warn('[Credits] Insufficient credits to start execution', { availableCredits, requiredCredits });
       await agentExecutionRepository.markFailed(executionId, {
         message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
       });
       await sendWs('failed', { executionId, reason: 'insufficient_credits' });
       return;
@@ -1220,6 +1267,7 @@ async function processExecution(
       });
       await agentExecutionRepository.markFailed(executionId, {
         message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
+        failureReason: 'insufficient_credits',
       });
       await sendWs('failed', { executionId, reason: 'insufficient_credits' });
       return;
@@ -2088,6 +2136,22 @@ async function processExecution(
       startPayloadEnableLattice: startPayload?.enableLattice,
       executionEnableLattice: execution.enableLattice,
     });
+    // Loop runs get the loop_ticket_* and directive tools, appended like Lattice; see
+    // agentExecutor.loopTicketTools.ts and agentExecutor.loopDirectiveTools.ts.
+    const loopsEnabled = execution.loopId
+      ? (await adminSettingsRepository.getSettingsValue('EnableLoops')) === true
+      : false;
+    const { loopTicketEnabledTools, loopTicketExternalTools } = resolveLoopTicketTools({
+      loopId: execution.loopId,
+      loopsEnabled,
+      userId: execution.userId,
+    });
+    const { loopDirectiveEnabledTools, loopDirectiveExternalTools } = await resolveLoopDirectiveTools({
+      loopId: execution.loopId,
+      loopsEnabled,
+      userId: execution.userId,
+      executionId,
+    });
 
     const subagentToolConfig = buildSubagentToolConfig({
       model: execution.model,
@@ -2167,7 +2231,15 @@ async function processExecution(
     // `chat_completion` gives it. See `agentExecutor.sessionToolPolicy.ts` for why
     // `session.enabledTools` is deliberately not unioned here.
     const resolvedToolNames = applySessionToolPolicy({
-      toolNames: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
+      toolNames: [
+        ...new Set([
+          ...profileEnabledTools,
+          ...MISSION_CHAT_TOOL_NAMES,
+          ...latticeEnabledTools,
+          ...loopTicketEnabledTools,
+          ...loopDirectiveEnabledTools,
+        ]),
+      ],
       session,
       profileDeniedTools: orchestrationProfile?.deniedTools ?? execution.profileDeniedTools,
       hasAttachments: runHasAttachments(execution, session.knowledgeIds),
@@ -2190,7 +2262,13 @@ async function processExecution(
         orchestrationProfile?.deniedTools,
         execution.profileDeniedTools
       ),
-      externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
+      externalTools: {
+        ...guardedPremiumTools,
+        ...missionChatTools,
+        ...latticeExternalTools,
+        ...loopTicketExternalTools,
+        ...loopDirectiveExternalTools,
+      },
       config: subagentToolConfig,
       mcpToolsByServer,
       agentOnlyMcpServers,
@@ -2731,7 +2809,7 @@ async function processExecution(
           approvedToolCallId: approvedPause.toolCallId,
           approvedTools,
           deniedTools,
-          confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+          confidenceGateThreshold: gateThresholdFor(orchestrationProfile, execution),
           confidenceOverrides: execution.confidenceOverrides,
         },
         {
@@ -3229,8 +3307,8 @@ async function processExecution(
       // It pauses on a streak of low iterations, not one (`LOW_CONFIDENCE_STREAK_TO_PAUSE`);
       // the streak is persisted on the execution doc so it survives continuations.
       // Per-profile override wins over the global default; a profile threshold of 0
-      // disables the gate entirely (confidence is never < 0) for unattended loops.
-      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
+      // disables the gate (confidence is never < 0), except on loop runs (`gateThresholdFor`).
+      const confidenceGateThreshold = gateThresholdFor(orchestrationProfile, execution);
       const gate = evaluateConfidenceGate({
         gate: readLastIterationConfidence(),
         isComplete: iterationResult.isComplete,
@@ -3627,7 +3705,9 @@ async function processSubagentDispatch(
   depth?: number
 ): Promise<void> {
   logger.updateMetadata({ executionId: childExecutionId, role: 'subagent_dispatch' });
-  const sendWs = createWsSender(connectionId, logger);
+  // Viewers subscribe to the top-level run, so child frames fan out to the root's viewers.
+  const rootExecutionId = await agentExecutionRepository.findRootExecutionId(childExecutionId).catch(() => undefined);
+  const sendWs = createWsSender(connectionId, logger, rootExecutionId);
 
   let parentId: string | undefined;
   let agentName: string | undefined;

@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 
 /**
  * Pins the "Allow/Deny for Session" write path in `handlePermissionResponse`: the
@@ -19,6 +20,13 @@ const mockDenyPendingPermission = vi.fn();
 const mockRememberDecision = vi.fn();
 const mockFindActiveBySessionId = vi.fn();
 const mockUpdateConnectionId = vi.fn();
+const mockAddViewer = vi.fn();
+const mockRemoveViewer = vi.fn();
+const mockFindSessionById = vi.fn();
+const mockMarkComplete = vi.fn();
+const mockResolveUnsure = vi.fn();
+const mockFindTicketByExecutionId = vi.fn();
+const mockResumeBlockedRun = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -29,13 +37,26 @@ vi.mock('@bike4mind/database', () => ({
     updateStatus: (...args: unknown[]) => mockUpdateStatus(...args),
     restoreRejectedResume: (...args: unknown[]) => mockRestoreRejectedResume(...args),
     clearPendingGate: (...args: unknown[]) => mockClearPendingGate(...args),
+    markComplete: (...args: unknown[]) => mockMarkComplete(...args),
     approvePendingPermission: (...args: unknown[]) => mockApprovePendingPermission(...args),
     denyPendingPermission: (...args: unknown[]) => mockDenyPendingPermission(...args),
     findActiveBySessionId: (...args: unknown[]) => mockFindActiveBySessionId(...args),
     updateConnectionId: (...args: unknown[]) => mockUpdateConnectionId(...args),
+    addViewer: (...args: unknown[]) => mockAddViewer(...args),
+    removeViewer: (...args: unknown[]) => mockRemoveViewer(...args),
+  },
+  sessionRepository: {
+    findById: (...args: unknown[]) => mockFindSessionById(...args),
   },
   sessionToolApprovalRepository: {
     rememberDecision: (...args: unknown[]) => mockRememberDecision(...args),
+  },
+  loopEventRepository: {
+    resolveUnsure: (...args: unknown[]) => mockResolveUnsure(...args),
+  },
+  workItemRepository: {
+    findByExecutionId: (...args: unknown[]) => mockFindTicketByExecutionId(...args),
+    resumeBlockedRun: (...args: unknown[]) => mockResumeBlockedRun(...args),
   },
 }));
 
@@ -593,6 +614,100 @@ describe('container confidence resume', () => {
   });
 });
 
+describe('gate response on a loop run', () => {
+  const pendingGate = { iteration: 2, confidence: 0.3, reason: 'thin results', requestedAt: new Date(1000) };
+  const gateCmd = (decision: 'continue' | 'stop') => ({
+    accessToken: 'token',
+    action: 'agent_execute' as const,
+    command: 'gate_response' as const,
+    executionId: 'exec-1',
+    decision,
+  });
+  const respond = (decision: 'continue' | 'stop') =>
+    handleGateResponse(gateCmd(decision), 'user-1', 'conn-1', 'http://ws', noopLogger as never);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockClearPendingGate.mockResolvedValue(true);
+    mockFindTicketByExecutionId.mockResolvedValue({ id: 'ticket-1', title: 'Research X' });
+    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 202 })));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  const loopRun = { ...baseExecution, status: 'paused', pendingGate, loopId: 'loop-1' };
+  const expectedEvent = {
+    loopId: 'loop-1',
+    userId: 'user-1',
+    executionId: 'exec-1',
+    iteration: 2,
+    confidence: 0.3,
+    reason: 'thin results',
+    requestedAt: pendingGate.requestedAt,
+    workItemId: 'ticket-1',
+    ticketTitle: 'Research X',
+  };
+
+  it('continue records the event as resumed and moves the parked ticket back to in_progress', async () => {
+    mockFindById.mockResolvedValue(loopRun);
+    await respond('continue');
+
+    expect(mockClearPendingGate).toHaveBeenCalledWith('exec-1', 'resumed', 'user-1');
+    expect(mockResolveUnsure).toHaveBeenCalledWith(expectedEvent, {
+      outcome: 'resumed',
+      by: 'user-1',
+      at: expect.any(Date),
+    });
+    expect(mockResumeBlockedRun).toHaveBeenCalledWith('ticket-1', 'exec-1');
+  });
+
+  it('stop records the event as rejected and leaves the ticket blocked', async () => {
+    mockFindById.mockResolvedValue(loopRun);
+    await respond('stop');
+
+    expect(mockClearPendingGate).toHaveBeenCalledWith('exec-1', 'rejected', 'user-1');
+    expect(mockMarkComplete).toHaveBeenCalledWith('exec-1', expect.objectContaining({ stoppedByGate: true }));
+    expect(mockResolveUnsure).toHaveBeenCalledWith(expectedEvent, expect.objectContaining({ outcome: 'rejected' }));
+    expect(mockResumeBlockedRun).not.toHaveBeenCalled();
+  });
+
+  it('a rejected resume dispatch writes nothing to the loop log or ticket', async () => {
+    mockFindById.mockResolvedValue(loopRun);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    await expect(respond('continue')).rejects.toThrow('401');
+
+    expect(mockResolveUnsure).not.toHaveBeenCalled();
+    expect(mockResumeBlockedRun).not.toHaveBeenCalled();
+  });
+
+  it('still resolves the gate when the loop log write fails', async () => {
+    mockFindById.mockResolvedValue(loopRun);
+    mockResolveUnsure.mockRejectedValueOnce(new Error('db down'));
+    await respond('stop');
+
+    expect(mockMarkComplete).toHaveBeenCalledWith('exec-1', expect.objectContaining({ stoppedByGate: true }));
+    expect(noopLogger.warn).toHaveBeenCalledWith(
+      '[Gate] Could not record the gate answer in the loop log',
+      expect.objectContaining({ executionId: 'exec-1' })
+    );
+  });
+
+  it.each(['continue', 'stop'] as const)('%s on a chat run touches no loop event or ticket', async decision => {
+    mockFindById.mockResolvedValue({ ...loopRun, loopId: undefined });
+    await respond(decision);
+
+    expect(mockClearPendingGate).toHaveBeenCalled();
+    expect(mockFindTicketByExecutionId).not.toHaveBeenCalled();
+    expect(mockResolveUnsure).not.toHaveBeenCalled();
+    expect(mockResumeBlockedRun).not.toHaveBeenCalled();
+  });
+});
+
 describe('concurrent permission approvals', () => {
   it('allows only the approval that won the CAS to dispatch or roll back', async () => {
     mockFindById.mockResolvedValue(baseExecution);
@@ -884,6 +999,170 @@ describe('reconnect command', () => {
 
     expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
     expect(mockUpdateConnectionId).not.toHaveBeenCalled();
+  });
+});
+
+describe('subscribe / unsubscribe commands', () => {
+  const wsEvent = (body: Record<string, unknown>) => ({
+    requestContext: { connectionId: 'viewer-conn', domainName: 'example.com', stage: 'dev' },
+    body: JSON.stringify({ accessToken: 'jwt', action: 'agent_execute', ...body }),
+  });
+  const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+  const sentPayloads = () =>
+    mockApiGwSend.mock.calls.map(([cmd]) => JSON.parse((cmd as { input: { Data: Buffer } }).input.Data.toString()));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiGwSend.mockResolvedValue(undefined);
+    vi.mocked(verifyApiKey).mockRejectedValue(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1' } as never);
+    mockFindSessionById.mockResolvedValue({ userId: 'user-1' });
+  });
+
+  it('adds the owner as a viewer and sends the snapshot without taking over the run', async () => {
+    const running = {
+      ...baseExecution,
+      status: 'running',
+      checkpoint: { iteration: 2, steps: [{ type: 'thought', content: 'hi' }] },
+    };
+    mockFindById.mockResolvedValueOnce(running).mockResolvedValueOnce(running);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');
+    expect(mockUpdateConnectionId).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([
+      expect.objectContaining({
+        action: 'reconnect_result',
+        requestId: 'req-1',
+        found: true,
+        executionId: 'exec-1',
+        status: 'running',
+        iterationCount: 2,
+        steps: [{ type: 'thought', content: 'hi' }],
+      }),
+    ]);
+  });
+
+  it('lets a member of a shared session watch the run', async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-2' } as never);
+    mockFindSessionById.mockResolvedValueOnce({ userId: 'user-1', users: [{ userId: 'user-2' }] });
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');
+    expect(sentPayloads()[0]).toMatchObject({ found: true });
+  });
+
+  it("refuses another user's run and never adds them as a viewer", async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'intruder' } as never);
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-2' }), {}, noopLogger);
+
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', requestId: 'req-2', found: false }]);
+  });
+
+  it('applies the owner check to a run without a session', async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'intruder' } as never);
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, sessionId: undefined, status: 'running' });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
+  });
+
+  it('builds the snapshot from a read taken after adding the viewer', async () => {
+    mockFindById
+      .mockResolvedValueOnce({ ...baseExecution, status: 'running', checkpoint: { iteration: 1, steps: [] } })
+      .mockResolvedValueOnce({
+        ...baseExecution,
+        status: 'running',
+        checkpoint: { iteration: 2, steps: [{ type: 'thought', content: 'late' }] },
+      });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockFindById).toHaveBeenCalledTimes(2);
+    expect(sentPayloads()[0]).toMatchObject({ found: true, steps: [{ type: 'thought', content: 'late' }] });
+  });
+
+  it('answers found:false for a missing run', async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-3' }), {}, noopLogger);
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', requestId: 'req-3', found: false }]);
+  });
+
+  it('answers found:false when subscribing throws, so the viewer does not spin forever', async () => {
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+    mockAddViewer.mockRejectedValueOnce(new Error('db down'));
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-4' }), {}, noopLogger);
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', requestId: 'req-4', found: false }]);
+  });
+
+  it("sends a finished run's answer, which a headless run has nowhere else to show", async () => {
+    const completed = {
+      ...baseExecution,
+      status: 'completed',
+      result: { answer: 'All done' },
+      checkpoint: { iteration: 1, steps: [{ type: 'final_answer', content: 'All done' }] },
+    };
+    for (let i = 0; i < 3; i++) mockFindById.mockResolvedValueOnce(completed);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+    await invoke(wsEvent({ command: 'reconnect', executionId: 'exec-1' }), {}, noopLogger);
+
+    const [subscribed, reconnected] = sentPayloads();
+    expect(subscribed).toMatchObject({ found: true, status: 'completed', answer: 'All done' });
+    // A chat reconnect keeps today's payload: the reply bubble already holds the answer.
+    expect(reconnected).toMatchObject({ found: true, status: 'completed' });
+    expect(reconnected).not.toHaveProperty('answer');
+  });
+
+  it('drops the answer with the steps when they do not fit the frame', async () => {
+    const run = {
+      ...baseExecution,
+      status: 'completed',
+      result: { answer: 'x'.repeat(101 * 1024) },
+      checkpoint: { iteration: 1, steps: [] },
+    };
+    mockFindById.mockResolvedValueOnce(run).mockResolvedValueOnce(run);
+    vi.mocked(decideInlineBudgets).mockReturnValueOnce({ includeStepsInline: false, includeChildrenInline: true });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    // The answer counts toward the steps budget.
+    expect(decideInlineBudgets).toHaveBeenCalledWith(101 * 1024, 0);
+    expect(sentPayloads()[0]).toMatchObject({ found: true, stepsTruncated: true });
+    expect(sentPayloads()[0]).not.toHaveProperty('answer');
+  });
+
+  it("sends a failed run's reason and a caller-safe message", async () => {
+    const run = {
+      ...baseExecution,
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      error: { message: 'Out of credits', callerSafe: true },
+    };
+    mockFindById.mockResolvedValueOnce(run).mockResolvedValueOnce(run);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()[0]).toMatchObject({
+      found: true,
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      errorMessage: 'Out of credits',
+    });
+  });
+
+  it('removes this connection on unsubscribe', async () => {
+    await invoke(wsEvent({ command: 'unsubscribe', executionId: 'exec-1' }), {}, noopLogger);
+    expect(mockRemoveViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');
   });
 });
 

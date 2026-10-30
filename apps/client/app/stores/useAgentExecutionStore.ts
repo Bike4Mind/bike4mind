@@ -93,20 +93,41 @@ export interface ChildExecution {
  * `extractFinalAnswer` relies on), so an incoming `final_answer` REPLACES an
  * existing one for the same iteration instead of appending. Steps of other
  * types, and `final_answer`s of other iterations, append as-is.
+ *
+ * An exact duplicate of an existing step also replaces it: a viewer (`subscribe`) can get the
+ * same step from the snapshot and from the live stream.
  */
 function appendCollapsingFinalAnswer(iterations: IterationStep[], incoming: IterationStep): IterationStep[] {
-  if (incoming.step.type === 'final_answer') {
-    const existingIdx = iterations.findLastIndex(
-      it => it.iteration === incoming.iteration && it.step.type === 'final_answer'
-    );
-    if (existingIdx !== -1) {
-      const next = iterations.slice();
-      next[existingIdx] = incoming;
-      return next;
-    }
+  const existingIdx =
+    incoming.step.type === 'final_answer'
+      ? iterations.findLastIndex(it => it.iteration === incoming.iteration && it.step.type === 'final_answer')
+      : iterations.findLastIndex(it => isSameStep(it, incoming));
+  if (existingIdx !== -1) {
+    const next = iterations.slice();
+    next[existingIdx] = incoming;
+    return next;
   }
   return [...iterations, incoming];
 }
+
+// Parallel tool observations can share a millisecond, so the timestamp alone is not an identity.
+function isSameStep(a: IterationStep, b: IterationStep): boolean {
+  const am = a.step.metadata;
+  const bm = b.step.metadata;
+  return (
+    !!am &&
+    !!bm &&
+    a.iteration === b.iteration &&
+    a.step.type === b.step.type &&
+    am.timestamp === bm.timestamp &&
+    am.toolName === bm.toolName &&
+    a.step.content === b.step.content
+  );
+}
+
+/** Lifecycle of a `subscribe` from this tab: awaiting the snapshot, watching, refused/missing, or
+ * closed (a tombstone: frames still in flight for it are dropped instead of re-creating the run). */
+export type ViewedExecutionState = 'pending' | 'found' | 'not_found' | 'closed';
 
 export interface PendingPermission {
   toolName: string;
@@ -207,6 +228,10 @@ interface AgentExecutionState {
    * single tab; concurrent dispatches are bounded by the server's
    * `concurrent_limit` check. */
   pendingDispatches: string[];
+  /** Executions this tab watches via `subscribe` rather than owns (`AgentRunViewer`). */
+  viewedExecutionIds: Record<string, ViewedExecutionState>;
+  /** `undefined` stops viewing. */
+  setViewed: (executionId: string, viewed: ViewedExecutionState | undefined) => void;
 
   // Lifecycle
   startExecution: (executionId: string, sessionId?: string) => void;
@@ -249,6 +274,10 @@ interface AgentExecutionState {
      * are excluded; they render via the header badge, not the nest.
      */
     childExecutions?: Record<string, ChildExecution>;
+    /** Outcome of a finished run; only `subscribe` snapshots carry it. Absent keeps the store's. */
+    answer?: string;
+    failureReason?: string;
+    errorMessage?: string;
   }) => void;
   /** Replace just `exec.iterations` without touching status/credits/permission.
    * Used by the REST-fallback path in `useAgentExecution` after the WS
@@ -358,6 +387,7 @@ function withExecution<T extends ParentExecution>(
   executionId: string,
   mutate: (exec: T) => T
 ): Record<string, ParentExecution> {
+  if (state.viewedExecutionIds[executionId] === 'closed') return state.executions;
   const existing = (state.executions[executionId] as T | undefined) ?? (emptyExecution(executionId) as T);
   const next = mutate(existing);
   next.lastEventAt = Date.now();
@@ -467,6 +497,13 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
   executions: {},
   pendingDispatches: [],
   pendingReconnectRequests: {},
+  viewedExecutionIds: {},
+
+  setViewed: (executionId, viewed) =>
+    set(state => {
+      const { [executionId]: _, ...rest } = state.viewedExecutionIds;
+      return { viewedExecutionIds: viewed ? { ...rest, [executionId]: viewed } : rest };
+    }),
 
   registerReconnectRequest: (requestId, sessionId, executionId, retryAllowed = true) =>
     set(state => {
@@ -697,6 +734,9 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
           // (no children, or `childrenTruncated: true` - REST fallback path
           // handles the latter via `mergeChildExecutions`).
           childExecutions: snapshot.childExecutions ?? exec.childExecutions,
+          answer: snapshot.answer ?? exec.answer,
+          failureReason: snapshot.failureReason ?? exec.failureReason,
+          errorMessage: snapshot.errorMessage ?? exec.errorMessage,
         };
       }),
     })),
@@ -830,7 +870,8 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
   clear: executionId =>
     set(state => {
       const { [executionId]: _, ...rest } = state.executions;
-      return { executions: rest };
+      const { [executionId]: _viewed, ...viewedExecutionIds } = state.viewedExecutionIds;
+      return { executions: rest, viewedExecutionIds };
     }),
 
   clearForSession: sessionId =>
@@ -849,7 +890,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
   // The pending-dispatch queue is correlation state for requests already in flight, so a reset
   // that dropped the executions but kept it would leave entries that can only ever mis-pair with
   // whatever comes next.
-  clearAll: () => set({ executions: {}, pendingDispatches: [], pendingReconnectRequests: {} }),
+  clearAll: () => set({ executions: {}, pendingDispatches: [], pendingReconnectRequests: {}, viewedExecutionIds: {} }),
 }));
 
 // ---------------------------------------------------------------------------

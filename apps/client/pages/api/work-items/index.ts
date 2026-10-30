@@ -3,8 +3,10 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
 import { IWorkItem } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
+import { assertLoopTicketAccess, makeDueIfReady, ticketMovePatch } from '@server/utils/loopTickets';
 import {
   parseStatusFilter,
   validateWorkItemDependencies,
@@ -26,6 +28,7 @@ const handler = baseApi()
     const {
       status,
       organizationId,
+      loopId,
       query = '',
       page = '1',
       limit = String(DEFAULT_LIMIT),
@@ -46,12 +49,14 @@ const handler = baseApi()
     // set that is already hard-scoped to the caller's own userId, so gating it
     // would 404 a plain org member without protecting anything.
     const statusFilter = parseStatusFilter(status);
+    if (loopId !== undefined) await assertLoopTicketAccess(req, loopId);
 
     const result = await workItemRepository.listForUser(
       req.user!.id,
       {
         ...(statusFilter && { status: statusFilter }),
         ...(organizationId && { organizationId }),
+        ...(loopId && { loopId }),
         ...(query && { search: query }),
       },
       { page: safePage, limit: safeLimit },
@@ -61,12 +66,18 @@ const handler = baseApi()
     res.json(result);
   })
   .post(async (req, res) => {
-    const body = req.body as Partial<IWorkItem>;
+    const body = req.body as Partial<IWorkItem> & { reason?: unknown };
 
     const title = validateWorkItemTitle(body.title);
     const description = validateWorkItemDescription(body.description);
-    const status = validateWorkItemStatus(body.status) ?? 'open';
+    const requestedStatus = validateWorkItemStatus(body.status);
     const dependencies = validateWorkItemDependencies(body.dependencies) ?? [];
+    // Same rule as PATCH: `loopId: null` means not linked, and a stage needs a loop.
+    const loop = body.loopId != null ? await assertLoopTicketAccess(req, body.loopId) : undefined;
+    if (!loop && body.stage != null) throw new BadRequestError('stage is only valid on a loop ticket');
+    const ticket =
+      loop && ticketMovePatch(loop, undefined, { stage: body.stage, status: requestedStatus, reason: body.reason });
+    const status = ticket?.status ?? requestedStatus ?? 'open';
 
     if (body.organizationId) {
       await verifyOrgAccess({ id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) }, body.organizationId);
@@ -83,8 +94,11 @@ const handler = baseApi()
       status,
       dependencies,
       ...(status === 'closed' && { closedAt: new Date() }),
+      ...(loop && { loopId: loop.id, stage: ticket!.stage }),
+      ...(ticket?.statusReason && { statusReason: ticket.statusReason }),
     } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
 
+    if (loop) await makeDueIfReady(loop);
     res.status(201).json(created);
   });
 

@@ -272,6 +272,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/eventBus.ts:telemetryAlertRuleDLQ',
     '65f5b9e522854e4e0dc8eab7245b7e37acfc5ad1be8139a52be0d75d981b46a0'
   ),
+  broker(
+    'queue:infra/loopSchedulerDeadLetter.ts:loopSchedulerDlq',
+    '5b85259ddd18160448733c9a2bd2ef7c29d0e10e07bf4e7f251839b86ff91994'
+  ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
     'baa7a0c90fa5af8cc53983d872bd753124a5af196999edf0c358a75000ec7c09',
@@ -840,6 +844,9 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'Hosted error triage and auto-fix dispatch; not applicable to a portable deployment.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
+  gap('schedule:infra/cron.ts:loopSchedulerCron', '9af087dbb217b9b00921e57b2e7fd5c5dd61e320e2c62297bcbb58890cbe6743', [
+    'lambda:InvokeFunction',
+  ]),
   wired(
     'schedule:infra/cron.ts:modelDiscoveryCron',
     '7f2b05bafc0342ba49618e79c8141efeb1def7b2ef88a4c2a76fbcc1f7b16fb8',
