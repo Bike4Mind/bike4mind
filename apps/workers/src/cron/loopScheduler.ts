@@ -11,6 +11,7 @@ import {
 import {
   adminSettingsRepository,
   agentExecutionRepository,
+  apiKeyRepository,
   connectDB,
   loopDirectiveRepository,
   loopEventRepository,
@@ -21,8 +22,10 @@ import {
   type IAgentExecution,
   type IPendingGate,
 } from '@bike4mind/database';
+import { getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { creditService } from '@bike4mind/services';
+import { apiKeyService, creditService } from '@bike4mind/services';
+import { getSettingsByNames } from '@bike4mind/utils';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
@@ -39,6 +42,7 @@ import {
 import { Resource } from 'sst';
 import { buildLoopQuery, parseLoopMemory } from './loopMemory';
 import { syncLoopNotices } from './loopNotices';
+import { nextIterationCredits } from '../queueHandlers/agentExecutor.billing';
 
 /** Claim lease; covers one dispatch, after which `activeExecutionId` keeps the loop from overlapping. */
 export const LOOP_LEASE_MS = 5 * 60 * 1000;
@@ -318,16 +322,29 @@ async function resumeIfDue(loop: ILoop, now: Date): Promise<void> {
   });
 }
 
-// ponytail: any positive balance resumes, though one iteration may cost more; such a run is refused and the
-// loop pauses again, so it cycles about every 10 minutes (a refused run, an event and a fresh notice each
-// time) until the balance covers a run. Compare against the executor's nextIterationCredits if that is noisy.
+/**
+ * Whether the account the executor bills can pay for the loop's first iteration, by the executor's own
+ * admission rule (agentExecutor.ts pre-flight credit check): a positive balance that covers
+ * `nextIterationCredits` when `enforceCredits` is on, and for an org, the member under its cap.
+ */
 async function canPayAgain(loop: ILoop): Promise<boolean> {
-  if (loop.organizationId) {
-    const org = await organizationRepository.findById(loop.organizationId);
-    return !!org && org.currentCredits > 0 && !creditService.isMemberAtOrOverCap(org, loop.userId);
-  }
-  const user = await userRepository.findById(loop.userId);
-  return !!user && (user.currentCredits ?? 0) > 0;
+  const org = loop.organizationId ? await organizationRepository.findById(loop.organizationId) : null;
+  const payer = loop.organizationId ? org : await userRepository.findById(loop.userId);
+  const balance = payer?.currentCredits ?? 0;
+  if (balance <= 0 || (org && creditService.isMemberAtOrOverCap(org, loop.userId))) return false;
+  return balance >= (await firstIterationCredits(loop));
+}
+
+async function firstIterationCredits(loop: ILoop): Promise<number> {
+  if ((await adminSettingsRepository.getSettingsValue('enforceCredits')) !== true) return 0;
+  const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(loop.userId, {
+    db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+    getSettingsByNames,
+  });
+  const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
+  const modelId = resolveDeprecatedModelId(loop.model, 'loopScheduler');
+  const modelInfo = models.find((m: { id: string }) => m.id === modelId);
+  return modelInfo ? nextIterationCredits(modelInfo, 0) : 0;
 }
 
 /**

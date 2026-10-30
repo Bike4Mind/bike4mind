@@ -25,10 +25,19 @@ import type { Logger } from '@bike4mind/observability';
  * The executor dispatch is mocked; execution docs are stubbed through findById.
  */
 
-const h = vi.hoisted(() => ({ startAgentExecution: vi.fn() }));
+const h = vi.hoisted(() => ({
+  startAgentExecution: vi.fn(),
+  getAvailableModels: vi.fn(),
+  nextIterationCredits: vi.fn(),
+}));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: h.startAgentExecution }));
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
+  getAvailableModels: h.getAvailableModels,
+}));
+vi.mock('../queueHandlers/agentExecutor.billing', () => ({ nextIterationCredits: h.nextIterationCredits }));
 
 import { BUDGET_PAUSE_REASON, LOOP_LEASE_MS, MAX_CONSECUTIVE_FAILURES, runLoopSchedulerTick } from './loopScheduler';
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
@@ -65,6 +74,8 @@ afterEach(async () => {
   await mongoose.connection.dropDatabase();
   vi.restoreAllMocks();
   h.startAgentExecution.mockReset();
+  h.getAvailableModels.mockReset();
+  h.nextIterationCredits.mockReset();
 });
 
 const createLoop = async (overrides: Record<string, unknown> = {}) =>
@@ -811,6 +822,25 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     expect(await openNotices()).toHaveLength(0);
   });
 
+  it('keeps a credit pause until the balance covers one iteration of the loop model when credits are enforced', async () => {
+    vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation(
+      (async (key: string) => key === 'EnableLoops' || key === 'enforceCredits') as never
+    );
+    const model = { id: 'claude-sonnet-5' };
+    h.getAvailableModels.mockResolvedValue([model]);
+    h.nextIterationCredits.mockReturnValue(20);
+    balance = { currentCredits: 5 };
+    const loop = await createLoop({ status: 'paused', autoResume: 'credits' });
+
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await reload(loop.id)).status).toBe('paused');
+    expect(h.nextIterationCredits).toHaveBeenCalledWith(model, 0);
+
+    balance = { currentCredits: 20 };
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await reload(loop.id)).status).toBe('live');
+  });
+
   it('keeps a credit pause on an org loop while the member is at its cap', async () => {
     // A member cap of 0 means the member is at it with nothing used.
     const org: Record<string, unknown> = { currentCredits: 100, maxCreditsPerMember: 0, userDetails: [] };
@@ -865,6 +895,28 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     await runLoopSchedulerTick(NOW, logger);
 
     expect((await reload(loop.id)).status).toBe('paused');
+  });
+
+  it('treats a legacy budget of 0 as no budget', async () => {
+    const loop = await createLoop();
+    // Stored before the > 0 validator; updateOne skips validators.
+    await Loop.updateOne({ _id: loop.id }, { $set: { budgetCreditsPerDay: 0 } });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(agentExecutionRepository.sumCreditsByLoop).not.toHaveBeenCalled();
+  });
+
+  it('resumes a budget pause with no last run without logging an event', async () => {
+    const loop = await createLoop({ status: 'paused', autoResume: 'budget', statusReason: BUDGET_PAUSE_REASON });
+    vi.mocked(logger.error).mockClear();
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect((await reload(loop.id)).status).toBe('live');
+    expect(await eventsOf(loop.id)).toHaveLength(0);
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it('never resumes an owner pause', async () => {
