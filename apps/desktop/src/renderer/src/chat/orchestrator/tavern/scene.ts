@@ -82,8 +82,9 @@ export type Placement = { zone: TavernZone; point: SlotPoint; slot: number };
 
 /**
  * Seats agents so nobody shuffles needlessly: an agent whose zone is unchanged keeps its previous slot,
- * the rest take the lowest free slot in their zone, and whoever finds the zone full queues at the door
- * in roster order.
+ * the rest take the lowest free slot in their zone, and whoever finds the zone full queues at the door.
+ * The door remembers too: an agent still queued keeps its index, newcomers take the lowest free index in
+ * roster order, so indices can have gaps.
  */
 export function placeAgents(
   agents: readonly AgentView[],
@@ -105,17 +106,35 @@ export function placeAgents(
     placements.set(agent.id, { zone, point: TAVERN_SLOTS[zone][before.slot], slot: before.slot });
   }
 
-  let queued = 0;
+  const unseated: AgentView[] = [];
   for (const agent of agents) {
     if (placements.has(agent.id)) continue;
     const zone = zoneFor(agent.state);
     const free = TAVERN_SLOTS[zone].findIndex((_, slot) => !taken[zone].has(slot));
     if (free < 0) {
-      placements.set(agent.id, { zone: 'door', point: DOOR_POINT, slot: queued++ });
+      unseated.push(agent);
       continue;
     }
     taken[zone].add(free);
     placements.set(agent.id, { zone, point: TAVERN_SLOTS[zone][free], slot: free });
+  }
+
+  const queue = new Set<number>();
+  const newcomers: AgentView[] = [];
+  for (const agent of unseated) {
+    const before = previous.get(agent.id);
+    if (before?.zone !== 'door' || queue.has(before.slot)) {
+      newcomers.push(agent);
+      continue;
+    }
+    queue.add(before.slot);
+    placements.set(agent.id, { zone: 'door', point: DOOR_POINT, slot: before.slot });
+  }
+  let next = 0;
+  for (const agent of newcomers) {
+    while (queue.has(next)) next++;
+    queue.add(next);
+    placements.set(agent.id, { zone: 'door', point: DOOR_POINT, slot: next });
   }
   return placements;
 }
