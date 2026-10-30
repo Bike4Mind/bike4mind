@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModelIdSchema } from './modelId';
 
 import {
   actorKindSchema,
@@ -15,7 +16,12 @@ import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constant
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
-import { CompletionProviderBlockEventSchema, CompletionToolSchema, ResponseFormatSchema } from './cliCompletions';
+import {
+  CompletionProviderBlockEventSchema,
+  CompletionSessionIdSchema,
+  CompletionToolSchema,
+  ResponseFormatSchema,
+} from './cliCompletions';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -89,7 +95,7 @@ export const CliCompletionRequestAction = z.object({
   action: z.literal('cli_completion_request'),
   accessToken: z.string(),
   requestId: z.uuid(),
-  model: z.string(),
+  model: ModelIdSchema,
   messages: z
     .array(
       z.object({
@@ -100,6 +106,7 @@ export const CliCompletionRequestAction = z.object({
       })
     )
     .min(1),
+  sessionId: CompletionSessionIdSchema.optional(),
   options: z
     .object({
       temperature: z.number().optional(),
@@ -643,8 +650,10 @@ export const CliCompletionErrorAction = z.object({
   error: z.string(),
   /** Seconds until the caller's rate-limit window reopens; present only on a rate-limit refusal. */
   retryAfter: z.number().optional(),
-  /** Machine-readable reason on a request the caller must fix (a 4xx), e.g. `tool_search_unsupported`. */
+  /** Machine-readable reason, e.g. `tool_search_unsupported` or `provider_not_configured`. */
   errorCode: z.string().optional(),
+  /** HTTP status the SSE route would have answered with. */
+  status: z.number().int().optional(),
 });
 export type ICliCompletionErrorAction = z.infer<typeof CliCompletionErrorAction>;
 

@@ -25,6 +25,7 @@ import {
 } from './mediaTools';
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
+import { setSessionPullRequest } from './pullRequestTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
@@ -147,6 +148,7 @@ const BY_NAME = new Map(
     ...SKILL_TOOLS,
     askUser,
     requestDirectory,
+    setSessionPullRequest,
     ...MCP_TOOLS,
     ...WEB_TOOLS,
   ].map(tool => [tool.schema.name, tool])
@@ -154,6 +156,18 @@ const BY_NAME = new Map(
 
 export function findTool(name: string): ToolDefinition | undefined {
   return BY_NAME.get(name);
+}
+
+/**
+ * The generation tool names toolsForRequest declares for the same `media` and `video` inputs, for
+ * the blank chat's suggestions. Read off the same constants so the two cannot disagree.
+ */
+export function offeredMediaToolNames(options: { media: boolean; video?: readonly VideoModel[] }): string[] {
+  if (!options.media) return [];
+  return [
+    ...MEDIA_TOOLS.map(tool => tool.schema.name),
+    ...(options.video?.length ? [generateVideoTool.schema.name] : []),
+  ];
 }
 
 /**
@@ -229,6 +243,11 @@ export function toolsForRequest(options: {
    * whether or not anything is configured, so the tool list does not churn as servers come and go.
    */
   mcpServers?: boolean;
+  /**
+   * A Code session with a user present, who is the only one who may say which PR the session
+   * follows. Offers set_session_pull_request.
+   */
+  pullRequest?: boolean;
 }): { toolSchema: ToolSchema }[] {
   const available = [
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
@@ -243,6 +262,7 @@ export function toolsForRequest(options: {
     ...(options.web ? WEB_TOOLS : []),
     // Offered with no folder granted too: asking for one is exactly what that conversation needs.
     ...(options.ask ? [askUser, requestDirectory] : []),
+    ...(options.pullRequest && options.ask ? [setSessionPullRequest] : []),
     ...(options.mcpServers ? (options.ask ? MCP_TOOLS : MCP_READ_TOOLS) : []),
   ];
   return [

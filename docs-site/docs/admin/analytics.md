@@ -72,7 +72,7 @@ Clicking the **Show Advanced Filters** button reveals additional filtering optio
 
 | Control | Description |
 |---------|-------------|
-| **Start Date** | Date picker, defaults to 7 days ago |
+| **Start Date** | Date picker, defaults to 6 days ago (the start of Last 7 Days, which includes today) |
 | **End Date** | Date picker, defaults to today |
 | **Today** | Quick-select button for today only |
 | **Last 7 Days** | Quick-select button for the past week |

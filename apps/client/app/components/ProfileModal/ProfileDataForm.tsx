@@ -13,11 +13,10 @@ import SectionContainer from '@client/app/components/ProfileModal/SectionContain
 
 interface ProfileDataFormProps {
   userData: WithOrgRef<IUserDocument>;
-  adminMode: boolean;
   onCancel?: () => void;
 }
 
-const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, onCancel }) => {
+const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, onCancel }) => {
   const [editUser, setEditUser] = useState<IUserDocument>({ ...userData, organizationId: userData.organizationId?.id });
   const [editing, setEditing] = useState(false);
   // Track which fields the user actually edited so handleSave only sends those.
@@ -89,12 +88,15 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
   };
 
   const handleSecurityQuestionChange = (index: number, key: keyof ISecurityQuestion, value: string) => {
-    const updatedQuestions = [...(editUser.securityQuestions || [])];
-    if (updatedQuestions[index]) {
-      updatedQuestions[index][key] = value;
-    }
     setEditedFields(prev => ({ ...prev, securityQuestions: true }));
-    setEditUser(prev => ({ ...prev, securityQuestions: updatedQuestions }));
+    // Copies the edited question: the originals are shared with the cached user data. Edit and delete
+    // only render for an existing question, hence the non-null assertions.
+    setEditUser(prev => ({
+      ...prev,
+      securityQuestions: prev.securityQuestions!.map((question, i) =>
+        i === index ? { ...question, [key]: value } : question
+      ),
+    }));
   };
 
   const handleAddSecurityQuestion = () => {
@@ -110,7 +112,7 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
     setEditedFields(prev => ({ ...prev, securityQuestions: true }));
     setEditUser(prev => ({
       ...prev,
-      securityQuestions: prev.securityQuestions ? prev.securityQuestions?.filter((_, i) => i !== index) : [],
+      securityQuestions: prev.securityQuestions!.filter((_, i) => i !== index),
     }));
   };
 
@@ -182,22 +184,6 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
             />
           </Grid>
           {/* Email field removed - users must use ChangeEmailCard component for secure email verification flow */}
-          {/* Admins can edit email through AdminProfileModal which uses adminMode={true} */}
-          {adminMode && (
-            <Grid className="profile-data-form-field-container" data-testid="profile-form-field" xs={12} sm={6} md={4}>
-              <Typography className="profile-data-form-label" data-testid="profile-form-label">
-                Email:
-              </Typography>
-              <Input
-                className="profile-data-form-input"
-                data-testid="profile-form-input-email"
-                name="email"
-                value={editUser.email || ''}
-                onChange={handleChange}
-                fullWidth
-              />
-            </Grid>
-          )}
           <Grid className="profile-data-form-field-container" data-testid="profile-form-field" xs={12} sm={6} md={4}>
             <Typography className="profile-data-form-label" data-testid="profile-form-label">
               Organization:
@@ -326,6 +312,7 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
                     <Grid xs={2} sm={1} md={1} alignContent={'flex-end'}>
                       <IconButton
                         className="profile-data-form-delete-button"
+                        data-testid="profile-form-delete-question-btn"
                         color={'danger'}
                         onClick={() => handleDeleteSecurityQuestion(index)}
                       >
@@ -338,6 +325,7 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
                 <Grid xs={12}>
                   <Button
                     className="profile-data-form-add-button"
+                    data-testid="profile-form-add-question-btn"
                     startDecorator={<AddCircleOutlineIcon />}
                     onClick={handleAddSecurityQuestion}
                   >

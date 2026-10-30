@@ -12,7 +12,7 @@ type RefuseWholeInviteParameters = z.infer<typeof refuseWholeInviteSchema>;
 
 interface RefuseWholeInviteAdapters {
   db: InviteTypeAuthAdapters & {
-    invites: Pick<IInviteRepository, 'findById' | 'findByToken' | 'update'>;
+    invites: Pick<IInviteRepository, 'findById' | 'findByToken' | 'refusePendingRecipient' | 'closeInvite'>;
   };
 }
 
@@ -56,18 +56,9 @@ export const refuseWholeInvite = async (
   const isPendingRecipient = !!email && pending.some(p => p.toLowerCase() === email);
 
   if (isPendingRecipient) {
-    invite.recipients!.pending = pending.filter(p => p.toLowerCase() !== email);
-    invite.recipients!.refused = [...(invite.recipients!.refused ?? []), user.email as string];
-    invite.remaining -= 1;
-  } else {
-    await authorizeByInviteType(user, invite.type, invite.documentId, db, { requireManageGroups: true });
-
-    invite.remaining = 0;
-    if (invite.recipients) {
-      invite.recipients.pending = [];
-    }
+    return (await db.invites.refusePendingRecipient(invite.id, user.email as string)) ?? db.invites.findById(invite.id);
   }
 
-  await db.invites.update({ id: invite.id, remaining: invite.remaining, recipients: invite.recipients });
-  return db.invites.findById(invite.id);
+  await authorizeByInviteType(user, invite.type, invite.documentId, db, { requireManageGroups: true });
+  return db.invites.closeInvite(invite.id);
 };

@@ -125,4 +125,36 @@ describe('useSessionContextUsage', () => {
     mockPages([quest('q1', {})]);
     expect(renderHook(() => useSessionContextUsage('s1')).result.current?.compactedTurns).toBe(0);
   });
+
+  describe('providerInputTokens', () => {
+    const settled = (tokenUsage: Record<string, unknown>, functionCalls?: unknown[]) => {
+      const q = quest('q1');
+      return { ...q, promptMeta: { ...q.promptMeta, tokenUsage, functionCalls } };
+    };
+    const read = () => renderHook(() => useSessionContextUsage('s1')).result.current?.providerInputTokens;
+
+    it('sums uncached, cache-read and cache-write input from a provider-settled turn', () => {
+      mockPages([
+        settled({
+          settledBasis: 'provider',
+          actualInputTokens: 1_741,
+          cacheReadInputTokens: 7_856,
+          cacheCreationInputTokens: 135_894,
+        }),
+      ]);
+      expect(read()).toBe(145_491);
+    });
+
+    it('is absent for a locally settled turn and for a turn that called tools', () => {
+      mockPages([settled({ settledBasis: 'local', actualInputTokens: 1_000 })]);
+      expect(read()).toBeUndefined();
+
+      mockPages([
+        settled({ settledBasis: 'provider', actualInputTokens: 1_000, cacheReadInputTokens: 9_000 }, [
+          { name: 'math_evaluate' },
+        ]),
+      ]);
+      expect(read()).toBeUndefined();
+    });
+  });
 });

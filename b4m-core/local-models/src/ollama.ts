@@ -53,6 +53,11 @@ export interface OllamaRuntimeOptions {
   fetch?: FetchLike;
   /** Sent as `Authorization: Bearer <apiKey>`, for a daemon behind an authenticating proxy. */
   apiKey?: string;
+  /**
+   * Scrubs credentials a proxy or daemon echoes into a streamed `/api/pull` line, given the response it came on.
+   * Defaults to removing `apiKey`, raw or JSON-escaped. Desktop passes its own (apps/desktop credentialRedactor).
+   */
+  redact?: (text: string, response: Response) => string;
   /** Deadline for ordinary API calls (ms). `pull` has none beyond its own signal. */
   requestTimeoutMs?: number;
   healthTimeoutMs?: number;
@@ -222,6 +227,7 @@ export class OllamaRuntime implements LocalRuntime {
   private readonly client: HttpClient;
   private readonly requestTimeoutMs: number;
   private readonly healthTimeoutMs: number;
+  private readonly redact: (text: string, response: Response) => string;
 
   constructor(options: OllamaRuntimeOptions = {}) {
     this.baseUrl = requireBaseUrl(options.baseUrl ?? DEFAULT_OLLAMA_URL, 'ollama');
@@ -238,6 +244,8 @@ export class OllamaRuntime implements LocalRuntime {
       fetch: options.fetch ?? fetch,
       headers: options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : undefined,
     };
+    const { apiKey } = options;
+    this.redact = options.redact ?? (apiKey ? apiKeyRedactor(apiKey) : text => text);
   }
 
   async health(): Promise<RuntimeHealth> {
@@ -333,7 +341,7 @@ export class OllamaRuntime implements LocalRuntime {
       for await (const line of readLines(response.body)) {
         if (signal.aborted) break;
         arm();
-        const frame = parseJson(this.client, '/api/pull', line, pullFrameSchema);
+        const frame = parseJson(this.client, '/api/pull', this.redact(line, response), pullFrameSchema);
         if (frame.error === MISSING_MANIFEST) throw new ModelNotFoundError(this.id, ref, { cause: frame.error });
         if (frame.error) throw new LocalRuntimeError(`${this.id} could not pull ${ref}: ${frame.error}`, this.id);
         if (frame.digest && frame.total !== undefined) {
@@ -422,4 +430,23 @@ export class OllamaRuntime implements LocalRuntime {
       throw error;
     }
   }
+}
+
+/**
+ * Replaces `apiKey` in a raw JSON line, where an encoder may have written any character backslash-escaped (`\/`)
+ * or as `\uXXXX` (Go escapes `&<>`). A lighter sibling of Desktop's credentialRedactor, for the bearer key alone.
+ */
+function apiKeyRedactor(apiKey: string): (text: string) => string {
+  let body = '';
+  for (let index = 0; index < apiKey.length; index++) {
+    const code = apiKey.charCodeAt(index);
+    const literal = apiKey[index].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const hex = code
+      .toString(16)
+      .padStart(4, '0')
+      .replace(/[a-f]/g, digit => `[${digit}${digit.toUpperCase()}]`);
+    body += `(?:${literal}|\\\\${literal}|\\\\u${hex})`;
+  }
+  const pattern = new RegExp(body, 'g');
+  return text => text.replace(pattern, '[redacted]');
 }

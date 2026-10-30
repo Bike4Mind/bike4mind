@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, readFile } from 'node:fs/promises';
+import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
@@ -97,6 +97,9 @@ import { registerModelServersIpc } from '../modelServers/ipc';
 import { LocalModels } from '../modelServers/LocalModels';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { withEnteredSpecs } from '../models/enteredHardware';
+import { machineView } from '../models/fit';
+import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -110,6 +113,7 @@ import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { ApprovalLog } from './permissions/ApprovalLog';
+import { formatApprovalSummary, readApprovalLog, summarizeApprovals } from './permissions/approvalSummary';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
@@ -359,6 +363,8 @@ export function registerChat(
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
+  // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
+  const approvalLog = new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message));
   // Beside approval-mode.json and app-wide like it; see ModelPreference for why.
   const modelPreference = new ModelPreference(join(userData, 'model-preference.json'));
   // Unconditional, unlike everything else at this level: it is the one way to check which model
@@ -452,7 +458,13 @@ export function registerChat(
       models.forgetLocal();
       send(IPC_CHANNELS.modelServersChanged, servers);
     },
+    localSpecsChanged: () => {
+      forgetLocalContexts();
+      localSizing.forget?.();
+      models.forgetLocal();
+    },
   });
+  localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
   void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
   const local = new LocalModels(new OllamaLocal((url, init) => net.fetch(url, init), localSizing), modelServers);
   const models = new ModelCatalog(
@@ -603,8 +615,7 @@ export function registerChat(
         return capabilityLedger.revokeMatching(match);
       },
     },
-    // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
-    approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
+    approvalLog,
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
@@ -615,6 +626,7 @@ export function registerChat(
     sidebarSections,
     mcp,
     browser,
+    pullRequests,
     screen: desktopScreenCapturer(app.getName()),
     prepareImage: prepareToolImage,
     history,
@@ -642,7 +654,10 @@ export function registerChat(
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
-  registerModelServersIpc(ipcMain, modelServers);
+  registerModelServersIpc(ipcMain, modelServers, async () => {
+    const probed = await localHardware.probed();
+    return probed && machineView(probed);
+  });
   ipcMain.handle(IPC_CHANNELS.chatListSuggestionModels, () => service.listSuggestionModels());
   registerLocalContextIpc(ipcMain, {
     preference: localContext,
@@ -653,6 +668,7 @@ export function registerChat(
     },
     fit: () => local.contextFit(),
   });
+  ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
     service.setSessionArchived(sessionId, archived)
   );
@@ -767,6 +783,19 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)
   );
+  // Written only where the user picks in the save dialog: the digest never leaves the machine otherwise.
+  ipcMain.handle(IPC_CHANNELS.permissionsExportApprovalSummary, async event => {
+    const options = {
+      defaultPath: join(app.getPath('downloads'), `approval-summary-${new Date().toISOString().slice(0, 10)}.md`),
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    };
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+    if (picked.canceled || !picked.filePath) return false;
+    const entries = await readApprovalLog([approvalLog.rotatedPath, approvalLog.filePath]);
+    await writeFile(picked.filePath, formatApprovalSummary(summarizeApprovals(entries)), 'utf8');
+    return true;
+  });
   const capabilityIpc = capabilityHandlers({
     ledger: capabilityLedger,
     ready: capabilitiesReady,

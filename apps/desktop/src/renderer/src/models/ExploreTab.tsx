@@ -249,11 +249,12 @@ function ModelDetail({
     if (!canPull) setConfirming(null);
   }, [canPull]);
 
+  const serverId = target.local ? undefined : target.id;
   const load = useCallback(async () => {
     setDetail({ state: 'loading' });
-    const result = await window.b4m.models.getDetail(repo);
+    const result = await window.b4m.models.getDetail(repo, serverId);
     setDetail(result.ok ? { state: 'ready', model: result.model } : { state: 'error', error: result.error });
-  }, [repo]);
+  }, [repo, serverId]);
 
   useEffect(() => {
     setPullError(null);
@@ -284,8 +285,6 @@ function ModelDetail({
 
   const model = detail.model;
   const runtimeReady = status?.reachable === true;
-  // Fit rates this computer, not a saved server.
-  const shown = (build: HubBuildView): HubBuildView => (target.local ? build : { ...build, fit: null });
   const start = async (build: HubBuildView, serverId: string | undefined, consent: PullConsent) => {
     setConfirming(null);
     setPullError(null);
@@ -380,12 +379,12 @@ function ModelDetail({
             <BuildRow
               key={build.id}
               repo={model.id}
-              build={shown(build)}
+              build={build}
               pull={pulls.find(entry => entry.key === pullKey(model.id, build.id, target.id))}
               installed={build.installedNames.some(name => installedNames.has(name))}
               runtimeReady={runtimeReady}
               canPull={canPull}
-              onPull={() => setConfirming({ build, serverId: target.local ? undefined : target.id })}
+              onPull={() => setConfirming({ build, serverId })}
             />
           ))
         )}
@@ -399,7 +398,7 @@ function ModelDetail({
       {canPull && confirmingOn && (
         <PullDialog
           model={model}
-          build={shown(confirmingOn.build)}
+          build={confirmingOn.build}
           target={target}
           onClose={() => setConfirming(null)}
           onConfirm={consent => void start(confirmingOn.build, confirmingOn.serverId, consent)}

@@ -6,7 +6,6 @@ const componentsByFile = {
   'AdminLiveOpsTriageMultiConfigTab.tsx': ['Card', 'Modal'],
   'AdminModalTab.tsx': ['Card', 'Table'],
   'AdminModalTabNew.tsx': ['Modal', 'Card'],
-  'AdminProfileModal.tsx': ['Modal'],
   'AdminSettingInputField.tsx': ['Card', 'Modal'],
   'AdminSystemHealthTab.tsx': ['Card'],
   'AdminWhatsNewModalsTab.tsx': ['Card', 'Modal', 'Table'],
