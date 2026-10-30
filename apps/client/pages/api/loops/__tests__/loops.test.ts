@@ -41,6 +41,7 @@ const tickets = vi.hoisted(() => ({
   softDeleteByLoop: vi.fn(),
   listForLoop: vi.fn(),
   findManyByIdsForUser: vi.fn(),
+  countBlockedByLoop: vi.fn(),
 }));
 const settings = vi.hoisted(() => ({ EnableLoops: true as unknown }));
 const executions = vi.hoisted(() => ({ sumCreditsByLoop: vi.fn() }));
@@ -103,6 +104,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   settings.EnableLoops = true;
   executions.sumCreditsByLoop.mockResolvedValue({});
+  tickets.countBlockedByLoop.mockResolvedValue({});
   getOrCreateSession.mockResolvedValue({ sessionId: 's-new' });
   resolveDefaultChatModel.mockResolvedValue({ model: 'default-model' });
   repo.create.mockImplementation(async (doc: Record<string, unknown>) => ({ id: OID, ...doc }));
@@ -217,6 +219,25 @@ describe('GET creditsUsed', () => {
     await result;
     expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID], ['s1']);
     expect(res._getJSONData().creditsUsed).toBe(9);
+  });
+});
+
+describe('GET blockedTickets', () => {
+  it("counts each loop's blocked tickets for the caller, 0 when it has none", async () => {
+    repo.listForUser.mockResolvedValue([loop(), loop({ id: 'other', sessionId: 's2' })]);
+    tickets.countBlockedByLoop.mockResolvedValue({ [OID]: 2 });
+    const { res, result } = call('collection', 'get');
+    await result;
+    expect(tickets.countBlockedByLoop).toHaveBeenCalledWith('u1', [OID, 'other']);
+    expect(res._getJSONData().map((l: { blockedTickets: number }) => l.blockedTickets)).toEqual([2, 0]);
+  });
+
+  it('adds the count to a single loop', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    tickets.countBlockedByLoop.mockResolvedValue({ [OID]: 1 });
+    const { res, result } = call('item', 'get', { query: { id: OID } });
+    await result;
+    expect(res._getJSONData().blockedTickets).toBe(1);
   });
 });
 

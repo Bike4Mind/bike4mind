@@ -29,8 +29,15 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const id = String(req.query.id);
     const loop = await loopRepository.findByIdAndUserId(id, req.user!.id);
     if (!loop) throw notFound(id);
-    const credits = await agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId]);
-    res.json({ ...loop, creditsUsed: credits[loop.id] ?? 0 } satisfies ILoopWithUsage);
+    const [credits, blocked] = await Promise.all([
+      agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId]),
+      workItemRepository.countBlockedByLoop(req.user!.id, [loop.id]),
+    ]);
+    res.json({
+      ...loop,
+      creditsUsed: credits[loop.id] ?? 0,
+      blockedTickets: blocked[loop.id] ?? 0,
+    } satisfies ILoopWithUsage);
   })
   .patch(async (req, res) => {
     await assertLoopsEnabled();

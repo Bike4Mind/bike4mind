@@ -1,6 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { adminSettingsRepository, agentExecutionRepository, loopRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  agentExecutionRepository,
+  loopRepository,
+  workItemRepository,
+} from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { ILoop, ILoopWithUsage } from '@bike4mind/common';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
@@ -26,11 +31,21 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .get(async (req, res) => {
     await assertLoopsEnabled();
     const loops = await loopRepository.listForUser(req.user!.id);
-    const credits = await agentExecutionRepository.sumCreditsByLoop(
-      loops.map(loop => loop.id),
-      loops.map(loop => loop.sessionId)
+    const ids = loops.map(loop => loop.id);
+    const [credits, blocked] = await Promise.all([
+      agentExecutionRepository.sumCreditsByLoop(
+        ids,
+        loops.map(loop => loop.sessionId)
+      ),
+      workItemRepository.countBlockedByLoop(req.user!.id, ids),
+    ]);
+    res.json(
+      loops.map((loop): ILoopWithUsage => ({
+        ...loop,
+        creditsUsed: credits[loop.id] ?? 0,
+        blockedTickets: blocked[loop.id] ?? 0,
+      }))
     );
-    res.json(loops.map((loop): ILoopWithUsage => ({ ...loop, creditsUsed: credits[loop.id] ?? 0 })));
   })
   .post(async (req, res) => {
     await assertLoopsEnabled();

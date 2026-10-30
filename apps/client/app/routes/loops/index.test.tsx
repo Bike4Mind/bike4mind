@@ -50,6 +50,7 @@ const loop = (overrides: Record<string, unknown> = {}) => ({
   runCount: 3,
   consecutiveFailures: 0,
   creditsUsed: 1234,
+  blockedTickets: 0,
   ...overrides,
 });
 
@@ -139,5 +140,27 @@ describe('LoopsPage', () => {
     expect(navigate).not.toHaveBeenCalled();
     fireEvent.keyDown(screen.getByTestId('loops-row-l1'), { key: 'Enter' });
     expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' } });
+  });
+
+  it('counts and marks the loops that need the owner, but not an owner pause', () => {
+    loopsState.data = [
+      loop({ id: 'credits', status: 'paused', statusReason: 'Out of credits' }),
+      loop({ id: 'blocked', status: 'live', blockedTickets: 2 }),
+      loop({ id: 'parked', status: 'needs_you', statusReason: 'Notebook gone' }),
+      loop({ id: 'owner', status: 'paused' }),
+    ];
+    renderPage();
+    expect(screen.getByTestId('loops-needs-you-count')).toHaveTextContent('3 loops need you');
+    expect(row('credits').getByTestId('loops-row-needs-you')).toHaveTextContent('Needs you');
+    expect(row('blocked').getByTestId('loops-row-needs-you')).toHaveTextContent('2 blocked');
+    // Its status chip already says "Needs you".
+    expect(row('parked').queryByTestId('loops-row-needs-you')).toBeNull();
+    expect(row('owner').queryByTestId('loops-row-needs-you')).toBeNull();
+  });
+
+  it('hides the count when nothing needs the owner', () => {
+    loopsState.data = [loop({ status: 'live' })];
+    renderPage();
+    expect(screen.queryByTestId('loops-needs-you-count')).toBeNull();
   });
 });

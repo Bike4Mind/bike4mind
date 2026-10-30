@@ -22,6 +22,7 @@ import {
   Link,
 } from '@mui/joy';
 import React, { FormEvent, useMemo, useState } from 'react';
+import { useRouter } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '@mui/joy/styles';
@@ -456,7 +457,10 @@ const Messages: React.FC = () => {
   );
 };
 
-const InboxDisplayModal: React.FC<{
+/** Server-set app path (loop notices); anything not app-relative is ignored. */
+const appLink = (link?: string) => (link?.startsWith('/') && !link.startsWith('//') ? link : undefined);
+
+export const InboxDisplayModal: React.FC<{
   open: boolean;
   inbox: IInboxDocument;
   sender?: any;
@@ -483,6 +487,10 @@ const InboxDisplayModal: React.FC<{
 }) => {
   const maxChars = 800;
   const [showSenderInfoModal, setShowSenderInfoModal] = useState<boolean>(false);
+  const router = useRouter();
+  const link = appLink(inbox.link);
+  // A SYSTEM notice has no one to reply to.
+  const canReply = inbox.userId !== 'SYSTEM';
 
   return (
     <>
@@ -566,11 +574,27 @@ const InboxDisplayModal: React.FC<{
               {inbox.message}
             </Typography>
           </Box>
-          {!showReplyInput && (
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: '24px' }}>
-              <Button color={'primary'} onClick={onReply} sx={blueButtonStyle}>
-                Reply
-              </Button>
+          {!showReplyInput && (link || canReply) && (
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: '24px' }}>
+              {link && (
+                <Button
+                  color={'primary'}
+                  onClick={() => {
+                    onClose();
+                    // history.push takes the path with its query (e.g. ?run=) as one string.
+                    router.history.push(link);
+                  }}
+                  sx={blueButtonStyle}
+                  data-testid="inbox-open-link-btn"
+                >
+                  Open
+                </Button>
+              )}
+              {canReply && (
+                <Button color={'primary'} onClick={onReply} sx={blueButtonStyle} data-testid="inbox-reply-btn">
+                  Reply
+                </Button>
+              )}
             </Box>
           )}
 

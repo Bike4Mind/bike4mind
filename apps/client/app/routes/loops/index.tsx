@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Box, Button, CircularProgress, Sheet, Table, Typography } from '@mui/joy';
+import { Box, Button, Chip, CircularProgress, Sheet, Table, Typography } from '@mui/joy';
 import AutorenewOutlinedIcon from '@mui/icons-material/AutorenewOutlined';
 import AgentPageHeader from '@client/app/components/Agent/AgentPageHeader';
 import LoopActions from '@client/app/components/Loops/LoopActions';
@@ -9,6 +9,7 @@ import {
   formatCredits,
   formatInterval,
   lastRunLabel,
+  loopNeedsOwner,
   LoopStatusChip,
   nextRunLabel,
 } from '@client/app/components/Loops/loopUi';
@@ -21,6 +22,7 @@ export default function LoopsPage() {
   // Only mounted inside LoopsGate, so the loops API is never called while EnableLoops is off.
   const { data: loops, isLoading } = useLoops();
   useDocumentTitle('Loops');
+  const needsYou = loops?.filter(loopNeedsOwner).length ?? 0;
 
   const newLoopButton = (
     <Button size="sm" onClick={() => setCreating(true)} data-testid="loops-new-btn">
@@ -37,6 +39,11 @@ export default function LoopsPage() {
         rightActions={newLoopButton}
       />
       <Box sx={{ p: 2 }}>
+        {needsYou > 0 && (
+          <Typography level="title-sm" color="warning" sx={{ mb: 1 }} data-testid="loops-needs-you-count">
+            {needsYou} {needsYou === 1 ? 'loop needs' : 'loops need'} you
+          </Typography>
+        )}
         {isLoading ? (
           <CircularProgress size="sm" />
         ) : !loops?.length ? (
@@ -81,6 +88,18 @@ export default function LoopsPage() {
                   </td>
                   <td>
                     <LoopStatusChip loop={loop} />
+                    {/* The status chip already reads "Needs you" for that status; only add what it doesn't say. */}
+                    {loopNeedsOwner(loop) && (loop.blockedTickets > 0 || loop.status !== 'needs_you') && (
+                      <Chip
+                        size="sm"
+                        variant="outlined"
+                        color="warning"
+                        sx={{ mt: 0.5 }}
+                        data-testid="loops-row-needs-you"
+                      >
+                        {loop.blockedTickets > 0 ? `${loop.blockedTickets} blocked` : 'Needs you'}
+                      </Chip>
+                    )}
                   </td>
                   <td>{formatInterval(loop.intervalMinutes)}</td>
                   <td>{lastRunLabel(loop)}</td>

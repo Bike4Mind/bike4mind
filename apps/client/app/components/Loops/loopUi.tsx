@@ -1,5 +1,5 @@
 import { Chip, Stack, Typography, type ColorPaletteProp } from '@mui/joy';
-import type { ILoop, LoopStatus } from '@bike4mind/common';
+import { loopStatusNeedsOwner, type ILoop, type ILoopWithUsage, type LoopStatus } from '@bike4mind/common';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 
 const STATUS_COLOR: Record<LoopStatus, ColorPaletteProp> = {
@@ -37,6 +37,10 @@ export function nextRunLabel(loop: Pick<ILoop, 'status' | 'nextRunAt' | 'activeE
   if (loop.status !== 'live' || !loop.nextRunAt) return '-';
   return new Date(loop.nextRunAt).getTime() <= Date.now() ? 'due' : relativeTimeFormat(loop.nextRunAt);
 }
+
+/** The owner rule the inbox notice sweep uses (`loopStatusNeedsOwner`), plus blocked tickets. */
+export const loopNeedsOwner = (loop: Pick<ILoopWithUsage, 'status' | 'statusReason' | 'blockedTickets'>) =>
+  loopStatusNeedsOwner(loop) || loop.blockedTickets > 0;
 
 export const formatCredits = (credits: number) => `${Math.round(credits).toLocaleString()} credits`;
 
