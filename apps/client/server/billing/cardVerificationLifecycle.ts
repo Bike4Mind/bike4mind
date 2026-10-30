@@ -1,7 +1,7 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type Stripe from 'stripe';
 import { CardVerification, type CardVerificationRecord } from './cardVerificationModel';
-import { grantVerifiedCardCredits } from './grantVerifiedCardCredits';
+import { grantVerifiedCardCredits, hasCardVerificationGrant } from './grantVerifiedCardCredits';
 
 export type CardVerificationPolicy = {
   enabled: boolean;
@@ -69,7 +69,8 @@ export async function beginCardVerification(
   const policy = await deps.policy();
   if (!configured(policy, deps.guards)) throw new CardVerificationRefused('unavailable');
   if (!context.userId || !context.ip || !context.asn) throw new CardVerificationRefused('unavailable');
-  if (!(await deps.guards.eligible(context.userId))) throw new CardVerificationRefused('ineligible');
+  if (!(await deps.guards.eligible(context.userId)) || (await hasCardVerificationGrant(context.userId)))
+    throw new CardVerificationRefused('ineligible');
   await deps.guards.authorizeAttempt(context);
   const record: CardVerificationRecord = {
     verificationId: randomUUID(),

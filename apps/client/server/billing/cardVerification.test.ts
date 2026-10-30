@@ -34,10 +34,10 @@ vi.mock('./cardVerificationModel', () => ({
     ),
   },
 }));
-vi.mock('./grantVerifiedCardCredits', () => ({ grantVerifiedCardCredits: vi.fn() }));
+vi.mock('./grantVerifiedCardCredits', () => ({ grantVerifiedCardCredits: vi.fn(), hasCardVerificationGrant: vi.fn() }));
 
 import { CardVerification } from './cardVerificationModel';
-import { grantVerifiedCardCredits } from './grantVerifiedCardCredits';
+import { grantVerifiedCardCredits, hasCardVerificationGrant } from './grantVerifiedCardCredits';
 import {
   beginCardVerification,
   completeCardVerification,
@@ -123,6 +123,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.record = null;
   vi.mocked(grantVerifiedCardCredits).mockResolvedValue('granted');
+  vi.mocked(hasCardVerificationGrant).mockResolvedValue(false);
 });
 
 describe('no-charge verification lifecycle', () => {
@@ -155,6 +156,17 @@ describe('no-charge verification lifecycle', () => {
     await expect(
       beginCardVerification({ userId: 'u', ip: 'ip', asn: 'asn', turnstileToken: 'token' }, false, f.deps)
     ).rejects.toThrow('synthetic lockout');
+    expect(f.stripe.customers.create).not.toHaveBeenCalled();
+    expect(CardVerification.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an already granted account before the challenge or any provider call', async () => {
+    const f = fixture();
+    vi.mocked(hasCardVerificationGrant).mockResolvedValue(true);
+    await expect(
+      beginCardVerification({ userId: 'u', ip: 'ip', asn: 'asn', turnstileToken: 'token' }, false, f.deps)
+    ).rejects.toMatchObject({ code: 'ineligible' });
+    expect(f.guards.authorizeAttempt).not.toHaveBeenCalled();
     expect(f.stripe.customers.create).not.toHaveBeenCalled();
     expect(CardVerification.create).not.toHaveBeenCalled();
   });

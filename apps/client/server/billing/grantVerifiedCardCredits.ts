@@ -12,6 +12,10 @@ export function cardVerificationTransactionId(userId: string): string {
   return `unlock-grant:card_verified:${userId}`;
 }
 
+export async function hasCardVerificationGrant(userId: string): Promise<boolean> {
+  return !!(await creditTransactionRepository.findOne({ transactionId: cardVerificationTransactionId(userId) }));
+}
+
 export async function grantVerifiedCardCredits(
   verificationId: string,
   userId: string,

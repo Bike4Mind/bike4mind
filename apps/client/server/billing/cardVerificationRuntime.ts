@@ -2,13 +2,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { z } from 'zod';
 import type Stripe from 'stripe';
-import {
-  adminSettingsRepository,
-  cacheRepository,
-  creditTransactionRepository,
-  mongoose,
-  userRepository,
-} from '@bike4mind/database';
+import { adminSettingsRepository, cacheRepository, mongoose, userRepository } from '@bike4mind/database';
 import { settingsMap } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
@@ -20,7 +14,7 @@ import { getTurnstilePolicy, turnstileAllowedHostnames } from '@server/utils/aut
 import { signupProtection } from '@server/auth/signupProtection';
 import { CardVerification, type CardVerificationRecord } from './cardVerificationModel';
 import { authenticatedSetupAttempt, parseCardDefensePolicy } from './cardVerificationPolicy';
-import { cardVerificationTransactionId } from './grantVerifiedCardCredits';
+import { hasCardVerificationGrant } from './grantVerifiedCardCredits';
 import {
   CardVerificationRefused,
   completeCardVerification,
@@ -403,9 +397,7 @@ export async function verificationOffer(userId: string) {
     .sort({ createdAt: -1 })
     .limit(100)
     .lean();
-  const granted = !!(await creditTransactionRepository.findOne({
-    transactionId: cardVerificationTransactionId(userId),
-  }));
+  const granted = await hasCardVerificationGrant(userId);
   return {
     available: policy.enabled && !granted && (await cardAccountEligible(userId)),
     credits: policy.cardUnlockCredits,
