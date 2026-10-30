@@ -1,7 +1,17 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
-import type { ILoop, ILoopEvent, ILoopWithUsage, LoopGateOutcome, LoopStatus, WorkItemStatus } from '@bike4mind/common';
+import type {
+  ILoop,
+  ILoopDirective,
+  ILoopDirectiveReply,
+  ILoopEvent,
+  ILoopWithUsage,
+  LoopDirectiveOwnerAction,
+  LoopGateOutcome,
+  LoopStatus,
+  WorkItemStatus,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 
@@ -21,14 +31,26 @@ export interface ILoopTicket {
   updatedAt: string;
 }
 
-/** One event as served by GET /api/loops/:id/events (apps/client/pages/api/loops/[id]/events.ts). */
-export type ILoopEventRow = Pick<
+/** An unsure event as served by GET /api/loops/:id/events (apps/client/pages/api/loops/[id]/events.ts). */
+export type ILoopUnsureRow = Pick<
   ILoopEvent,
   'id' | 'kind' | 'executionId' | 'workItemId' | 'ticketTitle' | 'iteration' | 'confidence' | 'reason'
 > & {
   resolution?: { outcome: LoopGateOutcome; by?: string; at: string };
   createdAt: string;
 };
+
+/** A directive the loop sent or received, as the same route serves it. */
+export type ILoopDirectiveRow = Pick<
+  ILoopDirective,
+  'id' | 'loopId' | 'fromLoopId' | 'fromLoopName' | 'executionId' | 'instruction' | 'reason' | 'state'
+> & {
+  kind: 'directive';
+  replies: (Omit<ILoopDirectiveReply, 'at' | 'userId'> & { at: string; executionId?: string })[];
+  createdAt: string;
+};
+
+export type ILoopEventRow = ILoopUnsureRow | ILoopDirectiveRow;
 
 /** Unsure events nobody has answered yet. */
 export const countNeedsYou = (events: ILoopEventRow[] = []) =>
@@ -48,6 +70,7 @@ export const loopKeys = {
 
 export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 'tools' | 'stages'> & {
   agentId?: string | null;
+  oversees?: string[] | null;
 };
 
 const LIST_POLL_MS = 30_000;
@@ -130,3 +153,19 @@ export const useCreateLoopTicket = () =>
 
 export const useMoveLoopTicket = () =>
   useLoopMutation(({ id, stage }: { id: string; stage: string }) => api.patch(`/api/work-items/${id}`, { stage }));
+
+/** Withdraw a directive or overrule a push-back; invalidates every loop, so both sides' logs refresh. */
+export const useOverrideDirective = () =>
+  useLoopMutation(
+    ({
+      loopId,
+      eventId,
+      action,
+      note,
+    }: {
+      loopId: string;
+      eventId: string;
+      action: LoopDirectiveOwnerAction;
+      note?: string;
+    }) => api.post(`/api/loops/${loopId}/events/${eventId}/override`, { action, ...(note && { note }) })
+  );

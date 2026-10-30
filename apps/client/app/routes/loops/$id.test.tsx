@@ -4,8 +4,10 @@ import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { navigate, search, loopState, actions, eventsState } = vi.hoisted(() => ({
+const { navigate, search, loopState, actions, eventsState, loopsState, overrideDirective } = vi.hoisted(() => ({
   navigate: vi.fn(),
+  loopsState: { data: [] as unknown[] },
+  overrideDirective: { mutate: vi.fn() },
   eventsState: { data: undefined as unknown },
   search: { run: undefined as string | undefined },
   loopState: { data: undefined as unknown, isLoading: false, error: null as unknown },
@@ -40,6 +42,8 @@ vi.mock('@client/app/hooks/data/loops', async importOriginal => ({
   useLoop: () => loopState,
   useLoopTickets: () => ({ data: undefined }),
   useLoopEvents: () => eventsState,
+  useLoops: () => loopsState,
+  useOverrideDirective: () => overrideDirective,
 }));
 
 import LoopDetailPage from './$id';
@@ -73,6 +77,7 @@ beforeEach(() => {
   loopState.data = loop();
   loopState.error = null;
   eventsState.data = undefined;
+  loopsState.data = [];
 });
 
 describe('LoopDetailPage states', () => {
@@ -156,5 +161,49 @@ describe('LoopDetailPage log', () => {
     renderPage();
     fireEvent.click(screen.getByTestId('loop-log-view-run-btn'));
     expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' }, search: { run: 'run-a' } });
+  });
+});
+
+describe('LoopDetailPage oversight', () => {
+  it('links the loops this one oversees and the loops overseeing it', () => {
+    loopState.data = loop({ oversees: ['w1'] });
+    loopsState.data = [
+      { id: 'l1', name: 'Self', oversees: ['w1'] },
+      { id: 'w1', name: 'Closer' },
+      { id: 'o1', name: 'Lead', oversees: ['l1'] },
+      { id: 'x1', name: 'Unrelated' },
+    ];
+    renderPage();
+    const line = screen.getByTestId('loop-detail-oversight');
+    expect(line.textContent).toBe('Oversees: CloserOverseen by: Lead');
+    fireEvent.click(screen.getByRole('button', { name: 'Lead' }));
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'o1' } });
+  });
+
+  it('shows nothing for a loop outside any oversight', () => {
+    renderPage();
+    expect(screen.queryByTestId('loop-detail-oversight')).toBeNull();
+  });
+
+  it('wires the log override to the mutation', () => {
+    eventsState.data = [
+      {
+        id: 'd1',
+        kind: 'directive',
+        loopId: 'l1',
+        fromLoopId: 'o1',
+        fromLoopName: 'Lead',
+        executionId: 'x',
+        instruction: 'Do X',
+        reason: 'Y',
+        state: 'open',
+        replies: [],
+        createdAt: '2026-10-29T10:00:00.000Z',
+      },
+    ];
+    renderPage();
+    fireEvent.click(screen.getByTestId('loop-log-directive-withdraw-btn'));
+    fireEvent.click(screen.getByTestId('loop-log-directive-confirm-btn'));
+    expect(overrideDirective.mutate).toHaveBeenCalledWith({ loopId: 'l1', eventId: 'd1', action: 'withdraw' });
   });
 });

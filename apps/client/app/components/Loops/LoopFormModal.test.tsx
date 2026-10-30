@@ -11,6 +11,12 @@ const { createLoop, updateLoop } = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/loops', () => ({
   useCreateLoop: () => createLoop,
   useUpdateLoop: () => updateLoop,
+  useLoops: () => ({
+    data: [
+      { id: 'l1', name: 'Digest' },
+      { id: 'l2', name: 'Closer' },
+    ],
+  }),
 }));
 vi.mock('@client/app/hooks/data/mcpServers', () => ({
   useMcpServers: () => ({
@@ -35,6 +41,7 @@ const values = (overrides: Partial<LoopFormValues> = {}): LoopFormValues => ({
   tools: [],
   stages: ['todo', 'doing', 'done'],
   agentId: '',
+  oversees: [],
   ...overrides,
 });
 
@@ -73,6 +80,15 @@ describe('validateLoopForm', () => {
     expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('agentId');
     expect(validateLoopForm(values(), 'edit').payload?.agentId).toBeNull();
     expect(validateLoopForm(values({ agentId: 'a1' }), 'create').payload?.agentId).toBe('a1');
+  });
+
+  it('omits no oversees on create, clears it with null on edit, and caps it at 5', () => {
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('oversees');
+    expect(validateLoopForm(values(), 'edit').payload?.oversees).toBeNull();
+    expect(validateLoopForm(values({ oversees: ['l2'] }), 'create').payload?.oversees).toEqual(['l2']);
+    expect(
+      validateLoopForm(values({ oversees: ['1', '2', '3', '4', '5', '6'] }), 'edit').errors.oversees
+    ).toBeDefined();
   });
 });
 
@@ -149,6 +165,25 @@ describe('LoopFormModal', () => {
         stages: ['todo', 'done'],
         agentId: null,
       }),
+      expect.anything()
+    );
+  });
+
+  it("sends the loops picked under Oversees, offering the owner's other loops only", () => {
+    renderForm({
+      id: 'l1',
+      name: 'Digest',
+      goal: 'Summarize',
+      intervalMinutes: 30,
+      tools: [],
+      stages: ['todo', 'doing', 'done'],
+    } as never);
+    fireEvent.click(screen.getByRole('combobox', { name: /oversees/i }));
+    expect(screen.queryByRole('option', { name: 'Digest' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: 'Closer' }));
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'l1', oversees: ['l2'] }),
       expect.anything()
     );
   });

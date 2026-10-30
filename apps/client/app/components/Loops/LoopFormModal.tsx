@@ -22,7 +22,7 @@ import { PICKABLE_TOOLS } from '@client/app/components/Agent/OrchestrationSectio
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useGetAgents } from '@client/app/hooks/data/agents';
-import { useCreateLoop, useUpdateLoop, type LoopFormPayload } from '@client/app/hooks/data/loops';
+import { useCreateLoop, useLoops, useUpdateLoop, type LoopFormPayload } from '@client/app/hooks/data/loops';
 
 // Limits mirror apps/client/server/utils/loopValidation.ts; keep in sync.
 const NAME_MAX = 120;
@@ -30,6 +30,7 @@ const GOAL_MAX = 8000;
 const TOOLS_MAX = 50;
 const STAGES_MAX = 20;
 const STAGE_NAME_MAX = 60;
+const OVERSEES_MAX = 5;
 const INTERVAL_MIN = 5;
 const INTERVAL_MAX = 10_080;
 // Mirrors validateLoopStages (apps/client/server/utils/loopValidation.ts): the last stage means closed.
@@ -47,9 +48,11 @@ export interface LoopFormValues {
   stages: string[];
   /** '' means no agent. */
   agentId: string;
+  /** Ids of the owner's other loops this one oversees. */
+  oversees: string[];
 }
 
-export type LoopFormErrors = Partial<Record<'name' | 'goal' | 'interval' | 'tools' | 'stages', string>>;
+export type LoopFormErrors = Partial<Record<'name' | 'goal' | 'interval' | 'tools' | 'stages' | 'oversees', string>>;
 
 /** Checks the form against the API's limits; `payload` is set only when there are no errors. */
 export function validateLoopForm(
@@ -72,6 +75,7 @@ export function validateLoopForm(
   }
 
   if (values.tools.length > TOOLS_MAX) errors.tools = `Pick ${TOOLS_MAX} tools or fewer`;
+  if (values.oversees.length > OVERSEES_MAX) errors.oversees = `Pick ${OVERSEES_MAX} loops or fewer`;
 
   const stages = values.stages.map(s => s.trim());
   if (stages.length < STAGES_MIN || stages.length > STAGES_MAX) {
@@ -84,6 +88,7 @@ export function validateLoopForm(
 
   if (Object.keys(errors).length > 0) return { errors };
   const agentId = values.agentId || (mode === 'edit' ? null : undefined);
+  const oversees = values.oversees.length > 0 ? values.oversees : mode === 'edit' ? null : undefined;
   return {
     errors,
     payload: {
@@ -93,6 +98,7 @@ export function validateLoopForm(
       tools: values.tools,
       stages,
       ...(agentId !== undefined && { agentId }),
+      ...(oversees !== undefined && { oversees }),
     },
   };
 }
@@ -107,6 +113,7 @@ function initialValues(loop?: ILoop): LoopFormValues {
       tools: [],
       stages: [...DEFAULT_LOOP_STAGES],
       agentId: '',
+      oversees: [],
     };
   }
   const unit: IntervalUnit =
@@ -119,6 +126,7 @@ function initialValues(loop?: ILoop): LoopFormValues {
     tools: loop.tools,
     stages: loop.stages,
     agentId: loop.agentId ?? '',
+    oversees: loop.oversees ?? [],
   };
 }
 
@@ -136,6 +144,8 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
   const [newStage, setNewStage] = useState('');
   const { data: mcpServers = [] } = useMcpServers();
   const { data: agents = [] } = useGetAgents();
+  const { data: loops = [] } = useLoops();
+  const otherLoops = loops.filter(other => other.id !== loop?.id);
   const createLoop = useCreateLoop();
   const updateLoop = useUpdateLoop();
   const saving = createLoop.isPending || updateLoop.isPending;
@@ -305,6 +315,26 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
                 </Option>
               ))}
             </Select>
+          </FormControl>
+          <FormControl error={!!errors.oversees}>
+            <FormLabel>Oversees</FormLabel>
+            <Select
+              multiple
+              placeholder="None"
+              value={values.oversees}
+              onChange={(_, oversees) => set('oversees', oversees)}
+              data-testid="loop-form-oversees-select"
+            >
+              {otherLoops.map(other => (
+                <Option key={other.id} value={other.id}>
+                  {other.name}
+                </Option>
+              ))}
+            </Select>
+            <FormHelperText>
+              {errors.oversees ??
+                'Runs of this loop can check the loops picked here and send them directives. They never do their work.'}
+            </FormHelperText>
           </FormControl>
           <Stack direction="row" gap={1} justifyContent="flex-end">
             <Button variant="plain" color="neutral" onClick={onClose} data-testid="loop-form-cancel-btn">

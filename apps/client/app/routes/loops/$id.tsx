@@ -26,7 +26,14 @@ import {
   LoopStatusChip,
   nextRunLabel,
 } from '@client/app/components/Loops/loopUi';
-import { countNeedsYou, useLoop, useLoopEvents, useLoopTickets } from '@client/app/hooks/data/loops';
+import {
+  countNeedsYou,
+  useLoop,
+  useLoopEvents,
+  useLoops,
+  useLoopTickets,
+  useOverrideDirective,
+} from '@client/app/hooks/data/loops';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import CloseIcon from '@mui/icons-material/Close';
 import AgentRunViewer from '@client/app/components/Session/AgentExecution/AgentRunViewer';
@@ -42,6 +49,8 @@ export default function LoopDetailPage() {
   const { data: loop, isLoading, error } = useLoop(id);
   const { data: tickets } = useLoopTickets(id);
   const { data: events } = useLoopEvents(id);
+  const { data: loops = [] } = useLoops();
+  const overrideDirective = useOverrideDirective();
   const needsYou = countNeedsYou(events);
   useDocumentTitle(loop?.name ?? 'Loop');
 
@@ -88,6 +97,7 @@ export default function LoopDetailPage() {
             </Link>
           )}
         </Stack>
+        <LoopOversightLine loopId={loop.id} oversees={loop.oversees ?? []} loops={loops} />
         <AccordionGroup variant="outlined" sx={{ borderRadius: 'sm' }}>
           <Accordion>
             <AccordionSummary data-testid="loop-detail-memory-toggle">Memory</AccordionSummary>
@@ -105,7 +115,15 @@ export default function LoopDetailPage() {
           <Accordion>
             <AccordionSummary data-testid="loop-detail-log-toggle">Log</AccordionSummary>
             <AccordionDetails>
-              <LoopEventLog data={events} onViewRun={setRun} />
+              <LoopEventLog
+                data={events}
+                onViewRun={setRun}
+                loopId={loop.id}
+                loops={loops}
+                onOverride={(eventId, action, note) =>
+                  overrideDirective.mutate({ loopId: loop.id, eventId, action, note })
+                }
+              />
             </AccordionDetails>
           </Accordion>
         </AccordionGroup>
@@ -133,5 +151,40 @@ export default function LoopDetailPage() {
         <Box sx={{ overflowY: 'auto' }}>{run && <AgentRunViewer executionId={run} />}</Box>
       </Drawer>
     </Box>
+  );
+}
+
+/** "Oversees: A, B - Overseen by: C", each a link to that loop; nothing when the loop is in no oversight. */
+function LoopOversightLine({
+  loopId,
+  oversees,
+  loops,
+}: {
+  loopId: string;
+  oversees: string[];
+  loops: { id: string; name: string; oversees?: string[] }[];
+}) {
+  const navigate = useNavigate();
+  const watched = loops.filter(other => oversees.includes(other.id));
+  const watchers = loops.filter(other => other.oversees?.includes(loopId));
+  if (watched.length === 0 && watchers.length === 0) return null;
+  const links = (group: { id: string; name: string }[]) =>
+    group.map((other, index) => (
+      <span key={other.id}>
+        {index > 0 && ', '}
+        <Link
+          component="button"
+          level="body-sm"
+          onClick={() => navigate({ to: '/loops/$id', params: { id: other.id } })}
+        >
+          {other.name}
+        </Link>
+      </span>
+    ));
+  return (
+    <Stack direction="row" gap={2} flexWrap="wrap" data-testid="loop-detail-oversight">
+      {watched.length > 0 && <Typography level="body-sm">Oversees: {links(watched)}</Typography>}
+      {watchers.length > 0 && <Typography level="body-sm">Overseen by: {links(watchers)}</Typography>}
+    </Stack>
   );
 }
