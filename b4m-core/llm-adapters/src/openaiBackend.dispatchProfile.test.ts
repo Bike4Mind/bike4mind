@@ -341,6 +341,27 @@ describe('OpenAI reasoning_effort for a catalog-only model', () => {
     expect(params).not.toHaveProperty('reasoning_effort');
   });
 
+  it('drops it on a chat turn with tools when the record leaves the tools quirk unstated', async () => {
+    const { backend, chatCreate } = buildBackend();
+    backend.setDispatchModel(
+      catalogOnly({ dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' } })
+    );
+    const params = await callChat(backend, chatCreate, 'gpt-6-sol', { reasoningEffort: 'high', tools: [tool] });
+    expect(params).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('keeps it on a chat turn with tools when the record states the combination is fine', async () => {
+    const { backend, chatCreate } = buildBackend();
+    backend.setDispatchModel(
+      catalogOnly({
+        effortIncompatibleWithTools: false,
+        dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' },
+      })
+    );
+    const params = await callChat(backend, chatCreate, 'gpt-6-sol', { reasoningEffort: 'high', tools: [tool] });
+    expect(params.reasoning_effort).toBe('high');
+  });
+
   it('keeps today behavior for an id in the hardcoded sets when the record states nothing', async () => {
     const { backend, chatCreate } = buildBackend();
     backend.setDispatchModel(modelRecord(ChatModels.GPT5_4, { can_think: true }));

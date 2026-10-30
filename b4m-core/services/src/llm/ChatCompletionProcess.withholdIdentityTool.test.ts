@@ -28,6 +28,20 @@ describe('withholdIdentityTool', () => {
     expect(withholdIdentityTool({ id: 'gpt-6-sol', supportsTools: true }, identityOnly)).toBe(false);
   });
 
+  it('withholds it from a catalog-only reasoner that leaves the tools quirk unstated', () => {
+    expect(
+      withholdIdentityTool(
+        {
+          id: 'gpt-6-sol',
+          supportsTools: true,
+          openaiReasoningEffort: true,
+          dispatchProfile: { toolTransport: 'chat' },
+        },
+        identityOnly
+      )
+    ).toBe(true);
+  });
+
   it('lets an explicit catalog false win over the hardcoded set', () => {
     expect(
       withholdIdentityTool(

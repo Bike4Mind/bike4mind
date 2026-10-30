@@ -13,10 +13,18 @@ export function supportsOpenAIReasoningEffort(info: ModelInfo | undefined, model
   return info?.openaiReasoningEffort === true || REASONING_SUPPORTED_MODELS.has(modelId);
 }
 
-/** Catalog first, so an explicit row wins; unstated falls back to the id set. */
+/**
+ * Catalog first, so an explicit row wins. Unstated falls back to the id set, except that a
+ * catalog-only reasoner defaults to incompatible: that fails closed (no effort on tool turns,
+ * as before the catalog could grant effort), and an o-series-like row opts in with `false`.
+ */
 export function openAIEffortIncompatibleWithTools(
-  info: Pick<ModelInfo, 'effortIncompatibleWithTools'> | undefined,
+  info: Pick<ModelInfo, 'effortIncompatibleWithTools' | 'openaiReasoningEffort'> | undefined,
   modelId: string
 ): boolean {
-  return info?.effortIncompatibleWithTools ?? REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(modelId);
+  return (
+    info?.effortIncompatibleWithTools ??
+    (REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(modelId) ||
+      (info?.openaiReasoningEffort === true && !REASONING_SUPPORTED_MODELS.has(modelId)))
+  );
 }
