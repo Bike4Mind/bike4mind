@@ -551,6 +551,7 @@ describe('creditService - addCredits', () => {
           credits: 100,
           transactionId: 'promo:1',
           reason: 'promo',
+          description: 'Promo grant',
         } as AddCreditsParameters,
         {
           ...mockAdapters,
