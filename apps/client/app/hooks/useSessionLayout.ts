@@ -75,6 +75,12 @@ export interface PendingMessageFile {
    * whichever notebook the user happens to be looking at.
    */
   uploadSessionId: string | null;
+  /** The attached file itself, previewed locally (see MessageFileThumbnails). */
+  localFile?: File;
+  /** The temp id minted when the upload started; survives the swap to the real FabFile id. */
+  clientId?: string;
+  /** Why an 'error' item failed, shown on its tile. */
+  errorMessage?: string;
 }
 
 /**
@@ -124,6 +130,7 @@ interface SessionLayoutControlState {
   floatingChatPosition: { x: number; y: number };
   floatingChatSize: { width: number; height: number };
   floatingChatMinimized: boolean;
+  floatingChatPillPosition: { x: number; y: number } | null;
   // Docked chat panel sizing (percentage)
   dockChatWidth: number; // Width % for dockRight mode (default 40)
   dockChatHeight: number; // Height % for dockBottom mode (default 40)
@@ -165,6 +172,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       floatingChatPosition: { x: -1, y: -1 }, // -1 indicates "center on first use"
       floatingChatSize: { width: 450, height: 600 },
       floatingChatMinimized: false,
+      floatingChatPillPosition: null,
       dockChatWidth: 40,
       dockChatHeight: 40,
     }),
@@ -181,6 +189,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
         // Floating chat window position/size persisted for cross-session memory
         floatingChatPosition: state.floatingChatPosition,
         floatingChatSize: state.floatingChatSize,
+        floatingChatPillPosition: state.floatingChatPillPosition,
         // floatingChatMinimized intentionally excluded - controlled at mount time
         // to avoid hydration race where persisted false overwrites auto-minimize on mobile
         // Docked chat panel sizing persisted for cross-session memory
@@ -424,6 +433,7 @@ export const patchPendingMessageFileModerationStatus = (
     return {
       ...item,
       status: moderationStatus === 'clean' ? 'complete' : 'blocked',
+      errorMessage: undefined,
       fabFile: {
         ...item.fabFile,
         moderationStatus,
@@ -433,6 +443,9 @@ export const patchPendingMessageFileModerationStatus = (
   });
 };
 
+export const MODERATION_TIMEOUT_MESSAGE =
+  "The safety check is taking longer than usual. We're still checking - it will attach once it clears, or you can remove it.";
+
 /**
  * Gives up on images whose moderation scan never reported back: `'scanning'` -> `'error'`,
  * so the composer is released and the user can remove the file. Never `'complete'` - an
@@ -441,7 +454,9 @@ export const patchPendingMessageFileModerationStatus = (
  */
 export const markModerationScanTimedOut = (files: PendingMessageFile[], fabFileIds: string[]): PendingMessageFile[] =>
   files.map(item =>
-    item.status === 'scanning' && fabFileIds.includes(item.fabFile.id) ? { ...item, status: 'error' } : item
+    item.status === 'scanning' && fabFileIds.includes(item.fabFile.id)
+      ? { ...item, status: 'error', errorMessage: MODERATION_TIMEOUT_MESSAGE }
+      : item
   );
 
 /**

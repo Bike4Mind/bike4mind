@@ -10,7 +10,14 @@ import {
 } from '@bike4mind/common';
 import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, SegmentedControl, useUndoToast } from '../../../shared';
+import {
+  ActionDialog,
+  ADMIN_REASON_PRESETS,
+  ChangePreview,
+  SegmentedControl,
+  undoAdminReason,
+  useUndoToast,
+} from '../../../shared';
 import { useAdminUserOrgMembership, type OrgMemberRoleChoice } from './useAdminUserOrgMembership';
 import { ORGANIZATION_ROLE_LABELS, displayName, type AdminUserProfile } from '../userProfileModel';
 
@@ -18,8 +25,6 @@ import { ORGANIZATION_ROLE_LABELS, displayName, type AdminUserProfile } from '..
 export type MembershipOrg = Pick<IOrganizationDocument, 'id' | 'name' | 'userId' | 'users' | 'adminUserIds' | 'seats'>;
 
 type DialogProps = { user: AdminUserProfile; onClose: () => void; onAudit?: () => void };
-
-const undoReason = (reason: string) => `Undo: ${reason}`.slice(0, 500);
 
 export const seatBlockedReason = (org: MembershipOrg): string | null => {
   const { seats, full } = organizationSeatUsage(org);
@@ -56,7 +61,7 @@ export const AddToOrganizationDialog: React.FC<DialogProps & { memberOrgIds: rea
     onClose();
     showUndo({
       message: `Added to ${picked.name}`,
-      onUndo: () => membership.remove(picked.id, undoReason(reason)),
+      onUndo: () => membership.remove(picked.id, undoAdminReason(reason)),
       onViewAudit: onAudit,
     });
   };
@@ -125,7 +130,7 @@ export const ChangeOrgRoleDialog: React.FC<DialogProps & { org: MembershipOrg }>
     onClose();
     showUndo({
       message: `${ORGANIZATION_ROLE_LABELS[next]} of ${org.name}`,
-      onUndo: () => membership.setRole(org.id, current, undoReason(reason)),
+      onUndo: () => membership.setRole(org.id, current, undoAdminReason(reason)),
       onViewAudit: onAudit,
     });
   };

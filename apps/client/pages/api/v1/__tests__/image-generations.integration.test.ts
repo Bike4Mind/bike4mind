@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
+import { Logger } from '@bike4mind/observability';
 
 const {
   mockValidate,
@@ -231,6 +232,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(res._getJSONData()).toMatchObject({ quest: { id: 'quest-1' } });
     expect(GenerateImageResponseSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls[0][0].adminRoleWithheld).toBe(true);
   });
 
   it('strips server-owned fields from the returned session', async () => {
@@ -253,6 +255,20 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(session).not.toHaveProperty('systemPromptText');
     expect(session).not.toHaveProperty('preauthorizedLakeIds');
     expect(session.origin).not.toHaveProperty('apiKeyId');
+  });
+
+  it('sends a response the contract declares in full, session document included', async () => {
+    mockGetOrCreateSession.mockResolvedValue({
+      sessionId: 'sess-1',
+      asyncPromises: [],
+      session: { id: 'sess-1', origin: { channel: 'api', apiKeyId: 'k1' } },
+    });
+    const warn = vi.spyOn(Logger.resetMetadata(), 'warn');
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(warn.mock.calls.filter(([message]) => String(message).startsWith('[contract]'))).toEqual([]);
   });
 
   describe('referenceImageFabFileIds', () => {
@@ -656,6 +672,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     it('route -> invoke -> queued SQS body: organization_id null stays null, omitted becomes the home org', async () => {
       const queued: Array<Record<string, unknown>> = [];
       const service = new ImageGenerationService({
+        assertModelAdmission: async () => {},
         db: {
           sessions: { findById: vi.fn(async () => ({ id: 'sess-1' })) },
           quests: {

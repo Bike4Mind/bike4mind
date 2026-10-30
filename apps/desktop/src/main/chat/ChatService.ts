@@ -34,6 +34,7 @@ import type {
   ChatUsage,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
+  CreationTool,
   ContextBoundaryResult,
   ReasoningEffortSetting,
   SendMessageResult,
@@ -181,7 +182,7 @@ import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirect
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { BackgroundWake } from './backgroundWake';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
-import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
+import { findTool, isOfferedEditTool, offeredMediaToolNames, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker, THRESHOLD as LOOP_THRESHOLD } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
@@ -919,6 +920,21 @@ export class ChatService {
   searchHistory(query: string): LocalHistoryResult[] {
     if (!this.deps.history) throw new Error('Local history is unavailable. Restart the app and try again.');
     return this.deps.history.search(query);
+  }
+
+  /**
+   * What a turn on `model` would be offered to generate with: the same conditions runReply reads
+   * for `media`, `video` and a model that takes no tools. Both lists come from the ModelCatalog's
+   * caches, so a blank chat asking for this costs no more than the next turn will.
+   */
+  async listCreationTools(model: string): Promise<CreationTool[]> {
+    if (!this.deps.media || !this.deps.getApiClient() || isLocalModel(model)) return [];
+    const [catalog, video] = await Promise.all([
+      this.deps.models?.list().catch(() => undefined),
+      this.deps.models?.listVideoModels().catch(() => []),
+    ]);
+    if (catalog?.models.find(option => option.id === model)?.supportsTools === false) return [];
+    return offeredMediaToolNames({ media: true, video: video ?? [] }).map(name => ({ name }));
   }
 
   /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */
@@ -1735,7 +1751,7 @@ export class ChatService {
     this.scopeVersions.delete(sessionId);
     await this.deps.background?.killSession(sessionId);
     // Only on delete: an archived conversation can be unarchived, and its scripts must still ask.
-    forgetSessionWrites(sessionId);
+    await forgetSessionWrites(sessionId);
     this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);

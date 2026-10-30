@@ -1,5 +1,18 @@
 # Signup abuse alarms
 
+Committed staged signup assessments also publish `SignupGrant_full`,
+`SignupGrant_reduced` and `SignupGrant_review` counts in `<app-name>/<stage>/Signup`
+via the server's structured log messages. Rolled-back transactions and ordinary
+grant retries do not emit a new assessment event. Emission is best effort after
+commit, so a process crash between commit and logging can undercount; these metrics
+are operational signals, not the credit ledger.
+
+Set `SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN` privately to a positive integer to alert
+when zero-credit review decisions reach that count in five minutes. Unset disables
+this alarm. Monitored stages route both ALARM and OK transitions through the same
+Slack and out-of-band email topics as the other signup alarms. No policy weights,
+network data, account identifiers or email addresses are included in band messages.
+
 All thresholds are read from the deployer's environment, are listed in
 `infra/deploy-contract.json`, and must be integers of at least 1. Invalid values
 fail deployment (or, for the scheduled worker, fail the run).
@@ -67,8 +80,46 @@ Sums AI credit spend by accounts created in the 7 days before that end time and 
 exceeds `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS` or the number of distinct spending
 accounts exceeds `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`. The message lists the top
 10 user ids by spend, the counts, and the window. It does not include emails.
-Both EventBridge delivery failures and exhausted Lambda retries reach a monitored
-14-day DLQ; recovery re-emits the original scheduled event.
+Each run logs `young-account-spend` with `windowStart`, `windowEnd` and the totals.
+
+Both EventBridge delivery failures and exhausted Lambda retries (2, the default)
+reach a monitored 14-day DLQ. Each message is one failed hour, and its body is the
+original scheduled event. Messages queued before the target cleared SST's `{}`
+input have a `{}` body and cannot be replayed. Their SQS `SentTimestamp`, minus a
+few minutes of Lambda retries, identifies the failed hour: backfill it as below,
+then purge them.
+
+### Replaying a failed hour
+
+There is no source queue to redrive into. To replay, save the DLQ message body to
+`event.json` and check it has a `time`. Find the function name with
+`aws lambda list-functions --query "Functions[?contains(FunctionName,'youngAccountSpendAlert')].FunctionName"`,
+then invoke it synchronously:
+
+```sh
+aws lambda invoke --function-name <function-name> --invocation-type RequestResponse \
+  --cli-binary-format raw-in-base64-out --cli-read-timeout 150 \
+  --payload fileb://event.json out.json
+```
+
+Delete the message only once `out.json` shows `ok` or `alerted`. If the handler
+throws, the CLI still exits 0 but prints `"FunctionError": "Unhandled"`, and
+`out.json` holds `errorMessage`. Lambda does not retry a synchronous invoke and it
+does not dead-letter, so a failed replay leaves the original message in place. The
+read timeout must exceed the function's 2-minute timeout; at the CLI's 60-second
+default, a slow run is sent again and can post twice.
+
+The worker keeps no delivery receipt. A dead-lettered hour has usually not posted
+(the Slack post is its last step); it has if Slack accepted a post whose response
+was then lost. Replaying an hour that already succeeded also posts again.
+
+To backfill a gap, invoke with `{"time":"<window end>"}` for each missing hour.
+Each run covers `[time - 1 hour, time)` and measures account age from `time`, so a
+later run reproduces the hour apart from deleted users. The schedule is
+`rate(1 hour)`, so take the minute and second from the `windowEnd` of a scheduled
+run next to the gap (the offset changes if the rule is re-created) to make
+backfilled windows tile against the scheduled ones. Every breaching hour posts to
+LiveOps with its window, so tell the channel before a large backfill.
 
 ## LLM spend (`infra/llmSpend.ts`)
 

@@ -18,6 +18,8 @@ import {
   SreSourceType,
   SRE_DEFAULT_REPO_SLUG,
   resolveFullConfig,
+  escapeSlackCode,
+  escapeSlackText,
 } from '@bike4mind/common';
 import type { KnownBlock } from '@slack/web-api';
 import { WebClient } from '@slack/web-api';
@@ -25,9 +27,7 @@ import { WebClient } from '@slack/web-api';
 const logger = new Logger();
 
 /** Escape Slack mrkdwn control characters in untrusted text */
-export function escapeSlackMrkdwn(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+export const escapeSlackMrkdwn = escapeSlackText;
 
 /** Format a source reference for Slack mrkdwn - link if URL, backtick-escaped otherwise */
 function formatSourceRef(sourceRef: string): string {
@@ -36,7 +36,7 @@ function formatSourceRef(sourceRef: string): string {
     const sanitized = sourceRef.replace(/[>|\r\n]/g, '');
     return `<${sanitized}>`;
   }
-  return `\`${sourceRef}\``;
+  return `\`${escapeSlackCode(sourceRef)}\``;
 }
 
 /** Resolve workspace bot token, returning null if not configured */
@@ -98,7 +98,7 @@ export async function postSreApprovalMessage(
   const ws = await resolveWorkspace(slackConfig, 'approval message');
   if (!ws) return;
 
-  const fileList = diagnosis.affectedFiles.map(f => `\`${escapeSlackMrkdwn(f.filePath)}\``).join(', ');
+  const fileList = diagnosis.affectedFiles.map(f => `\`${escapeSlackCode(f.filePath)}\``).join(', ');
 
   const blocks: KnownBlock[] = [
     {
@@ -182,7 +182,7 @@ export async function postSreScopeBlockedMessage(
   const ws = await resolveWorkspace(slackConfig, 'scope-blocked message');
   if (!ws) return;
 
-  const fileList = blockedFiles.map(f => `\`${f}\``).join('\n');
+  const fileList = blockedFiles.map(f => `\`${escapeSlackCode(f)}\``).join('\n');
 
   const blocks: KnownBlock[] = [
     {

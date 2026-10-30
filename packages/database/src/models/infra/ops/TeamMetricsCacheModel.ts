@@ -37,7 +37,7 @@ export interface ITeamMetricsCacheDocument extends IMongoDocument {
 
 export interface ITeamMetricsCacheModel extends Model<ITeamMetricsCacheDocument> {}
 
-export const TeamMetricsCacheSchema = new Schema<ITeamMetricsCacheDocument>(
+export const TeamMetricsCacheSchema: Schema<ITeamMetricsCacheDocument> = new Schema<ITeamMetricsCacheDocument>(
   {
     userId: { type: Schema.Types.ObjectId, required: true, unique: true, index: true },
     members: [

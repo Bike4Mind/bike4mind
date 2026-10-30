@@ -1,3 +1,4 @@
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
 import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
@@ -308,10 +309,10 @@ async function updateQuestAndReturnMarkdown(
 
 export const imageEditTool: ToolDefinition = {
   name: 'edit_image',
-  implementation: (context, config: GenerateImageToolCall) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async val => {
       // Get imageConfig from config (shared with image_generation tool)
-      const imageConfig = config;
+      const imageConfig = config as GenerateImageToolCall | undefined;
 
       const {
         image: toolImage,
@@ -389,6 +390,8 @@ Please select a supported edit model in your image settings modal.`;
       if (background === 'transparent' && rejectsTransparentBackground(editModel)) {
         editModel = ImageModels.GPT_IMAGE_1_5;
       }
+      await (await createToolModelAdmission(context)).assert(editModel);
+
       // BFL and Gemini reject webp; only the OpenAI branch below sends the raw value.
       const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
       const prompt_upsampling = imageConfig?.prompt_upsampling ?? false;

@@ -2,7 +2,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { TURNSTILE_SECRET_KEY: 'configured-test-secret' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { TURNSTILE_SECRET_KEY: 'configured-test-secret' },
+  isDeployedStage: () => false,
+}));
 
 // Mock only the repositories; settingsMap (zod parsing) stays real so the
 // boolean/string/missing setting-value handling is exercised for real.

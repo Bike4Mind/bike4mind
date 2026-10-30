@@ -1,5 +1,8 @@
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
 import {
   ApiKeyType,
+  DEFAULT_SOUND_MODEL_ID,
+  TTS_DEFAULT_MODEL,
   AudioGenerationToolCall,
   extensionFromMimeType,
   type GeneratedAssetMetadata,
@@ -62,9 +65,9 @@ const audioArgsSchema = z.object({
  */
 export const audioGenerationTool: ToolDefinition = {
   name: 'audio_generation',
-  implementation: (context, config: AudioGenerationToolCall) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async val => {
-      const audioConfig = config ?? {};
+      const audioConfig = (config ?? {}) as AudioGenerationToolCall;
       const parsedArgs = audioArgsSchema.safeParse(val);
       if (!parsedArgs.success) {
         return 'Error: audio_generation received invalid arguments.';
@@ -78,6 +81,8 @@ export const audioGenerationTool: ToolDefinition = {
       // Anything that is not explicitly a sound effect is speech (the common case),
       // so a caller that omits `kind` still gets a sensible result.
       const isSoundEffect = kind === 'sound_effect';
+
+      const admission = await createToolModelAdmission(context);
 
       if (isSoundEffect) {
         // Reject over-length input before any paid provider call, matching the bound the
@@ -100,6 +105,8 @@ export const audioGenerationTool: ToolDefinition = {
           // generic UNAVAILABLE_MESSAGE, which reads as "nothing works, try later".
           return 'Error: sound effects require an ElevenLabs API key; speech (kind="speech") is available.';
         }
+
+        await admission.assert(DEFAULT_SOUND_MODEL_ID);
 
         const durationSeconds = toolDurationSeconds ?? audioConfig.durationSeconds ?? undefined;
 
@@ -198,6 +205,8 @@ export const audioGenerationTool: ToolDefinition = {
         format = format && VOICE_VENDOR_SUPPORTED_FORMATS[fallbackProvider].includes(format) ? format : undefined;
         apiKey = fallbackKey;
       }
+
+      await admission.assert(TTS_DEFAULT_MODEL[provider]);
 
       // Reject over-length input before the paid call, per the resolved provider's cap.
       if (text.length > TTS_MAX_INPUT_CHARS[provider]) {

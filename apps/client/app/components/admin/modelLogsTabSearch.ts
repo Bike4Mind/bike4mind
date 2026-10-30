@@ -1,6 +1,6 @@
-import dayjs from 'dayjs';
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
 import { oneOf, parsePage, toNumber } from './adminSearchValues';
+import { DEFAULT_PRESET_DAYS, getPresetRange } from './Analytics/dateRange';
 
 /**
  * The Model Logs tab's `/admin` search params and their coercion. Pure and React-free:
@@ -38,9 +38,7 @@ export type ModelLogsModel = (typeof MODEL_LOGS_MODEL_OPTIONS)[number]['value'];
 const MODEL_VALUES = MODEL_LOGS_MODEL_OPTIONS.map(option => option.value);
 
 // The date inputs' and the model-logs API's format.
-const DATE_FORMAT = 'YYYY-MM-DD';
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const DEFAULT_RANGE_DAYS = 7;
 
 export type ModelLogsSearch = {
   [MODEL_LOGS_PAGE_PARAM]?: number;
@@ -60,11 +58,12 @@ export type ModelLogsView = {
   model: ModelLogsModel | undefined;
 };
 
-/** The rolling last-week range a URL without dates means, relative to today. */
-export const defaultModelLogsDateRange = (): Pick<ModelLogsView, 'startDate' | 'endDate'> => ({
-  startDate: dayjs().subtract(DEFAULT_RANGE_DAYS, 'days').format(DATE_FORMAT),
-  endDate: dayjs().format(DATE_FORMAT),
-});
+/**
+ * The range a URL without dates means, relative to today. It is the date filter's default preset,
+ * so that preset shows as selected when the tab opens.
+ */
+export const defaultModelLogsDateRange = (): Pick<ModelLogsView, 'startDate' | 'endDate'> =>
+  getPresetRange(DEFAULT_PRESET_DAYS);
 
 export const defaultModelLogsView = (): ModelLogsView => ({
   page: 1,

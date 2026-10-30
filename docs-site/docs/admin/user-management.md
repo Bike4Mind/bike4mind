@@ -34,6 +34,22 @@ To keep a combination of filters, sort, page size and grouping, click **Save vie
 
 Each saved tab you own has a **...** menu with **Rename**, **Share with all admins** (or **Make personal**) and **Delete**. Opening a saved view always starts at page 1. You can keep up to 50 views.
 
+## Signup risk review
+
+Open **Risk review** in the admin sidebar to review accounts flagged by signup risk scoring.
+AI access is automatically held while a review is pending, including free models and AI requests
+through API keys. These users can still sign in and access their existing data. The AI refusal
+message directs them to contact support to request a review.
+
+Choose **Approve** for a legitimate account to lift its signup review hold. Approval does not
+remove a separate manual AI restriction or suspension. **Undo**, available for 30 seconds,
+restores the review hold. Later rescores update the evidence but never clear a pending hold or
+overturn an approval. Choose **Suspend** for an abusive account to block account access.
+
+Existing pending reviews also hold AI access. If an approved user still cannot use AI, check for
+separate restrictions, suspension, and normal plan or credit limits. Signup-domain credit holds
+are independent of account risk reviews.
+
 ## Columns
 
 | Column | Details |
@@ -82,19 +98,48 @@ The **Recent activity** button shows a panel of recent user activity across the 
 
 Each user has a full-page profile at `/admin/users/<userId>`, opened by clicking the user's row in the Users tab or **Open profile** in the row menu. It is admin-only, like the rest of the admin panel. The **Users** button at the top returns to the Users tab.
 
-The header shows the user's name, email, and avatar; badges for email verification, banned, moderated, super admin, user level, organization, and signup method; the created and last-active dates; and the quick actions **Login as User**, **Send Message**, **Grant Subscription**, and **Update** (shown once there are changes to save).
+The header shows the user's name, email, avatar, account status, user level, organization, signup method, and created and last-active dates. **Adjust credits** and **Suspend** are quick actions; **More** contains the other account actions.
 
-The page has three tabs. The selected tab is kept in the URL as `?tab=activity` or `?tab=admin` (Overview is the default and has no parameter), so a link can open a specific tab.
+To edit the user's name or email, open **More > Edit profile**. The username is displayed read-only. Change the fields in the modal and click **Save Changes**. Wait for the success notification before closing the modal; the profile header refreshes after a successful save. If saving fails, keep the modal open, correct any validation error, and retry.
+
+The page has six tabs. The selected tab is kept in the URL, for example `?tab=activity` or `?tab=admin` (Overview is the default and has no parameter), so a link can open a specific tab.
 
 | Tab | Contents |
 |-----|----------|
-| **Overview** | The editable sections (User Details, Roles, Product Access, Subscription, B4M Settings, Activity & Profile), laid out two per row on wide screens and one per row on narrow ones |
+| **Overview** | Account details, access, subscription, recent activity, and internal notes |
 | **Activity** | The user's recent activity |
-| **Admin** | The **Danger zone**: Ban, Moderate, Delete, and Compliance (see [Admin Actions](#admin-actions-ban-moderate-delete)) |
+| **Credits** | Credit ledger and spending |
+| **API keys** | The user's API keys |
+| **Sign-ins** | Sign-in history and sessions |
+| **Admin log** | Administrative actions recorded for the user |
 
-Unsaved edits are kept when you switch tabs. If you try to leave the page with unsaved edits (another link, the browser Back button, or closing the tab), you are asked to confirm, and the in-app prompt lists the fields that would be discarded.
+Use **More** for role, product-access, subscription, compliance, restriction, and deletion actions (see [Admin Actions](#admin-actions-ban-moderate-delete)).
 
 Old links of the form `/admin?userId=<userId>` redirect to the user's profile page. An unknown or malformed user id shows **User not found**; any other loading error shows a retry button.
+
+## Risk flags
+
+Under the profile statistics, named risk badges show activity that needs a closer look.
+Click a badge to see its rule, the exact UTC window, and the counts or values behind it.
+There is no combined risk score, and a flag does not automatically restrict the account.
+
+| Badge | Rule |
+|-------|------|
+| **Repeated failed sign-ins** | At least 5 failed identity checks or blocked sessions in 24 hours. Failed passwords are not included in this audit source. |
+| **New IP or device** | A successful sign-in in the last 7 days uses an IP or browser and operating system combination absent from earlier retained successful sign-ins. At least 3 earlier successes are required. |
+| **Credit spend spike** | Spending over the current UTC day and 6 previous days reaches 3 times the preceding 30-day average rate. The baseline needs at least 7 active days and 100 credits, and recent spend must reach 200 credits. |
+| **Prior moderation** | At least 1 image moderation incident in 30 days, excluding incidents reviewed as false positives. |
+
+For sign-in flags, **View in timeline** opens the Activity tab filtered to sign-ins
+and the UTC calendar days covering the evidence window. **View credits** opens
+the Credits tab for a spend spike. **Open compliance** opens the moderation history.
+Sign-in comparisons use retained audit history, so they cannot establish whether an
+address or device appeared before that history.
+
+**No risk flags** means none of these rules fired. It does not establish that the account
+is safe or that every kind of sign-in failure was recorded. If the flags cannot be loaded,
+use **Try again**; a read failure is shown separately from an empty result. Access requires
+an administrator session; API keys cannot read the IP evidence.
 
 ## Internal notes and profile tags
 

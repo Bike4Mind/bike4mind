@@ -27,6 +27,8 @@ export const projectResponseSchema = z.object({
   groups: z.array(groupShareResponseSchema).optional(),
 });
 
+export const projectListResponseSchema = z.array(projectResponseSchema);
+
 /** DELETE /api/projects/removeNonExistintFiles. */
 export const removeNonExistentFilesResponseSchema = z.object({
   updatedProjects: z.array(projectResponseSchema),

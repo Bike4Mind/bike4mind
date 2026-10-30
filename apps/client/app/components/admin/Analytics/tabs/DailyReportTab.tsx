@@ -1,69 +1,41 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { Box, Card, Stack, Typography, Button, LinearProgress, Grid, Alert } from '@mui/joy';
 import SharedPaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
-import dayjs from 'dayjs';
-import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InfoIcon from '@mui/icons-material/Info';
 import { DateFilterComponent } from '../filters/DateFilterComponent';
-import { useAnalyticsData } from '@client/app/hooks/useAnalyticsData';
+import { useDailyReports } from '@client/app/hooks/useAnalyticsData';
 import { AnalyticsErrorCard } from '../AnalyticsErrorCard';
+import { DEFAULT_PRESET_DAYS, getPresetRange, type DateRange } from '../dateRange';
 
-dayjs.extend(isSameOrBefore);
-
-interface DailyReportTabProps {
-  error?: unknown;
-  onRefresh: () => void;
-}
-
-export const DailyReportTab: React.FC<DailyReportTabProps> = ({ error, onRefresh }) => {
+/** Owns its date range: the shared store belongs to User Activity, so changing dates here never touches it. */
+export const DailyReportTab: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(5);
-  const [dateRange, setDateRange] = useState({
-    startDate: dayjs().subtract(7, 'days').format('YYYY-MM-DD'),
-    endDate: dayjs().format('YYYY-MM-DD'),
-  });
+  const [dateRange, setDateRange] = useState<DateRange>(() => getPresetRange(DEFAULT_PRESET_DAYS));
 
-  const analyticsQuery = useAnalyticsData({
-    startDate: dateRange.startDate,
-    endDate: dateRange.endDate,
-    report: true,
-  });
+  const dailyReportsQuery = useDailyReports(dateRange);
+  const reports = dailyReportsQuery.data ?? [];
 
-  const handleRefresh = () => {
-    analyticsQuery.refetch();
-    onRefresh?.();
+  const handleDateRangeChange = (range: DateRange) => {
+    setDateRange(range);
+    setCurrentPage(1);
   };
 
-  const reports = useMemo(() => {
-    if (!analyticsQuery.data?.reports) return [];
-    return analyticsQuery.data.reports.sort((a, b) => dayjs(b.date).diff(dayjs(a.date)));
-  }, [analyticsQuery.data]);
-
   // Pagination
-  const totalPages = Math.ceil((reports?.length || 0) / itemsPerPage);
-  const currentItems = reports?.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage) || [];
+  const totalPages = Math.ceil(reports.length / itemsPerPage);
+  const currentItems = reports.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   return (
     <Box>
       <Card variant="outlined" sx={{ mb: 1 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'end' }}>
-          <DateFilterComponent
-            startDate={dateRange.startDate}
-            endDate={dateRange.endDate}
-            onStartDateChange={date => setDateRange(prev => ({ ...prev, startDate: date }))}
-            onEndDateChange={date => setDateRange(prev => ({ ...prev, endDate: date }))}
-            onRangeSelect={days => {
-              setDateRange({
-                startDate: dayjs().subtract(days, 'day').format('YYYY-MM-DD'),
-                endDate: dayjs().format('YYYY-MM-DD'),
-              });
-            }}
-          />
+          <DateFilterComponent value={dateRange} onChange={handleDateRangeChange} />
           <Button
             startDecorator={<RefreshIcon />}
-            onClick={handleRefresh}
-            disabled={analyticsQuery.isLoading}
+            onClick={() => dailyReportsQuery.refetch()}
+            disabled={dailyReportsQuery.isFetching}
+            data-testid="daily-report-refresh-btn"
             sx={{ height: '100%' }}
           >
             Refresh
@@ -71,12 +43,12 @@ export const DailyReportTab: React.FC<DailyReportTabProps> = ({ error, onRefresh
         </Stack>
       </Card>
 
-      {analyticsQuery.isLoading ? (
+      {dailyReportsQuery.isLoading ? (
         <LinearProgress />
-      ) : error || analyticsQuery.error ? (
+      ) : dailyReportsQuery.error ? (
         <AnalyticsErrorCard
-          error={error || analyticsQuery.error}
-          onRetry={handleRefresh}
+          error={dailyReportsQuery.error}
+          onRetry={() => dailyReportsQuery.refetch()}
           title="Could not load daily reports"
           testId="daily-report-error"
         />
@@ -101,16 +73,28 @@ export const DailyReportTab: React.FC<DailyReportTabProps> = ({ error, onRefresh
                   setItemsPerPage(size);
                   setCurrentPage(1);
                 }}
-                totalItems={reports?.length || 0}
+                totalItems={reports.length}
                 pageLimitOptions={[5, 10, 20]}
               />
               <Stack spacing={2}>
                 {currentItems.map((item, index) => {
+                  if (item.error) {
+                    return (
+                      <AnalyticsErrorCard
+                        key={item.date}
+                        error={new Error(item.error)}
+                        onRetry={() => dailyReportsQuery.refetch()}
+                        title={`Could not generate the report for ${item.date}`}
+                        testId={`daily-report-error-${item.date}`}
+                      />
+                    );
+                  }
                   const hasNoData = item.report.includes('No activity data found');
                   return (
                     <Card
                       key={item.date}
                       variant="outlined"
+                      data-testid="daily-report-card"
                       sx={{
                         mb: 2,
                         bgcolor: hasNoData

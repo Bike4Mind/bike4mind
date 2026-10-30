@@ -123,6 +123,17 @@ describe('sessionTagging', () => {
     expect(written.tagLastAttemptAt).toBeNull();
   });
 
+  it.each([OWNER, 'user-sharee', 'user-payer'])('skips queued tagging when %s is pending review', async heldId => {
+    h.userFindById.mockImplementation(async (id: string) => ({
+      id,
+      ...(id === heldId ? { riskScore: { reviewState: 'pending' } } : {}),
+    }));
+    const requesterId = heldId === OWNER ? undefined : 'user-sharee';
+    await run({ sessionId: SESSION_ID, requesterId, payerId: 'user-payer' });
+    expectNoOperationalSpend();
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
+  });
+
   describe('write-time access re-check', () => {
     const SHAREE = 'user-sharee';
 

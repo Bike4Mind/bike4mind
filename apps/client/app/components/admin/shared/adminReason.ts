@@ -27,6 +27,12 @@ export const ADMIN_REASON_PRESETS = {
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
+  waitlistInvite: [
+    'Approved from the waitlist queue',
+    'Pilot or partner access',
+    'Sales-approved trial',
+    'Internal testing',
+  ],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
   bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
@@ -37,6 +43,7 @@ export const ADMIN_REASON_PRESETS = {
   paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
   orgMembership: ['Customer request', 'Joined the team', 'Left the team', 'Account cleanup'],
   orgRoleChange: ['Customer request', 'Owner request', 'Team lead changed'],
+  signupRiskApproval: ['Verified legitimate user', 'Known customer or partner', 'False positive signal'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
@@ -55,6 +62,9 @@ export const composeAdminReason = ({ preset, note }: AdminReasonDraft): string =
   if (!preset) return trimmedNote;
   return trimmedNote ? `${preset}${PRESET_SEPARATOR}${trimmedNote}` : preset;
 };
+
+/** The reason an undo carries: the original one, marked, and still within the shared maximum. */
+export const undoAdminReason = (reason: string): string => `Undo: ${reason}`.slice(0, ADMIN_ACTION_REASON_MAX_LENGTH);
 
 export const isAdminReasonComplete = (draft: AdminReasonDraft): boolean =>
   isValidAdminActionReason(composeAdminReason(draft));
