@@ -5,7 +5,7 @@ import { createMongoServer } from '../../__test__/createMongoServer';
 import { CreditHolderType, SPEND_BUCKET_MS } from '@bike4mind/common';
 import { CreditTransaction } from './CreditTransactionModel';
 import { UsageEvent } from './UsageEventModel';
-import { SpendRollup, spendRollupRepository } from './SpendRollupModel';
+import { SpendRollup, ledgerUsageMatch, spendRollupRepository } from './SpendRollupModel';
 
 let mongod: MongoMemoryServer;
 
@@ -122,6 +122,21 @@ describe('SpendRollupRepository.rollupBucket', () => {
     expect(result.docs).toBe(1);
     expect(await findRollup('platform', 'all')).toMatchObject({ credits: 0, costUsd: 0, requests: 0 });
     expect(await spendRollupRepository.latestBucketStart()).toEqual(bucketStart);
+  });
+});
+
+describe('ledger usage scan', () => {
+  it('is served by a CreditTransaction index rather than a collection scan', async () => {
+    await CreditTransaction.syncIndexes();
+    await CreditTransaction.insertMany([deduct(CreditHolderType.User, 'user-a', -1)]);
+
+    const plan = await CreditTransaction.aggregate([
+      { $match: ledgerUsageMatch(bucketStart, new Date(bucketStart.getTime() + SPEND_BUCKET_MS)) },
+    ]).explain();
+
+    const stages = JSON.stringify(plan);
+    expect(stages).toContain('IXSCAN');
+    expect(stages).not.toContain('COLLSCAN');
   });
 });
 

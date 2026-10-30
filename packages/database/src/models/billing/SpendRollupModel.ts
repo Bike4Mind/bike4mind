@@ -2,6 +2,7 @@ import mongoose, { AnyBulkWriteOperation, Model, Schema, model } from 'mongoose'
 import BaseRepository from '@bike4mind/db-core';
 import {
   AI_USAGE_TRANSACTION_TYPES,
+  CreditHolderType,
   IMongoDocument,
   ISpendRollup,
   ISpendRollupRepository,
@@ -62,6 +63,16 @@ class ScopeTotals {
     return [...this.entries.values()];
   }
 }
+
+/**
+ * The ownerType predicate lists every holder type so the { ownerType, createdAt, type } index on
+ * CreditTransaction serves this scan; do not drop it as redundant.
+ */
+export const ledgerUsageMatch = (from: Date, to: Date) => ({
+  ownerType: { $in: Object.values(CreditHolderType) },
+  type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+  createdAt: { $gte: from, $lt: to },
+});
 
 const isNonZero = (totals: Totals): boolean =>
   totals.credits !== 0 || totals.costUsd !== 0 || totals.creditsCharged !== 0 || totals.requests !== 0;
@@ -196,10 +207,7 @@ export class SpendRollupRepository extends BaseRepository<ISpendRollupDocument> 
       model: Array<{ _id: string; credits: number; requests: number }>;
     }>([
       {
-        $match: {
-          type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
-          createdAt: { $gte: from, $lt: to },
-        },
+        $match: ledgerUsageMatch(from, to),
       },
       {
         $facet: {
