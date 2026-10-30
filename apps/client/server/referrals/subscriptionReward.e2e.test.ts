@@ -10,9 +10,10 @@ import {
   CreditTransaction,
   ReferralSubscriptionRewardModel,
   User,
+  creditLotRepository,
   referralSubscriptionRewardRepository,
 } from '@bike4mind/database';
-import { releaseDueSubscriptionRewards } from './subscriptionReward';
+import { releaseDueSubscriptionRewards, reverseSubscriptionRewardForRefund } from './subscriptionReward';
 
 const grantFailure = vi.hoisted(() => ({ next: false }));
 
@@ -122,5 +123,40 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
     expect(await releaseDueSubscriptionRewards({ now: NOW })).toMatchObject({ candidates: 0, released: 0 });
     expect((await User.findById(inviter.id))?.currentCredits).toBe(REWARD_CREDITS);
     expect(await CreditTransaction.countDocuments({ ownerId: inviter.id })).toBe(1);
+  });
+
+  describe('take-back after release', () => {
+    const lotOf = async (inviterId: string) => (await creditLotRepository.findByOwner(inviterId, 'User' as never))[0];
+    const refundAll = () =>
+      reverseSubscriptionRewardForRefund({
+        paymentIntentId: 'pi_1',
+        amountRefunded: 3000,
+        amountCaptured: 3000,
+        now: NOW,
+      });
+
+    it('shrinks the reward lot together with the balance', async () => {
+      const inviter = await seedDueReward();
+      await releaseDueSubscriptionRewards({ now: NOW });
+      expect(await lotOf(inviter.id)).toMatchObject({ amount: REWARD_CREDITS });
+
+      await refundAll();
+
+      expect((await User.findById(inviter.id))?.currentCredits).toBe(0);
+      expect(await lotOf(inviter.id)).toMatchObject({ amount: 0 });
+    });
+
+    it('never shrinks the lot below what was already spent from it', async () => {
+      const inviter = await seedDueReward();
+      await releaseDueSubscriptionRewards({ now: NOW });
+      const lot = await lotOf(inviter.id);
+      await creditLotRepository.update({ id: lot.id, consumedAssigned: 2000 });
+      await User.updateOne({ _id: inviter.id }, { currentCredits: REWARD_CREDITS - 2000 });
+
+      await refundAll();
+
+      expect((await User.findById(inviter.id))?.currentCredits).toBe(0);
+      expect(await lotOf(inviter.id)).toMatchObject({ amount: 2000, consumedAssigned: 2000 });
+    });
   });
 });
