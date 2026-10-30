@@ -100,3 +100,30 @@ export async function stopUnfundedIteration(
   );
   return true;
 }
+
+export interface IterationAccountGateArgs {
+  executionId: string;
+  /** Why the run's user may no longer spend, re-read per iteration; null when they may. */
+  readAccessDenial: () => Promise<string | null>;
+  snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
+}
+
+/**
+ * Stops the run when its user's account was blocked (ban, dispute, suspension) or AI-restricted after the run
+ * was admitted. Independent of enforceCredits: a blocked account spends nothing either way. Returns true when
+ * it stopped.
+ */
+export async function stopBlockedAccountIteration(
+  args: IterationAccountGateArgs,
+  deps: IterationCreditGateDeps
+): Promise<boolean> {
+  const denial = await args.readAccessDenial();
+  if (!denial) return false;
+
+  deps.logger.warn('[Account] Account can no longer use AI; stopping execution', { executionId: args.executionId });
+  const { steps } = args.snapshot();
+  await deps.markFailed(args.executionId, { message: denial });
+  await deps.sendWs('failed', { executionId: args.executionId, reason: 'account_blocked', partialResult: steps });
+  await deps.persistRunAsQuest(args.executionId, `Stopped: ${denial}`);
+  return true;
+}

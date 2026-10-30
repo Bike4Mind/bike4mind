@@ -27,6 +27,7 @@ import {
   normalizeMultimodalMessages,
   BadRequestError,
   HTTPError,
+  UnauthorizedError,
   type CompletionSource,
   UNKNOWN_MODEL_ERROR_CODE,
   DEGENERATE_FINISH_REASON,
@@ -570,11 +571,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     loadModelConfigurations(db.adminSettings),
     loadFreeTierAllowedModels(db.adminSettings),
   ]);
-  const actor = storedActor && params.scopeActor ? params.scopeActor(storedActor) : storedActor;
+  // Fail closed: an admission over no user would skip the account-state gate it exists to apply.
+  if (!storedActor) throw new UnauthorizedError('User not found');
+  const actor = params.scopeActor ? params.scopeActor(storedActor) : storedActor;
   await createModelAdmission({
-    user: actor ?? {},
+    user: actor,
     configs: modelConfigs,
-    getEntitlements: actor && params.getEntitlements ? () => params.getEntitlements!(actor) : undefined,
+    getEntitlements: params.getEntitlements ? () => params.getEntitlements!(actor) : undefined,
     models,
     enforceCredits: Boolean(enforceCredits),
     freeTierAllowedModels,
