@@ -1,5 +1,6 @@
 import {
   hasPaidSignupDrip,
+  signupGrantDripOpen,
   signupGrantDripRemaining,
   signupActiveSeconds,
   type IUserDocument,
@@ -43,7 +44,7 @@ async function qualifiesForPeriod(user: IUserDocument, period: SignupDripPeriod)
 export async function payActivityDripForDay(userId: string, now: Date = new Date(), resolvedPeriod?: SignupDripPeriod) {
   const user = await userRepository.findById(userId);
   const grant = user?.signupGrant;
-  if (!user || !grant || grant.stage === 'pending_email' || grant.stage === 'unlocked') return noGrant();
+  if (!user || !grant || !signupGrantDripOpen(grant)) return noGrant();
   const period = resolvedPeriod ?? (await resolveSignupDripPeriod(signupProtection.grantBudget?.now?.() ?? now));
   if (hasPaidSignupDrip(grant, period.day, period.key)) return noGrant();
   const { dailyCredits, dripCap } = await userService.resolveDripLimits(adminSettingsRepository);

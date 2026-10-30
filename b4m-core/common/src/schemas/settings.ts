@@ -4333,6 +4333,8 @@ export const settingsMap = {
     min: 0,
     max: 1000000,
     int: true,
+    // The client resolves the legacy drip cap from it while signupGrantDripCap is unset.
+    userReadable: true,
     description: 'Total credits the activity drip may release per account. Zero disables the activity drip.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
@@ -4354,7 +4356,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits a new account receives after email verification. While unset, Signup Grant Credits (then the default free credits) applies.',
+      'Credits a new account receives after email verification. While unset, Signup Grant Credits applies if staged signup grants are enabled, then the default free credits.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4366,7 +4368,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits paid for each day of qualifying activity until the drip cap is reached. Zero disables the drip. While unset, Signup Activity Daily Credits applies.',
+      'Credits paid for each day of qualifying activity until the drip cap is reached. Zero disables the drip. While unset, Signup Activity Daily Credits applies if the activity drip is enabled, else 0.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4378,7 +4380,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip. Zero disables the drip. While unset, the smaller of Signup Activity Maximum Credits and Verified Unlock Credits applies.',
+      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip. While unset, the smaller of Signup Activity Maximum Credits and Verified Unlock Credits applies (0 while staged signup grants are off).',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

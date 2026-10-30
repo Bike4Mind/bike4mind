@@ -11,11 +11,21 @@ import { useSignupGrantCredits } from './useSignupGrantCredits';
 
 describe('signup grant copy configuration', () => {
   beforeEach(() => {
-    h.values = { defaultFreeCredits: 37, signupGrantCredits: 12 };
+    h.values = { stagedSignupGrantEnabled: 'true', defaultFreeCredits: 37, signupGrantCredits: 12 };
   });
-  it.each([false, 'false', true, 'true'])('ignores the retired staged flag %j and reads the tranche', flag => {
+  it.each([
+    [false, 37],
+    ['false', 37],
+    [true, 12],
+    ['true', 12],
+  ])('reads the old tranche only while the retired staged flag %j is on, like the server', (flag, credits) => {
     h.values.stagedSignupGrantEnabled = flag;
-    expect(renderHook(useSignupGrantCredits).result.current).toBe(12);
+    expect(renderHook(useSignupGrantCredits).result.current).toBe(credits);
+  });
+  it('lets the initial credits key win whatever the retired staged flag says', () => {
+    h.values.stagedSignupGrantEnabled = 'false';
+    h.values.signupGrantInitialCredits = '500';
+    expect(renderHook(useSignupGrantCredits).result.current).toBe(500);
   });
   it('does not advertise credits when the configured tranche is zero', () => {
     h.values.signupGrantCredits = 0;

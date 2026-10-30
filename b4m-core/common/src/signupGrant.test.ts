@@ -3,6 +3,7 @@ import {
   newSignupGrant,
   resolveSignupGrantSchedule,
   resolveSignupGrantSettings,
+  signupGrantDripOpen,
   signupGrantDripRemaining,
 } from './signupGrant';
 
@@ -25,8 +26,11 @@ describe('signup grant configuration', () => {
 
   it.each([
     ['a stored drip cap', { signupGrantInitialCredits: '75', signupGrantDripCap: '9000' }],
-    ['a legacy unlock key of 0', { signupGrantCredits: '75', verifiedUnlockCredits: '0' }],
-    ['no cap key', { signupGrantCredits: '75' }],
+    [
+      'a legacy unlock key of 0',
+      { stagedSignupGrantEnabled: 'true', signupGrantCredits: '75', verifiedUnlockCredits: '0' },
+    ],
+    ['no cap key', { stagedSignupGrantEnabled: 'true', signupGrantCredits: '75' }],
   ])('still splits an invite into tranche plus locked remainder under %s', async (_label, values) => {
     expect(await newSignupGrant(settings(values), 200)).toMatchObject({ signupCredits: 75, unlockCredits: 125 });
   });
@@ -34,7 +38,9 @@ describe('signup grant configuration', () => {
   it.each(['0', '75', '-1', 'invalid'])(
     'preserves a restricted legacy setting %s and falls back to the default drip cap',
     async value => {
-      const result = await resolveSignupGrantSettings(settings({ defaultFreeCredits: value }));
+      const result = await resolveSignupGrantSettings(
+        settings({ stagedSignupGrantEnabled: 'true', defaultFreeCredits: value })
+      );
       expect(result.signupCredits).toBe(value === '75' ? 75 : 0);
       expect(result.unlockCredits).toBe(9000);
     }
@@ -61,6 +67,8 @@ describe('signup grant configuration', () => {
 
 describe('signup grant schedule', () => {
   const prodOldKeys = {
+    stagedSignupGrantEnabled: 'true',
+    signupGrantActivityEnabled: 'true',
     defaultFreeCredits: '10000',
     signupGrantCredits: '1000',
     verifiedUnlockCredits: '9000',
@@ -73,6 +81,8 @@ describe('signup grant schedule', () => {
       initialCredits: 1000,
       dailyCredits: 1000,
       dripCap: 9000,
+      unlockCredits: 9000,
+      paysFlat: false,
       inviteBonusCredits: 0,
       dripCapSource: 'legacy',
     });
@@ -94,6 +104,8 @@ describe('signup grant schedule', () => {
       initialCredits: 250,
       dailyCredits: 300,
       dripCap: 4000,
+      unlockCredits: 4000,
+      paysFlat: false,
       inviteBonusCredits: 50,
       dripCapSource: 'setting',
     });
@@ -120,24 +132,69 @@ describe('signup grant schedule', () => {
   });
 
   it('takes the smaller legacy cap, or the one that is set', async () => {
+    const staged = { stagedSignupGrantEnabled: 'true' };
     const both = await resolveSignupGrantSchedule(
-      settings({ signupGrantActivityMaxCredits: '9000', verifiedUnlockCredits: '5000' })
+      settings({ ...staged, signupGrantActivityMaxCredits: '9000', verifiedUnlockCredits: '5000' })
     );
     expect(both.dripCap).toBe(5000);
-    const one = await resolveSignupGrantSchedule(settings({ verifiedUnlockCredits: '7000' }));
+    const one = await resolveSignupGrantSchedule(settings({ ...staged, verifiedUnlockCredits: '7000' }));
     expect([one.dripCap, one.dripCapSource]).toEqual([7000, 'legacy']);
-    const off = await resolveSignupGrantSchedule(
-      settings({ signupGrantActivityMaxCredits: '0', verifiedUnlockCredits: '9000' })
-    );
-    expect(off.dripCap).toBe(0);
   });
 
-  it('reports the registry default when no cap key is set', async () => {
-    const schedule = await resolveSignupGrantSchedule(settings({}));
+  it('keeps a legacy activity max of 0 as drip-off while verification still releases verifiedUnlockCredits', async () => {
+    const values = {
+      stagedSignupGrantEnabled: 'true',
+      signupGrantActivityMaxCredits: '0',
+      verifiedUnlockCredits: '9000',
+    };
+    const off = await resolveSignupGrantSchedule(settings(values));
+    expect([off.dripCap, off.unlockCredits, off.paysFlat]).toEqual([0, 9000, false]);
+    expect(await newSignupGrant(settings({ ...values, signupGrantCredits: '1000' }))).toMatchObject({
+      signupCredits: 1000,
+      unlockCredits: 9000,
+    });
+  });
+
+  it('pays the flat grant with no drip while the schedule keys are unset and the retired toggles are off', async () => {
+    const preMigration = {
+      stagedSignupGrantEnabled: 'false',
+      signupGrantActivityEnabled: 'false',
+      defaultFreeCredits: '10000',
+      signupGrantCredits: '1000',
+      verifiedUnlockCredits: '9000',
+      signupGrantActivityDailyCredits: '1000',
+      signupGrantActivityMaxCredits: '9000',
+    };
+    expect(await resolveSignupGrantSchedule(settings(preMigration))).toEqual({
+      initialCredits: 10000,
+      dailyCredits: 0,
+      dripCap: 0,
+      unlockCredits: 0,
+      paysFlat: true,
+      inviteBonusCredits: 0,
+      dripCapSource: 'legacy',
+    });
+    expect(await newSignupGrant(settings(preMigration))).toMatchObject({ signupCredits: 10000, unlockCredits: 0 });
+    expect(await newSignupGrant(settings(preMigration), 200)).toMatchObject({ signupCredits: 200, unlockCredits: 0 });
+    expect(await resolveSignupGrantSchedule(settings({}))).toMatchObject({ dripCap: 0, dripCapSource: 'legacy' });
+  });
+
+  it('keeps the legacy daily amount only while the retired activity toggle is on', async () => {
+    const values = { stagedSignupGrantEnabled: 'true', signupGrantActivityDailyCredits: '1000' };
+    expect((await resolveSignupGrantSchedule(settings(values))).dailyCredits).toBe(0);
+    expect(
+      (await resolveSignupGrantSchedule(settings({ ...values, signupGrantActivityEnabled: true }))).dailyCredits
+    ).toBe(1000);
+  });
+
+  it('reports the registry default when staging is on and no cap key is set', async () => {
+    const schedule = await resolveSignupGrantSchedule(settings({ stagedSignupGrantEnabled: 'true' }));
     expect(schedule).toEqual({
       initialCredits: 0,
       dailyCredits: 0,
       dripCap: 9000,
+      unlockCredits: 9000,
+      paysFlat: false,
       inviteBonusCredits: 0,
       dripCapSource: 'default',
     });
@@ -158,5 +215,17 @@ describe('signupGrantDripRemaining', () => {
   });
   it('leaves nothing under a 0 cap', () => {
     expect(signupGrantDripRemaining({}, 0)).toBe(0);
+  });
+});
+
+describe('signupGrantDripOpen', () => {
+  it.each([
+    [{ stage: 'signup' }, true],
+    [{ stage: 'unlocked', unlockedBy: 'activity_drip' }, true],
+    [{ stage: 'unlocked', unlockedBy: 'card_verified' }, false],
+    [{ stage: 'unlocked' }, false],
+    [{ stage: 'pending_email' }, false],
+  ] as const)('%j is open: %s', (grant, open) => {
+    expect(signupGrantDripOpen(grant)).toBe(open);
   });
 });

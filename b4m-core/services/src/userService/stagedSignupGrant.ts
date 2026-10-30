@@ -3,6 +3,7 @@ import {
   hasPaidSignupDrip,
   PENDING_FREE_CREDITS_TAG,
   resolveSignupGrantSchedule,
+  signupGrantDripOpen,
   signupGrantDripRemaining,
   type IUserDocument,
   type SignupGrant,
@@ -134,7 +135,7 @@ async function releaseStage(
           const dripped = grant.dripCredits ?? 0;
           if (hasPaidSignupDrip(grant, day, period) || !Number.isSafeInteger(dripped) || dripped < 0) return noGrant();
           // A verification unlock already paid the whole entitlement; only a drip-completed grant reopens on a raised cap.
-          if (grant.stage === 'unlocked' && grant.unlockedBy !== 'activity_drip') return noGrant();
+          if (!signupGrantDripOpen(grant)) return noGrant();
           dripAmount = Math.max(0, Math.min(dailyCredits, signupGrantDripRemaining(grant, dripCap)));
           target = grant.creditsReleased + dripAmount;
           // The live cap governs the drip, so a cap raised after enrollment grows the snapshot pool to fit,
@@ -318,20 +319,35 @@ async function unlockWithHeldTranche(
 }
 
 let unsetDripCapAlertDay: string | undefined;
+let unsetDripCapAlertInFlight = false;
 
-/** Fire-and-forget, at most once per UTC day per process: the drip is paying from the registry default cap. */
+/**
+ * Fire-and-forget, at most once per UTC day per process: the drip is paying from the registry default cap.
+ * The day is marked only after a delivered alert, so a failed post retries on the next drip.
+ */
 function notifyUnsetDripCap(protection: GrantAdapters['db']['signupProtection'], fallback: number) {
   const today = new Date().toISOString().slice(0, 10);
-  if (!protection?.notifyConfig || unsetDripCapAlertDay === today) return;
-  unsetDripCapAlertDay = today;
-  protection.notifyConfig({ setting: 'signupGrantDripCap', fallback }).catch(error => {
-    console.warn('[signup-grant] Unset drip cap alert failed', error);
-  });
+  if (!protection?.notifyConfig || unsetDripCapAlertDay === today || unsetDripCapAlertInFlight) return;
+  unsetDripCapAlertInFlight = true;
+  protection
+    .notifyConfig({ setting: 'signupGrantDripCap', fallback })
+    .then(
+      () => {
+        unsetDripCapAlertDay = today;
+      },
+      error => {
+        console.warn('[signup-grant] Unset drip cap alert failed', error);
+      }
+    )
+    .finally(() => {
+      unsetDripCapAlertInFlight = false;
+    });
 }
 
 /** Test seam: clears the once-per-day alert dedupe. */
 export function resetUnsetDripCapAlert() {
   unsetDripCapAlertDay = undefined;
+  unsetDripCapAlertInFlight = false;
 }
 
 export async function resolveDripLimits(adminSettings: GrantAdapters['db']['adminSettings']) {
@@ -353,8 +369,8 @@ export async function dripSignupGrant(
   if (period !== undefined && !/^preview:\d{1,4}:\d+$/.test(period)) return noGrant();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return noGrant();
   const { dailyCredits, dripCap, dripCapSource } = await resolveDripLimits(adapters.db.adminSettings);
-  if (dripCapSource === 'default') notifyUnsetDripCap(adapters.db.signupProtection, dripCap);
   if (!(dailyCredits > 0) || !(dripCap > 0)) return noGrant();
+  if (dripCapSource === 'default') notifyUnsetDripCap(adapters.db.signupProtection, dripCap);
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || hasPaidSignupDrip(user.signupGrant, day, period)) return noGrant();
   // Existence only, and bounded: holders that are blocked, AI-revoked or held before `day` are ignored

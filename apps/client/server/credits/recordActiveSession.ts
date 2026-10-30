@@ -1,4 +1,4 @@
-import { hasPaidSignupDrip, signupGrantDripRemaining } from '@bike4mind/common';
+import { hasPaidSignupDrip, signupGrantDripOpen, signupGrantDripRemaining } from '@bike4mind/common';
 import { resolveSignupDripPeriod } from './signupDripPeriod';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
@@ -28,7 +28,7 @@ export async function recordHeartbeat(userId: string, now: Date = new Date()): P
 
   const user = await userRepository.findById(userId);
   const grant = user?.signupGrant;
-  if (!grant || grant.stage !== 'signup') return result;
+  if (!grant || !signupGrantDripOpen(grant)) return result;
   const period = await resolveSignupDripPeriod(clock);
   const { day } = period;
   result.nextEligibleAt = period.endsAt;
@@ -52,7 +52,7 @@ export async function recordHeartbeat(userId: string, now: Date = new Date()): P
   const written = await User.updateOne(
     {
       _id: userId,
-      'signupGrant.stage': 'signup',
+      'signupGrant.stage': grant.stage,
       ...(lastAt ? { 'signupGrant.activity.lastAt': lastAt } : { 'signupGrant.activity': { $exists: false } }),
     },
     { $set: { 'signupGrant.activity': { day, ms, lastAt: clock, ...(period.key ? { period: period.key } : {}) } } }

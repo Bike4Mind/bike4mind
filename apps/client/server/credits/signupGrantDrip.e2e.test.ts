@@ -26,6 +26,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const config: Record<string, string> = {
   stagedSignupGrantEnabled: 'true',
+  signupGrantActivityEnabled: 'true',
   signupGrantCredits: '1000',
   verifiedUnlockCredits: '9000',
   signupGrantDailyBudget: '0',
@@ -235,6 +236,28 @@ describe('signup activity drip', () => {
     await drip(user.id, 1);
     expect(notifyConfig).toHaveBeenCalledTimes(1);
     expect(notifyConfig).toHaveBeenCalledWith({ setting: 'signupGrantDripCap', fallback: 9000 });
+  });
+
+  it('does not alert on the default cap while the daily amount is 0', async () => {
+    delete config.verifiedUnlockCredits;
+    delete config.signupGrantActivityMaxCredits;
+    config.signupGrantDailyCredits = '0';
+    const user = await createSignupStageUser();
+    await drip(user.id, 0);
+    expect(notifyConfig).not.toHaveBeenCalled();
+  });
+
+  it('retries the unset-cap alert on the next drip after an undelivered post', async () => {
+    delete config.verifiedUnlockCredits;
+    delete config.signupGrantActivityMaxCredits;
+    notifyConfig.mockRejectedValueOnce(new Error('not delivered'));
+    const user = await createSignupStageUser();
+    await drip(user.id, 0);
+    await new Promise(resolve => setImmediate(resolve));
+    await drip(user.id, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    await drip(user.id, 2);
+    expect(notifyConfig).toHaveBeenCalledTimes(2);
   });
 
   it('does not alert when a cap is configured', async () => {

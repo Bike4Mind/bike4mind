@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { signupGrantDripRemaining } from '@bike4mind/common';
+import { signupGrantDripOpen, signupGrantDripRemaining } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSignupGrantSchedule } from '@client/app/hooks/useSignupGrantSchedule';
@@ -39,7 +39,8 @@ export function useSignupGrantHeartbeat() {
   const queryClient = useQueryClient();
   const { dailyCredits, dripCap } = useSignupGrantSchedule();
   const grant = currentUser?.signupGrant;
-  const eligible = dailyCredits > 0 && grant?.stage === 'signup' && signupGrantDripRemaining(grant, dripCap) > 0;
+  const eligible =
+    dailyCredits > 0 && !!grant && signupGrantDripOpen(grant) && signupGrantDripRemaining(grant, dripCap) > 0;
   const userId = currentUser?.id;
 
   useEffect(() => {

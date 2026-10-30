@@ -285,6 +285,7 @@ describe('active session heartbeat', () => {
   it('pays with the retired activity flag off when the daily amount is positive', async () => {
     const user = await createSignupStageUser(0);
     config.signupGrantActivityEnabled = 'false';
+    config.signupGrantDailyCredits = '1000';
     await User.updateOne({ _id: user.id }, { currentCredits: 0 });
     expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 1000, paidToday: true });
   });
@@ -346,5 +347,39 @@ describe('active session heartbeat', () => {
     expect(await activityOf(user.id)).toBeUndefined();
     config.signupGrantActivityMaxCredits = '9000';
     expect(await pingEvery60s(user.id, 660, 1260)).toMatchObject({ creditsGranted: 1000, paidToday: true });
+  });
+
+  it('reopens a drip-completed grant through the heartbeat when the live cap is raised', async () => {
+    config.signupGrantDripCap = '1000';
+    const user = await createSignupStageUser();
+    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 1000, paidToday: true });
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      stage: 'unlocked',
+      unlockedBy: 'activity_drip',
+      dripCredits: 1000,
+    });
+    const nextDay = 86_400;
+    config.signupGrantDripCap = '2500';
+    expect(await pingEvery60s(user.id, nextDay, nextDay + 600)).toMatchObject({
+      creditsGranted: 1000,
+      paidToday: true,
+    });
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ stage: 'signup', dripCredits: 2000 });
+  });
+
+  it('does not reopen a grant a verification unlock completed when the cap is raised', async () => {
+    const user = await createSignupStageUser();
+    await User.updateOne(
+      { _id: user.id },
+      {
+        'signupGrant.stage': 'unlocked',
+        'signupGrant.unlockedBy': 'card_verified',
+        'signupGrant.creditsReleased': 10000,
+      }
+    );
+    config.signupGrantDripCap = '20000';
+    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, activeSeconds: 0 });
+    expect(await activityOf(user.id)).toBeUndefined();
+    expect(await dripRows(user.id)).toHaveLength(0);
   });
 });

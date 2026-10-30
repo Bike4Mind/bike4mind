@@ -467,6 +467,7 @@ describe('staged signup ledger', () => {
         ({
           settingValue: (
             {
+              stagedSignupGrantEnabled: 'true',
               signupGrantActivityEnabled: 'true',
               signupGrantActivityMinActiveSeconds: '600',
               signupGrantActivityDailyCredits: '10',

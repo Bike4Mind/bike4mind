@@ -103,27 +103,60 @@ export interface SignupGrantSchedule {
   initialCredits: number;
   dailyCredits: number;
   dripCap: number;
+  /** Locked at enrollment and released by a verification unlock. */
+  unlockCredits: number;
+  /** Nothing is locked, so a referral invite pays whole as the pre-staging flat grant did. */
+  paysFlat: boolean;
   inviteBonusCredits: number;
   dripCapSource: SignupGrantDripCapSource;
 }
 
+/** The pre-schedule on/off switches; they only matter while the matching schedule key is unset. */
+export interface SignupGrantLegacyToggles {
+  staged: boolean;
+  activity: boolean;
+}
+
+export const isStoredToggleOn = (value: unknown) => value === true || value === 'true';
+
+/** The drip may still pay: the grant is mid-drip, or a drip completed it and a raised cap can reopen it. */
+export function signupGrantDripOpen(grant: Pick<SignupGrant, 'stage' | 'unlockedBy'>): boolean {
+  return grant.stage === 'signup' || (grant.stage === 'unlocked' && grant.unlockedBy === 'activity_drip');
+}
+
 /**
  * Resolves the schedule from stored values. Must stay in sync with the client mirror in
- * apps/client/app/hooks/useSignupGrantSchedule.ts.
+ * apps/client/app/hooks/useSignupGrantSchedule.ts and the seed in
+ * packages/scripts/migrate/migrations/20260921236500_seed-signup-grant-schedule.ts.
  */
 export function signupGrantScheduleFromValues(
-  read: (key: SignupGrantCreditKey) => number | undefined
+  read: (key: SignupGrantCreditKey) => number | undefined,
+  toggles: SignupGrantLegacyToggles
 ): SignupGrantSchedule {
   const cap = read('signupGrantDripCap');
-  const legacyCaps = [read('signupGrantActivityMaxCredits'), read('verifiedUnlockCredits')].filter(
+  const verifiedUnlock = read('verifiedUnlockCredits');
+  const legacyCaps = [read('signupGrantActivityMaxCredits'), verifiedUnlock].filter(
     (value): value is number => value !== undefined
   );
+  // Unset schedule keys with staging off keep the flat grant: nothing locked, no drip.
+  const legacyCap = !toggles.staged ? 0 : legacyCaps.length ? Math.min(...legacyCaps) : undefined;
+  const dripCap = cap ?? legacyCap ?? settingsMap.signupGrantDripCap.defaultValue ?? 0;
+  const dripCapSource: SignupGrantDripCapSource =
+    cap !== undefined ? 'setting' : legacyCap !== undefined ? 'legacy' : 'default';
   return {
-    initialCredits: read('signupGrantInitialCredits') ?? read('signupGrantCredits') ?? read('defaultFreeCredits') ?? 0,
-    dailyCredits: read('signupGrantDailyCredits') ?? read('signupGrantActivityDailyCredits') ?? 0,
-    dripCap: cap ?? (legacyCaps.length ? Math.min(...legacyCaps) : (settingsMap.signupGrantDripCap.defaultValue ?? 0)),
+    initialCredits:
+      read('signupGrantInitialCredits') ??
+      (toggles.staged ? read('signupGrantCredits') : undefined) ??
+      read('defaultFreeCredits') ??
+      0,
+    dailyCredits:
+      read('signupGrantDailyCredits') ?? (toggles.activity ? read('signupGrantActivityDailyCredits') : 0) ?? 0,
+    dripCap,
+    // Without a stored cap, verification releases verifiedUnlockCredits as before, even where a 0 activity max stops the drip.
+    unlockCredits: cap !== undefined || !toggles.staged ? dripCap : (verifiedUnlock ?? dripCap),
+    paysFlat: cap !== undefined ? cap === 0 : !toggles.staged,
     inviteBonusCredits: read('signupGrantInviteBonusCredits') ?? 0,
-    dripCapSource: cap !== undefined ? 'setting' : legacyCaps.length ? 'legacy' : 'default',
+    dripCapSource,
   };
 }
 
@@ -147,12 +180,17 @@ export async function resolveSignupGrantSchedule(
   for (const key of SCHEDULE_KEYS) {
     stored.set(key, storedGrantCredits(key, (await adminSettings.findBySettingName(key))?.settingValue));
   }
-  return signupGrantScheduleFromValues(key => stored.get(key));
+  const toggle = async (key: 'stagedSignupGrantEnabled' | 'signupGrantActivityEnabled') =>
+    isStoredToggleOn((await adminSettings.findBySettingName(key))?.settingValue);
+  return signupGrantScheduleFromValues(key => stored.get(key), {
+    staged: await toggle('stagedSignupGrantEnabled'),
+    activity: await toggle('signupGrantActivityEnabled'),
+  });
 }
 
 export async function resolveSignupGrantSettings(adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>) {
   const schedule = await resolveSignupGrantSchedule(adminSettings);
-  return { signupCredits: schedule.initialCredits, unlockCredits: schedule.dripCap };
+  return { signupCredits: schedule.initialCredits, unlockCredits: schedule.unlockCredits };
 }
 
 /**
@@ -165,18 +203,16 @@ export async function newSignupGrant(
   totalCredits?: number
 ) {
   const schedule = await resolveSignupGrantSchedule(adminSettings);
-  // Only a stored cap of 0 pays an invite whole: a legacy unlock key of 0 never governed the invite split.
-  const locksNothing = schedule.dripCapSource === 'setting' && schedule.dripCap === 0;
   const signupCredits =
     totalCredits === undefined
       ? schedule.initialCredits
-      : locksNothing
+      : schedule.paysFlat
         ? totalCredits
         : Math.min(schedule.initialCredits, totalCredits);
   return {
     stage: 'pending_email',
     signupCredits,
-    unlockCredits: totalCredits === undefined ? schedule.dripCap : totalCredits - signupCredits,
+    unlockCredits: totalCredits === undefined ? schedule.unlockCredits : totalCredits - signupCredits,
     creditsReleased: 0,
     nextCondition: 'email_verification',
   } satisfies SignupGrant;
