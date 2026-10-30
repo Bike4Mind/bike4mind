@@ -282,13 +282,25 @@ describe('SessionStore', () => {
       const before = (await store.get(id))?.updatedAt;
 
       expect(await store.setOrchestrate(id, true)).toMatchObject({ id, orchestrate: true });
-      const relaunched = new SessionStore(directory, MODEL);
-      expect(await relaunched.get(id)).toMatchObject({ orchestrate: true, updatedAt: before });
-      expect((await relaunched.list())[0]).toMatchObject({ id, orchestrate: true });
+      expect(await store.get(id)).toMatchObject({ orchestrate: true, updatedAt: before });
+      expect((await store.list())[0]).toMatchObject({ id, orchestrate: true });
 
       expect(await store.setOrchestrate(id, false)).not.toHaveProperty('orchestrate');
       expect(JSON.parse(await readFile(join(directory, `${id}.json`), 'utf8'))).not.toHaveProperty('orchestrate');
-      expect((await new SessionStore(directory, MODEL).list())[0]).not.toHaveProperty('orchestrate');
+      expect((await store.list())[0]).not.toHaveProperty('orchestrate');
+    });
+
+    it('drops the flag on a relaunch, as full access is dropped, from the file and the cached summary', async () => {
+      const { id } = await store.create();
+      await store.setOrchestrate(id, true);
+      // Caches the flagged summary in the index the next launch would read.
+      expect((await store.list())[0]).toMatchObject({ orchestrate: true });
+
+      const relaunched = new SessionStore(directory, MODEL, 'next-launch');
+      expect(await relaunched.get(id)).not.toHaveProperty('orchestrate');
+      expect((await relaunched.list())[0]).not.toHaveProperty('orchestrate');
+      expect(await relaunched.setOrchestrate(id, true)).toMatchObject({ orchestrate: true });
+      expect(await relaunched.get(id)).toMatchObject({ orchestrate: true });
     });
 
     it('reads a session and a cached summary written before the flag existed as not orchestrating', async () => {

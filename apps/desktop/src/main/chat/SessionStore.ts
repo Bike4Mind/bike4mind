@@ -43,12 +43,14 @@ export function deriveTitle(prompt: string): string {
 }
 
 /**
- * A session file as it is stored, which carries one field the rest of the app never sees.
+ * A session file as it is stored, which carries two fields the rest of the app never sees.
  *
  * `approvalModeLaunch` stamps a 'full' approval mode with the run of the app that chose it.
  * A file written by an earlier run reads back as 'ask' - see `normalizeApprovalMode`.
+ * `orchestrateLaunch` does the same for `orchestrate`, which also lifts a gate (on spawning), so
+ * it lasts one run of the app as 'full' does and reads back as off after a relaunch.
  */
-type StoredSession = ChatSession & { approvalModeLaunch?: string };
+type StoredSession = ChatSession & { approvalModeLaunch?: string; orchestrateLaunch?: string };
 
 /**
  * The approval mode a stored session actually gets, which is not always the one on disk.
@@ -578,9 +580,9 @@ export class SessionStore implements SessionWritesStore {
       if (parsed.version !== SUMMARY_INDEX_VERSION || parsed.defaults !== this.summaryDefaults()) return index;
       for (const [id, entry] of Object.entries(parsed.entries ?? {})) {
         if (!isValidSessionId(id) || !entry?.summary || typeof entry.size !== 'number') continue;
-        // 'full' is scoped to the launch that chose it (see normalizeApprovalMode), so a summary
-        // carrying it from an earlier run is stale by definition.
-        if (entry.summary.approvalMode === 'full') continue;
+        // 'full' and orchestrate are scoped to the launch that chose them (see StoredSession), so
+        // a summary carrying either from an earlier run is stale by definition.
+        if (entry.summary.approvalMode === 'full' || entry.summary.orchestrate) continue;
         index.set(id, entry);
       }
     } catch {
@@ -1216,7 +1218,9 @@ export class SessionStore implements SessionWritesStore {
       ...(grantedDirectories.length > 0 ? { grantedDirectories } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
-      ...(parsed.orchestrate === true ? { orchestrate: true } : {}),
+      ...(parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch === this.launchId
+        ? { orchestrate: true }
+        : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
       ...(origin ? { origin } : {}),
@@ -1235,6 +1239,7 @@ export class SessionStore implements SessionWritesStore {
     const record: StoredSession = {
       ...session,
       ...(session.approvalMode === 'full' ? { approvalModeLaunch: this.launchId } : {}),
+      ...(session.orchestrate ? { orchestrateLaunch: this.launchId } : {}),
     };
     await mkdir(directory, { recursive: true });
     // Write-then-rename, as the auth vault does: a crash mid-write would otherwise truncate a

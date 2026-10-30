@@ -1213,7 +1213,7 @@ interface ChatSessionMeta {
   /**
    * The user turned on Orchestrate: the model is steered to split work across agents, and the
    * agents it asks for start without a card, the switch being the approval. Never inherited by
-   * a session it spawns.
+   * a session it spawns, and like 'full' approval it lasts one run of the app (SessionStore).
    */
   orchestrate?: boolean;
   /** Set when the agent spawned this session rather than the user starting it. */
