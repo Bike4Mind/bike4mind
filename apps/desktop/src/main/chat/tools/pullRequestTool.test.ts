@@ -84,6 +84,7 @@ describe('set_session_pull_request', () => {
       'That is not a GitHub pull request URL, owner/repo#N, or #N.'
     );
     await expect(run({ pull_request: '#9' })).rejects.toThrow(/No pull request is bound yet/);
+    await expect(run({ pull_request: '#0' })).rejects.toThrow('That is not a GitHub pull request URL');
     expect(await store.get(SESSION)).toBeNull();
   });
 

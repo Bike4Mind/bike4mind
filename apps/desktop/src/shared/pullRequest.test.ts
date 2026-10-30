@@ -113,6 +113,14 @@ describe('parsePullRequestTarget', () => {
     expect(parsePullRequestTarget('the second one', repo)).toBeNull();
     expect(parsePullRequestTarget('https://github.com/example-org/widgets/issues/42', repo)).toBeNull();
   });
+
+  it('refuses a number past what a GitHub read can carry, in every form', () => {
+    expect(parsePullRequestTarget('#2147483647', repo)?.number).toBe(2147483647);
+    expect(parsePullRequestTarget('#2147483648', repo)).toBeNull();
+    expect(parsePullRequestTarget('other-org/gears#9007199254740991')).toBeNull();
+    expect(parsePullRequestTarget('https://github.com/example-org/widgets/pull/2147483648')).toBeNull();
+    expect(findPullRequestUrls('https://github.com/example-org/widgets/pull/2147483648')).toEqual([]);
+  });
 });
 
 describe('samePullRequest', () => {

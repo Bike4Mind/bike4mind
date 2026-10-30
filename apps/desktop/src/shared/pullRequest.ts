@@ -251,6 +251,16 @@ export type PrBindOutcome = { ok: true; pr: PrRef } | { ok: false; error: string
 
 const PR_URL_PATTERN = /https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)\/pull\/(\d+)(?![\d/]*new\b)/g;
 
+/**
+ * GitHub's GraphQL `Int` is 32-bit, and PRs are read in shared batches: one number past it would
+ * fail the read for every PR in the batch, not just its own.
+ */
+const MAX_PR_NUMBER = 2_147_483_647;
+
+export function isPrNumber(number: number): boolean {
+  return Number.isInteger(number) && number > 0 && number <= MAX_PR_NUMBER;
+}
+
 function toRef(owner: string, repo: string, number: number): PrRef {
   return { owner, repo, number, url: `https://github.com/${owner}/${repo}/pull/${number}` };
 }
@@ -265,8 +275,7 @@ export function parsePullRequestUrl(text: string): PrRef | null {
   );
   if (!match) return null;
   const number = Number(match[3]);
-  if (!Number.isSafeInteger(number) || number < 1) return null;
-  return toRef(match[1], match[2], number);
+  return isPrNumber(number) ? toRef(match[1], match[2], number) : null;
 }
 
 /**
@@ -284,7 +293,7 @@ export function parsePullRequestTarget(text: string, repo?: { owner: string; rep
   const digits = named ? named[3] : bare?.[1];
   if (!owner || !name || !digits) return null;
   const number = Number(digits);
-  return Number.isSafeInteger(number) && number > 0 ? toRef(owner, name, number) : null;
+  return isPrNumber(number) ? toRef(owner, name, number) : null;
 }
 
 /**
@@ -295,7 +304,7 @@ export function findPullRequestUrls(text: string): PrRef[] {
   const found: PrRef[] = [];
   for (const match of text.matchAll(PR_URL_PATTERN)) {
     const number = Number(match[3]);
-    if (Number.isSafeInteger(number) && number > 0) found.push(toRef(match[1], match[2], number));
+    if (isPrNumber(number)) found.push(toRef(match[1], match[2], number));
   }
   return found;
 }

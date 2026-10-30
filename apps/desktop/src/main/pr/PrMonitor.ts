@@ -3,6 +3,7 @@ import type { AutomaticTurnResult } from '../chat/ChatService';
 import {
   isExplicitBinding,
   isFinishedState,
+  isPrNumber,
   parsePullRequestTarget,
   parsePullRequestUrl,
   prDisplayState,
@@ -119,6 +120,8 @@ interface QueuedRead {
 interface Live {
   snapshot: PrSnapshot | null;
   error?: string;
+  /** The last read found no such PR: a typo or an issue number, which must not hold a pin. */
+  missing?: boolean;
   /** The read in flight, so a second ask joins it rather than starting another gh. */
   inflight: Promise<void> | null;
   failures: number;
@@ -274,7 +277,8 @@ export class PrMonitor {
     return this.bindExplicit(sessionId, 'agent', current => {
       const ref = parsePullRequestTarget(target, current);
       if (ref) return ref;
-      if (!current && /^#?\d+$/.test(target.trim())) {
+      const digits = /^#?(\d+)$/.exec(target.trim())?.[1];
+      if (!current && digits && isPrNumber(Number(digits))) {
         return 'No pull request is bound yet, so a bare number names no repository. Give the full URL or owner/repo#N.';
       }
       return 'That is not a GitHub pull request URL, owner/repo#N, or #N.';
@@ -324,6 +328,12 @@ export class PrMonitor {
       }
       return;
     }
+    const contested = current && !explicit && !current.dismissed && !this.armed(current);
+    // A pin that rests on a state saved before this launch may be stale: the chosen PR can have
+    // merged since, and a follow-up PR must then bind. One read settles it.
+    if (contested && this.pinned(sessionId, current) && !this.live.get(sessionId)?.snapshot) {
+      await this.read(sessionId);
+    }
     if (current && !explicit && !current.dismissed && (this.armed(current) || this.pinned(sessionId, current))) {
       this.deps.logger.debug(`PR: kept #${current.number} on ${sessionId}; it has automation armed or was chosen`);
       return;
@@ -340,6 +350,7 @@ export class PrMonitor {
   /** A PR the user or agent chose, and not known to be finished; a follow-up PR may replace a merged one. */
   private pinned(sessionId: string, binding: PrBinding): boolean {
     if (!isExplicitBinding(binding.source)) return false;
+    if (this.live.get(sessionId)?.missing) return false;
     return !isFinishedState(this.live.get(sessionId)?.snapshot?.state ?? binding.lastState);
   }
 
@@ -751,10 +762,12 @@ export class PrMonitor {
       live.snapshot = snapshot;
       live.failures = 0;
       delete live.error;
+      delete live.missing;
       await this.afterRead(sessionId, binding, snapshot);
     } catch (err) {
       live.error = this.noteGhFailure(err);
       live.failures += 1;
+      live.missing = err instanceof GhError && err.kind === 'not-found';
       if (err instanceof GhError && err.kind === 'rate-limited') {
         this.pausedUntil = this.now() + POLL_MS.rateLimitPause;
         this.deps.logger.warn('PR: GitHub rate limit hit; pausing every PR read');

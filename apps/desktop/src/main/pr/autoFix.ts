@@ -6,6 +6,7 @@ import {
   type PrReviewThread,
   type PrSnapshot,
 } from '@shared/pullRequest';
+import { SET_SESSION_PULL_REQUEST_TOOL_NAME } from '../chat/tools/pullRequestTool';
 
 /**
  * Auto-fix turns allowed per PR before it gives up.
@@ -282,7 +283,8 @@ export function autoFixRefusal(command: string): string | null {
 export function autoFixToolRefusal(name: string, input: Record<string, unknown>): string | null {
   if (DELEGATING_TOOLS.has(name)) return 'An auto-fix turn may not hand work to another conversation; fix it here.';
   // Only the user says which PR the session follows, and a CI log or review comment is not the user.
-  if (name === 'set_session_pull_request') return 'An auto-fix turn may not change which PR this session follows.';
+  if (name === SET_SESSION_PULL_REQUEST_TOOL_NAME)
+    return 'An auto-fix turn may not change which PR this session follows.';
   if (!SHELL_TOOLS.has(name)) return null;
   return autoFixRefusal(typeof input.command === 'string' ? input.command : '');
 }

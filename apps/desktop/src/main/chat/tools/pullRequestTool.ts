@@ -30,7 +30,7 @@ export const setSessionPullRequest: ToolDefinition = {
         pull_request: {
           type: 'string',
           description:
-            'A GitHub PR URL (https://github.com/<owner>/<repo>/pull/<n>), <owner>/<repo>#<n>, or #<n> for ' +
+            'A GitHub PR URL (https://github.com/<owner>/<repo>/pull/<n>), <owner>/<repo>#<n>, or #<n> (or <n>) for ' +
             'a PR in the same repository as the one bound now.',
         },
         clear: {
