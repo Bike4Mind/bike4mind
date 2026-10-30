@@ -129,6 +129,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(repo, 'markComplete').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'incrementCreditsUsed').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'checkAbortFlag').mockResolvedValue(false as never);
+  vi.spyOn(actual.usageEventRepository, 'record').mockResolvedValue(undefined as never);
   vi.spyOn(actual.User, 'findById').mockResolvedValue({ id: 'user-1', currentCredits: 100_000 } as never);
   vi.spyOn(actual.sessionRepository, 'findById').mockResolvedValue({
     id: 'session-1',
@@ -411,5 +412,89 @@ describe('processSubagentDispatch admission and billing', () => {
 
     expect(markFailed).toHaveBeenCalledWith('child-1', { message: 'Insufficient credits to run subagent' });
     expect(delegateToAgentMock).not.toHaveBeenCalled();
+  });
+  describe('usage events', () => {
+    const usageRecord = async () => {
+      const { usageEventRepository } = await import('@bike4mind/database');
+      return vi.mocked(usageEventRepository.record);
+    };
+
+    it('records a usage event for a completed subagent, as the in-chat delegation path does', async () => {
+      await dispatch();
+
+      const record = await usageRecord();
+      expect(record).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          requestId: 'quest-1',
+          sessionId: 'session-1',
+          userId: 'user-1',
+          ownerId: 'user-1',
+          feature: 'tool',
+          provider: 'anthropic',
+          model: 'test-model',
+          inputTokens: 10,
+          outputTokens: 5,
+          creditsCharged: 7,
+          status: 'ok',
+        })
+      );
+      expect(record.mock.calls[0][0].costUsd).toBeCloseTo(10 * 3e-6 + 5 * 15e-6, 12);
+    });
+
+    it('records what a subagent spent before it failed', async () => {
+      delegateToAgentMock.mockRejectedValue(Object.assign(new Error('provider 500'), { spent: childResult }));
+
+      await dispatch();
+
+      expect(await usageRecord()).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ feature: 'tool', creditsCharged: 7, inputTokens: 10, outputTokens: 5 })
+      );
+    });
+
+    it('records an in-process grandchild from the priced usage it reports', async () => {
+      delegateToAgentMock.mockImplementation(async () => {
+        const callbacks = buildSharedToolsMock.mock.calls[0][1] as {
+          onSubagentCredits(credits: number, meta: Record<string, unknown>): Promise<void>;
+        };
+        await callbacks.onSubagentCredits(4, {
+          usdCost: 0.002,
+          provider: 'anthropic',
+          model: 'test-model',
+          inputTokens: 2,
+          outputTokens: 1,
+          cacheReadTokens: 3,
+          cacheWriteTokens: 0,
+        });
+        return childResult;
+      });
+
+      await dispatch();
+
+      const record = await usageRecord();
+      expect(record).toHaveBeenCalledTimes(2);
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ creditsCharged: 4, costUsd: 0.002, cachedInputTokens: 3, inputTokens: 2 })
+      );
+    });
+
+    it('skips the event when the model cannot be priced, and still charges', async () => {
+      delegateToAgentMock.mockResolvedValue({ ...childResult, model: 'unknown-model' });
+
+      await dispatch();
+
+      expect(await usageRecord()).not.toHaveBeenCalled();
+      expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
+    });
+
+    it('completes the subagent when the usage event write fails', async () => {
+      (await usageRecord()).mockRejectedValueOnce(new Error('ledger unavailable'));
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+
+      await dispatch();
+
+      expect(deductCreditsMock).toHaveBeenCalledTimes(1);
+      expect(agentExecutionRepository.markComplete).toHaveBeenCalledTimes(1);
+      expect(agentExecutionRepository.markFailed).not.toHaveBeenCalled();
+    });
   });
 });
