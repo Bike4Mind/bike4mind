@@ -261,7 +261,8 @@ export interface WorkspaceSessionSettingsEntry {
   respond?: (ctx: WorkspaceTurnContext) => Promise<WorkspaceTurnReply | null>;
   /**
    * Whether `respond` scripts this session's turns, for a workspace that scripts only some of its
-   * sessions. Absent, every session on a workspace with `respond` counts as scripted.
+   * sessions. Absent, every session on a workspace with `respond` counts as scripted. It sees the
+   * stored session, before `resolve` applies.
    */
   answersTurns?: (ctx: WorkspaceSessionSettingsContext) => Promise<boolean>;
 }
@@ -320,11 +321,13 @@ export async function applyWorkspaceSessionSettings<TSession extends SurfaceSett
 
 /**
  * Whether `ctx.session`'s workspace answers its turns itself, so no model may answer one. A predicate
- * that throws counts as yes, since a wrong no would let a model improvise a scripted reply.
+ * that throws counts as `whenPredicateFails`: yes by default, since a wrong no would let a model
+ * improvise a scripted reply.
  */
 export async function workspaceAnswersTurns(
   ctx: WorkspaceSessionSettingsContext,
-  table: WorkspaceSessionSettingsTable
+  table: WorkspaceSessionSettingsTable,
+  whenPredicateFails = true
 ): Promise<boolean> {
   const entry = ownedFieldsFor(ctx.session, table, false)?.entry;
   if (!entry?.respond) return false;
@@ -333,7 +336,7 @@ export async function workspaceAnswersTurns(
     return await entry.answersTurns(ctx);
   } catch (error) {
     ctx.logger?.warn(`Workspace turn predicate for "${normalizeSurfaceId(ctx.session.surface)}" failed`, error);
-    return true;
+    return whenPredicateFails;
   }
 }
 

@@ -240,6 +240,9 @@ describe('respondFromWorkspace', () => {
       true
     );
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(WORKSPACE), cause);
+    await expect(
+      workspaceAnswersTurns({ user: null, session: session(), logger: { warn } }, table, false)
+    ).resolves.toBe(false);
   });
 
   it('returns the workspace reply for a session on it', async () => {

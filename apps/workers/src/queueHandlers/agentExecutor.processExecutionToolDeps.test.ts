@@ -171,6 +171,12 @@ vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', (
       respond: async () => null,
       answersTurns: async () => false,
     },
+    'flaky-responding-workspace': {
+      ownedFields: [],
+      resolve: async () => ({}),
+      respond: async () => null,
+      answersTurns: async () => Promise.reject(new Error('lookup failed')),
+    },
   },
 }));
 
@@ -1024,6 +1030,16 @@ describe('processExecution tool deps', () => {
       const { agentExecutionRepository } = await import('@bike4mind/database');
 
       await runWithSession({ ...baseSession, surface: 'partly-responding-workspace' });
+
+      expect(agentExecutionRepository.markFailed).not.toHaveBeenCalledWith('exec-1', {
+        message: 'This session answers its own turns, so agent runs are not available in it',
+      });
+    });
+
+    it('lets a resumed run finish when the predicate fails', async () => {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+
+      await runWithSession({ ...baseSession, surface: 'flaky-responding-workspace' });
 
       expect(agentExecutionRepository.markFailed).not.toHaveBeenCalledWith('exec-1', {
         message: 'This session answers its own turns, so agent runs are not available in it',

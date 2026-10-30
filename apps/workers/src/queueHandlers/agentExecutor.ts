@@ -1040,8 +1040,15 @@ async function processExecution(
       await sendWs('failed', { executionId, reason: 'unauthorized' });
       return;
     }
-    // Such a session's replies are scripted, so an agent model must not improvise one.
-    if (await workspaceAnswersTurns({ user, logger, session: loadedSession }, premiumWorkspaceSessionSettings)) {
+    // Such a session's replies are scripted, so an agent model must not improvise one. A resumed run
+    // passed this check when it started, so a failed lookup on resume lets it finish.
+    if (
+      await workspaceAnswersTurns(
+        { user, logger, session: loadedSession },
+        premiumWorkspaceSessionSettings,
+        isNewExecution
+      )
+    ) {
       await agentExecutionRepository.markFailed(executionId, {
         message: 'This session answers its own turns, so agent runs are not available in it',
       });
