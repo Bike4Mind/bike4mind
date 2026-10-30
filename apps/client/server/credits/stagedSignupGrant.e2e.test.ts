@@ -18,6 +18,7 @@ import { unlockSignupGrantFromActivity } from './activityUnlock';
 import { unlockSignupGrantFromOrgInvite } from './orgInviteUnlock';
 import { checkSignupGrantEligibility } from './signupGrantEligibility';
 import { createUniqueOAuthUser } from '../utils/auth/createOAuthUser';
+import { Logger } from '@bike4mind/observability';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -844,6 +845,8 @@ describe('unset verified unlock credits', () => {
     const create = async (withUnlockRow: boolean) => {
       await resetDb();
       await seed(withUnlockRow);
+      vi.restoreAllMocks();
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
       const user = await createUniqueOAuthUser({
         name: 'Synthetic User',
         baseUsername: 'synthetic-user',
@@ -851,12 +854,14 @@ describe('unset verified unlock credits', () => {
         oauthCredentials: { strategy: 'google', id: 'synthetic' },
         pendingFreeCredits: true,
       });
-      return persistedGrant(user.id);
+      return { grant: await persistedGrant(user.id), warns: warn.mock.calls.length };
     };
 
     const stored = await create(true);
     const absent = await create(false);
-    expect(stored).toMatchObject({ stage: 'pending_email', signupCredits: 12, unlockCredits: 0 });
-    expect(absent).toEqual(stored);
+    expect(stored.grant).toMatchObject({ stage: 'pending_email', signupCredits: 12, unlockCredits: 0 });
+    expect(absent.grant).toEqual(stored.grant);
+    expect(stored.warns).toBe(0);
+    expect(absent.warns).toBe(1);
   });
 });
