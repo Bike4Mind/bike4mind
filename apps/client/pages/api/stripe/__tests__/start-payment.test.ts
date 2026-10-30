@@ -5,18 +5,31 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
 import { CreditPurchaseEvents, MIN_PRICE_PER_CREDIT_USD } from '@bike4mind/common';
 
-// baseApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
+type Middleware = (req: unknown, res: unknown, next: (error?: unknown) => void) => void;
+
+// baseApi: unwrap the chain so handler.post(fn) runs the route's .use() middlewares, then fn; an error passed
+// to next() rejects, as the real error handler would answer it. refuseBlockedAccount runs for real.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    use: function () {
-      return this;
-    },
-    post: (fn: unknown) => fn,
-  }),
+  baseApi: () => {
+    const middlewares: Middleware[] = [];
+    return {
+      use(middleware: Middleware) {
+        middlewares.push(middleware);
+        return this;
+      },
+      post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) {
+          await new Promise<void>((resolve, reject) =>
+            middleware(req, res, error => (error ? reject(error) : resolve()))
+          );
+        }
+        return fn(req, res);
+      },
+    };
+  },
 }));
 
-// requireStripeWebhook is applied via .use(), which our baseApi mock drops. Stub the
-// factory so importing the handler module doesn't touch real webhook config.
+// Stub the factory so importing the handler module doesn't touch real webhook config.
 vi.mock('@server/middlewares/requireStripeWebhook', () => ({
   requireStripeWebhook: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));

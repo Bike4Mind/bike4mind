@@ -15,6 +15,7 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
+import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
 import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
@@ -22,6 +23,7 @@ import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
+  .use(refuseBlockedAccount())
   .post<Request<{}, {}, z.infer<typeof OrgSubscriptionSubscribeSchema>>>(async (req, res) => {
     const { priceId, organizationId, quantity, organizationData, callbackUrl, attributionConsent, surface } =
       OrgSubscriptionSubscribeSchema.parse(req.body);

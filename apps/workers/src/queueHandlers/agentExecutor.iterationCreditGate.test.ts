@@ -9,6 +9,7 @@ import {
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
+  stopBlockedAccountIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 
@@ -109,6 +110,44 @@ describe('stopUnfundedIteration', () => {
   });
 });
 
+describe('stopBlockedAccountIteration', () => {
+  const denial = 'Account suspended pending dispute resolution. Please contact support.';
+  const gateArgs = (readAccessDenial: () => Promise<string | null>) => ({
+    executionId: 'exec-1',
+    readAccessDenial,
+    snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' }),
+  });
+
+  it('stops a run whose account was blocked since it was admitted, before the next iteration', async () => {
+    const deps = makeDeps();
+
+    await expect(
+      stopBlockedAccountIteration(
+        gateArgs(async () => denial),
+        deps
+      )
+    ).resolves.toBe(true);
+
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: denial });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'account_blocked',
+      partialResult: steps,
+    });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith('exec-1', `Stopped: ${denial}`);
+  });
+
+  it('lets an active account run, without snapshotting the agent', async () => {
+    const deps = makeDeps();
+    const args = gateArgs(async () => null);
+
+    await expect(stopBlockedAccountIteration(args, deps)).resolves.toBe(false);
+
+    expect(args.snapshot).not.toHaveBeenCalled();
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+});
+
 describe('aggregationWakeStartIteration', () => {
   it('exempts the resuming iteration of an aggregation wake and nothing else', () => {
     expect(aggregationWakeStartIteration(true, 4)).toBe(4);
@@ -175,6 +214,14 @@ describe('processExecution iteration-gate wiring', () => {
     expect(loopSource).toMatch(/if \(gateThisIteration && modelInfo\) \{/);
     expect(loopSource).toMatch(/const stopped = await stopUnfundedIteration\(/);
     expect(loopSource).toMatch(/if \(stopped\) return;/);
+  });
+
+  it('re-reads the account state before every iteration, ahead of the credit gate', () => {
+    const accountGate = loopSource.indexOf('const blocked = await stopBlockedAccountIteration(');
+    expect(accountGate).toBeGreaterThanOrEqual(0);
+    expect(accountGate).toBeLessThan(loopSource.indexOf('const gateThisIteration = shouldGateIteration({'));
+    expect(loopSource).toContain('readAccessDenial: () => readUserAccessDenial((user as IUserDocument).id),');
+    expect(loopSource).toMatch(/if \(blocked\) return;/);
   });
 
   it('grows the next estimate from the iteration that just ran', () => {

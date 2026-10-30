@@ -46,6 +46,7 @@ import {
   cacheRepository,
 } from '@bike4mind/database';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   registerLambdaErrorHandlers,
   getSettingsByNames,
@@ -204,6 +205,7 @@ import {
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
+  stopBlockedAccountIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
@@ -746,6 +748,12 @@ export function buildInProcessCreditCapCheck(
  */
 async function readPayerBalance(payer: { organizationId?: string | null; userId: string }): Promise<number> {
   return loadPayerBalance(payer, { organizations: organizationRepository, users: userRepository });
+}
+
+/** A fresh read of the run's user, so the per-iteration account gate never decides on the invocation's snapshot. */
+async function readUserAccessDenial(userId: string): Promise<string | null> {
+  const user = await userRepository.findById(userId);
+  return user ? aiAccessDeniedMessage(user) : 'User not found';
 }
 
 /**
@@ -2849,6 +2857,26 @@ async function processExecution(
         logger.info('[Timeout] Self-dispatched to continuation queue');
         return;
       }
+
+      // A run outlives the message that admitted it, so an account blocked mid-run stops at the next iteration.
+      const blocked = await stopBlockedAccountIteration(
+        {
+          executionId,
+          readAccessDenial: () => readUserAccessDenial((user as IUserDocument).id),
+          snapshot: () => {
+            const checkpoint = agent.toCheckpoint();
+            return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
+          },
+        },
+        {
+          markFailed: (id, error) => agentExecutionRepository.markFailed(id, error),
+          sendWs,
+          persistRunAsQuest: (id, message) =>
+            persistRunAsQuest(id, message, logger, generatedImages, undefined, allSideEffects, retrievalSummary),
+          logger,
+        }
+      );
+      if (blocked) return;
 
       // Each iteration settles with an unconditional debit, so stop before one the payer's live
       // balance cannot cover rather than letting the run carry the balance below zero. The one
