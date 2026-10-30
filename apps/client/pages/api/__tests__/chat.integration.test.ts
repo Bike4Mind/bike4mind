@@ -1258,6 +1258,7 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       type: 'error',
       reply: 'You do not have access to this session',
       replies: [],
+      createdAt: new Date('2026-08-03T00:00:00Z'),
     });
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
     await handler(req, res);
@@ -1271,7 +1272,10 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
   });
 
   it('returns the prompt text when includeSystemPrompt is set', async () => {
-    const TEXT = { blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false }] };
+    const TEXT = {
+      blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false, placement: 'system' }],
+      sizeCapped: false,
+    };
     mockSystemPromptText.value = TEXT;
     const { req, res } = fire({
       body: { message: 'hello', sessionId: 'sess-1', wait: true, includeSystemPrompt: true },
@@ -1279,6 +1283,26 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().promptText).toEqual(TEXT);
+  });
+
+  it('sends a wait reply the contract declares in full, with every optional field present', async () => {
+    mockSystemPromptText.value = {
+      blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false, placement: 'system' }],
+      sizeCapped: false,
+    };
+    const warn = vi.spyOn(Logger.resetMetadata(), 'warn');
+    const { req, res } = fire({
+      body: {
+        message: 'hello',
+        sessionId: 'sess-1',
+        wait: true,
+        includeSystemPrompt: true,
+        includePromptDetails: true,
+      },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(warn.mock.calls.filter(([message]) => String(message).startsWith('[contract]'))).toEqual([]);
   });
 
   it('omits the prompt text without the flag, so the text is never returned unasked', async () => {
@@ -1512,7 +1536,14 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       mockReleaseReservedCredits.mockResolvedValue(undefined);
       mockSendStatusUpdate.mockReset().mockResolvedValue(undefined);
       // A turn still mid-flight when the deadline fires: nothing streamed yet.
-      mockInvoke.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
+      mockInvoke.mockResolvedValue({
+        id: 'quest-2',
+        status: 'running',
+        type: 'message',
+        reply: '',
+        replies: [],
+        createdAt: new Date('2026-08-03T00:00:00Z'),
+      });
     });
     afterEach(() => {
       waitTurnLimits.budgetMs = 45_000;

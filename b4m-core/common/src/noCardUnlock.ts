@@ -17,6 +17,8 @@ export type NoCardUnlockRefusal =
   | 'work_email_probe_inconclusive'
   | 'domain_cap_reached'
   | 'signup_held'
+  | 'signup_grant_pending'
+  | 'daily_budget_reached'
   | 'cap_reached'
   | 'inbox_already_claimed'
   | 'already_granted';

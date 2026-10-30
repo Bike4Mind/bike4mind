@@ -71,7 +71,7 @@ ArtifactContentSchema.index({ artifactId: 1, version: 1 }, { unique: true }); //
 ArtifactContentSchema.index({ contentHash: 1 }); // Content deduplication
 ArtifactContentSchema.index({ createdAt: -1 }); // Recent content
 
-export const ArtifactContent =
+export const ArtifactContent: Model<IArtifactContentDocument> =
   (mongoose.models.ArtifactContent as mongoose.Model<IArtifactContentDocument>) ||
   model<IArtifactContentDocument>('ArtifactContent', ArtifactContentSchema);
 

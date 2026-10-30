@@ -55,7 +55,7 @@ PublishedArtifactReportSchema.index(
 PublishedArtifactReportSchema.index({ status: 1, createdAt: -1 }); // moderation queue
 PublishedArtifactReportSchema.index({ publicId: 1, createdAt: -1 }); // reports for one artifact
 
-export const PublishedArtifactReport =
+export const PublishedArtifactReport: Model<IPublishedArtifactReportDocument> =
   (mongoose.models.PublishedArtifactReport as mongoose.Model<IPublishedArtifactReportDocument>) ||
   model<IPublishedArtifactReportDocument>('PublishedArtifactReport', PublishedArtifactReportSchema);
 

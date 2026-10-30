@@ -37,7 +37,7 @@ IntegrationRequestSchema.index({ userId: 1, integrationId: 1 }, { unique: true }
 // Serves the admin requester list (requestersFor) in its sort order, and any integrationId-only query.
 IntegrationRequestSchema.index({ integrationId: 1, createdAt: -1, _id: -1 });
 
-export const IntegrationRequest =
+export const IntegrationRequest: Model<IIntegrationRequestDocument> =
   (mongoose.models.IntegrationRequest as mongoose.Model<IIntegrationRequestDocument>) ||
   model<IIntegrationRequestDocument>('IntegrationRequest', IntegrationRequestSchema);
 

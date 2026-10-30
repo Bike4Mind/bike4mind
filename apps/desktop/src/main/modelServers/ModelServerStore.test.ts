@@ -175,6 +175,48 @@ describe('ModelServerStore', () => {
     await expect(store.add({ ...base, name: 'this computer' }, { type: 'none' })).rejects.toThrow(/already called/);
   });
 
+  it('saves, reads back and clears entered hardware for a server and for this computer', async () => {
+    const file = memoryFile();
+    const store = new ModelServerStore(cipher(), file, logger);
+    const record = await store.add(base, { type: 'none' });
+    expect(record.specs).toBeNull();
+    const specs = { ramGiB: 128, gpuMemoryGiB: 96, bandwidthGBps: 256, unified: true };
+    expect((await store.update(record.id, { specs })).specs).toEqual(specs);
+    // This computer's probe decides unified memory, so the flag is not kept for it.
+    expect(await store.setLocalSpecs({ ...specs, ramGiB: 64 })).toEqual({ ...specs, ramGiB: 64, unified: false });
+
+    const reopened = new ModelServerStore(cipher(), file, logger);
+    expect((await reopened.get(record.id))?.specs).toEqual(specs);
+    expect(await reopened.localSpecs()).toEqual({ ...specs, ramGiB: 64, unified: false });
+
+    await reopened.update(record.id, { specs: null });
+    await reopened.setLocalSpecs({ ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false });
+    expect(JSON.parse(file.contents!).servers[0].specs).toBeUndefined();
+    expect(JSON.parse(file.contents!).localSpecs).toBeUndefined();
+  });
+
+  it('refuses specs Settings should not send, and ignores a stored shape it cannot use', async () => {
+    const store = new ModelServerStore(cipher(), memoryFile(), logger);
+    const record = await store.add(base, { type: 'none' });
+    const blank = { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    await expect(store.update(record.id, { specs: { ...blank, gpuMemoryGiB: 24 } })).rejects.toThrow('Enter the RAM');
+    await expect(store.update(record.id, { specs: { ...blank, ramGiB: -1 } })).rejects.toThrow('RAM');
+    await expect(store.setLocalSpecs({ ...blank, bandwidthGBps: Number.NaN })).rejects.toThrow('bandwidth');
+    // GPU memory alone is fine for this computer, whose probe supplies the RAM.
+    expect(await store.setLocalSpecs({ ...blank, gpuMemoryGiB: 24 })).toEqual({ ...blank, gpuMemoryGiB: 24 });
+
+    const odd = memoryFile(
+      JSON.stringify({
+        version: 1,
+        servers: [{ ...base, id: 'abc', auth: { type: 'none' }, specs: { ramGiB: 'lots' } }],
+        localSpecs: { ramGiB: 1e9 },
+      })
+    );
+    const reopened = new ModelServerStore(cipher(), odd, logger);
+    expect((await reopened.get('abc'))?.specs).toBeNull();
+    expect(await reopened.localSpecs()).toBeNull();
+  });
+
   it(`stops at ${MAX_MODEL_SERVERS} servers`, async () => {
     const store = new ModelServerStore(cipher(), memoryFile(), logger);
     for (let index = 0; index < MAX_MODEL_SERVERS; index++) {

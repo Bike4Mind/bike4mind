@@ -28,7 +28,7 @@ const AI_MARKERS = [
   /\.complete\(/,
   /\bSessionEvents\.(?:Summarize|Tag)\.publish\(/,
 ];
-const GATE = /\b(?:assertAiAccessAllowed|createModelAdmission|reserveRequestCredits|isAiAccessRevoked)\(/;
+const GATE = /\b(?:assertAiAccessAllowed|createModelAdmission|reserveRequestCredits|aiAccessDeniedMessage)\(/;
 
 const EXEMPT = new Set([
   'admin/modal-tool.ts', // admin

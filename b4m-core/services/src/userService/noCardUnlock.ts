@@ -21,6 +21,7 @@ import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../cre
 import { accountBlockReasons } from './accountState';
 import { isDisposableEmail } from './disposableEmail';
 import { protectSignupCredits } from './signupProtection';
+import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './signupGrantBudget';
 import { InboxGrantClaimDeniedError } from './stagedSignupGrant';
 
 /** `reasonGranted`: this user already holds a ledger row for the reason, e.g. a concurrent request won the grant. */
@@ -246,6 +247,9 @@ export async function grantNoCardUnlock(
     return refused('signup_held');
   }
 
+  // A budget-held signup tranche is paid before any unlock, so no account holds the remainder without it.
+  if (user.signupGrantHeldReason === 'budget_exhausted') return refused('signup_grant_pending');
+
   const check = await validators[reason]({ id: user.id, email: user.email ?? '' });
   if (!check.ok) return refused(check.refusal);
 
@@ -257,6 +261,8 @@ export async function grantNoCardUnlock(
 
   let result: GrantNoCardUnlockResult | null = null;
   let failure: unknown = null;
+  let paidByPeer = false;
+  const reservations: SignupGrantBudgetReservation[] = [];
   try {
     result = await withTransaction(async () => {
       const current = await db.users.findById(userId);
@@ -266,10 +272,22 @@ export async function grantNoCardUnlock(
       const amount = Math.min(reasonCredits, settings.maxCredits - granted);
       if (amount <= 0) return refused('cap_reached');
 
+      const reservation = await reserveSignupGrantBudget(
+        { adminSettings: db.adminSettings, signupProtection },
+        transactionId,
+        amount
+      );
+      reservations.push(reservation);
+      if (reservation.outcome === 'exhausted') return refused('daily_budget_reached');
+
       // Unlocks share the one free-credit entitlement per canonical inbox with signup grants, so an
       // alias of an inbox that already earned credits anywhere earns none here. Claimed on the first
       // payout, which also stops a later signup grant on a sibling alias. A denied claim may have
       // aborted Mongo's transaction: throw out of it rather than running another operation.
+      //
+      // After the budget check, not before: an exhausted day *returns* a refusal, which commits this
+      // transaction, so claiming first would strand the inbox's one claim on an unlock that paid
+      // nothing. The denied-claim throw aborts instead, and the catch below refunds the reservation.
       if (!(await db.users.claimFreeCreditGrant(userId))) throw new InboxGrantClaimDeniedError();
 
       const { creditHolder } = await addCreditsWithLedgerRow(
@@ -290,10 +308,16 @@ export async function grantNoCardUnlock(
       return { granted: true, credits: amount, currentCredits: creditHolder.currentCredits };
     });
   } catch (error) {
-    if (error instanceof DuplicateCreditTransactionError) result = refused('already_granted');
-    else if (error instanceof InboxGrantClaimDeniedError) result = refused('inbox_already_claimed');
-    else failure = error;
+    if (error instanceof DuplicateCreditTransactionError) {
+      result = refused('already_granted');
+      paidByPeer = true;
+    } else if (error instanceof InboxGrantClaimDeniedError) {
+      // Nothing was paid under this id, so the reservation above is refunded by the release below.
+      result = refused('inbox_already_claimed');
+    } else failure = error;
   }
+  // A duplicate ledger row means a concurrent grant paid under this id, so its draw stays spent.
+  if (!result?.granted && !paidByPeer) await Promise.all(reservations.map(held => held.release()));
   if (commit?.ok && !result?.granted) {
     try {
       const reasonGranted = Boolean(await db.creditTransactions.findOne({ transactionId }));
