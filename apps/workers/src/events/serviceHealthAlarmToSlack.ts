@@ -27,6 +27,7 @@ import {
   isCloudWatchAlarm,
   postAlarmToSlack,
   resolveAlarmWebhookUrl,
+  stageLabel,
   type FormatOptions,
   type SlackAlarmMessage,
 } from './alarmSlackMessage';
@@ -84,7 +85,7 @@ function formatMessage(payload: unknown, stage: string, options: FormatOptions):
         `*Task*\n${escapeMrkdwn(detail.taskArn ?? 'unknown')}`,
         '*What to do*\nCheck the service events in ECS; the reason above is usually enough to name the fix (image pull, missing secret).',
       ],
-      context: [escapeMrkdwn(stage), 'level page', 'ecs task failed to start'],
+      context: [escapeMrkdwn(stageLabel(stage)), 'level page', 'ecs task failed to start'],
       summary: reason,
     });
   }

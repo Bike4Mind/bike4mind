@@ -180,16 +180,6 @@ export async function reportSubagentCredits(
   const credits = result.completionInfo.totalCredits;
   if (credits === undefined || !deps.onCredits || result.billedByTracker) return;
   const modelInfo = deps.availableModels?.find(m => m.id === result.model);
-  const inputTokens = result.completionInfo.totalInputTokens ?? 0;
-  const outputTokens = result.completionInfo.totalOutputTokens ?? 0;
-  // Thread the subagent's cache tokens through so the recorded provider
-  // cost is computed on the same basis as `creditsCharged` (which already
-  // reflects cache accounting). The cache buckets are additive, so dropping
-  // them makes costUsd understate true cost for any multi-iteration
-  // delegation, inflating the margins the dashboard reports above reality.
-  const cacheReadTokens = result.completionInfo.totalCacheReadTokens ?? 0;
-  const cacheWriteTokens = result.completionInfo.totalCacheWriteTokens ?? 0;
-  const turnUsage = result.completionInfo.turnUsage;
   // When the model can't be resolved the usage event is dropped rather than
   // fabricated from zeros (see #121/#132). Warn so the drop rate is observable
   // in logs (#152) - the credit is still charged, only cost attribution is lost.
@@ -201,32 +191,57 @@ export async function reportSubagentCredits(
   }
   await deps.onCredits(
     credits,
-    modelInfo
-      ? {
-          usdCost: turnUsage?.length
-            ? getTurnsCost(modelInfo, turnUsage)
-            : getTextModelCost(
-                modelInfo,
-                inputTokens,
-                outputTokens,
-                cacheReadTokens,
-                cacheWriteTokens,
-                inputTokens + cacheReadTokens + cacheWriteTokens
-              ),
-          provider: modelInfo.backend,
-          model: result.model,
+    modelInfo ? buildSubagentUsageMeta(modelInfo, result.model, result.completionInfo) : undefined
+  );
+}
+
+/** Prices a subagent run's token spend for its usage event. Shared with the agent-executor worker. */
+export function buildSubagentUsageMeta(
+  modelInfo: ModelInfo,
+  model: string,
+  completionInfo: Pick<
+    ServerAgentExecutionResult['completionInfo'],
+    | 'totalInputTokens'
+    | 'totalOutputTokens'
+    | 'totalCacheReadTokens'
+    | 'totalCacheWriteTokens'
+    | 'turnUsage'
+    | 'finishReason'
+  >
+): SubagentUsageMeta {
+  const inputTokens = completionInfo.totalInputTokens ?? 0;
+  const outputTokens = completionInfo.totalOutputTokens ?? 0;
+  // Thread the subagent's cache tokens through so the recorded provider
+  // cost is computed on the same basis as `creditsCharged` (which already
+  // reflects cache accounting). The cache buckets are additive, so dropping
+  // them makes costUsd understate true cost for any multi-iteration
+  // delegation, inflating the margins the dashboard reports above reality.
+  const cacheReadTokens = completionInfo.totalCacheReadTokens ?? 0;
+  const cacheWriteTokens = completionInfo.totalCacheWriteTokens ?? 0;
+  const turnUsage = completionInfo.turnUsage;
+  return {
+    usdCost: turnUsage?.length
+      ? getTurnsCost(modelInfo, turnUsage)
+      : getTextModelCost(
+          modelInfo,
           inputTokens,
           outputTokens,
           cacheReadTokens,
           cacheWriteTokens,
-          finishReason: result.completionInfo.finishReason,
-          priceStamp: buildUsagePriceStamp(modelInfo, {
-            turns: turnUsage,
-            tierBasisTokens: inputTokens + cacheReadTokens + cacheWriteTokens,
-          }),
-        }
-      : undefined
-  );
+          inputTokens + cacheReadTokens + cacheWriteTokens
+        ),
+    provider: modelInfo.backend,
+    model,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    finishReason: completionInfo.finishReason,
+    priceStamp: buildUsagePriceStamp(modelInfo, {
+      turns: turnUsage,
+      tierBasisTokens: inputTokens + cacheReadTokens + cacheWriteTokens,
+    }),
+  };
 }
 
 /**

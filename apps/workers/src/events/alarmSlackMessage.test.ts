@@ -269,14 +269,14 @@ describe('formatAlarmSlackMessage on production', () => {
 describe('formatAlarmSlackMessage on other stages', () => {
   const devBurst = { ...burst, AlarmName: 'bike4mind-dev-signup-code-send-burst' };
 
-  it('marks dev as secondary: grey bar, no siren, no mention even at page level', () => {
+  it('labels stage dev as staging and keeps it secondary: grey bar, no siren, no mention even at page level', () => {
     const message = formatAlarmSlackMessage(devBurst, 'dev', { mention: 'channel' });
-    expect(header(message)).toBe(':small_blue_diamond: dev alarm: Sign-in code emails spiking');
+    expect(header(message)).toBe(':small_blue_diamond: staging alarm: Sign-in code emails spiking');
     expect(attachment(message).color).toBe('#9AA5B1');
     expect(topBlocks(message)).toHaveLength(1);
     expect(message?.text).not.toContain('<!channel>');
     expect(contextOf(message)).toBe(
-      'dev  |  level page  |  bike4mind-dev-signup-code-send-burst  |  12:39 UTC, 27 Oct'
+      'staging  |  level page  |  bike4mind-dev-signup-code-send-burst  |  12:39 UTC, 27 Oct'
     );
   });
 
@@ -294,7 +294,7 @@ describe('formatAlarmSlackMessage on other stages', () => {
   it('resolves on dev in the same quiet green shape', () => {
     const message = formatAlarmSlackMessage({ ...devBurst, NewStateValue: 'OK' }, 'dev');
     expect(attachment(message).color).toBe('#2EB67D');
-    expect(bodyOf(message)[0].text?.text).toContain('dev  |  back to normal at 12:39 UTC');
+    expect(bodyOf(message)[0].text?.text).toContain('staging  |  back to normal at 12:39 UTC');
   });
 });
 
@@ -386,6 +386,34 @@ describe('lookupCatalog', () => {
 
   it('returns undefined for unknown suffixes', () => {
     expect(lookupCatalog('nothing-like-it')).toBeUndefined();
+  });
+
+  it('generates dead-letter queue entries that name the queue', () => {
+    const messages = lookupCatalog('dlq-billing-events-messages');
+    expect(messages?.title).toBe('Background job failed: billing events');
+    expect(messages?.links).toEqual(['dlq-replay']);
+    const age = lookupCatalog('dlq-fab-file-chunk-age');
+    expect(age?.title).toBe('Unhandled failure for over an hour: fab file chunk');
+    expect(lookupCatalog('dlq-alarm-handler-dlq-messages')).toBe(ALARM_CATALOG['dlq-alarm-handler-dlq-messages']);
+    expect(lookupCatalog('dlq-')).toBeUndefined();
+  });
+
+  it('covers the signup, spend and census alarms by exact name or provider prefix', () => {
+    expect(lookupCatalog('SuccessfulSignups')).toBe(ALARM_CATALOG.SuccessfulSignups);
+    expect(lookupCatalog('NewAccountApiKeys')).toBe(ALARM_CATALOG.NewAccountApiKeys);
+    expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
+    expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
+    expect(lookupCatalog('account-creation-metrics-missing')).toBe(ALARM_CATALOG['account-creation-metrics-missing']);
+  });
+
+  it('renders a dead-letter queue alarm with the queue name and the replay button', () => {
+    const message = formatAlarmSlackMessage(
+      { ...burst, AlarmName: 'bike4mind-production-dlq-release-notes-messages' },
+      'production',
+      { appUrl: 'https://app.example.com' }
+    );
+    expect(header(message)).toBe(':warning: Production warning: Background job failed: release notes');
+    expect(buttons(message).map(b => b.label)).toContain('DLQ replay');
   });
 
   it('handles hand-shaped cap-exceeded messages with no Trigger', () => {

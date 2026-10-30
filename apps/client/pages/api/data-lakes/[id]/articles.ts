@@ -15,10 +15,16 @@ import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { getFileMembershipArm, type DataLakeMembershipArm, type IFabFileDocument } from '@bike4mind/common';
+import {
+  dataLakeArticleListResponseSchema,
+  getFileMembershipArm,
+  type DataLakeMembershipArm,
+  type IFabFileDocument,
+} from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import { firstQueryValue } from '@bike4mind/server-utils/dataLakes/firstQueryValue';
+import { respond } from '@server/utils/respond';
 
 interface ArticlesQuery {
   id: string;
@@ -161,7 +167,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       );
     }
 
-    return res.json({ data, total: result.total, hasMore: result.hasMore });
+    return respond(res, dataLakeArticleListResponseSchema, { data, total: result.total, hasMore: result.hasMore });
   });
 
 export const config = {

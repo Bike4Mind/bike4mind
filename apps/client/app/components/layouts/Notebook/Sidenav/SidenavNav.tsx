@@ -82,7 +82,7 @@ type NavItem = {
   dividerAbove?: boolean;
   // Pinned to the row's right edge.
   trailing?: ReactNode;
-  // Lower stays in the nav longer once rows overflow MAX_NAV_ROWS; ties fold in display order.
+  // Lower stays in the nav longer once rows overflow MAX_NAV_ROWS; within a tie the later row folds first.
   priority: number;
 };
 
@@ -90,7 +90,8 @@ type NavItem = {
  * Primary sidebar navigation - a vertical icon list (New Chat, Files Manager, Agents, Projects,
  * OptiHashi, Tavern). OptiHashi/Tavern keep the same entitlement gating as the footer menu, and
  * Agents follows the `enableAgents` flag. The active row is highlighted by route (Files Manager
- * by the file-browser drawer's open state, since it isn't a route).
+ * by the file-browser drawer's open state, since it isn't a route). Past MAX_NAV_ROWS rows, the
+ * lowest-priority ones fold into a trailing More menu; the pinned rows never fold.
  */
 const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all' }) => {
   const theme = useTheme();
@@ -374,7 +375,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           {
             key: 'quests',
             priority: 0,
-            label: t('sidenav.questMaster', 'Quest Master'),
+            label: t('quests.my_quests', 'My Quests'),
             icon: (
               <NavIcon>
                 <AutoAwesomeOutlinedIcon sx={{ fontSize: '18px' }} />
@@ -395,7 +396,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'quests-v5',
-            priority: 3,
+            // Its own lowest tier, so it folds before Tavern and the other priority-3 rows.
+            priority: 4,
             label: t('sidenav.questsV5', 'Quests v5'),
             icon: (
               <NavIcon>

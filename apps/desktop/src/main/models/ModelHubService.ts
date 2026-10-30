@@ -108,7 +108,8 @@ export interface HubTokenPort {
 
 /**
  * A saved model server, read fresh for every call so a changed access setting applies at once. Its runtime
- * reports a dropped connection as ServerUnreachableError and a 401 or 403 as ServerCredentialsError.
+ * reports a dropped connection as ServerUnreachableError, a 401 as ServerCredentialsError and a 403 as
+ * ServerForbiddenError.
  */
 export interface ModelHubServer {
   name: string;

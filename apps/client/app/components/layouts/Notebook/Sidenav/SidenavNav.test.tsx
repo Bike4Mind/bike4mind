@@ -177,12 +177,12 @@ describe('SidenavNav feature rows', () => {
   });
 });
 
-describe('SidenavNav Quest Master row', () => {
+describe('SidenavNav My Quests row', () => {
   it('shows with the Quest Master flag and opens the quests page', () => {
     useFeatureEnabledMock.mockImplementation((flag: string) => flag === 'enableQuestMaster');
     renderNav();
     const row = screen.getByTestId('sidenav-nav-quests');
-    expect(row).toHaveTextContent('Quest Master');
+    expect(row).toHaveTextContent('My Quests');
     fireEvent.click(row);
     expect(navigate).toHaveBeenCalledWith({ to: '/quests' });
   });
@@ -556,6 +556,7 @@ describe('SidenavNav More overflow', () => {
     renderNav();
     fireEvent.click(within(openMore()).getByTestId('sidenav-more-skill-market'));
     expect(navigate).toHaveBeenCalledWith({ to: '/skills/market' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
   it('marks More as the current page while a folded row is active', () => {

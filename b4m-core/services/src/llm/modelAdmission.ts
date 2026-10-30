@@ -69,7 +69,7 @@ export async function loadFreeTierAllowedModels(
 }
 
 /** Whether an admission error is the free-tier refusal, as opposed to any other reason a model is refused. */
-export function isModelRequiresSubscriptionError(error: unknown): boolean {
+export function isModelRequiresSubscriptionError(error: unknown): error is ForbiddenError {
   if (!(error instanceof ForbiddenError)) return false;
   return error.additionalInfo?.errorCode === MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE;
 }

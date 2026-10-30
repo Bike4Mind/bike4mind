@@ -52,7 +52,6 @@
     "unpin": "Unpin sidebar",
     "help": "Help Center",
     "skillMarket": "Skill Market",
-    "questMaster": "Quest Master",
     "sessions": {
       "sort": {
         "label": "Sort By",
@@ -373,6 +372,9 @@
     "subscription": "Subscription",
     "edit": "Edit Profile",
     "manage_subscription": "Manage Subscription",
+    "pay_now": "Pay now",
+    "pay_now_success": "Payment received. Your plan will be restored in a moment.",
+    "pay_now_received": "Payment received",
     "upgrade": "Upgrade",
     "credit_analytics": "Credit Analytics",
     "pricing": "Credits Pricing",

@@ -12,11 +12,13 @@ import {
   INCONSISTENCY_KINDS,
   LAKE_FINDING_DETECTORS,
   LAKE_FINDING_STATUSES,
+  lakeFindingListResponseSchema,
   type ILakeFindingListItem,
 } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { respond } from '@server/utils/respond';
 
 const ListQuery = z.object({
   status: z.enum(LAKE_FINDING_STATUSES).optional(),
@@ -92,7 +94,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           : [],
     }));
 
-    return res.json({ data, hasMore: findings.length > pageLimit });
+    return respond(res, lakeFindingListResponseSchema, { data, hasMore: findings.length > pageLimit });
   });
 
 export const config = { api: { externalResolver: true } };

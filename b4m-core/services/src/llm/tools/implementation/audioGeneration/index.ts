@@ -1,4 +1,5 @@
 import { createToolModelAdmission } from '../../helpers/modelAdmission';
+import { toolModelRefusal } from '../../helpers/toolModelRefusal';
 import {
   ApiKeyType,
   DEFAULT_SOUND_MODEL_ID,
@@ -106,7 +107,8 @@ export const audioGenerationTool: ToolDefinition = {
           return 'Error: sound effects require an ElevenLabs API key; speech (kind="speech") is available.';
         }
 
-        await admission.assert(DEFAULT_SOUND_MODEL_ID);
+        const refusal = await toolModelRefusal(context, admission, DEFAULT_SOUND_MODEL_ID, 'audio_generation');
+        if (refusal) return refusal;
 
         const durationSeconds = toolDurationSeconds ?? audioConfig.durationSeconds ?? undefined;
 
@@ -206,7 +208,8 @@ export const audioGenerationTool: ToolDefinition = {
         apiKey = fallbackKey;
       }
 
-      await admission.assert(TTS_DEFAULT_MODEL[provider]);
+      const refusal = await toolModelRefusal(context, admission, TTS_DEFAULT_MODEL[provider], 'audio_generation');
+      if (refusal) return refusal;
 
       // Reject over-length input before the paid call, per the resolved provider's cap.
       if (text.length > TTS_MAX_INPUT_CHARS[provider]) {
