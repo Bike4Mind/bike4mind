@@ -115,55 +115,60 @@ export default function NotebookGroupList({
           >
             {key}
           </Typography>
-          {(shouldGroup
-            ? collapseApiItems(grouped.groupSessions[key], key)
-            : grouped.groupSessions[key].map(item => ({ kind: 'item' as const, item }))
-          ).map(row => {
-            if (row.kind === 'item') return renderRow(row.item);
-            const expanded = !!expandedBuckets[row.key];
-            return (
-              <Box key={`api-group-${row.key}`} data-testid="sidenav-api-group">
-                <Box
-                  component="button"
-                  type="button"
-                  aria-expanded={expanded}
-                  data-testid="sidenav-api-group-toggle"
-                  onClick={() => toggleBucket(row.key)}
-                  sx={theme => ({
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    px: 1,
-                    width: '100%',
-                    height: '32px',
-                    border: 'none',
-                    background: 'none',
-                    font: 'inherit',
-                    textAlign: 'left',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    color: 'text.secondary',
-                    '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
-                  })}
-                >
-                  {expanded ? (
-                    <KeyboardArrowDownIcon sx={{ fontSize: '16px' }} />
-                  ) : (
-                    <KeyboardArrowRightIcon sx={{ fontSize: '16px' }} />
-                  )}
-                  <ApiIcon sx={{ fontSize: '14px', color: 'text.tertiary' }} />
-                  <Typography level="body-xs" sx={{ color: 'inherit' }}>
-                    {t('sidenav.apiGroup', 'API - {{count}} notebooks', { count: row.items.length })}
-                  </Typography>
-                </Box>
-                {expanded && (
-                  <Box data-testid="sidenav-api-group-items" sx={{ pl: '12px' }}>
-                    {row.items.map(renderRow)}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            {(shouldGroup
+              ? collapseApiItems(grouped.groupSessions[key], key)
+              : grouped.groupSessions[key].map(item => ({ kind: 'item' as const, item }))
+            ).map(row => {
+              if (row.kind === 'item') return renderRow(row.item);
+              const expanded = !!expandedBuckets[row.key];
+              return (
+                <Box key={`api-group-${row.key}`} data-testid="sidenav-api-group">
+                  <Box
+                    component="button"
+                    type="button"
+                    aria-expanded={expanded}
+                    data-testid="sidenav-api-group-toggle"
+                    onClick={() => toggleBucket(row.key)}
+                    sx={theme => ({
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      px: 1,
+                      width: '100%',
+                      height: '32px',
+                      border: 'none',
+                      background: 'none',
+                      font: 'inherit',
+                      textAlign: 'left',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      color: 'text.secondary',
+                      '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
+                    })}
+                  >
+                    {expanded ? (
+                      <KeyboardArrowDownIcon sx={{ fontSize: '16px' }} />
+                    ) : (
+                      <KeyboardArrowRightIcon sx={{ fontSize: '16px' }} />
+                    )}
+                    <ApiIcon sx={{ fontSize: '14px', color: 'text.tertiary' }} />
+                    <Typography level="body-xs" sx={{ color: 'inherit' }}>
+                      {t('sidenav.apiGroup', 'API - {{count}} notebooks', { count: row.items.length })}
+                    </Typography>
                   </Box>
-                )}
-              </Box>
-            );
-          })}
+                  {expanded && (
+                    <Box
+                      data-testid="sidenav-api-group-items"
+                      sx={{ pl: '12px', display: 'flex', flexDirection: 'column', gap: '2px' }}
+                    >
+                      {row.items.map(renderRow)}
+                    </Box>
+                  )}
+                </Box>
+              );
+            })}
+          </Box>
         </div>
       ))}
     </>

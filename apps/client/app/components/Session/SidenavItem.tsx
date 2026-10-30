@@ -423,7 +423,7 @@ const SessionSidenavItem: FC<{
 
   const boxStyles = useMemo(
     () => (theme: any) => ({
-      borderRadius: '5px',
+      borderRadius: '8px',
       cursor: 'pointer',
       backgroundColor: isSelected ? theme.palette.notebooklist.focusedBackground : 'transparent',
       position: 'relative',
