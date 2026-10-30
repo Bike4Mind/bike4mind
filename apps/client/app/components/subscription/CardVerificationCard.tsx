@@ -1,16 +1,17 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Alert, Box, Button, Checkbox, Modal, ModalClose, ModalDialog, Typography } from '@mui/joy';
 import { Elements, PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 import { loadStripe, type Stripe } from '@stripe/stripe-js';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@client/app/contexts/ApiContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { getTurnstileToken } from '@client/app/utils/turnstile';
-import { CREDITS_BALANCE_KEY } from '@client/app/hooks/data/credits';
-
-type Offer = { available: boolean; credits: number; siteKey: string; saved: string[]; pending: string[] };
-const endpoint = '/api/stripe/card-verification';
-const queryKey = ['card-verification-offer'];
+import { getTurnstileToken, TurnstileCancelledError } from '@client/app/utils/turnstile';
+import {
+  getCardVerificationErrorMessage,
+  useCardVerificationOffer,
+  useCompleteCardVerification,
+  useRefreshCardVerification,
+  useRemoveCardVerification,
+  useStartCardVerification,
+} from '@client/app/hooks/data/cardVerification';
 
 function VerificationForm({
   verificationId,
@@ -22,13 +23,16 @@ function VerificationForm({
   const stripe = useStripe();
   const elements = useElements();
   const [busy, setBusy] = useState(false);
+  // State lags a render; a ref blocks a second submit in the same tick.
+  const busyRef = useRef(false);
   const [message, setMessage] = useState('');
   return (
     <Box
       component="form"
       onSubmit={async event => {
         event.preventDefault();
-        if (!stripe || !elements || busy) return;
+        if (!stripe || !elements || busyRef.current) return;
+        busyRef.current = true;
         setBusy(true);
         try {
           const result = await stripe.confirmSetup({
@@ -41,9 +45,10 @@ function VerificationForm({
             return;
           }
           await complete(verificationId);
-        } catch {
-          setMessage('Could not finish verification. Retry from Billing.');
+        } catch (error) {
+          setMessage(getCardVerificationErrorMessage(error));
         } finally {
+          busyRef.current = false;
           setBusy(false);
         }
       }}
@@ -69,47 +74,47 @@ function VerificationForm({
 
 export function CardVerificationCard({ entry = 'billing' }: { entry?: 'billing' | 'exhaustion' }) {
   const authenticated = useAccessToken(s => !!s.accessToken);
-  const queryClient = useQueryClient();
-  const offer = useQuery({
-    queryKey,
-    enabled: authenticated,
-    queryFn: async () => (await api.get<Offer>(endpoint)).data,
-    staleTime: 60000,
-    retry: false,
-  });
+  const offer = useCardVerificationOffer(authenticated);
+  const startVerification = useStartCardVerification();
+  const completeVerification = useCompleteCardVerification();
+  const removeVerification = useRemoveCardVerification();
+  const refresh = useRefreshCardVerification();
+  const titleId = useId();
   const [saveCard, setSaveCard] = useState(false);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [message, setMessage] = useState('');
+  const [failed, setFailed] = useState(false);
   const [session, setSession] = useState<{
     verificationId: string;
     clientSecret: string;
     stripe: Promise<Stripe | null>;
   } | null>(null);
-  const refresh = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey }),
-      queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY }),
-      queryClient.invalidateQueries({ queryKey: ['credit-transactions'] }),
-    ]);
-  };
   const complete = async (verificationId: string) => {
-    const { data } = await api.post<{ outcome: string; clientSecret?: string; publishableKey?: string }>(endpoint, {
-      verificationId,
-    });
-    if (data.outcome === 'granted' || data.outcome === 'already_granted') {
-      setMessage('Card verified, not charged. Your promotional credits are available.');
-      setSession(null);
-    } else if (data.outcome === 'pending') {
+    try {
+      const data = await completeVerification.mutateAsync(verificationId);
+      if (data.outcome === 'granted' || data.outcome === 'already_granted') {
+        setMessage('Card verified, not charged. Your promotional credits are available.');
+        setSession(null);
+        return;
+      }
+      if (data.outcome !== 'pending') {
+        setMessage('This card has already unlocked credits or did not qualify.');
+        setSession(null);
+        return;
+      }
       const { clientSecret, publishableKey } = data;
-      if (clientSecret && publishableKey)
-        setSession(current => current ?? { verificationId, clientSecret, stripe: loadStripe(publishableKey) });
-      else setMessage('Verification is processing. Check again shortly.');
-    } else {
-      setMessage('This card has already unlocked credits or did not qualify.');
-      setSession(null);
+      if (!clientSecret || !publishableKey) {
+        // Stripe is still processing, or the webhook is finishing it; the form can no longer be submitted.
+        setMessage('Verification is processing. Your credits will appear once it finishes.');
+        setSession(null);
+        return;
+      }
+      if (session) setMessage('Your card is not verified yet. Check the details and try again.');
+      setSession(current => current ?? { verificationId, clientSecret, stripe: loadStripe(publishableKey) });
+    } finally {
+      await refresh();
     }
-    await refresh();
   };
   if (!offer.data || (!message && !offer.data.available && !offer.data.saved.length && !offer.data.pending.length))
     return null;
@@ -118,10 +123,13 @@ export function CardVerificationCard({ entry = 'billing' }: { entry?: 'billing' 
     busyRef.current = true;
     setBusy(true);
     setMessage('');
+    setFailed(false);
     try {
       await operation();
-    } catch {
-      setMessage('Card verification could not finish. Please try again later.');
+    } catch (error) {
+      if (error instanceof TurnstileCancelledError) return;
+      setFailed(true);
+      setMessage(getCardVerificationErrorMessage(error));
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -155,11 +163,7 @@ export function CardVerificationCard({ entry = 'billing' }: { entry?: 'billing' 
               void run(async () => {
                 if (!offer.data?.siteKey) throw new Error('Verification unavailable');
                 const turnstileToken = await getTurnstileToken(offer.data.siteKey, 'card_verification');
-                const { data } = await api.post<{
-                  verificationId: string;
-                  clientSecret: string;
-                  publishableKey: string;
-                }>(endpoint, { turnstileToken, saveCard, entry });
+                const data = await startVerification.mutateAsync({ turnstileToken, saveCard, entry });
                 setSession({ ...data, stripe: loadStripe(data.publishableKey) });
               })
             }
@@ -176,7 +180,7 @@ export function CardVerificationCard({ entry = 'billing' }: { entry?: 'billing' 
           loading={busy}
           onClick={() =>
             void run(async () => {
-              await api.delete(endpoint, { data: { verificationId: id } });
+              await removeVerification.mutateAsync(id);
               await refresh();
               setMessage('Your saved verification card was removed.');
             })
@@ -192,14 +196,20 @@ export function CardVerificationCard({ entry = 'billing' }: { entry?: 'billing' 
           loading={busy}
           onClick={() => void run(() => complete(id))}
         >
-          Finish credit unlock
+          Finish card verification
         </Button>
       ))}
-      {message && <Alert data-testid="card-verification-result">{message}</Alert>}
+      {message && (
+        <Alert data-testid="card-verification-result" color={failed ? 'danger' : 'success'}>
+          {message}
+        </Alert>
+      )}
       <Modal open={!!session} onClose={() => setSession(null)}>
-        <ModalDialog sx={{ width: 'min(95vw, 520px)' }}>
+        <ModalDialog aria-labelledby={titleId} sx={{ width: 'min(95vw, 520px)' }}>
           <ModalClose />
-          <Typography level="h4">Verify your card</Typography>
+          <Typography id={titleId} level="h4">
+            Verify your card
+          </Typography>
           <Typography level="body-sm">Secured by Stripe. No charge and nothing auto-renews.</Typography>
           {session && (
             <Elements stripe={session.stripe} options={{ clientSecret: session.clientSecret }}>

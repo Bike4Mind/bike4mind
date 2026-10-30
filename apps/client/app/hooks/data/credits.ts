@@ -8,6 +8,7 @@ export interface CreditsBalance {
 }
 
 export const CREDITS_BALANCE_KEY = ['credits-balance'] as const;
+export const CREDIT_TRANSACTIONS_KEY = ['credit-transactions'] as const;
 
 export async function fetchCreditsBalance(): Promise<CreditsBalance> {
   const response = await api.get<CreditsBalance>('/api/credits/balance');
@@ -32,7 +33,7 @@ export function useGetCreditTransactions(
   const { enabled, days = 30, type = 'all' } = options;
 
   return useQuery<ICreditTransactionDocument[]>({
-    queryKey: ['credit-transactions', days, type],
+    queryKey: [...CREDIT_TRANSACTIONS_KEY, days, type],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (days) params.append('days', days.toString());
