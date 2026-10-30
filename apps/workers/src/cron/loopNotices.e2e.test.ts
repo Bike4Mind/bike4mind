@@ -92,7 +92,10 @@ describe('loop notices', () => {
   ])('opens one notice for a %s loop with a reason', async (status, statusReason, phrase) => {
     const loop = await createLoop({ status, statusReason });
     await tick();
+    const create = vi.spyOn(inboxRepository, 'createKeyedNotice');
     await tick();
+    // A held key is skipped before any insert, not left to the unique index to refuse.
+    expect(create).not.toHaveBeenCalled();
 
     const notices = await openNotices();
     expect(notices).toHaveLength(1);
