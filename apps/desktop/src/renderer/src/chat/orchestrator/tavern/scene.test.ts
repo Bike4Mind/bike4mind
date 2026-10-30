@@ -96,6 +96,24 @@ describe('placeAgents', () => {
     expect(second.get('new')?.slot).toBe(first.get('a')?.slot);
   });
 
+  it('keeps door queue indices across an unrelated roster change', () => {
+    const agents = Array.from({ length: 8 }, (_, index) => agentFixture(`w${index}`, 'working'));
+    const first = placeAgents(agents, noHistory);
+    expect(first.get('w6')).toMatchObject({ zone: 'door', slot: 0 });
+    expect(first.get('w7')).toMatchObject({ zone: 'door', slot: 1 });
+    const reordered = [agents[7], ...agents.slice(0, 7), agentFixture('x', 'done')];
+    const second = placeAgents(reordered, first);
+    expect(second.get('w6')).toEqual(first.get('w6'));
+    expect(second.get('w7')).toEqual(first.get('w7'));
+  });
+
+  it('lets a queued agent take a seat once one frees up', () => {
+    const agents = Array.from({ length: 7 }, (_, index) => agentFixture(`w${index}`, 'working'));
+    const first = placeAgents(agents, noHistory);
+    const second = placeAgents([agentFixture('w0', 'done'), ...agents.slice(1)], first);
+    expect(second.get('w6')).toMatchObject({ zone: 'workbench', slot: first.get('w0')?.slot });
+  });
+
   it('never puts two agents in the same zone and slot', () => {
     const states: AgentState[] = ['working', 'needs-you', 'done', 'failed', 'stopped', 'idle'];
     const agents = Array.from({ length: 30 }, (_, index) => agentFixture(`n${index}`, states[index % states.length]));

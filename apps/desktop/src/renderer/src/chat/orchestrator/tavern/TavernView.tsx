@@ -57,25 +57,25 @@ function usePlacements(agents: readonly AgentView[]) {
   return placements;
 }
 
-/**
- * During the intro everyone starts at the door; two frames later (so the door position is painted first)
- * they walk to their seats. Only the first mount plays it.
- */
-function useArrived(introPlaying: boolean) {
-  const [arrived, setArrived] = useState(() => !introPlaying || prefersReducedMotion());
+/** Flips to true two frames after mount (so the starting position is painted first), or at once if `already`. */
+function useAfterFirstPaint(already: boolean) {
+  const [done, setDone] = useState(already);
   useEffect(() => {
-    if (arrived) return;
+    if (done) return;
     let second = 0;
     const first = requestAnimationFrame(() => {
-      second = requestAnimationFrame(() => setArrived(true));
+      second = requestAnimationFrame(() => setDone(true));
     });
     return () => {
       cancelAnimationFrame(first);
       cancelAnimationFrame(second);
     };
-  }, [arrived]);
-  return arrived;
+  }, [done]);
+  return done;
 }
+
+/** During the intro everyone starts at the door and walks to their seats. Only the first mount plays it. */
+const useArrived = (introPlaying: boolean) => useAfterFirstPaint(!introPlaying || prefersReducedMotion());
 
 function Bubble({ agent, text }: { agent: AgentView; text: string }) {
   const urgent = agent.state === 'needs-you';
@@ -139,14 +139,19 @@ function Spark({ kind }: { kind: ToolKind }) {
 function Sprite({
   agent,
   point,
+  walkIn,
   selected,
   onSelect,
 }: {
   agent: AgentView;
   point: SlotPoint;
+  /** Mount at the door and walk to `point`; read on mount only. */
+  walkIn: boolean;
   selected: boolean;
   onSelect(id: string): void;
 }) {
+  const entered = useAfterFirstPaint(!walkIn);
+  const at = entered ? point : DOOR_POINT;
   const pose = poseFor(agent.state);
   const bubble = bubbleText(agent);
   return (
@@ -158,7 +163,7 @@ function Sprite({
       aria-pressed={selected}
       title={agent.title}
       onClick={() => onSelect(agent.id)}
-      style={{ left: `${point.x}%`, top: `${point.y}%`, zIndex: Math.round(point.y) }}
+      style={{ left: `${at.x}%`, top: `${at.y}%`, zIndex: Math.round(at.y) }}
       sx={{
         position: 'absolute',
         height: SPRITE_HEIGHT,
@@ -215,7 +220,23 @@ function Sprite({
 export function TavernView({ agents, onSelect, selectedId, introPlaying }: OrchestratorViewProps) {
   const placements = usePlacements(agents);
   const arrived = useArrived(introPlaying);
-  const queued = agents.filter(agent => placements.get(agent.id)?.zone === 'door').length;
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+  }, []);
+
+  const queue = agents.filter(agent => placements.get(agent.id)?.zone === 'door');
+  const selectedQueued = queue.findIndex(agent => agent.id === selectedId);
+  // The door shows one agent: the selected one when it is queued, so the selection stays visible.
+  const atDoor =
+    selectedQueued >= 0
+      ? queue[selectedQueued]
+      : queue.reduce<AgentView | undefined>(
+          (first, agent) =>
+            !first || (placements.get(agent.id)?.slot ?? 0) < (placements.get(first.id)?.slot ?? 0) ? agent : first,
+          undefined
+        );
+  const waiting = queue.length - 1;
 
   return (
     <Box
@@ -257,36 +278,44 @@ export function TavernView({ agents, onSelect, selectedId, introPlaying }: Orche
         />
         {agents.map(agent => {
           const placement = placements.get(agent.id);
-          if (!placement || (placement.zone === 'door' && placement.slot > 0)) return null;
+          if (!placement || (placement.zone === 'door' && agent !== atDoor)) return null;
           return (
             <Sprite
               key={agent.id}
               agent={agent}
               point={arrived ? placement.point : DOOR_POINT}
+              walkIn={mounted.current && !prefersReducedMotion()}
               selected={agent.id === selectedId}
               onSelect={onSelect}
             />
           );
         })}
-        {queued > 1 && (
+        {waiting > 0 && (
           <Box
+            component="button"
+            type="button"
             data-testid="orchestrator-tavern-door-overflow"
-            aria-label={`${queued - 1} more waiting at the door`}
+            aria-label={`${waiting} more waiting at the door; select next`}
+            onClick={() => onSelect(queue[(selectedQueued + 1) % queue.length].id)}
             style={{ left: `${DOOR_POINT.x}%`, top: `${DOOR_POINT.y}%` }}
             sx={{
               position: 'absolute',
               zIndex: 101,
               transform: 'translate(-50%, 20%)',
               px: '0.5em',
+              py: 0,
+              border: 0,
               borderRadius: '999px',
+              cursor: 'pointer',
               bgcolor: '#f5c542',
               color: '#2a1d10',
               fontWeight: 700,
               fontSize: 'clamp(10px, 2.2cqh, 14px)',
               lineHeight: 1.5,
+              '&:focus-visible': { outline: '2px solid #fbe9c8', outlineOffset: 2 },
             }}
           >
-            {`+${queued - 1}`}
+            {`+${waiting}`}
           </Box>
         )}
       </Box>
