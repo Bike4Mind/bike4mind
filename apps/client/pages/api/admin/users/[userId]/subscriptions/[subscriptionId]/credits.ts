@@ -5,7 +5,12 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import {
+  denySelfAdminAction,
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@server/utils/adminAudit';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -56,6 +61,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
 
     if (!subscription) {
       throw new NotFoundError('Subscription not found');
+    }
+    // Same owner rule as the comp route: the user, or the organization's billing owner.
+    const ownerUserId =
+      subscription.ownerType === SubscriptionOwnerType.Organization
+        ? (await organizationRepository.findById(subscription.ownerId))?.userId
+        : subscription.ownerId;
+    if (ownerUserId && isSelfOrImpersonator(req.user, ownerUserId)) {
+      await denySelfAdminAction(req, {
+        action: 'user.credits.denied',
+        attempted: 'user.credits.adjusted',
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+      });
     }
     if (creditsPerCycle === null && subscription.customCreditsPerCycle == null) {
       throw new BadRequestError('This subscription has no credits override to clear.');
