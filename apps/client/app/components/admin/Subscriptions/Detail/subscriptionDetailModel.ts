@@ -94,9 +94,9 @@ export const addMonths = (from: Date, months: number): Date => {
   return result;
 };
 
-/** A lapsed comp extends from today, not from a past end date. */
+/** A lapsed comp, or one with no end date, extends from today, not from a past end date. */
 export const compExtensionBase = (row: Pick<AdminSubscriptionRow, 'periodEndsAt'>, now: number): Date =>
-  new Date(Math.max(new Date(row.periodEndsAt).getTime(), now));
+  new Date(row.periodEndsAt ? Math.max(new Date(row.periodEndsAt).getTime(), now) : now);
 
 export const INTERVAL_LABELS: Readonly<Record<string, string>> = { monthly: 'Monthly', yearly: 'Yearly' };
 

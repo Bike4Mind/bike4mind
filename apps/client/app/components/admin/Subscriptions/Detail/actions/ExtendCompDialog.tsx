@@ -32,7 +32,7 @@ export const ExtendCompDialog: React.FC<SubscriptionDialogProps> = ({ detail, on
   const change = useAdminSubscriptionCompChange(subscription.id);
   const showUndo = useUndoToast();
 
-  const previousEndsAt = new Date(subscription.periodEndsAt).toISOString();
+  const previousEndsAt = subscription.periodEndsAt && new Date(subscription.periodEndsAt).toISOString();
   const target = addMonths(compExtensionBase(subscription, now), Number(months));
   const targetLabel = formatDate(target) ?? '-';
   const tooFar = target.getTime() > addMonths(new Date(now), COMP_MAX_MONTHS_AHEAD).getTime();
@@ -43,6 +43,7 @@ export const ExtendCompDialog: React.FC<SubscriptionDialogProps> = ({ detail, on
     showUndo({
       message: `Comp extended to ${targetLabel}`,
       onUndo: async () => {
+        if (!previousEndsAt) return;
         await change.mutateAsync({ action: 'setEndsAt', periodEndsAt: previousEndsAt, reason: undoReason(reason) });
       },
       onViewAudit: onAudit,
