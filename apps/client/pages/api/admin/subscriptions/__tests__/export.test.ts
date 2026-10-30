@@ -58,10 +58,12 @@ const makeRow = (index: number, overrides: Partial<AdminSubscriptionRow> = {}): 
     billingOwnerId: null,
   },
   plan: { priceId: 'price_team', name: 'Team', interval: 'monthly' },
+  billedInterval: { interval: 'month', intervalCount: 1 },
   status: 'active',
   source: 'stripe',
   quantity: 4,
   customCreditsPerCycle: -412,
+  mrr: { amount: 12000, currency: 'usd' },
   periodStartsAt: '2026-06-01T00:00:00.000Z',
   periodEndsAt: '2026-07-01T00:00:00.000Z',
   canceledAt: null,
@@ -118,6 +120,34 @@ describe('GET /api/admin/subscriptions/export', () => {
     expect(line.endsWith('"sub_1"')).toBe(true);
   });
 
+  it('writes MRR in major units beside its currency, and leaves it blank where there is none', async () => {
+    mockPage.mockResolvedValueOnce([
+      makeRow(1),
+      makeRow(2, { source: 'admin_grant', mrr: null }),
+      makeRow(3, { mrr: { amount: 1900, currency: 'jpy' } }),
+    ]);
+    const lines = (await call({})).res._getData().split('\n');
+    expect(lines[0]).toContain('"Source","MRR","MRR currency","Quantity"');
+    expect(lines[1]).toContain('"stripe",120.00,"USD",4,');
+    expect(lines[2]).toContain('"admin_grant",,"",4,');
+    expect(lines[3]).toContain('"stripe",1900,"JPY",4,');
+  });
+
+  it('writes the interval Stripe bills, as the Plan column labels it, falling back to the catalog', async () => {
+    mockPage.mockResolvedValueOnce([
+      makeRow(1, { billedInterval: { interval: 'year', intervalCount: 1 } }),
+      makeRow(2, { billedInterval: { interval: 'month', intervalCount: 3 } }),
+      makeRow(3, { billedInterval: null }),
+      makeRow(4, { billedInterval: null, plan: { priceId: 'price_legacy', name: null, interval: null } }),
+    ]);
+    const lines = (await call({})).res._getData().split('\n');
+    expect(lines[0]).toContain('"Plan","Interval","Price id"');
+    expect(lines[1]).toContain('"Team","Yearly","price_team"');
+    expect(lines[2]).toContain('"Team","Every 3 months","price_team"');
+    expect(lines[3]).toContain('"Team","Monthly","price_team"');
+    expect(lines[4]).toContain('"Unknown plan","","price_legacy"');
+  });
+
   it('writes seats and members for an organization owner', async () => {
     mockPage.mockResolvedValueOnce([makeRow(1)]);
     const { res } = await call({});
@@ -138,6 +168,22 @@ describe('GET /api/admin/subscriptions/export', () => {
     const lines = res._getData().trim().split('\n');
     expect(lines).toHaveLength(1 + 500 + 1);
     expect(res._getData()).not.toContain('# Truncated');
+  });
+
+  it('pages past a legacy row with no createdAt using a null cursor date, and writes empty date cells', async () => {
+    const firstPage = Array.from({ length: 501 }, (_, index) => makeRow(index + 1));
+    firstPage[499] = makeRow(500, { createdAt: null, periodStartsAt: null, periodEndsAt: null });
+    mockPage.mockResolvedValueOnce(firstPage).mockResolvedValueOnce([makeRow(600)]);
+
+    const { res } = await call({});
+
+    expect(mockPage).toHaveBeenCalledTimes(2);
+    expect(mockPage.mock.calls[1][1]).toEqual({ createdAt: null, id: firstPage[499].id });
+    const legacyLine = res._getData().split('\n')[500];
+    expect(legacyLine.startsWith('"",')).toBe(true);
+    expect(legacyLine).not.toContain('Invalid');
+    expect(legacyLine).toContain(',-412,"","",""');
+    expect(legacyLine.endsWith('"sub_500"')).toBe(true);
   });
 
   it('ends with a truncation line when the row cap is hit and more remain', async () => {

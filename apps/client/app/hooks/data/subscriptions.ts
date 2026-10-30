@@ -123,69 +123,6 @@ export const useGetSubscriptions = (
 };
 
 /**
- * Hook for admin users to get all subscriptions across the platform
- */
-export const useGetAllSubscriptions = (
-  options: {
-    enabled?: boolean;
-    search?: string;
-    page?: number;
-    limit?: number;
-  } = {}
-) => {
-  const { enabled = true, search, page = 1, limit = 10 } = options;
-
-  return useQuery({
-    queryKey: ['admin', 'subscriptions', search, page, limit],
-    queryFn: async () => {
-      const params = {
-        ...(search ? { search } : {}),
-        page,
-        limit,
-      };
-      const response = await api.get<{
-        subscriptions: Array<
-          IUserSubscription & { owner: { username: string; email: string; name: string; _id: string } }
-        >;
-        pagination: {
-          total: number;
-          page: number;
-          limit: number;
-          totalPages: number;
-        };
-      }>('/api/subscriptions', { params });
-      return response.data;
-    },
-    enabled,
-  });
-};
-
-/**
- * Hook for admin users to get subscription statistics
- */
-export const useGetSubscriptionStats = (
-  options: {
-    enabled?: boolean;
-  } = {}
-) => {
-  const { enabled = true } = options;
-
-  return useQuery({
-    queryKey: ['admin', 'subscription-stats'],
-    queryFn: async () => {
-      const response = await api.get<{
-        total: number;
-        active: number;
-        expiringThisMonth: number;
-        canceled: number;
-      }>('/api/subscriptions/stats');
-      return response.data;
-    },
-    enabled,
-  });
-};
-
-/**
  * Hook for users to subscribe to a team plan. This will also create a new organization.
  */
 export const useSubscribeTeamPlan = () => {
@@ -372,11 +309,19 @@ export const useRemoveSubscription = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ userId, subscriptionId }: { userId: string; subscriptionId: string }) => {
+    mutationFn: async ({
+      userId,
+      subscriptionId,
+      reason,
+    }: {
+      userId: string;
+      subscriptionId: string;
+      reason: string;
+    }) => {
       const { data } = await api.delete<{
         success: boolean;
         message: string;
-      }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/remove`);
+      }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/remove`, { data: { reason } });
       return data;
     },
     onSuccess: (data, variables) => {
@@ -403,10 +348,12 @@ export const useUpdateSubscriptionCredits = () => {
       userId,
       subscriptionId,
       creditsPerCycle,
+      reason,
     }: {
       userId: string;
       subscriptionId: string;
       creditsPerCycle: number;
+      reason: string;
     }) => {
       const { data } = await api.put<{
         success: boolean;
@@ -414,6 +361,7 @@ export const useUpdateSubscriptionCredits = () => {
         creditsPerCycle: number;
       }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/credits`, {
         creditsPerCycle,
+        reason,
       });
       return data;
     },

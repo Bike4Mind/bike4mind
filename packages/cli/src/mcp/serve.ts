@@ -4,7 +4,8 @@
  * Two transports: stdio (default, for Claude Desktop and other local clients)
  * and stateless streamable HTTP (`--http`). Auth precedence is
  * `--api-key` > `B4M_API_KEY` > the stored OAuth JWT; the endpoint is
- * `B4M_API_URL` > `--api-url` > the CLI's configured backend.
+ * `B4M_API_URL` > `--api-url` > the CLI's configured backend. `--local` (stdio
+ * only) serves just the local model tools and needs no endpoint at all.
  *
  * Transport contract for stdio: stdout carries the JSON-RPC frame stream and
  * NOTHING else, so all diagnostics are forced to stderr before ANY other work
@@ -19,16 +20,20 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Writable } from 'node:stream';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { parseApiUrl, requireApiUrl } from '../utils/apiUrl.js';
-import { buildMcpServer, buildStdioMcpServer, type BuildServerOptions } from './server.js';
+import { MODEL_TOOL_NAMES } from './modelTools.js';
+import { buildLocalMcpServer, buildMcpServer, buildStdioMcpServer, type BuildServerOptions } from './server.js';
 import { logger } from '../utils/Logger.js';
 
 const HTTP_PATH = '/mcp';
 
 export interface ServeOptions {
   http?: boolean;
+  /** Serve only the local model tools, without a Bike4Mind backend. Stdio only. */
+  local?: boolean;
   port?: number;
   apiKey?: string;
   apiUrl?: string;
@@ -76,9 +81,27 @@ function resolveBaseURL(options: ServeOptions, configStore: ConfigStore): Promis
   return configStore.getApiConfig().then(apiConfig => requireApiUrl(apiConfig));
 }
 
-async function serveStdio(buildOptions: BuildServerOptions, writeFrame: FrameWriter): Promise<void> {
-  const server = await buildStdioMcpServer(buildOptions);
+async function resolveBuildOptions(options: ServeOptions, configStore: ConfigStore): Promise<BuildServerOptions> {
+  const baseURL = await resolveBaseURL(options, configStore);
+  const apiKey = options.apiKey ?? process.env.B4M_API_KEY;
+  return { baseURL, apiKey, configStore, version: options.version };
+}
 
+/**
+ * The server stdio mode runs: the local model tools alone under `--local`, which never resolves an
+ * endpoint, otherwise the full set against the resolved backend (failing when none is configured).
+ */
+export async function buildServeStdioServer(options: ServeOptions, configStore: ConfigStore): Promise<McpServer> {
+  if (options.local) {
+    process.stderr.write(
+      `Serving local model tools only (${MODEL_TOOL_NAMES.join(', ')}); drop --local to serve the Bike4Mind tools.\n`
+    );
+    return buildLocalMcpServer({ configStore, version: options.version });
+  }
+  return buildStdioMcpServer(await resolveBuildOptions(options, configStore));
+}
+
+async function serveStdio(server: McpServer, writeFrame: FrameWriter): Promise<void> {
   const stdout = new Writable({
     write(chunk: Buffer, _encoding, callback) {
       if (writeFrame(chunk)) {
@@ -217,20 +240,24 @@ async function serveHttp(buildOptions: BuildServerOptions, port: number, resolve
 }
 
 export async function handleMcpServeCommand(options: ServeOptions): Promise<void> {
+  if (options.local && options.http) {
+    throw new Error('--local serves over stdio only; drop --http.');
+  }
+
   // stdio mode: seize stdout for the frame stream BEFORE anything else can print
   // to it (ConfigStore load, endpoint resolution, ...). HTTP mode leaves stdout
   // alone since its frames travel over the socket.
   const writeFrame = options.http ? undefined : captureStdout();
 
   const configStore = new ConfigStore();
-  const baseURL = await resolveBaseURL(options, configStore);
-  const apiKey = options.apiKey ?? process.env.B4M_API_KEY;
-
-  const buildOptions: BuildServerOptions = { baseURL, apiKey, configStore, version: options.version };
 
   if (writeFrame) {
-    await serveStdio(buildOptions, writeFrame);
+    await serveStdio(await buildServeStdioServer(options, configStore), writeFrame);
   } else {
-    await serveHttp(buildOptions, options.port ?? 7000, resolveHttpToken(options.token, process.env.B4M_MCP_TOKEN));
+    await serveHttp(
+      await resolveBuildOptions(options, configStore),
+      options.port ?? 7000,
+      resolveHttpToken(options.token, process.env.B4M_MCP_TOKEN)
+    );
   }
 }

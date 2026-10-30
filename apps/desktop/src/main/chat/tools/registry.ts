@@ -157,6 +157,18 @@ export function findTool(name: string): ToolDefinition | undefined {
 }
 
 /**
+ * The generation tool names toolsForRequest declares for the same `media` and `video` inputs, for
+ * the blank chat's suggestions. Read off the same constants so the two cannot disagree.
+ */
+export function offeredMediaToolNames(options: { media: boolean; video?: readonly VideoModel[] }): string[] {
+  if (!options.media) return [];
+  return [
+    ...MEDIA_TOOLS.map(tool => tool.schema.name),
+    ...(options.video?.length ? [generateVideoTool.schema.name] : []),
+  ];
+}
+
+/**
  * Tool declarations for the request body, in the endpoint's `{ toolSchema }` envelope.
  *
  * Every family is declared independently, because each becomes available for its own unrelated

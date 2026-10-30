@@ -25,6 +25,7 @@ import {
   viewConditions,
   type PlanCatalog,
 } from './adminSubscriptionsQuery';
+import { billedIntervalOf, mrrGroupStages, mrrTotal, subscriptionMrr, type MrrGroup } from './subscriptionMrr';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
 const LIST_MAX_TIME_MS = 10_000;
@@ -43,10 +44,16 @@ type SubscriptionDoc = {
   source?: AdminSubscriptionRow['source'];
   quantity: number;
   customCreditsPerCycle?: number | null;
-  periodStartsAt: Date;
-  periodEndsAt: Date;
+  // Rows copied in by the UserSubscription migration were raw inserts that skipped schema validation, so
+  // these required-in-schema dates can be missing on legacy documents.
+  periodStartsAt?: Date | null;
+  periodEndsAt?: Date | null;
   canceledAt?: Date | null;
-  createdAt: Date;
+  createdAt?: Date | null;
+  unitAmount?: number | null;
+  currency?: string | null;
+  interval?: string | null;
+  intervalCount?: number | null;
 };
 
 type ResolvedSearch = { condition?: Condition; truncated: boolean };
@@ -191,14 +198,16 @@ export async function toAdminSubscriptionRows(
     ownerId: doc.ownerId,
     owner: owners.get(`${doc.ownerType}:${doc.ownerId}`) ?? null,
     plan: planOf(doc.priceId, catalog),
+    billedInterval: doc.source === 'admin_grant' ? null : billedIntervalOf(doc.interval, doc.intervalCount),
     status: doc.status,
     source: doc.source ?? 'stripe',
     quantity: doc.quantity,
     customCreditsPerCycle: doc.customCreditsPerCycle ?? null,
-    periodStartsAt: doc.periodStartsAt.toISOString(),
-    periodEndsAt: doc.periodEndsAt.toISOString(),
+    mrr: subscriptionMrr(doc),
+    periodStartsAt: isoOrNull(doc.periodStartsAt),
+    periodEndsAt: isoOrNull(doc.periodEndsAt),
     canceledAt: isoOrNull(doc.canceledAt),
-    createdAt: doc.createdAt.toISOString(),
+    createdAt: isoOrNull(doc.createdAt),
   }));
 }
 
@@ -247,6 +256,8 @@ export async function adminSubscriptionsSummary(
       pastDue: [{ $match: views.pastDue }, { $count: 'count' }],
       comped: [{ $match: views.comped }, { $count: 'count' }],
       churned: [{ $match: views.churned }, { $count: 'count' }],
+      mrr: mrrGroupStages(),
+      pastDueMrr: mrrGroupStages(views.pastDue),
     },
     { maxTimeMS: LIST_MAX_TIME_MS }
   );
@@ -258,11 +269,14 @@ export async function adminSubscriptionsSummary(
       comped: countOf(result.comped),
       churned: countOf(result.churned),
     },
+    mrr: mrrTotal(result.mrr as MrrGroup[]),
+    pastDueMrr: mrrTotal(result.pastDueMrr as MrrGroup[]),
     searchTruncated,
   };
 }
 
-export type ExportCursor = { createdAt: Date; id: string };
+/** `createdAt` is null past the rows that lack one: `{ createdAt: null }` matches a missing field and those sort last. */
+export type ExportCursor = { createdAt: Date | null; id: string };
 
 /** One keyset page of the export, newest first. Reads `limit` rows; the caller asks for one extra to probe for more. */
 export async function adminSubscriptionsExportPage(
@@ -276,6 +290,9 @@ export async function adminSubscriptionsExportPage(
         $or: [
           { createdAt: { $lt: after.createdAt } },
           { createdAt: after.createdAt, _id: { $lt: new mongoose.Types.ObjectId(after.id) } },
+          // $lt on a Date never matches a missing createdAt, so a dated cursor must reach the undated tail
+          // explicitly. A null cursor is already inside that tail and must not restart it.
+          ...(after.createdAt ? [{ createdAt: null }] : []),
         ],
       }
     : null;

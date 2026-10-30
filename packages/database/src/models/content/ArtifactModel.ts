@@ -260,15 +260,12 @@ ArtifactSchema.methods.restore = function () {
   return this.save();
 };
 
-export const Artifact =
+export const Artifact: Model<IArtifactDocument> =
   (mongoose.models.Artifact as mongoose.Model<IArtifactDocument>) ||
   model<IArtifactDocument>('Artifact', ArtifactSchema);
 
 // Repository implementation
 export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
-  // Add shareable property required by interface
-  public shareable: any = {}; // Placeholder for IShareableStaticMethods
-
   constructor(model: Model<IArtifactDocument>) {
     super(model);
   }

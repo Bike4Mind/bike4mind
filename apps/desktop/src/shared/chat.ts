@@ -884,6 +884,8 @@ export interface ChatModelOption {
   name: string;
   /** Provider serving it ("anthropic", "ollama", ...). Shown as a secondary label. */
   backend?: string;
+  /** Release day as YYYY-MM-DD, from the server's catalog. Absent for local and saved-server models. */
+  releaseDate?: string;
   contextWindow?: number;
   /**
    * The most output tokens this model can produce in one reply, sent as `max_tokens` on every
@@ -951,6 +953,15 @@ export const REASONING_EFFORT_SETTINGS: readonly ReasoningEffortSetting[] = [
 export interface ChatModelCatalog {
   models: ChatModelOption[];
   error?: string;
+}
+
+/**
+ * A generation tool the next Chat turn would declare, as `listCreationTools` answers. Derived from
+ * the same inputs as the request's tool list (see toolsForRequest), so the blank chat never offers
+ * to make something the model will not be given a tool for.
+ */
+export interface CreationTool {
+  name: string;
 }
 
 /**

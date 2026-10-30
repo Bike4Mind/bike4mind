@@ -1,3 +1,12 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { ForbiddenError } from '@bike4mind/utils';
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: vi.fn(async () => ({
+    assert: vi.fn(async (_modelId: string) => {}),
+    admits: vi.fn(async (_modelId: string) => true),
+  })),
+}));
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -114,6 +123,20 @@ afterEach(() => {
  * never reach the client as a 401.
  */
 describe('POST /api/ai/voice-sessions upstream failures', () => {
+  it('refuses free-tier realtime voice before session creation or provider provisioning', async () => {
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw new ForbiddenError('paid plan required', { errorCode: 'model_requires_subscription' });
+    });
+    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const { res } = await callRoute();
+    expect(res._getStatusCode()).toBe(403);
+    expect(assertAdmission).toHaveBeenCalledWith('gpt-realtime-1.5');
+    expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }));
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockOpenVoiceHold).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
   it.each([401, 403, 429, 500])('answers a coded 502, not the upstream %i', async upstreamStatus => {
     mockPost.mockRejectedValueOnce({ isAxiosError: true, response: { status: upstreamStatus, data: { error: 'x' } } });
 

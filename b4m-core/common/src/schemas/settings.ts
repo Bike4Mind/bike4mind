@@ -470,11 +470,16 @@ export const SettingKeySchema = z.enum([
   'stagedSignupGrantEnabled',
   'signupGrantCredits',
   'verifiedUnlockCredits',
+  'signupGrantDailyBudget',
   'signupGrantRiskPolicy',
   'signupGrantActivityEnabled',
   'signupGrantOrgInviteEnabled',
   'signupGrantActivityMinMessages',
+  'signupGrantActivityMinActiveSeconds',
   'signupGrantActivityMinDays',
+  'signupGrantActivityDailyCredits',
+  'signupGrantActivityMaxCredits',
+  'signupGrantActivityPreviewTestMode',
   'maxSignupsPerIpPerDay',
   'maxSignupsPerAsnPerHour',
   'teamPlanMinSeats',
@@ -556,6 +561,7 @@ export const SettingKeySchema = z.enum([
   'SlackFeedbackWebhookUrl',
   'SlackNonProdFeedbackWebhookUrl',
   'SlackEmailAuditWebhookUrl',
+  'SlackSubscriptionsWebhookUrl',
   'SlackSecurityAlertsWebhookUrl',
 
   // Admin Audit Log alerting
@@ -656,6 +662,15 @@ export const SettingKeySchema = z.enum([
   // FREE-TIER MODEL ALLOWLIST
   'freeTierModelGateEnabled',
   'freeTierAllowedModels',
+
+  // OAUTH SIGN-UP ABUSE CONTROLS
+  'oauthAbuseAutoBlockEnabled',
+  'oauthAbuseAttemptThreshold',
+  'oauthAbuseWindowMinutes',
+  'oauthAbuseBlockEscalationMinutes',
+  'oauthAbuseLookbackHours',
+  'oauthRateLimitPerIp',
+  'oauthRateLimitWindowMinutes',
 
   // OVERWATCH ROLLUP CRON SETTINGS
   'overwatchRollupSync',
@@ -1012,6 +1027,28 @@ export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting,
  */
 export function isBlankSettingValue(raw: unknown): boolean {
   return raw == null || (typeof raw === 'string' && raw.trim() === '');
+}
+
+/** Shared by settings validation and the runner so stored values cannot produce invalid expiry dates. */
+export function parseOauthAbuseEscalationMinutes(value: string): number[] | null {
+  const parts = value.split(',').map(part => part.trim());
+  if (!parts.every(part => /^\d+$/.test(part))) return null;
+
+  const minutes = parts.map(Number);
+  const now = Date.now();
+  const valid = minutes.every(duration => {
+    const durationMs = duration * 60_000;
+    return duration > 0 && Number.isSafeInteger(durationMs) && Number.isFinite(new Date(now + durationMs).getTime());
+  });
+  return valid ? minutes : null;
+}
+
+function isEscalationScheduleOrBlank(value: string): boolean {
+  return value.trim() === '' || parseOauthAbuseEscalationMinutes(value) !== null;
+}
+
+function withSchema<T extends object, S extends z.ZodTypeAny>(setting: T, schema: S) {
+  return { ...setting, schema };
 }
 
 function makeStringSetting(
@@ -2027,6 +2064,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'SlackLiveopsWebhookUrl', order: 5 },
       { key: 'SlackUserActivityWebhookUrl', order: 6 },
       { key: 'SlackEmailAuditWebhookUrl', order: 6.5 },
+      { key: 'SlackSubscriptionsWebhookUrl', order: 6.6 },
       { key: 'SlackFeedbackWebhookUrl', order: 6.75 },
       { key: 'SlackNonProdFeedbackWebhookUrl', order: 6.8 },
       { key: 'FeedbackSendEmailUsername', order: 7 },
@@ -2147,28 +2185,33 @@ export const API_SERVICE_GROUPS = {
       { key: 'stagedSignupGrantEnabled', order: 4 },
       { key: 'signupGrantCredits', order: 5 },
       { key: 'verifiedUnlockCredits', order: 6 },
-      { key: 'signupGrantRiskPolicy', order: 7 },
-      { key: 'signupGrantActivityEnabled', order: 8 },
-      { key: 'signupGrantOrgInviteEnabled', order: 9 },
-      { key: 'signupGrantActivityMinMessages', order: 10 },
-      { key: 'signupGrantActivityMinDays', order: 11 },
-      { key: 'maxSignupsPerIpPerDay', order: 12 },
-      { key: 'maxSignupsPerAsnPerHour', order: 13 },
-      { key: 'freeTierDailySpendCapCredits', order: 14 },
-      { key: 'freeTierDay1SpendCapCredits', order: 15 },
-      { key: 'freeTierDays2To7SpendCapCredits', order: 16 },
-      { key: 'syntheticUserEmailDomains', order: 17 },
-      { key: 'turnstileEnabled', order: 18 },
-      { key: 'turnstileFailClosed', order: 19 },
-      { key: 'turnstileSiteKey', order: 20 },
-      { key: 'signupBurstThreshold', order: 21 },
-      { key: 'signupBurstWindowHours', order: 22 },
-      { key: 'signupBurstAutoHold', order: 23 },
-      { key: 'signupRiskScoring', order: 24 },
-      { key: 'signupAnomaly', order: 25 },
-      { key: 'enableDomainIntelligence', order: 26 },
-      { key: 'holdSignupsFromDomainsYoungerThanDays', order: 27 },
-      { key: 'domainIntelligenceTimeoutMs', order: 28 },
+      { key: 'signupGrantDailyBudget', order: 7 },
+      { key: 'signupGrantRiskPolicy', order: 8 },
+      { key: 'signupGrantActivityEnabled', order: 9 },
+      { key: 'signupGrantOrgInviteEnabled', order: 10 },
+      { key: 'signupGrantActivityMinMessages', order: 11 },
+      { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
+      { key: 'signupGrantActivityMinDays', order: 12 },
+      { key: 'signupGrantActivityDailyCredits', order: 13 },
+      { key: 'signupGrantActivityMaxCredits', order: 14 },
+      { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
+      { key: 'maxSignupsPerIpPerDay', order: 15 },
+      { key: 'maxSignupsPerAsnPerHour', order: 16 },
+      { key: 'freeTierDailySpendCapCredits', order: 17 },
+      { key: 'freeTierDay1SpendCapCredits', order: 18 },
+      { key: 'freeTierDays2To7SpendCapCredits', order: 19 },
+      { key: 'syntheticUserEmailDomains', order: 20 },
+      { key: 'turnstileEnabled', order: 21 },
+      { key: 'turnstileFailClosed', order: 22 },
+      { key: 'turnstileSiteKey', order: 23 },
+      { key: 'signupBurstThreshold', order: 24 },
+      { key: 'signupBurstWindowHours', order: 25 },
+      { key: 'signupBurstAutoHold', order: 26 },
+      { key: 'signupRiskScoring', order: 27 },
+      { key: 'signupAnomaly', order: 28 },
+      { key: 'enableDomainIntelligence', order: 29 },
+      { key: 'holdSignupsFromDomainsYoungerThanDays', order: 30 },
+      { key: 'domainIntelligenceTimeoutMs', order: 31 },
     ],
   },
   KNOWLEDGE: {
@@ -2294,7 +2337,7 @@ export const API_SERVICE_GROUPS = {
   FREE_TIER_MODELS: {
     id: 'freeTierModelsService',
     name: 'Free-Tier Models',
-    description: 'Which text models accounts without a paid plan may call, on every surface',
+    description: 'Which models accounts without a paid plan may call across all modalities',
     icon: 'Security',
     settings: [
       { key: 'freeTierModelGateEnabled', order: 1 },
@@ -2328,6 +2371,21 @@ export const API_SERVICE_GROUPS = {
       { key: 'otcLimitSendPerIpDaily', order: 8 },
       { key: 'otcLimitVerifyPerEmailPerIp', order: 9 },
       { key: 'otcLimitVerifyPerIp', order: 10 },
+    ],
+  },
+  AUTH_ABUSE: {
+    id: 'authAbuseService',
+    name: 'OAuth Abuse Protection',
+    description: 'Automatic IP blocking for repeated failed OAuth sign-ins and per-IP limits on OAuth routes',
+    icon: 'Security',
+    settings: [
+      { key: 'oauthAbuseAutoBlockEnabled', order: 1 },
+      { key: 'oauthAbuseAttemptThreshold', order: 2 },
+      { key: 'oauthAbuseWindowMinutes', order: 3 },
+      { key: 'oauthAbuseBlockEscalationMinutes', order: 4 },
+      { key: 'oauthAbuseLookbackHours', order: 5 },
+      { key: 'oauthRateLimitPerIp', order: 6 },
+      { key: 'oauthRateLimitWindowMinutes', order: 7 },
     ],
   },
   DATA_LAKE_AUDIT: {
@@ -3250,11 +3308,94 @@ export const settingsMap = {
     // defaults to paid-only so the gate is live without an admin write.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? 'all' : 'paid',
     description:
-      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
+      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), users who have bought credits, or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 5,
+  }),
+  // Auto-block of IPs with repeated failed OAuth sign-ins, plus per-IP limits on the OAuth routes.
+  oauthAbuseAutoBlockEnabled: makeBooleanSetting({
+    key: 'oauthAbuseAutoBlockEnabled',
+    name: 'OAuth Abuse Auto-Block',
+    defaultValue: true,
+    description: 'Automatically block IPs whose failed OAuth sign-ins reach the threshold within the window.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
+    order: 1,
+  }),
+  oauthAbuseAttemptThreshold: makeNumberSetting({
+    key: 'oauthAbuseAttemptThreshold',
+    name: 'OAuth Abuse Attempt Threshold',
+    defaultValue: 20,
+    min: 1,
+    int: true,
+    description: 'Failed sign-in attempts from one IP inside the window that trigger an automatic block.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
+    order: 2,
+  }),
+  oauthAbuseWindowMinutes: makeNumberSetting({
+    key: 'oauthAbuseWindowMinutes',
+    name: 'OAuth Abuse Window (minutes)',
+    defaultValue: 10,
+    min: 1,
+    max: 1440,
+    int: true,
+    description: 'Look-back window for counting failed sign-in attempts per IP.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
+    order: 3,
+  }),
+  oauthAbuseBlockEscalationMinutes: withSchema(
+    makeStringSetting({
+      key: 'oauthAbuseBlockEscalationMinutes',
+      name: 'OAuth Abuse Block Escalation (minutes)',
+      defaultValue: '10,60,1440',
+      description:
+        'Comma-separated block durations in minutes. Each repeat block of the same IP within the lookback moves one step up; the last step repeats.',
+      category: 'SecOps',
+      group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
+      order: 4,
+    }),
+    z.string().refine(isEscalationScheduleOrBlank, {
+      message: 'Use comma-separated positive whole minutes with valid expiry dates, e.g. 10,60,1440',
+    })
+  ),
+  oauthAbuseLookbackHours: makeNumberSetting({
+    key: 'oauthAbuseLookbackHours',
+    name: 'OAuth Abuse Escalation Lookback (hours)',
+    defaultValue: 24,
+    min: 1,
+    max: 720,
+    int: true,
+    description: 'How far back earlier automatic blocks of the same IP count toward escalation.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
+    order: 5,
+  }),
+  oauthRateLimitPerIp: makeNumberSetting({
+    key: 'oauthRateLimitPerIp',
+    name: 'OAuth Rate Limit (requests per IP)',
+    defaultValue: 40,
+    min: 1,
+    int: true,
+    description:
+      'Max OAuth initiation requests, and separately callback requests, per IP per window. Successful sign-ins count too, so raise this for a busy shared NAT (office or campus SSO onboarding); turning off OAuth Abuse Auto-Block does not affect this limit.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
+    order: 6,
+  }),
+  oauthRateLimitWindowMinutes: makeNumberSetting({
+    key: 'oauthRateLimitWindowMinutes',
+    name: 'OAuth Rate Limit Window (minutes)',
+    defaultValue: 10,
+    min: 1,
+    int: true,
+    description: 'Window for the per-IP OAuth request limit.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
+    order: 7,
   }),
   tagLineMain: makeStringSetting({
     key: 'tagLineMain',
@@ -3499,6 +3640,17 @@ export const settingsMap = {
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
     order: 8,
+    isSensitive: true,
+  }),
+  SlackSubscriptionsWebhookUrl: makeStringSetting({
+    key: 'SlackSubscriptionsWebhookUrl',
+    name: 'Subscriptions Channel Webhook URL',
+    defaultValue: '',
+    description:
+      'Incoming-webhook URL for subscription lifecycle posts: new paid subscriptions, plan changes, scheduled and reverted cancellations, ended subscriptions and first failed payments. Posts come from production only and carry internal IDs and admin links, never customer names or emails. Falls back to the default webhook URL when empty.',
+    category: 'Feedback',
+    group: API_SERVICE_GROUPS.FEEDBACK.id,
+    order: 6.6,
     isSensitive: true,
   }),
   SlackSecurityAlertsWebhookUrl: makeStringSetting({
@@ -3838,7 +3990,7 @@ export const settingsMap = {
     // Self-host has no billing stack, so every account would read as free; the gate is hosted-only by default.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
     description:
-      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) to the free-tier text models, on web chat, CLI, API keys, agents and fallbacks. Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
+      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) or a past credit purchase to the free-tier model allowlist across all modalities, on web chat, media generation, CLI, API keys, agents and fallbacks. Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
     order: 1,
@@ -3857,7 +4009,7 @@ export const settingsMap = {
       ChatModels.GEMINI_2_5_FLASH_LITE,
     ],
     description:
-      'Text model IDs free accounts may call while the Free-Tier Model Gate is on, one per line. The Default API Model is always allowed so a free account can still chat. A model missing here, including a newly added one, is paid-only.',
+      'Model IDs free accounts may call across all modalities while the Free-Tier Model Gate is on, one per line. Media models are paid-only unless explicitly listed. Conversational voice uses the ID elevenlabs. A model missing here, including a newly added one and the Default API Model, is paid-only. A free account that calls the chat or agent-execution API without a model starts on the first text model listed here that it can use.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
     order: 2,
@@ -4075,6 +4227,17 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
+  signupGrantDailyBudget: makeNumberSetting({
+    key: 'signupGrantDailyBudget',
+    name: 'Signup Grant Daily Budget',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description:
+      'Maximum free signup credits paid out per UTC day across all new accounts. Grants past the budget are held until a later day. 0 disables the budget.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
   signupGrantRiskPolicy: makeObjectSetting<Record<string, unknown>>({
     key: 'signupGrantRiskPolicy',
     name: 'Signup Grant Assessment Policy',
@@ -4090,7 +4253,8 @@ export const settingsMap = {
     name: 'Signup Grant Activity Unlock',
     defaultValue: false,
     userReadable: true,
-    description: 'Allow enrolled accounts to request an unlock based on server-completed first-party chat activity.',
+    description:
+      'Allow enrolled accounts to request an unlock once they keep the app open and in use for the minimum active time in a UTC day.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4106,24 +4270,71 @@ export const settingsMap = {
   }),
   signupGrantActivityMinMessages: makeNumberSetting({
     key: 'signupGrantActivityMinMessages',
-    name: 'Signup Activity Minimum Messages',
+    name: 'Signup Activity Minimum Messages (deprecated)',
     defaultValue: 0,
     min: 0,
     max: 10000,
     int: true,
-    description: 'Private minimum completed chat turns for activity unlock. Zero disables eligibility.',
+    description:
+      'Deprecated and unused: the activity drip qualifies on active time, not chat turns. Use Signup Activity Minimum Active Seconds.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantActivityMinActiveSeconds: makeNumberSetting({
+    key: 'signupGrantActivityMinActiveSeconds',
+    name: 'Signup Activity Minimum Active Seconds',
+    defaultValue: 60,
+    min: 60,
+    max: 7200,
+    int: true,
+    userReadable: true,
+    description:
+      'Active time in a UTC day, counted from heartbeat pings while the app is open and in use, before the activity drip pays. Invalid values fall back to 60.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantActivityMinDays: makeNumberSetting({
     key: 'signupGrantActivityMinDays',
-    name: 'Signup Activity Minimum Days',
+    name: 'Signup Activity Minimum Days (deprecated)',
     defaultValue: 0,
     min: 0,
     max: 365,
     int: true,
     description:
-      'Private minimum distinct UTC activity days and elapsed whole days between first and last activity. Zero disables eligibility.',
+      'Deprecated and unused: the activity drip is paid per qualifying UTC day and no longer reads this value. Leave at zero.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantActivityDailyCredits: makeNumberSetting({
+    key: 'signupGrantActivityDailyCredits',
+    name: 'Signup Activity Daily Credits',
+    defaultValue: 0,
+    min: 0,
+    max: 10000,
+    int: true,
+    userReadable: true,
+    description:
+      'Credits released for each UTC day of qualifying active time. Pays only from the unlock pool (Verified Unlock Credits) and pays nothing while that is 0. Zero disables the activity drip.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantActivityMaxCredits: makeNumberSetting({
+    key: 'signupGrantActivityMaxCredits',
+    name: 'Signup Activity Maximum Credits',
+    defaultValue: 9000,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description: 'Total credits the activity drip may release per account. Zero disables the activity drip.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupGrantActivityPreviewTestMode: makeBooleanSetting({
+    key: 'signupGrantActivityPreviewTestMode',
+    name: 'Signup Drip Preview Test Mode',
+    defaultValue: false,
+    description:
+      'PR previews only: use five-minute earning windows instead of UTC days to test the activity drip. Each window still requires the configured active time; use a minimum below five minutes. Production, staging and personal environments always use UTC days. The platform daily budget is unchanged. Reload the test user tab after toggling this switch.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

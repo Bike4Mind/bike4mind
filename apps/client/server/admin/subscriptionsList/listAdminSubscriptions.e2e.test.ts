@@ -58,6 +58,11 @@ type SubscriptionOverrides = Partial<{
   canceledAt: Date | null;
   periodEndsAt: Date;
   createdAt: Date;
+  quantity: number;
+  unitAmount: number | null;
+  currency: string;
+  interval: string;
+  intervalCount: number;
 }>;
 
 const seedSubscription = (ownerId: string, overrides: SubscriptionOverrides = {}) =>
@@ -76,6 +81,27 @@ const seedSubscription = (ownerId: string, overrides: SubscriptionOverrides = {}
   });
 
 const catalog = subscriptionPlanCatalog();
+
+// Mirrors the UserSubscription migration's raw insertOne, which skipped schema validation and so could
+// leave the required dates (and timestamps) off a legacy document.
+const seedLegacySubscription = async (ownerId: string) => {
+  const _id = new mongoose.Types.ObjectId();
+  await Subscription.collection.insertOne({
+    _id,
+    subscriptionId: `sub_${nextId()}`,
+    ownerType: 'User',
+    ownerId,
+    priceId: 'price_test',
+    status: 'active',
+    quantity: 1,
+  });
+  return String(_id);
+};
+
+const cursorOf = (row: { createdAt: string | null; id: string }) => ({
+  createdAt: row.createdAt ? new Date(row.createdAt) : null,
+  id: row.id,
+});
 
 describe('listAdminSubscriptions', () => {
   it('lists user and organization rows with the owner hydrated', async () => {
@@ -274,6 +300,22 @@ describe('listAdminSubscriptions', () => {
 
     expect(result.subscriptions[0].owner).toBeNull();
   });
+
+  it('lists a legacy row that has no period dates or createdAt', async () => {
+    const user = await seedUser('jane');
+    await seedSubscription(String(user._id));
+    const legacyId = await seedLegacySubscription(String(user._id));
+
+    const result = await listAdminSubscriptions({ ...params, limit: 1, page: 2 }, NOW);
+
+    expect(result.subscriptions).toHaveLength(1);
+    expect(result.subscriptions[0]).toMatchObject({
+      id: legacyId,
+      periodStartsAt: null,
+      periodEndsAt: null,
+      createdAt: null,
+    });
+  });
 });
 
 describe('adminSubscriptionsSummary', () => {
@@ -300,9 +342,12 @@ describe('adminSubscriptionsSummary', () => {
 
     const summary = await adminSubscriptionsSummary({}, NOW);
 
+    // None of these rows carries a mirrored amount, so every paying one is counted as unpriced.
     expect(summary).toEqual({
       total: 7,
       views: { paying: 3, pastDue: 1, comped: 1, churned: 1 },
+      mrr: { currency: 'usd', amount: 0, unpriced: 3, otherCurrency: 0 },
+      pastDueMrr: { currency: 'usd', amount: 0, unpriced: 1, otherCurrency: 0 },
       searchTruncated: false,
     });
   });
@@ -315,8 +360,111 @@ describe('adminSubscriptionsSummary', () => {
     expect(summary).toEqual({
       total: 1,
       views: { paying: 1, pastDue: 0, comped: 0, churned: 0 },
+      mrr: { currency: 'usd', amount: 0, unpriced: 1, otherCurrency: 0 },
+      pastDueMrr: { currency: 'usd', amount: 0, unpriced: 0, otherCurrency: 0 },
       searchTruncated: false,
     });
+  });
+});
+
+describe('MRR', () => {
+  // A Professional plan at $19.00 a month, as mirrored from Stripe.
+  const professional = { unitAmount: 1900, currency: 'usd', interval: 'month', intervalCount: 1 };
+
+  const seedBilling = async () => {
+    const user = await seedUser('jane');
+    const organization = await seedOrganization('Team org', String(user._id));
+    const userId = String(user._id);
+    await seedSubscription(userId, { subscriptionId: 'sub_monthly', ...professional });
+    await seedSubscription(userId, {
+      subscriptionId: 'sub_yearly',
+      ...professional,
+      unitAmount: 19900,
+      interval: 'year',
+    });
+    await seedSubscription(String(organization._id), {
+      subscriptionId: 'sub_team',
+      ownerType: 'Organization',
+      ...professional,
+      unitAmount: 3000,
+      quantity: 8,
+    });
+    await seedSubscription(userId, { subscriptionId: 'sub_past_due', status: 'past_due', ...professional });
+    await seedSubscription(userId, { subscriptionId: 'sub_unpaid', status: 'unpaid', ...professional });
+    await seedSubscription(userId, { subscriptionId: 'sub_trial', status: 'trialing', ...professional });
+    await seedSubscription(userId, { subscriptionId: 'sub_canceled', status: 'canceled', ...professional });
+    await seedSubscription(userId, { subscriptionId: 'admin_grant_c', source: 'admin_grant', ...professional });
+    // Written before the mirror existed: no amount, currency or interval at all.
+    await seedSubscription(userId, { subscriptionId: 'sub_unsynced' });
+    await seedSubscription(userId, { subscriptionId: 'sub_tiered', ...professional, unitAmount: null });
+    await seedSubscription(userId, { subscriptionId: 'sub_eur', ...professional, currency: 'eur', unitAmount: 1800 });
+  };
+
+  it('sums active and past due Stripe rows per month, counting what it leaves out', async () => {
+    await seedBilling();
+
+    const summary = await adminSubscriptionsSummary({}, NOW);
+
+    // 1900 + 19900 / 12 + 3000 x 8 + 1900 (past due)
+    expect(summary.mrr).toEqual({ currency: 'usd', amount: 29458, unpriced: 2, otherCurrency: 1 });
+    expect(summary.pastDueMrr).toEqual({ currency: 'usd', amount: 1900, unpriced: 0, otherCurrency: 0 });
+    expect(summary.views.pastDue).toBe(2);
+  });
+
+  it('intersects MRR with the current filter', async () => {
+    await seedBilling();
+
+    const organizations = await adminSubscriptionsSummary({ ownerType: 'Organization' }, NOW);
+    const comps = await adminSubscriptionsSummary({ source: 'admin_grant' }, NOW);
+
+    expect(organizations.mrr).toEqual({ currency: 'usd', amount: 24000, unpriced: 0, otherCurrency: 0 });
+    expect(comps.mrr).toEqual({ currency: 'usd', amount: 0, unpriced: 0, otherCurrency: 0 });
+  });
+
+  it('gives the same totals when facets run as separate queries for DocumentDB', async () => {
+    await seedBilling();
+    const native = await adminSubscriptionsSummary({}, NOW);
+
+    vi.stubEnv('USE_DOCUMENTDB_COMPATIBILITY', 'true');
+    try {
+      const split = await adminSubscriptionsSummary({}, NOW);
+      expect(split).toEqual(native);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("puts each row's own MRR on the list, and none on comps or rows without an amount", async () => {
+    await seedBilling();
+
+    const result = await listAdminSubscriptions(params, NOW);
+    const mrrOf = Object.fromEntries(result.subscriptions.map(row => [row.subscriptionId, row.mrr]));
+
+    expect(mrrOf).toEqual({
+      sub_monthly: { amount: 1900, currency: 'usd' },
+      sub_yearly: { amount: 1658, currency: 'usd' },
+      sub_team: { amount: 24000, currency: 'usd' },
+      sub_past_due: { amount: 1900, currency: 'usd' },
+      sub_unpaid: null,
+      sub_trial: null,
+      sub_canceled: null,
+      admin_grant_c: null,
+      sub_unsynced: null,
+      sub_tiered: null,
+      sub_eur: { amount: 1800, currency: 'eur' },
+    });
+  });
+
+  it('carries the mirrored billing interval, and none for a row written before the mirror', async () => {
+    await seedBilling();
+
+    const result = await listAdminSubscriptions(params, NOW);
+    const intervalOf = Object.fromEntries(result.subscriptions.map(row => [row.subscriptionId, row.billedInterval]));
+
+    expect(intervalOf.sub_yearly).toEqual({ interval: 'year', intervalCount: 1 });
+    expect(intervalOf.sub_monthly).toEqual({ interval: 'month', intervalCount: 1 });
+    expect(intervalOf.sub_unsynced).toBeNull();
+    expect(intervalOf.admin_grant_c).toBeNull();
   });
 });
 
@@ -332,19 +480,99 @@ describe('adminSubscriptionsExportPage', () => {
 
     const first = await adminSubscriptionsExportPage(match, null, 2, catalog);
     const last = first[first.length - 1];
-    const rest = await adminSubscriptionsExportPage(
-      match,
-      { createdAt: new Date(last.createdAt), id: last.id },
-      5,
-      catalog
-    );
+    const rest = await adminSubscriptionsExportPage(match, cursorOf(last), 5, catalog);
 
     const all = [...first, ...rest];
     expect(all).toHaveLength(4);
     expect(new Set(all.map(row => row.id)).size).toBe(4);
-    const times = all.map(row => new Date(row.createdAt).getTime());
+    const times = all.map(row => Date.parse(row.createdAt ?? ''));
     expect(times).toEqual([...times].sort((a, b) => b - a));
-    const tied = all.filter(row => new Date(row.createdAt).getTime() === tie.getTime()).map(row => row.id);
+    const tied = all.filter(row => Date.parse(row.createdAt ?? '') === tie.getTime()).map(row => row.id);
     expect(tied).toEqual([...tied].sort().reverse());
+  });
+
+  it('pages past legacy rows with no createdAt, which sort last', async () => {
+    const user = await seedUser('jane');
+    await seedSubscription(String(user._id));
+    const legacyIds = [
+      await seedLegacySubscription(String(user._id)),
+      await seedLegacySubscription(String(user._id)),
+      await seedLegacySubscription(String(user._id)),
+    ];
+    const { match } = await adminSubscriptionsMatch({}, NOW, catalog);
+
+    const all = [];
+    let after: ReturnType<typeof cursorOf> | null = null;
+    for (let page = 0; page < 5; page++) {
+      const rows = await adminSubscriptionsExportPage(match, after, 2, catalog);
+      all.push(...rows);
+      if (rows.length < 2) break;
+      after = cursorOf(rows[rows.length - 1]);
+    }
+
+    expect(all).toHaveLength(4);
+    expect(all[0].createdAt).not.toBeNull();
+    expect(all.slice(1).map(row => row.id)).toEqual([...legacyIds].sort().reverse());
+  });
+
+  it('reaches the undated tail from a cursor on a dated row', async () => {
+    const user = await seedUser('jane');
+    await seedSubscription(String(user._id), { createdAt: new Date(NOW.getTime() - DAY) });
+    await seedSubscription(String(user._id), { createdAt: new Date(NOW.getTime() - 2 * DAY) });
+    const legacyIds = [await seedLegacySubscription(String(user._id)), await seedLegacySubscription(String(user._id))];
+    const { match } = await adminSubscriptionsMatch({}, NOW, catalog);
+
+    const first = await adminSubscriptionsExportPage(match, null, 2, catalog);
+    const rest = await adminSubscriptionsExportPage(match, cursorOf(first[first.length - 1]), 5, catalog);
+
+    expect(first.every(row => row.createdAt !== null)).toBe(true);
+    expect(rest.map(row => row.id)).toEqual([...legacyIds].sort().reverse());
+  });
+});
+
+describe('cancel filter', () => {
+  const seedCancels = async () => {
+    const userId = String((await seedUser('jane'))._id);
+    await seedSubscription(userId, { subscriptionId: 'sub_live', status: 'active' });
+    await seedSubscription(userId, {
+      subscriptionId: 'sub_scheduled',
+      status: 'active',
+      canceledAt: new Date(NOW.getTime() - 2 * DAY),
+    });
+    await seedSubscription(userId, {
+      subscriptionId: 'sub_churned',
+      status: 'canceled',
+      canceledAt: new Date(NOW.getTime() - 5 * DAY),
+    });
+    await seedSubscription(userId, {
+      subscriptionId: 'sub_churned_long_ago',
+      status: 'canceled',
+      canceledAt: new Date(NOW.getTime() - 60 * DAY),
+    });
+  };
+  const subscriptionIds = (rows: { subscriptionId: string }[]) => rows.map(row => row.subscriptionId).sort();
+
+  it('lists a scheduled cancel that has not ended yet', async () => {
+    await seedCancels();
+
+    const result = await listAdminSubscriptions({ ...params, cancel: 'scheduled' }, NOW);
+
+    expect(subscriptionIds(result.subscriptions)).toEqual(['sub_scheduled']);
+  });
+
+  it('lists status canceled plus last30 as exactly the rows summary.views.churned counts', async () => {
+    await seedCancels();
+
+    const churned = await listAdminSubscriptions({ ...params, status: ['canceled'], cancel: 'last30' }, NOW);
+    const summary = await adminSubscriptionsSummary({}, NOW);
+
+    expect(subscriptionIds(churned.subscriptions)).toEqual(['sub_churned']);
+    expect(summary.views.churned).toBe(churned.total);
+  });
+
+  it('counts a cancel filter through the summary total', async () => {
+    await seedCancels();
+
+    expect((await adminSubscriptionsSummary({ cancel: 'scheduled' }, NOW)).total).toBe(1);
   });
 });

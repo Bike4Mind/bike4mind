@@ -9,11 +9,11 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { toCsv } from '@client/app/utils/csv';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { stageAdminAuditExport } from '@server/utils/adminAuditExportStorage';
 import { parseAuditExportQuery } from '@server/utils/adminAuditQuery';
-import { ensureAdmin, InternalServerError } from '@bike4mind/server-utils/utils/errors';
+import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 
 const EXPORT_PAGE_SIZE = 1000;
 
@@ -81,8 +81,10 @@ const stageExportOrThrow = async (csv: string, fileName: string, rowCount: numbe
   }
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const filters = parseAuditExportQuery(req.query);
 
   const { entries, truncated } = await collectEntries(filters);

@@ -1,4 +1,12 @@
-import type { AdminCreditSummary, AdminLedgerKind, AdminLedgerRow } from '@bike4mind/common';
+import {
+  COMPLETION_SOURCES,
+  type AdminCreditSummary,
+  type AdminLedgerFilter,
+  type AdminLedgerKind,
+  type AdminLedgerRow,
+  type AdminSpendBucket,
+  type CompletionSource,
+} from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 
 export const SPEND_RANGES = ['7', '30', '90'] as const;
@@ -71,4 +79,91 @@ const DAY_FORMAT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'nume
 /** `YYYY-MM-DD` (a UTC day) as "Oct 12". */
 export function formatSpendDay(date: string): string {
   return DAY_FORMAT.format(new Date(`${date}T00:00:00Z`));
+}
+
+export const SPEND_VIEWS = ['day', 'model', 'source'] as const;
+export type SpendView = (typeof SPEND_VIEWS)[number];
+
+export const SPEND_VIEW_OPTIONS: readonly { value: SpendView; label: string }[] = [
+  { value: 'day', label: 'By day' },
+  { value: 'model', label: 'By model' },
+  { value: 'source', label: 'By source' },
+];
+
+export const SOURCE_LABELS: Readonly<Record<CompletionSource, string>> = {
+  web: 'Web',
+  cli: 'CLI',
+  desktop: 'Desktop',
+  api: 'API',
+  agent: 'Agent',
+  system: 'System',
+};
+
+export const SOURCE_FILTER_OPTIONS: readonly { value: CompletionSource; label: string }[] = COMPLETION_SOURCES.map(
+  source => ({ value: source, label: SOURCE_LABELS[source] })
+);
+
+export const isCompletionSource = (value: string): value is CompletionSource =>
+  (COMPLETION_SOURCES as readonly string[]).includes(value);
+
+/** The bars of one breakdown; past this many, the smallest fold into one "Other" bar. */
+export const SPEND_BREAKDOWN_MAX_BARS = 8;
+
+export type SpendBar = { label: string; credits: number };
+
+const RANGE_FIELD: Readonly<Record<SpendRange, 'last7d' | 'last30d' | 'last90d'>> = {
+  '7': 'last7d',
+  '30': 'last30d',
+  '90': 'last90d',
+};
+
+function bucketLabel(key: string | null, view: 'model' | 'source'): string {
+  if (view === 'model') return key ?? 'Unknown model';
+  if (key === null) return 'Unclassified';
+  return isCompletionSource(key) ? SOURCE_LABELS[key] : key;
+}
+
+/** One range of a model or source breakdown, largest first, with the long tail folded into "Other". */
+export function spendBreakdown(
+  buckets: readonly AdminSpendBucket[],
+  range: SpendRange,
+  view: 'model' | 'source'
+): SpendBar[] {
+  const field = RANGE_FIELD[range];
+  const bars = buckets
+    .filter(bucket => bucket[field] > 0)
+    .map(bucket => ({ label: bucketLabel(bucket.key, view), credits: bucket[field] }))
+    .sort((a, b) => b.credits - a.credits || a.label.localeCompare(b.label));
+  if (bars.length <= SPEND_BREAKDOWN_MAX_BARS) return bars;
+  const kept = bars.slice(0, SPEND_BREAKDOWN_MAX_BARS - 1);
+  const other = bars.slice(SPEND_BREAKDOWN_MAX_BARS - 1).reduce((sum, bar) => sum + bar.credits, 0);
+  return [...kept, { label: 'Other', credits: other }];
+}
+
+/** What the ledger's filter row holds; empty strings and nulls mean "any". Dates are UTC YYYY-MM-DD. */
+export type LedgerFilterState = {
+  kind: LedgerFilter;
+  model: string | null;
+  source: CompletionSource | null;
+  from: string;
+  to: string;
+};
+
+export const EMPTY_LEDGER_FILTER: LedgerFilterState = { kind: 'all', model: null, source: null, from: '', to: '' };
+
+export const isLedgerRangeInverted = ({ from, to }: LedgerFilterState): boolean => !!from && !!to && from > to;
+
+export const hasLedgerFilter = (state: LedgerFilterState): boolean =>
+  state.kind !== 'all' || !!state.model || !!state.source || !!state.from || !!state.to;
+
+/** The wire filter (see adminLedgerFilterSchema), with unset fields left out. */
+export function toLedgerQuery(state: LedgerFilterState): AdminLedgerFilter {
+  const model = state.model?.trim();
+  return {
+    ...(state.kind !== 'all' && { kind: state.kind }),
+    ...(model && { model }),
+    ...(state.source && { source: state.source }),
+    ...(state.from && { from: state.from }),
+    ...(state.to && { to: state.to }),
+  };
 }

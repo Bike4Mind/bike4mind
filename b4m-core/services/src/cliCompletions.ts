@@ -468,6 +468,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // token estimate below and every backend translator read the same shape.
   const messages = normalizeMultimodalMessages(params.messages);
   const source: CompletionSource = params.source ?? 'api';
+  // One id per request: the usage event and the credit transaction share it so the admin ledger can
+  // point at the usage record.
+  const requestId = params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`;
   const completionStartTime = Date.now();
 
   if (!hasEffectiveConversationMessage(messages)) {
@@ -964,7 +967,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       ) {
         db.usageEvents
           ?.record({
-            requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+            requestId,
             userId,
             ownerId: holderId,
             ownerType: holderType,
@@ -1067,7 +1070,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const recordUsageEvent = (creditsCharged: number) => {
     db.usageEvents
       ?.record({
-        requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+        requestId,
         userId,
         ownerId: holderId,
         ownerType: holderType,
@@ -1225,6 +1228,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
                   apiKeyName: apiKeyInfo.keyName,
                 }),
                 authMethod: apiKeyInfo ? 'api_key' : 'jwt',
+                requestId,
                 // For org-billed keys, keep the acting user for attribution even
                 // though the credits leave the org pool.
                 ...(billToOrg && { billedTo: 'organization', actingUserId: userId }),

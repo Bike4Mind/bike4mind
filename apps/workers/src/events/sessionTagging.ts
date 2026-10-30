@@ -5,6 +5,7 @@ import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 // A name that is blank after trim is not a usable tag: keeping it would let one blank element make
 // an otherwise-unusable completion look like a success. Shared by both parse paths so they cannot
@@ -112,6 +113,12 @@ export const handler = withEventContext(async (event, logger) => {
   const payer = payerId ? await userRepository.findById(payerId) : requesterId ? writer : user;
   if (!payer) {
     logger.warn(`Payer ${payerId} not found, skipping tagging for session ${sessionId}`);
+    return;
+  }
+
+  const accessDenial = aiAccessDeniedMessage(writer) ?? aiAccessDeniedMessage(payer);
+  if (accessDenial) {
+    logger.warn(`Skipping tagging for session ${sessionId}: ${accessDenial}`);
     return;
   }
 

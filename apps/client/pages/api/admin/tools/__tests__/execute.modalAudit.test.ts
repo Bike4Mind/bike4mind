@@ -7,8 +7,12 @@ import { createMocks } from 'node-mocks-http';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain);
     chain.post = (fn: (typeof handlers)[string]) => {
       handlers.POST = fn;
       return chain;

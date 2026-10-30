@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 import {
+  DAILY_ACTIVITY_REPORT_VERSION,
+  WEEKLY_ACTIVITY_REPORT_VERSION,
   IDailyReportDocument,
   IWeeklyReportDocument,
   IDailyReportRepository,
@@ -20,7 +22,7 @@ class DailyReportRepository extends BaseRepository<IDailyReportDocument> impleme
   async upsertReport(date: string, report: string, aiInsights?: string | null) {
     return this.model.findOneAndUpdate(
       { date },
-      { date, report, aiInsights, updatedAt: new Date() },
+      { date, report, aiInsights, reportVersion: DAILY_ACTIVITY_REPORT_VERSION, updatedAt: new Date() },
       { upsert: true, new: true }
     );
   }
@@ -31,6 +33,8 @@ const DailyReportSchema = new mongoose.Schema<IDailyReportDocument>(
     date: { type: String, required: true, unique: true },
     report: { type: String, required: true },
     aiInsights: { type: String, default: null },
+    // Optional so existing rows stay valid; a missing value reads as version 0 (stale).
+    reportVersion: { type: Number },
   },
   {
     timestamps: true,
@@ -50,7 +54,7 @@ class WeeklyReportRepository extends BaseRepository<IWeeklyReportDocument> imple
   async upsertReport(startDate: string, endDate: string, report: string, aiInsights?: string | null) {
     return this.model.findOneAndUpdate(
       { startDate, endDate },
-      { startDate, endDate, report, aiInsights, updatedAt: new Date() },
+      { startDate, endDate, report, aiInsights, reportVersion: WEEKLY_ACTIVITY_REPORT_VERSION, updatedAt: new Date() },
       { upsert: true, new: true }
     );
   }
@@ -62,6 +66,8 @@ const WeeklyReportSchema = new mongoose.Schema<IWeeklyReportDocument>(
     endDate: { type: String, required: true },
     report: { type: String, required: true },
     aiInsights: { type: String, default: null },
+    // Optional so existing rows stay valid; a missing value reads as version 0 (stale).
+    reportVersion: { type: Number },
   },
   {
     timestamps: true,

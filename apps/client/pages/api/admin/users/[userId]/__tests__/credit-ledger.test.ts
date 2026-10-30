@@ -226,4 +226,72 @@ describe('GET /api/admin/users/[userId]/credit-ledger', () => {
     expect(rows[2].apiKeyPrefix).toBeUndefined();
     expect(JSON.stringify(rows)).not.toContain('secret');
   });
+
+  it('400s on a bad source, a bad date and a start date after the end date without querying', async () => {
+    await expect(run({ source: 'carrier-pigeon' }).promise).rejects.toBeInstanceOf(BadRequestError);
+    await expect(run({ from: '2026-13-40' }).promise).rejects.toBeInstanceOf(BadRequestError);
+    await expect(run({ from: '2026-02-02', to: '2026-02-01' }).promise).rejects.toBeInstanceOf(BadRequestError);
+    expect(h.findLedgerPage).not.toHaveBeenCalled();
+  });
+
+  it('passes model, source and whole UTC days to the repository and derives no balance', async () => {
+    h.findLedgerPage.mockResolvedValue([doc(1, { type: 'text_generation_usage', credits: -5, model: 'm1' })]);
+
+    const { res, promise } = run({ model: 'm1', source: 'cli', from: '2026-01-01', to: '2026-01-31' });
+    await promise;
+
+    expect(h.findLedgerPage).toHaveBeenCalledExactlyOnceWith('u1', 'User', {
+      types: undefined,
+      model: 'm1',
+      source: 'cli',
+      createdFrom: new Date('2026-01-01T00:00:00.000Z'),
+      createdBefore: new Date('2026-02-01T00:00:00.000Z'),
+      after: undefined,
+      limit: 51,
+    });
+    expect(h.sumNewer).not.toHaveBeenCalled();
+    expect(res._getJSONData().rows[0].balanceAfter).toBeUndefined();
+  });
+
+  it('keeps the running balance under a date range, starting below everything newer than the range', async () => {
+    h.sumNewer.mockResolvedValue(-40);
+    h.findLedgerPage.mockResolvedValue([
+      doc(2, { type: 'text_generation_usage', credits: -5 }),
+      doc(1, { type: 'purchase', credits: 100 }),
+    ]);
+
+    const { res, promise } = run({ to: '2026-01-01' });
+    await promise;
+
+    expect(h.sumNewer).toHaveBeenCalledExactlyOnceWith('u1', 'User', { createdAt: at(2), id: OID(2) });
+    expect(res._getJSONData().rows.map((r: { balanceAfter: number }) => r.balanceAfter)).toEqual([1040, 1045]);
+  });
+
+  it('starts at the current balance when the range has only a start date', async () => {
+    h.findLedgerPage.mockResolvedValue([doc(1, { type: 'text_generation_usage', credits: -5 })]);
+
+    const { res, promise } = run({ from: '2026-01-01' });
+    await promise;
+
+    expect(h.sumNewer).not.toHaveBeenCalled();
+    expect(res._getJSONData().rows[0].balanceAfter).toBe(1000);
+  });
+
+  it('reports the API request id and the chat quest id as separate fields', async () => {
+    h.findLedgerPage.mockResolvedValue([
+      doc(3, { type: 'completion_api_usage', credits: -1, metadata: { requestId: 'completion-k1-1' } }),
+      doc(2, { type: 'text_generation_usage', credits: -1, questId: 'q-42' }),
+      doc(1, { type: 'purchase', credits: 10 }),
+    ]);
+
+    const { res, promise } = run();
+    await promise;
+
+    const rows = res._getJSONData().rows as Array<{ requestId?: string; questId?: string }>;
+    expect(rows.map(r => [r.requestId, r.questId])).toEqual([
+      ['completion-k1-1', undefined],
+      [undefined, 'q-42'],
+      [undefined, undefined],
+    ]);
+  });
 });

@@ -161,10 +161,10 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // already inert in open core (no gate here ever read the keys).
   // INTENDED CONSEQUENCE (deliberate, not a regression): removing the rows also
   // drops `opti-compute` / `opti-hardware` from `allKnownEntitlementKeys()`, so
-  // `UserPermissions.tsx` no longer classifies them as managed - a leftover
+  // the admin Users profile no longer classifies them as managed - a leftover
   // `opti-compute` tag now renders as a removable custom-tag chip in the admin
   // Users panel (with no Product Access control, because the tier is retired).
-  // That is how an operator strips the inert leftover; see UserPermissions.test.tsx.
+  // That is how an operator strips the inert leftover.
   // [DELETION-FOOTPRINT] Overwatch comp grant: the `overwatch` tag bridges to
   // `overwatch:pro`. Admin-only gate was a stopgap before the entitlement model
   // existed (Open Core M0). No Stripe price yet; granted-only initially. Removed
@@ -353,7 +353,8 @@ export const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
  * Keys and ids a contribution may never name: `base` is held by every user, `datalake:` and
  * `embed:` keys need a literal owner grant, and `source:` tags are self-assertable OAuth
  * attribution. `customer` and `pending-free-credits` are stamped on accounts by core, and `plan:paid` is
- * derived from the subscription ladder only. Must stay in sync with the codegen check.
+ * derived from the subscription ladder or a credit purchase only. Must stay in sync with the codegen
+ * check.
  */
 export function isReservedContributionKey(key: string): boolean {
   return (

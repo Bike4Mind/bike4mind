@@ -98,6 +98,7 @@ const makeService = (overrides: {
   const count = vi.fn(async () => overrides.totalQuests ?? 0);
 
   const service = new ImageGenerationService({
+    assertModelAdmission: async () => {},
     db: { sessions: { findById }, quests: { count } },
     invokeSummarizeSession: overrides.invokeSummarizeSession,
   } as any);
@@ -166,6 +167,7 @@ describe('ImageGenerationService.selectInputImage', () => {
     );
     const getMostRecentChatHistory = vi.fn(async () => opts.recentMessages ?? []);
     const service = new ImageGenerationService({
+      assertModelAdmission: async () => {},
       db: { fabFiles: { findAccessibleInIds }, quests: { getMostRecentChatHistory } },
     } as any);
     return { service, findAccessibleInIds, getMostRecentChatHistory };
@@ -337,6 +339,7 @@ describe('ImageGenerationService.selectInputImage reference images (#2744)', () 
       (ids || []).map(id => fabFilesById?.[id]).filter(Boolean)
     );
     const service = new ImageGenerationService({
+      assertModelAdmission: async () => {},
       db: { fabFiles: { findAccessibleInIds }, quests: { getMostRecentChatHistory: vi.fn(async () => []) } },
     } as any);
     return { service, findAccessibleInIds };
@@ -516,6 +519,7 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
     const getMostRecentChatHistory = vi.fn(async () => []);
     const questsFindById = vi.fn(async () => ({ id: 'quest1' }) as any);
     const service = new ImageGenerationService({
+      assertModelAdmission: async () => {},
       db: {
         sessions: { findById },
         quests: { create, update, getMostRecentChatHistory, findById: questsFindById },
@@ -621,6 +625,7 @@ describe('ImageGenerationService.process (Gemini provider-dispatch parameter pas
     const updateMany = vi.fn(async () => undefined);
     const findAccessibleInIds = vi.fn(async () => []);
     const service = new ImageGenerationService({
+      assertModelAdmission: async () => {},
       db: {
         quests: { findById, update, updateMany },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
@@ -695,6 +700,7 @@ describe('ImageGenerationService.process (Gemini edit-path model passthrough)', 
       { id: 'f1', filePath: 'data:image/png;base64,AAAA', mimeType: 'image/png', moderationStatus: 'clean' },
     ]);
     const service = new ImageGenerationService({
+      assertModelAdmission: async () => {},
       db: {
         quests: { findById, update, updateMany },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
@@ -761,6 +767,7 @@ describe('ImageGenerationService.process (prompt truncation)', () => {
 
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
     const service = new ImageGenerationService({
+      assertModelAdmission: async () => {},
       db: {
         quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
@@ -859,6 +866,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     const creditHolds = makeCreditHolds();
     if (settledCredits !== undefined) creditHolds.settle.mockResolvedValueOnce(settledCredits);
     const service = new ImageGenerationService({
+      assertModelAdmission: async () => {},
       creditHolds,
       db: {
         quests: {
@@ -1172,6 +1180,7 @@ describe('ImageGenerationService.process (GPT-Image omitted-quality pin)', () =>
   const makeProcessService = () => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
     return new ImageGenerationService({
+      assertModelAdmission: async () => {},
       db: {
         quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
@@ -1241,6 +1250,7 @@ describe('ImageGenerationService.process (size normalization)', () => {
   const makeProcessService = (files: FakeFile[] = [], recentMessages: unknown[] = []) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
     return new ImageGenerationService({
+      assertModelAdmission: async () => {},
       creditHolds: makeCreditHolds(),
       db: {
         quests: {
@@ -1497,6 +1507,7 @@ describe('ImageGenerationService.invoke (retry quest bound to its session)', () 
     const update = vi.fn(async () => undefined);
     const startImageGenerationProcess = vi.fn(async () => undefined);
     const service = new ImageGenerationService({
+      assertModelAdmission: async () => {},
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' }) as ISessionDocument) },
         quests: {
@@ -1585,6 +1596,7 @@ describe('ImageGenerationService quest partial writes', () => {
     const update = vi.fn(async () => undefined);
     const creditHolds = makeCreditHolds();
     const service = new ImageGenerationService({
+      assertModelAdmission: async () => {},
       creditHolds,
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' }) as ISessionDocument) },
@@ -2159,6 +2171,7 @@ describe('ImageGenerationService.process (terminal state on early failure)', () 
     const quest = { id: 'quest1', sessionId: 'session1', status: questStatus } as any;
     const update = vi.fn(async () => undefined);
     const service = new ImageGenerationService({
+      assertModelAdmission: async () => {},
       db: {
         quests: { findById: vi.fn(async () => quest), update, updateMany: vi.fn(async () => undefined) },
         users: { findById: usersFindById },

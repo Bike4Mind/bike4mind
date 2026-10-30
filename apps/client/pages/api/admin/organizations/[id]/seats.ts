@@ -4,7 +4,7 @@ import { ApiKeyScope, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { resolveSubscriptionSource, setSeats } from '@server/services/organizationService';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
@@ -30,6 +30,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(
     if (!id) throw new BadRequestError('Organization id required');
 
     const { seats } = SeatsSchema.parse(req.body);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     // Block admin seat changes on Stripe-billed orgs. The customer manages
     // their own seats via the Stripe billing portal (which is itself gated
@@ -54,6 +55,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(
       action: 'org.seats.changed',
       target: { kind: 'organization', id: organization.id, displayName: organization.name },
       summary: `set seats to ${organization.seats}`,
+      reason,
       details: { seats: organization.seats, ownerId: organization.userId },
     });
 

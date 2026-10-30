@@ -168,6 +168,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   tags: true,
   pendingCreditGrant: true,
   signupGrant: true,
+  signupGrantHeldReason: true,
+  signupGrantHeldAt: true,
   level: true,
   isBanned: true,
   isModerated: true,
@@ -242,6 +244,26 @@ export const selfUserResponseSchema = z.object({
       nextCondition: z.enum(['email_verification', 'verification']).nullable(),
       unlockedBy: z.enum(SIGNUP_GRANT_UNLOCK_REASONS).optional(),
       unlockedOrgId: z.string().optional(),
+      dripCredits: z.number().int().nonnegative().optional(),
+      lastDripPeriod: z
+        .string()
+        .regex(/^preview:\d{1,4}:\d+$/)
+        .optional(),
+      lastDripDay: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional(),
+      activity: z
+        .object({
+          day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          ms: z.number().nonnegative(),
+          lastAt: z.coerce.date(),
+          period: z
+            .string()
+            .regex(/^preview:\d{1,4}:\d+$/)
+            .optional(),
+        })
+        .optional(),
     })
     .optional(),
   // Not on IUserDocument, but toJSON() emits it and admin tables key rows by it.

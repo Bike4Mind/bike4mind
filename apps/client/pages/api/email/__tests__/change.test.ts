@@ -9,6 +9,10 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   requestEmailChange: vi.fn(),
   publish: vi.fn(),
+  logAuditEvent: vi.fn(),
+  logAuthAudit: vi.fn(),
+  users: { findById: vi.fn(), existsOtherUserWithEmail: vi.fn(), update: vi.fn() },
+  withTransaction: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -25,12 +29,14 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: {},
-  withTransaction: async (fn: () => Promise<unknown>) => fn(),
+  userRepository: h.users,
+  withTransaction: h.withTransaction,
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { requestEmailChange: h.requestEmailChange } }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
-vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: vi.fn(), EmailAuditEvents: {} }));
+// logAuditEvent writes a CounterLog row; an own email change must never reach it.
+vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: h.logAuditEvent }));
+vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 
 process.env.APP_URL = 'https://app.test';
 await import('../change');
@@ -55,6 +61,7 @@ const run = async () => {
 describe('POST /api/email/change templates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => fn());
     h.requestEmailChange.mockImplementation(async (_params: unknown, { mailer }: { mailer: Mailer }) => {
       await mailer.sendEmailChangeNotification(user, newEmail);
       await mailer.sendEmailChangeVerification(user, newEmail, 'tok');
@@ -91,5 +98,64 @@ describe('POST /api/email/change templates', () => {
       expect.objectContaining({ userId: 'user-1', newEmail: 'new@x.com' }),
       expect.anything()
     );
+  });
+
+  it('wires the user repository into the service and audits the request', async () => {
+    h.requestEmailChange.mockImplementation(async (_params: unknown, { db }: { db: { users: typeof h.users } }) => {
+      await db.users.findById('user-1');
+      await db.users.existsOtherUserWithEmail('new@x.com', 'user-1');
+      await db.users.update({ id: 'user-1' });
+    });
+
+    await h.handler!(
+      {
+        body: { newEmail },
+        user: { ...user, email: '' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'agent/1' },
+        logger: { error: vi.fn() },
+      },
+      { json: vi.fn() }
+    );
+
+    expect(h.users.findById).toHaveBeenCalledWith('user-1');
+    expect(h.users.existsOtherUserWithEmail).toHaveBeenCalledWith('new@x.com', 'user-1');
+    expect(h.users.update).toHaveBeenCalledWith({ id: 'user-1' });
+    expect(h.logAuthAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ metadata: { oldEmail: undefined, newEmail } })
+    );
+  });
+
+  it('records the request in the user auth audit log, not CounterLog', async () => {
+    h.requestEmailChange.mockResolvedValue(undefined);
+    const req = { body: { newEmail }, user, ip: '127.0.0.1', headers: {}, logger: { error: vi.fn() } };
+
+    await h.handler!(req, { json: vi.fn() });
+
+    expect(h.logAuthAudit).toHaveBeenCalledWith(req, {
+      userId: 'user-1',
+      event: 'email_change_requested',
+      metadata: { oldEmail: user.email, newEmail },
+    });
+    expect(h.logAuditEvent).not.toHaveBeenCalled();
+  });
+
+  it('discards messages from a rolled-back transaction attempt', async () => {
+    h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+      return fn();
+    });
+    const tokens = ['rolled-back-token', 'committed-token'];
+    h.requestEmailChange.mockImplementation(async (_params: unknown, { mailer }: { mailer: Mailer }) => {
+      await mailer.sendEmailChangeNotification(user, newEmail);
+      await mailer.sendEmailChangeVerification(user, newEmail, tokens.shift()!);
+    });
+
+    const messages = await run();
+
+    expect(messages).toHaveLength(2);
+    expect(messages[1].body).toContain('committed-token');
+    expect(messages.some(message => message.body.includes('rolled-back-token'))).toBe(false);
   });
 });
