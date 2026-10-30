@@ -245,6 +245,11 @@ export interface CuratedList {
   /** The list's date, from its updatedAt. */
   updatedAt: string;
   source: CuratedSourceView;
+  /**
+   * What `machine`, the picks and the fits describe: this computer's probe, hardware entered in Settings, or null for
+   * a saved server without entered hardware, which keeps this computer's ratings and must not show them as its own.
+   */
+  rating: 'probe' | 'entered' | null;
   machine: MachineView;
   /** This computer's picks in slot order; empty when the list has none for its memory. */
   picks: CuratedPickView[];

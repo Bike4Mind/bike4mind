@@ -75,6 +75,7 @@ function server(id: string, name: string, extra: Partial<ModelServerView> = {}):
     unencrypted: id !== 'local',
     health: { state: 'online', version: '0.40.11', latencyMs: 3, checkedAt: null, error: null },
     models: [],
+    specs: null,
     ...extra,
   };
 }
@@ -202,6 +203,7 @@ function curatedList(): CuratedList {
   return {
     updatedAt: '2026-10-27T00:00:00Z',
     source: { origin: 'bundled', sequence: 1, check: 'off', checkedAt: null, stale: false },
+    rating: 'probe',
     machine: { memoryKind: 'cpu', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'high' },
     picks: [
       { slot: 'best', entryId: 'qwen3-8-27b-gsq', buildId: 'iq3-s', recommended: false },
@@ -269,7 +271,7 @@ interface Bridge {
   status: ModelRuntimeStatus;
   installed: InstalledModelsResult;
   /** Per saved server; this computer reads `status` and `installed`. */
-  remote: Record<string, { status: ModelRuntimeStatus; installed: InstalledModelsResult }>;
+  remote: Record<string, { status: ModelRuntimeStatus; installed: InstalledModelsResult; curated?: CuratedList }>;
   servers: ModelServerView[];
   search: HubSearchResult;
   detail: HubDetailResult;
@@ -373,7 +375,9 @@ beforeEach(() => {
           bridge.curatedFailures -= 1;
           throw new Error('ipc failed');
         }
-        return bridge.curated;
+        // Main rates a saved server only from hardware entered for it.
+        if (!serverId) return bridge.curated;
+        return bridge.remote[serverId]?.curated ?? { ...bridge.curated, rating: null };
       },
       getCuratedPull: async (entryId: string, buildId: string, serverId?: string) => {
         calls.getCuratedPull(entryId, buildId, ...(serverId === undefined ? [] : [serverId]));
@@ -1997,7 +2001,46 @@ describe('ModelsScreen servers', () => {
     expect(q('models-curated-picks')?.textContent).toContain('Curated picks');
     expect(q('models-curated-picks')?.textContent).not.toContain('For this computer');
     expect(q('models-curated-machine')?.textContent).not.toContain('This computer');
+    expect(q('models-curated-machine')?.textContent).toContain('Enter its hardware under Settings');
     expect(all('models-fit-badge')).toHaveLength(0);
+  });
+
+  it('rates a saved server from the hardware entered for it', async () => {
+    bridge.remote.gpu.curated = {
+      ...curatedList(),
+      rating: 'entered',
+      machine: {
+        ...curatedList().machine,
+        memoryKind: 'discrete',
+        totalMemoryBytes: 64 * GIB,
+        gpuMemoryBytes: 24 * GIB,
+      },
+    };
+    await mount(undefined, 'curated');
+    await pickServer('gpu');
+    expect(q('models-curated-picks')?.textContent).toContain('For gpu box');
+    expect(q('models-curated-machine')?.textContent).toContain(
+      'gpu box is rated from the hardware entered in Settings: 64 GiB of RAM and 24 GiB of GPU memory.'
+    );
+    expect(all('models-fit-badge').length).toBeGreaterThan(0);
+  });
+
+  it('says when this computer is rated from entered hardware', async () => {
+    bridge.curated = {
+      ...curatedList(),
+      rating: 'entered',
+      machine: {
+        ...curatedList().machine,
+        memoryKind: 'unified',
+        totalMemoryBytes: 128 * GIB,
+        gpuMemoryBytes: 96 * GIB,
+      },
+    };
+    await mount(undefined, 'curated');
+    expect(q('models-curated-picks')?.textContent).toContain('For this computer');
+    expect(q('models-curated-machine')?.textContent).toContain(
+      'This computer is rated from the hardware entered in Settings: 128 GiB of memory shared with its GPU, which can use 96 GiB.'
+    );
   });
 
   it('hides the controls and re-checks the server when Settings sets it to Chat only', async () => {

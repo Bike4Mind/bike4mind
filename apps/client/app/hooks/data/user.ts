@@ -138,6 +138,11 @@ export function useUpdateUser(options: { onSuccess?: () => void; onSettled?: () 
       // invalidation, a profile name change stays stale in the switcher until a hard
       // refresh. Invalidating triggers a refetch that repopulates the context store.
       queryClient.invalidateQueries({ queryKey: ['identify'] });
+      // An admin editing through Edit profile: the timeline and other profile cards key under
+      // ['admin', 'users', id] (see useAdminUserUpdate). Product access keys separately and
+      // derives grants from the email domain. A no-op when no admin view is mounted.
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users', id] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'user-entitlements', id] });
 
       if (onSuccess) onSuccess();
       // A partial write must not read as a clean save -- the whole point of the route

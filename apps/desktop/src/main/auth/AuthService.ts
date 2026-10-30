@@ -18,7 +18,13 @@ import type {
   ResolvedEnvironment,
   SetEnvironmentResult,
 } from '@shared/auth';
-import { hostedAvailable, normalizeSelection, resolveEnvironment, validateSelection } from './environment';
+import {
+  hostedAvailable,
+  migrateSelection,
+  normalizeSelection,
+  resolveEnvironment,
+  validateSelection,
+} from './environment';
 import { classifyIdentifyFailure } from './identifyFailure';
 import { fetchProfilePhoto, LOCAL_FILE_PROXY_BASE, type ProfilePhotoCache } from './profilePhoto';
 import { msUntilProactiveRefresh, msUntilRefreshRetry } from './refreshSchedule';
@@ -143,7 +149,18 @@ export class AuthService {
 
   /** Read the stored environment and session. Call after the app `ready` event. */
   async initialize(): Promise<void> {
-    const selection = await this.deps.vault.getEnvironment();
+    const stored = await this.deps.vault.getEnvironment();
+    const selection = migrateSelection(stored);
+    // Stored so the pick follows the baked default if it moves, not just labelled on each read.
+    if (selection !== stored && selection) {
+      try {
+        await this.deps.vault.setEnvironment(selection);
+      } catch (err) {
+        this.deps.logger.warn(
+          `AUTH: could not store the migrated environment: ${err instanceof Error ? err.message : 'unknown'}`
+        );
+      }
+    }
     await this.applyEnvironment(selection);
   }
 

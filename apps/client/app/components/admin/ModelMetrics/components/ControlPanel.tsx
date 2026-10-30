@@ -19,9 +19,12 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import dayjs from 'dayjs';
+import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import { ModelMetric } from '../types';
 import { getDisplayName } from '../utils/formatters';
 import UsernameText from '@client/app/components/common/UsernameText';
+
+dayjs.extend(isSameOrBefore);
 
 interface ControlPanelProps {
   metrics: ModelMetric[];
