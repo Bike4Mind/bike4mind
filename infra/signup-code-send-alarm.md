@@ -26,6 +26,8 @@ fail deployment (or, for the scheduled worker, fail the run).
 | `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS`      | 5000                   | Hourly credits spent by accounts under 7 days old                   |
 | `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`     | 25                     | Hourly count of distinct accounts under 7 days old that spent       |
 | `LLM_SPEND_ALARM_USD_PER_5MIN`           | 25                     | Estimated LLM USD per provider, 5-minute `Sum`                      |
+| `LLM_SPEND_ALARM_USD_PER_HOUR`           | 20                     | Estimated LLM USD per provider except Anthropic, hourly `Sum`       |
+| `LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` | 75                     | Estimated LLM USD for Anthropic, hourly `Sum`                       |
 | `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` | 2                      | Estimated LLM USD per hour by accounts under 7 days old             |
 | `SIGNUP_ALARM_PER_HOUR`                  | 8                      | Accounts created per hour (hourly census)                           |
 | `NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR`     | 5                      | User API keys created within 24h of signup per hour (hourly census) |
@@ -155,6 +157,13 @@ and WAF edge-signal counts from the alarms above.
 An hourly alarm on `EstimatedUsdYoungAccounts` fires when accounts under 7 days
 old sum to at least `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` (whole USD) and
 routes to the same two topics. It is not listed in the dashboard alarm-status widget.
+
+A second alarm per provider pages when `EstimatedUsd` sums to at least
+`LLM_SPEND_ALARM_USD_PER_HOUR` (whole USD, default 20) in one hour, or
+`LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` (default 75) for `anthropic`. It catches
+a sustained drain that stays under the 5-minute ceiling, routes to the same two
+topics, is listed in the alarm-status widget, and has its own "Estimated USD per
+hour by provider" widget with both ceilings drawn.
 
 The figures are estimates from our price table, not provider invoices. Paths
 outside the ChatCompletion service are not counted: the legacy WebSocket CLI
