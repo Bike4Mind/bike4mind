@@ -1003,11 +1003,16 @@ export function researchModeUsages(
     const modelInfo = models.find(m => m.id === result.model);
     const reported = result.completionInfo;
     if (!modelInfo || (!reported && !result.streamedChars)) return [];
+    const streamedEstimate = estimateStreamedOutputTokens(result.streamedChars, result.model);
     return [
       {
         modelInfo,
         inputTokens: reported?.inputTokens || inputTokens,
-        outputTokens: reported?.outputTokens || estimateStreamedOutputTokens(result.streamedChars, result.model),
+        // A failed run's last report can predate output it streamed afterwards (e.g. a timed-out stream
+        // that never stopped), so it is only a floor.
+        outputTokens: result.success
+          ? reported?.outputTokens || streamedEstimate
+          : Math.max(reported?.outputTokens ?? 0, streamedEstimate),
       },
     ];
   });
