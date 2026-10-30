@@ -405,7 +405,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           {
             key: 'quests',
             priority: 0,
-            label: t('sidenav.questMaster', 'Quest Master'),
+            label: t('quests.my_quests', 'My Quests'),
             icon: iconSlot(<AutoAwesomeOutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname === '/quests' || location.pathname.startsWith('/quests/'),
             onClick: () => {
