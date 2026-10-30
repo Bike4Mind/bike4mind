@@ -35,6 +35,19 @@ type DripEvidence = { drip: { day: string; dailyCredits: number; maxCredits: num
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
+/** The ledger description of an unlock tranche; the row's `reason` carries the machine label. */
+const SIGNUP_UNLOCK_DESCRIPTIONS: Readonly<Record<SignupGrantUnlockReason, string>> = {
+  card_verified: 'card verified',
+  phone_verified: 'phone verified',
+  admin: 'released by an admin',
+  activity: 'account activity',
+  org_invite: 'organization invite accepted',
+  github_verified: 'GitHub account verified',
+  work_email_verified: 'work email verified',
+  activity_drip: 'daily activity',
+  subscription: 'paid subscription started',
+};
+
 const grantClock = (db: GrantAdapters['db']) => db.signupProtection?.grantBudget?.now?.() ?? new Date();
 
 /** The grant without its payment hold; a fully released grant has nothing left to hold. */
@@ -207,6 +220,7 @@ async function releaseStage(
             type: 'generic_add',
             transactionId,
             reason: reason ? `signup_unlock:${reason}` : 'signup_tranche',
+            description: reason ? `Signup credits unlocked: ${SIGNUP_UNLOCK_DESCRIPTIONS[reason]}` : 'Signup credits',
           },
           {
             db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots },

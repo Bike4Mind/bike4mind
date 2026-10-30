@@ -1,7 +1,6 @@
 import { useEffect, useId, useRef, type ComponentProps, type ReactNode, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Divider from '@mui/joy/Divider';
-import LinearProgress from '@mui/joy/LinearProgress';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatProject } from '@shared/chat';
@@ -9,6 +8,7 @@ import type { PrBarState } from '@shared/pullRequest';
 import { countTodos, type TodoItem } from '@shared/todos';
 import type { WorkspaceChanges } from '@shared/workspaceChanges';
 import { ChangesBar, CreatePullRequestButton } from './ChangesBar';
+import { ContextBreakdown } from './ContextBreakdown';
 import { DiffCount } from './DiffCount';
 import { DisclosureIcon } from './icons';
 import { thinScrollbarSx } from './layout';
@@ -21,15 +21,7 @@ import {
   SESSION_PANEL_WIDTH,
   type SessionPanelSectionId,
 } from './sessionPanelState';
-import {
-  contextPercent,
-  describeCompaction,
-  formatOccupancy,
-  formatTokens,
-  occupancyArc,
-  occupancyColor,
-  type ComposerUsage,
-} from './statusLine';
+import { contextPercent, formatOccupancy, formatTokens, type ComposerUsage } from './statusLine';
 import { TodoList, visiblePlan } from './TodoPanel';
 import type { ProjectBindingController } from './useChat';
 
@@ -167,46 +159,20 @@ function environmentSection({ environment }: SessionPanelProps): SectionSpec {
   };
 }
 
-/**
- * How full the context window is. Left out until a request has been measured: an empty bar for a
- * figure nobody has stated would read as an empty window. Without a limit there is no percentage,
- * only the token count, rather than a share of a window this client made up.
- */
 function contextSection({ context }: SessionPanelProps): SectionSpec | null {
-  const tokens = context.contextTokens;
-  if (tokens === null) return null;
+  const tokens = context.contextSnapshot?.inputTokens ?? context.contextTokens;
   const percent = contextPercent(tokens, context.contextLimit);
-  const limit = context.contextLimit;
-  const share = percent === null ? `${formatTokens(tokens)} used` : formatOccupancy(percent, tokens);
+  const share =
+    tokens === null
+      ? 'Not measured'
+      : percent === null
+        ? `${formatTokens(tokens)} used`
+        : formatOccupancy(percent, tokens);
   return {
     id: 'context',
     title: 'Context',
     summary: <SummaryText>{share}</SummaryText>,
-    content: (
-      <Stack spacing={0.75} data-testid="session-panel-context">
-        {percent !== null && (
-          <LinearProgress
-            determinate
-            value={occupancyArc(percent)}
-            color={occupancyColor(percent)}
-            size="sm"
-            aria-label="Context window used"
-            aria-valuetext={share}
-            data-testid="session-panel-context-bar"
-          />
-        )}
-        <Typography level="body-xs" textColor="text.secondary" data-testid="session-panel-context-figure">
-          {limit === null
-            ? `${formatTokens(tokens)} used - this model reports no window size`
-            : `${formatTokens(tokens)} / ${formatTokens(limit)} (${share})`}
-        </Typography>
-        {limit !== null && (
-          <Typography level="body-xs" textColor="text.tertiary">
-            {describeCompaction(limit, context.modelWindow ?? null)}
-          </Typography>
-        )}
-      </Stack>
-    ),
+    content: <ContextBreakdown context={context} />,
   };
 }
 
