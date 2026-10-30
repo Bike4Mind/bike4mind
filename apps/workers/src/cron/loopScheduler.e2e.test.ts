@@ -6,6 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 import {
   adminSettingsRepository,
   agentExecutionRepository,
+  Inbox,
   Loop,
   LoopEvent,
   loopEventRepository,
@@ -662,6 +663,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
   });
 
   const eventsOf = (loopId: string) => LoopEvent.find({ loopId }).lean();
+  const openNotices = () => Inbox.find({ deletedAt: null }).lean();
 
   it('does not start a run once spend today reaches the budget, and pauses until the next UTC midnight', async () => {
     const loop = await createLoop({ budgetCreditsPerDay: 10 });
@@ -715,6 +717,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     spentToday = 10;
     await runLoopSchedulerTick(NOW, logger);
     expect(await eventsOf(loop.id)).toHaveLength(0);
+    expect(await openNotices()).toHaveLength(1);
 
     await runLoopSchedulerTick(new Date(MIDNIGHT.getTime() - 1), logger);
     expect((await reload(loop.id)).status).toBe('paused');
@@ -730,6 +733,7 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     expect(await eventsOf(loop.id)).toMatchObject([
       { kind: 'auto_resumed', executionId: 'exec-0', reason: 'Daily budget reset', requestedAt: MIDNIGHT },
     ]);
+    expect(await openNotices()).toHaveLength(0);
   });
 
   it('keeps a credit pause while the balance is empty and resumes once it is positive', async () => {
@@ -739,12 +743,14 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
 
     await runLoopSchedulerTick(NOW, logger);
     expect(await reload(loop.id)).toMatchObject({ status: 'paused', autoResume: 'credits' });
+    expect(await openNotices()).toHaveLength(1);
 
     balance = { currentCredits: 5 };
     await runLoopSchedulerTick(NOW, logger);
 
     expect(await reload(loop.id)).toMatchObject({ status: 'live', activeExecutionId: 'exec-1' });
     expect(await eventsOf(loop.id)).toMatchObject([{ kind: 'auto_resumed', reason: 'Credits available again' }]);
+    expect(await openNotices()).toHaveLength(0);
   });
 
   it('keeps a credit pause on an org loop while the member is at its cap', async () => {
