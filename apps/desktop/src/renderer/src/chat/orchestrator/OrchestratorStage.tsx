@@ -111,7 +111,7 @@ export function OrchestratorStage({
         {dockControl}
       </Box>
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'auto' }}>
           {renderView ? renderView(view, viewProps) : <TableView {...viewProps} />}
         </Box>
         {selected && (
