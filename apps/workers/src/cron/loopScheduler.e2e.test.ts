@@ -564,6 +564,44 @@ describe('runLoopSchedulerTick - unsure', () => {
     expect(await reload(loop.id)).toMatchObject({ runCount: 0, memory: { notes: '', nextAction: '' } });
   });
 
+  it('undoes a park that blocked the ticket after the owner had already resumed the run', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, { status: 'blocked', statusReason: 'Unsure: thin results' });
+    await loopEventRepository.resolveUnsure(
+      { loopId: loop.id, userId: 'user-1', executionId: 'exec-0', ...gate(new Date(1000)) },
+      { outcome: 'resumed', at: NOW }
+    );
+    executions['exec-0'] = { userId: 'user-1', status: 'completed', result: { answer: 'done' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing' });
+    expect((await ticketOf(ticket.id)).status).not.toBe('blocked');
+  });
+
+  it('folds a resumed run that went stale as stalled, and leaves a fresh one alone', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    const ticket = await createTicket(loop.id);
+    await loopEventRepository.resolveUnsure(
+      { loopId: loop.id, userId: 'user-1', executionId: 'exec-0', ...gate(new Date(1000)) },
+      { outcome: 'resumed', at: NOW }
+    );
+    executions['exec-0'] = { userId: 'user-1', status: 'awaiting_subagent', updatedAt: new Date(0) };
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await ticketOf(ticket.id)).status).toBe('in_progress');
+
+    executions['exec-0'] = {
+      userId: 'user-1',
+      status: 'running',
+      updatedAt: new Date(NOW.getTime() - STALE_ACTIVE_MS - 60_000),
+    };
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked', statusReason: 'Run stalled' });
+    expect((await eventsOf(loop.id))[0].foldedAt).toBeInstanceOf(Date);
+    expect(await reload(loop.id)).toMatchObject({ consecutiveFailures: 0 });
+  });
+
   it('parks a resumed run that pauses again under a new event', async () => {
     const loop = await createLoop({ nextRunAt: LATER });
     const ticket = await createTicket(loop.id);

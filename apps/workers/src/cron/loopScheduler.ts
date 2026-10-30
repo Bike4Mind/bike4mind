@@ -23,7 +23,14 @@ import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessCo
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
-import { advancePatch, lastStageOf, makeDueIfReady, unsureEventFields, unsureReason } from '@server/utils/loopTickets';
+import {
+  advancePatch,
+  lastStageOf,
+  makeDueIfReady,
+  unsureEventFields,
+  unsureReason,
+  UNSURE_PREFIX,
+} from '@server/utils/loopTickets';
 import { Resource } from 'sst';
 import { buildLoopQuery, parseLoopMemory } from './loopMemory';
 
@@ -227,14 +234,23 @@ async function foldResumedRun(event: ILoopEvent, now: Date): Promise<void> {
 
   if (execution && ACTIVE_AGENT_EXECUTION_STATUSES.includes(execution.status)) {
     const gate = execution.pendingGate;
-    if (execution.status !== 'paused' || !gate) return;
-    if (new Date(gate.requestedAt).getTime() === new Date(event.requestedAt).getTime()) return;
-    await parkUnsure(loop.id, execution, executionId, gate, ticket);
-    await loopEventRepository.markFolded(event.id, now);
-    return;
+    if (execution.status === 'paused' && gate) {
+      if (new Date(gate.requestedAt).getTime() === new Date(event.requestedAt).getTime()) return;
+      await parkUnsure(loop.id, execution, executionId, gate, ticket);
+      await loopEventRepository.markFolded(event.id, now);
+      return;
+    }
+    // Same stale rule as reconcileLoop, so a resumed run whose executor died does not hold its ticket forever.
+    if (WAITING_ON_CHILDREN.includes(execution.status)) return;
+    if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) return;
   }
 
   if (ticket) {
+    // The owner resumed while a tick was parking the run, so the park blocked the ticket after
+    // handleGateResponse tried to move it back: undo that before folding.
+    if (ticket.status === 'blocked' && ticket.statusReason?.startsWith(UNSURE_PREFIX)) {
+      await workItemRepository.resumeBlockedRun(ticket.id, executionId);
+    }
     const patch =
       execution?.status === 'completed'
         ? stoppedByGate(execution)

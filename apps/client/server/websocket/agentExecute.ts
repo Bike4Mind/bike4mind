@@ -822,6 +822,7 @@ export async function handleGateResponse(
       totalIterations: checkpoint?.iteration ?? 0,
       stoppedByGate: true,
     });
+    await recordLoopGateResolution(execution, cmd.executionId, 'rejected', userId, logger);
     await sendAgentEvent(connectionId, endpoint, {
       action: 'completed',
       executionId: cmd.executionId,
@@ -845,7 +846,6 @@ export async function handleGateResponse(
     // natural completion path fires. Resolve gates through the shared authority
     // and hand them over; the helper guards on the gates and `parentExecutionId`.
     await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
-    await recordLoopGateResolution(execution, cmd.executionId, 'rejected', userId, logger);
     logger.info('[Gate] Stopped execution with partial answer', { executionId: cmd.executionId });
     return;
   }

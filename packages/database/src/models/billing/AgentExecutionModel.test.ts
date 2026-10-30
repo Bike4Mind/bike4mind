@@ -1097,6 +1097,27 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('stale sweeps skip loop runs parked at the confidence gate', () => {
+    it('leaves a gate-paused loop run alone but still aborts a gate-paused chat run', async () => {
+      const userId = new mongoose.Types.ObjectId().toString();
+      const pendingGate = { iteration: 1, confidence: 0.2, reason: 'thin', requestedAt: new Date() };
+      const parked = await agentExecutionRepository.create(
+        makeBaseExecution({ userId, status: 'paused', loopId: 'loop-1', pendingGate })
+      );
+      const chat = await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'paused', pendingGate }));
+      await (agentExecutionRepository as unknown as { model: mongoose.Model<unknown> }).model.updateMany(
+        { _id: { $in: [parked.id, chat.id] } },
+        { $set: { updatedAt: new Date(Date.now() - 60 * 60 * 1000) } },
+        { timestamps: false }
+      );
+
+      const olderThan = new Date(Date.now() - 20 * 60 * 1000);
+      expect(await agentExecutionRepository.findStaleActiveIds({ userId, olderThan })).toEqual([chat.id]);
+      expect(await agentExecutionRepository.cleanupStaleActive(userId, 20 * 60 * 1000)).toEqual([chat.id]);
+      expect((await agentExecutionRepository.findById(parked.id))?.status).toBe('paused');
+    });
+  });
+
   describe('claimExecution covers awaiting_dag_children', () => {
     it('atomically transitions awaiting_dag_children → continuing exactly once', async () => {
       const parent = await agentExecutionRepository.create(makeBaseExecution({ status: 'awaiting_dag_children' }));

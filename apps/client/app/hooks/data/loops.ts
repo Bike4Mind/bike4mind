@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
-import type { ILoop, ILoopEvent, ILoopWithUsage, LoopStatus, WorkItemStatus } from '@bike4mind/common';
+import type { ILoop, ILoopEvent, ILoopWithUsage, LoopGateOutcome, LoopStatus, WorkItemStatus } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 
@@ -26,7 +26,7 @@ export type ILoopEventRow = Pick<
   ILoopEvent,
   'id' | 'kind' | 'executionId' | 'workItemId' | 'ticketTitle' | 'iteration' | 'confidence' | 'reason'
 > & {
-  resolution?: { outcome: 'resumed' | 'rejected'; by?: string; at: string };
+  resolution?: { outcome: LoopGateOutcome; by?: string; at: string };
   createdAt: string;
 };
 

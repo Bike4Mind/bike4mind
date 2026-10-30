@@ -13,6 +13,7 @@ import {
   type AudioGenerationToolCall,
   type AuthOrigin,
   AuthOriginSchema,
+  type LoopGateOutcome,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -81,7 +82,7 @@ export interface IPendingGate {
 
 /** A resolved confidence gate, kept on the execution by `clearPendingGate`. */
 export type IGateRecord = IPendingGate & {
-  resolution: 'resumed' | 'rejected';
+  resolution: LoopGateOutcome;
   resolvedAt: Date;
   resolvedBy?: string;
 };
@@ -1120,6 +1121,14 @@ export function parseExecutionListCursor(cursor: string): { createdAt: Date; id:
 
 const MAX_VIEWER_CONNECTIONS = 10;
 
+/**
+ * A loop run paused at the confidence gate is parked by the loop scheduler and waits on its owner,
+ * possibly for days, so the stale sweeps must not abort it (see `reconcileLoop` in `loopScheduler.ts`).
+ */
+const NOT_LOOP_PARKED = {
+  $nor: [{ status: 'paused', loopId: { $exists: true }, pendingGate: { $exists: true } }],
+};
+
 class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   constructor(private agentExecutionModel: mongoose.Model<IAgentExecution>) {
     super(agentExecutionModel);
@@ -1271,6 +1280,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       userId,
       status: { $in: this.sweepableStatuses },
       updatedAt: { $lt: cutoff },
+      ...NOT_LOOP_PARKED,
     };
     // Ids are read BEFORE the write because callers have to settle the quests
     // these executions leave behind, and `aborted` is terminal: once written,
@@ -1336,6 +1346,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const query: Record<string, unknown> = {
       status: { $in: this.sweepableStatuses },
       updatedAt: { $lt: opts.olderThan },
+      ...NOT_LOOP_PARKED,
     };
     if (opts.userId) query.userId = opts.userId;
     const docs = await this.model.find(query, { _id: 1 }).lean<Array<{ _id: mongoose.Types.ObjectId }>>();
@@ -1812,7 +1823,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * concurrent abort doesn't get resurrected.
    */
   async clearPendingGate(id: string, resolution: IGateRecord['resolution'], resolvedBy?: string): Promise<boolean> {
-    const record = { resolution, resolvedAt: '$$NOW', ...(resolvedBy && { resolvedBy }) };
+    const record = { resolution, resolvedAt: '$$NOW', ...(resolvedBy && { resolvedBy: { $literal: resolvedBy } }) };
     const result = await this.model.updateOne({ _id: id, abortedAt: { $exists: false } }, [
       {
         $set: {

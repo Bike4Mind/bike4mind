@@ -108,8 +108,9 @@ export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<voi
 }
 
 /** A blocked ticket's reason when its run paused at the confidence gate; the full reason is in the loop log. */
+export const UNSURE_PREFIX = 'Unsure';
 export const unsureReason = (gateReason?: string): string =>
-  (gateReason ? `Unsure: ${gateReason}` : 'Unsure').slice(0, 1000);
+  (gateReason ? `${UNSURE_PREFIX}: ${gateReason}` : UNSURE_PREFIX).slice(0, 1000);
 
 /**
  * The `unsure` loop event for a gate. Written by the loop scheduler (on detach) and by `gate_response`
