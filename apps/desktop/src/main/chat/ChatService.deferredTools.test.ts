@@ -145,30 +145,52 @@ describe('ChatService deferred tools', () => {
     ),
   });
 
+  /** Every replayed tool_use names a loaded tool or one a change surfaced before it. */
+  function expectDeclaredBeforeUse(request: Body): void {
+    const surfaced = new Set(
+      request.options.tools.filter(tool => !tool.toolSchema.defer_loading).map(tool => tool.toolSchema.name)
+    );
+    const declared = new Set(request.options.tools.map(tool => tool.toolSchema.name));
+    for (const message of request.messages) {
+      if (message.role === 'system') blockNames(message, 'tool_addition').forEach(name => surfaced.add(name!));
+      for (const name of blockNames(message, 'tool_use')) {
+        expect(declared.has(name!), `${name} declared`).toBe(true);
+        expect(surfaced.has(name!), `${name} surfaced before its call`).toBe(true);
+      }
+    }
+  }
+
+  const unmarked = ({ cache: _cache, ...rest }: WireMessage) => rest;
+
   describe('a tool called on a turn that was not deferred', () => {
-    async function switchAwayAndBack(shareOnReturn: boolean) {
+    async function switchAwayAndBack(away: 'model' | 'flag', shareOnReturn: boolean) {
       roots = [];
       const { id } = await service.createSession();
       const first = await turn(id, 'hello');
       expect(first.options.tools.some(tool => tool.toolSchema.name === 'file_read')).toBe(false);
 
-      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      const flag = deferredTools;
+      if (away === 'model') await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      else deferredTools = undefined;
       roots = [root];
       await readingTurn(id, 'read my file', 'call_1');
-      await service.setSessionModel(id, ChatModels.CLAUDE_5_5_OPUS);
+      if (away === 'model') await service.setSessionModel(id, ChatModels.CLAUDE_5_5_OPUS);
+      else deferredTools = flag;
       if (!shareOnReturn) roots = [];
       const third = await turn(id, 'back on Opus');
       const fourth = await turn(id, 'and again');
       return { first, third, fourth };
     }
 
-    const unmarked = ({ cache: _cache, ...rest }: WireMessage) => rest;
-
     it.each([
-      ['still shared', true],
-      ['unshared again', false],
-    ])('is added before its replayed call and declared deferred (%s)', async (_label, shared) => {
-      const { first, third, fourth } = await switchAwayAndBack(shared);
+      ['another model, still shared', 'model', true],
+      ['another model, unshared again', 'model', false],
+      ['deferral off, still shared', 'flag', true],
+      ['deferral off, unshared again', 'flag', false],
+    ] as const)('is added before its replayed call and declared deferred (%s)', async (_label, away, shared) => {
+      const { first, third, fourth } = await switchAwayAndBack(away, shared);
+      expectDeclaredBeforeUse(third);
+      expectDeclaredBeforeUse(fourth);
       for (const request of [third, fourth]) {
         const { use, addition } = positions(request, 'file_read');
         expect(use).toBeGreaterThan(0);
@@ -194,6 +216,30 @@ describe('ChatService deferred tools', () => {
         expect(summary).toEqual(['tool_removal:file_read']);
       }
     });
+  });
+
+  it('sends a plain request for history written under deferral once deferral is off, and defers again after', async () => {
+    const { id } = await service.createSession();
+    await readingTurn(id, 'read my file', 'call_1');
+    const stored = await store.get(id);
+    expect(stored?.messages.some(message => message.toolState)).toBe(true);
+
+    deferredTools = undefined;
+    const off = await turn(id, 'and now?');
+    expect(off.options.tools.some(tool => tool.toolSchema.defer_loading)).toBe(false);
+    expect(off.options.tools.some(tool => tool.toolSchema.name === DEFERRED_ANCHOR_TOOL_NAME)).toBe(false);
+    expect(changes(off)).toEqual([]);
+    expect(JSON.stringify(off.messages.slice(1))).not.toContain('<system-reminder>');
+    expect(off.messages[0].content).toContain('These folders are shared');
+    expect(off.messages.some(message => blockNames(message, 'tool_use').includes('file_read'))).toBe(true);
+    expectDeclaredBeforeUse(off);
+
+    deferredTools = { startSetMaxTokens: 100_000 };
+    const on = await turn(id, 'once more');
+    const next = await turn(id, 'and again');
+    expect(on.options.tools.some(tool => tool.toolSchema.defer_loading)).toBe(true);
+    expectDeclaredBeforeUse(on);
+    expect(next.messages.slice(0, on.messages.length).map(unmarked)).toEqual(on.messages.map(unmarked));
   });
 
   it('retries a tool-state write that failed once', async () => {

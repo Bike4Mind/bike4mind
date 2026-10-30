@@ -294,6 +294,9 @@ describe('public settings projection (M2.5 security boundary)', () => {
         // admin guard - carry no secret, but were missed by the initial opt-in pass.
         'ReferralCreditsAmount',
         'SystemFiles',
+        // The Desktop app follows these rather than deciding deferral itself.
+        'EnableDeferredToolLoading',
+        'DeferredToolStartSetMaxTokens',
       ]) {
         expect(keys.has(k)).toBe(true);
       }

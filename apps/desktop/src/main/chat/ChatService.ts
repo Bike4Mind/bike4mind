@@ -429,6 +429,7 @@ export interface ChatServiceDeps {
   /**
    * Deferred tool loading on supported Claude models (chat/deferredTools.ts). Absent keeps today's
    * request shape. A start set estimated over `startSetMaxTokens` is deferred too; 0 defers all.
+   * Read once per turn, so it may change between turns (DeferredToolsSetting).
    */
   deferredTools?: { startSetMaxTokens: number };
   /**
@@ -2747,8 +2748,9 @@ export class ChatService {
       const skillsSection = await skillsBlock;
       const toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
       // See chat/deferredTools.ts. Decided once per turn, so a turn never mixes the two shapes.
+      const deferredSetting = this.deps.deferredTools;
       const deferred =
-        !!this.deps.deferredTools &&
+        !!deferredSetting &&
         !localTurn &&
         cacheable &&
         toolsSupported &&
@@ -2799,7 +2801,7 @@ export class ChatService {
           name => !mcpNames.has(name) && findTool(name) !== undefined
         ).filter(declarable);
         const startTokens = estimateToolTokens(start.flatMap(name => schemaFor(name) ?? []));
-        if (startTokens > (this.deps.deferredTools?.startSetMaxTokens ?? 0)) start = [];
+        if (startTokens > (deferredSetting?.startSetMaxTokens ?? 0)) start = [];
         const marks: ToolStateMark[] = [];
         const replayed = insertToolChanges(
           await toCompletionMessages(session, readAttachment, marks),

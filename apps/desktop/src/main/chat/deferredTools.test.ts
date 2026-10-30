@@ -10,7 +10,6 @@ import {
   insertToolChanges,
   offersCoreTools,
   optionalToolNames,
-  parseDeferredToolsSetting,
   startToolNames,
   supportsDeferredTools,
   toolStateRecords,
@@ -35,25 +34,6 @@ const message = (role: ChatMessage['role'], extra: Partial<ChatMessage> = {}): C
   ...extra,
 });
 const call = (name: string) => ({ id: `c${++seq}`, name, arguments: '{}' }) as unknown as ChatToolCall;
-
-describe('parseDeferredToolsSetting', () => {
-  it('is on by default with the server start-set limit', () => {
-    expect(parseDeferredToolsSetting(undefined, undefined)).toEqual({ startSetMaxTokens: 100_000 });
-    expect(parseDeferredToolsSetting('1', '')).toEqual({ startSetMaxTokens: 100_000 });
-  });
-
-  it('is off only for 0', () => {
-    expect(parseDeferredToolsSetting('0', undefined)).toBeUndefined();
-    expect(parseDeferredToolsSetting(' 0 ', '5000')).toBeUndefined();
-  });
-
-  it('takes a non-negative start-set limit and ignores anything else', () => {
-    expect(parseDeferredToolsSetting(undefined, '0')).toEqual({ startSetMaxTokens: 0 });
-    expect(parseDeferredToolsSetting(undefined, ' 5000 ')).toEqual({ startSetMaxTokens: 5000 });
-    expect(parseDeferredToolsSetting(undefined, '-1')).toEqual({ startSetMaxTokens: 100_000 });
-    expect(parseDeferredToolsSetting(undefined, 'lots')).toEqual({ startSetMaxTokens: 100_000 });
-  });
-});
 
 describe('supportsDeferredTools', () => {
   it('is on for direct Anthropic Opus 5.5 only', () => {

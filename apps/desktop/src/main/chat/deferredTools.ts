@@ -24,21 +24,6 @@ import type { ToolSchema } from './tools/types';
  * record on its own turn, so the system prompt and the history before it never move.
  */
 
-/**
- * Deferred tool loading from the environment: on unless `enabled` is '0'. The start-set limit
- * mirrors the server's DeferredToolStartSetMaxTokens setting (default 100,000; 0 defers every
- * optional tool).
- */
-export function parseDeferredToolsSetting(
-  enabled: string | undefined,
-  startMaxTokens: string | undefined
-): { startSetMaxTokens: number } | undefined {
-  if (enabled?.trim() === '0') return undefined;
-  const raw = startMaxTokens?.trim();
-  const limit = raw ? Number(raw) : NaN;
-  return { startSetMaxTokens: Number.isFinite(limit) && limit >= 0 ? limit : 100_000 };
-}
-
 /** Offered on every signed-in remote turn, so the loaded set never changes. */
 export const CORE_TOOL_NAMES: ReadonlySet<string> = new Set([WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME]);
 

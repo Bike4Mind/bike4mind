@@ -75,7 +75,7 @@ import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
-import { parseDeferredToolsSetting } from './deferredTools';
+import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
@@ -169,8 +169,8 @@ const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
  */
 const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
 
-/** Deferred tool loading, on unless B4M_DESKTOP_DEFERRED_TOOLS=0. */
-const DEFERRED_TOOLS = parseDeferredToolsSetting(
+/** Local overrides of the server's deferred tool loading setting; see parseDeferredToolsOverride. */
+const DEFERRED_TOOLS_OVERRIDE = parseDeferredToolsOverride(
   process.env.B4M_DESKTOP_DEFERRED_TOOLS,
   process.env.B4M_DESKTOP_DEFERRED_START_MAX_TOKENS
 );
@@ -379,6 +379,15 @@ export function registerChat(
   // a scope folder on first use, and this records how the user likes to work rather than
   // anything belonging to one conversation or one account.
   const approvalModes = new ApprovalModePreference(join(userData, 'approval-mode.json'));
+  const deferredTools = new DeferredToolsSetting({
+    filePath: join(userData, 'deferred-tools.json'),
+    getApiClient: () => auth.getApiClient(),
+    getEnvironmentUrl: () => auth.getState().environment.url,
+    logger,
+    override: DEFERRED_TOOLS_OVERRIDE,
+  });
+  // Asked at launch so the first turn already has the server's answer.
+  void deferredTools.refresh();
   // Scoped to the backend and the account, not just to this machine: one install reaches
   // production and a local server, and can be signed in as a different person on each. The
   // provider is read per operation, so a switch takes effect on the next list with nothing
@@ -628,7 +637,9 @@ export function registerChat(
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
     protectedPaths: [userData],
-    ...(DEFERRED_TOOLS ? { deferredTools: DEFERRED_TOOLS } : {}),
+    get deferredTools() {
+      return deferredTools.current();
+    },
     getApiClient: () => auth.getApiClient(),
     isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
     getEnvironmentUrl: () => auth.getState().environment.url,
