@@ -10,6 +10,7 @@
  */
 
 import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
+import type { ChildOutcome } from './agentOutcome';
 import type { ChatImportOrigin } from './claudeImport';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
@@ -1214,6 +1215,14 @@ export function normalizeSessionTitle(text: string): string {
 
 export interface ChatSessionSummary extends ChatSessionMeta {
   messageCount: number;
+  /** How the last assistant turn ended; absent when the session has no assistant message. */
+  lastOutcome?: ChildOutcome;
+  /** One-line excerpt of the last assistant message; absent when it has no text. */
+  lastSnippet?: string;
+  /** Sum of usage.usdCost over all messages; absent when none reported it. */
+  totalUsdCost?: number;
+  /** Sum of usage.creditsUsed over all messages; absent when none reported it. */
+  totalCredits?: number;
 }
 
 export interface ChatSession extends ChatSessionMeta {
