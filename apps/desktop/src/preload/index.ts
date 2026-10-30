@@ -67,7 +67,7 @@ const api: DesktopApi = {
     getStatus: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStatus, serverId),
     listInstalled: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled, serverId),
     search: (request: HubSearchRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsSearch, request),
-    getDetail: (repo: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetDetail, repo),
+    getDetail: (repo: string, serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetDetail, repo, serverId),
     listCurated: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListCurated, serverId),
     getCuratedPull: (entryId: string, buildId: string, serverId?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.modelsGetCuratedPull, entryId, buildId, serverId),
@@ -363,6 +363,7 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.modelServersUpdate, id, input),
     remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersRemove, id),
     check: (id?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersCheck, id),
+    probedHardware: () => ipcRenderer.invoke(IPC_CHANNELS.modelServersProbedHardware),
     onChanged: listener => {
       const handler = (_event: unknown, servers: ModelServerView[]) => listener(servers);
       ipcRenderer.on(IPC_CHANNELS.modelServersChanged, handler);
