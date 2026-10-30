@@ -66,6 +66,20 @@ describe('PromptReplies keeps an approved image through completion when the repl
     expect(screen.getByTestId('reply-image-loaded')).toBeTruthy();
   });
 
+  it.each([
+    ['a footnote definition', 'A claim[^1].', '[^1]: Source.'],
+    ['a link reference definition', 'See [the docs][d].', '[d]: https://example.com/docs'],
+  ])('an image approved while running stays loaded after running -> done with %s', (_, lead, definition) => {
+    const streamed = `intro\n\n${lead}\n\n![chart](https://example.com/c.png)\n\nmore`;
+    const { rerender } = render(<Reply text={streamed} status="running" />);
+    fireEvent.click(screen.getByTestId('reply-image-load-btn'));
+    const text = `${streamed} text.\n\n${definition}`;
+    rerender(<Reply text={text} status="running" />);
+    rerender(<Reply text={text} status="done" />);
+    expect(screen.queryByTestId('reply-image-load-btn')).toBeNull();
+    expect(screen.getByTestId('reply-image-loaded')).toBeTruthy();
+  });
+
   it('a retried reply (stopped -> running on the same quest) does not inherit the old approval', () => {
     const first = 'Intro.\n\n![old](https://example.com/old.png)\n\n```js\nconst x';
     const { rerender } = render(<Reply text={first} status="running" />);
