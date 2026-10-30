@@ -165,13 +165,26 @@ describe('serveNextPair', () => {
     expect(votes.deleteUnclaimedServed).toHaveBeenCalledWith('stale', new Date('2025-12-31T23:59:10Z'));
   });
 
-  it('keeps a retired pair claimed row when its crashed submit already paid', async () => {
+  it('settles a retired pair claimed row its crashed submit already paid, then serves a fresh one', async () => {
     const { service, votes, pairs, findPaidCredits } = build();
-    votes.findOutstanding.mockResolvedValue(servedRow({ claimedAt: new Date('2025-12-31T00:00:00Z') }));
-    pairs.findById.mockResolvedValue(pair({ active: false }));
+    const claimedAt = new Date('2025-12-31T00:00:00Z');
+    votes.findOutstanding.mockResolvedValue(servedRow({ claimedAt, choice: 'b' }));
+    pairs.findById.mockResolvedValue(pair({ active: false, goldChoice: 'b' }));
+    pairs.sampleUnseen.mockResolvedValue(pair({ id: 'bbbbbbbbbbbbbbbbbbbbbbbb' }));
     findPaidCredits.mockResolvedValue(2);
-    await service.serveNextPair('u1');
+    expect(await service.serveNextPair('u1')).toMatchObject({
+      status: 'ready',
+      pair: { pairId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },
+    });
     expect(votes.deleteUnclaimedServed).not.toHaveBeenCalled();
+    expect(votes.recordVote).toHaveBeenCalledWith('u1', 'aaaaaaaaaaaaaaaaaaaaaaaa', claimedAt, {
+      choice: 'b',
+      votedAt: claimedAt,
+      responseMs: 0,
+      goldCorrect: true,
+      credited: true,
+      creditsAwarded: 2,
+    });
   });
 
   it('shows the winner of a serve race', async () => {
@@ -267,6 +280,23 @@ describe('submitVote', () => {
     expect(votes.deleteUnclaimedServed).toHaveBeenCalledWith('vote1', new Date('2025-12-31T23:59:10Z'));
     expect(addCredits).not.toHaveBeenCalled();
     expect(votes.recordVote).not.toHaveBeenCalled();
+  });
+
+  it('settles a paid claimed row of a retired pair instead of leaving it served', async () => {
+    const { service, votes, pairs, findPaidCredits, addCredits } = build();
+    const claimedAt = new Date('2025-12-31T00:00:00Z');
+    votes.findForPair.mockResolvedValue(servedRow({ claimedAt }));
+    pairs.findById.mockResolvedValue(pair({ active: false }));
+    findPaidCredits.mockResolvedValue(2);
+    await expect(service.submitVote('u1', vote)).rejects.toBeInstanceOf(NotFoundError);
+    expect(votes.deleteUnclaimedServed).not.toHaveBeenCalled();
+    expect(votes.recordVote).toHaveBeenCalledWith(
+      'u1',
+      'aaaaaaaaaaaaaaaaaaaaaaaa',
+      claimedAt,
+      expect.objectContaining({ choice: 'tie', credited: true, creditsAwarded: 2, goldCorrect: null })
+    );
+    expect(addCredits).not.toHaveBeenCalled();
   });
 
   it('does not credit a missed gold question and records the reason', async () => {

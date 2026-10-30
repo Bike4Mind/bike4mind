@@ -101,6 +101,21 @@ describe('arenaVoteRepository outstanding-pair invariant', () => {
     expect(await repo.recordVote('u1', pairId, crashed, outcomeAt(crashed))).toBeNull();
   });
 
+  it('stores the first claimant choice and keeps it across a stale takeover', async () => {
+    const pairId = newPairId();
+    await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });
+    const crashed = new Date('2026-03-02T10:00:00Z');
+    const retry = new Date('2026-03-02T10:02:00Z');
+    const first = await repo.claim('u1', pairId, crashed, longAgo, 'a');
+    expect(first?.choice).toBe('a');
+    const takeover = await repo.claim('u1', pairId, retry, new Date('2026-03-02T10:01:00Z'), 'b');
+    expect(takeover?.choice).toBe('a');
+    const stored = await ArenaVote.collection.findOne({ userId: 'u1', pairId });
+    expect(stored?.choice).toBe('a');
+    expect(stored?.claimedAt).toBeInstanceOf(Date);
+    expect((stored?.claimedAt as Date).getTime()).toBe(retry.getTime());
+  });
+
   it('releases only its own claim so a retry can claim again', async () => {
     const pairId = newPairId();
     await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });

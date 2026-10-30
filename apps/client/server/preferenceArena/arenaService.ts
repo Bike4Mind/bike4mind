@@ -134,9 +134,22 @@ export function createArenaService(deps: ArenaServiceDeps) {
     return null;
   }
 
-  // A claimed row may belong to a crashed submit that already paid; deleting it would erase that proof.
-  async function dropRetiredRow(row: IArenaVoteDocument): Promise<void> {
-    if (row.claimedAt && (await deps.findPaidCredits(arenaVoteTransactionId(row.id))) !== null) return;
+  // A claimed row may belong to a crashed submit that already paid; deleting it would erase that
+  // proof from the caps, and keeping it 'served' would hold the one-outstanding lock forever, so settle it.
+  async function dropRetiredRow(row: IArenaVoteDocument, goldChoice?: ArenaChoice): Promise<void> {
+    const paid = row.claimedAt ? await deps.findPaidCredits(arenaVoteTransactionId(row.id)) : null;
+    if (row.claimedAt && paid !== null) {
+      const choice = row.choice ?? 'tie';
+      await votes.recordVote(row.userId, row.pairId, row.claimedAt, {
+        choice,
+        votedAt: row.claimedAt,
+        responseMs: Math.max(0, row.claimedAt.getTime() - row.servedAt.getTime()),
+        goldCorrect: goldChoice ? choice === goldChoice : null,
+        credited: true,
+        creditsAwarded: paid,
+      });
+      return;
+    }
     await votes.deleteUnclaimedServed(row.id, new Date(now().getTime() - CLAIM_STALE_MS));
   }
 
@@ -146,7 +159,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
     const pair = await pairs.findById(outstanding.pairId);
     if (pair?.active) return { status: 'ready', pair: toView(pair, outstanding.swapped) };
     // The pair was retired under a served row; drop it so the user is not stuck on it.
-    await dropRetiredRow(outstanding);
+    await dropRetiredRow(outstanding, pair?.goldChoice);
     return null;
   }
 
@@ -203,7 +216,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
 
     const pair = await pairs.findById(pairId);
     if (!pair?.active) {
-      await dropRetiredRow(row);
+      await dropRetiredRow(row, pair?.goldChoice);
       throw new NotFoundError('Pair is no longer available');
     }
 
