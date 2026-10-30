@@ -72,7 +72,7 @@ import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME, specsRate, type ModelServerSpecs } 
 import { chatContextTokens, type LocalModelFootprint } from '../chat/localContext';
 import { configuredNumCtx } from '../chat/localChatContext';
 import { ServerCredentialsError, ServerUnreachableError } from '../modelServers/errors';
-import { ServerRedirectError, ServerTransportError } from '../modelServers/serverFetch';
+import { ServerRedirectError, ServerTransportError } from '@bike4mind/local-models/servers';
 import { serverHardware, withEnteredSpecs } from './enteredHardware';
 import { fitFromArch, fitFromSize, machineView } from './fit';
 

@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import { parseBaseUrl } from '@bike4mind/local-models';
+import { parseBaseUrl } from '../http';
 
 /**
  * Where an address points. 'tailscale' is Tailscale's IPv6 range only: 100.64.0.0/10 is shared with

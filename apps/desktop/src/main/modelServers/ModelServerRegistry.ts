@@ -10,6 +10,25 @@ import {
   type LocalRuntime,
   type OpenAICompatibleProduct,
 } from '@bike4mind/local-models';
+import {
+  answersWithoutCredentials,
+  createServerFetch,
+  describeFailure,
+  DROP_CODES,
+  errorCode,
+  leastTrusted,
+  parseServerAddress,
+  probeServer,
+  redactServerResponse,
+  scopeOfIp,
+  ServerRedirectError,
+  ServerTransportError,
+  suggestServerName,
+  transportVerdict,
+  type AddressScope,
+  type ParsedAddress,
+  type ServerEndpoint,
+} from '@bike4mind/local-models/servers';
 import { localBackend, localModelId, type ChatModelOption } from '@shared/chat';
 import {
   LOCAL_SERVER_ID,
@@ -19,7 +38,6 @@ import {
   serverRuntimeId,
   type ModelServerAddInput,
   type ModelServerHealth,
-  type ModelServerKind,
   type ModelServerProbeInput,
   type ModelServerProbeResult,
   type ModelServerSpecs,
@@ -29,28 +47,11 @@ import {
 import type { LocalChat } from '../chat/localChat';
 import { OllamaLocal } from '../chat/OllamaLocal';
 import type { ModelHubServer } from '../models/ModelHubService';
-import {
-  leastTrusted,
-  parseServerAddress,
-  scopeOfIp,
-  suggestServerName,
-  transportVerdict,
-  type AddressScope,
-  type ParsedAddress,
-} from './addressPolicy';
 import { ServerCredentialsError, ServerUnreachableError } from './errors';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
-import {
-  createServerFetch,
-  redactServerResponse,
-  ServerRedirectError,
-  ServerTransportError,
-  type ServerEndpoint,
-} from './serverFetch';
 
 export const LOCAL_OLLAMA_URL = 'http://127.0.0.1:11434';
-const PROBE_TIMEOUT_MS = 5_000;
 const LOCAL_TIMEOUT_MS = 1_500;
 /** Background recheck while the app runs. */
 export const HEALTH_INTERVAL_MS = 60_000;
@@ -102,17 +103,6 @@ const UNKNOWN_HEALTH: ModelServerHealth = {
   checkedAt: null,
   error: null,
 };
-
-interface ProbeOutcome {
-  kind: ModelServerKind | null;
-  product: OpenAICompatibleProduct | null;
-  version: string | null;
-  latencyMs: number | null;
-  models: number | null;
-  auth: boolean;
-  error: string | null;
-  refused: boolean;
-}
 
 /**
  * The saved model servers: one chat client per server keyed by `srv-<id>`, their health, and the
@@ -206,7 +196,7 @@ export class ModelServerRegistry {
     if (!verdict.ok) return failed(verdict.reason);
     const label = parsed.host;
     const fetch = this.fetchFor({ origin: parsed.origin, label, credentialHeaders: () => headers });
-    const outcome = await detect(fetch, parsed.baseUrl, label, this.now);
+    const outcome = await probeServer(fetch, parsed.baseUrl, label, this.now);
     const base = {
       address: parsed.baseUrl,
       unencrypted: verdict.unencrypted,
@@ -224,7 +214,7 @@ export class ModelServerRegistry {
     let openToAnyone = false;
     if (scope === 'public') {
       openToAnyone = headers
-        ? await answersWithout(
+        ? await answersWithoutCredentials(
             this.fetchFor({ origin: parsed.origin, label, credentialHeaders: () => null }),
             parsed.baseUrl,
             outcome.kind
@@ -497,7 +487,7 @@ export class ModelServerRegistry {
       });
       return;
     }
-    const outcome = await detect(
+    const outcome = await probeServer(
       entry.fetch,
       entry.record.transport.baseUrl,
       entry.record.name,
@@ -698,34 +688,6 @@ function unavailableReason(entry: Entry): string {
   return `${entry.record.name} is unreachable`;
 }
 
-/** The system error code on the error itself (Node http mid-body drops) or on its cause (fetch). */
-function errorCode(err: unknown): string | undefined {
-  if (!(err instanceof Error)) return undefined;
-  const own = (err as { code?: unknown }).code;
-  if (typeof own === 'string') return own;
-  const cause = (err.cause as { code?: unknown } | undefined)?.code;
-  return typeof cause === 'string' ? cause : undefined;
-}
-
-const DROP_CODES = new Set(['ECONNRESET', 'UND_ERR_SOCKET', 'ERR_STREAM_PREMATURE_CLOSE']);
-
-/** One line for a failed request; never includes a header or credential. */
-export function describeFailure(err: unknown): string {
-  if (err instanceof ServerTransportError || err instanceof ServerRedirectError) return err.message;
-  if (err instanceof DOMException && err.name === 'TimeoutError') return 'it did not answer in time';
-  if (err instanceof Error && err.name === 'TimeoutError') return 'it did not answer in time';
-  if (err instanceof PullIdleTimeoutError) return 'it stopped sending data';
-  const code = errorCode(err);
-  if (code === 'ECONNREFUSED') return 'connection refused';
-  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'host not found';
-  if (code === 'EHOSTUNREACH' || code === 'ENETUNREACH') return 'no route to the host';
-  if (code === 'ETIMEDOUT') return 'the connection timed out';
-  if (code && DROP_CODES.has(code)) return 'the connection dropped';
-  if (err instanceof TypeError && /terminated|aborted/i.test(err.message)) return 'the connection dropped';
-  if (err instanceof Error && /ended (the reply )?before/i.test(err.message)) return 'the connection dropped';
-  return code ?? (err instanceof Error ? err.message : String(err));
-}
-
 /** The health a failed request implies; null when the failure says nothing about the server (a model error). */
 function failureHealth(err: unknown, label: string): ModelServerHealth | null {
   const checkedAt = new Date().toISOString();
@@ -749,114 +711,4 @@ function failureHealth(err: unknown, label: string): ModelServerHealth | null {
     checkedAt,
     error: `${label}: ${describeFailure(err)}`,
   };
-}
-
-const OWNER_PRODUCT: Record<string, OpenAICompatibleProduct> = { llamacpp: 'llama-server', vllm: 'vllm' };
-
-/** Identifies the server by what it answers, never by port, and times the answer. */
-async function detect(
-  fetch: FetchLike,
-  baseUrl: string,
-  label: string,
-  now: () => number,
-  expected?: ModelServerKind
-): Promise<ProbeOutcome> {
-  const get = async (path: string) => {
-    const started = now();
-    try {
-      const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
-      const latencyMs = Math.round(now() - started);
-      const body: unknown = response.ok
-        ? await response.json().catch(() => null)
-        : (await response.body?.cancel(), null);
-      return { status: response.status, body, latencyMs, error: null as unknown };
-    } catch (error) {
-      return { status: 0, body: null, latencyMs: null, error };
-    }
-  };
-  const [version, models] = await Promise.all([
-    expected === 'openai-compatible' ? null : get('/api/version'),
-    expected === 'ollama' ? null : get('/v1/models'),
-  ]);
-  const auth = [version, models].some(result => result?.status === 401 || result?.status === 403);
-  const ollamaVersion = (version?.body as { version?: unknown } | null)?.version;
-  if (version && version.status === 200 && typeof ollamaVersion === 'string') {
-    const tags = await get('/api/tags');
-    const listed = (tags.body as { models?: unknown } | null)?.models;
-    return {
-      kind: 'ollama',
-      product: null,
-      version: ollamaVersion,
-      latencyMs: version.latencyMs,
-      models: Array.isArray(listed) ? listed.length : null,
-      auth: false,
-      error: null,
-      refused: false,
-    };
-  }
-  const data = (models?.body as { data?: unknown } | null)?.data;
-  if (models && models.status === 200 && Array.isArray(data)) {
-    const owner = data
-      .map(entry => (entry as { owned_by?: unknown } | null)?.owned_by)
-      .find(value => typeof value === 'string' && value in OWNER_PRODUCT) as string | undefined;
-    const product = owner ? OWNER_PRODUCT[owner] : null;
-    return {
-      kind: 'openai-compatible',
-      product,
-      version: await openAIVersion(get, product),
-      latencyMs: models.latencyMs,
-      models: data.length,
-      auth: false,
-      error: null,
-      refused: false,
-    };
-  }
-  const failure = [version, models].find(result => result && result.error)?.error;
-  const refused = failure instanceof ServerTransportError || failure instanceof ServerRedirectError;
-  const status = [version, models].find(result => result && result.status > 0)?.status;
-  return {
-    kind: null,
-    product: null,
-    version: null,
-    latencyMs: null,
-    models: null,
-    auth,
-    refused,
-    error: failure
-      ? refused
-        ? describeFailure(failure)
-        : `Could not reach ${label}: ${describeFailure(failure)}`
-      : status
-        ? `${label} answered HTTP ${status}, not as Ollama or an OpenAI-compatible server.`
-        : null,
-  };
-}
-
-async function openAIVersion(
-  get: (path: string) => Promise<{ status: number; body: unknown }>,
-  product: OpenAICompatibleProduct | null
-): Promise<string | null> {
-  if (product === 'llama-server') {
-    const props = await get('/props');
-    const build = (props.body as { build_info?: unknown } | null)?.build_info;
-    return typeof build === 'string' ? build : null;
-  }
-  if (product === 'vllm') {
-    const version = (await get('/version')).body as { version?: unknown } | null;
-    return typeof version?.version === 'string' ? version.version : null;
-  }
-  return null;
-}
-
-/** Whether the server lists its models with no credential at all. */
-async function answersWithout(fetch: FetchLike, baseUrl: string, kind: ModelServerKind): Promise<boolean> {
-  try {
-    const response = await fetch(`${baseUrl}${kind === 'ollama' ? '/api/tags' : '/v1/models'}`, {
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
-    await response.body?.cancel();
-    return response.ok;
-  } catch {
-    return false;
-  }
 }
