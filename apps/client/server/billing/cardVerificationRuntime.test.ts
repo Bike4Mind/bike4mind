@@ -260,8 +260,12 @@ describe('mandatory verification defenses', () => {
     await expect(runtime.guards!.authorizeAttempt(context)).rejects.toThrow('locked');
     mocks.limit.mockResolvedValueOnce({ success: false });
     await expect(runtime.guards!.authorizeAttempt(context)).rejects.toThrow('Too many');
+  });
+  it('verifies the challenge before spending any shared attempt counter', async () => {
+    const runtime = await cardVerificationRuntime();
     mocks.verify.mockResolvedValueOnce({ ok: false, reason: 'unavailable' });
     await expect(runtime.guards!.authorizeAttempt(context)).rejects.toThrow('Verification failed');
+    expect(mocks.limit).not.toHaveBeenCalled();
   });
   it('records each signed attempt once and never resets daily failure identity', async () => {
     vi.spyOn(CardVerificationFailure, 'updateOne').mockResolvedValue({ upsertedCount: 0 } as never);

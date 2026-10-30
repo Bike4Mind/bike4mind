@@ -141,6 +141,17 @@ export async function cardVerificationRuntime(): Promise<CardVerificationDepende
           throw new ServiceUnavailableError('Card verification requires trusted network information.');
         const ipDigest = cardNetworkDigest(context.ip);
         await failureCounts(context.userId, ipDigest);
+        // Only challenge-passing attempts may spend the shared counters, so junk tokens cannot exhaust an ASN.
+        const challengeResult = await verifyTurnstile({
+          token: context.turnstileToken,
+          secret: challenge.secret,
+          ip: context.ip,
+          expectedAction: 'card_verification',
+          allowedHostnames: turnstileAllowedHostnames(),
+          requireAllowedHostnames: true,
+          allowTestSecret: !isProduction(),
+        });
+        if (!challengeResult.ok) throw new ForbiddenError('Verification failed. Refresh and try again.');
         for (const [scope, value, limit] of [
           ['account', context.userId, defense.accountAttempts],
           ['ip', ipDigest, defense.ipAttempts],
@@ -153,16 +164,6 @@ export async function cardVerificationRuntime(): Promise<CardVerificationDepende
           );
           if (!result.success) throw new TooManyRequestsError('Too many verification attempts. Try again later.');
         }
-        const result = await verifyTurnstile({
-          token: context.turnstileToken,
-          secret: challenge.secret,
-          ip: context.ip,
-          expectedAction: 'card_verification',
-          allowedHostnames: turnstileAllowedHostnames(),
-          requireAllowedHostnames: true,
-          allowTestSecret: !isProduction(),
-        });
-        if (!result.ok) throw new ForbiddenError('Verification failed. Refresh and try again.');
       },
       approveRisk: async intent => {
         const expanded = await stripe.setupIntents.retrieve(intent.id, { expand: ['latest_attempt'] });
