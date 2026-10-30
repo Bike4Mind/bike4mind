@@ -113,6 +113,17 @@ Event Metrics is organized into two sub-tabs:
 
 A counter displays "Showing X of Y events" for the current filter state.
 
+### By user
+
+The **Events / By user** switch at the top of the tab opens the per-user activity log: one row per day, action and user, with a metadata sample and a count. The view is kept in the page URL.
+
+| Control | Description |
+|---------|-------------|
+| **Organizations** | Limit rows to one or more organizations |
+| **Exclude** | Hide rows without an organization, and staff and test accounts |
+| **Advanced filters** | Date range presets, action and email search, and metadata filters |
+| **Export CSV** | Download every row that matches the filters, not just the current page |
+
 ## Slack Metrics
 
 The Slack Metrics tab provides focused analytics for Slack integration usage. It reuses the Event Metrics filtering infrastructure but automatically restricts the data to the "Slack" event category (the category filter selector is hidden in the UI).

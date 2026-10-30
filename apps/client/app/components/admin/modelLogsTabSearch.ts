@@ -1,6 +1,6 @@
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
 import { oneOf, parsePage, toNumber } from './adminSearchValues';
-import { DEFAULT_PRESET_DAYS, getPresetRange } from './Analytics/dateRange';
+import { DEFAULT_PRESET_DAYS, getPresetRange } from './EventMetrics/UserActivity/dateRange';
 
 /**
  * The Model Logs tab's `/admin` search params and their coercion. Pure and React-free:

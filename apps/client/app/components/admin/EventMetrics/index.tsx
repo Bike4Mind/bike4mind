@@ -9,8 +9,11 @@ import { ControlPanel } from './components/ControlPanel';
 import { OverviewTab } from './components/OverviewTab';
 import { CurationBreakdownTab } from './components/CurationBreakdownTab';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { SegmentedControl, useAdminListUrlState } from '../shared';
+import { EVENTS_SEARCH_KEYS, EVENTS_VIEW_BY_USER } from './eventsTabSearch';
+import { UserActivityView } from './UserActivity';
 
-const EventMetricsTab: React.FC = () => {
+const EventMetricsPanel: React.FC = () => {
   // Applied filters state (used for API calls)
   const [appliedFilters, setAppliedFilters] = useState<{
     dateFrom?: string;
@@ -66,7 +69,7 @@ const EventMetricsTab: React.FC = () => {
   const chartData = processChartData(filteredAndSortedMetrics);
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 3 } }}>
+    <Box>
       {/* Error State */}
       {isError && (
         <Alert
@@ -164,6 +167,31 @@ const EventMetricsTab: React.FC = () => {
           <CurationBreakdownTab chartData={chartData} />
         </TabPanel>
       </Tabs>
+    </Box>
+  );
+};
+
+const VIEW_OPTIONS = [
+  { value: 'events', label: 'Events' },
+  { value: EVENTS_VIEW_BY_USER, label: 'By user' },
+] as const;
+
+const EventMetricsTab: React.FC = () => {
+  const [state, update] = useAdminListUrlState(EVENTS_SEARCH_KEYS);
+  const view = state.filters.view === EVENTS_VIEW_BY_USER ? EVENTS_VIEW_BY_USER : 'events';
+
+  return (
+    <Box sx={{ p: { xs: 1.5, sm: 3 } }}>
+      <Box sx={{ mb: 2 }}>
+        <SegmentedControl
+          options={VIEW_OPTIONS}
+          value={view}
+          onChange={next => update({ filters: { view: next === 'events' ? '' : next } })}
+          aria-label="Events view"
+          data-testid="event-metrics-view"
+        />
+      </Box>
+      {view === 'events' ? <EventMetricsPanel /> : <UserActivityView />}
     </Box>
   );
 };
