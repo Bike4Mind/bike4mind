@@ -4192,7 +4192,8 @@ export class ChatService {
 
   /**
    * Store the tool-state records a deferred-tools turn needs before its request is built, so this
-   * request and every later replay render the same bytes. See toolStateRecords.
+   * request and every later replay render the same bytes. See toolStateRecords. The exception is
+   * a mid-turn change (recordMidTurnToolState), which the next turn replays somewhere else.
    */
   private async recordToolStates(
     session: ChatSession,
@@ -4207,7 +4208,9 @@ export class ChatService {
   /**
    * A mid-turn change, recorded on the newest user turn so the next turn replays it there. It keeps
    * every tool the turn already had, so nothing this turn called is replayed before its addition;
-   * the next turn's record drops what is no longer offered.
+   * the next turn's record drops what is no longer offered. Live, the change rode on the newest
+   * tool result instead, so the next turn misses the cache from that prompt on (a known cost,
+   * paid once per mid-turn change).
    */
   private async recordMidTurnToolState(session: ChatSession, next: ChatToolState): Promise<void> {
     const history = sentHistory(session.messages);
