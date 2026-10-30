@@ -388,13 +388,22 @@ describe('POST /api/gears/claim', () => {
     }
   );
 
-  it('pays a verified legacy account that has no createdAt', async () => {
+  it('pays a verified legacy account that has no createdAt but an old ObjectId', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve({ emailVerified: true }) });
+    const { res, promise } = claim({ key: 'projects' }, { id: '507f1f77bcf86cd799439011' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
+  });
+
+  it('holds the payout for an account with neither createdAt nor an ObjectId id', async () => {
     unlockProjects();
     mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve({ emailVerified: true }) });
     const { res, promise } = claim({ key: 'projects' });
     await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
+    expect(res._getStatusCode()).toBe(409);
+    expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
   it('pays a trusted account (email-verified and older than 7 days)', async () => {
