@@ -5,6 +5,10 @@
  * The real meterPlatformCompletion + reserveRequestCredits run; only the credit store is faked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { BadRequestError, ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
 
 const quotaAdmission = vi.hoisted(() => vi.fn().mockResolvedValue({ release: async () => {} }));
