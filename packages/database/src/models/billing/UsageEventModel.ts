@@ -207,9 +207,11 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return row?.credits ?? 0;
   }
 
-  async activitySummaryByUser(userId: string, from: Date, to: Date): Promise<IUserUsageActivity> {
+  async activitySummaryByUser(userId: string, from: Date, to: Date, limit: number): Promise<IUserUsageActivity> {
     const [row] = await this.model.aggregate<IUserUsageActivity>([
       { $match: { userId, createdAt: { $gte: from, $lt: to } } },
+      { $sort: { createdAt: -1 } },
+      { $limit: limit },
       {
         $group: {
           _id: null,

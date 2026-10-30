@@ -1,5 +1,6 @@
 import {
   RISK_EVIDENCE_SCAN_LIMIT,
+  RISK_EVIDENCE_USAGE_SCAN_LIMIT,
   RISK_EVIDENCE_VERSION,
   RISK_EVIDENCE_WINDOW_DAYS,
   riskEvidenceSummarySchema,
@@ -170,7 +171,12 @@ export async function buildRiskEvidence(
       );
     }),
     collect<'usage'>('usage_ledger', async () => {
-      const activity = await sources.usageEvents.activitySummaryByUser(user.id, from, now);
+      const activity = await sources.usageEvents.activitySummaryByUser(
+        user.id,
+        from,
+        now,
+        RISK_EVIDENCE_USAGE_SCAN_LIMIT
+      );
       if (activity.events === 0) return missing<'usage'>('usage_ledger', 'no_activity');
       return observed<'usage'>(
         'usage_ledger',
@@ -180,7 +186,11 @@ export async function buildRiskEvidence(
           failed: activity.failed,
           creditsSpent: activity.credits,
         },
-        { sampleCount: activity.events, latestAt: activity.latestAt }
+        {
+          sampleCount: activity.events,
+          latestAt: activity.latestAt,
+          truncated: activity.events >= RISK_EVIDENCE_USAGE_SCAN_LIMIT,
+        }
       );
     }),
     collect<'concurrency'>('execution_state', async () =>

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   RISK_EVIDENCE_SCAN_LIMIT,
+  RISK_EVIDENCE_USAGE_SCAN_LIMIT,
   riskEvidenceSummarySchema,
   type ISignupMeta,
   type RiskEvidenceSummary,
@@ -142,6 +143,28 @@ describe('refreshRiskEvidence', () => {
 
     expect(stored[0].facts.edgeFingerprint).toMatchObject({ status: 'observed', value: { ja4Present: true } });
     expect(stored[0].facts.wafSignals).toMatchObject({ status: 'observed', value: { anonIp: false, botSignal: true } });
+  });
+
+  it('marks usage truncated when the ledger scan hits its cap', async () => {
+    const { adapters, stored } = setup();
+    const activitySummaryByUser = vi.fn(async () => ({
+      events: RISK_EVIDENCE_USAGE_SCAN_LIMIT,
+      completed: RISK_EVIDENCE_USAGE_SCAN_LIMIT,
+      failed: 0,
+      credits: 1,
+      latestAt: NOW,
+    }));
+    adapters.db.usageEvents.activitySummaryByUser = activitySummaryByUser;
+
+    await refresh(adapters);
+
+    expect(activitySummaryByUser).toHaveBeenCalledWith(
+      USER_ID,
+      expect.any(Date),
+      expect.any(Date),
+      RISK_EVIDENCE_USAGE_SCAN_LIMIT
+    );
+    expect(stored[0].facts.usage).toMatchObject({ status: 'observed', truncated: true });
   });
 
   it('marks one fact failed when its source errors, and still stores the rest', async () => {

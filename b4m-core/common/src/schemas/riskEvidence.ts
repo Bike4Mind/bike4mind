@@ -26,6 +26,9 @@ export const RISK_EVIDENCE_WINDOW_DAYS = 30;
 /** Source rows one bounded scan reads; a scan that hits it is `truncated`, so its count is a floor. */
 export const RISK_EVIDENCE_SCAN_LIMIT = 200;
 
+/** Usage ledger rows one refresh reads; higher than the auth scans because a busy account logs many per day. */
+export const RISK_EVIDENCE_USAGE_SCAN_LIMIT = 5000;
+
 export const RISK_EVIDENCE_TRIGGERS = [
   'signup',
   'login',

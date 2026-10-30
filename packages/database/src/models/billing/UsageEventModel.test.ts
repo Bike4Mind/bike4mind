@@ -1016,7 +1016,7 @@ describe('UsageEventRepository.activitySummaryByUser', () => {
     await at(to, { creditsCharged: 1000 });
     await at(new Date('2026-10-20T12:00:00Z'), { userId: 'someone-else', creditsCharged: 1000 });
 
-    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to)).resolves.toEqual({
+    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to, 100)).resolves.toEqual({
       events: 3,
       completed: 1,
       failed: 2,
@@ -1026,12 +1026,27 @@ describe('UsageEventRepository.activitySummaryByUser', () => {
   });
 
   it('returns zeros and no latestAt when the user had no usage in the window', async () => {
-    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to)).resolves.toEqual({
+    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to, 100)).resolves.toEqual({
       events: 0,
       completed: 0,
       failed: 0,
       credits: 0,
       latestAt: null,
+    });
+  });
+
+  it('summarises only the newest `limit` events, so a busy account is a bounded read', async () => {
+    const latest = new Date('2026-10-21T09:00:00Z');
+    await at(new Date('2026-10-20T11:00:00Z'), { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T12:00:00Z'), { creditsCharged: 7 });
+    await at(latest, { creditsCharged: 3 });
+
+    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to, 2)).resolves.toEqual({
+      events: 2,
+      completed: 2,
+      failed: 0,
+      credits: 10,
+      latestAt: latest,
     });
   });
 });

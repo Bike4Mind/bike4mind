@@ -649,8 +649,9 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
   /**
    * The user's usage in [from, to): event count, `ok` events, the rest (error/timeout/refusal/
    * degenerate), credits charged plus written off, and the newest event's time (null when none).
+   * Reads at most `limit` of the newest events, so `events === limit` means the counts are a floor.
    */
-  activitySummaryByUser(userId: string, from: Date, to: Date): Promise<IUserUsageActivity>;
+  activitySummaryByUser(userId: string, from: Date, to: Date, limit: number): Promise<IUserUsageActivity>;
 
   /** Credits each user has spent in total, charged plus written off; users with none are absent. */
   creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>>;
