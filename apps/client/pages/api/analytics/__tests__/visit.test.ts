@@ -41,8 +41,9 @@ function call({
   cookie,
   userAgent = BROWSER_UA,
   referer,
-}: { cookie?: string; userAgent?: string; referer?: string } = {}) {
-  const { req, res } = createMocks({ method: 'POST' });
+  body,
+}: { cookie?: string; userAgent?: string; referer?: string; body?: unknown } = {}) {
+  const { req, res } = createMocks({ method: 'POST', ...(body !== undefined && { body: body as never }) });
   req.headers = {
     ...(cookie !== undefined && { cookie }),
     ...(userAgent !== undefined && { 'user-agent': userAgent }),
@@ -138,13 +139,26 @@ describe('POST /api/analytics/visit', () => {
     expect((res as unknown as { getHeader: (n: string) => unknown }).getHeader('Cache-Control')).toBe('no-store');
   });
 
-  it('records where the visit came from, with the referrer query string stripped', async () => {
-    const { run } = call({ referer: 'https://news.example.com/story?utm_source=email&secret=abc' });
+  it('records where the visit came from and where it landed, from the body, reduced to origin and path', async () => {
+    const { run } = call({
+      body: {
+        referrer: 'https://news.example.com/story?secret=abc',
+        landingPath: '/share/0f8fad5b-d9cb-469f-a165-70867728950e?x=1',
+      },
+    });
     await run();
 
     expect(mockEmitVisitEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ referrer: 'https://news.example.com/story' })
+      expect.objectContaining({ referrer: 'https://news.example.com', landingPath: '/share/:token' })
     );
+  });
+
+  it('never takes the source from the Referer header, which names the app page that sent the beacon', async () => {
+    const { run } = call({ referer: 'https://app.example.com/notebooks/65f1c0ffee0ddba11ad5eed1' });
+    await run();
+
+    expect(mockEmitVisitEvent).toHaveBeenCalledTimes(1);
+    expect(mockEmitVisitEvent.mock.calls[0][0]).toMatchObject({ referrer: undefined, landingPath: undefined });
   });
 
   it('attributes the visit to the campaign cookie captured on landing', async () => {

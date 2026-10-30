@@ -1,9 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
-import { isAnalyticsConfigured, emitVisitEvent, sanitizeReferrer } from '@server/analytics/emitActiveEvent';
+import { isAnalyticsConfigured, emitVisitEvent } from '@server/analytics/emitActiveEvent';
 import { readUtmCookie } from '@bike4mind/server-utils/analytics/cookies';
 import { isProbableBot, mintVisitId, readVisitId, visitCookieHeader } from '@server/analytics/visitSession';
+import { readVisitLanding } from '@server/analytics/visitLanding';
 
 /**
  * POST /api/analytics/visit - the visit beacon.
@@ -19,12 +20,18 @@ import { isProbableBot, mintVisitId, readVisitId, visitCookieHeader } from '@ser
  * one event; a request that already carries one emits nothing and only slides the
  * inactivity window forward. One event per visit, by construction rather than by throttle.
  *
- * Unauthenticated deliberately, and correspondingly narrow: it takes no body, returns no
- * body, writes one cookie, and the only thing it records is a server-minted id, the
- * referrer and the campaign cookie. There is nothing here to act on behalf of a user, which
- * is why it needs neither auth nor CSRF protection; what it does need is a bound on volume,
- * since it is a public path that writes. Hence the per-IP rate limit below, on top of the
- * `/api/` per-IP counter the edge WAF already keeps.
+ * Unauthenticated deliberately, and correspondingly narrow: its body is at most a referrer
+ * origin and a landing path, it returns no body, writes one cookie, and the only thing it
+ * records is a server-minted id, those two (checked: visitLanding.ts) and the campaign cookie.
+ * There is nothing here to act on behalf of a user, which is why it needs neither auth nor CSRF
+ * protection; what it does need is a bound on volume, since it is a public path that writes.
+ * Hence the per-IP rate limit below, on top of the `/api/` per-IP counter the edge WAF already
+ * keeps.
+ *
+ * The referrer comes from the body, never the Referer header: the beacon is a fetch from the
+ * app's own page, so the header always names that page, and a visit read from it came from the
+ * app itself. A body without one (no consent, no referrer, or a page loaded before this shipped)
+ * records none, which reads as direct.
  */
 
 // Per-IP, and generous against real use: a page load fires this once, so a browser needs
@@ -56,15 +63,16 @@ const handler = baseApi({ auth: false, maxBodySize: 1024 })
 
     if (existing !== undefined) return res.status(204).end();
 
-    const referer = typeof req.headers.referer === 'string' ? req.headers.referer : undefined;
+    const landing = readVisitLanding(req.body);
 
     // Fire-and-forget, like the middleware's emit: a page load must not wait on the ingest
     // hop, and a dropped visit event costs one session in a count that is already
     // best-effort. Errors are swallowed inside emitVisitEvent.
     void emitVisitEvent({
       sessionId: visitId,
-      referrer: sanitizeReferrer(referer),
+      referrer: landing.referrer,
       utm: readUtmCookie(req),
+      landingPath: landing.landingPath,
     }).catch(() => {});
 
     return res.status(204).end();

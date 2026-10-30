@@ -96,8 +96,11 @@ export interface EmitOptions {
 export interface VisitEmitOptions {
   /** The visit's own identifier - see visitSession.ts for what one visit means. */
   sessionId: string;
+  /** The site the visitor came from, as an origin (visitLanding.ts). */
   referrer?: string;
   utm?: OverwatchUtm;
+  /** The path the visit landed on, already cleaned (visitLanding.ts). */
+  landingPath?: string;
 }
 
 /**
@@ -124,8 +127,8 @@ export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
  * emitActiveEvent above; sending one here would mean a signed-in visit and an anonymous
  * visit were stored as different kinds of record, and the funnel's first stage would go
  * back to counting two different things. It also means the acquisition stage carries the
- * least data that can answer it: an id this server minted, a referrer, and the campaign
- * cookie - no user, no user type.
+ * least data that can answer it: an id this server minted, the referrer's origin, the landing
+ * path and the campaign cookie - no user, no user type.
  */
 export async function emitVisitEvent(opts: VisitEmitOptions): Promise<void> {
   return postEvent({
@@ -134,6 +137,7 @@ export async function emitVisitEvent(opts: VisitEmitOptions): Promise<void> {
     event: OVERWATCH_VISIT_EVENT,
     ...(opts.referrer !== undefined && { referrer: opts.referrer }),
     ...(opts.utm !== undefined && { utm: opts.utm }),
+    ...(opts.landingPath !== undefined && { metadata: { landingPath: opts.landingPath } }),
   });
 }
 
