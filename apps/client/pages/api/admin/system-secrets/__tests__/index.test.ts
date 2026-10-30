@@ -45,6 +45,8 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYP
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.fn() } }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
+import { Logger } from '@bike4mind/observability';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import handler from '../index';
 
 const SECRET_VALUE = 'sk-test-plaintext-value';
@@ -100,5 +102,20 @@ describe('POST /api/admin/system-secrets admin audit', () => {
     expect(res._getStatusCode()).toBe(500);
     expect(res._getJSONData()).not.toHaveProperty('success');
     expect(h.clearSecretCache).not.toHaveBeenCalled();
+  });
+});
+
+// A non-admin probe is an expected client error: it must reach the shared error handler
+// (403, logged at warn) instead of the route's own catch, which logs at error and pages.
+describe('non-admin access', () => {
+  it.each(['GET', 'POST'] as const)('%s rejects with ForbiddenError without logging an error', async method => {
+    const { req, res } = createMocks({ method, body: { secretName: 'OPENAI_API_KEY', value: SECRET_VALUE } });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
+
+    await expect(
+      (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(Logger.error).not.toHaveBeenCalled();
+    expect(h.upsertSecret).not.toHaveBeenCalled();
   });
 });

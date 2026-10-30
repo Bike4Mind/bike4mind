@@ -85,11 +85,11 @@ function getTier1Status(stage: string): Tier1SecretInfo[] {
 }
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  try {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
+  if (!req.user?.isAdmin) {
+    throw new ForbiddenError('Unauthorized. Admin access required.');
+  }
 
+  try {
     const stage = Config.STAGE;
     const secrets = getTier1Status(stage);
 
@@ -101,9 +101,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
     return res.json(response);
   } catch (error) {
     Logger.error('Error fetching Tier 1 secrets status:', error);
-    if (error instanceof ForbiddenError) {
-      return res.status(403).json({ error: error.message });
-    }
     return res.status(500).json({ error: 'Failed to fetch Tier 1 secrets status' });
   }
 });

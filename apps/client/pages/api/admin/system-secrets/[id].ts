@@ -28,11 +28,11 @@ function maskSecretValue(value: string | undefined): string {
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
-    try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+    if (!req.user?.isAdmin) {
+      throw new ForbiddenError('Unauthorized. Admin access required.');
+    }
 
+    try {
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
@@ -70,18 +70,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
       }
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
-      }
       return res.status(500).json({ error: 'Failed to fetch system secret' });
     }
   })
   .delete(async (req, res) => {
-    try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+    if (!req.user?.isAdmin) {
+      throw new ForbiddenError('Unauthorized. Admin access required.');
+    }
 
+    try {
       const { id } = req.query;
 
       if (!id || typeof id !== 'string') {
@@ -128,9 +125,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
-      }
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
       }
       return res.status(500).json({ error: 'Failed to delete system secret' });
     }

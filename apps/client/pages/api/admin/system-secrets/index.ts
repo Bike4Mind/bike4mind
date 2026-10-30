@@ -37,11 +37,11 @@ function maskSecretValue(value: string | undefined): string {
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
-    try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+    if (!req.user?.isAdmin) {
+      throw new ForbiddenError('Unauthorized. Admin access required.');
+    }
 
+    try {
       const dbSecrets = await systemSecretRepository.findAll();
 
       // Build response with resolution status for each configurable secret
@@ -79,18 +79,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       });
     } catch (error) {
       Logger.error('Error fetching system secrets status:', error);
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
-      }
       return res.status(500).json({ error: 'Failed to fetch system secrets' });
     }
   })
   .post(async (req, res) => {
-    try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+    if (!req.user?.isAdmin) {
+      throw new ForbiddenError('Unauthorized. Admin access required.');
+    }
 
+    try {
       const { secretName, value } = req.body;
 
       if (!secretName || typeof secretName !== 'string') {
@@ -170,9 +167,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       });
     } catch (error) {
       Logger.error('Error creating/updating system secret:', error);
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
-      }
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
       }
