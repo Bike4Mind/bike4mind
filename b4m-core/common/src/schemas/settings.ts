@@ -4714,7 +4714,7 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Flag a payment whose card has paid on more accounts than this (all time, by card fingerprint). 0 turns the check off.',
+      'Flag a payment whose card has been used, successfully or not, on more accounts than this (by card fingerprint, within the attempt retention window). 0 turns the check off.',
   }),
   paymentRiskMaxCardsPerWindow: makeNumberSetting({
     key: 'paymentRiskMaxCardsPerWindow',

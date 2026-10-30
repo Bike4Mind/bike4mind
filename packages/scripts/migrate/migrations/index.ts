@@ -256,8 +256,8 @@ import EnsureAdminSavedViewIndexes from './20260921236100_ensure-admin-saved-vie
 import EnsureSubscriptionAdminListIndexes from './20260921236200_ensure-subscription-admin-list-indexes';
 import EnsureSubscriptionMirrorIndexes from './20260921236300_ensure-subscription-mirror-indexes';
 import EnsureSignupTraceIndexes from './20260921236400_ensure-signup-trace-indexes';
-import EnsurePaymentAttemptIndexes from './20261030000000_ensure-payment-attempt-indexes';
 import NormalizeSubscriberEmails from './20260921236500_normalize-subscriber-emails';
+import EnsurePaymentAttemptIndexes from './20260921236600_ensure-payment-attempt-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -448,8 +448,8 @@ const coreMigrations: MigrationFile[] = [
   EnsureSubscriptionAdminListIndexes,
   EnsureSubscriptionMirrorIndexes,
   EnsureSignupTraceIndexes,
-  EnsurePaymentAttemptIndexes,
   NormalizeSubscriberEmails,
+  EnsurePaymentAttemptIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

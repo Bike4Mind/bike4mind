@@ -198,7 +198,7 @@ describe('screenPaymentOutcome', () => {
   beforeEach(() => {
     mocks.chargesRetrieve.mockResolvedValue(charge());
     mocks.findById.mockResolvedValue({ id: 'u1', createdAt: minutesAgo(1) });
-    mocks.recordOutcome.mockResolvedValue(recorded);
+    mocks.recordOutcome.mockResolvedValue({ attempt: recorded, changed: true });
     mocks.countAccountsForCard.mockResolvedValue(2);
     mocks.countRecentCards.mockResolvedValue({ userCards: 1, networkCards: 1 });
   });
@@ -214,7 +214,7 @@ describe('screenPaymentOutcome', () => {
     expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
     const [message] = mocks.postMessageToSlack.mock.calls[0];
     expect(message).toContain('account is 1 min old');
-    expect(message).toContain('card has paid on 2 accounts');
+    expect(message).toContain('card used on 2 accounts');
     expect(message).toContain('100.00 USD');
     expect(message).not.toContain('fp_1');
   });
@@ -226,6 +226,16 @@ describe('screenPaymentOutcome', () => {
     await screenPaymentOutcome(input, logger, now);
 
     expect(mocks.recordOutcome).toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('does not alert again on a Stripe redelivery', async () => {
+    mocks.recordOutcome.mockResolvedValue({ attempt: recorded, changed: false });
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.countAccountsForCard).not.toHaveBeenCalled();
+    expect(mocks.countRecentCards).not.toHaveBeenCalled();
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
   });
 
@@ -331,10 +341,9 @@ describe('alertStripeRiskEvent', () => {
   it('alerts on a Radar-blocked payment, not on a plain decline', async () => {
     const failed = event('payment_intent.payment_failed', { id: 'pi_1', last_payment_error: { charge: 'ch_1' } });
 
-    mocks.chargesRetrieve.mockResolvedValue(
-      charge({ outcome: { risk_level: 'normal', type: 'issuer_declined' } as Stripe.Charge.Outcome })
-    );
-    await alertStripeRiskEvent(failed, logger);
+    const declined = charge({ outcome: { risk_level: 'normal', type: 'issuer_declined' } as Stripe.Charge.Outcome });
+    mocks.chargesRetrieve.mockResolvedValue(declined);
+    await expect(alertStripeRiskEvent(failed, logger)).resolves.toBe(declined);
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
 
     mocks.chargesRetrieve.mockResolvedValue(

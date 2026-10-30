@@ -111,7 +111,8 @@ class PaymentAttemptRepository {
 
   /**
    * Adds a Stripe-reported outcome to the attempt, creating it when start-payment never saw it
-   * (a Checkout subscription). Returns the updated attempt.
+   * (a Checkout subscription). `changed` is false when the update added nothing new (same outcome,
+   * no new card): a Stripe redelivery, which must not alert a second time.
    */
   async recordOutcome(input: {
     paymentIntentId: string;
@@ -123,23 +124,29 @@ class PaymentAttemptRepository {
     cardFingerprint: string | null;
     riskLevel: string | null;
     hostingNetwork: boolean | null;
-  }): Promise<PaymentAttempt> {
+  }): Promise<{ attempt: PaymentAttempt; changed: boolean }> {
     const { paymentIntentId, cardFingerprint, outcome, riskLevel, userId, kind, amount, currency, hostingNetwork } =
       input;
-    const doc = await PaymentAttemptModel.findOneAndUpdate(
+    // The pre-image says what this delivery added; the second read returns the merged row.
+    const before = await PaymentAttemptModel.findOneAndUpdate(
       { paymentIntentId },
       {
         $set: { outcome, ...(riskLevel !== null && { riskLevel }), ...(amount !== null && { amount, currency }) },
         $setOnInsert: { userId, kind, ipHash: null, hostingNetwork },
         ...(cardFingerprint && { $addToSet: { cardFingerprints: cardFingerprint } }),
       },
-      { upsert: true, new: true }
+      { upsert: true, new: false }
     ).lean();
-    if (!doc) throw new Error(`PaymentAttempt upsert returned nothing for ${paymentIntentId}`);
-    return toAttempt(doc);
+    const after = await PaymentAttemptModel.findOne({ paymentIntentId }).lean();
+    if (!after) throw new Error(`PaymentAttempt upsert left no row for ${paymentIntentId}`);
+    const changed =
+      !before ||
+      before.outcome !== outcome ||
+      (cardFingerprint !== null && !(before.cardFingerprints ?? []).includes(cardFingerprint));
+    return { attempt: toAttempt(after), changed };
   }
 
-  /** Distinct accounts that have paid, or tried to pay, with this card. Null when the scan is truncated. */
+  /** Distinct accounts that have used this card, successfully or not. Null when the scan is truncated. */
   async countAccountsForCard(cardFingerprint: string): Promise<number | null> {
     const userIds = await PaymentAttemptModel.distinct('userId', { cardFingerprints: cardFingerprint }).maxTimeMS(2000);
     return userIds.length > MAX_COUNTED_ROWS ? null : userIds.length;

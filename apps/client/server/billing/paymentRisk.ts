@@ -102,7 +102,7 @@ function describeSignal(signal: PaymentRiskSignal, thresholds: PaymentRiskThresh
     case 'youngAccount':
       return `account is ${signal.accountAgeMinutes} min old`;
     case 'sharedCard':
-      return `card has paid on ${signal.accounts} accounts`;
+      return `card used on ${signal.accounts} accounts`;
     case 'manyCardsPerAccount':
       return `${signal.cards} cards tried by this account in ${thresholds.cardWindowMinutes} min`;
     case 'manyCardsPerNetwork':
@@ -227,7 +227,7 @@ export async function screenPaymentOutcome(
           .hostingNetwork
       : null;
 
-    const attempt = await paymentAttemptRepository.recordOutcome({
+    const { attempt, changed } = await paymentAttemptRepository.recordOutcome({
       paymentIntentId: input.paymentIntentId,
       userId: input.userId,
       kind: input.kind,
@@ -238,6 +238,10 @@ export async function screenPaymentOutcome(
       riskLevel: risk?.riskLevel ?? null,
       hostingNetwork: signupHosting,
     });
+    if (!changed) {
+      logger.info('[PaymentRisk] redelivered outcome, already screened', { paymentIntentId: input.paymentIntentId });
+      return;
+    }
 
     const since = new Date(now.getTime() - thresholds.cardWindowMinutes * MINUTE_MS);
     const [accountsForCard, recentCards] = await Promise.all([
@@ -348,20 +352,22 @@ export function isRiskyCharge(risk: ChargeRisk): boolean {
 
 /**
  * Forwards a Stripe risk event to LiveOps. The purchaser is resolved from the charge's customer,
- * then from the intent metadata's userId. Never throws.
+ * then from the intent metadata's userId. Returns the charge it retrieved (null when none), so a
+ * caller that screens the same payment does not fetch it from Stripe again. Never throws.
  */
-export async function alertStripeRiskEvent(event: Stripe.Event, logger: Logger): Promise<void> {
+export async function alertStripeRiskEvent(event: Stripe.Event, logger: Logger): Promise<Stripe.Charge | null> {
   const riskEvent = stripeRiskEventOf(event);
-  if (!riskEvent) return;
+  if (!riskEvent) return null;
+  let charge: Stripe.Charge | null = null;
   try {
     const chargeRef = riskEvent.chargeRef;
     if (!chargeRef) {
       logger.warn('[PaymentRisk] risk event without a charge', { event: event.type });
-      return;
+      return null;
     }
-    const charge = typeof chargeRef === 'string' ? await stripe.charges.retrieve(chargeRef) : chargeRef;
+    charge = typeof chargeRef === 'string' ? await stripe.charges.retrieve(chargeRef) : chargeRef;
     const risk = chargeRiskOf(charge);
-    if (event.type === 'payment_intent.payment_failed' && !isRiskyCharge(risk)) return;
+    if (event.type === 'payment_intent.payment_failed' && !isRiskyCharge(risk)) return charge;
 
     const customerId = idOf(charge.customer);
     const customerUser = customerId ? await userRepository.findByStripeCustomerId(customerId) : null;
@@ -384,6 +390,7 @@ export async function alertStripeRiskEvent(event: Stripe.Event, logger: Logger):
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  return charge;
 }
 
 /** The Radar risk line for an alert that already exists (disputes). Never throws; null when unknown. */

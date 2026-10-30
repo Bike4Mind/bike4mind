@@ -41,7 +41,7 @@ describe('PaymentAttemptModel', () => {
     await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_1', ...start, ipHash: 'net_b' });
 
     await paymentAttemptRepository.recordOutcome({ ...outcome('pi_1', 'u1', 'fp_1'), outcome: 'failed' });
-    const attempt = await paymentAttemptRepository.recordOutcome(outcome('pi_1', 'u1', 'fp_2'));
+    const { attempt } = await paymentAttemptRepository.recordOutcome(outcome('pi_1', 'u1', 'fp_2'));
 
     expect(attempt).toMatchObject({
       paymentIntentId: 'pi_1',
@@ -54,13 +54,26 @@ describe('PaymentAttemptModel', () => {
   });
 
   it('creates the attempt when start-payment never saw it', async () => {
-    const attempt = await paymentAttemptRepository.recordOutcome({
+    const { attempt, changed } = await paymentAttemptRepository.recordOutcome({
       ...outcome('pi_sub', 'u1', 'fp_1'),
       kind: 'subscription',
       hostingNetwork: true,
     });
 
     expect(attempt).toMatchObject({ kind: 'subscription', ipHash: null, hostingNetwork: true });
+    expect(changed).toBe(true);
+  });
+
+  it('reports a redelivered outcome as unchanged, and a new outcome or card as changed', async () => {
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_1', ...start });
+
+    const failed = { ...outcome('pi_1', 'u1', 'fp_1'), outcome: 'failed' as const };
+    expect((await paymentAttemptRepository.recordOutcome(failed)).changed).toBe(true);
+    expect((await paymentAttemptRepository.recordOutcome(failed)).changed).toBe(false);
+    expect((await paymentAttemptRepository.recordOutcome({ ...failed, cardFingerprint: null })).changed).toBe(false);
+    expect((await paymentAttemptRepository.recordOutcome({ ...failed, cardFingerprint: 'fp_2' })).changed).toBe(true);
+    expect((await paymentAttemptRepository.recordOutcome(outcome('pi_1', 'u1', 'fp_2'))).changed).toBe(true);
+    expect((await paymentAttemptRepository.recordOutcome(outcome('pi_1', 'u1', 'fp_2'))).changed).toBe(false);
   });
 
   it('counts the accounts behind one card', async () => {

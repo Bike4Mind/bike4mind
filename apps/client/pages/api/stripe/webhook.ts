@@ -742,7 +742,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       // A Radar block or high-risk failure alerts on its own; every failed card attempt is also
       // recorded so the per-account and per-network card counts see it. Neither throws.
-      await alertStripeRiskEvent(event, req.logger);
+      const failedCharge = await alertStripeRiskEvent(event, req.logger);
       const failedCustomerId = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
       const failedPayer = failedCustomerId ? await userRepository.findByStripeCustomerId(failedCustomerId) : null;
       if (failedPayer) {
@@ -754,7 +754,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             amount: intent.amount,
             currency: intent.currency,
             outcome: 'failed',
-            chargeRef: intent.last_payment_error?.charge,
+            chargeRef: failedCharge ?? intent.last_payment_error?.charge,
             fallbackCardFingerprint: intent.last_payment_error?.payment_method?.card?.fingerprint ?? null,
           },
           req.logger
