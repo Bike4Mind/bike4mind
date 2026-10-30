@@ -354,11 +354,13 @@ describe('ChatService spawn suggestions', () => {
     await service.setSessionOrchestrate(parent.id, true);
     await service.send(parent.id, 'split this up');
     await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
-    const tools = (post.mock.calls[0][1].options.tools as { toolSchema: { name: string } }[]).map(
-      entry => entry.toolSchema.name
-    );
+    const declared = post.mock.calls[0][1].options.tools as { toolSchema: { name: string; description: string } }[];
+    const tools = declared.map(entry => entry.toolSchema.name);
     expect(tools).toContain('session_spawn');
     expect(tools).not.toContain('session_suggestion_update');
+    expect(declared.find(entry => entry.toolSchema.name === 'session_spawn')?.toolSchema.description).toContain(
+      'STARTS it at once'
+    );
     expect(String(wire(0)[0]?.content)).toContain('you are coordinating agents');
 
     callTool(streams[0], 'o1', 'session_spawn', { prompt: 'do the first piece', title: 'First piece' });

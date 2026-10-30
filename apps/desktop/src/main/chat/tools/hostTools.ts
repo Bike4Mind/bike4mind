@@ -8,6 +8,7 @@ import {
   type SpawnSuggestionHost,
   type ToolContext,
   type ToolDefinition,
+  type ToolSchema,
 } from './types';
 
 /**
@@ -280,6 +281,19 @@ export const sessionSpawn: ToolDefinition = {
       'turn, and do not start another one for the same work.',
     ].join('\n');
   },
+};
+
+/** session_spawn as declared to a session with Orchestrate in effect; same parameters, other contract. */
+export const delegatedSpawnSchema: ToolSchema = {
+  ...sessionSpawn.schema,
+  description:
+    'Hand a self-contained piece of work to a NEW conversation in this project. The user turned ' +
+    'on Orchestrate here, so this STARTS it at once: no card, nothing to approve. It runs in its ' +
+    'own git worktree on a new branch cut from the branch this conversation is on when the ' +
+    'project is a repository, and in this working directory otherwise; the result says which. ' +
+    'A started session runs on its own, does not report into your turn, and tells this ' +
+    'conversation when it finishes. It cannot see anything said here, so the prompt has to ' +
+    'carry the whole task. Each one costs credits: never start several variations of one task.',
 };
 
 export const sessionSuggestionUpdate: ToolDefinition = {

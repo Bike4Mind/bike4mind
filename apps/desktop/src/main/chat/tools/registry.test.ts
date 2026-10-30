@@ -73,6 +73,19 @@ describe('toolsForRequest', () => {
     expect(findTool('session_suggestion_dismiss')).toBeDefined();
   });
 
+  it('describes session_spawn as starting the agent at once when the session delegates', () => {
+    const spawnDescription = (delegates: boolean) =>
+      toolsForRequest({ roots: [], media: false, host: true, ask: true, suggestions: !delegates, delegates }).find(
+        entry => entry.toolSchema.name === 'session_spawn'
+      )?.toolSchema.description ?? '';
+
+    const delegated = spawnDescription(true);
+    expect(delegated).toContain('STARTS it at once');
+    expect(delegated).toContain('its own git worktree');
+    expect(delegated).not.toContain('only SUGGESTS');
+    expect(spawnDescription(false)).toContain('only SUGGESTS');
+  });
+
   it('offers the browser without a folder, a project or anything else', () => {
     // The browser rides on nothing: a Chat session with no grant at all still gets it.
     expect(names({ roots: [], media: false, host: false, browser: true })).toEqual(

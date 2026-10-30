@@ -2765,6 +2765,7 @@ export class ChatService {
               // See ToolDefinition.interactive.
               ask,
               suggestions: !session.origin && !orchestrating,
+              delegates: orchestrating,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
