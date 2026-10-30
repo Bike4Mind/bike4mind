@@ -146,6 +146,13 @@ vi.mock('@server/billing/earlyFraudWarning', () => ({
 vi.mock('@server/billing/linkedAccounts', () => ({
   propagateAccountRisk: (...args: unknown[]) => mockPropagateAccountRisk(...args),
 }));
+// The forfeit helpers have their own suite (server/credits/paymentUnlockForfeit.test.ts); here only the wiring.
+const mockForfeitHeldUnlockForFraudWarning = vi.fn();
+vi.mock('@server/credits/paymentUnlockForfeit', () => ({
+  forfeitSignupUnlock: vi.fn(),
+  forfeitHeldUnlockForRefund: vi.fn(),
+  forfeitHeldUnlockForFraudWarning: (...args: unknown[]) => mockForfeitHeldUnlockForFraudWarning(...args),
+}));
 
 // The real source-product emitter runs (signupEvents.ts); only the network edge is mocked, with an
 // ingest key for one made-up product.
@@ -305,6 +312,15 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       expect(mockRespondToEarlyFraudWarning).toHaveBeenCalledWith(event, expect.anything());
       expect(mockAlertStripeRiskEvent).not.toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('also cancels a held signup unlock on an early fraud warning, and only then', async () => {
+      const warning = { id: 'issfr_1', charge: 'ch_1' };
+      await invokeWebhookWithEvent({ type: 'radar.early_fraud_warning.created', data: { object: warning } });
+      await invokeWebhookWithEvent({ type: 'review.opened', data: { object: { id: 'prv_1', charge: 'ch_1' } } });
+
+      expect(mockForfeitHeldUnlockForFraudWarning).toHaveBeenCalledTimes(1);
+      expect(mockForfeitHeldUnlockForFraudWarning).toHaveBeenCalledWith(warning, expect.anything());
     });
 
     it('screens a first credit grant, but not a redelivery', async () => {

@@ -260,6 +260,7 @@ import NormalizeSubscriberEmails from './20260921236500_normalize-subscriber-ema
 import EnsurePaymentAttemptIndexes from './20260921236600_ensure-payment-attempt-indexes';
 import EnsurePaymentRiskLinkIndexes from './20260921236700_ensure-payment-risk-link-indexes';
 import EnsurePendingCreditHoldUserIndex from './20260921236900_ensure-pending-credit-hold-user-index';
+import EnsureUserHeldUnlockIndex from './20260921236800_ensure-user-held-unlock-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -454,6 +455,7 @@ const coreMigrations: MigrationFile[] = [
   EnsurePaymentAttemptIndexes,
   EnsurePaymentRiskLinkIndexes,
   EnsurePendingCreditHoldUserIndex,
+  EnsureUserHeldUnlockIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

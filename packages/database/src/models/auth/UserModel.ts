@@ -18,7 +18,9 @@ import {
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
   MFA_ATTEMPT_RESET_WINDOW_MS,
+  PAYMENT_UNLOCK_REASONS,
   SIGNUP_GRANT_UNLOCK_REASONS,
+  SIGNUP_UNLOCK_FORFEIT_CAUSES,
   Collection,
   PaginatedResponse,
 } from '@bike4mind/common';
@@ -1097,6 +1099,27 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
             type: new Schema({ day: String, ms: Number, lastAt: Date, period: String }, { _id: false }),
             default: undefined,
           },
+          heldUnlock: {
+            type: new Schema(
+              {
+                reason: { type: String, enum: PAYMENT_UNLOCK_REASONS, required: true },
+                heldAt: { type: Date, required: true },
+                releaseAt: { type: Date, required: true },
+              },
+              { _id: false }
+            ),
+            default: undefined,
+          },
+          unlockForfeited: {
+            type: new Schema(
+              {
+                cause: { type: String, enum: SIGNUP_UNLOCK_FORFEIT_CAUSES, required: true },
+                at: { type: Date, required: true },
+              },
+              { _id: false }
+            ),
+            default: undefined,
+          },
         },
         { _id: false }
       ),
@@ -1498,6 +1521,14 @@ UserSchema.index({ 'riskScore.reviewState': 1, 'riskScore.score': -1 }, { name: 
 UserSchema.index(
   { signupGrantHeldReason: 1, _id: 1 },
   { partialFilterExpression: { signupGrantHeldReason: { $type: 'string' } }, name: 'user_signupGrantHeldReason' }
+);
+// Serves the held-release job's scan for payment unlocks whose settling window has passed.
+UserSchema.index(
+  { 'signupGrant.heldUnlock.releaseAt': 1, _id: 1 },
+  {
+    partialFilterExpression: { 'signupGrant.heldUnlock.releaseAt': { $type: 'date' } },
+    name: 'user_signupGrant_heldUnlock_releaseAt',
+  }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
