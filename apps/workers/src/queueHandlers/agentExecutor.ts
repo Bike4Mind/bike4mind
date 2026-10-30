@@ -3872,16 +3872,12 @@ async function processSubagentDispatch(
         : enforceCredits && modelInfo && uncoveredIterationCredits(availableCredits, modelInfo, 0) !== undefined
           ? { message: 'Insufficient credits to run subagent', error: 'insufficient_credits' }
           : null;
-    if (refusal) {
-      logger.warn('[SubagentDispatch] Refusing to start subagent', { model: childModel, reason: refusal.error });
-      await agentExecutionRepository.markFailed(childExecutionId, { message: refusal.message });
-      await sendWs('subagent_failed', {
-        executionId: parentId,
-        childExecutionId,
-        agentName,
-        error: refusal.error,
-        isTimeout: false,
-      });
+    // Every pre-start refusal fails the child the same way: mark it failed, tell the parent, and
+    // terminate its DAG node so the parent's wake is not left waiting on it.
+    const refuseSubagent = async ({ message, error }: { message: string; error: string }) => {
+      logger.warn('[SubagentDispatch] Refusing to start subagent', { model: childModel, reason: error });
+      await agentExecutionRepository.markFailed(childExecutionId, { message });
+      await sendWs('subagent_failed', { executionId: parentId, childExecutionId, agentName, error, isTimeout: false });
       await fireDagNodeTerminalOnRefusal({
         dagNodeId,
         parentExecutionId: dagParentExecutionId,
@@ -3890,31 +3886,16 @@ async function processSubagentDispatch(
         logger,
         sendWs,
       });
+    };
+    if (refusal) {
+      await refuseSubagent(refusal);
       return;
     }
 
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
     // Same as the parent run: an id the catalog no longer carries fails this child cleanly.
     if (!llm) {
-      logger.warn('[SubagentDispatch] No LLM backend for model; refusing to start subagent', { model: childModel });
-      await agentExecutionRepository.markFailed(childExecutionId, {
-        message: `Model "${childModel}" is no longer available`,
-      });
-      await sendWs('subagent_failed', {
-        executionId: parentId,
-        childExecutionId,
-        agentName,
-        error: 'model_unavailable',
-        isTimeout: false,
-      });
-      await fireDagNodeTerminalOnRefusal({
-        dagNodeId,
-        parentExecutionId: dagParentExecutionId,
-        childExecutionId,
-        connectionId,
-        logger,
-        sendWs,
-      });
+      await refuseSubagent({ message: `Model "${childModel}" is no longer available`, error: 'model_unavailable' });
       return;
     }
     llm.currentModel = childModel;
@@ -3925,22 +3906,7 @@ async function processSubagentDispatch(
       (err: Error) => err
     );
     if (admissionRefusal) {
-      await agentExecutionRepository.markFailed(childExecutionId, { message: admissionRefusal.message });
-      await sendWs('subagent_failed', {
-        executionId: parentId,
-        childExecutionId,
-        agentName,
-        error: 'model_not_admitted',
-        isTimeout: false,
-      });
-      await fireDagNodeTerminalOnRefusal({
-        dagNodeId,
-        parentExecutionId: dagParentExecutionId,
-        childExecutionId,
-        connectionId,
-        logger,
-        sendWs,
-      });
+      await refuseSubagent({ message: admissionRefusal.message, error: 'model_not_admitted' });
       return;
     }
 
