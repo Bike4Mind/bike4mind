@@ -12,7 +12,6 @@ const openProfile = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet } }));
 vi.mock('@client/app/hooks/data/user', () => ({ useGetUserTags: () => ({ data: [] }) }));
 vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganizations: () => ({ data: [] }) }));
-vi.mock('../AdminProfileModal', () => ({ default: () => null }));
 vi.mock('./ComplianceModal', () => ({ default: () => null }));
 vi.mock('./CreateUserModal', () => ({ default: () => null, useCreateUserModal: () => ({ setOpen: vi.fn() }) }));
 vi.mock('./List/UsersBulkActionDialog', async importOriginal => ({
