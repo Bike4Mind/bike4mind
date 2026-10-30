@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
@@ -85,10 +85,14 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
 
   // The server refuses a session that owes enrollment as soon as its own settings cache sees
   // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on the
-  // first refusal so the enrollment flow renders instead of an app whose every call fails.
+  // first refusal so the enrollment flow renders instead of an app whose every call fails. Only
+  // the first: refetching on each of a burst of refusals re-ran the settings load once per 403.
+  const refusalHandledRef = useRef(false);
   useEffect(
     () =>
       registerMfaEnrollmentInterceptor(api, () => {
+        if (refusalHandledRef.current) return;
+        refusalHandledRef.current = true;
         setEnrollmentRefused(true);
         void queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY });
         void queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
@@ -171,6 +175,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       {
         onSuccess: () => {
           setShowMFASetup(false);
+          refusalHandledRef.current = false;
           toast.success('MFA setup completed successfully');
 
           // Refresh all relevant data

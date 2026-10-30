@@ -238,6 +238,16 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     expect(interceptorEject).toHaveBeenCalledWith(0);
   });
 
+  it('refetches once for a burst of refusals, not once per refused request', async () => {
+    const { queryClient } = renderWrapper();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const onRejected = await registeredRefusalHandler();
+    await Promise.all([1, 2, 3, 4].map(() => onRejected(enrollmentRefusal()).catch(() => undefined)));
+
+    expect(invalidate.mock.calls.filter(([arg]) => arg?.queryKey === ADMIN_SETTINGS_QUERY_KEY)).toHaveLength(1);
+  });
+
   it('renders the enrollment flow when the refusal arrives but the status query has failed', async () => {
     // The status endpoint is down; only the server's 403 reveals that this session owes enrollment.
     get.mockRejectedValue(new Error('status unavailable'));
