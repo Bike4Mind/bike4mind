@@ -30,6 +30,7 @@ import {
 } from './cardVerificationLifecycle';
 
 const DAY = 86400000;
+const NOTIFY_RETRY_WINDOW = 7 * DAY;
 const logger = new Logger({ metadata: { service: 'card-verification' } });
 interface CardVerificationFailureRecord {
   attemptId: string;
@@ -271,7 +272,11 @@ async function notifyVerification(verificationId: string, userId: string) {
   const record = await CardVerification.findOne({ verificationId, userId, state: 'granted' }).lean();
   if (!record || record.notifiedAt) return;
   const user = await userRepository.findById(userId);
-  if (!user?.email) return;
+  if (!user?.email) {
+    // Nothing to send to; mark it handled so recovery stops revisiting the row.
+    await CardVerification.updateOne({ verificationId, userId }, { $set: { notifiedAt: new Date() } });
+    return;
+  }
   const { default: mailer } = await import('@server/utils/mailer');
   const sent = await mailer.sendEmail(
     user.email,
@@ -315,13 +320,20 @@ export async function reconcileCardVerifications() {
       { state: 'verified' },
       { state: 'pending' },
       { state: 'refused', paymentMethodId: { $exists: true }, detached: false },
-      { state: 'granted', $or: [{ notifiedAt: null }, { saveCard: false, detached: false }] },
+      {
+        state: 'granted',
+        $or: [
+          { notifiedAt: null, createdAt: { $gte: new Date(Date.now() - NOTIFY_RETRY_WINDOW) } },
+          { saveCard: false, detached: false },
+        ],
+      },
     ],
   })
     .sort({ updatedAt: 1 })
     .limit(100)
     .lean();
   let failures = 0;
+  let runtime: Promise<CardVerificationDependencies> | undefined;
   for (const row of rows) {
     try {
       if (
@@ -335,8 +347,9 @@ export async function reconcileCardVerifications() {
         if (row.state === 'verified' && !row.saveCard)
           await finishCardVerification(row.verificationId, row.userId, true);
         if (row.state === 'pending' || row.state === 'verified') {
-          const runtime = await cardVerificationRuntime();
-          if (!(await runtime.policy()).enabled) continue;
+          runtime ??= cardVerificationRuntime();
+          const deps = await runtime;
+          if (!(await deps.policy()).enabled) continue;
           if (!(await cardAccountEligible(row.userId))) {
             if (row.state === 'pending' && !(await expirePendingVerification(row))) continue;
             await CardVerification.updateOne(
@@ -347,13 +360,15 @@ export async function reconcileCardVerifications() {
             continue;
           }
           if (!row.setupIntentId) {
-            await resumeCardVerificationSetup(row.verificationId, row.userId, runtime);
+            await resumeCardVerificationSetup(row.verificationId, row.userId, deps);
             continue;
           }
         }
         await finishCardVerification(row.verificationId, row.userId);
       }
     } catch (error) {
+      if (error instanceof CardVerificationRefused && error.code === 'ineligible')
+        logger.warn('card-verification-recovery-refused', { verificationId: row.verificationId, state: row.state });
       if (!(error instanceof CardVerificationRefused && ['unavailable', 'ineligible'].includes(error.code)))
         failures += 1;
     } finally {

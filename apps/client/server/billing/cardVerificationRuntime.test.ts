@@ -57,6 +57,8 @@ vi.mock('./cardVerificationLifecycle', async importOriginal => ({
   removeVerificationCard: mocks.remove,
 }));
 import { CardVerification } from './cardVerificationModel';
+import { CardVerificationRefused } from './cardVerificationLifecycle';
+import { Logger } from '@bike4mind/observability';
 
 const defense = {
   accountId: 'acct_synthetic',
@@ -178,6 +180,65 @@ describe('mandatory verification defenses', () => {
     );
     expect(mocks.remove).toHaveBeenCalled();
     expect(mocks.retrieve).not.toHaveBeenCalled();
+  });
+  it('builds the runtime once per recovery run', async () => {
+    const row = { userId: 'synthetic-user', state: 'verified', saveCard: true, setupIntentId: 'seti_synthetic' };
+    vi.spyOn(CardVerification, 'find').mockReturnValue({
+      sort: () => ({
+        limit: () => ({
+          lean: async () => [
+            { ...row, verificationId: 'synthetic-a' },
+            { ...row, verificationId: 'synthetic-b' },
+          ],
+        }),
+      }),
+    } as never);
+    vi.spyOn(CardVerification, 'updateOne').mockResolvedValue({} as never);
+    mocks.user.mockResolvedValue(null);
+    await expect(reconcileCardVerifications()).resolves.toBeUndefined();
+    expect(mocks.remove).toHaveBeenCalledTimes(2);
+    expect(mocks.account).toHaveBeenCalledTimes(1);
+  });
+  it('stops revisiting unnotified grants for accounts without email or past the retry window', async () => {
+    const find = vi.spyOn(CardVerification, 'find').mockReturnValue({
+      sort: () => ({
+        limit: () => ({
+          lean: async () => [
+            { verificationId: 'synthetic', userId: 'synthetic-user', state: 'granted', saveCard: true },
+          ],
+        }),
+      }),
+    } as never);
+    vi.spyOn(CardVerification, 'findOne').mockReturnValue({
+      lean: async () => ({ state: 'granted', saveCard: true, credits: 17 }),
+    } as never);
+    vi.spyOn(CardVerification, 'updateOne').mockResolvedValue({} as never);
+    mocks.user.mockResolvedValue({});
+    await expect(reconcileCardVerifications()).resolves.toBeUndefined();
+    expect(CardVerification.updateOne).toHaveBeenCalledWith(
+      { verificationId: 'synthetic', userId: 'synthetic-user' },
+      { $set: { notifiedAt: expect.any(Date) } }
+    );
+    expect(JSON.stringify(find.mock.calls[0][0])).toContain('"notifiedAt":null,"createdAt":{"$gte"');
+  });
+  it('reports a removal refused for an attached card instead of swallowing it', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    vi.spyOn(CardVerification, 'find').mockReturnValue({
+      sort: () => ({
+        limit: () => ({
+          lean: async () => [
+            { verificationId: 'synthetic', userId: 'synthetic-user', state: 'refused', paymentMethodId: 'pm_x' },
+          ],
+        }),
+      }),
+    } as never);
+    vi.spyOn(CardVerification, 'updateOne').mockResolvedValue({} as never);
+    mocks.remove.mockRejectedValueOnce(new CardVerificationRefused('ineligible'));
+    await expect(reconcileCardVerifications()).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      'card-verification-recovery-refused',
+      expect.objectContaining({ verificationId: 'synthetic' })
+    );
   });
   it.each(['succeeded', 'processing'])('does not cancel an old %s setup', async status => {
     const row = {
