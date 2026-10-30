@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { assignConsumptionFIFO, attributeChargeToFundingSources, computeConsumption } from './creditLotAssignment';
 
-describe('creditService - creditLotAssignment', () => {
+describe('creditLotAssignment', () => {
   describe('computeConsumption', () => {
     it('is the total granted minus current credits', () => {
       expect(computeConsumption([{ amount: 100 }, { amount: 200 }], 250)).toBe(50);
