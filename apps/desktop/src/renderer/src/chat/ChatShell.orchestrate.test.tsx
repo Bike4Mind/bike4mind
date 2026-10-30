@@ -48,6 +48,15 @@ const CHILD = {
   origin: { parentSessionId: PARENT.id, seedPrompt: 'do a thing' },
 } as ChatSessionSummary;
 
+const PARENT_B = { ...PARENT, id: 'parent-2', title: 'Second parent' } as ChatSessionSummary;
+const CHILD_B = {
+  ...CHILD,
+  id: 'child-2',
+  title: 'Second agent',
+  origin: { parentSessionId: PARENT_B.id, seedPrompt: 'do another thing' },
+} as ChatSessionSummary;
+const SESSIONS = [PARENT, CHILD, PARENT_B, CHILD_B];
+
 const INTRO_SEEN_KEY = 'b4m.orchestrator.introSeen';
 
 /**
@@ -85,9 +94,9 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
       chat: quietBridge({
-        listSessions: async () => [PARENT, CHILD],
+        listSessions: async () => SESSIONS,
         getSession: async (id: string) =>
-          ({ ...(id === CHILD.id ? CHILD : PARENT), messages: [] }) as unknown as ChatSession,
+          ({ ...(SESSIONS.find(session => session.id === id) ?? PARENT), messages: [] }) as unknown as ChatSession,
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
@@ -120,6 +129,15 @@ const el = (testId: string) => {
   return found;
 };
 
+async function clickSessionRow(title: string) {
+  const row = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')).find(candidate =>
+    candidate.textContent?.includes(title)
+  );
+  if (!row) throw new Error(`no row ${title}`);
+  await act(async () => row.click());
+  await act(async () => undefined);
+}
+
 async function openParent() {
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -131,12 +149,7 @@ async function openParent() {
       </CssVarsProvider>
     );
   });
-  const parentRow = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')).find(row =>
-    row.textContent?.includes(PARENT.title)
-  );
-  if (!parentRow) throw new Error('no parent row');
-  await act(async () => parentRow.click());
-  await act(async () => undefined);
+  await clickSessionRow(PARENT.title);
 }
 
 const enterOrchestrate = () => act(() => el('chat-orchestrate-chip').querySelector('button')?.click());
@@ -144,7 +157,7 @@ const enterOrchestrate = () => act(() => el('chat-orchestrate-chip').querySelect
 describe('orchestrate mode in the chat shell', () => {
   it('offers the chip only on a session that has spawned agents, and keeps the chat surface as before', async () => {
     await openParent();
-    expect(el('chat-orchestrate-chip').textContent).toBe('1 agents \u00B7 Orchestrate');
+    expect(el('chat-orchestrate-chip').textContent).toBe('1 agent \u00B7 Orchestrate');
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('chat-thread-empty-host')).not.toBeNull();
   });
@@ -186,6 +199,23 @@ describe('orchestrate mode in the chat shell', () => {
     await enterOrchestrate();
     expect(query('orchestrator-tavern')).toBeNull();
     expect(query('orchestrator-table-row-child-1')).not.toBeNull();
+  });
+
+  it('restarts the intro timer when switching straight to another orchestrating session', async () => {
+    window.localStorage.setItem(`b4m.orchestrator.surface.${PARENT_B.id}`, 'orchestrate');
+    await openParent();
+    vi.useFakeTimers();
+    await enterOrchestrate();
+    act(() => vi.advanceTimersByTime(1000));
+
+    await clickSessionRow(PARENT_B.title);
+    expect(query(`orchestrator-tavern-agent-${CHILD_B.id}`)).not.toBeNull();
+
+    // The first session's timer would have fired here; the second intro gets its full run.
+    act(() => vi.advanceTimersByTime(600));
+    expect(window.localStorage.getItem(INTRO_SEEN_KEY)).toBeNull();
+    act(() => vi.advanceTimersByTime(900));
+    expect(window.localStorage.getItem(INTRO_SEEN_KEY)).toBe('1');
   });
 
   it('opens an agent session from the stage', async () => {

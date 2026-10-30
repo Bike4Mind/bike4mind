@@ -34,6 +34,13 @@ describe('OrchestrateToggle', () => {
     expect(el('chat-orchestrate-chip').textContent).toBe('2 agents \u00B7 Orchestrate');
   });
 
+  it('uses the singular for one agent', async () => {
+    await renderToggle([agentFixture('a', 'working')]);
+    expect(el('chat-orchestrate-chip').textContent).toBe('1 agent working \u00B7 Orchestrate');
+    await renderToggle([agentFixture('a', 'done')]);
+    expect(el('chat-orchestrate-chip').textContent).toBe('1 agent \u00B7 Orchestrate');
+  });
+
   it('switches to the orchestrate surface when the chip is clicked', async () => {
     await renderToggle([agentFixture('a')]);
     // Joy routes a chip's click through its inner action button.
