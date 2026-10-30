@@ -63,6 +63,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const deny = (refusal: NoCardUnlockRefusal): NoCardUnlockCheck => ({ ok: false, refusal });
 
+/** The ledger description of a no-card grant; the row's `reason` carries the machine label. */
+const NO_CARD_UNLOCK_DESCRIPTIONS: Readonly<Record<NoCardUnlockReason, string>> = {
+  github_verified: 'GitHub account verified',
+  work_email_verified: 'work email verified',
+};
+
 export interface GithubValidatorDeps {
   settings: NoCardUnlockSettings;
   github: GithubClient;
@@ -287,6 +293,7 @@ export async function grantNoCardUnlock(
           type: 'generic_add',
           transactionId,
           reason: `no_card_unlock:${reason}`,
+          description: `Credits unlocked: ${NO_CARD_UNLOCK_DESCRIPTIONS[reason]}`,
         },
         {
           db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots },

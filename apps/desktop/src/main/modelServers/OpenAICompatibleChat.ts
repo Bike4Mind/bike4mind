@@ -5,7 +5,7 @@ import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
-import { ServerCredentialsError } from './errors';
+import { ServerCredentialsError, ServerForbiddenError } from './errors';
 
 export interface OpenAICompatibleServer {
   runtimeId: string;
@@ -287,8 +287,8 @@ export class OpenAICompatibleChat implements LocalChat {
   }
 
   private async httpError(response: Response): Promise<Error> {
-    if (response.status === 401 || response.status === 403)
-      return new ServerCredentialsError(this.server.label, this.server.hasCredentials());
+    if (response.status === 401) return new ServerCredentialsError(this.server.label, this.server.hasCredentials());
+    if (response.status === 403) return new ServerForbiddenError(this.server.label);
     const body: unknown = await response.json().catch(() => null);
     const error = body && typeof body === 'object' && 'error' in body ? (body as { error: unknown }).error : null;
     const detail =

@@ -762,11 +762,64 @@ describe('getExtractedText (lake admission fingerprint source, #1679)', () => {
     expect(small.getExtractedText()).toBe(large.getExtractedText());
   });
 
-  it('is undefined for a file that yields no extractable text', async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(['application/x-cfb', 'application/octet-stream'])(
+    'warns and returns no chunks for unsupported %s',
+    async mimeType => {
+      const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+      const warn = vi.spyOn(Logger.prototype, 'warn');
+      const error = vi.spyOn(Logger.prototype, 'error');
+      try {
+        await expect(chunker.chunkFile(Buffer.from('anything'), mimeType)).resolves.toEqual([]);
+        expect(warn).toHaveBeenCalledExactlyOnceWith(`Unsupported file type: ${mimeType}`);
+        expect(error).not.toHaveBeenCalled();
+        expect(chunker.getExtractedText()).toBeUndefined();
+      } finally {
+        chunker.freeEncoder();
+      }
+    }
+  );
+
+  it('returns no chunks for a file with no recorded MIME type', async () => {
     const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
-    await chunker.chunkFile(Buffer.from('anything'), 'application/octet-stream');
-    chunker.freeEncoder();
-    expect(chunker.getExtractedText()).toBeUndefined();
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    const error = vi.spyOn(Logger.prototype, 'error');
+    try {
+      await expect(chunker.chunkFile({ filePath: 'untyped-file' })).resolves.toEqual([]);
+      expect(warn).toHaveBeenCalledExactlyOnceWith('Unsupported file type: undefined');
+      expect(error).not.toHaveBeenCalled();
+      expect(chunker.getExtractedText()).toBeUndefined();
+    } finally {
+      chunker.freeEncoder();
+    }
+  });
+
+  it.each(['audio/mpeg', 'video/mp4'])('keeps media-only %s quiet', async mimeType => {
+    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    const error = vi.spyOn(Logger.prototype, 'error');
+    try {
+      await expect(chunker.chunkFile(Buffer.from('anything'), mimeType)).resolves.toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      expect(chunker.getExtractedText()).toBeUndefined();
+    } finally {
+      chunker.freeEncoder();
+    }
+  });
+
+  it('still chunks an unknown text/* type as plain text', async () => {
+    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+    try {
+      const chunks = await chunker.chunkFile(Buffer.from('hello world'), 'text/x-foo');
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getExtractedText()).toBe('hello world');
+    } finally {
+      chunker.freeEncoder();
+    }
   });
 });
 

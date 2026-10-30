@@ -99,6 +99,26 @@ describe('createModelAdmission', () => {
     await expect(admission.admits('anything')).rejects.toBeInstanceOf(ForbiddenError);
   });
 
+  it.each([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+    ['suspended', { moderation: { status: 'suspended' as const } }],
+  ])('refuses every model for a %s user, even an admin, before resolving entitlements', async (_label, state) => {
+    const getEntitlements = vi.fn().mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    const admission = createModelAdmission({ user: { isAdmin: true, ...state }, configs: [], getEntitlements });
+    await expect(admission.assert('anything')).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(admission.admits('anything')).rejects.toThrow('Please contact support');
+    expect(getEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('admits an active account with the block flags cleared', async () => {
+    const admission = createModelAdmission({
+      user: { isBanned: false, disputePending: false, moderation: { status: 'active' } },
+      configs: [],
+    });
+    await expect(admission.assert('anything')).resolves.toBeUndefined();
+  });
+
   it('admits as usual once moderation is lifted', async () => {
     const admission = createModelAdmission({ user: { isModerated: false }, configs: [] });
     await expect(admission.admits('anything')).resolves.toBe(true);

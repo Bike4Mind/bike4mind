@@ -381,6 +381,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         // Correlation id for the usage-event dual write (synthesized downstream if absent).
         requestId,
         source,
+        sessionId: body.sessionId,
         logger,
         onReady,
         onChunk: async (text, info) => {
