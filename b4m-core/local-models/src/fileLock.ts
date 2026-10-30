@@ -103,6 +103,8 @@ function isStale(holder: { mtimeMs: number }, staleMs: number): boolean {
 }
 
 const readText = (path: string) => readFile(path, 'utf8').catch(() => null);
+/** A guard's draft, kept while its owner's takeover runs: its absence tells a clearStaleGuard the owner is done. */
+const draftOf = (guard: string, nonce: string) => `${guard}.new-${nonce}`;
 const errno = (error: unknown) => (error as NodeJS.ErrnoException).code ?? '';
 
 /** Moves a file renamed aside back to `path`; without hard links, only while nothing else has taken `path`. */
@@ -134,14 +136,29 @@ async function clearStaleGuard(guard: string, nonce: string, staleMs: number): P
   const movedAt = (await stat(aside).catch(() => null))?.mtimeMs ?? 0;
   // Each guard holds its owner's nonce, so other text means a contender's guard replaced the stale one; so does an
   // empty one written just now, by a contender on a file system without hard links that has not written it yet.
-  if (moved !== text || (moved === '' && Date.now() - movedAt < EMPTY_GUARD_GRACE_MS)) await putBack(aside, guard);
+  if (moved !== text || (moved === '' && Date.now() - movedAt < EMPTY_GUARD_GRACE_MS)) {
+    await putBack(aside, guard);
+    // An owner that finished while its guard was aside removed nothing, and checks for the guard only after its draft.
+    const ownerDone = moved && !(await readText(draftOf(guard, moved)));
+    if (ownerDone && (await readText(guard)) === moved) await rm(guard, { force: true });
+  }
   await rm(aside, { force: true });
 }
 
-/** Creates `guard` holding `nonce`; false when another guard is there. */
+/** Creates `guard` holding `nonce`, and its draft, which the caller removes when done; false when another guard is there. */
 async function createGuard(guard: string, nonce: string): Promise<boolean> {
+  let placed = false;
+  try {
+    placed = await placeGuard(guard, nonce);
+    return placed;
+  } finally {
+    if (!placed) await rm(draftOf(guard, nonce), { force: true });
+  }
+}
+
+async function placeGuard(guard: string, nonce: string): Promise<boolean> {
   // Written aside and linked into place, so where links work a guard is never seen empty.
-  const draft = `${guard}.new-${nonce}`;
+  const draft = draftOf(guard, nonce);
   try {
     await writeFile(draft, nonce, { flag: 'wx' });
     await link(draft, guard);
@@ -149,8 +166,6 @@ async function createGuard(guard: string, nonce: string): Promise<boolean> {
   } catch (error) {
     if (errno(error) === 'EEXIST') return false;
     if (!NO_LINK_CODES.has(errno(error))) throw error;
-  } finally {
-    await rm(draft, { force: true });
   }
   let handle;
   try {
@@ -206,6 +221,9 @@ async function takeOver(
     return moved === judged.text;
   } finally {
     await rm(guard, { force: true });
+    await rm(draftOf(guard, nonce), { force: true });
+    // A clearStaleGuard may have put the guard back since; it looks for the draft only after putting back.
+    if ((await readText(guard)) === nonce) await rm(guard, { force: true });
   }
 }
 
