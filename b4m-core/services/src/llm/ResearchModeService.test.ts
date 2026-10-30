@@ -350,38 +350,47 @@ describe('ResearchModeService timeout', () => {
       thinkingStyle: 'legacy',
       max_tokens: 64_000,
     } as unknown as ModelInfo;
-    let signal: AbortSignal | undefined;
-    const complete = vi.fn(async (_model, _messages, options: ICompletionOptions) => {
-      signal = options.abortSignal;
+    const signals: Record<string, AbortSignal> = {};
+    const complete = vi.fn(async (model: string, _messages, options: ICompletionOptions) => {
+      signals[model] = options.abortSignal!;
       await waitForAbort(options.abortSignal!);
     });
     useBackend(complete);
-    const service = new ResearchModeService({}, [thinkingModel], logger);
+    const service = new ResearchModeService({}, [thinkingModel, timedModels[0]], logger);
+    // A sibling on a model that cannot think keeps its own 220s limit.
     const mode = {
       enabled: true,
-      configurations: [{ id: 'a', enabled: true, model: thinkingModel.id, parameters: { maxTokens: 4000 } }],
+      configurations: [
+        { id: 'a', enabled: true, model: thinkingModel.id, parameters: { maxTokens: 4000 } },
+        { id: 'b', enabled: true, model: 'model-a', parameters: { maxTokens: 4000 } },
+      ],
     };
 
     const pending = service.processResearchMode(mode, [], { thinking: { enabled: true } } as any, onStream);
     // The adapter raises 4000 to the 16000 default budget + 1000, so the limit is 120s + 17000 / 40.
     await vi.advanceTimersByTimeAsync(220_000);
-    expect(signal?.aborted).toBe(false);
+    expect(signals[thinkingModel.id].aborted).toBe(false);
+    expect(signals['model-a'].aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(325_000);
     const results = await pending;
 
-    expect(signal?.aborted).toBe(true);
-    expect(results[0]).toMatchObject({ success: false, error: 'Timeout after 545 seconds' });
+    expect(signals[thinkingModel.id].aborted).toBe(true);
+    expect(results.map(r => [r.configurationId, r.error])).toEqual([
+      ['a', 'Timeout after 545 seconds'],
+      ['b', 'Timeout after 220 seconds'],
+    ]);
   });
 
   it('rounds the timeout in its error message to whole seconds', async () => {
     useBackend(hangingComplete());
     const service = new ResearchModeService({}, timedModels, logger);
 
-    const pending = service.processResearchMode(budgeted({ a: 1 }), [], baseOptions, onStream);
-    await vi.advanceTimersByTimeAsync(130_025);
+    // 120.025s rounds down and 145.6s rounds up, so neither floor nor ceil passes.
+    const pending = service.processResearchMode(budgeted({ a: 1, b: 1024 }), [], baseOptions, onStream);
+    await vi.advanceTimersByTimeAsync(156_000);
     const results = await pending;
 
-    expect(results[0]).toMatchObject({ success: false, error: 'Timeout after 120 seconds' });
+    expect(results.map(r => r.error)).toEqual(['Timeout after 120 seconds', 'Timeout after 146 seconds']);
   });
 
   it('reports a Stop before the timeout as cancelled, without draining', async () => {
@@ -549,5 +558,24 @@ describe('researchModeUsages', () => {
     );
 
     expect(usage).toMatchObject({ inputTokens: 50, outputTokens: 5 });
+  });
+
+  it('bills a failed configuration the streamed estimate when its last report is below it', () => {
+    const [usage] = researchModeUsages(
+      [
+        {
+          configurationId: 'a',
+          model: 'model-a',
+          success: false,
+          streamedChars: 40_000,
+          error: 'Cancelled',
+          completionInfo: { inputTokens: 50, outputTokens: 5 },
+        },
+      ],
+      models,
+      999
+    );
+
+    expect(usage).toMatchObject({ inputTokens: 50, outputTokens: estimateStreamedOutputTokens(40_000, 'model-a') });
   });
 });
