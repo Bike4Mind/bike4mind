@@ -13,6 +13,7 @@ export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
+export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
 export { generateImageContract } from './contracts/imageGeneration.contract';

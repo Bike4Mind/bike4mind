@@ -24,6 +24,7 @@ export * from './PartnerSignupRuleModel';
 export * from './PasskeyChallengeModel';
 export * from './PasskeyCredentialModel';
 export * from './PendingOtcTokenModel';
+export * from './PushTokenModel';
 export * from './RegistrationInviteModel';
 export * from './SamlRequestIdModel';
 export * from './SessionModel';

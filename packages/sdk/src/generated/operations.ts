@@ -305,6 +305,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/skills/market/listings',
   },
+  registerPushToken: {
+    method: 'POST',
+    path: '/api/v1/push-tokens',
+  },
   removeDataLakeFile: {
     method: 'DELETE',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
@@ -336,6 +340,10 @@ export const operations = {
   synthesizeSpeech: {
     method: 'POST',
     path: '/api/ai/tts',
+  },
+  unregisterPushToken: {
+    method: 'DELETE',
+    path: '/api/v1/push-tokens',
   },
   updateAgent: {
     method: 'PATCH',
