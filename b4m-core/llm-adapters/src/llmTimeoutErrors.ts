@@ -1,3 +1,5 @@
+import type { TurnUsage } from '@bike4mind/common';
+
 /**
  * Which of our own client-side timers gave up on the model:
  * - `first_event`: the stream opened but sent no event before the first-event deadline.
@@ -18,6 +20,8 @@ export interface LlmTimeoutUsage {
   cacheCreationInputTokens: number;
   /** Output of the completed tool rounds only; absent when none completed. */
   outputTokens?: number;
+  /** Per-request counts for pricing; the cut request contributes no output. */
+  turnUsage?: readonly TurnUsage[];
 }
 
 export interface LlmTimeoutDetails {

@@ -32,7 +32,7 @@ beforeEach(() => {
 const messageStart = { type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 0 } } };
 
 /** Yields message_start, then stalls until the backend aborts the stream, like a hung connection. */
-function stalledStream() {
+function stalledStream(reportUsage = true) {
   let rejectStall: (error: Error) => void = () => {};
   const stalled = new Promise<never>((_, reject) => {
     rejectStall = reject;
@@ -42,7 +42,7 @@ function stalledStream() {
     abortedState,
     stream: {
       [Symbol.asyncIterator]: async function* () {
-        yield messageStart;
+        if (reportUsage) yield messageStart;
         await stalled;
       },
       controller: {
@@ -152,6 +152,9 @@ describe('AnthropicBackend - stream idle timeout selection', () => {
       accumOutputTokens: 250,
       accumCacheReadTokens: 4000,
       accumCacheWriteTokens: 60,
+      accumTurnUsage: [
+        { inputTokens: 300, outputTokens: 250, cacheReadInputTokens: 4000, cacheCreationInputTokens: 60 },
+      ],
     });
 
     await vi.advanceTimersByTimeAsync(91_000);
@@ -159,7 +162,16 @@ describe('AnthropicBackend - stream idle timeout selection', () => {
 
     expect(outcome.error).toMatchObject({
       name: 'LlmTimeoutError',
-      usage: { inputTokens: 310, outputTokens: 250, cacheReadInputTokens: 4000, cacheCreationInputTokens: 60 },
+      usage: {
+        inputTokens: 310,
+        outputTokens: 250,
+        cacheReadInputTokens: 4000,
+        cacheCreationInputTokens: 60,
+        turnUsage: [
+          { inputTokens: 300, outputTokens: 250, cacheReadInputTokens: 4000, cacheCreationInputTokens: 60 },
+          { inputTokens: 10, outputTokens: 0 },
+        ],
+      },
     });
   });
 
@@ -173,6 +185,34 @@ describe('AnthropicBackend - stream idle timeout selection', () => {
       inputTokens: 10,
       cacheReadInputTokens: 0,
       cacheCreationInputTokens: 0,
+    });
+  });
+
+  it('keeps only completed rounds when the next round times out before message_start', async () => {
+    const priorTurns = [{ inputTokens: 300, outputTokens: 250 }];
+    const backend = buildBackend(stalledStream(false).stream);
+    const turn = backend
+      .complete(
+        ChatModels.CLAUDE_4_5_SONNET,
+        [{ role: 'user', content: 'hi' }],
+        {
+          stream: true,
+          _internal: {
+            enableIdleTimeout: true,
+            accumInputTokens: 300,
+            accumOutputTokens: 250,
+            accumTurnUsage: priorTurns,
+          },
+        },
+        async () => {}
+      )
+      .catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    expect(await turn).toMatchObject({
+      kind: 'first_event',
+      usage: { inputTokens: 300, outputTokens: 250, turnUsage: priorTurns },
     });
   });
 });

@@ -50,6 +50,39 @@ describe('timedOutAttemptUsageFields', () => {
     expect(fields.outputTokens).toBe(0);
     expect(fields.costUsd).toBeCloseTo(getTextModelCost(model, 1000, 400, 0, 0, 1000), 12);
   });
+
+  it.each([
+    { lastPrompt: 110_000, expectedCost: 1.1025, expectedTier: 200_000 },
+    { lastPrompt: 210_000, expectedCost: 2.6525, expectedTier: 1_000_000 },
+  ])(
+    'prices each request on its own tier with a $lastPrompt-token cut prompt',
+    ({ lastPrompt, expectedCost, expectedTier }) => {
+      const tieredModel = {
+        ...model,
+        pricing: {
+          200_000: { input: 5e-6, output: 25e-6 },
+          1_000_000: { input: 10e-6, output: 50e-6 },
+        },
+      };
+      const fields = timedOutAttemptUsageFields(tieredModel, {
+        inputTokens: 110_000 + lastPrompt,
+        outputTokens: 100,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        turnUsage: [
+          { inputTokens: 110_000, outputTokens: 100 },
+          { inputTokens: lastPrompt, outputTokens: 0 },
+        ],
+      });
+
+      expect(fields.costUsd).toBeCloseTo(expectedCost, 12);
+      expect(fields.rates?.tierKey).toBe(expectedTier);
+      expect(fields.turnUsage).toEqual([
+        { inputTokens: 110_000, outputTokens: 100, tierKey: 200_000 },
+        { inputTokens: lastPrompt, outputTokens: 0, tierKey: expectedTier },
+      ]);
+    }
+  );
 });
 
 describe('timedOutUsageOf', () => {

@@ -1,4 +1,10 @@
-import { buildUsagePriceStamp, getTextModelCost, type IUsageEventInput, type ModelInfo } from '@bike4mind/common';
+import {
+  buildUsagePriceStamp,
+  getTextModelCost,
+  getTurnsCost,
+  type IUsageEventInput,
+  type ModelInfo,
+} from '@bike4mind/common';
 import type { LlmTimeoutUsage } from '@bike4mind/llm-adapters';
 
 type TimedOutAttemptFields = Pick<
@@ -32,6 +38,7 @@ export function timedOutAttemptUsageFields(model: ModelInfo, usage: LlmTimeoutUs
   const { inputTokens, cacheReadInputTokens, cacheCreationInputTokens } = usage;
   const outputTokens = usage.outputTokens ?? 0;
   const promptTokens = inputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+  const turns = usage.turnUsage;
   return {
     provider: model.backend,
     model: model.id,
@@ -42,16 +49,18 @@ export function timedOutAttemptUsageFields(model: ModelInfo, usage: LlmTimeoutUs
     cachedInputTokens: cacheReadInputTokens,
     cacheWriteTokens: cacheCreationInputTokens,
     settledBasis: 'provider',
-    costUsd: getTextModelCost(
-      model,
-      inputTokens,
-      outputTokens,
-      cacheReadInputTokens,
-      cacheCreationInputTokens,
-      promptTokens
-    ),
+    costUsd: turns?.length
+      ? getTurnsCost(model, turns)
+      : getTextModelCost(
+          model,
+          inputTokens,
+          outputTokens,
+          cacheReadInputTokens,
+          cacheCreationInputTokens,
+          promptTokens
+        ),
     creditsCharged: 0,
-    ...buildUsagePriceStamp(model, { tierBasisTokens: promptTokens }),
+    ...buildUsagePriceStamp(model, { turns, tierBasisTokens: promptTokens }),
     status: 'timeout',
   };
 }
