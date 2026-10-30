@@ -99,7 +99,10 @@ export function shadowTokenKey(userId: string, now: Date): string {
   return `shadow-tokens:${userId}:${now.toISOString().slice(0, 10)}`;
 }
 
-/** True when the request may start. Counts one token per request so a user at the cap is refused. */
+/**
+ * True when the request may start. Counts one token per request so a user at the cap is refused.
+ * Actual usage is added after the run, so a request starting just under the cap can overshoot it by one request.
+ */
 export async function reserveShadowTokenBudget(
   user: TierUser & { id: string },
   cap: number,
