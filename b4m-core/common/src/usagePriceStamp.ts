@@ -1,5 +1,4 @@
 import {
-  CACHE_READ_MULTIPLIER,
   oneHourCacheWriteRate,
   pricingTierForTokens,
   resolveAppliedRates,
@@ -20,9 +19,9 @@ export type UsagePriceStampBasis = {
   /** The tierBasisTokens of the getTextModelCost call; read when there are no turns. */
   tierBasisTokens?: number;
   /**
-   * The cost priced a local estimate rather than provider usage: cache reads fold into the input
-   * term at CACHE_READ_MULTIPLIER and cache writes are not billed at all. Rate the stamp the same
-   * way, or the stored rates would recompute to a charge that was never made.
+   * The cost priced a local estimate rather than provider usage: cache writes are not billed at
+   * all. Rate the stamp the same way, or the stored rates would recompute to a charge that was
+   * never made.
    */
   localEstimate?: boolean;
   /** 1-hour cache writes of an aggregate basis; with turns, their own counts are summed instead. */
@@ -74,10 +73,7 @@ function stampFor(model: ModelInfo, basis: UsagePriceStampBasis): UsagePriceStam
     ? turns.reduce((largest, turn) => Math.max(largest, promptTokens(turn)), 0)
     : (basis.tierBasisTokens ?? 0);
   const resolved = resolveAppliedRates(model, tierBasisTokens);
-  const rates =
-    resolved && basis.localEstimate
-      ? { ...resolved, cacheRead: resolved.input * CACHE_READ_MULTIPLIER, cacheWrite: 0 }
-      : resolved;
+  const rates = resolved && basis.localEstimate ? { ...resolved, cacheWrite: 0 } : resolved;
 
   const stamp: UsagePriceStamp = {
     priceSource: model.priceSource ?? 'literal',

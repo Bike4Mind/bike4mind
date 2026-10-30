@@ -35,6 +35,7 @@ import type {
   ChatImageActionResult,
   ChatImageRef,
   ChatModelCatalog,
+  CreationTool,
   ChatMoveToBackgroundResult,
   ChatQueueEvent,
   ChatQueuedMessage,
@@ -105,6 +106,7 @@ import type {
   HubSearchRequest,
   HubSearchResult,
   InstalledModelsResult,
+  MachineView,
   ModelPull,
   ModelPullRequest,
   ModelPullResult,
@@ -149,6 +151,7 @@ export const IPC_CHANNELS = {
   chatGetLocalContext: 'chat:get-local-context',
   chatSetLocalContext: 'chat:set-local-context',
   chatGetLocalContextFit: 'chat:get-local-context-fit',
+  chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
   chatSettleLocalModel: 'chat:settle-local-model',
   chatSetSessionHistory: 'chat:set-session-history',
@@ -274,6 +277,7 @@ export const IPC_CHANNELS = {
   modelServersUpdate: 'servers:update',
   modelServersRemove: 'servers:remove',
   modelServersCheck: 'servers:check',
+  modelServersProbedHardware: 'servers:probed-hardware',
   /** main -> renderer push; a server was added, changed, or its health was rechecked. */
   modelServersChanged: 'servers:changed',
   toolsGetAccess: 'tools:get-access',
@@ -329,6 +333,8 @@ export const IPC_CHANNELS = {
   /** Starts a download; resolves when it finishes, fails or is cancelled. */
   modelsPull: 'models:pull',
   modelsCancelPull: 'models:cancel-pull',
+  /** Continues a pull paused by a dropped connection; resolves like `modelsPull`. */
+  modelsResumePull: 'models:resume-pull',
   modelsDismissPull: 'models:dismiss-pull',
   modelsRemove: 'models:remove',
   /** Hugging Face sign-in: whether a token is saved, save one, forget it. None of them returns the token. */
@@ -585,15 +591,16 @@ export interface DesktopApi {
     install(force: boolean): Promise<UpdateInstallResult>;
     onStateChanged(listener: (state: UpdateState) => void): () => void;
   };
+  /** The Models screen. `serverId` picks a saved model server; omitted means this computer. */
   models: {
-    getStatus(): Promise<ModelRuntimeStatus>;
-    listInstalled(): Promise<InstalledModelsResult>;
+    getStatus(serverId?: string): Promise<ModelRuntimeStatus>;
+    listInstalled(serverId?: string): Promise<InstalledModelsResult>;
     search(request: HubSearchRequest): Promise<HubSearchResult>;
-    getDetail(repo: string): Promise<HubDetailResult>;
-    listCurated(): Promise<CuratedList>;
-    getCuratedPull(entryId: string, buildId: string): Promise<CuratedPullResult>;
+    getDetail(repo: string, serverId?: string): Promise<HubDetailResult>;
+    listCurated(serverId?: string): Promise<CuratedList>;
+    getCuratedPull(entryId: string, buildId: string, serverId?: string): Promise<CuratedPullResult>;
     /** Checks an installed curated build against its review again, after Ollama could not describe it. */
-    checkCurated(entryId: string, buildId: string): Promise<CuratedCheckResult>;
+    checkCurated(entryId: string, buildId: string, serverId?: string): Promise<CuratedCheckResult>;
     /** Checks for a newer curated list now. */
     checkCuratedList(): Promise<void>;
     getCuratedSettings(): Promise<CuratedListSettings>;
@@ -602,8 +609,9 @@ export interface DesktopApi {
     listPulls(): Promise<ModelPull[]>;
     pull(request: ModelPullRequest): Promise<ModelPullResult>;
     cancelPull(key: string): Promise<void>;
+    resumePull(key: string): Promise<ModelPullResult>;
     dismissPull(key: string): Promise<void>;
-    remove(name: string): Promise<ModelRemoveResult>;
+    remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
     /** Whether a Hugging Face token is saved; the token itself never comes back to the renderer. */
     getHfToken(): Promise<HfTokenStatus>;
     /** Saves the token once Hugging Face accepts it. */
@@ -611,7 +619,8 @@ export interface DesktopApi {
     clearHfToken(): Promise<HfTokenResult>;
     onHfTokenChanged(listener: (status: HfTokenStatus) => void): () => void;
     onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
-    onInstalledChanged(listener: () => void): () => void;
+    /** Called with the id of the server (`local` for this computer) whose models changed. */
+    onInstalledChanged(listener: (serverId: string) => void): () => void;
   };
   auth: {
     getState(): Promise<AuthState>;
@@ -674,6 +683,8 @@ export interface DesktopApi {
     setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
     /** Which local models each fixed size may not fit, by the memory estimate. */
     getLocalContextFit(): Promise<LocalContextFit>;
+    /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
+    listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** Device-local only: moves a conversation whose model is not installed to the pick a send would use. */
@@ -1024,6 +1035,8 @@ export interface DesktopApi {
     remove(id: string): Promise<ModelServerMutationResult>;
     /** Rechecks one server, or all of them when `id` is omitted. */
     check(id?: string): Promise<ModelServerView[]>;
+    /** This computer's hardware as probed, before entered specs; null when the probe failed. */
+    probedHardware(): Promise<MachineView | null>;
     onChanged(listener: (servers: ModelServerView[]) => void): () => void;
   };
   /** User-made sidebar sections; see @shared/sidebarSections. */

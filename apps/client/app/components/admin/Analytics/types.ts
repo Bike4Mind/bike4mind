@@ -36,6 +36,8 @@ export interface AnalyticsState {
   selectedOrganizations: string[];
   exclusions: UserActivityExclusions;
   dateFilters: DateFilters;
+  /** True until the range is picked by hand, while it should still follow the default preset. */
+  isDefaultDateRange: boolean;
   userActivityFilters: UserActivityFilters;
   metadataFilters: MetadataFilter[];
   page: number;
@@ -45,6 +47,7 @@ export interface AnalyticsState {
   setSelectedOrganizations: (orgs: string[]) => void;
   toggleExclusion: (key: keyof UserActivityExclusions) => void;
   setDateFilters: (filters: DateFilters) => void;
+  refreshDefaultDateFilters: () => void;
   setUserActivityFilters: (filters: Partial<UserActivityFilters>) => void;
   setMetadataFilters: (filters: MetadataFilter[]) => void;
   setPage: (page: number) => void;

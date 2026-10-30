@@ -86,6 +86,9 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
     sessionId: { type: String, required: false },
     inputTokens: { type: Number, required: false },
     outputTokens: { type: Number, required: false },
+    // Prompt-cache tokens, disjoint from inputTokens (see CacheTokenFields in CreditTransactionTypes.ts).
+    cacheReadTokens: { type: Number, required: false },
+    cacheWriteTokens: { type: Number, required: false },
     apiKeyId: { type: String, required: false }, // For completion_api_usage (optional - present for API key auth, undefined for JWT)
 
     // Transfer and received credit fields
@@ -135,6 +138,8 @@ CreditTransactionSchema.index(
   { ownerId: 1, ownerType: 1, createdAt: -1, _id: -1 },
   { name: 'ownerId_ownerType_createdAt_id' }
 );
+// Serves the hourly young-account spend scan (CounterLogModel.ts).
+// Built by CreditTransaction.createIndexes() in the 20260921235947 ensure migration.
 CreditTransactionSchema.index({ ownerType: 1, createdAt: -1, type: 1 });
 CreditTransactionSchema.index({ stripeDisputeId: 1 }, { unique: true, sparse: true });
 // Serves the admin user timeline's credit events (userTimeline.ts). Partial on the non-usage types so a

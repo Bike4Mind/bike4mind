@@ -88,6 +88,18 @@ describe('useAdminTabUrlSync', () => {
     expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
+  it('replaces a legacy subscribers link with the waitlist slug', () => {
+    routerMock.search = { tab: 'subscribers' };
+
+    const { result } = renderHook(() => useHarness(AdminTab.Users));
+
+    expect(result.current.activeTab).toBe(AdminTab.Waitlist);
+    expect(routerMock.navigate).toHaveBeenCalledTimes(1);
+    const { replace, search } = lastNavigation();
+    expect(replace).toBe(true);
+    expect(search({ tab: 'subscribers' }).tab).toBe('waitlist');
+  });
+
   // Mount effects run twice in development; a first-run flag would let the store default
   // overwrite the deep link on the second pass.
   it('keeps a deep link on StrictMode double-run', () => {

@@ -36,19 +36,20 @@ inputs:
       means "any depth" and '*' stops at '/' (default pathspec magic does NOT
       exclude a root README.md via '**/*.md').
 
-      Default note: markdown is excluded ONLY in docs locations (READMEs,
-      docs-site/, agents/, repo root). Do not blanket-exclude '**/*.md' if any
-      markdown is a runtime build input (e.g. @next/mdx, app/prompts/*.md,
-      app/content/*.md) - that would silently skip a real deploy. lumina5
-      serves docs from docs-site/ (Docusaurus) and uses .changeset/ for
-      version bumps; both are non-deployable to the app.
+      Default note: every .md/.mdx file is non-deployable wherever it lives,
+      EXCEPT the paths listed in `content-paths` below, which are markdown the
+      build or the tests read and so always count as deployable. Register any
+      new markdown build input there; an unregistered one is treated as docs
+      and silently skips a real deploy. lumina5 serves docs from docs-site/
+      (Docusaurus) and uses .changeset/ for version bumps; both are
+      non-deployable to the app.
     required: false
     default: |
       :(exclude,glob)docs-site/**
+      :(exclude,glob)docs/**
       :(exclude,glob)agents/**
-      :(exclude,glob)**/README.md
-      :(exclude,glob)**/CHANGELOG.md
-      :(exclude,glob)*.md
+      :(exclude,glob)**/*.md
+      :(exclude,glob)**/*.mdx
       :(exclude)LICENSE
       :(exclude,glob)**/.env.example
       :(exclude,glob).vscode/**
@@ -61,6 +62,21 @@ inputs:
       :(exclude).github/CODEOWNERS
       :(exclude).github/dependabot.yml
       :(exclude,glob).changeset/**
+  content-paths:
+    description: >-
+      Newline-separated git pathspecs (INCLUDE form) of markdown that is a
+      build or test input rather than documentation. A change here is always
+      deployable, overriding the '**/*.md' / '**/*.mdx' excludes above: the
+      client's content tree, the CLI's built-in agent definitions (copied into
+      its dist by tsdown), the model-discovery parser fixtures and the lake RAG
+      eval corpus. Listing a directory rather than the markdown in it keeps a
+      new file there deployable without an edit here.
+    required: false
+    default: |
+      apps/client/content/**
+      packages/cli/src/agents/defaults/**
+      b4m-core/services/src/llm/evals/**
+      **/__fixtures__/**
   docs-paths:
     description: >-
       Newline-separated git pathspecs (INCLUDE form) defining the docs site.
@@ -120,6 +136,7 @@ runs:
         # fail-open when it is not.
         MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        CONTENT_PATHS: ${{ inputs.content-paths }}
         DOCS_PATHS: ${{ inputs.docs-paths }}
         PUBLISHED_PATHS: ${{ inputs.published-paths }}
       run: |
@@ -136,6 +153,9 @@ runs:
 
         EXCLUDES=()
         while IFS= read -r line; do EXCLUDES+=("$line"); done < <(parse_specs "$EXCLUDE_PATHS")
+
+        CONTENT=()
+        while IFS= read -r line; do CONTENT+=("$line"); done < <(parse_specs "$CONTENT_PATHS")
 
         DOCS=()
         while IFS= read -r line; do DOCS+=("$line"); done < <(parse_specs "$DOCS_PATHS")
@@ -201,9 +221,26 @@ runs:
           echo "published-changed=true" >> "$GITHUB_OUTPUT"
           exit 0
         }
-        if [ -z "$NON_DOC" ]; then
+        # Markdown the build or tests read is deployable even though '**/*.md' is excluded.
+        # Guarded on a non-empty list: `git diff -- ` with no pathspec would list every file.
+        CONTENT_HIT=""
+        if [ "${#CONTENT[@]}" -gt 0 ]; then
+          CONTENT_HIT=$(git diff --name-only "$BASE" "$HEAD" -- "${CONTENT[@]}") || {
+            echo "git diff (content) failed unexpectedly after range validation; failing open."
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+            echo "docs-changed=true" >> "$GITHUB_OUTPUT"
+            echo "published-changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+        fi
+
+        if [ -z "$NON_DOC" ] && [ -z "$CONTENT_HIT" ]; then
           echo "All changed files match the non-deployable list; skipping test + deploy."
           echo "deployable=false" >> "$GITHUB_OUTPUT"
+        elif [ -z "$NON_DOC" ]; then
+          echo "Markdown build/test inputs changed (content-paths):"
+          echo "$CONTENT_HIT"
+          echo "deployable=true" >> "$GITHUB_OUTPUT"
         else
           echo "Deployable changes detected:"
           echo "$NON_DOC"

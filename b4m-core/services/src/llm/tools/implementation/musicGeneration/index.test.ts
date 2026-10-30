@@ -35,6 +35,7 @@ const build = (createJob: MusicToolConfig['createJob'], options: BuildOptions = 
     logger,
     getAbortSignal: () => signal,
     userId: 'u1',
+    user: { id: 'u1', isAdmin: false },
     organizationId: 'org1',
     sessionId: 's1',
     questId,
@@ -55,7 +56,7 @@ describe('music_generation tool', () => {
       source: 'agent',
       sessionId: 's1',
       questId: 'q1',
-      user: { id: 'u1', organizationId: 'org1' },
+      user: { id: 'u1', organizationId: 'org1', adminRoleWithheld: true },
       request: { model: 'test-music', prompt: 'a sea shanty' },
     });
     expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });

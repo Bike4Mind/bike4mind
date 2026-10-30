@@ -64,7 +64,7 @@ export class AdminPage extends BasePage {
 
   async navigateToUsersTab() {
     await this.expandUserOps();
-    await this.page.getByTestId('admin-users-tab-btn').filter({ visible: true }).first().click();
+    await (await this.revealSidebarItem('admin-users-tab-btn', 'people')).click();
     await expect(this.page.getByTestId('admin-users-search-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
     await this.waitForUsersLoaded();
   }
@@ -80,13 +80,30 @@ export class AdminPage extends BasePage {
 
   async navigateToOrganizationsTab() {
     await this.expandUserOps();
-    await this.page.getByTestId('admin-organizations-tab-btn').filter({ visible: true }).first().click();
+    await (await this.revealSidebarItem('admin-organizations-tab-btn', 'people')).click();
     await expect(this.page.getByTestId('admin-organizations-search-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  }
+
+  /**
+   * Long sidebar sections hide items past the first few behind a "More" row (see splitSectionItems).
+   * Every sidebar navigation goes through here so a reorder of the section can't silently hide a link.
+   */
+  private async revealSidebarItem(testId: string, sectionKey: string) {
+    const link = this.page.getByTestId(testId).filter({ visible: true }).first();
+    if (!(await link.isVisible())) {
+      const moreRow = this.page.getByTestId(`admin-sidebar-more-${sectionKey}-btn`).filter({ visible: true }).first();
+      // The row toggles: clicking it while expanded ("Less") would hide the link instead.
+      if ((await moreRow.getAttribute('aria-expanded')) === 'false') {
+        await moreRow.click();
+      }
+    }
+    await expect(link).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    return link;
   }
 
   async navigateToInviteCenter() {
     await this.expandUserOps();
-    await this.page.getByTestId('admin-invite-center-tab-btn').filter({ visible: true }).first().click();
+    await (await this.revealSidebarItem('admin-invite-center-tab-btn', 'people')).click();
     await expect(this.page.getByTestId('invite-center-codes-tab')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
@@ -178,15 +195,9 @@ export class AdminPage extends BasePage {
   }
 
   /** Pick an action from the profile header's More menu. */
-  private async clickProfileMenuItem(action: 'loginAs' | 'delete') {
+  private async clickProfileMenuItem(action: 'editProfile' | 'loginAs' | 'delete') {
     await this.page.getByTestId('user-profile-more-btn').click();
     await this.page.getByTestId(`user-profile-menu-${action}-item`).click();
-  }
-
-  async clickUserProfileButton(name: string) {
-    await this.openUserProfile(name);
-    await this.page.getByTestId('admin-user-profile-btn').click();
-    await expect(this.page.getByTestId('admin-profile-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
   // --- Login as User (profile page) ---
@@ -220,26 +231,26 @@ export class AdminPage extends BasePage {
     await confirmBtn.click();
   }
 
-  // --- Edit User Profile (AdminProfileModal) ---
+  // --- Edit profile (profile More menu) ---
 
-  async fillProfileField(label: string, value: string) {
-    const input = this.getProfileFieldByLabel(label);
-    await input.clear();
-    if (value) {
-      await input.fill(value);
-    }
+  /** Open the target user's profile, then pick "Edit profile" from the More menu. */
+  async openEditProfileDialog(name: string) {
+    await this.openUserProfile(name);
+    await this.clickProfileMenuItem('editProfile');
+    await expect(this.page.getByTestId('edit-profile-dialog')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
-  async saveProfileChanges() {
-    const saveBtn = this.page.getByTestId('profile-save-btn');
+  async fillEditProfileName(value: string) {
+    await this.fillMuiInput(this.page.getByTestId('edit-profile-dialog-name-input'), value);
+  }
+
+  /** Save stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH; the dialog closes on success. */
+  async saveEditProfile(reason = 'E2E profile edit regression guard') {
+    await this.page.getByTestId('edit-profile-dialog-reason-input').fill(reason);
+    const saveBtn = this.page.getByTestId('edit-profile-dialog-confirm-btn');
+    await expect(saveBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
     await saveBtn.click();
-    // Wait for save to complete (button re-enables after API response)
-    await expect(saveBtn).toBeEnabled({ timeout: TIMEOUTS.ACTION });
-  }
-
-  async closeModal() {
-    await this.page.getByTestId('modal-close-btn').click();
-    await expect(this.page.getByTestId('modal-close-btn')).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
+    await expect(this.page.getByTestId('edit-profile-dialog')).toBeHidden({ timeout: TIMEOUTS.ACTION });
   }
 
   // --- Delete User (profile More menu) ---

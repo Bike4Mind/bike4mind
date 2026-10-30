@@ -1,3 +1,5 @@
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
+import { toolModelRefusal } from '../../helpers/toolModelRefusal';
 import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
@@ -389,6 +391,9 @@ Please select a supported edit model in your image settings modal.`;
       if (background === 'transparent' && rejectsTransparentBackground(editModel)) {
         editModel = ImageModels.GPT_IMAGE_1_5;
       }
+      const refusal = await toolModelRefusal(context, await createToolModelAdmission(context), editModel, 'edit_image');
+      if (refusal) return refusal;
+
       // BFL and Gemini reject webp; only the OpenAI branch below sends the raw value.
       const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
       const prompt_upsampling = imageConfig?.prompt_upsampling ?? false;

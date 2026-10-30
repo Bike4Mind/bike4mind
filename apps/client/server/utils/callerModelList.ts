@@ -1,18 +1,22 @@
 import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import {
+  createModelAdmission,
   isFreeTierExempt,
   isFreeTierModel,
   isUnpricedTextModel,
   loadFreeTierAllowedModels,
+  loadModelConfigurations,
 } from '@bike4mind/services/llm/modelAdmission';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   getImageModelCapabilities,
   isImageModel,
+  isModelDeprecated,
   PAID_PLAN_ENTITLEMENT_KEY,
   type IUserDocument,
+  type ModelAccessLock,
   type ModelInfo,
   type SupersededModelInfo,
 } from '@bike4mind/common';
@@ -25,7 +29,12 @@ import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
  * The models one caller can use, shared by `GET /api/models` (internal shape, SPA + CLI) and
  * `GET /api/v1/models` (public projection) so the two can never disagree on which models exist.
  */
-export type CallerModelList = { models: ModelInfo[]; supersededModels: SupersededModelInfo[] };
+type CatalogModelList = { models: ModelInfo[]; supersededModels: SupersededModelInfo[] };
+
+/** `lockedModels`: paid-only models a free account sees but cannot select (see ModelInfo.access). */
+export type CallerModelList = CatalogModelList & { lockedModels: ModelInfo[] };
+
+const PAID_PLAN_LOCK: ModelAccessLock = { locked: true, reason: 'requires_paid_plan' };
 
 // Short floor for cross-tab / fresh page loads. The dominant repeat-open case is
 // already absorbed by useModelInfo's 1h client staleTime; this just bounds how
@@ -43,7 +52,7 @@ function withImageCapabilities(model: ModelInfo): ModelInfo {
   return { ...model, image: getImageModelCapabilities(model.id) };
 }
 
-async function buildCallerModelList(userId: string | null, enforceCredits: boolean): Promise<CallerModelList> {
+async function buildCallerModelList(userId: string | null, enforceCredits: boolean): Promise<CatalogModelList> {
   const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
 
@@ -76,25 +85,64 @@ async function holdsPaidPlan(user: IUserDocument): Promise<boolean> {
 
 /**
  * Same free-tier rule createModelAdmission refuses at call time (llm/modelAdmission.ts), applied after the
- * cache so a plan change or a gate toggle shows on the next load. An anonymous caller is left unfiltered:
- * it cannot call a model, so this list is not a gate for it. A failed allowlist read also lists unfiltered:
- * the picker is not the gate, call-time admission still enforces.
+ * cache so a plan change or a gate toggle shows on the next load. Paid-only models move from `models` to
+ * `lockedModels`; disabled and retired ones are dropped, since no upgrade unlocks them. An anonymous caller
+ * is left unfiltered: it cannot call a model, so this list is not a gate for it. A failed allowlist read
+ * also lists unfiltered: the picker is not the gate, call-time admission still enforces.
  */
-async function withoutPaidOnlyModels(list: CallerModelList, user: IUserDocument | null): Promise<CallerModelList> {
-  if (!user || isFreeTierExempt(user)) return list;
+async function withoutPaidOnlyModels(list: CatalogModelList, user: IUserDocument | null): Promise<CallerModelList> {
+  const unfiltered = { ...list, lockedModels: [] };
+  if (!user || isFreeTierExempt(user)) return unfiltered;
   let allowedModels: ReadonlySet<string> | undefined;
   try {
     allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
   } catch (error) {
     Logger.globalInstance.warn('callerModelList: free-tier allowlist read failed; listing unfiltered', { error });
-    return list;
+    return unfiltered;
   }
-  if (!allowedModels) return list;
-  if (await holdsPaidPlan(user)) return list;
-  const models = list.models.filter(model => isFreeTierModel(model.id, model, allowedModels));
+  if (!allowedModels) return unfiltered;
+  if (await holdsPaidPlan(user)) return unfiltered;
+  const models: ModelInfo[] = [];
+  const lockedModels: ModelInfo[] = [];
+  for (const model of list.models) {
+    if (isFreeTierModel(model.id, allowedModels)) models.push(model);
+    else if (!model.disabled && !isModelDeprecated(model)) lockedModels.push({ ...model, access: PAID_PLAN_LOCK });
+  }
   const offeredIds = new Set<string>(models.map(model => model.id));
   // An upgrade offer pointing at a paid-only model would only lead to a refusal.
-  return { models, supersededModels: list.supersededModels.filter(entry => offeredIds.has(entry.replacementId)) };
+  return {
+    models,
+    supersededModels: list.supersededModels.filter(entry => offeredIds.has(entry.replacementId)),
+    lockedModels,
+  };
+}
+
+/**
+ * The model for a request that names none: a free account whose default is paid-only starts on the first allowlisted
+ * text model (admin order) that admission accepts. Read failures propagate, as they do at call time.
+ */
+export async function resolveCallerDefaultModel(
+  defaultModel: string,
+  user: IUserDocument,
+  logger: { log: (message: string) => void }
+): Promise<string> {
+  if (isFreeTierExempt(user)) return defaultModel;
+  const allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
+  if (!allowedModels || allowedModels.has(defaultModel)) return defaultModel;
+  const entitlements = await getUserEntitlements(toEntitlementUser(user));
+  if (entitlements.includes(PAID_PLAN_ENTITLEMENT_KEY)) return defaultModel;
+  const { models } = await getCachedCallerModelList(user.id, logger);
+  const admission = createModelAdmission({
+    user,
+    configs: await loadModelConfigurations(adminSettingsRepository),
+    getEntitlements: async () => entitlements,
+    models,
+    freeTierAllowedModels: allowedModels,
+  });
+  for (const id of allowedModels) {
+    if (models.some(model => model.id === id && model.type === 'text') && (await admission.admits(id))) return id;
+  }
+  return defaultModel;
 }
 
 export async function getCallerModelList(
@@ -107,7 +155,7 @@ export async function getCallerModelList(
 async function getCachedCallerModelList(
   userId: string | null,
   logger: { log: (message: string) => void }
-): Promise<CallerModelList> {
+): Promise<CatalogModelList> {
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
   const enforceCredits = Boolean(getSettingsValue('enforceCredits', settings));
   // The flag is in the key so toggling enforceCredits takes effect immediately, not after the TTL.
@@ -116,7 +164,7 @@ async function getCachedCallerModelList(
   const cached = await cacheRepository.findOne({ key: cacheKey });
   if (cached) {
     logger.log(`Cache hit for key: ${cacheKey}`);
-    return cached.result as CallerModelList;
+    return cached.result as CatalogModelList;
   }
 
   logger.log(`Cache miss for key: ${cacheKey}`);

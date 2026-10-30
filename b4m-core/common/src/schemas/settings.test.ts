@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   ARTIFACT_EMISSION_PROMPT,
   settingsMap,
+  stageHiddenSettingKeys,
   publicSafeSettingKeys,
   userReadableSettingKeys,
   redactSettingSecrets,
@@ -1477,4 +1478,18 @@ describe('API rate limit settings floor', () => {
       expect(settingsMap[key].schema.safeParse(1.5).success).toBe(false);
     }
   );
+});
+
+describe('stageHiddenSettingKeys', () => {
+  it('hides the deprecated drip settings and preview test mode on production stages', () => {
+    expect(stageHiddenSettingKeys(true).sort()).toEqual([
+      'signupGrantActivityMinDays',
+      'signupGrantActivityMinMessages',
+      'signupGrantActivityPreviewTestMode',
+    ]);
+  });
+
+  it('hides nothing elsewhere', () => {
+    expect(stageHiddenSettingKeys(false)).toEqual([]);
+  });
 });

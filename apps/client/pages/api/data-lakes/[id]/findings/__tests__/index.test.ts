@@ -166,6 +166,19 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
     expect(json).toHaveBeenCalledWith({ data: [{ ...rows[0], supersededFabFileIds: [] }], hasMore: false });
   });
 
+  it('strips undeclared fields from each row, keeping supersededFabFileIds and hasMore', async () => {
+    h.listByLake.mockResolvedValue([
+      { id: 'f1', kind: 'expired-claim', _id: 'raw-object-id', __v: 7, notInSchema: 'secret' },
+    ]);
+
+    const { json, done } = invoke();
+    await done;
+
+    const [body] = json.mock.calls[0];
+    expect(body.hasMore).toBe(false);
+    expect(body.data).toEqual([{ id: 'f1', kind: 'expired-claim', supersededFabFileIds: [] }]);
+  });
+
   it('marks which cited files of an open finding are superseded in the resolved lake', async () => {
     // `c` is cited only by the closed row and `d` only by the second open row, so a dropped
     // open-only filter (c reaches the lookup) and a page-wide mapping (f1 would also get `d`) both fail.

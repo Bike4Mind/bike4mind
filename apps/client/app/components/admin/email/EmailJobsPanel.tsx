@@ -72,9 +72,9 @@ export default function EmailJobsPanel() {
 
   const getRecipientTypeLabel = (filter: any): string => {
     if (filter?.specificEmails?.length) return `${filter.specificEmails.length} Specific`;
-    if (filter?.allUsers && filter?.allSubscribers) return 'Users & Subscribers';
+    if (filter?.allUsers && filter?.allSubscribers) return 'All users and waitlist';
     if (filter?.allUsers) return 'Users';
-    if (filter?.allSubscribers || filter?.all) return 'Subscribers';
+    if (filter?.allSubscribers || filter?.all) return 'Waitlist';
     return 'Custom';
   };
 

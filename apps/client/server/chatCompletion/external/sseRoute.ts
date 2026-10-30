@@ -62,6 +62,7 @@ import {
   type CompletionQuotaGrant,
 } from '@server/utils/untrustedCompletionQuota';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -289,6 +290,17 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       if (authResult.method === 'apiKey') {
         apiKeyInfo = authResult.apiKeyInfo;
+        // Register before admission so authenticated rejections count as requests too.
+        logApiKeyUsageOnResponse({
+          req,
+          res,
+          apiKey: apiKeyInfo,
+          endpoint: COMPLETIONS_ENDPOINT,
+          source,
+          startTime,
+          logger,
+          track,
+        });
         logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
         await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
           userId: apiKeyInfo.userId,
@@ -369,6 +381,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         // Correlation id for the usage-event dual write (synthesized downstream if absent).
         requestId,
         source,
+        sessionId: body.sessionId,
         logger,
         onReady,
         onChunk: async (text, info) => {

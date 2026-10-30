@@ -33,6 +33,7 @@ const {
   mockProcess,
   mockGetSettingsMap,
   mockResolveDefaultChatModel,
+  mockResolveCallerDefaultModel,
   mockIsChatModelUsable,
   mockTryIncrement,
   mockResolveUserRateLimitPerMin,
@@ -56,6 +57,7 @@ const {
   mockProcess: vi.fn(),
   mockGetSettingsMap: vi.fn(),
   mockResolveDefaultChatModel: vi.fn(),
+  mockResolveCallerDefaultModel: vi.fn(async (model: string) => model),
   mockIsChatModelUsable: vi.fn(),
   mockTryIncrement: vi.fn(),
   mockResolveUserRateLimitPerMin: vi.fn(),
@@ -133,11 +135,19 @@ vi.mock('@server/utils/userRateTier', () => ({
 // their edges. getSettingsValue stays real (with {} it falls back to the default
 // model). SQSService is inert; the tokenizer/default-options are irrelevant to
 // the async response.
+const { mockOptionsFindUser, mockProcessOptions } = vi.hoisted(() => ({
+  mockOptionsFindUser: vi.fn(),
+  mockProcessOptions: vi.fn(),
+}));
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
-  getDefaultChatCompletionOptions: () => ({}),
+  getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
   resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),
   isChatModelUsable: (...a: unknown[]) => mockIsChatModelUsable(...a),
+}));
+// Passthrough: the free-tier default fallback has its own tests (server/utils/callerModelList.test.ts).
+vi.mock('@server/utils/callerModelList', () => ({
+  resolveCallerDefaultModel: (...a: unknown[]) => mockResolveCallerDefaultModel(...a),
 }));
 
 // Only the data dependencies of the real apiKeyAuth middleware and the chat
@@ -168,6 +178,9 @@ vi.mock('@bike4mind/services/llm', async orig => {
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
   class MockChatCompletionProcess {
+    constructor(options: unknown) {
+      mockProcessOptions(options);
+    }
     pipelinePhases = undefined;
     get terminalError() {
       return mockTerminalError.value;
@@ -416,6 +429,23 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
   });
 
+  it.each([
+    ['withholds', [ApiKeyScope.AI_CHAT], false],
+    ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], true],
+  ] as const)(
+    '%s the admin role from a wait=true tool that re-reads the owner, for a key with scopes %j',
+    async (_, scopes, expected) => {
+      validateWithScopes([...scopes]);
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      const { users } = (
+        mockProcessOptions.mock.calls[0][0] as { db: { users: { findById: (id: string) => unknown } } }
+      ).db;
+      mockOptionsFindUser.mockResolvedValueOnce({ id: 'user-1', isAdmin: true });
+      expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(expected);
+    }
+  );
+
   describe.each([
     {
       name: 'a retired id is swapped for its successor',
@@ -600,6 +630,35 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(res._getStatusCode()).toBe(200);
       expect(mockTryIncrement).not.toHaveBeenCalled();
     });
+  });
+
+  it('starts a model-less request on the caller-specific default when it differs from the admin default', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockResolveDefaultChatModel.mockResolvedValueOnce({ model: 'admin-default' });
+    mockResolveCallerDefaultModel.mockResolvedValueOnce('allowlisted-model');
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res.statusCode).toBeLessThan(300);
+    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith(
+      'admin-default',
+      expect.objectContaining({ id: 'user-1' }),
+      expect.anything()
+    );
+    expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
+      'allowlisted-model'
+    );
+  });
+
+  it('treats a whitespace-only model as model-less and starts on the default', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockResolveDefaultChatModel.mockResolvedValueOnce({ model: 'admin-default' });
+    mockResolveCallerDefaultModel.mockResolvedValueOnce('admin-default');
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', model: '   ' } });
+    await handler(req, res);
+    expect(res.statusCode).toBeLessThan(300);
+    expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
+      'admin-default'
+    );
   });
 
   it('returns 400 when the resolved default chat model is unusable (self-host, no key, no local model)', async () => {
@@ -1235,6 +1294,7 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       type: 'error',
       reply: 'You do not have access to this session',
       replies: [],
+      createdAt: new Date('2026-08-03T00:00:00Z'),
     });
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
     await handler(req, res);
@@ -1248,7 +1308,10 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
   });
 
   it('returns the prompt text when includeSystemPrompt is set', async () => {
-    const TEXT = { blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false }] };
+    const TEXT = {
+      blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false, placement: 'system' }],
+      sizeCapped: false,
+    };
     mockSystemPromptText.value = TEXT;
     const { req, res } = fire({
       body: { message: 'hello', sessionId: 'sess-1', wait: true, includeSystemPrompt: true },
@@ -1256,6 +1319,26 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().promptText).toEqual(TEXT);
+  });
+
+  it('sends a wait reply the contract declares in full, with every optional field present', async () => {
+    mockSystemPromptText.value = {
+      blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false, placement: 'system' }],
+      sizeCapped: false,
+    };
+    const warn = vi.spyOn(Logger.resetMetadata(), 'warn');
+    const { req, res } = fire({
+      body: {
+        message: 'hello',
+        sessionId: 'sess-1',
+        wait: true,
+        includeSystemPrompt: true,
+        includePromptDetails: true,
+      },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(warn.mock.calls.filter(([message]) => String(message).startsWith('[contract]'))).toEqual([]);
   });
 
   it('omits the prompt text without the flag, so the text is never returned unasked', async () => {
@@ -1489,7 +1572,14 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       mockReleaseReservedCredits.mockResolvedValue(undefined);
       mockSendStatusUpdate.mockReset().mockResolvedValue(undefined);
       // A turn still mid-flight when the deadline fires: nothing streamed yet.
-      mockInvoke.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
+      mockInvoke.mockResolvedValue({
+        id: 'quest-2',
+        status: 'running',
+        type: 'message',
+        reply: '',
+        replies: [],
+        createdAt: new Date('2026-08-03T00:00:00Z'),
+      });
     });
     afterEach(() => {
       waitTurnLimits.budgetMs = 45_000;

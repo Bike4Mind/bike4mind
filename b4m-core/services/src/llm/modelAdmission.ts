@@ -10,10 +10,10 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue, isModelAccessible } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { AI_ACCESS_REVOKED_MESSAGE, isAiAccessRevoked } from '../userService/accountState';
+import { aiAccessDeniedMessage, type AiAccessStateFields } from '../userService/accountState';
 
 export type ModelAdmissionInput = {
-  user: { isAdmin?: boolean | null; tags?: string[] | null; isModerated?: boolean | null };
+  user: AiAccessStateFields & { isAdmin?: boolean | null; tags?: string[] | null };
   /** The llmModelConfigurations admin setting. */
   configs: LLMModelConfig[];
   getEntitlements?: () => Promise<string[]>;
@@ -23,7 +23,7 @@ export type ModelAdmissionInput = {
   enforceCredits?: boolean;
   /**
    * The free-tier allowlist from loadFreeTierAllowedModels; undefined when the gate is off. While set,
-   * a text model outside it needs the PAID_PLAN_ENTITLEMENT_KEY entitlement (admins and developers exempt).
+   * a model of any modality outside it needs the PAID_PLAN_ENTITLEMENT_KEY entitlement (admins and developers exempt).
    */
   freeTierAllowedModels?: ReadonlySet<string>;
 };
@@ -53,26 +53,23 @@ export async function loadModelConfigurations(
 }
 
 /**
- * The text models a free account may call, or undefined when the free-tier gate is off. The Default API
- * Model is always included so a free account is never left with no model to chat on. A read failure
- * propagates: this gate fails closed.
+ * The models a free account may call, across all modalities and in admin order, or undefined when the gate is off.
+ * A read failure propagates: this gate fails closed. The Default API Model is not added (see
+ * resolveCallerDefaultModel in apps/client/server/utils/callerModelList.ts).
  */
 export async function loadFreeTierAllowedModels(
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>
 ): Promise<ReadonlySet<string> | undefined> {
   const settings = await getSettingsMap(
     { adminSettings },
-    { names: ['freeTierModelGateEnabled', 'freeTierAllowedModels', 'DefaultAPIModel'] }
+    { names: ['freeTierModelGateEnabled', 'freeTierAllowedModels'] }
   );
   if (getSettingsValue('freeTierModelGateEnabled', settings) !== true) return undefined;
-  const allowed = new Set(getSettingsValue('freeTierAllowedModels', settings) ?? []);
-  const defaultModel = getSettingsValue('DefaultAPIModel', settings);
-  if (defaultModel) allowed.add(defaultModel);
-  return allowed;
+  return new Set(getSettingsValue('freeTierAllowedModels', settings) ?? []);
 }
 
 /** Whether an admission error is the free-tier refusal, as opposed to any other reason a model is refused. */
-export function isModelRequiresSubscriptionError(error: unknown): boolean {
+export function isModelRequiresSubscriptionError(error: unknown): error is ForbiddenError {
   if (!(error instanceof ForbiddenError)) return false;
   return error.additionalInfo?.errorCode === MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE;
 }
@@ -83,15 +80,10 @@ export function isFreeTierExempt(user: Pick<ModelAdmissionInput['user'], 'isAdmi
 }
 
 /**
- * Whether a free account may call the model. Only text models are gated; an id missing from the catalog
- * (`model` undefined) is gated as text so the gate never opens on an unknown model.
+ * Whether a free account may call the model, regardless of modality or catalog presence.
  */
-export function isFreeTierModel(
-  modelId: string,
-  model: Pick<ModelInfo, 'type'> | undefined,
-  allowedModels: ReadonlySet<string>
-): boolean {
-  return (model !== undefined && model.type !== 'text') || allowedModels.has(modelId);
+export function isFreeTierModel(modelId: string, allowedModels: ReadonlySet<string>): boolean {
+  return allowedModels.has(modelId);
 }
 
 /** A text model with no usable per-token price settles at $0, so it cannot run while credits are enforced. */
@@ -125,14 +117,15 @@ export function createModelAdmission({
       return [];
     }));
 
-  const requiresPaidPlan = async (modelId: string, model: ModelInfo | undefined): Promise<boolean> => {
+  const requiresPaidPlan = async (modelId: string): Promise<boolean> => {
     if (!freeTierAllowedModels || isFreeTierExempt(user)) return false;
-    if (isFreeTierModel(modelId, model, freeTierAllowedModels)) return false;
+    if (isFreeTierModel(modelId, freeTierAllowedModels)) return false;
     return !(await resolveEntitlements()).includes(PAID_PLAN_ENTITLEMENT_KEY);
   };
 
   const assertAiAccess = (): void => {
-    if (isAiAccessRevoked(user)) throw new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE);
+    const message = aiAccessDeniedMessage(user);
+    if (message) throw new ForbiddenError(message);
   };
 
   const refusal = async (modelId: string): Promise<Error | null> => {
@@ -150,7 +143,7 @@ export function createModelAdmission({
         return new ForbiddenError(`Model "${modelId}" is not accessible and no fallback available`);
       }
     }
-    if (await requiresPaidPlan(modelId, model)) {
+    if (await requiresPaidPlan(modelId)) {
       if (entitlementReadFailed) {
         return new ServiceUnavailableError(`Could not verify your plan for model "${modelId}". Please try again.`);
       }

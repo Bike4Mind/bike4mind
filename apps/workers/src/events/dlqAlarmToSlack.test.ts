@@ -60,7 +60,7 @@ describe('dlqAlarmToSlack handler', () => {
     expect(init.method).toBe('POST');
     const body = JSON.parse(init.body as string);
     expect(body.text).toContain('Test alarm');
-    expect(JSON.stringify(body.blocks)).toContain(':small_blue_diamond: dev alarm: Test alarm');
+    expect(JSON.stringify(body.blocks)).toContain(':small_blue_diamond: staging alarm: Test alarm');
     expect(JSON.stringify(body.attachments)).toContain('Test alarm description');
     expect(JSON.stringify(body.attachments)).toContain('bike4mind-dev-test-alarm');
   });

@@ -74,6 +74,7 @@ import {
   REPLY_CHOICES_GUIDANCE,
   NARRATED_TOOL_CALL_NOTICE,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
+  getTextModelCost,
   type IMessage,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -6589,6 +6590,105 @@ describe('ChatCompletionProcess', () => {
       expect(usageEventsRecord).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'refusal' }));
     });
 
+    // A timed-out stream rejects before reporting usage, and the fallback's settlement only prices
+    // its own attempt, so the prompt the provider billed for the cut stream gets its own unbilled row.
+    it('records the prompt usage of a timed-out attempt as an unbilled timeout row before falling back', async () => {
+      const usage = { inputTokens: 1000, cacheReadInputTokens: 2000, cacheCreationInputTokens: 400 };
+      const { usageEventsRecord, fallbackModel } = arrangeUsageEventScenario({
+        enforceCredits: true,
+        primaryComplete: async () => {
+          throw createAnthropicStreamTimeoutError('stream_idle', 1_280_000, { keepalive: true, usage });
+        },
+      });
+
+      await runUsageEventScenario();
+
+      expect(usageEventsRecord).toHaveBeenCalledTimes(2);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ model: fallbackModel.id, status: 'ok' })
+      );
+      const timeoutRow = usageEventsRecord.mock.calls.find(([event]) => event.status === 'timeout')?.[0];
+      expect(timeoutRow).toMatchObject({
+        requestId: mockQuest.id,
+        model: ChatModels.GPT4,
+        provider: ModelBackend.OpenAI,
+        inputTokens: 0,
+        outputTokens: 0,
+        providerInputTokens: 1000,
+        cachedInputTokens: 2000,
+        cacheWriteTokens: 400,
+        creditsCharged: 0,
+      });
+      const [primaryModel] = await mockedGetAvailableModels.mock.results[0].value;
+      expect(timeoutRow.costUsd).toBeGreaterThan(0);
+      expect(timeoutRow.costUsd).toBeCloseTo(getTextModelCost(primaryModel, 1000, 0, 2000, 400, 3400), 12);
+    });
+
+    it('records a timeout that ends the turn once, with nothing charged for it', async () => {
+      const { usageEventsRecord } = arrangeUsageEventScenario({
+        enforceCredits: true,
+        primaryComplete: async () => {
+          throw createAnthropicStreamTimeoutError('stream_idle', 1_280_000, {
+            keepalive: true,
+            usage: { inputTokens: 1000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+          });
+        },
+      });
+      mockedGetLlmWithFallback.mockResolvedValue(null);
+
+      await runUsageEventScenario().catch(() => undefined);
+
+      const timeoutRows = usageEventsRecord.mock.calls.filter(([event]) => event.status === 'timeout');
+      expect(timeoutRows).toHaveLength(1);
+      expect(timeoutRows[0][0]).toMatchObject({
+        model: ChatModels.GPT4,
+        inputTokens: 0,
+        providerInputTokens: 1000,
+        settledBasis: 'provider',
+        creditsCharged: 0,
+      });
+      expect(usageEventsRecord).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'ok' }));
+    });
+
+    it('prices the output of completed tool rounds on the timeout row', async () => {
+      const usage = { inputTokens: 1000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 700 };
+      const { usageEventsRecord } = arrangeUsageEventScenario({
+        enforceCredits: true,
+        primaryComplete: async () => {
+          throw createAnthropicStreamTimeoutError('stream_idle', 1_280_000, { keepalive: true, usage });
+        },
+      });
+
+      await runUsageEventScenario();
+
+      const timeoutRow = usageEventsRecord.mock.calls.find(([event]) => event.status === 'timeout')?.[0];
+      expect(timeoutRow).toMatchObject({ outputTokens: 0, providerInputTokens: 1000, providerOutputTokens: 700 });
+      const [primaryModel] = await mockedGetAvailableModels.mock.results[0].value;
+      expect(timeoutRow.costUsd).toBeCloseTo(getTextModelCost(primaryModel, 1000, 700, 0, 0, 1000), 12);
+    });
+
+    it('still answers from the fallback when the timeout row fails to write', async () => {
+      const { usageEventsRecord, fallbackModel } = arrangeUsageEventScenario({
+        enforceCredits: true,
+        primaryComplete: async () => {
+          throw createAnthropicStreamTimeoutError('stream_idle', 1_280_000, {
+            keepalive: true,
+            usage: { inputTokens: 1000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+          });
+        },
+      });
+      usageEventsRecord.mockImplementation(async event =>
+        event.status === 'timeout' ? Promise.reject(new Error('ledger down')) : null
+      );
+
+      await runUsageEventScenario();
+
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ model: fallbackModel.id, status: 'ok' })
+      );
+      expect((mockQuest.replies ?? []).join('')).toContain('Hello from the fallback');
+    });
+
     it('records no refusal row when enforceCredits is off', async () => {
       const { usageEventsRecord } = arrangeUsageEventScenario({
         enforceCredits: false,
@@ -6837,10 +6937,7 @@ describe('ChatCompletionProcess', () => {
         expect(event).not.toHaveProperty('turnUsage');
       });
 
-      it('rates local-estimate cache reads at the folded multiplier the charge used', async () => {
-        // The local branch bills cache reads inside the input term at CACHE_READ_MULTIPLIER and
-        // bills no cache writes; stamping the tier's own cacheRead would recompute to a charge
-        // ~9x the one made.
+      it('rates local-estimate cache reads at the default multiplier when the tier publishes none', async () => {
         const event = await settle({ cacheReadInputTokens: 40 });
         expect(event.settledBasis).toBe('local');
         expect(event.cachedInputTokens).toBe(40);
@@ -6849,6 +6946,29 @@ describe('ChatCompletionProcess', () => {
           cacheRead: (2 / 1_000_000) * 0.1,
           cacheWrite: 0,
         });
+      });
+
+      it('bills and stamps local-estimate cache reads at the tier published cache_read', async () => {
+        // A published cache_read below 0.1x input (Claude Opus 5.5 is 0.05x) must not be
+        // replaced by the default multiplier just because the provider reported no output.
+        const published = 0.05 * (2 / 1_000_000);
+        const event = await settle(
+          { cacheReadInputTokens: 40 },
+          {
+            pricing: {
+              200000: { input: 2 / 1_000_000, output: 12 / 1_000_000, cache_read: published },
+              1_000_000: { input: 4 / 1_000_000, output: 18 / 1_000_000 },
+            },
+          }
+        );
+        expect(event.settledBasis).toBe('local');
+        expect(event.rates).toMatchObject({ ...LOW, cacheRead: published, cacheWrite: 0 });
+        const r = event.rates;
+        const uncachedInput = event.inputTokens - event.cachedInputTokens;
+        expect(event.costUsd).toBeCloseTo(
+          r.input * uncachedInput + r.output * event.outputTokens + r.cacheRead * event.cachedInputTokens,
+          15
+        );
       });
 
       it('writes turnUsage with each turn tier for a multi-turn completion', async () => {
@@ -12068,6 +12188,50 @@ describe('ChatCompletionProcess', () => {
       expect(mockedGetLlmWithFallback).toHaveBeenCalledTimes(1);
       expect(mockedGetLlmWithFallback.mock.calls[0][5]).toMatchObject({ forceSwitch: true });
       expect(fallbackBackend.complete).toHaveBeenCalledTimes(1);
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({ replies: ['Hello from fallback'], status: 'done', type: 'message' })
+      );
+    });
+
+    it('falls back without a same-model retry when the stream was cut while the model was still generating', async () => {
+      setupStreamIdleTimeoutMocks();
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      const primaryComplete = vi
+        .fn()
+        .mockRejectedValue(createAnthropicStreamTimeoutError('stream_idle', 1_280_000, { keepalive: true }));
+      mockedGetLlmByModel.mockReturnValue({
+        complete: primaryComplete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackBackend = {
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['Hello from fallback']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-sonnet-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({
+        model: { ...modelInfo, id: 'claude-sonnet-4-8', name: 'Claude Sonnet 4.8', backend: ModelBackend.Anthropic },
+        backend: fallbackBackend,
+        attempt: 1,
+      } as unknown as Awaited<ReturnType<typeof getLlmWithFallback>>);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(primaryComplete).toHaveBeenCalledTimes(1);
+      expect(mockedGetLlmWithFallback).toHaveBeenCalledTimes(1);
+      expect(mockedGetLlmWithFallback.mock.calls[0][5]).toMatchObject({ forceSwitch: true });
+      expect(service.sendStatusUpdate).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'AI service is slow, retrying...',
+        expect.anything()
+      );
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({ replies: ['Hello from fallback'], status: 'done', type: 'message' })
       );

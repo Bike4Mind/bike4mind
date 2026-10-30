@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '@bike4mind/local-models';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ServerCredentialsError, ServerUnreachableError } from './errors';
-import { ModelServerRegistry } from './ModelServerRegistry';
+import type { ChatModelOption } from '@shared/chat';
+import type { ModelServerProbeResult } from '@shared/modelServers';
+import { ModelServerRegistry, PICKER_CHECK_WAIT_MS } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
 import type { ServerEndpoint } from './serverFetch';
 
@@ -30,11 +32,17 @@ const json = (body: unknown, status = 200) =>
 
 type Handler = (path: string, credentials: Record<string, string> | null) => Response | Promise<Response>;
 
-/** An Ollama that answers on every origin; `down` and `wantToken` change how it answers. */
+/** An Ollama that answers on every origin; `down`, `forbidden` and `wantToken` change how it answers. */
 function fakeOllama(models = ['qwen2.5:0.5b']) {
-  const state = { down: new Set<string>(), wantToken: null as string | null };
+  const state = {
+    down: new Set<string>(),
+    forbidden: false,
+    wantToken: null as string | null,
+    versionGate: null as Promise<void> | null,
+  };
   const calls: { origin: string; path: string; credentials: Record<string, string> | null }[] = [];
   const handler: Handler = (path, credentials) => {
+    if (state.forbidden) return new Response('', { status: 403 });
     if (state.wantToken && credentials?.authorization !== `Bearer ${state.wantToken}`)
       return json({ error: 'unauthorized' }, 401);
     if (path === '/api/version') return json({ version: '0.12.0' });
@@ -51,12 +59,16 @@ function fakeOllama(models = ['qwen2.5:0.5b']) {
       const credentials = endpoint.credentialHeaders();
       calls.push({ origin: url.origin, path: url.pathname, credentials });
       if (state.down.has(url.origin)) throw new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+      if (url.pathname === '/api/version') await state.versionGate;
       return handler(url.pathname, credentials);
     };
   return { state, calls, fetchFor };
 }
 
-function registry(fake: ReturnType<typeof fakeOllama>, resolve: Record<string, string[]> = {}) {
+function registry(
+  fake: ReturnType<typeof fakeOllama>,
+  resolve: Record<string, string[]> | ((host: string) => Promise<string[]>) = {}
+) {
   const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
   const changed = vi.fn();
   const instance = new ModelServerRegistry({
@@ -65,7 +77,7 @@ function registry(fake: ReturnType<typeof fakeOllama>, resolve: Record<string, s
     changed,
     fetchFor: fake.fetchFor,
     localFetch: async () => json({ version: '0.12.0' }),
-    resolve: async host => resolve[host] ?? [],
+    resolve: typeof resolve === 'function' ? resolve : async host => resolve[host] ?? [],
   });
   return { registry: instance, store, changed };
 }
@@ -91,6 +103,55 @@ describe('ModelServerRegistry', () => {
       unencrypted: true,
       health: { state: 'online', version: '0.12.0' },
     });
+  });
+
+  it('saves entered hardware for a server and for this computer, and says when this computer changed', async () => {
+    const fake = fakeOllama();
+    const file = memoryFile();
+    const quiet = { debug: () => undefined, warn: () => undefined };
+    const localSpecsChanged = vi.fn();
+    const servers = new ModelServerRegistry({
+      store: new ModelServerStore(cipher, file, quiet),
+      logger: { debug: () => undefined, warn: () => undefined },
+      fetchFor: fake.fetchFor,
+      localFetch: async () => json({ version: '0.12.0' }),
+      resolve: async () => [],
+      localSpecsChanged,
+    });
+    const saved = vi.fn();
+    servers.onServerSaved(saved);
+    const [, added] = await servers.add({
+      address: 'http://192.168.1.20:11434',
+      credential: none,
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    const specs = { ramGiB: 64, gpuMemoryGiB: 24, bandwidthGBps: 1008, unified: false };
+
+    const views = await servers.update(added.id, { specs });
+    expect(views[1].specs).toEqual(specs);
+    expect(servers.specs(added.id)).toEqual(specs);
+    expect(saved).toHaveBeenLastCalledWith(added.id);
+    expect(localSpecsChanged).not.toHaveBeenCalled();
+
+    const local = { ...specs, gpuMemoryGiB: null };
+    expect((await servers.update('local', { specs: local }))[0].specs).toEqual(local);
+    expect(servers.specs('local')).toEqual(local);
+    expect(saved).toHaveBeenLastCalledWith('local');
+    expect(localSpecsChanged).toHaveBeenCalledTimes(1);
+    await expect(servers.update('local', { name: 'mine' })).rejects.toThrow('no other settings');
+
+    // A restart reads this computer's specs back and says so, since sizing may have run on the probe alone.
+    const restarted = vi.fn();
+    const again = new ModelServerRegistry({
+      store: new ModelServerStore(cipher, file, quiet),
+      logger: quiet,
+      fetchFor: fake.fetchFor,
+      localSpecsChanged: restarted,
+    });
+    expect((await again.views())[0].specs).toEqual(local);
+    expect(restarted).toHaveBeenCalledTimes(1);
   });
 
   it('detects Ollama by what it answers and marks plain http on a private address unencrypted', async () => {
@@ -162,6 +223,131 @@ describe('ModelServerRegistry', () => {
     expect(probe).toMatchObject({ ok: false, needsCredentials: true });
   });
 
+  it("refuses this computer's own Ollama address before sending anything", async () => {
+    const fake = fakeOllama();
+    const { registry: servers, store } = registry(fake);
+    for (const address of [
+      'http://127.0.0.1:11434',
+      '127.0.0.1:11434',
+      'localhost:11434',
+      'http://localhost.:11434',
+      'http://[::1]:11434/',
+      '0.0.0.0:11434',
+      'http://[::ffff:127.0.0.1]:11434',
+    ]) {
+      const probe = await servers.probe({ address, credential: none });
+      expect(probe).toMatchObject({ ok: false, address: null });
+      expect(probe.error).toMatch(/is This computer, which is already listed.*different local port/);
+    }
+    await expect(
+      servers.add({ address: '127.0.0.1:11434', credential: none, name: 'tunnel', kind: 'ollama', access: 'chat' })
+    ).rejects.toThrow(/This computer/);
+    expect(fake.calls).toHaveLength(0);
+    expect(await store.list()).toHaveLength(0);
+    expect((await servers.probe({ address: '127.0.0.1:21434', credential: none })).ok).toBe(true);
+  });
+
+  it('keeps the session-only message through the first picker load after a restart', async () => {
+    const fake = fakeOllama();
+    fake.state.wantToken = TOKEN;
+    const file = memoryFile();
+    const noKeyring: SecretCipher = { ...cipher, isEncryptionAvailable: () => false };
+    const silent = { debug: () => undefined, warn: () => undefined };
+    await new ModelServerStore(noKeyring, file, silent).add(
+      {
+        name: 'gpu box',
+        kind: 'ollama',
+        transport: { type: 'http', baseUrl: 'http://127.0.0.2:11434' },
+        access: 'chat',
+      },
+      { type: 'bearer', token: TOKEN }
+    );
+    const servers = new ModelServerRegistry({
+      store: new ModelServerStore(noKeyring, file, silent),
+      logger: silent,
+      fetchFor: fake.fetchFor,
+      localFetch: async () => json({ version: '0.12.0' }),
+      resolve: async () => [],
+    });
+    const [model] = await servers.models();
+    expect(fake.calls).toHaveLength(0);
+    expect(model).toBeUndefined();
+    const view = (await servers.views())[1];
+    expect(view.health.state).toBe('credentials');
+    expect(view.health.error).toMatch(/kept only until Desktop quit/);
+  });
+
+  describe('a server that answers 403', () => {
+    const notCredentials = /credential|token/i;
+
+    it('reports the refusal when testing the address, without asking for credentials', async () => {
+      const fake = fakeOllama();
+      fake.state.forbidden = true;
+      const { registry: servers } = registry(fake);
+      const probe = await servers.probe({ address: 'http://127.0.0.2:11434', credential: none });
+      expect(probe).toMatchObject({ ok: false, needsCredentials: false });
+      expect(probe.error).toMatch(/127\.0\.0\.2 answered 403 Forbidden/);
+      expect(probe.error).not.toMatch(notCredentials);
+      expect(probe.error).toMatch(/If this server needs an API key, enter it and test again/);
+
+      const withKey = await servers.probe({
+        address: 'http://127.0.0.2:11434',
+        credential: { type: 'bearer', token: TOKEN },
+      });
+      expect(withKey).toMatchObject({ ok: false, needsCredentials: false });
+      expect(withKey.error).not.toMatch(/needs an API key/);
+    });
+
+    it('marks a saved server with a credential refused on a check and a picker refresh', async () => {
+      const fake = fakeOllama();
+      fake.state.wantToken = TOKEN;
+      const { registry: servers } = registry(fake);
+      await servers.add({
+        address: 'http://127.0.0.2:11434',
+        credential: { type: 'bearer', token: TOKEN },
+        name: 'gpu box',
+        kind: 'ollama',
+        access: 'chat',
+      });
+      fake.state.forbidden = true;
+      const [model] = await servers.models();
+      const refreshed = (await servers.views())[1];
+      expect(refreshed.health.state).toBe('refused');
+      expect(refreshed.health.error).toMatch(/gpu box answered 403 Forbidden/);
+      expect(refreshed.health.error).not.toMatch(notCredentials);
+      expect(model.unavailable).toMatch(/gpu box was refused/);
+
+      const [, checked] = await servers.check();
+      expect(checked.health.state).toBe('refused');
+      expect(checked.health.error).toMatch(/gpu box answered 403 Forbidden/);
+      expect(checked.health.error).not.toMatch(notCredentials);
+    });
+
+    it('turns a 403 mid-chat into a refusal, not a request for new credentials', async () => {
+      const fake = fakeOllama();
+      const { registry: servers } = registry(fake);
+      await servers.add({
+        address: 'http://127.0.0.2:11434',
+        credential: none,
+        name: 'gpu box',
+        kind: 'ollama',
+        access: 'chat',
+      });
+      const [, saved] = await servers.views();
+      fake.state.forbidden = true;
+      const error = await servers
+        .chatFor(`srv-${saved.id}`)!
+        .stream(
+          { model: `local:srv-${saved.id}:qwen2.5:0.5b`, messages: [{ role: 'user', content: 'hi' }] },
+          () => undefined
+        )
+        .catch((err: unknown) => err);
+      expect(error).not.toBeInstanceOf(ServerCredentialsError);
+      expect((error as Error).message).toMatch(/gpu box answered 403 Forbidden/);
+      expect((await servers.views())[1].health.state).toBe('refused');
+    });
+  });
+
   it('keys models by server so two servers can offer the same model', async () => {
     const fake = fakeOllama();
     const { registry: servers } = registry(fake);
@@ -204,6 +390,118 @@ describe('ModelServerRegistry', () => {
     expect(model).toMatchObject({ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } });
     expect(model.unavailable).toMatch(/gpu box is unreachable/);
     expect((await servers.views())[1].health.state).toBe('unreachable');
+  });
+
+  it('lists an online server without waiting on a slow health check of it', async () => {
+    const fake = fakeOllama();
+    const { registry: servers } = registry(fake);
+    await servers.add({
+      address: 'http://127.0.0.2:11434',
+      credential: none,
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    let release: () => void = () => {};
+    fake.state.versionGate = new Promise(resolve => (release = resolve));
+    const checking = servers.check();
+    const listed = await Promise.race([
+      servers.models(),
+      new Promise(resolve => setTimeout(() => resolve('waited for the check'), 200)),
+    ]);
+    release();
+    await checking;
+    expect(listed).toMatchObject([{ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } }]);
+  });
+
+  it('gives up on a host name lookup that does not answer', async () => {
+    vi.useFakeTimers();
+    try {
+      const { registry: servers } = registry(fakeOllama(), () => new Promise(() => {}));
+      let probe: ModelServerProbeResult | null = null;
+      void servers.probe({ address: 'http://slow.example.test:11434', credential: none }).then(result => {
+        probe = result;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(probe).toMatchObject({ ok: false, error: expect.stringMatching(/Could not find slow\.example\.test/) });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lists a server not checked yet without waiting on its first check', async () => {
+    const fake = fakeOllama();
+    const { registry: servers, store } = registry(fake, () => new Promise(() => {}));
+    await store.add(
+      {
+        name: 'gpu box',
+        kind: 'ollama',
+        transport: { type: 'http', baseUrl: 'http://gpu.example.test:11434' },
+        access: 'manage',
+      },
+      none
+    );
+    void servers.start();
+    const listed = await Promise.race([
+      servers.models(),
+      new Promise(resolve => setTimeout(() => resolve('waited for the check'), 200)),
+    ]);
+    servers.stop();
+    expect(listed).toEqual([expect.objectContaining({ name: 'qwen2.5:0.5b', server: expect.anything() })]);
+    expect((listed as ChatModelOption[])[0].unavailable).toBeUndefined();
+  });
+
+  describe('a server shown as down with a check running', () => {
+    async function downServer() {
+      const fake = fakeOllama();
+      const { registry: servers } = registry(fake);
+      await servers.add({
+        address: 'http://127.0.0.2:11434',
+        credential: none,
+        name: 'gpu box',
+        kind: 'ollama',
+        access: 'manage',
+      });
+      fake.state.down.add('http://127.0.0.2:11434');
+      await servers.check();
+      fake.state.down.clear();
+      let release: () => void = () => {};
+      fake.state.versionGate = new Promise(resolve => (release = resolve));
+      const checking = servers.check();
+      return { servers, release, checking };
+    }
+
+    it('lists it as soon as that check finds it back', async () => {
+      const { servers, release, checking } = await downServer();
+      const listing = servers.models();
+      setTimeout(release, 20);
+      const [model] = await listing;
+      await checking;
+      expect(model).toMatchObject({ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } });
+      expect(model.unavailable).toBeUndefined();
+    });
+
+    it('lists its last models, disabled, when that check is slow', async () => {
+      const { servers, release, checking } = await downServer();
+      vi.useFakeTimers();
+      try {
+        let listed: ChatModelOption[] | null = null;
+        void servers.models().then(result => {
+          listed = result;
+        });
+        await vi.advanceTimersByTimeAsync(PICKER_CHECK_WAIT_MS);
+        expect(listed).toEqual([
+          expect.objectContaining({
+            name: 'qwen2.5:0.5b',
+            unavailable: expect.stringMatching(/gpu box is unreachable/),
+          }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+        release();
+        await checking;
+      }
+    });
   });
 
   it('sends the saved credential only through its own server fetch', async () => {

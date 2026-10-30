@@ -60,11 +60,13 @@ export interface INetworkMeta {
 
 export interface ISignupMeta extends INetworkMeta {
   capturedAt: Date;
+  /** Server-verified challenge proof; absent/null when skipped, unavailable, or a test secret was used. */
+  challengeVerified?: true | null;
 }
 
 /**
- * none and pending follow the score on every recompute; approved and banned are an admin's ruling
- * and a recompute never changes them.
+ * Scoring can move none to pending. Pending holds AI access until an admin decides;
+ * recomputing never clears pending or changes an approved/banned ruling.
  */
 export const SIGNUP_RISK_REVIEW_STATES = ['none', 'pending', 'approved', 'banned'] as const;
 export type SignupRiskReviewState = (typeof SIGNUP_RISK_REVIEW_STATES)[number];
@@ -327,6 +329,10 @@ export interface IUser extends ICreditHolder {
   /** Absent on accounts created before staged grants were enabled. */
   signupGrant?: SignupGrant;
   signupGrantAssessment?: SignupGrantAssessment;
+  /** Why free credits are being withheld; cleared when they are paid. */
+  signupGrantHeldReason?: 'budget_exhausted' | 'risk_review' | null;
+  /** When the signup tranche was last held for an exhausted daily budget. */
+  signupGrantHeldAt?: Date | null;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;
@@ -902,9 +908,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
     options?: { throttledUntil?: Date | null }
   ) => Promise<IUserDocument | null>;
   /**
-   * Store a recomputed risk score. `riskScore.reviewState` is only the proposal: an approved or
-   * banned state already stored is kept, in the same write, so an admin ruling made since the
-   * caller read the user is never undone.
+   * Store a recomputed risk score. Preserve pending holds and approved/banned rulings in the
+   * same write, so rescoring cannot clear a hold or undo a concurrent admin decision.
    */
   setRiskScore: (userId: string, riskScore: ISignupRiskScore) => Promise<void>;
   /**
@@ -912,6 +917,13 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * in id order; pass the last id back as `afterId` for the next page.
    */
   findRiskScoringCandidateIds: (since: Date, options: { afterId?: string; limit: number }) => Promise<string[]>;
+  /** Unbanned users whose risk review is pending, highest score first, at most `limit`. */
+  findPendingRiskReviews: (limit: number) => Promise<IUserDocument[]>;
+  /**
+   * Move a user's review from `from` to `to`, only if it is still `from`; false when it was not
+   * (already decided or no score). Used for admin approve and its undo.
+   */
+  setRiskReviewState: (userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState) => Promise<boolean>;
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores
    * the appeal text for admin review. Returns the updated user.

@@ -213,6 +213,17 @@ describe('streamCompletion', () => {
     expect(post.mock.calls[0][1]).toMatchObject({ max_tokens: 16_384 });
   });
 
+  it('sends the session id so the server ledger can tie the spend to the conversation', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+
+    const done = streamCompletion(instance, '/c', { ...REQUEST, sessionId: 'session-1' }, () => {});
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1]).toMatchObject({ sessionId: 'session-1' });
+  });
+
   it('asks for readable reasoning only when told to', async () => {
     const stream = new PassThrough();
     const { instance, post } = fakeAxios(stream);

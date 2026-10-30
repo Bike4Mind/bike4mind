@@ -1,5 +1,4 @@
 import {
-  IQuestMasterPlan,
   IQuestMasterPlanDocument,
   IQuestMasterPlanRepository,
   QuestMasterData,
@@ -16,7 +15,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
-export const QuestMasterDataSchema = new Schema<QuestMasterData>(
+export const QuestMasterDataSchema: Schema<QuestMasterData> = new Schema<QuestMasterData>(
   {
     id: { type: String, required: true },
     title: { type: String, required: true, maxlength: 500 },
@@ -55,7 +54,7 @@ export const QuestMasterDataSchema = new Schema<QuestMasterData>(
   { _id: false }
 );
 
-export const QuestMasterPlanSchema = new Schema<IQuestMasterPlan>(
+export const QuestMasterPlanSchema: Schema<IQuestMasterPlanDocument> = new Schema<IQuestMasterPlanDocument>(
   {
     notebookId: { type: String, required: true },
     goal: { type: String, required: true, maxlength: 2000 },
@@ -201,8 +200,8 @@ QuestMasterPlanSchema.index({ userId: 1, tags: 1 }); // Compound index for user 
 // Apply soft delete plugin for data safety
 QuestMasterPlanSchema.plugin(softDeletePlugin);
 
-export const QuestMasterPlan =
-  mongoose.models.QuestMasterPlan ?? mongoose.model('QuestMasterPlan', QuestMasterPlanSchema);
+export const QuestMasterPlan: Model<IQuestMasterPlanDocument> =
+  mongoose.models.QuestMasterPlan ?? mongoose.model<IQuestMasterPlanDocument>('QuestMasterPlan', QuestMasterPlanSchema);
 
 /**
  * Filter arms that keep a write to a plan the caller can still write: owner or sharedWith, and not

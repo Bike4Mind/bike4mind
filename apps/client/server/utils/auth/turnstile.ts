@@ -1,6 +1,7 @@
 import { settingsMap } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { Logger } from '@bike4mind/observability';
+import { Config, isDeployedStage } from '@bike4mind/server-utils/utils/config';
 import { isTurnstileSecretConfigured } from '@bike4mind/server-utils/utils/turnstile';
 
 export type TurnstilePolicy = {
@@ -10,6 +11,23 @@ export type TurnstilePolicy = {
   siteKey: string;
   secret: string;
 };
+
+export type TurnstileInactiveReason = 'secret-not-configured' | 'disabled' | 'site-key-empty';
+export const TURNSTILE_INACTIVE_LOG_INTERVAL_MS = 5 * 60_000;
+
+const logger = new Logger({ metadata: { service: 'turnstile' } });
+const lastInactiveWarning = new Map<TurnstileInactiveReason, number>();
+
+// The event name feeds the metric filter in infra/turnstileAlarms.ts, so it must stay in sync; one
+// request per interval per container is enough to keep that alarm raised.
+function warnPolicyInactive(reason: TurnstileInactiveReason): void {
+  if (!isDeployedStage()) return;
+  const now = Date.now();
+  const last = lastInactiveWarning.get(reason);
+  if (last !== undefined && now - last < TURNSTILE_INACTIVE_LOG_INTERVAL_MS) return;
+  lastInactiveWarning.set(reason, now);
+  logger.warn('turnstile-policy-inactive', { reason });
+}
 
 async function readSetting<K extends 'turnstileEnabled' | 'turnstileFailClosed' | 'turnstileSiteKey'>(key: K) {
   const row = await adminSettingsRepository.findBySettingName(key);
@@ -21,10 +39,12 @@ async function readSetting<K extends 'turnstileEnabled' | 'turnstileFailClosed' 
 export async function getTurnstilePolicy(): Promise<TurnstilePolicy> {
   const secret = Config.TURNSTILE_SECRET_KEY;
   if (!isTurnstileSecretConfigured(secret)) {
+    warnPolicyInactive('secret-not-configured');
     return { active: false, failClosed: false, siteKey: '', secret: '' };
   }
   const enabled = await readSetting('turnstileEnabled');
   if (enabled !== true) {
+    warnPolicyInactive('disabled');
     return { active: false, failClosed: false, siteKey: '', secret: '' };
   }
   const [failClosed, siteKey] = await Promise.all([
@@ -32,6 +52,7 @@ export async function getTurnstilePolicy(): Promise<TurnstilePolicy> {
     readSetting('turnstileSiteKey'),
   ]);
   const trimmedKey = String(siteKey ?? '').trim();
+  if (trimmedKey === '') warnPolicyInactive('site-key-empty');
   return {
     active: trimmedKey !== '',
     failClosed: failClosed === true,

@@ -76,11 +76,13 @@ describe('applyReplyDone', () => {
       done({
         content: 'x',
         stopReason: 'tool_turn_limit',
+        contextSnapshot: { model: 'test', inputTokens: 100, overhead: [] },
         artifacts: [{ id: 'a1', type: 'html', mimeType: 'text/html', title: 'Demo', content: '<b>hi</b>' }],
       })
     );
 
     expect(settled.stopReason).toBe('tool_turn_limit');
+    expect(settled.contextSnapshot?.inputTokens).toBe(100);
     expect(settled.artifacts).toHaveLength(1);
   });
 

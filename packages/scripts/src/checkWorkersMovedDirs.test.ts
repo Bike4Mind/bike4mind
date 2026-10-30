@@ -163,7 +163,11 @@ const MOVED_MODULES = [
       'getFirstIterationMementosPreamble',
     ],
   },
-  { from: 'apps/client/server/deepAgent', to: 'apps/workers/src/deepAgent', stems: ['missionChatTools'] },
+  {
+    from: 'apps/client/server/deepAgent',
+    to: 'apps/workers/src/deepAgent',
+    stems: ['missionChatTools', 'wakeHandler'],
+  },
   { from: 'apps/client/server/services', to: 'apps/workers/src/services', stems: ['secopsTriageService'] },
   { from: 'apps/client/server/modelDiscovery', to: 'apps/workers/src/modelDiscovery', stems: ['metrics'] },
   { from: 'apps/client/server/cli', to: 'apps/workers/src/cli', stems: ['defineLambdaRoute'] },
@@ -227,6 +231,7 @@ describe('directories and modules moved out of apps/client/server stay moved', (
         // infra/queues.ts; the Lambda Bundle Guard is path-filtered and skips infra/-only PRs.
         'apps/workers/src/queueHandlers/imageGeneration.dispatch',
         'apps/workers/src/queueHandlers/imageEdit.dispatch',
+        'apps/workers/src/deepAgent/wakeHandler.dispatch',
         // infra/emailMarketing.ts, which no other moved handler lives in.
         'apps/workers/src/queueHandlers/emailBatch.dispatch',
         'apps/workers/src/queueHandlers/dataLakeCleanup.dispatch',

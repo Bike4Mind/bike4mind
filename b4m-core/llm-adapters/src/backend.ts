@@ -168,6 +168,13 @@ export interface TurnTelemetrySink {
 
 export interface ICompletionOptions {
   maxTokens?: number;
+  /**
+   * Hard ceiling on the output budget sent to the provider, applied after any backend-side
+   * sizing that can raise maxTokens (the adaptive-thinking floor, a legacy thinking budget,
+   * Gemini's thinking reserve). Billing sets it so a round never costs more than the holder
+   * can pay; see completionCreditBudget in @bike4mind/services.
+   */
+  outputTokenCeiling?: number;
   temperature?: number;
   topP?: number;
   topK?: number;

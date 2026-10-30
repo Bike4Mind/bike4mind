@@ -92,5 +92,5 @@ Pagination controls appear above and below the invite table with the following o
 
 ## Related Articles
 
-- [Subscribers](./subscribers.md)
+- [Waitlist](./waitlist.md)
 - [Bulk Import](./bulk-import.md)

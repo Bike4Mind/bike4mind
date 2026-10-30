@@ -219,28 +219,22 @@ describe('creditService - addCredits', () => {
       });
     });
 
-    it('should use default description for generic_add when not provided', async () => {
-      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
-
-      const parameters: AddCreditsParameters = {
+    it.each([
+      ['missing', undefined],
+      ['blank', '   '],
+    ])('rejects a generic_add with a %s description instead of writing an unlabelled grant', async (_, description) => {
+      const parameters = {
         type: 'generic_add',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 25,
         reason: 'promotion',
-      };
+        description,
+      } as unknown as AddCreditsParameters;
 
-      await addCredits(parameters, mockAdapters);
-
-      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith('generic_add', {
-        ownerId: 'user1',
-        ownerType: CreditHolderType.User,
-        credits: 25,
-        description: 'Generic credit addition',
-        metadata: undefined,
-        reason: 'promotion',
-        userId: undefined,
-      });
+      await expect(addCredits(parameters, mockAdapters)).rejects.toThrow();
+      expect(mockCreditTransactionRepo.createTransaction).not.toHaveBeenCalled();
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
     });
 
     it('should pass transactionId to createTransaction for Zod passthrough verification', async () => {
@@ -248,6 +242,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 100,
@@ -355,6 +350,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'org1',
         ownerType: CreditHolderType.Organization,
         credits: 100,
@@ -368,7 +364,7 @@ describe('creditService - addCredits', () => {
         ownerId: 'org1',
         ownerType: CreditHolderType.Organization,
         credits: 100,
-        description: 'Generic credit addition',
+        description: 'Test grant',
         metadata,
         reason: 'promotion',
         userId: undefined,
@@ -382,6 +378,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 100,
@@ -403,6 +400,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 100,
@@ -425,6 +423,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 100,
@@ -466,6 +465,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'ghost',
         ownerType: CreditHolderType.User,
         credits: 100,
@@ -544,6 +544,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 50,
@@ -560,6 +561,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 100,

@@ -12,6 +12,7 @@ import {
 import { CreditHolderType, IUserDocument, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
 import { Resource } from 'sst';
+import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 
 type BackfillOptions = {
   dbUri: string;
@@ -148,6 +149,10 @@ class BackfillPendingFreeCredits {
             },
             reason: 'backfill: pending staged signup tranche',
             logger: console,
+            collectRiskSignals: createSignupGrantRiskCollector(),
+            emitRiskBand: async band => {
+              console.info(JSON.stringify({ message: `signup-grant-assessed-${band}` }));
+            },
           });
           if (!release.released) continue;
           await userRepository.clearPendingFreeCreditGrant(user.id);
@@ -170,6 +175,7 @@ class BackfillPendingFreeCredits {
               // this short-circuits to a net-zero increment instead of double-crediting.
               transactionId: `verify-grant:${user.id}`,
               reason: 'backfill: stranded by pre-c2c1b5e6 verify atomicity bug',
+              description: 'Signup credits (backfill)',
             },
             { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
           );

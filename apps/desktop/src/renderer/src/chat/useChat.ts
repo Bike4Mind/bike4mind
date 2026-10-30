@@ -818,7 +818,12 @@ export function useConversation(
         return base.map(message => {
           if (message.id !== event.messageId) return message;
           if (event.type === 'done') return applyReplyDone(message, event);
-          return { ...message, error: event.message, ...(event.stopReason ? { stopReason: event.stopReason } : {}) };
+          return {
+            ...message,
+            error: event.message,
+            contextSnapshot: event.contextSnapshot,
+            ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+          };
         });
       });
     });

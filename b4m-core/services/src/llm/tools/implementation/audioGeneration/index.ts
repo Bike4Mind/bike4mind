@@ -1,5 +1,9 @@
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
+import { toolModelRefusal } from '../../helpers/toolModelRefusal';
 import {
   ApiKeyType,
+  DEFAULT_SOUND_MODEL_ID,
+  TTS_DEFAULT_MODEL,
   AudioGenerationToolCall,
   extensionFromMimeType,
   type GeneratedAssetMetadata,
@@ -79,6 +83,8 @@ export const audioGenerationTool: ToolDefinition = {
       // so a caller that omits `kind` still gets a sensible result.
       const isSoundEffect = kind === 'sound_effect';
 
+      const admission = await createToolModelAdmission(context);
+
       if (isSoundEffect) {
         // Reject over-length input before any paid provider call, matching the bound the
         // direct /api/ai/sound-effects endpoint enforces (soundGeneration.ts). A crafted
@@ -100,6 +106,9 @@ export const audioGenerationTool: ToolDefinition = {
           // generic UNAVAILABLE_MESSAGE, which reads as "nothing works, try later".
           return 'Error: sound effects require an ElevenLabs API key; speech (kind="speech") is available.';
         }
+
+        const refusal = await toolModelRefusal(context, admission, DEFAULT_SOUND_MODEL_ID, 'audio_generation');
+        if (refusal) return refusal;
 
         const durationSeconds = toolDurationSeconds ?? audioConfig.durationSeconds ?? undefined;
 
@@ -198,6 +207,9 @@ export const audioGenerationTool: ToolDefinition = {
         format = format && VOICE_VENDOR_SUPPORTED_FORMATS[fallbackProvider].includes(format) ? format : undefined;
         apiKey = fallbackKey;
       }
+
+      const refusal = await toolModelRefusal(context, admission, TTS_DEFAULT_MODEL[provider], 'audio_generation');
+      if (refusal) return refusal;
 
       // Reject over-length input before the paid call, per the resolved provider's cap.
       if (text.length > TTS_MAX_INPUT_CHARS[provider]) {

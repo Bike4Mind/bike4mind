@@ -94,6 +94,10 @@ const projectService = vi.hoisted(() => ({
   removeNonExistentFiles: vi.fn(),
 }));
 vi.mock('@bike4mind/services', () => ({ projectService }));
+vi.mock('@server/sharing/revokedFileReferences', () => ({
+  projectRevokeCleanupTargets: vi.fn(async () => []),
+  cleanUpRevokedFileReferences: vi.fn(async () => {}),
+}));
 vi.mock('@bike4mind/database', () => ({
   Project: class Project {},
   projectRepository: { find: vi.fn(async () => [{ id: 'p1', name: 'Project' }]) },

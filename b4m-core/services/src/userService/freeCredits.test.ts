@@ -120,6 +120,7 @@ describe('free credits service', () => {
           type: 'generic_add',
           transactionId: 'verify-grant:user-1',
           reason: 'test grant',
+          description: 'Signup credits: test grant',
         }),
         expect.objectContaining({ db: expect.objectContaining({ creditLots: adapters.db.creditLots }) })
       );
@@ -136,6 +137,72 @@ describe('free credits service', () => {
       expect(addCreditsSpy).not.toHaveBeenCalled();
     });
 
+    it('neither holds nor draws the budget for an alias that earns nothing', async () => {
+      const adapters = buildAdapters('100');
+      const repository = { reserve: vi.fn(), refund: vi.fn(), markAlerted: vi.fn(), getSpent: vi.fn() };
+      repository.reserve.mockResolvedValue(null);
+      adapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => ({
+        settingValue: name === 'signupGrantDailyBudget' ? '50' : '100',
+      }));
+      adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
+      const users = Object.assign(adapters.db.users, { addTagsToUser: vi.fn(), update: vi.fn() });
+      Object.assign(adapters.db, { signupProtection: { repository: {}, grantBudget: { repository } } });
+
+      const result = await grantFreeCredits({ id: 'user-2' }, adapters);
+
+      expect(result).toEqual({ creditsGranted: 0, currentCredits: null });
+      expect(repository.reserve).not.toHaveBeenCalled();
+      expect(users.addTagsToUser).not.toHaveBeenCalled();
+      expect(users.update).not.toHaveBeenCalled();
+      expect(addCreditsSpy).not.toHaveBeenCalled();
+    });
+
+    const exhaustedBudget = (adapters: ReturnType<typeof buildAdapters>) => {
+      const repository = { reserve: vi.fn().mockResolvedValue(null), refund: vi.fn(), markAlerted: vi.fn() };
+      adapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => ({
+        settingValue: name === 'signupGrantDailyBudget' ? '50' : '100',
+      }));
+      const users = Object.assign(adapters.db.users, { addTagsToUser: vi.fn(), update: vi.fn() });
+      Object.assign(adapters.db, { signupProtection: { repository: {}, grantBudget: { repository } } });
+      return { repository, users };
+    };
+
+    it('neither draws, tags nor holds an account whose grant is already paid on an exhausted day', async () => {
+      const adapters = buildAdapters('100');
+      const { repository, users } = exhaustedBudget(adapters);
+      adapters.db.creditTransactions.findOne.mockResolvedValue({ transactionId: 'verify-grant:user-1' });
+
+      const result = await grantFreeCredits({ id: 'user-1' }, adapters);
+
+      expect(result).toEqual({ creditsGranted: 0, currentCredits: null });
+      expect(adapters.db.creditTransactions.findOne).toHaveBeenCalledWith({
+        transactionId: { $in: ['verify-grant:user-1', 'otc-register-grant:user-1'] },
+      });
+      expect(repository.reserve).not.toHaveBeenCalled();
+      expect(users.addTagsToUser).not.toHaveBeenCalled();
+      expect(users.update).not.toHaveBeenCalled();
+    });
+
+    it('clears a held reason left from an earlier attempt when the inbox claim is refused', async () => {
+      const adapters = buildAdapters('100');
+      const { repository, users } = exhaustedBudget(adapters);
+      adapters.db.users.findById.mockResolvedValue({ id: 'user-2', signupGrantHeldReason: 'budget_exhausted' });
+      adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
+
+      expect(await grantFreeCredits({ id: 'user-2' }, adapters)).toEqual({ creditsGranted: 0, currentCredits: null });
+      expect(repository.reserve).not.toHaveBeenCalled();
+      expect(users.update).toHaveBeenCalledExactlyOnceWith({ id: 'user-2', signupGrantHeldReason: null });
+    });
+
+    it('keeps the held reason while the budget is still exhausted', async () => {
+      const adapters = buildAdapters('100');
+      const { users } = exhaustedBudget(adapters);
+      adapters.db.users.findById.mockResolvedValue({ id: 'user-2', signupGrantHeldReason: 'budget_exhausted' });
+
+      expect(await grantFreeCredits({ id: 'user-2' }, adapters)).toMatchObject({ withheld: true });
+      expect(users.update).not.toHaveBeenCalledWith({ id: 'user-2', signupGrantHeldReason: null });
+    });
+
     it('grants an invite-resolved amount without claiming the inbox', async () => {
       const adapters = buildAdapters('100');
       adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
@@ -143,6 +210,28 @@ describe('free credits service', () => {
       const result = await grantFreeCredits({ id: 'user-2', pendingCreditGrant: 5000 }, adapters);
 
       expect(adapters.db.users.claimFreeCreditGrant).not.toHaveBeenCalled();
+      expect(result.creditsGranted).toBe(5000);
+    });
+
+    it('reports no grant when the transaction id was already paid', async () => {
+      const adapters = buildAdapters('100');
+      addCreditsSpy.mockRejectedValueOnce(new creditService.DuplicateCreditTransactionError());
+
+      const result = await grantFreeCredits({ id: 'user-1' }, adapters);
+
+      expect(result).toEqual({ creditsGranted: 0, currentCredits: null });
+      expect(addCreditsSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ transactionId: 'verify-grant:user-1' }),
+        expect.objectContaining({ duplicateTransactionId: 'throw' })
+      );
+    });
+
+    it('pays an invite-resolved amount without drawing the daily signup budget', async () => {
+      const adapters = buildAdapters('100');
+      const reserve = vi.fn().mockResolvedValue(null);
+      (adapters.db as Record<string, unknown>).signupProtection = { grantBudget: { repository: { reserve } } };
+      const result = await grantFreeCredits({ id: 'user-2', pendingCreditGrant: 5000 }, adapters);
+      expect(reserve).not.toHaveBeenCalled();
       expect(result.creditsGranted).toBe(5000);
     });
 
@@ -178,7 +267,7 @@ describe('free credits service', () => {
       const result = await releasePendingFreeCredits({ id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG] }, adapters);
 
       expect(adapters.db.creditTransactions.findOne).toHaveBeenCalledWith({
-        transactionId: 'otc-register-grant:user-1',
+        transactionId: { $in: ['verify-grant:user-1', 'otc-register-grant:user-1'] },
       });
       expect(addCreditsSpy).not.toHaveBeenCalled();
       expect(result).toEqual({
@@ -199,7 +288,7 @@ describe('free credits service', () => {
 
       const result = await releasePendingFreeCredits(user, adapters);
 
-      expect(result).toEqual({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+      expect(result).toEqual({ released: false, failed: true, creditsGranted: 0, currentCredits: null, patch: {} });
       expect(user.tags).toEqual(['Customer', PENDING_FREE_CREDITS_TAG]);
       expect(user.pendingCreditGrant).toBe(250);
       expect(adapters.logger.error).toHaveBeenCalledExactlyOnceWith(
@@ -258,7 +347,7 @@ describe('free credits service', () => {
 
       const result = await releasePendingFreeCredits({ id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG] }, adapters);
 
-      expect(result).toEqual({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+      expect(result).toEqual({ released: false, failed: true, creditsGranted: 0, currentCredits: null, patch: {} });
       expect(adapters.logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
     });
   });

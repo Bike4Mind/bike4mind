@@ -97,3 +97,14 @@ export const fabFileResponseSchema = z.object({
 });
 
 export const fabFileListResponseSchema = z.array(fabFileResponseSchema);
+
+/** POST /api/files/createFabFile: the created file, plus the public media URL for an admin modal-media upload. */
+export const createdFabFileResponseSchema = fabFileResponseSchema.extend({ mediaUrl: z.string().optional() });
+
+/**
+ * POST /api/files/tags/toggle: each toggled file, plus how many lakes the call joined it to solely
+ * by a fileTagPrefix content tag (a count, never the lakes themselves).
+ */
+export const toggledFabFileListResponseSchema = z.array(
+  fabFileResponseSchema.extend({ prefixArmJoinedLakeCount: z.number().optional() })
+);

@@ -39,7 +39,15 @@ describe('modelSwitchCacheCredits', () => {
     const gpt = model('gpt-5', 3, { backend: 'openai' } as Partial<ModelInfo>);
     const tokens = (100_000 / tokenEstimateMultiplier(OPUS.id)) * tokenEstimateMultiplier(gpt.id);
     expect(modelSwitchCacheCredits(gpt, 100_000, OPUS.id)).toBeCloseTo(
-      (tokens * 3 * CACHE_WRITE_MULTIPLIER * CREDITS_PER_USD_COST) / 1_000_000,
+      (tokens * 3 * CREDITS_PER_USD_COST) / 1_000_000,
+      0
+    );
+  });
+
+  it('prices a backend that bills no cache writes at the input rate', () => {
+    const gpt = model('gpt-5', 3, { backend: 'openai' } as Partial<ModelInfo>);
+    expect(modelSwitchCacheCredits(gpt, 100_000, gpt.id)).toBeCloseTo(
+      (100_000 * 3 * CREDITS_PER_USD_COST) / 1_000_000,
       0
     );
   });
@@ -81,6 +89,29 @@ describe('getModelSwitchCostNotice', () => {
 
   it('hides when switching back to the model that answered', () => {
     expect(getModelSwitchCostNotice({ ...base, selectedModel: OPUS })).toBeNull();
+  });
+
+  it('hides after a fallback hop when the selected model is the one the user last sent to', () => {
+    const fallback = model('claude-haiku-5-5', 1);
+    expect(
+      getModelSwitchCostNotice({
+        ...base,
+        selectedModel: OPUS,
+        answeredModelId: fallback.id,
+        previousInputModelId: OPUS.id,
+      })
+    ).toBeNull();
+  });
+
+  it('hides after a fallback hop when the selected model is the one that answered', () => {
+    expect(
+      getModelSwitchCostNotice({
+        ...base,
+        selectedModel: SONNET,
+        answeredModelId: SONNET.id,
+        previousInputModelId: OPUS.id,
+      })
+    ).toBeNull();
   });
 
   it('hides for a new or empty conversation', () => {

@@ -31,6 +31,7 @@ describe('buildLocalMcpServer', () => {
       ollamaRegistry: vi.fn(),
       resolveRuntime: async () => ({ runtime, source: 'env' }),
       defaultModel: async () => undefined,
+      machine: async () => ({ unknown: 'not read in this test' }),
     };
     const server = buildLocalMcpServer({ version: '0.0.0' }, deps);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

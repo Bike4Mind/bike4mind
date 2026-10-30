@@ -109,8 +109,8 @@ export function completionsSupportsToolChanges(model: CompletionsToolCapabilityM
   return servedByDirectAnthropic(model) && supportsToolChanges(model);
 }
 
-// By-reference tool changes per platform. Haiku 5.5 takes them on the Claude API (verified with a live request) but
-// Bedrock documents it as by-value only. Bedrock lists no Sonnet 5.5 either.
+// By-reference tool changes per platform; keep in sync with TOOL_CHANGES_VERSIONS above. Haiku 5.5 takes them on
+// the Claude API (verified with a live request) but Bedrock documents it as by-value only. Bedrock lists no Sonnet 5.5 either.
 const DEFERRED_ADDITION_ANTHROPIC_VERSIONS: ReadonlySet<string> = new Set([
   'haiku-5-5',
   'opus-4-8',

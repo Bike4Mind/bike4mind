@@ -21,6 +21,7 @@ import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../cre
 import { accountBlockReasons } from './accountState';
 import { isDisposableEmail } from './disposableEmail';
 import { protectSignupCredits } from './signupProtection';
+import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './signupGrantBudget';
 
 /** `reasonGranted`: this user already holds a ledger row for the reason, e.g. a concurrent request won the grant. */
 export type NoCardUnlockRelease = (opts: { reasonGranted: boolean }) => Promise<void>;
@@ -61,6 +62,12 @@ const REAUTHORIZE_STATUSES = new Set([401, 403, 404]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const deny = (refusal: NoCardUnlockRefusal): NoCardUnlockCheck => ({ ok: false, refusal });
+
+/** The ledger description of a no-card grant; the row's `reason` carries the machine label. */
+const NO_CARD_UNLOCK_DESCRIPTIONS: Readonly<Record<NoCardUnlockReason, string>> = {
+  github_verified: 'GitHub account verified',
+  work_email_verified: 'work email verified',
+};
 
 export interface GithubValidatorDeps {
   settings: NoCardUnlockSettings;
@@ -245,6 +252,9 @@ export async function grantNoCardUnlock(
     return refused('signup_held');
   }
 
+  // A budget-held signup tranche is paid before any unlock, so no account holds the remainder without it.
+  if (user.signupGrantHeldReason === 'budget_exhausted') return refused('signup_grant_pending');
+
   const check = await validators[reason]({ id: user.id, email: user.email ?? '' });
   if (!check.ok) return refused(check.refusal);
 
@@ -256,6 +266,8 @@ export async function grantNoCardUnlock(
 
   let result: GrantNoCardUnlockResult | null = null;
   let failure: unknown = null;
+  let paidByPeer = false;
+  const reservations: SignupGrantBudgetReservation[] = [];
   try {
     result = await withTransaction(async () => {
       const current = await db.users.findById(userId);
@@ -265,6 +277,14 @@ export async function grantNoCardUnlock(
       const amount = Math.min(reasonCredits, settings.maxCredits - granted);
       if (amount <= 0) return refused('cap_reached');
 
+      const reservation = await reserveSignupGrantBudget(
+        { adminSettings: db.adminSettings, signupProtection },
+        transactionId,
+        amount
+      );
+      reservations.push(reservation);
+      if (reservation.outcome === 'exhausted') return refused('daily_budget_reached');
+
       const { creditHolder } = await addCreditsWithLedgerRow(
         {
           ownerId: userId,
@@ -273,6 +293,7 @@ export async function grantNoCardUnlock(
           type: 'generic_add',
           transactionId,
           reason: `no_card_unlock:${reason}`,
+          description: `Credits unlocked: ${NO_CARD_UNLOCK_DESCRIPTIONS[reason]}`,
         },
         {
           db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots },
@@ -283,9 +304,13 @@ export async function grantNoCardUnlock(
       return { granted: true, credits: amount, currentCredits: creditHolder.currentCredits };
     });
   } catch (error) {
-    if (error instanceof DuplicateCreditTransactionError) result = refused('already_granted');
-    else failure = error;
+    if (error instanceof DuplicateCreditTransactionError) {
+      result = refused('already_granted');
+      paidByPeer = true;
+    } else failure = error;
   }
+  // A duplicate ledger row means a concurrent grant paid under this id, so its draw stays spent.
+  if (!result?.granted && !paidByPeer) await Promise.all(reservations.map(held => held.release()));
   if (commit?.ok && !result?.granted) {
     try {
       const reasonGranted = Boolean(await db.creditTransactions.findOne({ transactionId }));

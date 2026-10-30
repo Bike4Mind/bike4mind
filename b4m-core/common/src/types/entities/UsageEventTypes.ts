@@ -643,6 +643,9 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
   /** Credits the user spent in [from, to): charged plus written off. */
   creditsSpentByUser(userId: string, from: Date, to: Date): Promise<number>;
 
+  /** Credits each user has spent in total, charged plus written off; users with none are absent. */
+  creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>>;
+
   /** Margin buckets per user over the trailing N days (default 30), worst margin first. */
   marginByUser(days?: number): Promise<IUserMargin[]>;
 

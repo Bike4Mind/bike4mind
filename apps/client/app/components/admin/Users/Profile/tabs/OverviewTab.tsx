@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Button, Chip, Stack, Typography } from '@mui/joy';
+import { Box, Chip, Stack, Typography } from '@mui/joy';
 import { USER_TIMELINE_TYPES, resolveUserStorageLimit, storageLimitToBytes, type AuditEntry } from '@bike4mind/common';
 import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
@@ -8,9 +8,11 @@ import UserSubscriptionStatus from '../../Details/UserSubscriptionStatus';
 import { Fact, SectionCard, StatusChip, formatUtc } from '../../../shared';
 import type { ProfileAction } from '../actions/profileActions';
 import { UserNotesCard } from './UserNotesCard';
+import { OrganizationsCard } from './OrganizationsCard';
+import { HeaderAction, RowAction } from './cardActions';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
 import { timelineItem } from './timelineItems';
-import { USER_ROLE_LABELS, isManagedTag, organizationName, userRole, type AdminUserProfile } from '../userProfileModel';
+import { USER_ROLE_LABELS, isManagedTag, userRole, type AdminUserProfile } from '../userProfileModel';
 
 const RECENT_ACTIVITY_COUNT = 6;
 
@@ -20,39 +22,10 @@ const formatBytes = (bytes: number): string => {
   return `${Math.round(bytes / 1e3)} KB`;
 };
 
-/** A small text button for a row-level action inside a fact. */
-const RowAction: React.FC<{ onClick: () => void; children: React.ReactNode; 'data-testid': string }> = ({
-  onClick,
-  children,
-  'data-testid': testId,
-}) => (
-  <Button
-    size="sm"
-    variant="plain"
-    color="neutral"
-    onClick={onClick}
-    sx={{ minHeight: 24, px: 0.75 }}
-    data-testid={testId}
-  >
-    {children}
-  </Button>
-);
-
-const HeaderAction: React.FC<{ onClick: () => void; children: React.ReactNode; 'data-testid': string }> = ({
-  onClick,
-  children,
-  'data-testid': testId,
-}) => (
-  <Button size="sm" variant="plain" color="neutral" onClick={onClick} sx={{ minHeight: 30 }} data-testid={testId}>
-    {children}
-  </Button>
-);
-
 const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileAction) => void }> = ({
   user,
   onAction,
 }) => {
-  const org = organizationName(user);
   const storage = resolveUserStorageLimit(user);
   const network = user.signupMeta;
   const signupParts = [
@@ -78,7 +51,6 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
           </RowAction>
         </Stack>
       </Fact>
-      <Fact label="Organization">{org}</Fact>
       <Fact label="Signup">{signupParts.length > 0 ? signupParts.join(' \u00b7 ') : null}</Fact>
       <Fact label="Two-factor" data-testid="user-profile-fact-mfa">
         {user.mfa?.totpEnabled ? (
@@ -218,10 +190,12 @@ type OverviewTabProps = {
   onAction: (action: ProfileAction) => void;
   onViewActivity: () => void;
   onViewCredits: () => void;
+  /** Opens the Admin log, for the UndoToast's audit link. */
+  onAudit?: () => void;
 };
 
 /** Two columns of cards that collapse to one below ~700 px (DESIGN_GUIDE.md section 5). */
-export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onViewActivity, onViewCredits }) => (
+export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onViewActivity, onViewCredits, onAudit }) => (
   <Box
     sx={{
       display: 'grid',
@@ -233,6 +207,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
   >
     <Stack gap={2}>
       <AccountCard user={user} onAction={onAction} />
+      <OrganizationsCard user={user} onAudit={onAudit} />
       <AccessCard user={user} onAction={onAction} />
       <SectionCard
         title="Subscription"

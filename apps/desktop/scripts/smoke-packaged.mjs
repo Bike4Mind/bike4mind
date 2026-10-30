@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
@@ -22,7 +22,11 @@ if (process.platform === 'darwin') {
   // A temporary HOME has no login keychain; startup tests must not prompt or touch the real one.
   platformArgs.push('--use-mock-keychain');
 }
-assert.ok(executable, 'Pass the installed macOS app executable');
+if (process.platform === 'win32') {
+  // Hosted Windows runners have no GPU.
+  platformArgs.push('--disable-gpu');
+}
+assert.ok(executable, 'Pass the installed app executable');
 const server = createServer();
 await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
 const port = server.address().port;
@@ -30,17 +34,24 @@ await new Promise(resolveClose => server.close(resolveClose));
 const home = await mkdtemp(join(tmpdir(), 'desktop-smoke-'));
 let logs = '';
 let socket;
+const env = {
+  ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, 'config'),
+  XDG_CACHE_HOME: join(home, 'cache'), XDG_DATA_HOME: join(home, 'data'),
+  ...(process.platform === 'win32' && {
+    APPDATA: join(home, 'AppData', 'Roaming'), LOCALAPPDATA: join(home, 'AppData', 'Local'), USERPROFILE: home,
+  }),
+};
+// Delete rather than blank: Windows treats an empty variable as set, so ELECTRON_RUN_AS_NODE=''
+// still starts the exe as plain Node, which rejects every Chromium flag.
+delete env.ELECTRON_RENDERER_URL;
+delete env.ELECTRON_RUN_AS_NODE;
 const child = spawn(executable, [
   ...platformArgs,
   '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${port}`,
   `--user-data-dir=${join(home, 'profile')}`,
 ], {
   detached: true,
-  env: {
-    ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, 'config'),
-    XDG_CACHE_HOME: join(home, 'cache'), XDG_DATA_HOME: join(home, 'data'),
-    ELECTRON_RENDERER_URL: '', ELECTRON_RUN_AS_NODE: '',
-  },
+  env,
 });
 child.stdout.on('data', chunk => { logs += chunk; });
 child.stderr.on('data', chunk => { logs += chunk; });
@@ -94,7 +105,9 @@ try {
   while (Date.now() < deadline) {
     const result = await call('Runtime.evaluate', {
       expression: `(async () => {
-        if (!window.b4m || !document.querySelector('[data-testid="environment-active-text"]')) return null;
+        // The picker is open only when no server resolves; otherwise the card shows a summary line.
+        const card = '[data-testid="environment-active-text"], [data-testid="signin-server-text"]';
+        if (!window.b4m || !document.querySelector(card)) return null;
         return { info: await window.b4m.getAppInfo(), auth: (await window.b4m.auth.getState()).status,
           update: (await window.b4m.update.getState()).status,
           heading: document.body.innerText.includes('Bike4Mind Desktop') };
@@ -114,17 +127,23 @@ try {
   if (process.env.EXPECT_UPDATES_DISABLED === 'true') {
     assert.equal(state.update, 'unsupported', 'Manual-install builds must not enable in-app updates');
   }
+  if (process.env.EXPECT_UPDATES_ENABLED === 'true') {
+    assert.notEqual(state.update, 'unsupported', 'Feed-enabled builds must enable in-app updates');
+  }
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
   assert.equal(child.exitCode, null, 'App exited during startup verification');
   await writeFile(join(output, 'result.json'), JSON.stringify(state, null, 2));
   console.log('Packaged app rendered its auth screen and passed main/preload IPC checks.');
 } finally {
   socket?.close();
-  if (child.pid) {
+  if (child.pid && process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F']);
+  } else if (child.pid) {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { /* Already exited. */ }
     await delay(1000);
     try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Already exited. */ }
   }
   await writeFile(join(output, 'app.log'), logs);
-  await rm(home, { recursive: true, force: true });
+  // Windows can hold handles in the profile briefly after taskkill returns.
+  await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

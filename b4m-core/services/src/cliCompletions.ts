@@ -35,6 +35,7 @@ import {
   HTTPError,
   type CompletionSource,
   UNKNOWN_MODEL_ERROR_CODE,
+  MAX_MODEL_ID_LENGTH,
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   completionsSupportsToolSearch,
@@ -78,12 +79,20 @@ import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
+import { timedOutAttemptUsageFields, timedOutUsageOf } from './llm/timedOutAttemptUsage';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
 import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './llm/modelAdmission';
 import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+import {
+  MIN_AFFORDABLE_OUTPUT_TOKENS,
+  affordableRoundBudget,
+  capRoundOutput,
+  gateEveryRound,
+  type RoundBudget,
+} from './completionCreditBudget';
 import { fallbackThinkingVisibility } from './thinkingVisibility';
 
 /** Persistence boundary: implementations commit each callback and its hold transition atomically. */
@@ -187,6 +196,12 @@ export interface CompletionParams {
   /** Correlation id for the usage-event dual write. Synthesized when absent. */
   requestId?: string;
   /**
+   * The caller's conversation id (desktop chat session, CLI session), as the client sent it.
+   * Recorded on the completion_api_usage ledger row so spend can be traced back to a conversation.
+   * Untrusted, display-only: never used for authorization or lookups.
+   */
+  sessionId?: string;
+  /**
    * Where this completion request originated. Recorded on the credit
    * transaction (and analytics event) so reports can break down usage by
    * surface (cli, api, etc.). Defaults to 'api' since this service is only
@@ -215,6 +230,14 @@ export interface CompletionParams {
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
   /** Resolved on the reloaded caller; omitted means `raw`. A failed resolution withholds. */
   getThinkingVisibility?: (user: IUserDocument) => Promise<ThinkingVisibility>;
+}
+
+const MAX_LEDGER_TOOL_NAMES = 20;
+const MAX_LEDGER_TOOL_NAME_LENGTH = 64;
+
+/** Caps the tool names a ledger row carries: tool names are caller-supplied on the wire path. */
+export function boundedToolNames(names: Iterable<string>): string[] {
+  return [...names].slice(0, MAX_LEDGER_TOOL_NAMES).map(name => name.slice(0, MAX_LEDGER_TOOL_NAME_LENGTH));
 }
 
 /**
@@ -480,6 +503,12 @@ export function withholdReasoningFromFrame(
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
+  if (params.model.length > MAX_MODEL_ID_LENGTH) {
+    throw new BadRequestError(
+      `Model id exceeds ${MAX_MODEL_ID_LENGTH} characters. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
   const model = resolveOpenAiBareModelAlias(params.model);
   // Callers write multimodal parts in whichever dialect their SDK speaks and the wire
   // schema accepts any of them (z.array(z.any())). Canonicalize once, here, so the
@@ -762,6 +791,16 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Atomic credit reservation: Reserve estimated credits BEFORE execution
   // This prevents race conditions where concurrent requests pass the check
   let reservedCredits = 0;
+  // Prices a round's input the way the hold does and returns the output budget `availableCredits`
+  // can pay for on top of it; see completionCreditBudget. Set only when credits are enforced.
+  let roundBudgetFor: ((roundMessages: IMessage[], availableCredits: number) => RoundBudget) | null = null;
+  const refundReservation = async () => {
+    const refund = async () => {
+      await holderMethods.incrementCredits(holderId, reservedCredits);
+    };
+    if (params.creditHolds) await params.creditHolds.refund(refund);
+    else await refund();
+  };
 
   if (enforceCredits && modelInfo) {
     // Estimate cost from the input message length plus a realistic output size. The basis is
@@ -822,6 +861,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       }
     }
 
+    let balanceAfterHold = 0;
     const debit = async (): Promise<ICreditHolder> => {
       // Atomically reserve credits using incrementCredits with negative value
       const holderAfterReservation = await holderMethods.incrementCredits(holderId, -reservedCredits);
@@ -842,6 +882,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       logger?.debug?.(
         `[CLI_CREDITS] Credits reserved successfully. Balance after reservation: ${holderAfterReservation.currentCredits}`
       );
+      balanceAfterHold = holderAfterReservation.currentCredits;
       return holderAfterReservation;
     };
     if (params.creditHolds) {
@@ -858,6 +899,43 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     } else {
       await debit();
     }
+
+    // The hold above is a realistic estimate, not a bound: an answer may run to maxTokens (or past
+    // it, where an adapter raises the budget for thinking). Cap the round at what this holder can
+    // actually pay - its remaining balance plus its own hold - so settlement cannot overdraw.
+    const minimumOutputTokens = Math.min(MIN_AFFORDABLE_OUTPUT_TOKENS, maxTokens);
+    const toolSearch = completionsSupportsToolSearch(modelInfo);
+    roundBudgetFor = (roundMessages, availableCredits) => {
+      const toolTokens = estimateToolTokens(completionOptions.tools ?? [], toolSearch);
+      const inputTokens = estimateInputTokens(roundMessages) + toolTokens;
+      return affordableRoundBudget({
+        modelInfo,
+        inputUsd: estimateReservationUsd(modelInfo, roundMessages, inputTokens, 0, toolTokens),
+        inputTokens,
+        availableCredits,
+        minimumOutputTokens,
+      });
+    };
+    const firstRound = roundBudgetFor(messages, balanceAfterHold + reservedCredits);
+    if (!firstRound.affordable) {
+      await refundReservation();
+      const available = balanceAfterHold + reservedCredits;
+      throw new InsufficientCreditsError(
+        billToOrg
+          ? `Your organization does not have enough credits. It has ${available} credits, but even a short answer requires approximately ${firstRound.minimumCredits}. Please contact your organization administrator to add more credits.`
+          : `Insufficient credits. You have ${available} credits, but even a short answer requires approximately ${firstRound.minimumCredits} credits. ` +
+              `Try using a smaller model or reducing the prompt size.`,
+        'insufficient_credits'
+      );
+    }
+    if (firstRound.outputTokens < maxTokens) {
+      logger?.info?.('[CLI_CREDITS] Output budget lowered to what the balance can pay for', {
+        model,
+        maxTokens,
+        affordableOutputTokens: firstRound.outputTokens,
+      });
+    }
+    Object.assign(completionOptions, capRoundOutput(completionOptions, firstRound.outputTokens));
   }
 
   // Track tokens across callback invocations for credit calculation.
@@ -893,6 +971,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let finalStopReason: string | undefined;
   // Every char streamed to the caller, for pricing a first call that was cut short (see below).
   let streamedOutputChars = 0;
+  // Distinct tool names the model called on this request, for the ledger row.
+  const toolNamesUsed = new Set<string>();
 
   const settledUsdCost = (pricedModel: ModelInfo): number =>
     finalTurnUsage?.length
@@ -931,6 +1011,14 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (info?.outputTokens !== undefined && info.reasoningTokens !== undefined)
       finalReasoningTokens = info.reasoningTokens;
     if (info?.stopReason) finalStopReason = info.stopReason;
+    // Strings only: these feed the ledger row written inside settlement, so a malformed entry
+    // must never be able to throw there and veto the billing write.
+    const startedName: unknown = info?.toolStarted?.name;
+    if (typeof startedName === 'string' && startedName) toolNamesUsed.add(startedName);
+    for (const tool of info?.toolsUsed ?? []) {
+      const toolName: unknown = tool?.name;
+      if (typeof toolName === 'string' && toolName) toolNamesUsed.add(toolName);
+    }
     // Tool-artifact frames carry a tool's own output for a renderer, not the model's, so they are not
     // output the provider bills on this call.
     if (info?.channel !== 'tool-artifact') {
@@ -962,9 +1050,58 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // spent what it streamed: it settles below like an abort the adapter resolves on, and is rethrown
   // once settled. Any other failure refunds the reservation here.
   let abortError: unknown;
+  // A server-tools completion runs its tool rounds inside the adapter, each re-sending the grown
+  // conversation; the first round was capped above, every later one is capped here against what
+  // is left once the rounds so far are paid for. A round that cannot afford a short answer ends
+  // the turn instead of overdrawing.
+  let stoppedForCredits = false;
+  // Adapters carry earlier rounds' usage forward in `_internal.accum*` and report it only on the
+  // terminal round, so the gate adopts it from there: that prices the spend so far, and bills the
+  // rounds already run when the gate ends the turn before any terminal report. Never lowers a total
+  // a callback already reported.
+  const adoptAccumulatedUsage = (internal: ICompletionOptions['_internal']) => {
+    const turns = internal?.accumTurnUsage;
+    if (turns?.length) {
+      if (turns.length <= (finalTurnUsage?.length ?? 0)) return;
+      finalTurnUsage = turns;
+      // Turns are split cache-exclusive; Gemini's raw accumInputTokens includes cache reads.
+      finalInputTokens = turns.reduce((sum, turn) => sum + turn.inputTokens, 0);
+      finalOutputTokens = turns.reduce((sum, turn) => sum + turn.outputTokens, 0);
+      finalCacheReadTokens = turns.reduce((sum, turn) => sum + (turn.cacheReadInputTokens ?? 0), 0);
+      finalCacheCreationTokens = turns.reduce((sum, turn) => sum + (turn.cacheCreationInputTokens ?? 0), 0);
+      return;
+    }
+    finalInputTokens = Math.max(finalInputTokens, internal?.accumInputTokens ?? 0);
+    finalOutputTokens = Math.max(finalOutputTokens, internal?.accumOutputTokens ?? 0);
+    finalCacheReadTokens = Math.max(finalCacheReadTokens, internal?.accumCacheReadTokens ?? 0);
+    finalCacheCreationTokens = Math.max(finalCacheCreationTokens, internal?.accumCacheWriteTokens ?? 0);
+  };
+  const roundBudget = roundBudgetFor;
+  const completionLlm =
+    useServerTools && roundBudget
+      ? gateEveryRound(llm, async (roundMessages, roundOptions, round) => {
+          if (round === 0) return roundOptions;
+          adoptAccumulatedUsage(roundOptions._internal);
+          const spentCredits = usdToCredits(settledUsdCost(modelInfo!));
+          const balance = (await fetchHolder())?.currentCredits ?? 0;
+          const budget = roundBudget(roundMessages, balance + reservedCredits - spentCredits);
+          if (!budget.affordable) {
+            stoppedForCredits = true;
+            logger?.info?.('[CLI_CREDITS] Tool loop stopped: the balance cannot pay for another round', {
+              model,
+              round,
+              spentCredits,
+              requiredCredits: budget.minimumCredits,
+            });
+            return null;
+          }
+          return capRoundOutput(roundOptions, budget.outputTokens);
+        })
+      : llm;
   try {
     await params.onReady?.();
-    await llm.complete(model, messages, completionOptions, wrappedOnChunk);
+    await completionLlm.complete(model, messages, completionOptions, wrappedOnChunk);
+    if (stoppedForCredits) finalStopReason = 'max_tokens';
     const heldText = reasoningWithholder?.flush();
     if (heldText) await onChunk([heldText]);
   } catch (error) {
@@ -974,11 +1111,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       // If completion fails, refund the reserved credits to whichever pool paid
       if (reservedCredits > 0) {
         logger?.info?.(`[CLI_CREDITS] Completion failed, refunding ${reservedCredits} reserved credits`);
-        const refund = async () => {
-          await holderMethods.incrementCredits(holderId, reservedCredits);
-        };
-        if (params.creditHolds) await params.creditHolds.refund(refund);
-        else await refund();
+        await refundReservation();
       }
       // The success-path settlement/metering below is now unreachable, so an
       // alwaysRecordUsage caller (embed) would otherwise have NO ledger trace of a run
@@ -992,7 +1125,23 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       // this path has no fallback loop, so the refused call is the whole request.
       const isRefusal = error instanceof Error && isSafetyRefusalError(error);
       const recordsUsage = enforceCredits || params.alwaysRecordUsage;
-      if (
+      const timeoutUsage = timedOutUsageOf(error);
+      if (modelInfo && recordsUsage && timeoutUsage) {
+        db.usageEvents
+          ?.record({
+            requestId,
+            userId,
+            ownerId: holderId,
+            ownerType: holderType,
+            feature: 'completion_api',
+            source,
+            apiKeyId: apiKeyInfo?.keyId,
+            ...timedOutAttemptUsageFields(modelInfo, timeoutUsage),
+            model,
+            latencyMs: Date.now() - completionStartTime,
+          })
+          .catch(err => logger?.warn?.('Failed to record timed-out usage event', err));
+      } else if (
         modelInfo &&
         ((isRefusal && recordsUsage) || (params.alwaysRecordUsage && (finalInputTokens > 0 || finalOutputTokens > 0)))
       ) {
@@ -1131,16 +1280,42 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   };
 
   let settlementCommitted = false;
+  // What settlement takes from the holder: the actual cost, unless that exceeds the hold plus the
+  // remaining balance.
+  let chargedCredits = finalCredits;
 
   // Adjust credits after completion: refund over-reservation or charge under-reservation
   if (enforceCredits && modelInfo) {
     try {
+      // Never take the balance below zero. With every round capped at what the holder can pay, a
+      // cost past the hold plus the balance is an estimate miss (a tokenizer under-count, a lapsed
+      // prompt cache) or a concurrent spend; it goes uncollected and loud rather than overdrawing.
+      if (finalCredits > reservedCredits) {
+        const balance = (await fetchHolder())?.currentCredits ?? 0;
+        chargedCredits = Math.min(finalCredits, reservedCredits + Math.max(0, balance));
+        if (chargedCredits < finalCredits) {
+          logger?.error?.(
+            '[CLI_CREDITS] ALERT: Completion cost more than the balance could pay - charged down to zero',
+            {
+              userId,
+              holderId,
+              holderType,
+              model,
+              reserved: reservedCredits,
+              actual: finalCredits,
+              charged: chargedCredits,
+              uncollectedCredits: finalCredits - chargedCredits,
+            }
+          );
+        }
+      }
+
       let ledgerWritten = false;
       const settle = async () => {
         // Reuse the settlement values computed above - recomputing would draw a
         // second stochastic rounding and desync the charge from what the client saw.
         const usdCost = finalUsdCost;
-        const actualCredits = finalCredits;
+        const actualCredits = chargedCredits;
         const creditDifference = reservedCredits - actualCredits;
 
         logger?.info?.(
@@ -1153,39 +1328,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
         // Adjust the difference between reserved and actual against the paying pool
         if (creditDifference !== 0) {
-          // Pre-check: warn if adjustment will cause negative balance (under-reservation case)
-          if (creditDifference < 0) {
-            // Under-reservation: we need to charge more credits
-            // Check if this will cause negative balance
-            const currentHolder = await fetchHolder();
-            const currentBalance = currentHolder?.currentCredits ?? 0;
-            const projectedBalance = currentBalance + creditDifference;
-
-            if (projectedBalance < 0) {
-              logger?.warn?.(
-                '[CLI_CREDITS] WARNING: Adjustment will cause negative balance - tracking for reconciliation',
-                {
-                  userId,
-                  holderId,
-                  holderType,
-                  currentBalance,
-                  adjustment: creditDifference,
-                  projectedBalance,
-                  reserved: reservedCredits,
-                  actual: actualCredits,
-                }
-              );
-              // Proceed with adjustment but track the shortfall in transaction metadata
-            }
-          }
-
           holderAfterAdjustment = await holderMethods.incrementCredits(holderId, creditDifference);
           logger?.debug?.(
             `[CLI_CREDITS] Credit adjustment applied: ${creditDifference > 0 ? 'refunded' : 'charged'} ${Math.abs(creditDifference)} credits. ` +
               `New balance: ${holderAfterAdjustment?.currentCredits}`
           );
 
-          // Check for negative balance (should be rare with atomic reservation)
+          // Only a spend racing this settlement between the balance read above and this write gets here
           if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
             logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
               userId,
@@ -1251,8 +1400,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
               description,
               model: model as ChatModels,
               apiKeyId: apiKeyInfo?.keyId, // Optional - present for API key auth, undefined for JWT
+              sessionId: params.sessionId,
               inputTokens: finalInputTokens,
               outputTokens: finalOutputTokens,
+              cacheReadTokens: finalCacheReadTokens,
+              cacheWriteTokens: finalCacheCreationTokens,
               source,
               metadata: {
                 // Include API key info if present
@@ -1267,6 +1419,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
                 usdCost,
                 reservedCredits,
                 creditDifference,
+                ...(toolNamesUsed.size > 0 && { toolNames: boundedToolNames(toolNamesUsed) }),
               },
             },
             {
@@ -1281,11 +1434,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         }
       };
       const settled = params.creditHolds
-        ? await params.creditHolds.settle(finalCredits, settle)
+        ? await params.creditHolds.settle(chargedCredits, settle)
         : (await settle(), true);
       settlementCommitted = settled && ledgerWritten;
       // Emit analytics only after the transaction containing the ledger has committed.
-      if (settlementCommitted) recordUsageEvent(finalCredits);
+      if (settlementCommitted) recordUsageEvent(chargedCredits);
     } catch (error) {
       // Log with sufficient detail for manual reconciliation
       logger?.error?.('[CLI_CREDITS] CRITICAL: Failed to adjust credits - requires manual reconciliation', {
@@ -1311,7 +1464,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Only the embed path opts in (alwaysRecordUsage) - legacy callers are untouched.
   if (modelInfo && params.alwaysRecordUsage && !usageRecorded) {
     const charged = params.creditHolds ? settlementCommitted : enforceCredits;
-    recordUsageEvent(charged ? finalCredits : 0);
+    recordUsageEvent(charged ? chargedCredits : 0);
   }
 
   // A model missing from the catalog computes no cost, so per-key spend cannot

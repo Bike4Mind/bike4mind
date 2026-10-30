@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { ModelArchSchema, type ModelArch } from '../schemas/modelHub';
 import { MOE_35B_ARCH, machine } from './__fixtures__/hubManifest';
 import {
@@ -11,10 +11,13 @@ import {
   contextOptions,
   contextTarget,
   estimateFit,
+  estimateFitFromSize,
   fitMarginBytes,
   flashAttnOffBytes,
   isCpuOnly,
   kvCacheBytes,
+  memoryBudgets,
+  ollamaNumCtx,
   type FitInput,
   type HardwareProfile,
 } from './fit';
@@ -666,5 +669,67 @@ describe('contextOptions', () => {
       [32768, false],
       [65536, false],
     ]);
+  });
+});
+
+describe('memoryBudgets', () => {
+  it('gives a CPU-only machine a share of its RAM and a discrete GPU its VRAM plus a RAM pool', () => {
+    expect(memoryBudgets(machine('cpu', 128))).toEqual({ gpu: 96 * GIB, ramPool: 0, cpuOnly: true });
+    expect(memoryBudgets(machine('discrete', 64, 24))).toEqual({
+      gpu: 24 * GIB,
+      ramPool: 64 * GIB * FIT_CONSTANTS.discreteOffloadRamFraction,
+      cpuOnly: false,
+    });
+  });
+});
+
+describe('ollamaNumCtx', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('caps the reported window at 32K unless OLLAMA_MAX_NUM_CTX sets another cap', () => {
+    expect(ollamaNumCtx(262144)).toBe(32768);
+    expect(ollamaNumCtx(Infinity)).toBe(32768);
+    expect(ollamaNumCtx(8192)).toBe(8192);
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', '65536');
+    expect(ollamaNumCtx(262144)).toBe(65536);
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', 'nonsense');
+    expect(ollamaNumCtx(262144)).toBe(32768);
+  });
+});
+
+describe('estimateFitFromSize', () => {
+  const cpu128 = machine('cpu', 128);
+
+  it('fits a small file and counts compute on top of it', () => {
+    const fit = estimateFitFromSize(GIB, cpu128, 32768);
+    expect(fit).toMatchObject({ level: 'fits', budgetBytes: 96 * GIB, offloadBytes: 0, cpuOnly: true, context: 32768 });
+    expect(fit.needBytes).toBeGreaterThan(GIB);
+    expect(fit.needBytes).toBeLessThan(2 * GIB);
+  });
+
+  it('is tight past the headroom left for context memory', () => {
+    expect(estimateFitFromSize(80 * GIB, cpu128, 32768).level).toBe('tight');
+  });
+
+  it('is too large past the budget without a GPU to split onto', () => {
+    const fit = estimateFitFromSize(120 * GIB, cpu128, 32768);
+    expect(fit.level).toBe('too-large');
+    expect(fit.offloadBytes).toBeGreaterThan(24 * GIB);
+  });
+
+  it('splits a discrete GPU overflow into system RAM until the pool runs out', () => {
+    const rig = machine('discrete', 64, 24);
+    const split = estimateFitFromSize(30 * GIB, rig, 16384);
+    expect(split.level).toBe('tight');
+    expect(split.offloadBytes).toBeGreaterThan(6 * GIB);
+    expect(estimateFitFromSize(100 * GIB, rig, 16384).level).toBe('too-large');
+  });
+
+  it('needs more at a longer context', () => {
+    const short = estimateFitFromSize(4 * GIB, cpu128, 8192);
+    const long = estimateFitFromSize(4 * GIB, cpu128, 131072);
+    expect(long.needBytes).toBeGreaterThan(short.needBytes);
   });
 });

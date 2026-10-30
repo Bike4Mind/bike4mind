@@ -9,15 +9,17 @@ import {
 import {
   FabFile,
   fabFileRepository,
+  Project,
+  projectRepository,
   Session,
   sessionRepository,
   User,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { sessionService, sharingService } from '@bike4mind/services';
+import { projectService, sessionService, sharingService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
-import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
+import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from './revokedFileReferences';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -45,6 +47,7 @@ afterAll(async () => {
 afterEach(async () => {
   await Promise.all([
     FabFile.collection.deleteMany({}),
+    Project.collection.deleteMany({}),
     Session.collection.deleteMany({}),
     User.collection.deleteMany({}),
   ]);
@@ -98,12 +101,7 @@ const revokeAndCleanUp = async (ownerId: string, fileId: string, recipientId: st
       { db: { ...db, projects: {} as never } }
     )
   );
-  await sharingService.cleanUpRevokedFileReferences(fileId, recipientId, {
-    db,
-    resolveAttachmentLakeAccess: user =>
-      createAttachmentLakeAccess(user as never, logger, { requireCompleteView: true })(),
-    logger,
-  });
+  await cleanUpRevokedFileReferences([{ userId: recipientId, fileIds: [fileId] }], logger);
 };
 
 const systemFileIds = async (userId: string) =>
@@ -184,5 +182,73 @@ describe('revoking a file share cleans up the recipient references', () => {
     await revokeAndCleanUp(ownerId, String(fileId), recipientId);
 
     expect(await systemFileIds(recipientId)).toEqual([String(fileId)]);
+  });
+});
+
+describe('session revoke and project delete clean up the references they strand', () => {
+  it("an unscoped session revoke drops the session's files from the recipient's pins", async () => {
+    const fileId = oid();
+    const sessionId = oid();
+    const ownerId = await seedUser();
+    const recipientId = await seedUser(fileId);
+    // accept.ts tags the file grant a session share mints with that session's id.
+    await seedFile(fileId, ownerId, {
+      users: [{ ...share(recipientId), sessionId: String(sessionId) }],
+    });
+    await Session.collection.insertOne({
+      _id: sessionId,
+      userId: ownerId,
+      name: 'shared notebook',
+      knowledgeIds: [String(fileId)],
+      users: [share(recipientId)],
+      groups: [],
+      deletedAt: null,
+      __v: 0,
+    });
+
+    const session = await withTransaction(() =>
+      sharingService.revoke(
+        ownerId,
+        { id: String(sessionId), type: 'sessions', userId: recipientId },
+        { db: { ...db, projects: {} as never } }
+      )
+    );
+    await cleanUpRevokedFileReferences(
+      [{ userId: recipientId, fileIds: (session as { knowledgeIds?: string[] }).knowledgeIds ?? [] }],
+      logger
+    );
+
+    expect(await systemFileIds(recipientId)).toEqual([]);
+  });
+
+  it("deleting a project drops its files from every member's pins", async () => {
+    const fileId = oid();
+    const ownerId = await seedUser();
+    const memberId = await seedUser(fileId);
+    const projectId = oid();
+    await seedFile(fileId, ownerId, {
+      users: [{ ...share(memberId), projectId: String(projectId) }],
+    });
+    await Project.collection.insertOne({
+      _id: projectId,
+      name: 'p',
+      description: 'd',
+      userId: ownerId,
+      users: [{ userId: memberId, permissions: ['read', 'update'] }],
+      fileIds: [String(fileId)],
+      sessionIds: [],
+      deletedAt: null,
+      __v: 0,
+    });
+
+    const targets = await projectRevokeCleanupTargets(String(projectId), undefined, logger);
+    await projectService.deleteProject(
+      ownerId,
+      { id: String(projectId) },
+      { db: { ...db, projects: projectRepository } as never }
+    );
+    await cleanUpRevokedFileReferences(targets, logger);
+
+    expect(await systemFileIds(memberId)).toEqual([]);
   });
 });

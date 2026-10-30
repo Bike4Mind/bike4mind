@@ -99,6 +99,9 @@ import { registerModelServersIpc } from '../modelServers/ipc';
 import { LocalModels } from '../modelServers/LocalModels';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { withEnteredSpecs } from '../models/enteredHardware';
+import { machineView } from '../models/fit';
+import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -131,6 +134,7 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { devLog } from '../devlog/DevLogSink';
@@ -280,6 +284,8 @@ export interface RegisteredChat {
   claudeImport: ClaudeImportService;
   /** Spare checkouts, removed on the quit pass that can wait for git. */
   spareWorktrees: SpareWorktrees;
+  /** Saved model servers, which the Models screen also pulls to and removes from. */
+  modelServers: ModelServerRegistry;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
 }
@@ -402,6 +408,7 @@ export function registerChat(
     REASONING_EFFORT,
     new PromptCacheTtlPreference(join(userData, 'prompt-cache-ttl.json'))
   );
+  keepSessionWritesIn(store);
   const access = new AccessStore(join(userData, 'tool-access.json'));
   const capabilityLedger = new CapabilityLedger(join(userData, 'capability-ledger.json'));
   // App-wide like approval-mode.json; see SidebarSectionStore.
@@ -466,7 +473,13 @@ export function registerChat(
       models.forgetLocal();
       send(IPC_CHANNELS.modelServersChanged, servers);
     },
+    localSpecsChanged: () => {
+      forgetLocalContexts();
+      localSizing.forget?.();
+      models.forgetLocal();
+    },
   });
+  localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
   void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
   const local = new LocalModels(new OllamaLocal((url, init) => net.fetch(url, init), localSizing), modelServers);
   const models = new ModelCatalog(
@@ -629,6 +642,7 @@ export function registerChat(
     sidebarSections,
     mcp,
     browser,
+    pullRequests,
     screen: desktopScreenCapturer(app.getName()),
     prepareImage: prepareToolImage,
     history,
@@ -659,7 +673,10 @@ export function registerChat(
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
-  registerModelServersIpc(ipcMain, modelServers);
+  registerModelServersIpc(ipcMain, modelServers, async () => {
+    const probed = await localHardware.probed();
+    return probed && machineView(probed);
+  });
   ipcMain.handle(IPC_CHANNELS.chatListSuggestionModels, () => service.listSuggestionModels());
   registerLocalContextIpc(ipcMain, {
     preference: localContext,
@@ -670,6 +687,7 @@ export function registerChat(
     },
     fit: () => local.contextFit(),
   });
+  ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
     service.setSessionArchived(sessionId, archived)
   );
@@ -1278,7 +1296,7 @@ export function registerChat(
     logger,
   });
 
-  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, localContext };
+  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, modelServers, localContext };
 }
 
 export { ChatService } from './ChatService';

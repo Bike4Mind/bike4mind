@@ -18,6 +18,7 @@ import type { WorkspaceOwner } from '@shared/worktreeRemoval';
 import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
+import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
@@ -98,6 +99,8 @@ export interface CreateOptions {
  */
 const SUMMARY_INDEX = '.summary-index';
 const SUMMARY_INDEX_VERSION = 1;
+/** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
+const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;
 
 interface IndexedSummary {
@@ -257,7 +260,7 @@ export interface PromptCacheTtlMemory {
  * directly in `baseDirectory`, which is what a test that does not care builds and what every
  * install before this looked like on disk.
  */
-export class SessionStore {
+export class SessionStore implements SessionWritesStore {
   /** One preparation - the mkdir, and the legacy migration - per scope directory, not per call. */
   private readonly prepared = new Map<string, Promise<string>>();
 
@@ -1029,6 +1032,36 @@ export class SessionStore {
       if (!directory) return;
       await rm(this.filePath(directory, id), { force: true });
     });
+  }
+
+  async loadSessionWrites(id: string): Promise<unknown> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return null;
+    try {
+      return JSON.parse(await readFile(this.sessionWritesPath(directory, id), 'utf8')) as unknown;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  async saveSessionWrites(id: string, writes: StoredSessionWrites): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return;
+    const path = this.sessionWritesPath(directory, id);
+    await mkdir(join(directory, SESSION_WRITES), { recursive: true });
+    const temporary = `${path}.tmp`;
+    await writeFile(temporary, JSON.stringify(writes), 'utf8');
+    await rename(temporary, path);
+  }
+
+  async deleteSessionWrites(id: string): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (directory) await rm(this.sessionWritesPath(directory, id), { force: true });
+  }
+
+  private sessionWritesPath(directory: string, id: string): string {
+    return join(directory, SESSION_WRITES, basename(this.filePath(directory, id)));
   }
 
   /**

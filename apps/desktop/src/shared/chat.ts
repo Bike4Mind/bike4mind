@@ -667,6 +667,7 @@ export interface ChatMessage {
   usage?: ChatUsage;
   /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
   promptCache?: ChatPromptCacheStamp;
+  contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
   /**
    * Provider-shaped reasoning blocks (Anthropic extended thinking). Opaque: they are replayed
    * verbatim into the next request, because dropping them breaks thinking-plus-tools turns.
@@ -972,6 +973,15 @@ export const REASONING_EFFORT_SETTINGS: readonly ReasoningEffortSetting[] = [
 export interface ChatModelCatalog {
   models: ChatModelOption[];
   error?: string;
+}
+
+/**
+ * A generation tool the next Chat turn would declare, as `listCreationTools` answers. Derived from
+ * the same inputs as the request's tool list (see toolsForRequest), so the blank chat never offers
+ * to make something the model will not be given a tool for.
+ */
+export interface CreationTool {
+  name: string;
 }
 
 /**
@@ -1282,6 +1292,7 @@ export type ChatStreamEvent =
       content: string;
       stopReason?: string;
       usage?: ChatUsage;
+      contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
       toolCalls?: ChatToolCall[];
       /** The reply's round structure; see ChatMessage.rounds. Absent when no tool ever ran. */
       rounds?: ChatReplyRound[];
@@ -1289,7 +1300,14 @@ export type ChatStreamEvent =
       artifacts?: ChatArtifact[];
       promptCache?: ChatPromptCacheStamp;
     }
-  | { type: 'error'; sessionId: string; messageId: string; message: string; stopReason?: string }
+  | {
+      type: 'error';
+      sessionId: string;
+      messageId: string;
+      message: string;
+      stopReason?: string;
+      contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
+    }
   | {
       type: 'background-output';
       sessionId: string;

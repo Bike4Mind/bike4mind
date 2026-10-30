@@ -22,7 +22,6 @@ import {
   withRequestTtlWrites,
   oneHourWritesOf,
   sumOneHourCacheWrites,
-  CACHE_READ_MULTIPLIER,
   ModelInfo,
   ModelBackend,
   b4mLLMTools,
@@ -146,6 +145,8 @@ import {
   isTurnEndingTool,
   ResponsesStreamTruncatedError,
   LlmTimeoutError,
+  isLlmTimeoutError,
+  isKeepaliveStreamTimeout,
   isOutputBudgetExhaustedError,
   isStreamEndedWithoutFinishError,
   type OutputBudgetExhaustedError,
@@ -153,6 +154,7 @@ import {
   convertOpenAIToolHistoryToCanonical,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
+import { timedOutAttemptUsageFields } from './timedOutAttemptUsage';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
@@ -3391,6 +3393,11 @@ export class ChatCompletionProcess {
         user: this.user,
         db: this.db,
         entitlementKeys,
+        getEntitlements: async () => {
+          const { keys, resolved } = await this.resolveEntitlementKeys();
+          if (!resolved) throw new Error('entitlement resolution failed');
+          return keys;
+        },
         authOrigin: parsedBody.authOrigin,
         apiKeyId: parsedBody.apiKeyId,
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
@@ -3873,6 +3880,9 @@ export class ChatCompletionProcess {
         );
         const startLimit = getSettingsValue('DeferredToolStartSetMaxTokens', defaultAdminSettings);
         if (loaded.size > 0 && startTokens > (startLimit ?? Number.POSITIVE_INFINITY)) {
+          logger.info(
+            `Deferring the tool start set: ~${startTokens} tokens exceeds the ${startLimit} limit (${loaded.size} tools)`
+          );
           toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames, undeclarable);
         }
       }
@@ -5018,7 +5028,11 @@ export class ChatCompletionProcess {
         options.tools = declareDeferredTools(options.tools, removedToolDeclarations, toolTimeline.loaded);
         outboundMessages = applyToolTimeline(outboundMessages, toolTimeline.changes, guidance);
         deferredState = {
-          declaredOnly: new Set([...removedToolDeclarations.map(t => t.toolSchema.name), DEFERRED_ANCHOR_TOOL_NAME]),
+          // A removed start-set tool keeps its guidance in the system prompt, so an undo hop keeps it declared too.
+          declaredOnly: new Set([
+            ...removedToolDeclarations.map(t => t.toolSchema.name).filter(name => !toolTimeline.loaded.has(name)),
+            DEFERRED_ANCHOR_TOOL_NAME,
+          ]),
           guidance: offeredToolNames
             .map(name => guidance.get(name)?.trim())
             .filter((text): text is string => Boolean(text))
@@ -5155,6 +5169,31 @@ export class ChatCompletionProcess {
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
       let streamEndedWithoutFinishRetried = false;
+      // A timed-out stream rejects before reporting usage and the next attempt resets
+      // actualTokenUsage, so the usage the provider billed for it is recorded here as COGS only:
+      // when the loop moves on, and when the timeout ends the turn (nothing else settles it then).
+      // The set keeps an error rethrown after its hop was recorded from being booked twice.
+      const recordedTimeouts = new WeakSet<Error>();
+      const recordTimedOutAttempt = (error: unknown, attemptModel: typeof currentModel) => {
+        if (!adminSettingsEnforceCredits || !isLlmTimeoutError(error) || !error.usage) return;
+        if (recordedTimeouts.has(error)) return;
+        recordedTimeouts.add(error);
+        this.db.usageEvents
+          ?.record({
+            requestId: quest.id,
+            userId: this.user.id,
+            ownerId: this.reservedCreditsOwnerId || this.user.id,
+            ownerType: this.reservedCreditsOwnerType,
+            sessionId: quest.sessionId,
+            feature: 'chat',
+            source: 'web',
+            ...timedOutAttemptUsageFields(attemptModel, error.usage),
+            latencyMs: Date.now() - processStartTime,
+          })
+          .catch((usageEventError: unknown) => {
+            logger.warn('Failed to record timed-out attempt usage event', usageEventError);
+          });
+      };
       // Where the last tool call landed in the visible reply, so the end of the turn can tell
       // an answer written after the tools ran from a preamble written before them. The slots
       // themselves can't say this: every iteration appends into the same indices.
@@ -5729,8 +5768,15 @@ export class ChatCompletionProcess {
             // Stream idle timeout retry: for mid-stream stalls, retry once with short backoff.
             // Unlike request timeouts (model never started), stream idle timeouts mean the model
             // started responding but stalled. One retry, then fall back: repeating the same stall
-            // on the same model wastes minutes.
-            if (isStreamIdleTimeoutError(lastError) && !streamIdleTimeoutRetried) {
+            // on the same model wastes minutes. A keepalive timeout is no stall: the same model
+            // would think just as long again, so it goes straight to the fallback.
+            const isKeepaliveTimeout = isKeepaliveStreamTimeout(lastError);
+            if (isKeepaliveTimeout) {
+              logger.info(
+                `[Stream Idle Retry] ${currentModel.id} was still generating when the keepalive ceiling cut the stream; skipping the same-model retry, which would re-bill the thinking phase`
+              );
+            }
+            if (isStreamIdleTimeoutError(lastError) && !streamIdleTimeoutRetried && !isKeepaliveTimeout) {
               streamIdleTimeoutRetried = true;
               const STREAM_IDLE_RETRY_DELAY_MS = 3000;
               const jitter = Math.floor(Math.random() * 1000);
@@ -5742,6 +5788,7 @@ export class ChatCompletionProcess {
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
               turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, currentModel.id);
+              recordTimedOutAttempt(lastError, currentModel);
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5793,8 +5840,9 @@ export class ChatCompletionProcess {
                 chatApiKeyTable,
                 logger,
                 {
-                  // A timeout that reaches here has spent its one same-model retry. triedModelIds
-                  // already excludes the failed model; forceSwitch states that intent outright.
+                  // A timeout that reaches here has spent its one same-model retry, or skipped it
+                  // because the model was still generating (isSlowModelTimeout covers both).
+                  // triedModelIds already excludes the failed model; forceSwitch states that intent outright.
                   forceSwitch: overloadRetriesExhausted || isSlowModelTimeout,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
@@ -5810,6 +5858,8 @@ export class ChatCompletionProcess {
                 logger.warn(`🚫 [Fallback] No suitable fallback model available`);
                 throw lastError;
               }
+
+              recordTimedOutAttempt(lastError, failedModel);
 
               // Update to the fallback model
               currentModel = fallbackResult.model;
@@ -6266,6 +6316,7 @@ export class ChatCompletionProcess {
         };
       } catch (error) {
         logger.debug(`Error during fallback-enabled model invocation (final model: ${currentModel.id}):`, error);
+        recordTimedOutAttempt(error, currentModel);
         // Only a turn that ends refused counts: a refusal a fallback model answered may be a
         // classifier false positive, and the hit drives throttling/suspension.
         if (error instanceof Error && isSafetyRefusalError(error)) {
@@ -6312,8 +6363,9 @@ export class ChatCompletionProcess {
         // zeroed axis as free.
         // Anything less than full positive usage falls back to the local
         // estimate, which also remains the pre-reservation basis. The fallback
-        // keeps the capped cache-read discount and never bills cache creation,
-        // exactly the pre-provider-basis behavior. The bases never blend.
+        // bills capped cache reads at the model's own cache-read rate (the same
+        // one the provider basis uses) and never bills cache creation. The bases
+        // never blend.
         //
         // Disjoint-fields assumption: whatever an adapter forwards as
         // cacheReadInputTokens must NOT also be counted in inputTokens. Anthropic-family
@@ -6377,9 +6429,9 @@ export class ChatCompletionProcess {
               )
           : getTextModelCost(
               currentModel,
-              localInputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
+              localInputTokens - cacheReadInputTokens,
               outputTokens,
-              0,
+              cacheReadInputTokens,
               0,
               // The local estimate is one whole prompt; the cache discount above must not lower its tier.
               localInputTokens
@@ -6703,6 +6755,8 @@ export class ChatCompletionProcess {
                 model: currentModel.id,
                 inputTokens,
                 outputTokens,
+                cacheReadTokens: cacheReadInputTokens || undefined,
+                cacheWriteTokens: cacheCreationInputTokens || undefined,
               },
               {
                 db: {
@@ -7482,6 +7536,8 @@ export class ChatCompletionProcess {
           model: usage.modelInfo.id,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
+          cacheReadTokens: usage.cacheReadInputTokens,
+          cacheWriteTokens: usage.cacheCreationInputTokens,
         },
         {
           db: {

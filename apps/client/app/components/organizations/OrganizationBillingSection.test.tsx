@@ -45,10 +45,21 @@ vi.mock('@client/app/hooks/data/stripe', () => ({
   }),
 }));
 
+const currentUser = vi.hoisted(() => ({ current: { id: 'owner_1' } as { id: string } | null }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: currentUser.current }),
+}));
+
+const payInvoice = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/components/subscription/usePayFailedInvoice', () => ({
+  usePayFailedInvoice: () => ({ pay: payInvoice, isPending: false, isPaid: false, declineMessage: null }),
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 
 const org = {
   id: 'org1',
+  userId: 'owner_1',
   name: 'Acme',
   seats: 5,
   users: [{ userId: 'u1' }],
@@ -77,6 +88,8 @@ const renderSection = () => {
 beforeEach(() => {
   subscriptionsData.current = [];
   teamPlanFlag.current = true;
+  currentUser.current = { id: 'owner_1' };
+  payInvoice.mockReset();
   plansData.current = [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }];
 });
 
@@ -295,5 +308,44 @@ describe('OrganizationBillingSection - Team plan gate', () => {
     const btn = screen.getByTestId('organization-billing-subscribe-btn') as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
     expect(screen.queryByLabelText(TEAM_PLAN_UNAVAILABLE_MESSAGE)).toBeNull();
+  });
+});
+
+describe('OrganizationBillingSection - Pay now', () => {
+  const payNowButton = () => screen.queryByTestId('org-billing-pay-now-btn');
+
+  it('lets the owner pay the open invoice of a delinquent plan', () => {
+    subscriptionsData.current = [row('past_due')];
+
+    renderSection();
+
+    fireEvent.click(payNowButton()!);
+    expect(payInvoice).toHaveBeenCalledWith('sub_past_due');
+  });
+
+  it('is hidden from an org member who is not the owner', () => {
+    subscriptionsData.current = [row('past_due')];
+    currentUser.current = { id: 'member_2' };
+
+    renderSection();
+
+    expect(screen.getByText('Payment issue')).toBeTruthy();
+    expect(payNowButton()).toBeNull();
+  });
+
+  it('is hidden on a plan in good standing', () => {
+    subscriptionsData.current = [row('active')];
+
+    renderSection();
+
+    expect(payNowButton()).toBeNull();
+  });
+
+  it('is hidden on an admin-granted plan', () => {
+    subscriptionsData.current = [{ ...row('past_due'), source: SubscriptionSource.AdminGrant }];
+
+    renderSection();
+
+    expect(payNowButton()).toBeNull();
   });
 });

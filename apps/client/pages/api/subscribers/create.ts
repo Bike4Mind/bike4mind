@@ -1,43 +1,60 @@
-import { SUBSCRIBER_SOURCES } from '@bike4mind/common';
+import { SUBSCRIBER_SOURCES, TURNSTILE_ACTION_SUBSCRIBE, escapeSlackLine } from '@bike4mind/common';
 import { Subscriber } from '@bike4mind/database';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { baseApi } from '@server/middlewares/baseApi';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
+import { requireTurnstile } from '@server/middlewares/requireTurnstile';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { ipSubject } from '@server/utils/otcLimits';
 import * as z from 'zod';
 
 // One body for every outcome. It also stops an anonymous caller receiving the stored
 // Subscriber document, which the 201 used to return in full.
 const SIGNUP_ACK = { message: 'Thanks -- you are on the list.' } as const;
 
-const handler = baseApi({ auth: false }).post(async (req, res) => {
-  const validatedBody = z
-    .object({
-      firstName: z.string().min(1).max(50),
-      lastName: z.string().min(1).max(50),
-      email: z.string().email(),
-      source: z.enum(SUBSCRIBER_SOURCES).default('subscribe_page'),
-    })
-    .parse(req.body);
+const HOUR_MS = 60 * 60 * 1000;
 
-  // This route is unauthenticated, so a 400 'Email already registered' vs a 201 let anyone
-  // test whether an address is on the waitlist. Both outcomes now return SIGNUP_ACK: a repeat
-  // signup is a no-op that looks exactly like a first one. The Slack alert below is skipped
-  // for a duplicate so admins are not paged twice for the same address.
-  const existingSubscriber = await Subscriber.findOne({ email: validatedBody.email, deletedAt: null });
-  if (existingSubscriber) {
-    return res.status(201).json(SIGNUP_ACK);
-  }
+// Every accepted signup stores a row and pages the team on Slack, and nothing proves who is asking,
+// so the source is bounded the same way as a sign-in code request: a bot challenge first, then
+// per-IP caps keyed like OTC_LIMITS (IPv6 by /64). Sized for a shared office NAT, where a handful
+// of real people may sign up from one address in a day.
+const handler = baseApi({ auth: false })
+  .use(checkBlockedIP())
+  .use(requireTurnstile(TURNSTILE_ACTION_SUBSCRIBE))
+  // Fixed built-ins, no admin setting. Unlike otcCounterLimit (server/utils/otcLimits.ts) there is no E2E
+  // bypass, so an e2e spec hitting this route from CI's shared IP would trip the hourly cap.
+  .use(rateLimit({ bucket: 'subscribers-create-hourly', subject: ipSubject, limit: 10, windowMs: HOUR_MS }))
+  .use(rateLimit({ bucket: 'subscribers-create-daily', subject: ipSubject, limit: 30, windowMs: 24 * HOUR_MS }))
+  .post(async (req, res) => {
+    const validatedBody = z
+      .object({
+        firstName: z.string().min(1).max(50),
+        lastName: z.string().min(1).max(50),
+        email: z.string().email(),
+        source: z.enum(SUBSCRIBER_SOURCES).default('subscribe_page'),
+      })
+      .parse(req.body);
 
-  await Subscriber.create(validatedBody);
+    // This route is unauthenticated, so a 400 'Email already registered' vs a 201 let anyone
+    // test whether an address is on the waitlist. Both outcomes now return SIGNUP_ACK: a repeat
+    // signup is a no-op that looks exactly like a first one. The Slack alert below is skipped
+    // for a duplicate so admins are not paged twice for the same address.
+    const existingSubscriber = await Subscriber.findOne({ email: validatedBody.email, deletedAt: null });
+    if (existingSubscriber) {
+      return res.status(201).json(SIGNUP_ACK);
+    }
 
-  try {
-    const brand = process.env.APP_NAME || '';
-    const blockedSignupNote =
-      validatedBody.source === 'subscribe_page'
-        ? ''
-        : `\nThey tried to sign up while registration was closed (source: \`${validatedBody.source}\`).\n`;
-    const slackMessage = `🎯 **New Subscriber Alert!**
+    await Subscriber.create(validatedBody);
 
-📧 **${validatedBody.firstName} ${validatedBody.lastName}** (${validatedBody.email}) just requested an invite code!
+    try {
+      const brand = process.env.APP_NAME || '';
+      const blockedSignupNote =
+        validatedBody.source === 'subscribe_page'
+          ? ''
+          : `\nThey tried to sign up while registration was closed (source: \`${validatedBody.source}\`).\n`;
+      const slackMessage = `🎯 **New Subscriber Alert!**
+
+📧 **${escapeSlackLine(validatedBody.firstName)} ${escapeSlackLine(validatedBody.lastName)}** (${escapeSlackLine(validatedBody.email)}) just requested an invite code!
 ${blockedSignupNote}
 👋 They're waiting at the door and ready to join${brand ? ` ${brand}` : ''}. Time to roll out the red carpet!
 
@@ -45,14 +62,14 @@ ${blockedSignupNote}
 
 📍 *Admin Panel > Subscribers* to convert them to a user.`;
 
-    await postMessageToSlack(slackMessage);
-  } catch (slackError) {
-    // Don't fail the request if the Slack notification fails
-    console.error('Failed to send Slack notification for new subscriber:', slackError);
-  }
+      await postMessageToSlack(slackMessage);
+    } catch (slackError) {
+      // Don't fail the request if the Slack notification fails
+      console.error('Failed to send Slack notification for new subscriber:', slackError);
+    }
 
-  return res.status(201).json(SIGNUP_ACK);
-});
+    return res.status(201).json(SIGNUP_ACK);
+  });
 
 export const config = {
   api: {

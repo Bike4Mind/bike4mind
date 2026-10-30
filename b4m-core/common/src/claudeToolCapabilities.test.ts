@@ -128,6 +128,16 @@ describe('chatSupportsDeferredToolAddition', () => {
     expect(chatSupportsDeferredToolAddition({ id, backend })).toBe(expected);
   });
 
+  it('only admits models that also support tool changes', () => {
+    for (const id of CHAT_MODELS.filter(isClaudeModelId)) {
+      for (const backend of [ModelBackend.Anthropic, ModelBackend.Bedrock]) {
+        if (chatSupportsDeferredToolAddition({ id, backend })) {
+          expect(supportsToolChanges({ id, backend }), `${id} on ${backend}`).toBe(true);
+        }
+      }
+    }
+  });
+
   it('follows the adapter family of a catalog row over its backend', () => {
     const id = ChatModels.CLAUDE_5_5_OPUS;
     expect(

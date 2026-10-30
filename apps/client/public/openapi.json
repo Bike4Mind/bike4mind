@@ -522,7 +522,59 @@
                 }
               },
               "promptText": {
-                "type": "string"
+                "type": "object",
+                "properties": {
+                  "blocks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "hardcoded",
+                            "admin",
+                            "user",
+                            "project",
+                            "session",
+                            "org",
+                            "caller"
+                          ]
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "redacted": {
+                          "type": "boolean"
+                        },
+                        "placement": {
+                          "type": "string",
+                          "enum": [
+                            "system",
+                            "user_turn",
+                            "mixed"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "source",
+                        "name",
+                        "redacted",
+                        "placement"
+                      ]
+                    }
+                  },
+                  "sizeCapped": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "blocks",
+                  "sizeCapped"
+                ]
               },
               "performance": {
                 "type": "object",
@@ -810,7 +862,8 @@
             "type": "string"
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 256
           },
           "temperature": {
             "type": "number",
@@ -1973,6 +2026,7 @@
         "properties": {
           "model": {
             "type": "string",
+            "minLength": 1,
             "maxLength": 256
           },
           "messages": {
@@ -2202,6 +2256,12 @@
           },
           "max_tokens": {
             "type": "number"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise."
           },
           "options": {
             "type": "object",
@@ -4106,7 +4166,8 @@
             },
             "required": [
               "id"
-            ]
+            ],
+            "additionalProperties": {}
           },
           "originalPrompt": {
             "type": "string"
@@ -4212,6 +4273,7 @@
               },
               {
                 "type": "string",
+                "maxLength": 256,
                 "pattern": "^local-image\\/(?=.*\\S)[\\w.:/ -]+$"
               }
             ]
@@ -4613,6 +4675,7 @@
               },
               {
                 "type": "string",
+                "maxLength": 256,
                 "pattern": "^local-image\\/(?=.*\\S)[\\w.:/ -]+$"
               }
             ]
@@ -5917,7 +5980,7 @@
           "model": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 128,
+            "maxLength": 256,
             "description": "A decision model id from `GET /api/v1/decision-models`."
           },
           "input": {
@@ -8014,6 +8077,7 @@
           "model": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 256,
             "description": "A model id from GET /api/v1/video-models."
           },
           "prompt": {
@@ -9350,6 +9414,7 @@
           "model": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 256,
             "description": "A model id from GET /api/v1/music-models."
           },
           "prompt": {
@@ -11883,6 +11948,7 @@
           "preferred_model": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 256,
             "description": "A chat model id. An unknown model is rejected with a 422."
           },
           "temperature": {
@@ -12051,6 +12117,7 @@
               "null"
             ],
             "minLength": 1,
+            "maxLength": 256,
             "description": "A chat model id. An unknown model is rejected with a 422."
           },
           "temperature": {
@@ -12123,6 +12190,7 @@
           "image_model": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 256,
             "description": "An image model id. Omit to use the deployment image model. An unknown or non-image model is rejected with a 400."
           }
         },

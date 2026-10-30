@@ -322,7 +322,7 @@ const NarratedToolCallSchema = subSchema({
   toolNames: { type: [String], required: false, default: undefined },
 });
 
-export const PromptMetaSchema = new Schema<PromptMeta>(
+export const PromptMetaSchema: Schema<PromptMeta> = new Schema<PromptMeta>(
   {
     model: {
       name: { type: String, required: false },
@@ -561,7 +561,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
   { _id: false }
 );
 
-export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
+export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schema<IChatHistoryItemDocument>(
   {
     sessionId: { type: String, required: true },
     signupActivity: {

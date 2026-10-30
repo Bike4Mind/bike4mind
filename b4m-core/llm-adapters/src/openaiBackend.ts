@@ -20,6 +20,7 @@ import { stripToolDependentMessages } from './toolPairingUtils';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import OpenAI from 'openai';
+import { providerFetchOptions } from './providerDispatcher';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
   Response as OpenAIResponse,
@@ -150,6 +151,7 @@ function federatedOpenAIClient(): OpenAI {
         serviceAccountId,
         provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
       },
+      fetchOptions: providerFetchOptions(),
     });
     federatedOpenAIClients.set(cacheKey, client);
   }
@@ -182,7 +184,10 @@ export class OpenAIBackend implements ICompletionBackend {
   private readonly _dispatch = new DispatchModel();
 
   constructor(apiKey: string | typeof OPENAI_FEDERATED_KEY, logger?: Logger, endUserId?: string) {
-    this._api = apiKey === OPENAI_FEDERATED_KEY ? federatedOpenAIClient() : new OpenAI({ apiKey });
+    this._api =
+      apiKey === OPENAI_FEDERATED_KEY
+        ? federatedOpenAIClient()
+        : new OpenAI({ apiKey, fetchOptions: providerFetchOptions() });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
   }

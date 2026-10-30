@@ -66,7 +66,7 @@ ImageModerationIncidentSchema.index({ createdAt: -1 }); // moderation queue
 // Admin triage queue: absent reviewStatus (pre-Q3) sorts alongside 'pending_review' via $in query.
 ImageModerationIncidentSchema.index({ reviewStatus: 1, createdAt: 1 });
 
-export const ImageModerationIncident =
+export const ImageModerationIncident: Model<IImageModerationIncidentDocument> =
   (mongoose.models.ImageModerationIncident as mongoose.Model<IImageModerationIncidentDocument>) ||
   model<IImageModerationIncidentDocument>('ImageModerationIncident', ImageModerationIncidentSchema);
 
