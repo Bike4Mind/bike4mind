@@ -236,7 +236,7 @@ export const CompletionRequestSchema = z.object({
         .enum(['5m', '1h'])
         .optional()
         .describe(
-          'Prompt-cache lifetime for this request, where the server places cache breakpoints (Claude on the direct Anthropic API or Bedrock, when the request comes from the CLI or Desktop app). `5m` (the default) writes at 1.25x the input rate; `1h` writes at 2x and keeps the cached prefix for an hour between requests. Reads cost the same either way. Models without 1-hour caching ignore `1h` and keep `5m`.'
+          'Prompt-cache lifetime for this request, where the server places cache breakpoints (Claude on the direct Anthropic API or Bedrock, when the request comes from the CLI or Desktop app). `5m` (the default) writes at 1.25x the input rate; `1h` writes at 2x and keeps the cached prefix for an hour between requests. Reads cost the same either way. Models without 1-hour caching ignore `1h` and keep `5m`. Every breakpoint in a request must share one TTL: with `1h`, set no `cache_control` of your own unless it also carries `ttl: "1h"`.'
         ),
     })
     .optional(),
