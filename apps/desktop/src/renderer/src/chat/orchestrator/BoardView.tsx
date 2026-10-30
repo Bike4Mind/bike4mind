@@ -48,8 +48,8 @@ function visualPosition(node: HTMLElement, board: HTMLElement): Point {
 /**
  * FLIP: after a commit that changes `layoutSignature` (column membership or order), compare each card's
  * visual position with the last snapshot and slide moved cards from the old spot. Other commits measure
- * nothing, so live activity updates stay cheap. The snapshot is also refreshed on scroll so scrolling
- * alone never reads as a move. Skips the first mount (nothing remembered) and reduced motion.
+ * nothing, so live activity updates stay cheap. The snapshot is also refreshed on scroll and resize so
+ * neither alone reads as a move. Skips the first mount (nothing remembered) and reduced motion.
  */
 function useFlip(layoutSignature: string) {
   const boardRef = useRef<HTMLElement | null>(null);
@@ -107,7 +107,13 @@ function useFlip(layoutSignature: string) {
       previous.current = next;
     };
     board.addEventListener('scroll', resnapshot, { capture: true, passive: true });
-    return () => board.removeEventListener('scroll', resnapshot, { capture: true });
+    // A resize reflows every card. Guarded because jsdom has no ResizeObserver.
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resnapshot);
+    observer?.observe(board);
+    return () => {
+      board.removeEventListener('scroll', resnapshot, { capture: true });
+      observer?.disconnect();
+    };
   }, []);
 
   const refFor = (id: string) => {

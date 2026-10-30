@@ -119,6 +119,7 @@ describe('BoardView', () => {
 
     afterEach(() => {
       vi.restoreAllMocks();
+      vi.unstubAllGlobals();
       Reflect.deleteProperty(HTMLElement.prototype, 'animate');
     });
 
@@ -149,6 +150,36 @@ describe('BoardView', () => {
       await renderBoard([agentFixture('a', 'done')]);
       const keyframes = animate.mock.calls[0]?.[0] as Array<{ transform: string }>;
       expect(keyframes[0]?.transform).toBe('translate(0px, 40px)');
+    });
+
+    it('re-snapshots when the board resizes, so a resize alone never reads as a move', async () => {
+      let resized: (() => void) | null = null;
+      const observe = vi.fn();
+      const disconnect = vi.fn();
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          constructor(callback: () => void) {
+            resized = callback;
+          }
+          observe = observe;
+          unobserve() {}
+          disconnect = disconnect;
+        }
+      );
+      await renderBoard([agentFixture('a', 'working')]);
+      expect(observe).toHaveBeenCalledWith(el('orchestrator-board'));
+
+      top = 60;
+      await act(async () => resized?.());
+      expect(animate).not.toHaveBeenCalled();
+      top = 20;
+      await renderBoard([agentFixture('a', 'done')]);
+      const keyframes = animate.mock.calls[0]?.[0] as Array<{ transform: string }>;
+      expect(keyframes[0]?.transform).toBe('translate(0px, 40px)');
+
+      themed.unmount();
+      expect(disconnect).toHaveBeenCalled();
     });
 
     it('does not animate under reduced motion', async () => {
