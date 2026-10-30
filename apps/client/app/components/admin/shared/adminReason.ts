@@ -17,6 +17,7 @@ export const ADMIN_REASON_PRESETS = {
   emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
   profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
+  newAccountSpendCap: ['Verified customer', 'Known high-volume user', 'Suspicious usage'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],

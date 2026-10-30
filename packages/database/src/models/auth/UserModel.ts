@@ -1066,6 +1066,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isBanned: { type: Boolean, default: false },
     isModerated: { type: Boolean, default: false },
     apiKeyTrustApproved: { type: Boolean, default: false },
+    newAccountSpendCapLifted: { type: Boolean, default: false },
     // Per-user moderation tracking + auto-throttle/suspend state.
     // Lazily populated - undefined until the user's first moderation hit.
     moderation: { type: UserModerationSchema, required: false, default: undefined },
