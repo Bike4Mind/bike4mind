@@ -70,8 +70,13 @@ export interface ISpendRollupRepository extends IBaseRepository<ISpendRollup> {
     to: Date
   ): Promise<Map<string, ISpendRollup[]>>;
 }
-// Placeholder: filled in by the alert repository task.
-export interface ISpendAlertRepository {}
+/** A persisted alert as the repository returns it. */
+export type SpendAlertRecord = ISpendAlert & { id: string };
+
+export interface ISpendAlertRepository extends IBaseRepository<SpendAlertRecord> {
+  /** Incidents still holding an openKey: status open or acknowledged. */
+  findActive(): Promise<SpendAlertRecord[]>;
+}
 
 export function floorToBucket(date: Date): Date {
   return new Date(Math.floor(date.getTime() / SPEND_BUCKET_MS) * SPEND_BUCKET_MS);
