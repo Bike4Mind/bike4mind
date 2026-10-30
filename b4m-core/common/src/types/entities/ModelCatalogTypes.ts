@@ -360,6 +360,8 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
 
   can_think: 'reasoning',
   thinkingStyle: 'reasoning',
+  openaiReasoningEffort: 'reasoning',
+  effortIncompatibleWithTools: 'reasoning',
 
   can_stream: 'modalities',
   supportsVision: 'modalities',
