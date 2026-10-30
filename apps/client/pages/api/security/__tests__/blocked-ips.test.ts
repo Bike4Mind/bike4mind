@@ -132,8 +132,8 @@ describe('/api/security/blocked-ips - admin gate', () => {
     repo.block.mockResolvedValue({ doc: { ip: '1.2.3.4', reason: 'earlier' }, created: false });
     const { req, res } = mocks(ADMIN, { method: 'POST', body: { ip: '1.2.3.4', reason: 'abuse' } });
     await mockRefs.postHandler!(req, res);
-    expect(res._getStatusCode()).toBe(201);
-    expect(res._getJSONData().item).toMatchObject({ reason: 'earlier' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ item: { reason: 'earlier' }, alreadyBlocked: true });
     expect(repo.block).toHaveBeenCalledWith('1.2.3.4', 'abuse');
     expect(audit.record).not.toHaveBeenCalled();
   });

@@ -15,6 +15,7 @@
  */
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { respond } from '@server/utils/respond';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
@@ -24,6 +25,8 @@ import {
   IWebhookSubscriptionRequest,
   IWebhookSubscriptionResponse,
   IWebhookSubscriptionDocument,
+  webhookSubscriptionResponseSchema,
+  webhookSubscriptionListResponseSchema,
 } from '@bike4mind/common';
 
 // Maximum subscribers per organization to prevent fan-out amplification
@@ -137,7 +140,7 @@ const handler = baseApi()
 
       const response = formatSubscriptionResponse(subscription, org.name);
 
-      return res.status(201).json(response);
+      return respond(res, webhookSubscriptionResponseSchema, response, 201);
     })
   )
   // GET - List user's subscriptions
@@ -156,7 +159,7 @@ const handler = baseApi()
         })
       );
 
-      return res.status(200).json(responses);
+      return respond(res, webhookSubscriptionListResponseSchema, responses);
     })
   );
 

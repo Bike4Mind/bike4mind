@@ -64,6 +64,10 @@ vi.mock('sst', () => ({
   Resource: { App: { stage: 'test' }, websocket: { managementEndpoint: 'wss://example.test' } },
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
+const mockLogApiKeyUsage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
+  ApiKeyUsageManager: { logUsage: mockLogApiKeyUsage },
+}));
 
 const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
@@ -421,5 +425,26 @@ describe('daily cap billing target', () => {
       expect.objectContaining({ userId: 'u1', billingOrganizationId: organizationId })
     );
     expect(executeCompletion).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: organizationId }));
+  });
+});
+
+describe('API key usage counting', () => {
+  it('logs one usage row for an API key request', async () => {
+    mockLogApiKeyUsage.mockClear();
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+    } as never);
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+
+    expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1);
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ keyId: 'k1', userId: 'u1', endpoint: '/api/ai/v1/ws-completions', statusCode: 202 })
+    );
   });
 });

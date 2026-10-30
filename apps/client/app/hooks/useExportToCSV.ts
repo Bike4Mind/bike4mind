@@ -1,15 +1,29 @@
 import { useCallback } from 'react';
 import dayjs from 'dayjs';
+import { downloadData } from '@client/app/utils/download';
+import { CSV_BOM, toCsvFromRecords } from '@client/app/utils/csv';
+
+type CsvRow = Record<string, unknown>;
+
+const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}/;
+
+const withParsedDates = (row: CsvRow): CsvRow =>
+  Object.fromEntries(
+    Object.entries(row).map(([key, value]) => [
+      key,
+      typeof value === 'string' && ISO_DATE_PREFIX.test(value) ? dayjs(value) : value,
+    ])
+  );
 
 interface ExportOptions {
   filename?: string;
   dateFormat?: string;
   customHeaders?: string[];
-  customTransform?: (data: any) => any;
+  customTransform?: (row: CsvRow) => CsvRow;
 }
 
 export const useExportToCSV = () => {
-  const exportToCSV = useCallback((data: any[], options: ExportOptions = {}) => {
+  const exportToCSV = useCallback((data: CsvRow[], options: ExportOptions = {}) => {
     if (!data?.length) return;
 
     const { filename = 'export', dateFormat = 'YYYY-MM-DD', customHeaders, customTransform } = options;
@@ -18,36 +32,9 @@ export const useExportToCSV = () => {
 
     const headers = customHeaders || Object.keys(transformedData[0]);
 
-    const csvContent = [
-      headers.join(','),
-      ...transformedData.map(item =>
-        headers
-          .map(header => {
-            const value = item[header];
-            if (value === null || value === undefined) return '';
-            if (dayjs.isDayjs(value) || (typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}/))) {
-              return dayjs(value).format(dateFormat);
-            }
-            if (typeof value === 'object') {
-              return `"${JSON.stringify(value).replace(/"/g, '""')}"`;
-            }
-            if (typeof value === 'string' && value.includes(',')) {
-              return `"${value.replace(/"/g, '""')}"`;
-            }
-            return value;
-          })
-          .join(',')
-      ),
-    ].join('\n');
+    const csvContent = toCsvFromRecords(transformedData.map(withParsedDates), headers, dateFormat);
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `${filename}_${dayjs().format('YYYY-MM-DD')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadData(CSV_BOM + csvContent, `${filename}_${dayjs().format('YYYY-MM-DD')}.csv`, 'text/csv;charset=utf-8;');
   }, []);
 
   return exportToCSV;

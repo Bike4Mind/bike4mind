@@ -33,7 +33,7 @@ function enabledConfig(overrides?: Partial<SandboxConfig>): SandboxConfig {
 }
 
 /** Create a mock ProxyManager */
-function createMockProxyManager(running: boolean, port: number | null): ProxyManager {
+function createMockProxyManager(running: boolean, port: number | null, socketPath: string | null = null): ProxyManager {
   const env =
     running && port ? { HTTP_PROXY: `http://127.0.0.1:${port}`, HTTPS_PROXY: `http://127.0.0.1:${port}` } : {};
   return {
@@ -45,6 +45,7 @@ function createMockProxyManager(running: boolean, port: number | null): ProxyMan
     getAllowedDomains: () => [],
     isRunning: () => running,
     getPort: () => port,
+    getSocketPath: () => socketPath,
     onEvent: vi.fn(() => () => {}),
   } as unknown as ProxyManager;
 }
@@ -71,6 +72,7 @@ function createStatefulProxyManager(opts?: { failStart?: boolean }): ProxyManage
     isRunning: () => running,
     getPort: () => (running ? 8888 : null),
     getProxyEnv: () => (running ? { HTTP_PROXY: 'http://127.0.0.1:8888' } : {}),
+    getSocketPath: () => null,
     addAllowedDomain: vi.fn(),
     getAllowedDomains: () => [],
     onEvent: vi.fn(() => () => {}),
@@ -411,6 +413,86 @@ describe('SandboxOrchestrator', () => {
     });
   });
 
+  describe('command wrapping inputs', () => {
+    it('blocks when the working directory validator rejects cwd', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), mockRuntime);
+
+      const decision = orchestrator.shouldSandbox('ls', '/elsewhere', () => 'outside the workspace');
+
+      expect(decision).toEqual({ type: 'blocked', reason: 'outside the workspace' });
+      expect(wrapSpy).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['/etc/seccomp.bpf', { seccompProfile: '/etc/seccomp.bpf' }],
+      [undefined, {}],
+    ])('passes the Linux seccomp profile %s only when configured', (seccompProfile, expected) => {
+      const mockRuntime = { ...createMockRuntime(), platform: 'linux' as const };
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const config = enabledConfig({
+        platform: {
+          ...DEFAULT_SANDBOX_CONFIG.platform,
+          linux: { ...DEFAULT_SANDBOX_CONFIG.platform.linux, seccompProfile },
+        },
+      });
+      const orchestrator = new SandboxOrchestrator(config, mockRuntime);
+
+      orchestrator.shouldSandbox('ls', '/tmp');
+
+      if (seccompProfile) expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining(expected));
+      else expect(wrapSpy.mock.calls[0][0]).not.toHaveProperty('seccompProfile');
+    });
+
+    it.each(['   ', 'tools/'])('sandboxes an unusual command %j without throwing', command => {
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), createMockRuntime());
+      expect(orchestrator.shouldSandbox(command, '/tmp').type).toBe('sandbox');
+    });
+  });
+
+  describe('proxy socket wiring', () => {
+    const networkConfig = () => enabledConfig({ network: { ...DEFAULT_SANDBOX_CONFIG.network, enabled: true } });
+
+    it('passes the proxy socket alongside the port when network is granted', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const proxy = createMockProxyManager(true, 8888, '/tmp/b4m-proxy-x/proxy.sock');
+      const orchestrator = new SandboxOrchestrator(networkConfig(), mockRuntime, proxy);
+
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+
+      expect(wrapSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          networkEnabled: true,
+          proxyPort: 8888,
+          proxySocketPath: '/tmp/b4m-proxy-x/proxy.sock',
+        })
+      );
+    });
+
+    it('omits the socket when the proxy has none', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const orchestrator = new SandboxOrchestrator(networkConfig(), mockRuntime, createMockProxyManager(true, 8888));
+
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+
+      expect(wrapSpy.mock.calls[0][0]).not.toHaveProperty('proxySocketPath');
+    });
+
+    it('omits the socket when network is not granted', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const proxy = createMockProxyManager(true, 8888, '/tmp/b4m-proxy-x/proxy.sock');
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), mockRuntime, proxy);
+
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+
+      expect(wrapSpy.mock.calls[0][0]).not.toHaveProperty('proxySocketPath');
+    });
+  });
+
   describe('container sockets', () => {
     it.each([
       [undefined, false],
@@ -613,6 +695,40 @@ describe('SandboxOrchestrator', () => {
 
       expect(orchestrator.getStats().violations).toBe(1);
       expect(mockStore.record).toHaveBeenCalledWith(violation);
+    });
+
+    it('getViolationStore returns the configured store', () => {
+      const store = { record: vi.fn() } as unknown as ViolationLogStore;
+      const orchestrator = new SandboxOrchestrator();
+      expect(orchestrator.getViolationStore()).toBeNull();
+      orchestrator.setViolationStore(store);
+      expect(orchestrator.getViolationStore()).toBe(store);
+    });
+
+    it('setNetworkEnabled(false) tolerates a proxy that fails to stop', async () => {
+      const proxy = createMockProxyManager(true, 8888);
+      vi.mocked(proxy.stop).mockRejectedValue(new Error('close failed'));
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), createMockRuntime(), proxy);
+
+      await expect(orchestrator.setNetworkEnabled(false)).resolves.toBe(false);
+      expect(orchestrator.getConfig().network.enabled).toBe(false);
+    });
+
+    it('recordViolation still counts the violation when the store fails', async () => {
+      const mockStore = { record: vi.fn().mockRejectedValue(new Error('disk full')) } as unknown as ViolationLogStore;
+      const orchestrator = new SandboxOrchestrator();
+      orchestrator.setViolationStore(mockStore);
+
+      await expect(
+        orchestrator.recordViolation({
+          type: 'network',
+          command: 'curl https://example.com',
+          blockedBy: 'proxy',
+          timestamp: new Date(),
+          detail: 'blocked',
+        })
+      ).resolves.toBeUndefined();
+      expect(orchestrator.getStats().violations).toBe(1);
     });
   });
 });

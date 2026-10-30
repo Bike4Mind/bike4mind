@@ -1,4 +1,5 @@
 import type { AuditChange, AuditEntry } from '@bike4mind/common';
+import { undoAdminReason } from '../../../shared/adminReason';
 import type { AdminUserProfile } from '../userProfileModel';
 
 /**
@@ -90,6 +91,8 @@ const changeSentence = ({ field, before, after }: AuditChange): string => {
       return after ? 'Marked email verified' : 'Marked email unverified';
     case 'tags':
       return tagSentence(before, after);
+    case 'pendingEmail':
+      return `Requested an email change to ${formatAuditValue(after)}`;
     case 'currentCredits': {
       if (typeof before !== 'number' || typeof after !== 'number') return 'Adjusted credits';
       const delta = after - before;
@@ -115,6 +118,16 @@ export const describeAuditEntry = (entry: AuditEntry): string => {
 // Undo replays `before` through the same audited update the profile's dialogs use. Only fields whose
 // previous value can be written back as-is qualify; credits, roles and deletions have their own flows.
 const UNDOABLE_FIELDS: ReadonlySet<string> = new Set(['isBanned', 'isModerated', 'tags']);
+// The update route requires `statusChangeReason` whenever one of these flips, undo included.
+const STATUS_FIELDS: ReadonlySet<string> = new Set(['isBanned', 'isModerated']);
+// Older suspensions and restrictions were recorded as user.profile.updated, so both shapes undo.
+const UNDOABLE_ACTIONS: ReadonlySet<string> = new Set([
+  'user.profile.updated',
+  'user.suspended',
+  'user.reinstated',
+  'user.restricted',
+  'user.restriction_lifted',
+]);
 
 const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
@@ -144,15 +157,26 @@ export const auditUndo = (
   user: AdminUserProfile
 ): AuditUndo | null => {
   const changes = entry.changes ?? [];
-  if (entry.action !== 'user.profile.updated' || changes.length === 0) return null;
+  if (!UNDOABLE_ACTIONS.has(entry.action) || changes.length === 0) return null;
   if (!changes.every(change => UNDOABLE_FIELDS.has(change.field))) return null;
   const touched = new Set(changes.map(change => change.field));
   const supersededBy = newerEntries.some(newer => newer.changes?.some(change => touched.has(change.field)));
   if (supersededBy) return null;
   if (!changes.every(change => sameValue(currentValue(user, change.field), change.after))) return null;
+  // A status entry from before reasons were stored has none, and inventing one would put words no
+  // admin wrote into a strict audit record; the profile's reason dialogs still reverse it.
+  const touchesStatus = changes.some(change => STATUS_FIELDS.has(change.field));
+  const reason = entry.reason?.trim();
+  if (touchesStatus && !reason) return null;
   return {
-    patch: Object.fromEntries(changes.map(change => [change.field, change.before ?? defaultFor(change.field)])),
-    redo: Object.fromEntries(changes.map(change => [change.field, change.after])),
+    patch: {
+      ...Object.fromEntries(changes.map(change => [change.field, change.before ?? defaultFor(change.field)])),
+      ...(touchesStatus && reason && { statusChangeReason: undoAdminReason(reason) }),
+    },
+    redo: {
+      ...Object.fromEntries(changes.map(change => [change.field, change.after])),
+      ...(touchesStatus && reason && { statusChangeReason: reason }),
+    },
   };
 };
 

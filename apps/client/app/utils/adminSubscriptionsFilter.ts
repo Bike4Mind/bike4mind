@@ -168,12 +168,12 @@ export type AdminSubscriptionRow = {
    * with no billed amount mirrored from Stripe yet.
    */
   mrr: AdminSubscriptionMrr | null;
-  periodStartsAt: string;
-  periodEndsAt: string;
+  periodStartsAt: string | null;
+  periodEndsAt: string | null;
   canceledAt: string | null;
   /** When a scheduled cancel takes effect: Stripe's cancelAt, or the period end under cancelAtPeriodEnd. */
   cancelAt: string | null;
-  createdAt: string;
+  createdAt: string | null;
 };
 
 // The Plan column and the CSV export both label intervals here, so the list and the export agree.

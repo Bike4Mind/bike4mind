@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCreditsLine } from './newUserWelcomeModel';
+import {
+  STARTER_PROMPTS,
+  activeTimeCopy,
+  advertisedDripCredits,
+  shouldShowNewUserWelcome,
+  unlockPathsCopy,
+  welcomeCreditsLine,
+} from './newUserWelcomeModel';
 
 describe('shouldShowNewUserWelcome', () => {
   it('shows only for a loaded, notebook-free, undismissed user', () => {
@@ -46,15 +53,30 @@ describe('welcomeCreditsLine', () => {
     );
   });
 
-  it('describes a risk-assessed staged tranche as a maximum rather than a guaranteed grant', () => {
+  it('names every unlock path and the daily drip amount for a staged tranche', () => {
     expect(
       welcomeCreditsLine({
         ...base,
         awaitingVerification: true,
-        pendingGrant: 10000,
+        pendingGrant: 1000,
         pendingGrantIsMaximum: true,
+        dailyDripCredits: 1000,
       })
-    ).toBe('Verify your email to unlock up to 10,000 credits, subject to eligibility checks.');
+    ).toBe(
+      'Verify your email to unlock up to 1,000 credits now. The rest unlocks up to 1,000 credits for each day you have Bike4Mind open and in use for about 1 minute (a hidden tab or 5 minutes without input does not count), all at once when you subscribe, or all at once when you verify a card.'
+    );
+  });
+
+  it('omits the daily drip clause when the drip is off', () => {
+    const line = welcomeCreditsLine({
+      ...base,
+      awaitingVerification: true,
+      pendingGrant: 1000,
+      pendingGrantIsMaximum: true,
+    });
+    expect(line).toContain('when you subscribe');
+    expect(line).not.toContain('each day');
+    expect(line).not.toContain('eligibility');
   });
 });
 
@@ -63,5 +85,38 @@ describe('STARTER_PROMPTS', () => {
     expect(STARTER_PROMPTS).toHaveLength(3);
     expect(new Set(STARTER_PROMPTS.map(p => p.prompt)).size).toBe(3);
     for (const p of STARTER_PROMPTS) expect(p.prompt).toMatch(/^[\x20-\x7e]+$/);
+  });
+});
+
+describe('activeTimeCopy', () => {
+  it.each([
+    [undefined, 'about 1 minute'],
+    ['junk', 'about 1 minute'],
+    [0, 'about 1 minute'],
+    [600, 'about 10 minutes'],
+    [900, 'about 15 minutes'],
+    [3600, 'about 1 hour'],
+    [5400, 'about 1.5 hours'],
+    [7200, 'about 2 hours'],
+  ])('renders %s as %s', (seconds, expected) => {
+    expect(activeTimeCopy(seconds)).toBe(expected);
+  });
+
+  it('feeds the unlock paths copy from the setting', () => {
+    expect(unlockPathsCopy(500, '1800')).toContain('for about 30 minutes');
+  });
+});
+
+describe('advertisedDripCredits', () => {
+  const on = { enabled: true, dailyCredits: 1000 };
+  it('advertises the daily amount only when the unlock pool is positive', () => {
+    expect(advertisedDripCredits({ ...on, unlockCredits: 9000 })).toBe(1000);
+    expect(advertisedDripCredits({ ...on, unlockCredits: 0 })).toBe(0);
+    expect(advertisedDripCredits({ ...on, unlockCredits: undefined })).toBe(0);
+  });
+
+  it('stays off when the feature is off or no daily amount is set', () => {
+    expect(advertisedDripCredits({ enabled: false, dailyCredits: 1000, unlockCredits: 9000 })).toBe(0);
+    expect(advertisedDripCredits({ enabled: 'true', dailyCredits: 0, unlockCredits: 9000 })).toBe(0);
   });
 });

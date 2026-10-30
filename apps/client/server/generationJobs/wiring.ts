@@ -1,3 +1,4 @@
+import { assertMediaModelAdmission } from '@server/billing/assertMediaModelAdmission';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
@@ -400,6 +401,7 @@ export const getVideoJobDeps = (): VideoJobDeps => {
 
 export const getCreateVideoJobDeps = (): CreateVideoJobDeps => ({
   ...getVideoJobDeps(),
+  assertModelAdmission: assertMediaModelAdmission,
   engine: getGenerationJobEngine(),
 });
 
@@ -427,6 +429,7 @@ export const getMusicJobDeps = (): MusicJobDeps => {
 
 export const getCreateMusicJobDeps = (): CreateMusicJobDeps => ({
   ...getMusicJobDeps(),
+  assertModelAdmission: assertMediaModelAdmission,
   engine: getGenerationJobEngine(),
   checkStorageFor,
 });

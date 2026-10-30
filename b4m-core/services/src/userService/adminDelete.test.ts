@@ -32,6 +32,21 @@ describe('adminDeleteUser', () => {
     expect(users.delete.mock.invocationCallOrder[0]).toBeLessThan(endConnections.mock.invocationCallOrder[0]);
   });
 
+  it('escapes the name and email in the Slack notice', async () => {
+    const { adapters, users } = makeAdapters();
+    users.findById.mockImplementation(async (id: string) =>
+      id === 'admin-1' ? { id, isAdmin: true } : { id, name: '<!channel> & co', email: 'a<!here>@example.com' }
+    );
+    (adapters.db.adminSettings.findBySettingNames as ReturnType<typeof vi.fn>).mockResolvedValue([true, false]);
+
+    await adminDeleteUser('admin-1', { id: 'user-1' }, adapters);
+
+    const text = (adapters.notify.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(text).toContain('&lt;!channel&gt; &amp; co');
+    expect(text).toContain('a&lt;!here&gt;@example.com');
+    expect(text).not.toContain('<!channel>');
+  });
+
   it('ends nothing when the caller is not an admin', async () => {
     const { adapters, users, endConnections } = makeAdapters();
 

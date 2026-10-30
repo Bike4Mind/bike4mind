@@ -66,6 +66,16 @@ describe('HardwareProbe', () => {
     expect(await hardware.profile()).toBe(machine);
     expect(probe).toHaveBeenCalledTimes(2);
   });
+
+  it('applies an override to what sizing reads and keeps the probe itself apart', async () => {
+    const hardware = new HardwareProbe(async () => machine);
+    let ram = 64;
+    hardware.setOverride(probed => ({ ...probed, totalMemoryBytes: ram * 1024 ** 3 }));
+    ram = 128;
+    expect((await hardware.profile())?.totalMemoryBytes).toBe(128 * 1024 ** 3);
+    expect(hardware.known()?.totalMemoryBytes).toBe(128 * 1024 ** 3);
+    expect(await hardware.probed()).toBe(machine);
+  });
 });
 
 describe('localContextSizing', () => {
