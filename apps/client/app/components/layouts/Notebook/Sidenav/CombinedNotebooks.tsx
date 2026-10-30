@@ -483,7 +483,7 @@ const CombinedNotebooks = () => {
         </Box>
         <Stack
           className="notebook-sidenav-container combined-notebooks-container"
-          sx={{ p: '0 10px 0', gap: 1.5, mb: 0, mt: '4px' }}
+          sx={{ p: '0 10px 0', gap: 1.5, mb: 0, mt: 0 }}
         >
           <SidenavNav section="scroll" />
         </Stack>
