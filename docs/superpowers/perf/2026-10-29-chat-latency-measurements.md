@@ -34,6 +34,8 @@ Notes on re-runs at head c5defb153: items 1, 3, 4, 5 and 6a reproduced within no
 
 ## Regression pass (2026-10-30)
 
+Note: in the streaming-markdown PR these round-numbered test files were later renamed for the behaviour they pin (for example `streamingSplit.regression5.test.tsx` is now `streamingSplit.skipRule.test.tsx`, `StreamingMarkdown.regression2.test.tsx` is now `StreamingMarkdown.completion.test.tsx`). The round names below are kept as a record.
+
 Four fresh agents, one per area, were briefed to break the branch against the base commit
 and left their tests in place as `*.regression.test.ts(x)` files (165 tests). What they
 found, and what changed because of it:

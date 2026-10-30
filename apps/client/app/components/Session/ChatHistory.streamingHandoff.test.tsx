@@ -125,7 +125,12 @@ const queryClient = new QueryClient();
 const noop = vi.fn();
 const sendMessage = async () => {};
 const virtuosoRef = { current: null };
-const older = { id: 'quest-0', prompt: 'earlier', replies: ['Earlier answer.'], status: 'done' } as unknown as IChatHistoryItem;
+const older = {
+  id: 'quest-0',
+  prompt: 'earlier',
+  replies: ['Earlier answer.'],
+  status: 'done',
+} as unknown as IChatHistoryItem;
 
 const History = ({ quest, streaming }: { quest: IChatHistoryItem; streaming: boolean }) => {
   const flattenQuests = streaming ? [{ ...quest, replies: [] }, older] : [quest, older];
@@ -162,7 +167,13 @@ const History = ({ quest, streaming }: { quest: IChatHistoryItem; streaming: boo
 };
 
 const quest = (reply: string, status: string) =>
-  ({ id: 'quest-1', sessionId: 'session-1', prompt: 'chart please', replies: [reply], status }) as unknown as IChatHistoryItem;
+  ({
+    id: 'quest-1',
+    sessionId: 'session-1',
+    prompt: 'chart please',
+    replies: [reply],
+    status,
+  }) as unknown as IChatHistoryItem;
 
 describe('ChatHistory hands a streamed reply to its completed row without remounting its blocks', () => {
   it('keeps an image approved mid-stream loaded once the quest is done and leaves the streaming slot', () => {

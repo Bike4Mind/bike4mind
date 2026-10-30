@@ -22,7 +22,7 @@ const md = (text: string) =>
 const streamChained = (text: string, step: (i: number) => number = () => 1) => {
   let prev: StreamingBlocks | undefined;
   const violations: string[] = [];
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     i = Math.min(text.length, i + step(i));
     const prefix = text.slice(0, i);
     const next = splitStreamingBlocks(prefix, parse, prev);
@@ -33,11 +33,7 @@ const streamChained = (text: string, step: (i: number) => number = () => 1) => {
   return { split: prev!, violations };
 };
 
-const perBlockHtml = (split: StreamingBlocks) =>
-  [...split.blocks, split.tail]
-    .filter(Boolean)
-    .map(md)
-    .join('\n');
+const perBlockHtml = (split: StreamingBlocks) => [...split.blocks, split.tail].filter(Boolean).map(md).join('\n');
 
 const streamedRender = (text: string) => {
   const { split } = streamChained(text);
@@ -96,7 +92,7 @@ const corpus = (count: number, seedStart: number) => {
   });
 };
 
-describe('splitStreamingBlocks soundness fuzz, round 4', () => {
+describe('splitStreamingBlocks soundness fuzz', () => {
   it('only appends blocks, reassembles every prefix, cuts at full-parse node starts, and renders like the single parse', () => {
     const failures: string[] = [];
     for (const text of corpus(80, 4040)) {
@@ -136,7 +132,7 @@ const PROBES: Record<string, string> = {
   'blockquote lazy then blank': '> a\nlazy\n\nb',
 };
 
-describe('splitStreamingBlocks targeted constructs, round 4', () => {
+describe('splitStreamingBlocks targeted constructs', () => {
   for (const [name, text] of Object.entries(PROBES)) {
     it(`streams "${name}" char by char and renders like the single parse`, () => {
       const { violations } = streamChained(text);
