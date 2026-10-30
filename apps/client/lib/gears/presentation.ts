@@ -121,7 +121,7 @@ export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
   apicall: {
     title: 'API Call',
     tagline: 'Hello, world',
-    intro: 'Make your first API request - one curl with your key and the completions endpoint answers.',
+    intro: 'Send an API request - one curl with your key and the completions endpoint answers.',
     cta: 'Make an API call',
     ctaAction: 'navigate:/profile?tab=settings',
   },

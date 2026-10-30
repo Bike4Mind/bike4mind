@@ -7,9 +7,13 @@ describe('GEAR_PRESENTATION', () => {
     expect(Object.keys(GEAR_PRESENTATION).sort()).toEqual([...GEAR_KEYS].sort());
   });
 
-  it.each(GEAR_KEYS)('%s default cta does not claim to be a first-time action', key => {
-    expect(GEAR_PRESENTATION[key].cta.trim()).not.toBe('');
-    expect(GEAR_PRESENTATION[key].cta).not.toMatch(/your first/i);
+  // A claimed card still shows its default copy, so none of it may read as first-time.
+  it.each(GEAR_KEYS)('%s default copy does not claim to be a first-time action', key => {
+    const { title, tagline, intro, cta } = GEAR_PRESENTATION[key];
+    expect(cta.trim()).not.toBe('');
+    for (const copy of [title, tagline, intro, cta]) {
+      expect(copy).not.toMatch(/your first/i);
+    }
   });
 
   it('pins the neutral copy for the destination gears', () => {
