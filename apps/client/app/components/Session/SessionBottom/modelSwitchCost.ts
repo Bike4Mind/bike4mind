@@ -1,12 +1,15 @@
-import { resolveAppliedRates, usdToCreditsExpected, type ModelInfo } from '@bike4mind/common';
+import { ModelBackend, resolveAppliedRates, usdToCreditsExpected, type ModelInfo } from '@bike4mind/common';
 import { estimateNextInputTokens } from '@client/app/utils/creditEstimate';
 
 /** Below this the notice stays hidden: a re-write that small is not worth interrupting for. */
 export const MODEL_SWITCH_NOTICE_MIN_CREDITS = 500;
 
+const CACHE_WRITE_BACKENDS: ReadonlySet<string> = new Set([ModelBackend.Anthropic, ModelBackend.Bedrock]);
+
 /**
  * Credits the next message spends writing this conversation into `model`'s prompt cache, which is
- * per model: the last turn's prompt, in `model`'s tokens, at the cache-write rate settlement charges.
+ * per model: the last turn's prompt, in `model`'s tokens, at the cache-write rate settlement charges
+ * (the plain input rate for backends that bill no cache writes).
  * Null when unpriced or free.
  */
 export function modelSwitchCacheCredits(
@@ -18,7 +21,9 @@ export function modelSwitchCacheCredits(
   const promptTokens = estimateNextInputTokens(previousInputTokens, '', model.id, previousModelId);
   const rates = resolveAppliedRates(model, promptTokens);
   if (!rates) return null;
-  const credits = usdToCreditsExpected(rates.cacheWrite * promptTokens);
+  const billsCacheWrite =
+    CACHE_WRITE_BACKENDS.has(model.backend) || model.pricing[rates.tierKey]?.cache_write !== undefined;
+  const credits = usdToCreditsExpected((billsCacheWrite ? rates.cacheWrite : rates.input) * promptTokens);
   return credits > 0 ? credits : null;
 }
 
@@ -48,7 +53,7 @@ export function getModelSwitchCostNotice({
   providerInputTokens?: number;
 }): number | null {
   if (!selectedModel || !answeredModelId || !previousInputTokens) return null;
-  if (selectedModel.id === answeredModelId) return null;
+  if (selectedModel.id === (previousInputModelId ?? answeredModelId)) return null;
   const credits = providerInputTokens
     ? modelSwitchCacheCredits(selectedModel, providerInputTokens, answeredModelId)
     : modelSwitchCacheCredits(selectedModel, previousInputTokens, previousInputModelId);
