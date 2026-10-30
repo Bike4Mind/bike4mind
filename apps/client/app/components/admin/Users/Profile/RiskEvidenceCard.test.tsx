@@ -73,7 +73,7 @@ describe('RiskEvidenceCard', () => {
     expect(within(network).getByText('point sample')).toBeInTheDocument();
 
     const auth = screen.getByTestId('risk-evidence-fact-authActivity');
-    expect(within(auth).getByText('200 (capped)')).toBeInTheDocument();
+    expect(within(auth).getByText('200 samples (capped)')).toBeInTheDocument();
 
     const fingerprint = screen.getByTestId('risk-evidence-fact-edgeFingerprint');
     expect(within(fingerprint).getByText('Unknown')).toBeInTheDocument();

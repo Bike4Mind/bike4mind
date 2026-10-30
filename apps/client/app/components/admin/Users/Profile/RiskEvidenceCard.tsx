@@ -83,21 +83,27 @@ const FactRow: React.FC<{ name: RiskEvidenceFactName; fact: RiskEvidenceFacts[Ri
           </Typography>
         )}
       </Box>
-      <Box component="td" sx={{ ...cell, color: 'admin.inkMuted' }}>
-        {PROVENANCE_LABELS[fact.provenance]}
-      </Box>
-      <Box component="td" sx={{ ...cell, color: 'admin.inkMuted' }}>
-        {fact.status === 'observed' ? `${fact.sampleCount}${fact.truncated ? ' (capped)' : ''}` : EM_DASH}
-      </Box>
+      {/* Source, samples and freshness share a column so the table fits the card without scrolling. */}
       <Box component="td" sx={cell}>
-        {fact.status === 'observed' &&
-          (fact.latestAt ? (
-            <RelativeTime at={fact.latestAt} />
-          ) : (
-            <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-              point sample
-            </Typography>
-          ))}
+        <Stack gap={0.25}>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            {PROVENANCE_LABELS[fact.provenance]}
+          </Typography>
+          {fact.status === 'observed' && (
+            <>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                {`${fact.sampleCount} ${fact.sampleCount === 1 ? 'sample' : 'samples'}${fact.truncated ? ' (capped)' : ''}`}
+              </Typography>
+              {fact.latestAt ? (
+                <RelativeTime at={fact.latestAt} />
+              ) : (
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                  point sample
+                </Typography>
+              )}
+            </>
+          )}
+        </Stack>
       </Box>
     </Box>
   );
@@ -171,7 +177,7 @@ export const RiskEvidenceCard: React.FC<{ userId: string }> = ({ userId }) => {
               >
                 <Box component="thead" sx={{ color: 'admin.inkMuted' }}>
                   <tr>
-                    {['Fact', 'Status', 'Value', 'Source', 'Samples', 'Freshness'].map(heading => (
+                    {['Fact', 'Status', 'Value', 'Source'].map(heading => (
                       <Box key={heading} component="th" sx={{ py: 0.75, px: 1.5, fontWeight: 500 }}>
                         {heading}
                       </Box>
