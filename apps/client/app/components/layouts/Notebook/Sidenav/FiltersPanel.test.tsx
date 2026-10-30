@@ -61,13 +61,15 @@ describe('FiltersPanel placement', () => {
   afterEach(() => {
     setScreen(originalWidth);
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('opens on <body>, centred under the button and 8px below it', () => {
     vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(230);
     setScreen(1440);
     renderPanel({ anchorRef: { current: anchorAt() } });
-    const panel = screen.getByTestId('sidenav-filters-panel');
+    const panel = screen.getByRole('dialog', { name: 'Filters' });
+    expect(panel).toBe(screen.getByTestId('sidenav-filters-panel'));
     expect(panel.parentElement).toBe(document.body);
     const style = getComputedStyle(panel);
     expect(style.position).toBe('fixed');
@@ -78,12 +80,13 @@ describe('FiltersPanel placement', () => {
     expect(style.maxHeight).toBe('calc(100dvh - 160px)');
   });
 
-  // The sidebar keeps its width on a phone, so a panel centred under the button runs off a 390px screen.
-  it('centres it on the screen when it does not fit under the button', () => {
+  // The sidebar keeps its width on a phone, so a panel centred under the button runs off a 390px screen:
+  // it slides left only until its right edge is 8px from the screen's (390 - 8 - 230).
+  it('keeps it 8px inside the screen when it does not fit under the button', () => {
     vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(230);
     setScreen(390);
     renderPanel({ anchorRef: { current: anchorAt() } });
-    expect(getComputedStyle(screen.getByTestId('sidenav-filters-panel')).left).toBe('80px');
+    expect(getComputedStyle(screen.getByTestId('sidenav-filters-panel')).left).toBe('152px');
   });
 
   it('rounds an odd width to a whole pixel', () => {
@@ -101,7 +104,27 @@ describe('FiltersPanel placement', () => {
     act(() => {
       window.dispatchEvent(new Event('resize'));
     });
-    expect(getComputedStyle(screen.getByTestId('sidenav-filters-panel')).left).toBe('80px');
+    expect(getComputedStyle(screen.getByTestId('sidenav-filters-panel')).left).toBe('152px');
+  });
+
+  it('places it again when its rows change size while open', () => {
+    let onRowsResize: () => void = () => {};
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          onRowsResize = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+    const offsetWidth = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(230);
+    setScreen(1440);
+    renderPanel({ anchorRef: { current: anchorAt() } });
+    offsetWidth.mockReturnValue(300);
+    act(() => onRowsResize());
+    expect(getComputedStyle(screen.getByTestId('sidenav-filters-panel')).left).toBe('162px');
   });
 });
 

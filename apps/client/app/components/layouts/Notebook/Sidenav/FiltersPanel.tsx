@@ -106,20 +106,21 @@ export default function FiltersPanel({
   anchorRef,
 }: FiltersPanelProps) {
   const { t } = useTranslation();
-  // Under the button's middle when that fits the screen with SCREEN_EDGE to spare; otherwise (a phone,
-  // where the sidebar spans the screen) centred on the screen. Placed before paint, and again on a resize
-  // or rotation, as the bulk-actions panel is (useBulkActions); the backdrop below stops page scroll.
+  // Centred under the button, then slid just far enough to keep SCREEN_EDGE from either side of the
+  // screen (a phone, where the sidebar spans it), so it stays as close to the button as it can. Placed
+  // before paint, and again on a resize or rotation, as the bulk-actions panel is (useBulkActions); the
+  // backdrop below stops page scroll.
   const panelRef = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState({ top: 0, left: 0 });
   const placePanel = useCallback(() => {
     const anchor = anchorRef.current?.getBoundingClientRect();
     if (!anchor) return;
     const width = panelRef.current?.offsetWidth ?? 0;
-    const underButton = anchor.left + anchor.width / 2;
-    const fits = underButton - width / 2 >= SCREEN_EDGE && underButton + width / 2 <= window.innerWidth - SCREEN_EDGE;
+    const leftUnderButton = anchor.left + anchor.width / 2 - width / 2;
+    // maxWidth keeps the panel within the screen, so the upper bound never drops below SCREEN_EDGE.
+    const left = Math.min(Math.max(leftUnderButton, SCREEN_EDGE), window.innerWidth - SCREEN_EDGE - width);
     // Left edge rather than translateX(-50%), rounded so an odd width does not land on a half pixel.
-    const centre = fits ? underButton : window.innerWidth / 2;
-    setPlace({ top: anchor.bottom + ANCHOR_GAP, left: Math.round(centre - width / 2) });
+    setPlace({ top: anchor.bottom + ANCHOR_GAP, left: Math.round(left) });
   }, [anchorRef]);
   // On a short viewport the panel scrolls; a fade at its foot says there is more below until the end.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -182,6 +183,8 @@ export default function FiltersPanel({
       <Box
         ref={panelRef}
         data-testid="sidenav-filters-panel"
+        role="dialog"
+        aria-label={t('filter.title', 'Filters')}
         tabIndex={-1}
         sx={theme => ({
           position: 'fixed',
