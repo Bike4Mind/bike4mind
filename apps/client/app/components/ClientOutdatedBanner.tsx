@@ -15,6 +15,7 @@ export const ClientOutdatedBanner = () => {
 
   if (!outdated) return null;
 
+  // A Box, not Alert: spacing and glass styling are pinned to the marketing-site announcement pill.
   return (
     <Box
       role="status"
@@ -26,6 +27,7 @@ export const ClientOutdatedBanner = () => {
         transform: 'translateX(-50%)',
         zIndex: 10000,
         width: '100%',
+        // Sized to the current label; recheck if the copy changes.
         maxWidth: 270,
         display: 'flex',
         alignItems: 'center',
