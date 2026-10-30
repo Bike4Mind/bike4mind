@@ -31,7 +31,13 @@ import {
 
 const DAY = 86400000;
 const logger = new Logger({ metadata: { service: 'card-verification' } });
-const failureSchema = new mongoose.Schema({
+interface CardVerificationFailureRecord {
+  attemptId: string;
+  userId: string;
+  ipDigest: string;
+  at: Date;
+}
+const failureSchema = new mongoose.Schema<CardVerificationFailureRecord>({
   attemptId: { type: String, required: true },
   userId: { type: String, required: true },
   ipDigest: { type: String, required: true },
@@ -42,7 +48,8 @@ failureSchema.index({ userId: 1, at: 1 });
 failureSchema.index({ ipDigest: 1, at: 1 });
 failureSchema.index({ at: 1 }, { expireAfterSeconds: 172800 });
 export const CardVerificationFailure =
-  mongoose.models.CardVerificationFailure ?? mongoose.model('CardVerificationFailure', failureSchema);
+  (mongoose.models.CardVerificationFailure as mongoose.Model<CardVerificationFailureRecord> | undefined) ??
+  mongoose.model<CardVerificationFailureRecord>('CardVerificationFailure', failureSchema);
 
 export async function ensureCardVerificationIndexes() {
   await CardVerification.createIndexes();
