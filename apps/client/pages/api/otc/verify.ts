@@ -545,7 +545,9 @@ const handler = baseApi({ auth: false })
           riskSignals: signals.map(type => ({ type, at: new Date() })),
         });
         // Missing or expired form tokens are record-only: the token fetch can be in flight, fail, be rate-limited, or the tab left open.
-        const actionable = signals.filter(s => s !== 'signup_token_missing' && s !== 'signup_token_expired');
+        // Too-fast alone is record-only too (autofill + Enter can beat the timer); it rides along with a stronger signal.
+        const recordOnly: UserRiskSignalType[] = ['signup_token_missing', 'signup_token_expired', 'signup_too_fast'];
+        const actionable = signals.filter(s => !recordOnly.includes(s));
         if (actionable.length) {
           step = 'set throttle tier';
           const tierChange = await userService.setThrottleTier(

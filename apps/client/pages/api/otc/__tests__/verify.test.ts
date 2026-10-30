@@ -1675,7 +1675,7 @@ describe('/api/otc/verify - signup bot-check signals', () => {
     expect(mockSetThrottleTier).toHaveBeenCalledWith(
       'user-1',
       'shadow',
-      { reason: 'signup checks: signup_too_fast,signup_honeypot', source: 'signup_timing' },
+      { reason: 'signup checks: signup_too_fast,signup_honeypot', source: 'signup_honeypot' },
       expect.anything()
     );
     expect(mockRecordAdminActionForActor).toHaveBeenCalledWith(
@@ -1712,6 +1712,31 @@ describe('/api/otc/verify - signup bot-check signals', () => {
     });
     expect(mockSetThrottleTier).not.toHaveBeenCalled();
     expect(mockRecordAdminActionForActor).not.toHaveBeenCalled();
+  });
+
+  it('records a lone too-fast submission without shadowing the account', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(['signup_too_fast']);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserUpdate).toHaveBeenCalledWith({
+      id: 'user-1',
+      riskSignals: [{ type: 'signup_too_fast', at: expect.any(Date) }],
+    });
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
+    expect(mockRecordAdminActionForActor).not.toHaveBeenCalled();
+  });
+
+  it('shadows too-fast plus an invalid token with the timing source', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(['signup_too_fast', 'signup_token_invalid']);
+    await handler(req, res);
+    expect(mockSetThrottleTier).toHaveBeenCalledWith(
+      'user-1',
+      'shadow',
+      { reason: 'signup checks: signup_too_fast,signup_token_invalid', source: 'signup_timing' },
+      expect.anything()
+    );
   });
 
   it('shadows an expired token plus honeypot with the honeypot source', async () => {
@@ -1783,7 +1808,7 @@ describe('/api/otc/verify - signup bot-check signals', () => {
     expect(mockSetThrottleTier).toHaveBeenCalledWith(
       'user-1',
       'shadow',
-      expect.objectContaining({ source: 'signup_timing' }),
+      expect.objectContaining({ source: 'signup_honeypot' }),
       expect.anything()
     );
     expect(res._getStatusCode()).toBe(clean.res._getStatusCode());
