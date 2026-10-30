@@ -22,6 +22,7 @@ import {
   type ModelServerKind,
   type ModelServerProbeInput,
   type ModelServerProbeResult,
+  type ModelServerSpecs,
   type ModelServerUpdateInput,
   type ModelServerView,
 } from '@shared/modelServers';
@@ -86,6 +87,8 @@ export interface ModelServerRegistryDeps {
   /** For "This computer"; defaults to the global fetch. */
   localFetch?: FetchLike;
   now?(): number;
+  /** This computer's entered hardware was loaded or changed, so whatever was sized from its probe is stale. */
+  localSpecsChanged?(): void;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -115,6 +118,7 @@ interface ProbeOutcome {
 export class ModelServerRegistry {
   private readonly entries = new Map<string, Entry>();
   private localHealth: ModelServerHealth = { ...UNKNOWN_HEALTH };
+  private localSpecs: ModelServerSpecs | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
   private loaded: Promise<void> | null = null;
   private readonly savedListeners = new Set<(id: string) => void>();
@@ -157,8 +161,15 @@ export class ModelServerRegistry {
       unencrypted: false,
       health: this.localHealth,
       models: [],
+      specs: this.localSpecs,
     };
     return [local, ...[...this.entries.values()].map(entry => this.view(entry))];
+  }
+
+  /** Hardware entered in Settings for a server or this computer; null before the list loads. */
+  specs(id: string): ModelServerSpecs | null {
+    if (id === LOCAL_SERVER_ID) return this.localSpecs;
+    return this.entries.get(id)?.record.specs ?? null;
   }
 
   /** Tests an address without saving it. */
@@ -248,6 +259,14 @@ export class ModelServerRegistry {
 
   async update(id: string, input: ModelServerUpdateInput): Promise<ModelServerView[]> {
     await this.load();
+    if (id === LOCAL_SERVER_ID) {
+      if (input.specs === undefined) throw new Error('This computer has no other settings to change here.');
+      this.localSpecs = await this.deps.store.setLocalSpecs(input.specs);
+      this.deps.localSpecsChanged?.();
+      this.saved(id);
+      this.emit();
+      return this.views();
+    }
     const entry = this.entries.get(id);
     if (!entry) throw new Error('That model server is no longer saved.');
     if (input.credential) {
@@ -593,14 +612,17 @@ export class ModelServerRegistry {
       unencrypted: entry.parsed.protocol === 'http:' && entry.scope === 'private',
       health: entry.health,
       models: record.models,
+      specs: record.specs,
     };
   }
 
   private load(): Promise<void> {
-    this.loaded ??= this.deps.store.list().then(records => {
+    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs()]).then(([records, specs]) => {
       for (const record of records) {
         if (parseServerAddress(record.transport.baseUrl)) this.entries.set(record.id, this.build(record));
       }
+      this.localSpecs = specs;
+      if (specs) this.deps.localSpecsChanged?.();
     });
     return this.loaded;
   }

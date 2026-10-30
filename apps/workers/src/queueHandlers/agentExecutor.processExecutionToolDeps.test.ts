@@ -330,12 +330,37 @@ describe('processExecution tool deps', () => {
       return deps.user as { isAdmin?: boolean };
     }
 
+    async function depsUsersReadFor(doc: Record<string, unknown>) {
+      const { agentExecutionRepository, userRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      const deps = await runWithSession(baseSession);
+      const users = (deps.db as { users: typeof userRepository }).users;
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ isAdmin: true } as never);
+      try {
+        return { users, owner: (await users.findById('user-1')) as { isAdmin?: boolean } };
+      } finally {
+        findUser.mockRestore();
+      }
+    }
+
     it('withholds the owner admin role when the run was started that way', async () => {
       expect((await depsUserFor({ ...execDoc, apiKeyId: 'key-1', adminRoleWithheld: true })).isAdmin).toBe(false);
     });
 
     it('keeps the owner admin role for a run that does not withhold it', async () => {
       expect((await depsUserFor({ ...execDoc, apiKeyId: 'key-1' })).isAdmin).toBe(true);
+    });
+
+    it('withholds it from a tool that re-reads the owner by id', async () => {
+      const { owner } = await depsUsersReadFor({ ...execDoc, apiKeyId: 'key-1', adminRoleWithheld: true });
+      expect(owner.isAdmin).toBe(false);
+    });
+
+    it('hands tools the plain user repository for a run that does not withhold it', async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { users, owner } = await depsUsersReadFor({ ...execDoc, apiKeyId: 'key-1' });
+      expect(users).toBe(userRepository);
+      expect(owner.isAdmin).toBe(true);
     });
   });
 

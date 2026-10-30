@@ -32,7 +32,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useExportToCSV } from '@client/app/hooks/useExportToCSV';
 import { fetchCounterLogs, type CounterLogRow } from '@client/app/utils/userAPICalls';
-import { useAnalyticsStore, ALL_VALUE } from '../store';
+import { useAnalyticsStore, ALL_VALUE, isAllOrganizations } from '../store';
 import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
 import { UserActivityFilters } from '../filters/UserActivityFilters';
 import { collectUserActivityRows, MAX_EXPORT_ROWS } from '../exportUserActivity';
@@ -81,7 +81,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
   const getOrganizationDisplayLabel = () => {
     const selected = selectedOrganizations || [];
 
-    if (selected.length === 0 || selected.includes(ALL_VALUE)) {
+    if (isAllOrganizations(selected)) {
       return 'All Organizations';
     }
 
@@ -107,7 +107,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
     }
   };
 
-  const isAllSelected = selectedOrganizations.includes(ALL_VALUE);
+  const isAllSelected = isAllOrganizations(selectedOrganizations);
 
   /**
    * Export walks the pages itself: the grid holds a single server page, so exporting what is
@@ -209,6 +209,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
                   </Typography>
                   <Dropdown>
                     <MenuButton
+                      data-testid="user-activity-org-menu-btn"
                       endDecorator={<KeyboardArrowDownIcon />}
                       sx={{
                         minWidth: { xs: 0, sm: 200 },
@@ -228,16 +229,16 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
                       </Box>
                     </MenuButton>
                     <Menu sx={{ maxHeight: 300, overflowY: 'auto', minWidth: 200 }}>
-                      <MenuItem onClick={() => toggleOrganization('all')}>
-                        <Checkbox
-                          checked={selectedOrganizations.includes(ALL_VALUE)}
-                          onChange={() => toggleOrganization('all')}
-                          sx={{ mr: 1 }}
-                        />
+                      <MenuItem onClick={() => toggleOrganization('all')} data-testid="user-activity-org-option-all">
+                        <Checkbox checked={isAllSelected} onChange={() => toggleOrganization('all')} sx={{ mr: 1 }} />
                         All
                       </MenuItem>
                       {organizations?.map(org => (
-                        <MenuItem key={org} onClick={() => toggleOrganization(org)}>
+                        <MenuItem
+                          key={org}
+                          onClick={() => toggleOrganization(org)}
+                          data-testid={`user-activity-org-option-${org}`}
+                        >
                           <Checkbox
                             checked={selectedOrganizations.includes(org)}
                             onChange={() => toggleOrganization(org)}
@@ -255,7 +256,13 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
                     Accounts
                   </Typography>
                   <Box sx={{ display: 'flex', alignItems: 'center', minHeight: 2.5 }}>
-                    <Stack direction={'row'} gap={2} flexWrap="wrap" alignItems="center">
+                    <Stack
+                      direction={'row'}
+                      gap={2}
+                      flexWrap="wrap"
+                      alignItems="center"
+                      data-testid="user-activity-exclude-orgs"
+                    >
                       {/* A specific org selection already leaves out users without an org. */}
                       <Checkbox
                         checked={exclusions.noOrg}

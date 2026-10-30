@@ -14,13 +14,9 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 
 const renderHeader = (user: AdminUserProfile = buildProfile()) => {
   const onAction = vi.fn();
-  const onEditProfile = vi.fn();
   const onCompliance = vi.fn();
-  render(
-    <UserProfileHeader user={user} onAction={onAction} onEditProfile={onEditProfile} onCompliance={onCompliance} />,
-    { wrapper: TestWrapper }
-  );
-  return { onAction, onEditProfile, onCompliance };
+  render(<UserProfileHeader user={user} onAction={onAction} onCompliance={onCompliance} />, { wrapper: TestWrapper });
+  return { onAction, onCompliance };
 };
 
 describe('UserProfileHeader', () => {
@@ -42,7 +38,6 @@ describe('UserProfileHeader', () => {
       <UserProfileHeader
         user={buildProfile({ isBanned: true, isModerated: true })}
         onAction={vi.fn()}
-        onEditProfile={vi.fn()}
         onCompliance={vi.fn()}
       />,
       { wrapper: TestWrapper }
@@ -66,6 +61,26 @@ describe('UserProfileHeader', () => {
 
     expect(screen.getByTestId('user-profile-joined')).toHaveTextContent(/^Joined with Google \u00b7 /);
     expect(screen.getByTestId('user-profile-org-chip')).toHaveTextContent('Acme');
+  });
+
+  it('shows an unlisted signup method and level as stored', () => {
+    renderHeader(
+      buildProfile({
+        level: 'TrialUser' as AdminUserProfile['level'],
+        photoUrl: 'https://example.com/a.png',
+        acquisition: { signupMethod: 'saml', capturedAt: new Date() },
+      })
+    );
+
+    expect(screen.getByTestId('user-profile-joined')).toHaveTextContent(/^Joined with saml \u00b7 /);
+    expect(screen.getByTestId('user-profile-level-chip')).toHaveTextContent('TrialUser');
+  });
+
+  it('leaves out the level chip and email when the account has neither', () => {
+    renderHeader(buildProfile({ level: undefined, email: null }));
+
+    expect(screen.queryByTestId('user-profile-level-chip')).not.toBeInTheDocument();
+    expect(screen.queryByText('ada@example.com')).not.toBeInTheDocument();
   });
 
   it('leaves the org chip out while the org is an unpopulated id, as an update response carries it', () => {
@@ -97,17 +112,24 @@ describe('UserProfileHeader', () => {
     expect(screen.getByTestId('user-profile-adjust-credits-btn')).toBeInTheDocument();
   });
 
-  it.each(['loginAs', 'message', 'subscription', 'role', 'productAccess', 'restrict', 'shadowTier', 'delete'])(
-    'the More menu reports %s',
-    async action => {
-      const { onAction } = renderHeader();
+  it.each([
+    'editProfile',
+    'loginAs',
+    'message',
+    'subscription',
+    'role',
+    'productAccess',
+    'restrict',
+    'shadowTier',
+    'delete',
+  ])('the More menu reports %s', async action => {
+    const { onAction } = renderHeader();
 
-      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
-      fireEvent.click(await screen.findByTestId(`user-profile-menu-${action}-item`));
+    fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+    fireEvent.click(await screen.findByTestId(`user-profile-menu-${action}-item`));
 
-      expect(onAction).toHaveBeenCalledWith(action);
-    }
-  );
+    expect(onAction).toHaveBeenCalledWith(action);
+  });
 
   it('the More menu opens the compliance record through onCompliance, not onAction', async () => {
     const { onAction, onCompliance } = renderHeader();
@@ -117,17 +139,6 @@ describe('UserProfileHeader', () => {
 
     expect(onCompliance).toHaveBeenCalledTimes(1);
     expect(onAction).not.toHaveBeenCalled();
-  });
-
-  it('the More menu opens the profile editor through onEditProfile, not onAction', async () => {
-    const { onAction, onEditProfile, onCompliance } = renderHeader();
-
-    fireEvent.click(screen.getByTestId('user-profile-more-btn'));
-    fireEvent.click(await screen.findByTestId('user-profile-menu-editProfile-item'));
-
-    expect(onEditProfile).toHaveBeenCalledTimes(1);
-    expect(onAction).not.toHaveBeenCalled();
-    expect(onCompliance).not.toHaveBeenCalled();
   });
 
   it('turns the restrict item into Lift restriction for a restricted account', async () => {

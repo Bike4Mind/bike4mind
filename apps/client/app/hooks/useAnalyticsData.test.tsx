@@ -10,7 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 const fetchCounterLogs = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/utils/userAPICalls', () => ({ fetchCounterLogs }));
 
-import { useAnalyticsData } from './useAnalyticsData';
+import { useAnalyticsData, useDailyReports } from './useAnalyticsData';
 import { useAnalyticsStore, ALL_VALUE } from '../components/admin/Analytics/store';
 import { AnalyticsSubTab } from '../components/admin/Analytics/types';
 
@@ -110,69 +110,52 @@ describe('useAnalyticsData - user activity', () => {
     expect(result.current.data?.logs[0]).toMatchObject({ date: 'page-2' });
   });
 
-  it('does not page the report tabs, which return a single cached document', async () => {
+  it('sends nothing while disabled, so the grid query never runs behind a report tab', async () => {
+    renderHook(() => useAnalyticsData({ enabled: false }), { wrapper });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(fetchCounterLogs).not.toHaveBeenCalled();
+  });
+
+  it('never sends a report flag', async () => {
     useAnalyticsStore.setState({ activeSubTab: AnalyticsSubTab.DailyReport });
-    fetchCounterLogs.mockResolvedValue({ reports: [{ date: '2026-07-28', report: 'x' }] });
 
     renderHook(() => useAnalyticsData(), { wrapper });
 
     await waitFor(() => expect(fetchCounterLogs).toHaveBeenCalled());
-    expect(lastCall().page).toBeUndefined();
-  });
-
-  it('does not carry a report tab result over as placeholder data after switching to the grid', async () => {
-    useAnalyticsStore.setState({ activeSubTab: AnalyticsSubTab.DailyReport });
-    fetchCounterLogs.mockResolvedValueOnce({ reports: [{ date: '2026-07-28', report: 'x' }] });
-
-    const { result, rerender } = renderHook(() => useAnalyticsData(), { wrapper });
-    await waitFor(() => expect(result.current.data?.reports).toHaveLength(1));
-
-    let resolveGridFetch: (value: { logs: { date: string }[]; total: number }) => void = () => {};
-    fetchCounterLogs.mockImplementationOnce(() => new Promise(resolve => (resolveGridFetch = resolve)));
-    useAnalyticsStore.getState().setActiveSubTab(AnalyticsSubTab.UserActivity);
-    rerender();
-
-    await waitFor(() => expect(result.current.isFetching).toBe(true));
-    expect(result.current.isPlaceholderData).toBe(false);
-    expect(result.current.data?.logs).toBeUndefined();
-    expect(result.current.isLoading).toBe(true);
-
-    resolveGridFetch({ logs: [{ date: 'page-1' }], total: 1 });
-    await waitFor(() => expect(result.current.data?.logs[0]).toMatchObject({ date: 'page-1' }));
+    expect(lastCall()).not.toHaveProperty('report');
+    expect(lastCall()).not.toHaveProperty('weeklyReport');
   });
 });
 
-describe('useAnalyticsData - report mode', () => {
+describe('useDailyReports', () => {
   beforeEach(() => {
     fetchCounterLogs.mockReset();
-    useAnalyticsStore.setState({
-      activeSubTab: AnalyticsSubTab.DailyReport,
-      selectedOrganizations: [ALL_VALUE],
-      exclusions: { noOrg: false, staff: false },
-      userActivityFilters: { counterNameSearch: '', userEmailSearch: '' },
-      metadataFilters: [],
-      page: 1,
-      limit: 25,
-    });
   });
 
-  it('does not apply placeholder data across a date range change, unlike the grid', async () => {
-    fetchCounterLogs.mockResolvedValueOnce({ reports: [{ date: '2026-07-28', report: 'x' }] });
-    const { result, rerender } = renderHook(
-      ({ startDate }: { startDate: string }) => useAnalyticsData({ startDate, report: true }),
-      { wrapper, initialProps: { startDate: '2026-07-21' } }
-    );
-    await waitFor(() => expect(result.current.data?.reports).toHaveLength(1));
+  it('asks for the daily reports of exactly the given range', async () => {
+    fetchCounterLogs.mockResolvedValue({ reports: [] });
 
-    let resolveNextRange: (value: { reports: { date: string; report: string }[] }) => void = () => {};
-    fetchCounterLogs.mockImplementationOnce(() => new Promise(resolve => (resolveNextRange = resolve)));
-    rerender({ startDate: '2026-07-28' });
+    renderHook(() => useDailyReports({ startDate: '2026-07-01', endDate: '2026-07-30' }), { wrapper });
 
-    await waitFor(() => expect(result.current.isFetching).toBe(true));
-    expect(result.current.isLoading).toBe(true);
-    expect(result.current.isPlaceholderData).toBe(false);
+    await waitFor(() => expect(fetchCounterLogs).toHaveBeenCalledTimes(1));
+    expect(lastCall()).toEqual({ startDate: '2026-07-01', endDate: '2026-07-30', report: true, includeInsights: true });
+  });
 
-    resolveNextRange({ reports: [{ date: '2026-08-04', report: 'y' }] });
-    await waitFor(() => expect(result.current.data?.reports).toMatchObject([{ date: '2026-08-04' }]));
+  it('returns the reports newest first', async () => {
+    fetchCounterLogs.mockResolvedValue({
+      reports: [
+        { date: '2026-07-01', report: 'a' },
+        { date: '2026-07-03', report: 'c' },
+        { date: '2026-07-02', report: 'b' },
+      ],
+    });
+
+    const { result } = renderHook(() => useDailyReports({ startDate: '2026-07-01', endDate: '2026-07-03' }), {
+      wrapper,
+    });
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.map(report => report.date)).toEqual(['2026-07-03', '2026-07-02', '2026-07-01']);
   });
 });
