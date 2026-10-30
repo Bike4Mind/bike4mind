@@ -142,6 +142,11 @@ describe('grantNoCardUnlock on a real replica set', () => {
     expect(
       await CreditTransaction.countDocuments({ transactionId: noCardUnlockTransactionId('github_verified', id) })
     ).toBe(1);
+    const row = await CreditTransaction.findOne({ transactionId: noCardUnlockTransactionId('github_verified', id) });
+    expect(row).toMatchObject({
+      reason: 'no_card_unlock:github_verified',
+      description: 'Credits unlocked: GitHub account verified',
+    });
   });
 
   it('refuses while the signup tranche is held, and draws the daily signup budget otherwise', async () => {

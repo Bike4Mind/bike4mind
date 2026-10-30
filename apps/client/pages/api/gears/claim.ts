@@ -61,6 +61,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
             type: 'generic_add',
             transactionId,
             reason: `gear unlock: ${key}`,
+            description: `Gear unlock reward: ${key}`,
           },
           { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
         );

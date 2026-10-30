@@ -8,6 +8,12 @@ import { CreditHolderType } from '@bike4mind/common';
  * so the read path under test is the production one - no `getSettingsMap`/`getSettingsValue` stub.
  */
 // The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+// Pricing is stubbed flat in this file, so the per-round credit cap cannot be priced here; it is held
+// open, and cliCompletions.creditCap.test.ts covers it on real pricing.
+vi.mock('./completionCreditBudget', async importOriginal => ({
+  ...(await importOriginal<typeof import('./completionCreditBudget')>()),
+  affordableRoundBudget: () => ({ affordable: true, outputTokens: Number.MAX_SAFE_INTEGER }),
+}));
 vi.mock('./llm/modelAdmission', async importOriginal => ({
   ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
   loadFreeTierAllowedModels: async () => undefined,

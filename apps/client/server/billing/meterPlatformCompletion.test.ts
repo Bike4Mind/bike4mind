@@ -22,6 +22,11 @@ vi.mock('@bike4mind/database', async () => ({
   organizationRepository: { findById: m.orgFindById, incrementCredits: m.orgIncrement },
   userRepository: { findById: m.userFindById, incrementCredits: m.userIncrement },
   usageEventRepository: { record: m.recordUsageEvent },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@bike4mind/services', async () => {
   const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(

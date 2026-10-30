@@ -44,6 +44,8 @@ export type GrantFreeCreditsResult = {
   withheld?: boolean;
   /** Set when the grant stayed held because the daily budget was spent. */
   budgetExhausted?: boolean;
+  /** Set when a payment unlock is held until its payment settles. */
+  heldUntil?: Date;
   creditsGranted: number;
   currentCredits: number | null;
 };
@@ -175,6 +177,7 @@ async function grantFlatFreeCredits(
         type: 'generic_add',
         transactionId,
         reason,
+        description: `Signup credits: ${reason}`,
       },
       {
         db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots },

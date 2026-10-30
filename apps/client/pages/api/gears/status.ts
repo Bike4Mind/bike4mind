@@ -37,6 +37,8 @@ export interface GearStatus {
   rewardPending?: boolean;
   /** Why rewardPending is true - drives the UI copy so each reason shows the right message. */
   pendingReason?: GearPendingReason;
+  /** With pendingReason 'too_new': the account age the payout waits for (gearRewardMinAccountAgeDays). */
+  minAccountAgeDays?: number;
 }
 
 const handler = baseApi().get(
@@ -44,7 +46,7 @@ const handler = baseApi().get(
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-    const { evaluations, overrides } = await evaluateGears(String(userId));
+    const { evaluations, overrides, minAccountAgeDays } = await evaluateGears(String(userId));
     const gears: GearStatus[] = evaluations.map(evaluation => {
       const { def, unlocked, credits, rewardEligible, alreadyRewarded, pendingReason } = evaluation;
       const o = overrides.get(def.key);
@@ -63,6 +65,7 @@ const handler = baseApi().get(
       if (unlocked && !rewardEligible && !alreadyRewarded) {
         gear.rewardPending = true;
         if (pendingReason) gear.pendingReason = pendingReason;
+        if (pendingReason === 'too_new') gear.minAccountAgeDays = minAccountAgeDays;
       }
       if (rewardEligible && credits > 0 && !alreadyRewarded) gear.claimable = true;
       if (alreadyRewarded) gear.claimed = true;

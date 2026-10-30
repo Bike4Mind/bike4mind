@@ -55,6 +55,12 @@ export interface ShellScan {
    * has read untrusted content still runs these unasked; see ChatService's DirectoryTurn.untrusted.
    */
   contained: boolean;
+  /**
+   * True when every command only reads: a contained program that writes nothing, or a git
+   * subcommand that only reports (see `readOnlyGit`), with no redirect, in-place edit or
+   * environment change. Lets a worktree session read its main checkout unasked.
+   */
+  readOnly: boolean;
   /** Files the script writes by redirect, `tee`, a copy or download destination, or in place (see shellWrites). */
   writes: string[];
   /** Folders whose contents the script may rewrite, such as an archive's extraction folder. */
@@ -683,6 +689,7 @@ const LOCAL_PROGRAMS = new Set([
   'fold',
   'grep',
   'head',
+  'iconv',
   'jq',
   'ls',
   'mkdir',
@@ -694,6 +701,7 @@ const LOCAL_PROGRAMS = new Set([
   'realpath',
   'rev',
   'rg',
+  'sleep',
   'sort',
   'stat',
   'tail',
@@ -710,6 +718,8 @@ const LOCAL_PROGRAMS = new Set([
 /** Options that make a listed program run another one. */
 const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
   find: /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
+  // Not a program, but `-o` writes a file, which `sort -o` keeps out of the list too.
+  iconv: /^(-[A-Za-z]*o|--o(u(t(p(ut?)?)?)?)?(=|$))/,
   rg: /^--pre(-glob)?(=|$)/,
   tree: /^-[A-Za-z]*[oR]/,
 };
@@ -740,6 +750,130 @@ function sortRunsOrWrites(args: readonly string[]): boolean {
     }
   }
   return false;
+}
+
+/** Option arguments of `timeout` that take a value of their own. */
+const TIMEOUT_VALUE_OPTIONS = /^(-s|-k|--signal|--kill-after)$/;
+
+/**
+ * The command `timeout [options] DURATION command...` runs, or null when it cannot be read off
+ * the text. The duration and option values are inert; only the wrapped command matters.
+ */
+function timeoutCommand(raw: readonly string[]): string[] | null {
+  let at = 0;
+  while (at < raw.length && unquote(raw[at]).startsWith('-')) {
+    if (TIMEOUT_VALUE_OPTIONS.test(unquote(raw[at]))) at++;
+    at++;
+  }
+  const duration = raw[at];
+  if (duration === undefined || !/^\d+(\.\d+)?[smhd]?$/.test(unquote(duration))) return null;
+  const command = raw.slice(at + 1);
+  return command.length > 0 ? [...command] : null;
+}
+
+/**
+ * Whether `set` only flips shell options (`set -e`, `set -euo pipefail`, `set +x`). Positional
+ * arguments (`set -- a b`) are refused: later commands could read them back as `$1`.
+ */
+function setOnlyChangesOptions(args: readonly string[]): boolean {
+  if (args.length === 0) return false;
+  for (let at = 0; at < args.length; at++) {
+    const arg = args[at];
+    if (!/^[-+][A-Za-z]+$/.test(arg)) return false;
+    if (arg.endsWith('o')) {
+      at++;
+      if (!/^[a-z]+$/.test(args[at] ?? '')) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * One sed script that only prints, deletes or quits over a line range: `1,45p`, `$d`, `10q`.
+ * Anything else is refused, because sed's `e` command and `s///e` flag run a program and `w`
+ * writes a file, and telling those apart from a substitution needs a full sed parser.
+ */
+const READ_ONLY_SED_SCRIPT = /^(?:(?:\d+|\$)(?:,(?:\d+|\$))?)?[pdq]$/;
+
+/**
+ * Whether a sed call only reads: `-n` and `-E`/`-r` flags, at most one inline script (bare or
+ * after `-e`) of the `READ_ONLY_SED_SCRIPT` shape, then input files. No `-i`, no `-f` script file,
+ * and no script the shell would expand first.
+ */
+function readOnlySed(raw: readonly string[]): boolean {
+  let script: string | null = null;
+  let at = 0;
+  for (; at < raw.length; at++) {
+    const arg = unquote(raw[at]);
+    if (arg === '-e' || arg === '--expression') {
+      if (script !== null) return false;
+      script = raw[++at] ?? null;
+      if (script === null) return false;
+      continue;
+    }
+    if (/^-[nEr]+$/.test(arg) || arg === '--quiet' || arg === '--silent' || arg === '--regexp-extended') continue;
+    if (arg.startsWith('-')) return false;
+    break;
+  }
+  if (script === null) script = raw[at++] ?? null;
+  if (script === null) return false;
+  // `"1,$p"` is expanded by the shell before sed sees it; only a single-quoted or plain script is literal.
+  if (isDynamic(script) && !script.startsWith("'")) return false;
+  if (!READ_ONLY_SED_SCRIPT.test(unquote(script))) return false;
+  return raw.slice(at).every(arg => !isDynamic(arg) && !unquote(arg).startsWith('-'));
+}
+
+/** Contained programs that still create or write files on their own. */
+const WRITES_LOCALLY = new Set(['mkdir', 'tee']);
+
+/** git subcommands that only report on the repository. `branch` and the rest are judged in `readOnlyGit`. */
+const GIT_REPORTS = new Set([
+  'blame',
+  'cat-file',
+  'describe',
+  'diff',
+  'log',
+  'ls-files',
+  'merge-base',
+  'rev-list',
+  'rev-parse',
+  'shortlog',
+  'show',
+  'status',
+]);
+
+/**
+ * Whether a git call only reports, optionally run elsewhere with `-C DIR` or `--no-pager`. Any
+ * other global option (`-c`, `--git-dir`, `--exec-path`) is refused, as are `--output` and
+ * `--ext-diff`. Repository config can still name a program, which is why this decides only
+ * whether a worktree may read its own main checkout, which shares that config, never containment.
+ */
+export function readOnlyGit(raw: readonly string[]): boolean {
+  if (raw.length === 0 || raw.some(isDynamic)) return false;
+  const tokens = raw.map(unquote);
+  if (tokens[0] !== 'git') return false;
+  let at = 1;
+  while (at < tokens.length && tokens[at].startsWith('-')) {
+    if (tokens[at] === '-C') at += 2;
+    else if (tokens[at] === '--no-pager') at++;
+    else return false;
+  }
+  const [subcommand, ...args] = tokens.slice(at);
+  if (subcommand === undefined) return false;
+  if (args.some(arg => /^--(output|ext-diff|open-files-in-pager)(=|$)/.test(arg) || /^-O/.test(arg))) return false;
+  if (GIT_REPORTS.has(subcommand)) return true;
+  if (subcommand === 'branch') {
+    return args.every(arg => /^(--show-current|--list|-[alrv]+|--all|--remotes|--verbose|--no-color)$/.test(arg));
+  }
+  if (subcommand === 'remote') return args.every(arg => arg === '-v' || arg === '--verbose');
+  if (subcommand === 'worktree' || subcommand === 'stash') return args[0] === 'list';
+  return false;
+}
+
+function onlyReads(raw: readonly string[]): boolean {
+  const command = unquote(raw[0] ?? '') === 'timeout' ? timeoutCommand(raw.slice(1)) : raw;
+  if (!command || command.length === 0) return false;
+  return (containedCommand(command) && !WRITES_LOCALLY.has(unquote(command[0]))) || readOnlyGit(command);
 }
 
 /** gh subcommands that only read from GitHub. `api` is judged on its own in `readOnlyGh`. */
@@ -927,6 +1061,12 @@ export function containedCommand(raw: readonly string[]): boolean {
   const tokens = raw.map(unquote);
   const [program, ...args] = tokens;
   if (isDynamic(raw[0])) return false;
+  if (program === 'timeout') {
+    const command = timeoutCommand(raw.slice(1));
+    return command !== null && containedCommand(command);
+  }
+  if (program === 'set') return setOnlyChangesOptions(args);
+  if (program === 'sed') return readOnlySed(raw.slice(1));
   if (LOCAL_PROGRAMS.has(program)) {
     if (program === 'sort') return !sortRunsOrWrites(args);
     const runs = RUNS_A_PROGRAM[program];
@@ -982,6 +1122,7 @@ export async function scanShell(
     const writes = new Set<string>();
     const writtenTrees = new Set<string>();
     let contained = true;
+    let readOnly = true;
 
     const noteEnvFile = (raw: string): void => {
       const path = expandHome(unquote(raw));
@@ -1072,6 +1213,17 @@ export async function scanShell(
       }
       for (const file of ghReadFiles(tokens.map(unquote))) await check(file, state.cwd);
       if (reason || assigns || arithmetic || !containedCommand(tokens)) contained = false;
+      if (
+        reason ||
+        assigns ||
+        arithmetic ||
+        writes ||
+        inPlace.files.length > 0 ||
+        inPlace.trees.length > 0 ||
+        !onlyReads(tokens)
+      ) {
+        readOnly = false;
+      }
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       if (!TOUCHES_FILES.has(program)) {
@@ -1188,7 +1340,9 @@ export async function scanShell(
         const body = node.childForFieldName('body');
         const header = body ? node.text.slice(0, body.startIndex - node.startIndex).replace(/[\s;]+$/, '') : node.text;
         commands.push({ text: header, always: header, coverable: false, words: header });
-        contained = false;
+        // A lowercase name with no underscore is no variable a listed program reads (`HOME`,
+        // `GIT_DIR` and `http_proxy` all fail it), so the loop stays contained if its body does.
+        if (!/^[a-z][a-z0-9]*$/.test(node.childForFieldName('variable')?.text ?? '')) contained = false;
         setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
         return;
@@ -1228,6 +1382,7 @@ export async function scanShell(
       outbound: [...outbound],
       sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
       contained: contained && commands.length > 0,
+      readOnly: readOnly && !setsEnvironment && commands.length > 0,
       writes: [...writes],
       writtenTrees: [...writtenTrees],
     };

@@ -133,6 +133,7 @@ export async function applySignupDomainGrant(params: {
             type: 'generic_add',
             transactionId: `domain-grant-credits:${userId}`,
             reason: 'domain-grant signup credits',
+            description: 'Signup credits from an email-domain grant',
           },
           {
             db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },

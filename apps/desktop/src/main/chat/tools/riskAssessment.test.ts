@@ -105,6 +105,8 @@ describe('the untrusted-content and outbound axes', () => {
     'memory_read',
     'memory_write',
     'memory_delete',
+    // What this app's PR bar shows; the read it causes is one a detected PR causes unasked.
+    'set_session_pull_request',
   ];
 
   it('classifies every tool the app can offer', () => {
@@ -121,6 +123,7 @@ describe('the untrusted-content and outbound axes', () => {
       web: true,
       ask: true,
       mcpServers: true,
+      pullRequest: true,
       mcp: [],
       modelId: 'claude-sonnet-5-5',
     }).map(entry => entry.toolSchema.name);

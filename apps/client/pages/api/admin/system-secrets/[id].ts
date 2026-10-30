@@ -63,15 +63,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         warnings: resolution.warnings,
       });
     } catch (error) {
+      if (error instanceof ForbiddenError) {
+        Logger.warn('Error fetching system secret:', error.message);
+        return res.status(403).json({ error: error.message });
+      }
       Logger.error('Error fetching system secret:', error);
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
-      }
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
       }
       return res.status(500).json({ error: 'Failed to fetch system secret' });
     }
@@ -122,15 +123,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         message: `Database override for ${secret.secretName} deleted. Will now use SST value if available.`,
       });
     } catch (error) {
+      if (error instanceof ForbiddenError) {
+        Logger.warn('Error deleting system secret:', error.message);
+        return res.status(403).json({ error: error.message });
+      }
       Logger.error('Error deleting system secret:', error);
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
-      }
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
       }
       return res.status(500).json({ error: 'Failed to delete system secret' });
     }
