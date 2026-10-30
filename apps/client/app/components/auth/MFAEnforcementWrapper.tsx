@@ -12,6 +12,7 @@ import { ADMIN_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 import MFAModal from '@client/app/components/common/MFAModal';
 import { Box, Typography, Alert, CircularProgress, Button } from '@mui/joy';
 import { toast } from 'sonner';
+import { isAxiosError } from 'axios';
 import { useQueryClient } from '@tanstack/react-query';
 
 interface MFAEnforcementWrapperProps {
@@ -69,16 +70,16 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
         setShowMFASetup(true);
         toast.info('Please complete MFA setup to continue');
       },
-      onError: (error: any) => {
+      onError: (error: unknown) => {
         if (isStepUpCancelled(error)) return;
+        const response = isAxiosError(error) ? error.response : undefined;
         // Already enrolled: this tab's status was stale, so refresh it rather than report an error.
-        if (error.response?.status === 409) {
+        if (response?.status === 409) {
           void mfaStatusQuery.refetch();
           return;
         }
-        // Extract the actual error message from axios response
-        const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
-        toast.error(errorMessage);
+        const serverMessage = (response?.data as { error?: string } | undefined)?.error;
+        toast.error(serverMessage || (error instanceof Error && error.message) || 'Failed to setup MFA');
       },
     });
   }, [setupMFAMutate, mfaStatusQuery.refetch]);
@@ -99,6 +100,11 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       }),
     [queryClient]
   );
+  // Re-arm once enforcement is seen off, so an admin turning it back on without a reload still
+  // gets this tab's next refusal handled.
+  useEffect(() => {
+    if (!enforceMFA) refusalHandledRef.current = false;
+  }, [enforceMFA]);
 
   // Check if user needs to be forced to setup MFA
   useEffect(() => {

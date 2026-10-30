@@ -24,8 +24,9 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 }));
 
 // enforceMFA on, admin settings loaded.
+const { adminSettings } = vi.hoisted(() => ({ adminSettings: { enforceMFA: 'true' } }));
 vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
-  useAdminSettings: () => ({ settings: { enforceMFA: 'true' }, isLoading: false }),
+  useAdminSettings: () => ({ settings: { ...adminSettings }, isLoading: false }),
 }));
 
 // A signed-in user with no MFA configured (so enforcement wants to auto-start setup).
@@ -248,6 +249,39 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     expect(invalidate.mock.calls.filter(([arg]) => arg?.queryKey === ADMIN_SETTINGS_QUERY_KEY)).toHaveLength(1);
   });
 
+  it('handles a refusal again after enforcement is turned off and back on without a reload', async () => {
+    const { queryClient, rerender } = renderWrapper();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const adminSettingsRefetches = () =>
+      invalidate.mock.calls.filter(([arg]) => arg?.queryKey === ADMIN_SETTINGS_QUERY_KEY).length;
+    const rerenderWrapper = () =>
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <QueryClientProvider client={queryClient}>
+            <MFAEnforcementWrapper>
+              <div data-testid="app-content" />
+            </MFAEnforcementWrapper>
+          </QueryClientProvider>
+        </CssVarsProvider>
+      );
+
+    const onRejected = await registeredRefusalHandler();
+    await onRejected(enrollmentRefusal()).catch(() => undefined);
+    expect(adminSettingsRefetches()).toBe(1);
+
+    try {
+      adminSettings.enforceMFA = 'false';
+      rerenderWrapper();
+      adminSettings.enforceMFA = 'true';
+      rerenderWrapper();
+
+      await onRejected(enrollmentRefusal()).catch(() => undefined);
+      expect(adminSettingsRefetches()).toBe(2);
+    } finally {
+      adminSettings.enforceMFA = 'true';
+    }
+  });
+
   it('renders the enrollment flow when the refusal arrives but the status query has failed', async () => {
     // The status endpoint is down; only the server's 403 reveals that this session owes enrollment.
     get.mockRejectedValue(new Error('status unavailable'));
@@ -332,6 +366,7 @@ describe('MFAEnforcementWrapper - an enrolled user is never sent into setup', ()
     get.mockResolvedValueOnce({ data: { enabled: false } }).mockResolvedValue({ data: { enabled: true } });
     post.mockRejectedValue(
       Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
         response: { status: 409, data: { error: 'MFA is already enabled for this account.' } },
       })
     );

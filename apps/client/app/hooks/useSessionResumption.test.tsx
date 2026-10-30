@@ -33,14 +33,15 @@ vi.mock('@client/app/hooks/data/sessions', async () => {
 
 import { useSessionResumption } from './useSessionResumption';
 
-const notFound = () =>
-  new AxiosError('Not Found', 'ERR_BAD_REQUEST', undefined, undefined, {
-    status: 404,
-    statusText: 'Not Found',
+const httpError = (status: number, statusText: string) =>
+  new AxiosError(statusText, 'ERR_BAD_RESPONSE', undefined, undefined, {
+    status,
+    statusText,
     data: {},
     headers: {},
     config: { headers: new AxiosHeaders() },
   });
+const notFound = () => httpError(404, 'Not Found');
 
 const renderResumption = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -85,8 +86,11 @@ describe('useSessionResumption - the last-open session no longer opens', () => {
     }
   });
 
-  it('keeps the pointer on a failure that is not a 404', async () => {
-    getSession.mockRejectedValue(new Error('network down'));
+  it.each([
+    ['a server error', () => httpError(500, 'Internal Server Error')],
+    ['a network failure', () => new Error('network down')],
+  ])('keeps the pointer on %s', async (_label, makeError) => {
+    getSession.mockRejectedValue(makeError());
     const { result } = renderResumption();
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
