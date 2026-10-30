@@ -44,7 +44,7 @@ describe('useAgentActivity', () => {
   it('subscribes once, folds tool-start, and unsubscribes on unmount', () => {
     let latest: ReadonlyMap<string, AgentActivity> = new Map();
     const Probe = () => {
-      latest = useAgentActivity();
+      latest = useAgentActivity(new Set(['s1']));
       return null;
     };
     act(() => root.render(<Probe />));
@@ -57,6 +57,28 @@ describe('useAgentActivity', () => {
     act(() => root.unmount());
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     root = createRoot(container);
+  });
+});
+
+describe('useAgentActivity filtering', () => {
+  it('never re-renders for a session outside the tracked set', () => {
+    let renders = 0;
+    let latest: ReadonlyMap<string, AgentActivity> = new Map();
+    const tracked = new Set(['mine']);
+    const Probe = () => {
+      renders += 1;
+      latest = useAgentActivity(tracked);
+      return null;
+    };
+    act(() => root.render(<Probe />));
+    const settled = renders;
+
+    act(() => listener?.(toolStart('elsewhere')));
+    expect(renders).toBe(settled);
+    expect(latest.size).toBe(0);
+
+    act(() => listener?.(toolStart('mine')));
+    expect(latest.has('mine')).toBe(true);
   });
 });
 

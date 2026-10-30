@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { foldActivity, type AgentActivity } from './activity';
@@ -12,16 +12,23 @@ import {
   type OrchestratorViewId,
   type SessionSurface,
 } from './orchestratorPrefs';
-import { buildRoster, type AgentView } from './roster';
+import { buildRoster, descendantIds, type AgentView } from './roster';
 
 const NO_ACTIVITY: ReadonlyMap<string, AgentActivity> = new Map();
 
-/** What every session's agent is doing right now, folded from the one shared stream. */
-export function useAgentActivity(): ReadonlyMap<string, AgentActivity> {
+/**
+ * What the tracked sessions' agents are doing right now, folded from the shared stream. Events from
+ * any other session are dropped before they reach state, so unrelated work never re-renders.
+ */
+export function useAgentActivity(trackedIds: ReadonlySet<string>): ReadonlyMap<string, AgentActivity> {
   const [activity, setActivity] = useState(NO_ACTIVITY);
+  // A ref, so a changing roster never resubscribes.
+  const tracked = useRef(trackedIds);
+  tracked.current = trackedIds;
 
   useEffect(() => {
     return window.b4m.chat.onStreamEvent(event => {
+      if (!tracked.current.has(event.sessionId)) return;
       setActivity(current => foldActivity(current, event));
     });
   }, []);
@@ -35,7 +42,8 @@ export function useOrchestratorRoster(
   statuses: ReadonlyMap<string, ChatSessionStatus>,
   prSummaries: ReadonlyMap<string, PrSummary>
 ): AgentView[] {
-  const activity = useAgentActivity();
+  const trackedIds = useMemo(() => descendantIds(sessions, rootId), [sessions, rootId]);
+  const activity = useAgentActivity(trackedIds);
   return useMemo(
     () => (rootId === null ? [] : buildRoster({ sessions, statuses, activity, prSummaries, rootId })),
     [rootId, sessions, statuses, activity, prSummaries]

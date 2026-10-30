@@ -83,11 +83,13 @@ import { SpawnFailureToast } from './SpawnFailureToast';
 import { useCreationTools } from './useCreationTools';
 import { BoardView } from './orchestrator/BoardView';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
-import { OrchestratorStage, type AgentActions, type OrchestratorViewProps } from './orchestrator/OrchestratorStage';
+import type { AgentActions, OrchestratorViewProps } from './orchestrator/OrchestratorStage';
+import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
 import { readIntroSeen, writeIntroSeen, type OrchestratorViewId } from './orchestrator/orchestratorPrefs';
 import { TableView } from './orchestrator/TableView';
 import { TavernView } from './orchestrator/tavern/TavernView';
-import { useOrchestratorRoster, useOrchestratorPrefs } from './orchestrator/useOrchestrator';
+import { agentStates } from './orchestrator/roster';
+import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -482,11 +484,11 @@ export function ChatShell({
   const hasPullRequest =
     !!pullRequest?.binding || !!pullRequest?.dismissed || (!!activeId && prSummaries.has(activeId));
   const spawned = useMemo(() => spawnedSessions(sessions, statuses, activeId), [sessions, statuses, activeId]);
-  // The only stream subscription for agent activity; never pair it with useAgentActivity.
-  const agents = useOrchestratorRoster(activeId, sessions, statuses, prSummaries);
+  // States only: the activity stream is subscribed inside OrchestratorSurface, while orchestrating.
+  const spawnedStates = useMemo(() => agentStates(sessions, statuses, activeId), [sessions, statuses, activeId]);
   const orchestratorPrefs = useOrchestratorPrefs(activeId);
   const { setDockOpen, setView: setOrchestratorView } = orchestratorPrefs;
-  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agents.length > 0;
+  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && spawnedStates.length > 0;
 
   // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
   // already true when it mounts, which is the same commit that enters orchestrate mode.
@@ -1032,7 +1034,7 @@ export function ChatShell({
                 )}
               </Box>
               <OrchestrateToggle
-                agents={agents}
+                states={spawnedStates}
                 surface={orchestratorPrefs.surface}
                 onSurfaceChange={orchestratorPrefs.setSurface}
               />
@@ -1142,10 +1144,15 @@ export function ChatShell({
             ref={threadRegion}
             sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
           >
-            {orchestrating ? (
+            {orchestrating && activeId !== null ? (
               <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
-                <OrchestratorStage
-                  agents={agents}
+                <OrchestratorSurface
+                  // Keyed so a switch between orchestrating parents resets selection and sort, and never reuses sprites.
+                  key={activeId}
+                  rootId={activeId}
+                  sessions={sessions}
+                  statuses={statuses}
+                  prSummaries={prSummaries}
                   view={orchestratorView}
                   onViewChange={changeOrchestratorView}
                   actions={agentActions}

@@ -3,17 +3,18 @@ import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
 import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
 import type { SessionSurface } from './orchestratorPrefs';
-import type { AgentView } from './roster';
+import type { AgentState } from './roster';
 
 interface OrchestrateToggleProps {
-  agents: readonly AgentView[];
+  /** One entry per agent; states only, so the chat surface never subscribes to agent activity. */
+  states: readonly AgentState[];
   surface: SessionSurface;
   onSurfaceChange(surface: SessionSurface): void;
 }
 
 /** Header entry point into orchestrate mode; absent for a session that has spawned no agents. */
-export function OrchestrateToggle({ agents, surface, onSurfaceChange }: OrchestrateToggleProps) {
-  if (agents.length === 0) return null;
+export function OrchestrateToggle({ states, surface, onSurfaceChange }: OrchestrateToggleProps) {
+  if (states.length === 0) return null;
 
   if (surface === 'orchestrate') {
     return (
@@ -34,8 +35,8 @@ export function OrchestrateToggle({ agents, surface, onSurfaceChange }: Orchestr
     );
   }
 
-  const needsYou = agents.some(agent => agent.state === 'needs-you');
-  const busy = needsYou || agents.some(agent => agent.state === 'working');
+  const needsYou = states.includes('needs-you');
+  const busy = needsYou || states.includes('working');
 
   return (
     <Chip
@@ -54,7 +55,7 @@ export function OrchestrateToggle({ agents, surface, onSurfaceChange }: Orchestr
         ) : undefined
       }
     >
-      {`${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}${busy ? ' working' : ''} \u00B7 Orchestrate`}
+      {`${states.length} ${states.length === 1 ? 'agent' : 'agents'}${busy ? ' working' : ''} \u00B7 Orchestrate`}
     </Chip>
   );
 }
