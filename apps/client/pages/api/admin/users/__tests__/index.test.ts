@@ -107,8 +107,9 @@ describe('GET /api/admin/users', () => {
     const rejected = async (query: Record<string, string>, message: RegExp) => {
       const res = await call(handler, query);
       expect(res._getStatusCode(), JSON.stringify(query)).toBe(400);
-      const { error } = res._getJSONData() as { error: { message: string }[] };
-      expect(error.map(issue => issue.message).join('\n')).toMatch(message);
+      const { error, issues } = res._getJSONData() as { error: string; issues: { message: string }[] };
+      expect(issues.map(issue => issue.message).join('\n')).toMatch(message);
+      expect(error).toBe(issues[0].message);
     };
 
     it('forwards a verdict with its created window', async () => {
@@ -119,6 +120,8 @@ describe('GET /api/admin/users', () => {
     it('rejects a verdict that is unknown, has no created window or spans too long', async () => {
       await rejected({ ...month, verdict: 'unclassified' }, /suspected|legit/);
       await rejected({ verdict: 'legit', createdFrom: month.createdFrom }, /needs both createdFrom and createdTo/);
+      const res = await call(handler, { verdict: 'suspected' });
+      expect(res._getJSONData()).toMatchObject({ error: 'verdict needs both createdFrom and createdTo' });
       await rejected({ ...month, verdict: 'legit', createdTo: '2027-01-03T00:00:00.000Z' }, /at most 93 days/);
       expect(mockList).not.toHaveBeenCalled();
     });
@@ -136,6 +139,8 @@ describe('GET /api/admin/users', () => {
       await rejected({ activeFrom: '2026-02-30', activeTo: '2026-03-01' }, /UTC day/);
       await rejected({ activeFrom: '10/03/2026', activeTo: '2026-10-03' }, /UTC day/);
       await rejected({ activeFrom: '2026-10-03' }, /set together/);
+      const res = await call(handler, { activeFrom: '2026-10-03' });
+      expect(res._getJSONData()).toMatchObject({ error: 'activeFrom and activeTo must be set together' });
       await rejected({ activeTo: '2026-10-03' }, /set together/);
       await rejected({ activeFrom: '2026-10-07', activeTo: '2026-10-01' }, /not be before/);
       await rejected({ activeFrom: '2025-10-01', activeTo: '2026-10-02' }, /at most 366 days/);
@@ -152,6 +157,8 @@ describe('GET /api/admin/users', () => {
     it('rejects a funnel step that is unknown, has no created window or spans too long', async () => {
       await rejected({ ...month, funnelStep: 'bought' }, /signedUp/);
       await rejected({ funnelStep: 'firstAction' }, /needs both createdFrom and createdTo/);
+      const res = await call(handler, { funnelStep: 'firstAction' });
+      expect(res._getJSONData()).toMatchObject({ error: 'funnelStep needs both createdFrom and createdTo' });
       await rejected(
         { funnelStep: 'paid', createdFrom: '2026-01-01T00:00:00.000Z', createdTo: month.createdTo },
         /93 days/
