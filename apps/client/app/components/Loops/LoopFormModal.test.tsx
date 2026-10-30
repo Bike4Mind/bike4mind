@@ -16,6 +16,7 @@ vi.mock('@client/app/hooks/data/loops', () => ({
       { id: 'l1', name: 'Digest' },
       { id: 'l2', name: 'Closer' },
     ],
+    isSuccess: true,
   }),
 }));
 vi.mock('@client/app/hooks/data/mcpServers', () => ({
@@ -82,7 +83,7 @@ describe('validateLoopForm', () => {
     expect(validateLoopForm(values({ agentId: 'a1' }), 'create').payload?.agentId).toBe('a1');
   });
 
-  it('omits no oversees on create, clears it with null on edit, and caps it at 5', () => {
+  it('omits an empty oversees on create, clears it with null on edit, and caps it at 5', () => {
     expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('oversees');
     expect(validateLoopForm(values(), 'edit').payload?.oversees).toBeNull();
     expect(validateLoopForm(values({ oversees: ['l2'] }), 'create').payload?.oversees).toEqual(['l2']);
@@ -181,6 +182,23 @@ describe('LoopFormModal', () => {
     fireEvent.click(screen.getByRole('combobox', { name: /oversees/i }));
     expect(screen.queryByRole('option', { name: 'Digest' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('option', { name: 'Closer' }));
+    fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
+    expect(updateLoop.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'l1', oversees: ['l2'] }),
+      expect.anything()
+    );
+  });
+
+  it('drops an oversees id whose loop was deleted, so the edit still saves', () => {
+    renderForm({
+      id: 'l1',
+      name: 'Digest',
+      goal: 'Summarize',
+      intervalMinutes: 30,
+      tools: [],
+      stages: ['todo', 'doing', 'done'],
+      oversees: ['gone', 'l2'],
+    } as never);
     fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
     expect(updateLoop.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'l1', oversees: ['l2'] }),

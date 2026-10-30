@@ -1,27 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { loopDirectiveRepository, loopEventRepository, loopRepository } from '@bike4mind/database';
-import type { ILoopDirective } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { directiveRow } from '@server/utils/loopDirectives';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
 
 /** Events returned per loop, newest first; older ones stay in the DB. */
 export const LOOP_EVENT_LIMIT = 100;
-
-/** A directive as a log row; owner replies drop their `userId`. Shared with the override route. */
-export const directiveRow = (directive: ILoopDirective) => ({
-  id: directive.id,
-  kind: 'directive' as const,
-  loopId: directive.loopId,
-  fromLoopId: directive.fromLoopId,
-  fromLoopName: directive.fromLoopName,
-  executionId: directive.executionId,
-  instruction: directive.instruction,
-  reason: directive.reason,
-  state: directive.state,
-  replies: directive.replies.map(reply => (reply.by === 'owner' ? { ...reply, userId: undefined } : reply)),
-  createdAt: directive.createdAt,
-});
 
 /**
  * A loop's event log, newest first: unsure runs and how their owner answered, plus directives the loop sent

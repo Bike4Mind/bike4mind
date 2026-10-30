@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { Button, Chip, Input, Stack, Typography, type ColorPaletteProp } from '@mui/joy';
-import type { LoopDirectiveOwnerAction, LoopDirectiveState } from '@bike4mind/common';
+import {
+  LOOP_DIRECTIVE_NOTE_MAX,
+  LOOP_DIRECTIVE_TRANSITIONS,
+  type LoopDirectiveOwnerAction,
+  type LoopDirectiveState,
+} from '@bike4mind/common';
 import type { ILoopDirectiveRow, ILoopEventRow, ILoopUnsureRow } from '@client/app/hooks/data/loops';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 
@@ -115,15 +120,18 @@ function DirectiveRow({
   const state = DIRECTIVE_STATE[event.state];
   const direction =
     event.fromLoopId === loopId
-      ? `To ${loops?.find(loop => loop.id === event.loopId)?.name ?? 'a deleted loop'}`
+      ? `To ${loops?.find(loop => loop.id === event.loopId)?.name ?? 'another loop'}`
       : `From ${event.fromLoopName}`;
-  const canWithdraw = ['open', 'accepted', 'pushed_back'].includes(event.state);
-  const canOverrule = event.state === 'pushed_back';
+  const canWithdraw = LOOP_DIRECTIVE_TRANSITIONS.withdraw.includes(event.state);
+  const canOverrule = LOOP_DIRECTIVE_TRANSITIONS.overrule.includes(event.state);
 
-  const confirm = () => {
-    if (pending) onOverride?.(event.id, pending, note.trim() || undefined);
+  const close = () => {
     setPending(null);
     setNote('');
+  };
+  const confirm = () => {
+    if (pending) onOverride?.(event.id, pending, note.trim() || undefined);
+    close();
   };
 
   return (
@@ -171,12 +179,14 @@ function DirectiveRow({
             placeholder="Note (optional)"
             value={note}
             onChange={e => setNote(e.target.value)}
-            slotProps={{ input: { maxLength: 1000, 'data-testid': 'loop-log-directive-note-input' } }}
+            slotProps={{
+              input: { maxLength: LOOP_DIRECTIVE_NOTE_MAX, 'data-testid': 'loop-log-directive-note-input' },
+            }}
           />
           <Button size="sm" onClick={confirm} data-testid="loop-log-directive-confirm-btn">
             {pending === 'withdraw' ? 'Withdraw' : 'Overrule'}
           </Button>
-          <Button size="sm" variant="plain" color="neutral" onClick={() => setPending(null)}>
+          <Button size="sm" variant="plain" color="neutral" onClick={close} data-testid="loop-log-directive-cancel-btn">
             Cancel
           </Button>
         </Stack>

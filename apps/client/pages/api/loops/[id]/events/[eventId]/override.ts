@@ -1,13 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { loopDirectiveRepository, loopRepository } from '@bike4mind/database';
-import { LOOP_DIRECTIVE_TRANSITIONS, type LoopDirectiveOwnerAction } from '@bike4mind/common';
+import { LOOP_DIRECTIVE_NOTE_MAX, LOOP_DIRECTIVE_TRANSITIONS, type LoopDirectiveOwnerAction } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
-import { directiveRow } from '../../events';
-
-const NOTE_MAX = 1000;
+import { directiveRow } from '@server/utils/loopDirectives';
 
 /**
  * The owner's override of a directive sent or received by this loop: `withdraw` cancels it, `overrule`
@@ -28,7 +26,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
     if (body.note !== undefined && typeof body.note !== 'string') throw new BadRequestError('note must be a string');
     const note = body.note?.trim();
-    if (note && note.length > NOTE_MAX) throw new BadRequestError(`note must be ${NOTE_MAX} characters or fewer`);
+    if (note && note.length > LOOP_DIRECTIVE_NOTE_MAX)
+      throw new BadRequestError(`note must be ${LOOP_DIRECTIVE_NOTE_MAX} characters or fewer`);
 
     const loop = await loopRepository.findByIdAndUserId(id, userId);
     if (!loop) throw new NotFoundError('Loop not found for id: ' + id);

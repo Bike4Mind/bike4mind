@@ -144,8 +144,12 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
   const [newStage, setNewStage] = useState('');
   const { data: mcpServers = [] } = useMcpServers();
   const { data: agents = [] } = useGetAgents();
-  const { data: loops = [] } = useLoops();
+  const { data: loops = [], isSuccess: loopsLoaded } = useLoops();
   const otherLoops = loops.filter(other => other.id !== loop?.id);
+  // Drop ids of loops deleted since this one was saved; the Select can't show them, and the API rejects them.
+  const oversees = loopsLoaded
+    ? values.oversees.filter(id => otherLoops.some(other => other.id === id))
+    : values.oversees;
   const createLoop = useCreateLoop();
   const updateLoop = useUpdateLoop();
   const saving = createLoop.isPending || updateLoop.isPending;
@@ -169,7 +173,7 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
   };
 
   const submit = () => {
-    const { errors: found, payload } = validateLoopForm(values, mode);
+    const { errors: found, payload } = validateLoopForm({ ...values, oversees }, mode);
     setErrors(found);
     if (!payload) return;
     const options = { onSuccess: onClose };
@@ -321,7 +325,7 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
             <Select
               multiple
               placeholder="None"
-              value={values.oversees}
+              value={oversees}
               onChange={(_, oversees) => set('oversees', oversees)}
               data-testid="loop-form-oversees-select"
             >

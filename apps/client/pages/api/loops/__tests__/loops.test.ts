@@ -585,6 +585,14 @@ describe('POST /api/loops/:id/events/:eventId/override', () => {
     expect(baseApiOptions.override).toEqual({ auth: 'jwtOnly' });
   });
 
+  it.each([
+    [{ action: 'withdraw', note: 7 }, 'note must be a string'],
+    [{ action: 'withdraw', note: 'n'.repeat(1001) }, 'note must be 1000 characters or fewer'],
+  ])('rejects a bad note %#', async (body, message) => {
+    await expect(override(body).result).rejects.toMatchObject({ statusCode: 400, message });
+    expect(directives.transition).not.toHaveBeenCalled();
+  });
+
   it.each(['open', 'accepted', 'pushed_back'])('withdraws a %s directive as an owner reply', async state => {
     directives.findByIdForUser.mockResolvedValue(directive({ state }));
     const { res, result } = override({ action: 'withdraw', note: ' not needed ' });

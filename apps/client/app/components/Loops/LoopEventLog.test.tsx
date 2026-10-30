@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -84,11 +84,15 @@ describe('LoopEventLog directives', () => {
   const renderDirectives = (
     data: ILoopEventRow[],
     loopId = WORKER,
-    { onOverride = vi.fn(), onViewRun = vi.fn() } = {}
+    {
+      onOverride = vi.fn(),
+      onViewRun = vi.fn(),
+      loopList = loops,
+    }: { onOverride?: Mock; onViewRun?: Mock; loopList?: typeof loops } = {}
   ) =>
     render(
       <CssVarsProvider theme={appTheme}>
-        <LoopEventLog data={data} loopId={loopId} loops={loops} onOverride={onOverride} onViewRun={onViewRun} />
+        <LoopEventLog data={data} loopId={loopId} loops={loopList} onOverride={onOverride} onViewRun={onViewRun} />
       </CssVarsProvider>
     );
 
@@ -98,6 +102,9 @@ describe('LoopEventLog directives', () => {
     cleanup();
     renderDirectives([directive()], OVERSEER);
     expect(screen.getByTestId('loop-log-directive-direction').textContent).toContain('To Closer');
+    cleanup();
+    renderDirectives([directive()], OVERSEER, { loopList: [] });
+    expect(screen.getByTestId('loop-log-directive-direction').textContent).toContain('To another loop');
   });
 
   it.each([
@@ -153,5 +160,17 @@ describe('LoopEventLog directives', () => {
     fireEvent.click(screen.getByTestId('loop-log-directive-withdraw-btn'));
     fireEvent.click(screen.getByTestId('loop-log-directive-confirm-btn'));
     expect(onOverride).toHaveBeenLastCalledWith('d1', 'withdraw', undefined);
+  });
+
+  it('clears the note on Cancel', () => {
+    const onOverride = vi.fn();
+    renderDirectives([directive({ state: 'pushed_back' })], WORKER, { onOverride });
+
+    fireEvent.click(screen.getByTestId('loop-log-directive-withdraw-btn'));
+    fireEvent.change(screen.getByTestId('loop-log-directive-note-input'), { target: { value: 'typo' } });
+    fireEvent.click(screen.getByTestId('loop-log-directive-cancel-btn'));
+    fireEvent.click(screen.getByTestId('loop-log-directive-overrule-btn'));
+    expect((screen.getByTestId('loop-log-directive-note-input') as HTMLInputElement).value).toBe('');
+    expect(onOverride).not.toHaveBeenCalled();
   });
 });
