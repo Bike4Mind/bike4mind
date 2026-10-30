@@ -112,6 +112,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.verified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.api_key_trust.approved': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.new_account_spend_cap.lifted': { category: 'identity', severity: 'notice', write: 'strict' },
+  'user.new_account_spend_cap.restored': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
