@@ -11,6 +11,7 @@ import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/in
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
+import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -93,10 +94,16 @@ const handler = baseApi()
       }
     }
 
+    const threeDSecureOptions = await firstPurchaseCardOptions(
+      { stripeCustomerId: req.user.stripeCustomerId, accountCreatedAt: req.user.createdAt },
+      req.logger
+    );
+
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       ...USD_CHECKOUT_SESSION_PARAMS,
       payment_method_types: ['card'],
+      ...threeDSecureOptions,
       line_items: [
         {
           price: priceId,

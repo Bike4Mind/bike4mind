@@ -12,6 +12,7 @@ import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/in
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { recordPaymentStart } from '@server/billing/paymentRisk';
 import { readNetworkMeta } from '@server/auth/networkMeta';
+import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
 import type Stripe from 'stripe';
 
 const handler = baseApi()
@@ -42,6 +43,11 @@ const handler = baseApi()
     // fallback and billing portal depend on it too. A customer created here is only persisted once
     // an intent references it, and is deleted if the intent cannot be created, so a failed start
     // never leaves a customer behind.
+    const threeDSecureOptions = await firstPurchaseCardOptions(
+      { stripeCustomerId: req.user.stripeCustomerId, accountCreatedAt: req.user.createdAt },
+      req.logger
+    );
+
     let customerId = req.user.stripeCustomerId ?? undefined;
     let createdCustomerId: string | undefined;
     if (!customerId) {
@@ -68,6 +74,7 @@ const handler = baseApi()
         automatic_payment_methods: {
           enabled: true,
         },
+        ...threeDSecureOptions,
       });
     } catch (error) {
       if (createdCustomerId) {

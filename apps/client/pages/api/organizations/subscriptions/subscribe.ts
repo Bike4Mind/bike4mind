@@ -20,6 +20,7 @@ import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
 import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
+import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
@@ -140,11 +141,18 @@ const handler = baseApi()
           }),
     });
 
+    // The org's customer carries the charge history; the buyer's own account age drives the window.
+    const threeDSecureOptions = await firstPurchaseCardOptions(
+      { stripeCustomerId: customerId, accountCreatedAt: req.user.createdAt },
+      req.logger
+    );
+
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       ...USD_CHECKOUT_SESSION_PARAMS,
       customer: customerId,
       payment_method_types: ['card'],
+      ...threeDSecureOptions,
       line_items: [
         {
           price: priceId,
