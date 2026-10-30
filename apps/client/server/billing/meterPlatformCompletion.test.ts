@@ -305,7 +305,7 @@ describe('meterPlatformCompletion credits', () => {
       [model]
     );
 
-    await metered.settle({ inputTokens: 10, outputTokens: 5 });
+    await metered.settle({ inputTokens: 1000, outputTokens: 500 });
 
     expect(m.deductCredits).toHaveBeenCalledWith(
       expect.objectContaining({ apiKeyId: 'k-queued', source: undefined }),
