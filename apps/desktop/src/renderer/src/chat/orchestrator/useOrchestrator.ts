@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
-import { foldActivity, type AgentActivity } from './activity';
+import { bufferUntrackedActivity, foldActivity, type AgentActivity } from './activity';
 import {
   readDockOpen,
   readSurface,
@@ -15,10 +15,13 @@ import {
 import { buildRoster, descendantIds, type AgentView } from './roster';
 
 const NO_ACTIVITY: ReadonlyMap<string, AgentActivity> = new Map();
+// Untracked ids remembered at once; the stream carries every session, so this must stay bounded.
+const UNTRACKED_BUFFER_CAP = 16;
 
 /**
  * What the tracked sessions' agents are doing right now, folded from the shared stream. Events from
- * any other session are dropped before they reach state, so unrelated work never re-renders.
+ * any other session never reach state, so unrelated work never re-renders; the latest few are kept
+ * aside and applied if their id becomes tracked.
  */
 export function useAgentActivity(trackedIds: ReadonlySet<string>): ReadonlyMap<string, AgentActivity> {
   const [activity, setActivity] = useState(NO_ACTIVITY);
@@ -26,12 +29,39 @@ export function useAgentActivity(trackedIds: ReadonlySet<string>): ReadonlyMap<s
   const tracked = useRef(trackedIds);
   tracked.current = trackedIds;
 
+  // Activity for ids not tracked yet, held in a ref so it never re-renders.
+  const untracked = useRef(NO_ACTIVITY);
+
   useEffect(() => {
     return window.b4m.chat.onStreamEvent(event => {
-      if (!tracked.current.has(event.sessionId)) return;
+      if (!tracked.current.has(event.sessionId)) {
+        untracked.current = bufferUntrackedActivity(untracked.current, event, UNTRACKED_BUFFER_CAP);
+        return;
+      }
+      // A live event supersedes anything buffered before the id was tracked.
+      if (untracked.current.has(event.sessionId)) {
+        const without = new Map(untracked.current);
+        without.delete(event.sessionId);
+        untracked.current = without;
+      }
       setActivity(current => foldActivity(current, event));
     });
   }, []);
+
+  useEffect(() => {
+    const adopted = [...untracked.current].filter(([id]) => trackedIds.has(id));
+    if (adopted.length === 0) return;
+    const remaining = new Map(untracked.current);
+    adopted.forEach(([id]) => remaining.delete(id));
+    untracked.current = remaining;
+    setActivity(current => {
+      const next = new Map(current);
+      adopted.forEach(([id, buffered]) => {
+        if (!next.has(id)) next.set(id, buffered);
+      });
+      return next;
+    });
+  }, [trackedIds]);
 
   return activity;
 }

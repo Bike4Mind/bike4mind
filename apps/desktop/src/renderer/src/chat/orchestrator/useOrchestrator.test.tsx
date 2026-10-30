@@ -82,6 +82,36 @@ describe('useAgentActivity filtering', () => {
   });
 });
 
+describe('useAgentActivity for a just-spawned child', () => {
+  it('applies activity that streamed before the child became tracked', () => {
+    let latest: ReadonlyMap<string, AgentActivity> = new Map();
+    const Probe = ({ tracked }: { tracked: ReadonlySet<string> }) => {
+      latest = useAgentActivity(tracked);
+      return null;
+    };
+    act(() => root.render(<Probe tracked={new Set(['parent'])} />));
+    act(() => listener?.(toolStart('child')));
+    expect(latest.has('child')).toBe(false);
+
+    act(() => root.render(<Probe tracked={new Set(['parent', 'child'])} />));
+    expect(latest.get('child')).toEqual({ kind: 'tool', tool: 'read_file', detail: 'file.ts' });
+  });
+
+  it('lets a live event for a tracked id win over what was buffered for it', () => {
+    let latest: ReadonlyMap<string, AgentActivity> = new Map();
+    const Probe = ({ tracked }: { tracked: ReadonlySet<string> }) => {
+      latest = useAgentActivity(tracked);
+      return null;
+    };
+    act(() => root.render(<Probe tracked={new Set<string>()} />));
+    act(() => listener?.(toolStart('child')));
+    act(() => root.render(<Probe tracked={new Set(['child'])} />));
+    act(() => listener?.({ type: 'done', sessionId: 'child', messageId: 'm', content: '' } as ChatStreamEvent));
+    act(() => root.render(<Probe tracked={new Set(['child'])} />));
+    expect(latest.has('child')).toBe(false);
+  });
+});
+
 describe('useOrchestratorRoster', () => {
   it('is empty without a root', () => {
     let latest: unknown[] = [1];

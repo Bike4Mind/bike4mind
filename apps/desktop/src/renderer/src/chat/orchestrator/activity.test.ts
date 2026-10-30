@@ -2,6 +2,7 @@ import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import {
   activityLabel,
+  bufferUntrackedActivity,
   describeToolInput,
   foldActivity,
   toolKind,
@@ -73,6 +74,37 @@ describe('foldActivity', () => {
     const current: ReadonlyMap<string, AgentActivity> = new Map();
     foldActivity(current, { type: 'phase', ...base, phase: { kind: 'thinking' } });
     expect(current.size).toBe(0);
+  });
+});
+
+describe('bufferUntrackedActivity', () => {
+  const thinking = (sessionId: string): ChatStreamEvent => ({
+    type: 'phase',
+    sessionId,
+    messageId: 'm',
+    phase: { kind: 'thinking' },
+  });
+
+  it('keeps only the newest ids once over the cap, refreshing an id that streams again', () => {
+    let buffer: ReadonlyMap<string, AgentActivity> = new Map();
+    for (const id of ['a', 'b', 'c']) buffer = bufferUntrackedActivity(buffer, thinking(id), 3);
+    buffer = bufferUntrackedActivity(buffer, { type: 'tool-start', ...base, sessionId: 'a', call: call('x') }, 3);
+    buffer = bufferUntrackedActivity(buffer, thinking('d'), 3);
+    expect([...buffer.keys()]).toEqual(['c', 'a', 'd']);
+  });
+
+  it('never grows past the cap', () => {
+    let buffer: ReadonlyMap<string, AgentActivity> = new Map();
+    for (let index = 0; index < 100; index++) buffer = bufferUntrackedActivity(buffer, thinking(`s${index}`), 8);
+    expect(buffer.size).toBe(8);
+  });
+
+  it('drops an id whose turn ended, and returns the same map when nothing changes', () => {
+    const buffer = bufferUntrackedActivity(new Map(), thinking('a'), 4);
+    expect(bufferUntrackedActivity(buffer, thinking('a'), 4)).toBe(buffer);
+    expect(bufferUntrackedActivity(buffer, { type: 'done', ...base, sessionId: 'a', content: '' }, 4).has('a')).toBe(
+      false
+    );
   });
 });
 

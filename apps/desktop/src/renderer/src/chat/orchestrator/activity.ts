@@ -70,6 +70,30 @@ export function foldActivity(
   return new Map(current).set(event.sessionId, next);
 }
 
+/**
+ * `foldActivity` for sessions not tracked yet, keeping at most `cap` ids, the most recently streamed
+ * last. A just-spawned child streams before its summary lands, so its activity waits here until then.
+ */
+export function bufferUntrackedActivity(
+  buffer: ReadonlyMap<string, AgentActivity>,
+  event: ChatStreamEvent,
+  cap: number
+): ReadonlyMap<string, AgentActivity> {
+  const folded = foldActivity(buffer, event);
+  if (folded === buffer) return buffer;
+  const next = new Map(folded);
+  const latest = next.get(event.sessionId);
+  if (latest) {
+    next.delete(event.sessionId);
+    next.set(event.sessionId, latest);
+  }
+  for (const oldest of next.keys()) {
+    if (next.size <= cap) break;
+    next.delete(oldest);
+  }
+  return next;
+}
+
 export type ToolKind = 'edit' | 'read' | 'shell' | 'web' | 'agent' | 'other';
 
 // Order matters: 'bash_list' is a shell tool, not a read, and 'session_read' is an agent tool.
