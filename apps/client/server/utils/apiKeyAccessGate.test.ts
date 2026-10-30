@@ -29,6 +29,7 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
 
 const USER = { id: 'user-1', isAdmin: false, tags: [] };
 const ADMIN = { id: 'admin-1', isAdmin: true, tags: [] };
+const CREDIT_BUYER = { ...USER, lastCreditsPurchasedAt: new Date('2026-10-01T00:00:00Z') };
 const ORG_BILLING = { billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1' };
 const setMode = (mode: string | undefined) =>
   getSettingsMapMock.mockResolvedValue(mode === undefined ? {} : { apiKeyAccess: mode });
@@ -115,6 +116,20 @@ describe('isApiKeyAccessAllowed', () => {
     expect(await gate.isApiKeyAccessAllowed(USER)).toBe(false);
     expect(findActiveUserSubscriptions).not.toHaveBeenCalled();
     expect(findPlanHolderOrgIds).not.toHaveBeenCalled();
+  });
+
+  it('admits a credit buyer with no subscription without reading subscriptions', async () => {
+    expect(await gate.isApiKeyAccessAllowed(CREDIT_BUYER)).toBe(true);
+    expect(findActiveUserSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a null purchase date as a purchase', async () => {
+    expect(await gate.isApiKeyAccessAllowed({ ...USER, lastCreditsPurchasedAt: null })).toBe(false);
+  });
+
+  it('refuses a credit buyer when the switch is disabled', async () => {
+    setMode('disabled');
+    expect(await gate.isApiKeyAccessAllowed(CREDIT_BUYER)).toBe(false);
   });
 
   it.each(['', 'price_unknown', '__proto__', 'constructor', 'toString'])(
@@ -298,12 +313,22 @@ describe('describeApiKeyAccess', () => {
     expect(await gate.describeApiKeyAccess(USER)).toEqual({ mode: 'paid', allowed: true, basis: 'paid_subscription' });
   });
 
+  it('reports a credit buyer as allowed by the purchase', async () => {
+    expect(await gate.describeApiKeyAccess(CREDIT_BUYER)).toEqual({
+      mode: 'paid',
+      allowed: true,
+      basis: 'credit_purchase',
+    });
+  });
+
   it('agrees with isApiKeyAccessAllowed for a billing-less key', async () => {
     for (const mode of ['all', 'paid', 'disabled']) {
       setMode(mode);
       gate.clearApiKeyAccessModeCache();
-      const described = await gate.describeApiKeyAccess(USER);
-      expect(described.allowed).toBe(await gate.isApiKeyAccessAllowed(USER));
+      for (const user of [USER, CREDIT_BUYER]) {
+        const described = await gate.describeApiKeyAccess(user);
+        expect(described.allowed).toBe(await gate.isApiKeyAccessAllowed(user));
+      }
     }
   });
 });
@@ -327,6 +352,14 @@ describe('assertCliSessionAllowed', () => {
     expect(error).toBeInstanceOf(ForbiddenError);
     expect((error as Error).message).toBe(gate.CLI_ACCESS_DENIED_MESSAGE);
     expect(findBySidMock).toHaveBeenCalledWith('sid-1');
+  });
+
+  it('admits a device-flow CLI session for a credit buyer', async () => {
+    findBySidMock.mockResolvedValue({ createdVia: 'device', clientId: 'b4m-cli' });
+    await expect(gate.assertCliSessionAllowed(CREDIT_BUYER, 'sid-1')).resolves.toBeUndefined();
+    await expect(
+      gate.assertCliSessionAllowed(CREDIT_BUYER, undefined, { requireApiAccess: true })
+    ).resolves.toBeUndefined();
   });
 
   it.each(OAUTH_DEVICE_CLIENT_IDS)('refuses a session identified only by known client %s', async clientId => {

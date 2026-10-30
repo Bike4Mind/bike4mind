@@ -1,11 +1,19 @@
-import { Box, Stack, Typography } from '@mui/joy';
+import { Box, Skeleton, Stack, Tooltip, Typography } from '@mui/joy';
 import {
   NEW_ACCOUNT_WINDOW_MS,
   RISK_BAND,
   type AdminUsersListRow,
   type AdminUsersSortField,
 } from '@client/app/utils/adminUsersFilter';
+import {
+  SIGNUP_SIGNAL_LABELS,
+  SIGNUP_TIMESERIES_RANGE_LABELS as RANGE_LABELS,
+  type SignupTimeseriesRange,
+  type SignupVerdict,
+  type SignupVerdicts,
+} from '@client/app/utils/signupSignals';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+import { adminFocus } from '../../shared/adminStyles';
 import { InitialsAvatar } from '../../shared/InitialsAvatar';
 import { InlineBar } from '../../shared/InlineBar';
 import { StatusChip } from '../../shared/StatusChip';
@@ -53,6 +61,29 @@ const RISK_BY_BAND: Record<string, AccountStatus> = {
 export const accountRisk = (row: Pick<AdminUsersListRow, 'signupGrantAssessment'>): AccountStatus | undefined =>
   RISK_BY_BAND[row.signupGrantAssessment?.band ?? ''];
 
+/** Chip and hover text for the signup chart's verdict; undefined when there is none to show. */
+export function signupVerdictDisplay(
+  verdict: SignupVerdict | null | undefined,
+  range: SignupTimeseriesRange
+): (AccountStatus & { title: string }) | undefined {
+  if (!verdict) return undefined;
+  const reasons = verdict.signals.map(signal => SIGNUP_SIGNAL_LABELS[signal].label).join(', ');
+  const scope = `Signup chart, ${RANGE_LABELS[range].toLowerCase()}`;
+  if (verdict.suspected) return { label: 'Suspected', tone: 'warn', title: `${scope}: ${reasons}.` };
+  return {
+    label: 'Likely legit',
+    tone: 'neutral',
+    title: reasons ? `${scope}: one weak signal, ${reasons}.` : `${scope}: no suspected-signup signals.`,
+  };
+}
+
+export type UsersVerdictColumn = {
+  range: SignupTimeseriesRange;
+  /** Undefined while loading or after a failed fetch (the tab shows an alert for that). */
+  verdicts?: SignupVerdicts['verdicts'];
+  loading?: boolean;
+};
+
 const Dash = () => (
   <Typography component="span" sx={{ color: 'admin.inkMuted' }} aria-label="None">
     {'\u2014'}
@@ -75,7 +106,15 @@ export const USERS_SORT_COLUMNS: Record<string, AdminUsersSortField> = {
   credits: 'currentCredits',
 };
 
-export function usersColumns({ now, maxSpend }: { now: Date; maxSpend: number }): DataColumn<AdminUsersListRow>[] {
+export function usersColumns({
+  now,
+  maxSpend,
+  verdict,
+}: {
+  now: Date;
+  maxSpend: number;
+  verdict: UsersVerdictColumn;
+}): DataColumn<AdminUsersListRow>[] {
   return [
     {
       id: 'user',
@@ -186,6 +225,42 @@ export function usersColumns({ now, maxSpend }: { now: Date; maxSpend: number })
           <StatusChip tone={risk.tone} label={risk.label} data-testid={`admin-users-risk-${row.id}`} />
         ) : (
           <Dash />
+        );
+      },
+    },
+    {
+      id: 'verdict',
+      label: 'Verdict',
+      width: '7rem',
+      render: row => {
+        if (verdict.loading) {
+          return (
+            <Skeleton
+              variant="rectangular"
+              width={64}
+              height={22}
+              sx={{ borderRadius: 'md' }}
+              data-testid={`admin-users-verdict-loading-${row.id}`}
+            />
+          );
+        }
+        const shown = signupVerdictDisplay(verdict.verdicts?.[row.id], verdict.range);
+        if (!shown) return <Dash />;
+        return (
+          <Tooltip title={shown.title} placement="top" enterTouchDelay={0}>
+            {/* Focusable so keyboard and touch users can reach the reasons, not just mouse hover. */}
+            <Box
+              component="span"
+              tabIndex={0}
+              // A generic span may not carry aria-label; img makes it a labelled, non-interactive status.
+              role="img"
+              aria-label={`${shown.label}. ${shown.title}`}
+              onClick={event => event.stopPropagation()}
+              sx={{ display: 'inline-flex', borderRadius: 'md', ...adminFocus }}
+            >
+              <StatusChip tone={shown.tone} label={shown.label} data-testid={`admin-users-verdict-${row.id}`} />
+            </Box>
+          </Tooltip>
         );
       },
     },

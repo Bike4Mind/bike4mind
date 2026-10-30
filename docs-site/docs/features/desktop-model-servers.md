@@ -14,7 +14,7 @@ Desktop supports two kinds of server:
 - Ollama.
 - OpenAI-compatible servers such as llama-server, LM Studio and vLLM.
 
-Each server has an Access setting. Chat only lets Desktop use the server's models for chat. Chat and manage marks the server as one you administer. Desktop does not pull or remove models on a remote server with either setting. Chat only is the default, and the setting applies to this device only.
+Each server has an Access setting. Chat only lets Desktop list and use the server's models for chat. Chat and manage also lets you download and remove models on an Ollama server from the Models screen. OpenAI-compatible servers only support listing and chat, with either access setting. Chat only is the default, and the setting applies to this device only.
 
 ## When to use this
 
@@ -139,7 +139,37 @@ The address must not include a username, password, query string or fragment. If 
 
 If Test warns that a public address answered without credentials, put a proxy with a token in front of it. Saving anyway requires you to tick Save it anyway.
 
+## Manage models on an Ollama server
+
+1. In Settings > Model servers, set the Ollama server's Access to Chat and manage.
+2. Open Models and select the server in the server switcher. This computer manages models on your own computer instead.
+3. Use Explore to choose a model and build, then select Download and confirm the destination. The download uses the server's saved connection and credentials, and stores the model on that server.
+4. Use Installed to see the server's models or remove one. Removing a model affects other users of that server too.
+
+Desktop cannot see how much free disk space a remote server has. Check the server's storage before downloading a large model.
+
+If a download connection drops or stops reporting progress, the download pauses. Restore the connection and select Resume to reuse partial data still kept by Ollama. If Ollama restarts after a download has been paused for more than an hour, it starts over. Desktop keeps your computer awake while a server download runs, but releases that request when it pauses or finishes.
+
+Removing a saved server or changing its Access to Chat only stops its downloads in Desktop and closes open download and removal dialogs. It does not remove models already stored on the server.
+
+## Rate models for a server's hardware
+
+Desktop cannot measure a remote server's memory, so by default the Models screen shows no fit badges for a saved server and its Curated picks are not chosen for it. To rate models for the server, enter its hardware:
+
+1. In Settings > Model servers, select Hardware on the server.
+2. Enter its RAM and, if it has one, its GPU memory, in GB as the hardware is sold. Tick The GPU shares this RAM for a machine with unified memory, such as an Apple silicon Mac. For a machine whose GPU can use only part of that memory, enter that part as GPU memory.
+3. Select Save hardware.
+
+The Curated tab then picks models for that server and shows fit badges for it, as it does for your own computer. Explore and the download dialog use the same figures. RAM is required; without it the server stays unrated.
+
+This computer has the same Hardware fields. Desktop detects this computer's hardware itself and shows what it found next to the fields. Fill in only what it got wrong: an entered figure replaces the detected one for fit badges, Curated picks and the context size local chat uses. Select Use detected hardware to go back.
+
+You can also enter memory bandwidth in GB/s. Desktop saves it, but it does not change ratings yet.
+
 ## Troubleshooting
+
+- Download or Remove is missing: select an Ollama server with Access set to Chat and manage. Chat only and OpenAI-compatible servers do not offer these controls.
+- A download is paused: check the server and connection, then select Resume. If it pauses again behind a proxy, check whether the proxy allows long-running streaming responses.
 
 - Needs credentials: the server returned 401 or 403, or Desktop no longer has the saved credential. Check the token, or the header name and value. If the message says the saved credential could not be read, the secure storage lost it, for example after a keyring reset. If it says the credential was kept only until Desktop quit, it was session-only and Desktop restarted. In both cases open the server's credentials and enter the value again.
 - Needs credentials with a correct token, behind a proxy: Ollama may be answering 403 because the `Host` header was not rewritten. Check the Caddy setup above, and test with `curl -i` against the address.

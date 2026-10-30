@@ -91,6 +91,8 @@ vi.mock('@bike4mind/llm-adapters', () => ({
 
 // Mock common
 vi.mock('@bike4mind/common', () => ({
+  escapeSlackText: (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+  escapeSlackLine: (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
   LiveopsTriageConfigSchema: {
     parse: vi.fn(val => val),
   },
@@ -552,6 +554,33 @@ describe('LiveopsTriageService', () => {
       const uninitializedService = createLiveopsTriageService(logger);
 
       await expect(uninitializedService.fetchSlackAlerts('C123', 12)).rejects.toThrow('Slack client not initialized');
+    });
+  });
+
+  describe('postTriageSummary', () => {
+    it('escapes issue titles and the health assessment before posting', async () => {
+      await service.initSlackClient('test-token');
+      mockSlackClient.sendMessage.mockResolvedValue(undefined);
+      const summary = {
+        totalAlerts: 1,
+        newIssues: 1,
+        duplicates: 0,
+        regressions: 0,
+        p0Count: 0,
+        p1Count: 1,
+        p2Count: 0,
+        p3Count: 0,
+        recurringPatterns: [],
+        healthAssessment: 'Ping <!channel> & friends',
+      };
+      const created = [{ number: 7, title: 'Boom <!channel>', priority: 'P1', url: 'https://example.com/7' }];
+
+      await service.postTriageSummary('C123', summary, created, [], 12, new Date());
+
+      const posted = JSON.stringify(mockSlackClient.sendMessage.mock.calls[0][0].blocks);
+      expect(posted).toContain('Boom &lt;!channel&gt;');
+      expect(posted).toContain('Ping &lt;!channel&gt; &amp; friends');
+      expect(posted).not.toContain('<!channel>');
     });
   });
 

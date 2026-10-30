@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { getRequestEntitlements, getUserEntitlements, requestHasEntitlement, userHasEntitlement } from './index';
+import {
+  getRequestEntitlements,
+  getUserEntitlements,
+  requestHasEntitlement,
+  toEntitlementUser,
+  userHasEntitlement,
+} from './index';
 import type { Request } from 'express';
+import type { IUserDocument } from '@bike4mind/common';
 import { __registryRows } from '@client/lib/entitlements/registry';
 
 // Minimal req shim - only the fields the entitlement helpers touch.
@@ -136,6 +143,28 @@ describe('getUserEntitlements', () => {
       findActive.mockResolvedValue([{ priceId: 'price_ladder_pro', source: 'admin_grant' }]);
 
       await expect(getUserEntitlements(user)).resolves.toContain('plan:paid');
+    });
+
+    it('is granted to a credit buyer without a subscription', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(
+        getUserEntitlements({ ...user, lastCreditsPurchasedAt: new Date('2026-10-01T00:00:00Z') })
+      ).resolves.toContain('plan:paid');
+    });
+
+    it('is granted exactly once to a credit buyer who also subscribes', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_ladder_basic' }]);
+
+      const keys = await getUserEntitlements({ ...user, lastCreditsPurchasedAt: new Date('2026-10-01T00:00:00Z') });
+
+      expect(keys.filter(key => key === 'plan:paid')).toHaveLength(1);
+    });
+
+    it('is not granted when lastCreditsPurchasedAt is null', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(getUserEntitlements({ ...user, lastCreditsPurchasedAt: null })).resolves.not.toContain('plan:paid');
     });
 
     it('is not granted without a subscription', async () => {
@@ -385,5 +414,15 @@ describe('requestHasEntitlement', () => {
   it('denies (fail-closed) when the request has no authenticated user', async () => {
     await expect(requestHasEntitlement({} as unknown as Request, 'anything')).resolves.toBe(false);
     expect(findActive).not.toHaveBeenCalled();
+  });
+});
+
+describe('toEntitlementUser', () => {
+  // Callers that project the user (model picker, /api/v1/me) must not lose the purchase signal behind plan:paid.
+  it('keeps lastCreditsPurchasedAt', () => {
+    const purchasedAt = new Date('2026-10-01T00:00:00Z');
+    const user = { id: 'u1', tags: [], lastCreditsPurchasedAt: purchasedAt } as unknown as IUserDocument;
+
+    expect(toEntitlementUser(user).lastCreditsPurchasedAt).toBe(purchasedAt);
   });
 });

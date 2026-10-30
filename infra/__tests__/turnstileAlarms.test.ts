@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { matchesMessageFilterPattern } from './helpers/matchesMessageFilterPattern';
 
 const resources = vi.hoisted(() => {
   function output<T>(value: T) {
@@ -62,7 +63,7 @@ describe('turnstile policy alarm wiring', () => {
     expect(resources.filter).toHaveBeenCalledWith('turnstilePolicyInactiveFilter', {
       name: 'test-app-production-turnstile-policy-inactive',
       logGroupName: expect.objectContaining({ value: 'server-logs' }),
-      pattern: '%\\x22message\\x22:\\x22turnstile-policy-inactive\\x22%',
+      pattern: '{ $.message = "turnstile-policy-inactive" }',
       metricTransformation: {
         name: 'TurnstilePolicyInactive',
         namespace: 'test-app/production/Turnstile',
@@ -72,7 +73,7 @@ describe('turnstile policy alarm wiring', () => {
     });
     const pattern = resources.filter.mock.calls[0][1].pattern;
     if (typeof pattern !== 'string') throw new Error('Missing metric filter pattern');
-    const expression = new RegExp(pattern.slice(1, -1));
+    const expression = { test: (line: string) => matchesMessageFilterPattern(pattern, line) };
     const prefix = '2026-10-29T00:00:00.000Z request-id WARN ';
     expect(expression.test(prefix + JSON.stringify({ message: 'turnstile-policy-inactive', reason: 'disabled' }))).toBe(
       true
@@ -107,7 +108,7 @@ describe('turnstile policy alarm wiring', () => {
       'turnstileMisconfiguredFilter',
       expect.objectContaining({
         name: 'test-app-production-turnstile-misconfigured',
-        pattern: '%\\x22message\\x22:\\x22turnstile-misconfigured\\x22%',
+        pattern: '{ $.message = "turnstile-misconfigured" }',
         metricTransformation: expect.objectContaining({ name: 'TurnstileMisconfigured' }),
       })
     );

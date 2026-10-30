@@ -23,14 +23,21 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+// parseAdminActionReason stays real so the 400s are the route's own.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 await import('../unverify-email');
 
-const makeReq = () => ({
+const REASON = 'Support ticket confirmed the address';
+
+const makeReq = (body: unknown = { reason: REASON }) => ({
   query: { userId: 'user-1' },
+  body,
   user: { id: 'admin-1', username: 'admin', isAdmin: true },
   headers: {},
   logger: { info: vi.fn() },
@@ -59,6 +66,7 @@ describe('POST /api/admin/users/[userId]/unverify-email', () => {
       expect.objectContaining({
         action: 'user.email.unverified',
         target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
+        reason: REASON,
       })
     );
     expect(h.update).toHaveBeenCalledWith({ id: 'user-1', emailVerified: false, emailVerifiedAt: null });
@@ -81,5 +89,23 @@ describe('POST /api/admin/users/[userId]/unverify-email', () => {
     await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow(/Admin access required/);
     expect(h.findById).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{}, /outdated version/],
+    [{ reason: 'no' }, /at least/i],
+  ])('rejects a missing or too-short reason %j with no write and no audit', async (body, message) => {
+    h.findById.mockResolvedValue({
+      id: 'user-1',
+      username: 'u',
+      emailVerified: true,
+      emailVerifiedAt: new Date(),
+      email: 'a@b.test',
+    });
+
+    await expect(h.handler!(makeReq(body), { json: vi.fn() })).rejects.toThrow(message);
+
+    expect(h.update).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

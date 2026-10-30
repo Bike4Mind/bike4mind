@@ -219,6 +219,15 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         undefined,
         req.logger
       );
+
+      // A purchase grants plan:paid, so refresh the model picker (MODEL_CATALOG_QUERY_KEY in
+      // app/hooks/data/useModelInfo.ts) and entitlements now instead of on the next reload.
+      // Best-effort: allSettled never rejects, so it cannot fail a delivery whose credits landed.
+      await Promise.allSettled(
+        [['llm', 'models'], ['entitlements']].map(queryKey =>
+          sendToClient(user.id, Resource.websocket.managementEndpoint, { action: 'invalidate_query', queryKey })
+        )
+      );
       break;
     }
 

@@ -183,12 +183,6 @@ export class AdminPage extends BasePage {
     await this.page.getByTestId(`user-profile-menu-${action}-item`).click();
   }
 
-  async clickUserProfileButton(name: string) {
-    await this.openUserProfile(name);
-    await this.clickProfileMenuItem('editProfile');
-    await expect(this.page.getByTestId('admin-profile-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
-  }
-
   // --- Login as User (profile page) ---
 
   /** Open the target user's profile, then pick "Log in as user" from the More menu. */
@@ -220,26 +214,26 @@ export class AdminPage extends BasePage {
     await confirmBtn.click();
   }
 
-  // --- Edit User Profile (AdminProfileModal) ---
+  // --- Edit profile (profile More menu) ---
 
-  async fillProfileField(label: string, value: string) {
-    const input = this.getProfileFieldByLabel(label);
-    await input.clear();
-    if (value) {
-      await input.fill(value);
-    }
+  /** Open the target user's profile, then pick "Edit profile" from the More menu. */
+  async openEditProfileDialog(name: string) {
+    await this.openUserProfile(name);
+    await this.clickProfileMenuItem('editProfile');
+    await expect(this.page.getByTestId('edit-profile-dialog')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
-  async saveProfileChanges() {
-    const saveBtn = this.page.getByTestId('profile-save-btn');
+  async fillEditProfileName(value: string) {
+    await this.fillMuiInput(this.page.getByTestId('edit-profile-dialog-name-input'), value);
+  }
+
+  /** Save stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH; the dialog closes on success. */
+  async saveEditProfile(reason = 'E2E profile edit regression guard') {
+    await this.page.getByTestId('edit-profile-dialog-reason-input').fill(reason);
+    const saveBtn = this.page.getByTestId('edit-profile-dialog-confirm-btn');
+    await expect(saveBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
     await saveBtn.click();
-    // Wait for save to complete (button re-enables after API response)
-    await expect(saveBtn).toBeEnabled({ timeout: TIMEOUTS.ACTION });
-  }
-
-  async closeModal() {
-    await this.page.getByTestId('modal-close-btn').click();
-    await expect(this.page.getByTestId('modal-close-btn')).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
+    await expect(this.page.getByTestId('edit-profile-dialog')).toBeHidden({ timeout: TIMEOUTS.ACTION });
   }
 
   // --- Delete User (profile More menu) ---

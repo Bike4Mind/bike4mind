@@ -1,5 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
+import { toggledFabFileListResponseSchema } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
@@ -86,7 +88,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       })
     );
 
-    return res.json(result);
+    return respond(res, toggledFabFileListResponseSchema, result);
   })
 );
 

@@ -10,6 +10,7 @@ const {
   flagConnectionsMock,
   withdrawListingsMock,
   deleteAuthEventsMock,
+  retainTracesMock,
 } = vi.hoisted(() => ({
   deleteEmbedMock: vi.fn(),
   deleteRequestsMock: vi.fn(),
@@ -20,6 +21,7 @@ const {
   flagConnectionsMock: vi.fn(),
   withdrawListingsMock: vi.fn(),
   deleteAuthEventsMock: vi.fn(),
+  retainTracesMock: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -29,6 +31,7 @@ vi.mock('@bike4mind/database', () => ({
   integrationRequestRepository: { deleteAllForUser: deleteRequestsMock },
   hideDeletedAuthorAnnotations: hideAnnotationsMock,
 }));
+vi.mock('@server/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: retainTracesMock }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: purgePublishedMock,
 }));
@@ -53,6 +56,7 @@ beforeEach(() => {
   hideAnnotationsMock.mockReset().mockResolvedValue(0);
   withdrawListingsMock.mockReset().mockResolvedValue(0);
   deleteAuthEventsMock.mockReset().mockResolvedValue(0);
+  retainTracesMock.mockReset().mockResolvedValue(0);
   revokeDriveMock.mockReset().mockResolvedValue('revoked');
   revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
   flagConnectionsMock.mockReset().mockResolvedValue({ affectedOrgConnections: 0, affectedPersonalConnections: 0 });
@@ -80,6 +84,29 @@ describe('purgeDeletedUserData', () => {
     ).resolves.toBeUndefined();
 
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('delete auth events'));
+  });
+
+  it('keeps the hashed signup traces before deleting the auth events', async () => {
+    retainTracesMock.mockImplementation(async () => {
+      expect(deleteAuthEventsMock).not.toHaveBeenCalled();
+      return 1;
+    });
+
+    await purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null });
+
+    expect(retainTracesMock).toHaveBeenCalledWith('u1');
+    expect(deleteAuthEventsMock).toHaveBeenCalledWith('u1');
+  });
+
+  it('still deletes the auth events when keeping the traces fails', async () => {
+    retainTracesMock.mockRejectedValue(new Error('traces down'));
+
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
+
+    expect(deleteAuthEventsMock).toHaveBeenCalledWith('u1');
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('signup traces'));
   });
 
   it('still hides annotations when withdrawing Skill Market listings fails, and never throws', async () => {

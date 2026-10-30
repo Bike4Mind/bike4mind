@@ -10,10 +10,10 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue, isModelAccessible } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { AI_ACCESS_REVOKED_MESSAGE, isAiAccessRevoked } from '../userService/accountState';
+import { aiAccessDeniedMessage, type AiAccessStateFields } from '../userService/accountState';
 
 export type ModelAdmissionInput = {
-  user: { isAdmin?: boolean | null; tags?: string[] | null; isModerated?: boolean | null };
+  user: AiAccessStateFields & { isAdmin?: boolean | null; tags?: string[] | null };
   /** The llmModelConfigurations admin setting. */
   configs: LLMModelConfig[];
   getEntitlements?: () => Promise<string[]>;
@@ -53,22 +53,19 @@ export async function loadModelConfigurations(
 }
 
 /**
- * The models a free account may call, or undefined when the free-tier gate is off. The Default API
- * Model is always included so a free account is never left with no model to chat on. A read failure
- * propagates: this gate fails closed.
+ * The models a free account may call, across all modalities and in admin order, or undefined when the gate is off.
+ * A read failure propagates: this gate fails closed. The Default API Model is not added (see
+ * resolveCallerDefaultModel in apps/client/server/utils/callerModelList.ts).
  */
 export async function loadFreeTierAllowedModels(
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>
 ): Promise<ReadonlySet<string> | undefined> {
   const settings = await getSettingsMap(
     { adminSettings },
-    { names: ['freeTierModelGateEnabled', 'freeTierAllowedModels', 'DefaultAPIModel'] }
+    { names: ['freeTierModelGateEnabled', 'freeTierAllowedModels'] }
   );
   if (getSettingsValue('freeTierModelGateEnabled', settings) !== true) return undefined;
-  const allowed = new Set(getSettingsValue('freeTierAllowedModels', settings) ?? []);
-  const defaultModel = getSettingsValue('DefaultAPIModel', settings);
-  if (defaultModel) allowed.add(defaultModel);
-  return allowed;
+  return new Set(getSettingsValue('freeTierAllowedModels', settings) ?? []);
 }
 
 /** Whether an admission error is the free-tier refusal, as opposed to any other reason a model is refused. */
@@ -127,7 +124,8 @@ export function createModelAdmission({
   };
 
   const assertAiAccess = (): void => {
-    if (isAiAccessRevoked(user)) throw new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE);
+    const message = aiAccessDeniedMessage(user);
+    if (message) throw new ForbiddenError(message);
   };
 
   const refusal = async (modelId: string): Promise<Error | null> => {

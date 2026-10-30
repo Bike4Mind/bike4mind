@@ -81,6 +81,8 @@ export async function handler(event: unknown) {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
   const summary = await counterLogRepository.findYoungAccountSpend(start, end, TOP_SPENDER_LIMIT);
   logger.log('young-account-spend', {
+    windowStart: start.toISOString(),
+    windowEnd: end.toISOString(),
     totalCredits: summary.totalCredits,
     accountCount: summary.accountCount,
     thresholds,

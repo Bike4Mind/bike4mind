@@ -102,7 +102,12 @@ export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, stora
   // body. A shallow copy, not a mutation: this is the one function every outward-facing file read
   // (get/list/search, byIds, the shared-lake fallback) passes a FabFile through, and some of those
   // callers still hold and use their own reference to the same object afterward.
-  const fabFile = { ...fabFileIn, supersededInLakes: undefined };
+  // list/byIds hand over hydrated docs, whose spread copies only _doc/$__ and drops every field.
+  const plain =
+    typeof (fabFileIn as { toJSON?: unknown }).toJSON === 'function'
+      ? (fabFileIn as unknown as { toJSON: () => IFabFileDocument }).toJSON()
+      : fabFileIn;
+  const fabFile = { ...plain, supersededInLakes: undefined };
 
   // Never hand out a URL for an image that's still held (pending scan) or was
   // quarantined (blocked) by upload moderation, before any URL work. We withhold the

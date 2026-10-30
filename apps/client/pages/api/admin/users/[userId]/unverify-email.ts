@@ -6,7 +6,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { ApiKeyScope, AuthEvents } from '@bike4mind/common';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 interface RequestQuery {
   userId: string;
@@ -27,6 +27,8 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       if (typeof userId !== 'string' || !userId) {
         throw new BadRequestError('Invalid user ID');
       }
+
+      const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
       await withTransaction(async () => {
         // Get the user
@@ -49,6 +51,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
           action: 'user.email.unverified',
           target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
           summary: 'unverified email',
+          reason,
         });
 
         // Log admin action to analytics

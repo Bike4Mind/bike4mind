@@ -6,6 +6,7 @@ import {
   FileEvents,
   MODAL_MEDIA_PREFIX,
   Permission,
+  createdFabFileResponseSchema,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -23,6 +24,7 @@ import { getFileExtension } from '@bike4mind/utils';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -218,7 +220,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
 
       const signed = await signBrowserFileResponse(result);
       // Same URL the admin form builds (AdminModalVideoFields), so API-key callers need no bucket name.
-      return res.json(
+      return respond(
+        res,
+        createdFabFileResponseSchema,
         adminModalMedia && result.filePath
           ? { ...signed, mediaUrl: getS3Url({ bucket: Resource.fabFileBucket.name, key: result.filePath }) }
           : signed

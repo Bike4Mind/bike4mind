@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getSettingsMap: vi.fn(),
   resolveSlackWebhookUrl: vi.fn(),
   post: vi.fn(),
+  log: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: mocks.resource }));
@@ -24,7 +25,7 @@ vi.mock('axios', () => ({ default: { post: mocks.post } }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     withMetadata() {
-      return { log: vi.fn(), error: vi.fn() };
+      return { log: mocks.log, error: vi.fn() };
     }
   },
 }));
@@ -114,6 +115,10 @@ describe('young-account spend handler', () => {
     expect(start).toEqual(new Date('2026-10-26T10:00:00Z'));
     expect(end).toEqual(new Date(event.time));
     expect(limit).toBe(10);
+    expect(mocks.log).toHaveBeenCalledWith(
+      'young-account-spend',
+      expect.objectContaining({ windowStart: '2026-10-26T10:00:00.000Z', windowEnd: '2026-10-26T11:00:00.000Z' })
+    );
     expect(mocks.post).not.toHaveBeenCalled();
   });
 

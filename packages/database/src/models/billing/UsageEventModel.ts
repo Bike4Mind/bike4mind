@@ -166,11 +166,12 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
    * `since`, and when the oldest of those calls landed. Input plus output, plus the cache buckets
    * where they are separate: a 'chat' row's inputTokens is the estimate of the whole prompt, so its
    * cache read and write tokens are already in it; every other feature records them disjointly
-   * (see `rates` in UsageEventTypes.ts). Served by the { userId, createdAt } index.
+   * (see `rates` in UsageEventTypes.ts). Timeout attempts are absorbed provider cost and do not
+   * consume the user's quota. Served by the { userId, createdAt } index.
    */
   async userTokensSince(userId: string, since: Date): Promise<{ tokens: number; oldestAt?: Date }> {
     const [row] = await this.model.aggregate<{ tokens: number; oldestAt: Date }>([
-      { $match: { userId, ownerType: CreditHolderType.User, createdAt: { $gte: since } } },
+      { $match: { userId, ownerType: CreditHolderType.User, createdAt: { $gte: since }, status: { $ne: 'timeout' } } },
       {
         $group: {
           _id: null,
@@ -203,6 +204,21 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       },
     ]);
     return row?.credits ?? 0;
+  }
+
+  async creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>> {
+    if (userIds.length === 0) return {};
+    // Lifetime spend on purpose; the {userId, createdAt} index serves it for a bounded id list.
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      { $match: { userId: { $in: userIds } } },
+      {
+        $group: {
+          _id: '$userId',
+          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+        },
+      },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
   }
 
   async marginByModelDay(since?: Date): Promise<IModelDayMargin[]> {
@@ -423,8 +439,10 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     // Both provider counts must be real positive counts to compare against the
     // local estimate. A row settled 'local' can still carry a partial provider
     // report (one axis zero); gating on > 0 keeps those out of the delta.
+    // Timeout rows use zero quota sentinels rather than measured local estimates.
     const hasProviderCounts = {
       $and: [
+        { $ne: ['$status', 'timeout'] },
         { $gt: [{ $ifNull: ['$providerInputTokens', 0] }, 0] },
         { $gt: [{ $ifNull: ['$providerOutputTokens', 0] }, 0] },
       ],

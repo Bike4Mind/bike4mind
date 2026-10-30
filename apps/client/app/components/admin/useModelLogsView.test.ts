@@ -49,7 +49,7 @@ describe('useModelLogsView', () => {
       modelLogsLimit: 25,
     });
 
-    act(() => result.current[1]({ startDate: '2026-10-14', endDate: '2026-10-21', limit: 10 }));
+    act(() => result.current[1]({ startDate: '2026-10-15', endDate: '2026-10-21', limit: 10 }));
     expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs' });
   });
 

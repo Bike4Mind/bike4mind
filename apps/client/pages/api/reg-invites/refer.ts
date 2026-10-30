@@ -1,4 +1,4 @@
-import { RegInviteEvents, inboxAliasKey, requireEnv } from '@bike4mind/common';
+import { RegInviteEvents, escapeSlackLine, escapeSlackText, inboxAliasKey, requireEnv } from '@bike4mind/common';
 import { IRegistrationInvite, RegInviteSource, RegInviteStatusType } from '@bike4mind/common';
 import { registrationInviteRepository, User, userRepository } from '@bike4mind/database';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
@@ -178,7 +178,7 @@ const handler = baseApi().post(
 
         // Queue the Slack notification; sent in a batch after the loop.
         if (getSettingsValue('EnableReferralToSlack', settings)) {
-          const slackMsg = `Referral sent by user ${userName}:${userId} to ${target} with ${inviteCode} and body ${finalBody}`;
+          const slackMsg = `Referral sent by user ${escapeSlackLine(userName)}:${userId} to ${escapeSlackLine(target)} with ${inviteCode} and body ${escapeSlackText(finalBody)}`;
           notificationPromises.push(observeOperation(postMessageToSlack(slackMsg)));
         }
 
@@ -242,7 +242,7 @@ const handler = baseApi().post(
 
     // Send accumulated error/skip messages to Slack as one batch.
     if (slackErrorMessages.length > 0) {
-      const slackMessage = slackErrorMessages.join('\n');
+      const slackMessage = escapeSlackText(slackErrorMessages.join('\n'));
       await postMessageToSlack(slackMessage);
     }
 

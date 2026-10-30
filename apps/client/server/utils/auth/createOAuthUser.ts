@@ -1,4 +1,5 @@
 import { newSignupGrant, PENDING_FREE_CREDITS_TAG, sanitizeUsername, USERNAME_MAX_LENGTH } from '@bike4mind/common';
+import type { ISignupMeta } from '@bike4mind/common';
 import { adminSettingsRepository, User } from '@bike4mind/database';
 import { randomUUID } from 'crypto';
 
@@ -74,6 +75,7 @@ export async function createUniqueOAuthUser(params: {
    * backfillPendingFreeCredits script rescues.
    */
   pendingFreeCredits?: boolean;
+  signupMeta?: ISignupMeta;
 }) {
   const { name, baseUsername, email, oauthCredentials, pendingFreeCredits = false } = params;
   // `name` is a required field. Providers that send neither a displayName/name
@@ -95,6 +97,7 @@ export async function createUniqueOAuthUser(params: {
     ...(email ? { email, emailVerified: true, emailVerifiedAt: new Date() } : {}),
     ...(pendingFreeCredits ? { tags: [PENDING_FREE_CREDITS_TAG] } : {}),
     ...(signupGrant ? { signupGrant } : {}),
+    ...(params.signupMeta ? { signupMeta: params.signupMeta } : {}),
   });
 
   let candidate = baseUsername;

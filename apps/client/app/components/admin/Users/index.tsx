@@ -11,7 +11,7 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import type { AdminUsersListRow } from '@client/app/utils/adminUsersFilter';
 import type { AdminUsersBulkActionType, AdminUsersBulkTarget } from '@client/app/utils/adminUsersBulk';
 import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
-import AdminProfileModal from '../AdminProfileModal';
+import type { SignupTimeseriesRange } from '@client/app/utils/signupSignals';
 import {
   AdminPageHeader,
   DataTable,
@@ -23,6 +23,7 @@ import {
 import { adminFocus } from '../shared/adminStyles';
 import { AnomalyBanner } from './AnomalyBanner';
 import { SignupActivityPanel } from '../Signups/SignupActivityPanel';
+import { useSignupTimeseries, useSignupVerdicts } from '../Signups/useSignupTimeseries';
 import ComplianceModal from './ComplianceModal';
 import CreateUserModal, { useCreateUserModal } from './CreateUserModal';
 import { exportUsersCsv } from './exportUsersCsv';
@@ -55,6 +56,7 @@ const copyToClipboard = async (value: string, what: string) => {
 };
 
 function UserRowActions({ row, onOpen }: { row: AdminUsersListRow; onOpen: () => void }) {
+  const { email } = row;
   return (
     <Dropdown>
       <MenuButton
@@ -79,7 +81,7 @@ function UserRowActions({ row, onOpen }: { row: AdminUsersListRow; onOpen: () =>
           Open profile
         </MenuItem>
         <MenuItem onClick={() => copyToClipboard(row.id, 'User ID')}>Copy user ID</MenuItem>
-        {row.email && <MenuItem onClick={() => copyToClipboard(row.email ?? '', 'Email')}>Copy email</MenuItem>}
+        {email && <MenuItem onClick={() => copyToClipboard(email, 'Email')}>Copy email</MenuItem>}
       </Menu>
     </Dropdown>
   );
@@ -95,13 +97,14 @@ const UsersTab: React.FC = () => {
   // The target is frozen when the dialog opens, so a list refetch cannot change what it acts on.
   const [bulkRun, setBulkRun] = useState<{ type: AdminUsersBulkActionType; target: AdminUsersBulkTarget } | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [signupRange, setSignupRange] = useState<SignupTimeseriesRange>('7d');
 
   // Seeded from the persisted params so a restored search is not wiped on mount.
   const {
     value: search,
     debouncedValue: debouncedSearch,
     setValue: setSearch,
-  } = useDebounceValue(useUsersTab.getState().params.search ?? '');
+  } = useDebounceValue(useUsersTab.getState().params.search);
   useEffect(() => {
     if (debouncedSearch === params.search) return;
     setParams({ search: debouncedSearch, page: 1 });
@@ -119,9 +122,21 @@ const UsersTab: React.FC = () => {
 
   const rows = useMemo(() => usersQuery.data?.users ?? [], [usersQuery.data]);
   const totalUsers = usersQuery.data?.totalUsers ?? 0;
+  const rowIds = useMemo(() => rows.map(row => row.id), [rows]);
+  // Same query key as the chart panel's, so this shares its fetch rather than making another.
+  const chartQuery = useSignupTimeseries(signupRange);
+  const verdictsQuery = useSignupVerdicts(signupRange, chartQuery.data?.until, rowIds);
+  const verdicts = verdictsQuery.data?.verdicts;
+  // Until the chart loads, the verdicts query is disabled; it then counts as loading too.
+  const verdictsLoading = rowIds.length > 0 && !verdictsQuery.isError && !chartQuery.isError && !verdicts;
   const columns = useMemo(
-    () => usersColumns({ now: new Date(), maxSpend: Math.max(0, ...rows.map(row => row.spend30d ?? 0)) }),
-    [rows]
+    () =>
+      usersColumns({
+        now: new Date(),
+        maxSpend: Math.max(0, ...rows.map(row => row.spend30d ?? 0)),
+        verdict: { range: signupRange, verdicts, loading: verdictsLoading },
+      }),
+    [rows, signupRange, verdicts, verdictsLoading]
   );
 
   // A selection made under one filter must not ride into a bulk run under another.
@@ -246,7 +261,11 @@ const UsersTab: React.FC = () => {
         }}
       />
       {anomalyQuery.isError && <Alert color="warning">Could not check signup anomalies. Refresh to retry.</Alert>}
-      <SignupActivityPanel onSelectWindow={window => setParams({ ...window, signedUp: undefined, page: 1 })} />
+      <SignupActivityPanel
+        range={signupRange}
+        onRangeChange={setSignupRange}
+        onSelectWindow={window => setParams({ ...window, signedUp: undefined, page: 1 })}
+      />
 
       {showRecentActivity ? (
         <RecentActivityView />
@@ -262,6 +281,28 @@ const UsersTab: React.FC = () => {
             }}
           />
           <UsersToolbar params={params} search={search} onSearchChange={setSearch} onChange={setParams} />
+          {verdictsQuery.isError && (
+            <Alert
+              color="warning"
+              data-testid="admin-users-verdicts-error"
+              endDecorator={
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  onClick={() => {
+                    // A chart open for over a day is past what the verdicts route accepts; reload both.
+                    chartQuery.refetch();
+                    verdictsQuery.refetch();
+                  }}
+                  data-testid="admin-users-verdicts-retry-btn"
+                >
+                  Retry
+                </Button>
+              }
+            >
+              Could not load signup verdicts. The rest of the list is unaffected.
+            </Alert>
+          )}
           {params.groupBy && groupsQuery.data?.groupsTruncated && (
             <Alert color="warning" data-testid="admin-users-groups-truncated">
               Too many accounts match to group them all. Narrow the filters to see every domain.
@@ -325,7 +366,6 @@ const UsersTab: React.FC = () => {
         </>
       )}
 
-      <AdminProfileModal />
       <ComplianceModal />
       <CreateUserModal />
       {/* Mounted only while open, so each run starts from a clean form and idempotency key. */}

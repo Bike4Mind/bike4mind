@@ -6,27 +6,12 @@
  * for notification previews and blocks is the rich Block Kit layout.
  */
 
+import { escapeSlackCode, escapeSlackLine, escapeSlackText } from '@bike4mind/common';
 import { KnownBlock } from '@slack/web-api';
 
 interface BlockTemplateResult {
   text: string;
   blocks: KnownBlock[];
-}
-
-/**
- * Escape special characters in Slack mrkdwn to prevent injection.
- * Slack mrkdwn uses: * _ ` ~ for formatting, and < > for links/mentions.
- */
-function escapeMrkdwn(text: string): string {
-  // Escape backslash first, then other special characters
-  return text
-    .replace(/\\/g, '\\\\')
-    .replace(/\*/g, '\\*')
-    .replace(/_/g, '\\_')
-    .replace(/`/g, '\\`')
-    .replace(/~/g, '\\~')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 /**
@@ -57,7 +42,7 @@ export function buildPROpenedBlocks(data: PROpenedData): BlockTemplateResult {
     data.additions !== undefined ? ` (+${data.additions} / -${data.deletions}, ${data.changedFiles} files)` : '';
 
   return {
-    text: `[${data.repo}] PR #${data.prNumber} opened by ${data.author}: ${data.prTitle}`,
+    text: escapeSlackText(`[${data.repo}] PR #${data.prNumber} opened by ${data.author}: ${data.prTitle}`),
     blocks: [
       {
         type: 'header',
@@ -67,12 +52,17 @@ export function buildPROpenedBlocks(data: PROpenedData): BlockTemplateResult {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*<${data.prUrl}|${escapeMrkdwn(data.prTitle)}>*\n${data.headBranch} → ${data.baseBranch}${stats}`,
+          text: `*<${data.prUrl}|${escapeSlackLine(data.prTitle)}>*\n${escapeSlackLine(data.headBranch)} → ${escapeSlackLine(data.baseBranch)}${stats}`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}  |  *Author:* ${data.author}` }],
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: `*Repo:* ${escapeSlackLine(data.repo)}  |  *Author:* ${escapeSlackLine(data.author)}`,
+          },
+        ],
       },
       {
         type: 'actions',
@@ -108,10 +98,10 @@ interface ReviewRequestedData {
 }
 
 export function buildReviewRequestedBlocks(data: ReviewRequestedData): BlockTemplateResult {
-  const reviewerMention = data.reviewerSlackId ? `<@${data.reviewerSlackId}>` : data.reviewer;
+  const reviewerMention = data.reviewerSlackId ? `<@${data.reviewerSlackId}>` : escapeSlackLine(data.reviewer);
 
   return {
-    text: `[${data.repo}] Review requested on PR #${data.prNumber}: ${data.prTitle}`,
+    text: escapeSlackText(`[${data.repo}] Review requested on PR #${data.prNumber}: ${data.prTitle}`),
     blocks: [
       {
         type: 'header',
@@ -121,12 +111,12 @@ export function buildReviewRequestedBlocks(data: ReviewRequestedData): BlockTemp
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `${reviewerMention}, *${data.author}* requested your review on *<${data.prUrl}|#${data.prNumber} ${escapeMrkdwn(data.prTitle)}>*`,
+          text: `${reviewerMention}, *${escapeSlackLine(data.author)}* requested your review on *<${data.prUrl}|#${data.prNumber} ${escapeSlackLine(data.prTitle)}>*`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}` }],
+        elements: [{ type: 'mrkdwn', text: `*Repo:* ${escapeSlackLine(data.repo)}` }],
       },
       {
         type: 'actions',
@@ -156,10 +146,10 @@ interface PRReviewData {
 }
 
 export function buildPRApprovedBlocks(data: PRReviewData): BlockTemplateResult {
-  const bodyPreview = data.reviewBody ? `\n> ${escapeMrkdwn(truncate(data.reviewBody, 200))}` : '';
+  const bodyPreview = data.reviewBody ? `\n> ${escapeSlackLine(truncate(data.reviewBody, 200))}` : '';
 
   return {
-    text: `[${data.repo}] PR #${data.prNumber} approved by ${data.reviewer}: ${data.prTitle}`,
+    text: escapeSlackText(`[${data.repo}] PR #${data.prNumber} approved by ${data.reviewer}: ${data.prTitle}`),
     blocks: [
       {
         type: 'header',
@@ -169,12 +159,12 @@ export function buildPRApprovedBlocks(data: PRReviewData): BlockTemplateResult {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${data.reviewer}* approved *<${data.prUrl}|#${data.prNumber} ${escapeMrkdwn(data.prTitle)}>*${bodyPreview}`,
+          text: `*${escapeSlackLine(data.reviewer)}* approved *<${data.prUrl}|#${data.prNumber} ${escapeSlackLine(data.prTitle)}>*${bodyPreview}`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}` }],
+        elements: [{ type: 'mrkdwn', text: `*Repo:* ${escapeSlackLine(data.repo)}` }],
       },
     ],
   };
@@ -183,10 +173,12 @@ export function buildPRApprovedBlocks(data: PRReviewData): BlockTemplateResult {
 // ─── PR Changes Requested ──────────────────────────────────────
 
 export function buildPRChangesRequestedBlocks(data: PRReviewData): BlockTemplateResult {
-  const bodyPreview = data.reviewBody ? `\n> ${escapeMrkdwn(truncate(data.reviewBody, 200))}` : '';
+  const bodyPreview = data.reviewBody ? `\n> ${escapeSlackLine(truncate(data.reviewBody, 200))}` : '';
 
   return {
-    text: `[${data.repo}] Changes requested on PR #${data.prNumber} by ${data.reviewer}: ${data.prTitle}`,
+    text: escapeSlackText(
+      `[${data.repo}] Changes requested on PR #${data.prNumber} by ${data.reviewer}: ${data.prTitle}`
+    ),
     blocks: [
       {
         type: 'header',
@@ -196,12 +188,12 @@ export function buildPRChangesRequestedBlocks(data: PRReviewData): BlockTemplate
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${data.reviewer}* requested changes on *<${data.prUrl}|#${data.prNumber} ${escapeMrkdwn(data.prTitle)}>*${bodyPreview}`,
+          text: `*${escapeSlackLine(data.reviewer)}* requested changes on *<${data.prUrl}|#${data.prNumber} ${escapeSlackLine(data.prTitle)}>*${bodyPreview}`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}` }],
+        elements: [{ type: 'mrkdwn', text: `*Repo:* ${escapeSlackLine(data.repo)}` }],
       },
       {
         type: 'actions',
@@ -231,7 +223,7 @@ interface PRMergedData {
 
 export function buildPRMergedBlocks(data: PRMergedData): BlockTemplateResult {
   return {
-    text: `[${data.repo}] PR #${data.prNumber} merged by ${data.mergedBy}: ${data.prTitle}`,
+    text: escapeSlackText(`[${data.repo}] PR #${data.prNumber} merged by ${data.mergedBy}: ${data.prTitle}`),
     blocks: [
       {
         type: 'header',
@@ -241,12 +233,12 @@ export function buildPRMergedBlocks(data: PRMergedData): BlockTemplateResult {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*<${data.prUrl}|#${data.prNumber} ${escapeMrkdwn(data.prTitle)}>* merged into \`${data.baseBranch}\` by *${data.mergedBy}*`,
+          text: `*<${data.prUrl}|#${data.prNumber} ${escapeSlackLine(data.prTitle)}>* merged into \`${escapeSlackCode(data.baseBranch)}\` by *${escapeSlackLine(data.mergedBy)}*`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}` }],
+        elements: [{ type: 'mrkdwn', text: `*Repo:* ${escapeSlackLine(data.repo)}` }],
       },
     ],
   };
@@ -265,10 +257,10 @@ interface CIData {
 }
 
 export function buildCIFailedBlocks(data: CIData): BlockTemplateResult {
-  const commitInfo = data.commitMessage ? `\nCommit: _${data.commitMessage.split('\n')[0]}_` : '';
+  const commitInfo = data.commitMessage ? `\nCommit: ${escapeSlackLine(data.commitMessage.split('\n')[0])}` : '';
 
   return {
-    text: `[${data.repo}] CI failed: ${data.workflowName} on ${data.branch}`,
+    text: escapeSlackText(`[${data.repo}] CI failed: ${data.workflowName} on ${data.branch}`),
     blocks: [
       {
         type: 'header',
@@ -278,7 +270,7 @@ export function buildCIFailedBlocks(data: CIData): BlockTemplateResult {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*<${data.workflowUrl}|${data.workflowName}>* failed on \`${data.branch}\` (run #${data.runNumber})${commitInfo}`,
+          text: `*<${data.workflowUrl}|${escapeSlackLine(data.workflowName)}>* failed on \`${escapeSlackCode(data.branch)}\` (run #${data.runNumber})${commitInfo}`,
         },
       },
       {
@@ -286,7 +278,7 @@ export function buildCIFailedBlocks(data: CIData): BlockTemplateResult {
         elements: [
           {
             type: 'mrkdwn',
-            text: `*Repo:* ${data.repo}${data.commitAuthor ? `  |  *Author:* ${data.commitAuthor}` : ''}`,
+            text: `*Repo:* ${escapeSlackLine(data.repo)}${data.commitAuthor ? `  |  *Author:* ${escapeSlackLine(data.commitAuthor)}` : ''}`,
           },
         ],
       },
@@ -310,7 +302,7 @@ export function buildCIFailedBlocks(data: CIData): BlockTemplateResult {
 
 export function buildCIPassedBlocks(data: CIData): BlockTemplateResult {
   return {
-    text: `[${data.repo}] CI passed: ${data.workflowName} on ${data.branch}`,
+    text: escapeSlackText(`[${data.repo}] CI passed: ${data.workflowName} on ${data.branch}`),
     blocks: [
       {
         type: 'header',
@@ -320,12 +312,12 @@ export function buildCIPassedBlocks(data: CIData): BlockTemplateResult {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*<${data.workflowUrl}|${data.workflowName}>* passed on \`${data.branch}\` (run #${data.runNumber})`,
+          text: `*<${data.workflowUrl}|${escapeSlackLine(data.workflowName)}>* passed on \`${escapeSlackCode(data.branch)}\` (run #${data.runNumber})`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}` }],
+        elements: [{ type: 'mrkdwn', text: `*Repo:* ${escapeSlackLine(data.repo)}` }],
       },
     ],
   };
@@ -346,10 +338,12 @@ interface MentionData {
 
 export function buildMentionBlocks(data: MentionData): BlockTemplateResult {
   const type = data.isPullRequest ? 'PR' : 'Issue';
-  const bodyPreview = escapeMrkdwn(truncate(data.commentBody, 300));
+  const bodyPreview = escapeSlackLine(truncate(data.commentBody, 300));
 
   return {
-    text: `[${data.repo}] ${data.commenter} mentioned you in ${type} #${data.issueOrPrNumber}: ${data.issueOrPrTitle}`,
+    text: escapeSlackText(
+      `[${data.repo}] ${data.commenter} mentioned you in ${type} #${data.issueOrPrNumber}: ${data.issueOrPrTitle}`
+    ),
     blocks: [
       {
         type: 'header',
@@ -359,12 +353,12 @@ export function buildMentionBlocks(data: MentionData): BlockTemplateResult {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${data.commenter}* mentioned you in *<${data.issueOrPrUrl}|#${data.issueOrPrNumber} ${escapeMrkdwn(data.issueOrPrTitle)}>*\n> ${bodyPreview}`,
+          text: `*${escapeSlackLine(data.commenter)}* mentioned you in *<${data.issueOrPrUrl}|#${data.issueOrPrNumber} ${escapeSlackLine(data.issueOrPrTitle)}>*\n> ${bodyPreview}`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}` }],
+        elements: [{ type: 'mrkdwn', text: `*Repo:* ${escapeSlackLine(data.repo)}` }],
       },
       {
         type: 'actions',
@@ -404,7 +398,7 @@ interface PushData {
 function truncateCommitMessage(message: string): string {
   const firstLine = message.split('\n')[0];
   const truncated = firstLine.length > 72 ? firstLine.slice(0, 69) + '...' : firstLine;
-  return escapeMrkdwn(truncated);
+  return escapeSlackLine(truncated);
 }
 
 export function buildPushBlocks(data: PushData): BlockTemplateResult {
@@ -420,7 +414,7 @@ export function buildPushBlocks(data: PushData): BlockTemplateResult {
   const headerText = data.forced ? 'Force Push' : `Push to ${data.branch}`;
 
   return {
-    text: `[${data.repo}] ${data.commitCount} commit(s) pushed to ${data.branch} by ${data.pusher}`,
+    text: escapeSlackText(`[${data.repo}] ${data.commitCount} commit(s) pushed to ${data.branch} by ${data.pusher}`),
     blocks: [
       {
         type: 'header',
@@ -430,12 +424,12 @@ export function buildPushBlocks(data: PushData): BlockTemplateResult {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${data.pusher}* pushed ${data.commitCount} commit${data.commitCount > 1 ? 's' : ''} to \`${data.branch}\`${forceWarning}\n\n${commitList}${moreCommits}`,
+          text: `*${escapeSlackLine(data.pusher)}* pushed ${data.commitCount} commit${data.commitCount > 1 ? 's' : ''} to \`${escapeSlackCode(data.branch)}\`${forceWarning}\n\n${commitList}${moreCommits}`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}` }],
+        elements: [{ type: 'mrkdwn', text: `*Repo:* ${escapeSlackLine(data.repo)}` }],
       },
       {
         type: 'actions',
@@ -465,10 +459,10 @@ interface IssueData {
 }
 
 export function buildIssueOpenedBlocks(data: IssueData): BlockTemplateResult {
-  const bodyPreview = data.body ? `\n> ${escapeMrkdwn(truncate(data.body, 200))}` : '';
+  const bodyPreview = data.body ? `\n> ${escapeSlackLine(truncate(data.body, 200))}` : '';
 
   return {
-    text: `[${data.repo}] Issue #${data.issueNumber} opened by ${data.author}: ${data.issueTitle}`,
+    text: escapeSlackText(`[${data.repo}] Issue #${data.issueNumber} opened by ${data.author}: ${data.issueTitle}`),
     blocks: [
       {
         type: 'header',
@@ -478,12 +472,17 @@ export function buildIssueOpenedBlocks(data: IssueData): BlockTemplateResult {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*<${data.issueUrl}|${escapeMrkdwn(data.issueTitle)}>*${bodyPreview}`,
+          text: `*<${data.issueUrl}|${escapeSlackLine(data.issueTitle)}>*${bodyPreview}`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}  |  *Author:* ${data.author}` }],
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: `*Repo:* ${escapeSlackLine(data.repo)}  |  *Author:* ${escapeSlackLine(data.author)}`,
+          },
+        ],
       },
       {
         type: 'actions',
@@ -512,7 +511,7 @@ interface IssueClosedData {
 
 export function buildIssueClosedBlocks(data: IssueClosedData): BlockTemplateResult {
   return {
-    text: `[${data.repo}] Issue #${data.issueNumber} closed by ${data.closedBy}: ${data.issueTitle}`,
+    text: escapeSlackText(`[${data.repo}] Issue #${data.issueNumber} closed by ${data.closedBy}: ${data.issueTitle}`),
     blocks: [
       {
         type: 'header',
@@ -522,12 +521,12 @@ export function buildIssueClosedBlocks(data: IssueClosedData): BlockTemplateResu
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*<${data.issueUrl}|${escapeMrkdwn(data.issueTitle)}>* closed by *${data.closedBy}*`,
+          text: `*<${data.issueUrl}|${escapeSlackLine(data.issueTitle)}>* closed by *${escapeSlackLine(data.closedBy)}*`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}` }],
+        elements: [{ type: 'mrkdwn', text: `*Repo:* ${escapeSlackLine(data.repo)}` }],
       },
     ],
   };
@@ -546,10 +545,10 @@ interface IssueAssignedData {
 }
 
 export function buildIssueAssignedBlocks(data: IssueAssignedData): BlockTemplateResult {
-  const assigneeMention = data.assigneeSlackId ? `<@${data.assigneeSlackId}>` : data.assignee;
+  const assigneeMention = data.assigneeSlackId ? `<@${data.assigneeSlackId}>` : escapeSlackLine(data.assignee);
 
   return {
-    text: `[${data.repo}] Issue #${data.issueNumber} assigned to ${data.assignee}: ${data.issueTitle}`,
+    text: escapeSlackText(`[${data.repo}] Issue #${data.issueNumber} assigned to ${data.assignee}: ${data.issueTitle}`),
     blocks: [
       {
         type: 'header',
@@ -559,12 +558,12 @@ export function buildIssueAssignedBlocks(data: IssueAssignedData): BlockTemplate
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `${assigneeMention}, you've been assigned to *<${data.issueUrl}|#${data.issueNumber} ${escapeMrkdwn(data.issueTitle)}>* by *${data.assignedBy}*`,
+          text: `${assigneeMention}, you've been assigned to *<${data.issueUrl}|#${data.issueNumber} ${escapeSlackLine(data.issueTitle)}>* by *${escapeSlackLine(data.assignedBy)}*`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}` }],
+        elements: [{ type: 'mrkdwn', text: `*Repo:* ${escapeSlackLine(data.repo)}` }],
       },
       {
         type: 'actions',
@@ -596,11 +595,11 @@ interface PRReviewCommentData {
 }
 
 export function buildPRReviewCommentBlocks(data: PRReviewCommentData): BlockTemplateResult {
-  const bodyPreview = escapeMrkdwn(truncate(data.commentBody, 200));
-  const escapedPath = escapeMrkdwn(data.path);
+  const bodyPreview = escapeSlackLine(truncate(data.commentBody, 200));
+  const escapedPath = escapeSlackCode(data.path);
 
   return {
-    text: `[${data.repo}] ${data.commenter} commented on PR #${data.prNumber}: ${data.prTitle}`,
+    text: escapeSlackText(`[${data.repo}] ${data.commenter} commented on PR #${data.prNumber}: ${data.prTitle}`),
     blocks: [
       {
         type: 'header',
@@ -610,12 +609,12 @@ export function buildPRReviewCommentBlocks(data: PRReviewCommentData): BlockTemp
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${data.commenter}* commented on *<${data.prUrl}|#${data.prNumber} ${escapeMrkdwn(data.prTitle)}>*\n_${escapedPath}_\n> ${bodyPreview}`,
+          text: `*${escapeSlackLine(data.commenter)}* commented on *<${data.prUrl}|#${data.prNumber} ${escapeSlackLine(data.prTitle)}>*\n\`${escapedPath}\`\n> ${bodyPreview}`,
         },
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `*Repo:* ${data.repo}` }],
+        elements: [{ type: 'mrkdwn', text: `*Repo:* ${escapeSlackLine(data.repo)}` }],
       },
       {
         type: 'actions',

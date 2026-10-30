@@ -55,6 +55,14 @@ describe('/api/subscribers/create - signup source', () => {
     expect(mocks.postMessageToSlack.mock.calls[0][0]).toContain('oauth_signup_closed');
   });
 
+  it('escapes subscriber-supplied names and email in the admin alert', async () => {
+    await submit({ firstName: '<!channel>', lastName: 'A&B', email: 'x@example.com' });
+
+    const text = mocks.postMessageToSlack.mock.calls[0][0] as string;
+    expect(text).toContain('&lt;!channel&gt; A&amp;B');
+    expect(text).not.toContain('<!channel>');
+  });
+
   it('rejects a source outside the known set rather than storing caller-chosen text', async () => {
     await expect(submit({ ...person, source: 'anything-goes' })).rejects.toBeInstanceOf(ZodError);
     expect(mocks.create).not.toHaveBeenCalled();

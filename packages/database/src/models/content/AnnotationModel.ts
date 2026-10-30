@@ -115,7 +115,7 @@ AnnotationSchema.methods.restore = function () {
   return this.save();
 };
 
-export const Annotation =
+export const Annotation: Model<IAnnotationDocument> =
   (mongoose.models.Annotation as mongoose.Model<IAnnotationDocument>) ||
   model<IAnnotationDocument>('Annotation', AnnotationSchema);
 

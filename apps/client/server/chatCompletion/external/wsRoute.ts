@@ -50,6 +50,7 @@ import {
   NO_COMPLETION_QUOTA,
   type CompletionQuotaGrant,
 } from '@server/utils/untrustedCompletionQuota';
+import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 /**
@@ -128,6 +129,16 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         apiKeyInfo = await verifyApiKey(headers);
         userId = apiKeyInfo.userId;
         logger.info('[CLI_WS_HTTP] Authenticated via API key', { keyId: apiKeyInfo.keyId });
+        logApiKeyUsageOnResponse({
+          req,
+          res,
+          apiKey: apiKeyInfo,
+          endpoint: WS_COMPLETIONS_ENDPOINT,
+          source,
+          startTime,
+          logger,
+          track,
+        });
 
         await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
           userId: apiKeyInfo.userId,

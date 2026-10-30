@@ -181,6 +181,7 @@ beforeEach(() => {
   // A fresh document per read, as a real lookup returns, so the owner re-read is not the already-withheld one.
   findUserMock.mockImplementation(async () => ({ id: 'admin-1', isBanned: false, isAdmin: true }));
   createFabFileMock.mockResolvedValue({ id: 'file-1' });
+  toggleTagsMock.mockResolvedValue([]);
   listBlockedMock.mockResolvedValue([]);
   revokeSessionsMock.mockResolvedValue(2);
 });

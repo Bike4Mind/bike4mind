@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import type { SignupTimeseries, SignupTimeseriesRange } from '@client/app/utils/signupSignals';
+import type { SignupTimeseries, SignupTimeseriesRange, SignupVerdicts } from '@client/app/utils/signupSignals';
 
 // Nested under ['users'] so every user mutation's prefix invalidation (create, delete, ...) refreshes the chart.
 export const signupTimeseriesQueryKey = (range: SignupTimeseriesRange) =>
@@ -18,6 +18,27 @@ export function useSignupTimeseries(range: SignupTimeseriesRange) {
         })
       ).data,
     staleTime: 60000,
+  });
+}
+
+/**
+ * The chart's verdict for each listed account. `asOf` is the loaded chart's `until`, so the verdicts
+ * classify the same cohort at the same instant and refresh only when the chart does.
+ */
+export function useSignupVerdicts(range: SignupTimeseriesRange, asOf: string | undefined, userIds: readonly string[]) {
+  return useQuery({
+    // Not under ['users']: a user mutation refreshes the chart, whose new `until` re-keys this query, so
+    // invalidating it as well would only classify the range once more for a result thrown away.
+    queryKey: ['signup-verdicts', range, asOf, userIds] as const,
+    queryFn: async () =>
+      (
+        await api.get<SignupVerdicts>('/api/admin/users/signup-verdicts', {
+          params: { range, asOf, tzOffset: -new Date().getTimezoneOffset(), ids: userIds.join(',') },
+        })
+      ).data,
+    enabled: !!asOf && userIds.length > 0,
+    // Fixed by asOf, so a result never goes stale on its own.
+    staleTime: Infinity,
   });
 }
 

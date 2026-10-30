@@ -14,10 +14,16 @@ initializeSlackPackage();
  */
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { respond } from '@server/utils/respond';
 import { baseApi } from '@server/middlewares/baseApi';
 import { jiraWebhookConfigRepository, jiraWebhookSubscriptionRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
-import { IJiraWebhookSubscriptionRequest, IJiraWebhookSubscriptionResponse } from '@bike4mind/common';
+import {
+  IJiraWebhookSubscriptionRequest,
+  IJiraWebhookSubscriptionResponse,
+  jiraWebhookSubscriptionResponseSchema,
+  jiraWebhookSubscriptionListResponseSchema,
+} from '@bike4mind/common';
 import { AtlassianTokenManager } from '@bike4mind/server-utils/integrations/jira/atlassianTokenManager';
 import { validateFilters } from '@server/integrations/jira/types';
 
@@ -128,7 +134,7 @@ const handler = baseApi()
         atlassianSiteName: webhookConfig.atlassianSiteUrl,
       };
 
-      return res.status(201).json(response);
+      return respond(res, jiraWebhookSubscriptionResponseSchema, response, 201);
     })
   )
   // GET - List user's subscriptions
@@ -169,7 +175,7 @@ const handler = baseApi()
         atlassianSiteName: configMap.get(subscription.webhookConfigId),
       }));
 
-      return res.status(200).json(response);
+      return respond(res, jiraWebhookSubscriptionListResponseSchema, response);
     })
   );
 

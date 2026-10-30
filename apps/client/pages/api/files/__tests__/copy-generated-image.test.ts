@@ -50,7 +50,7 @@ const KEY = '9db8f846-08d5-47d7-9166-a039d3c3d4d7.png';
 
 function makeRes() {
   const json = vi.fn();
-  return { res: { json } as unknown as NextApiResponse, json };
+  return { res: { json, status: vi.fn(() => ({ json })) } as unknown as NextApiResponse, json };
 }
 
 const req = (userId: string, body: Record<string, unknown> = {}) =>

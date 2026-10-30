@@ -18,7 +18,10 @@ vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
   getLogoUrl: vi.fn(() => ''),
   buildEmailLogoImg: vi.fn(() => ''),
 }));
-vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
+  postMessageToSlack: (...a: unknown[]) => mockPostMessageToSlack(...a),
+}));
+const mockPostMessageToSlack = vi.fn();
 const mockEmailPublish = vi.fn();
 vi.mock('@server/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: (...a: any[]) => mockEmailPublish(...a) } },
@@ -495,5 +498,30 @@ describe('/api/reg-invites/refer - reusing an existing invite', () => {
     await invokeHandler(req, res);
     expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 0, []);
     expect(res._getJSONData()).toMatchObject({ sent: [], failed: ['friend@example.com'] });
+  });
+});
+
+describe('/api/reg-invites/refer - Slack escaping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReserveReferrals.mockResolvedValue(true);
+    mockInviteFind.mockResolvedValue([]);
+    mockUserUpdate.mockResolvedValue(undefined);
+    vi.mocked(getSettingsMap).mockResolvedValue({});
+    vi.mocked(getSettingsValue).mockImplementation((key: string) => key === 'EnableReferralToSlack');
+    process.env.APP_URL = 'https://app.test.local';
+  });
+
+  it('escapes the sender name and body in the referral message', async () => {
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true, numReferralsAvailable: 3 });
+    (req as any).body.userName = '<!channel> & co';
+    (req as any).body.emailBody = 'Hi <!here>';
+
+    await invokeHandler(req, res);
+
+    const text = mockPostMessageToSlack.mock.calls[0][0] as string;
+    expect(text).toContain('&lt;!channel&gt; &amp; co');
+    expect(text).toContain('Hi &amp;lt;!here&amp;gt;');
+    expect(text).not.toMatch(/<!(channel|here)>/);
   });
 });

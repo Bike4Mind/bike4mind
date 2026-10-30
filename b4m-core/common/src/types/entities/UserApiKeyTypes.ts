@@ -470,6 +470,8 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;
   /** When the user's first key was created, deleted and revoked keys included; null when none. */
   findFirstCreatedAtByUserId: (userId: string) => Promise<Date | null>;
+  /** Keys each user has created, deleted and revoked keys included; users with none are absent. */
+  countCreatedByUserIds: (userIds: string[]) => Promise<Record<string, number>>;
   updateUsage: (id: string, usage: Partial<IUserApiKeyUsage>) => Promise<void>;
   /** Atomically adds settled credits to `usage.totalSpendCredits`. No-op for non-finite or <= 0 amounts. */
   incrementSpend: (id: string, credits: number) => Promise<void>;
