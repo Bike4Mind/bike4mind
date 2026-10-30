@@ -202,7 +202,12 @@ export default defineConfig({
     {
       name: 'unauthenticated',
       use: { ...devices['Desktop Chrome'] },
-      testMatch: [/(?:^|\/)auth\.spec\.ts$/, /(?:^|\/)signup\.spec\.ts$/, /(?:^|\/)mfa\.spec\.ts$/],
+      testMatch: [
+        /(?:^|\/)auth\.spec\.ts$/,
+        /(?:^|\/)existing-user-login\.spec\.ts$/,
+        /(?:^|\/)signup\.spec\.ts$/,
+        /(?:^|\/)mfa\.spec\.ts$/,
+      ],
       dependencies: ['setup-core', 'setup-projects'],
     },
     // WebSocket token enforcement: mints its own throwaway users (revoking a token kills every
