@@ -89,6 +89,7 @@ import {
   processFabFilesServer,
   processUrlsFromPrompt,
   isOverloadedError,
+  isProviderSpendLimitError,
   shouldTriggerFallback,
   isSafetyRefusalError,
   stripAllToolBlocks,
@@ -336,6 +337,10 @@ const STREAMING_HEARTBEAT_ERROR_ESCALATION_THRESHOLD = 3;
 
 /** Final reply when the model stayed too slow through its retry and any fallback. Not "busy": the provider never said so. */
 export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
+// Shown when the provider account behind the model is out of budget and no other route could answer.
+// The fault is ours, not the user's credits, so it must not read like their balance ran out.
+export const PROVIDER_SPEND_LIMIT_REPLY =
+  'This model is temporarily unavailable on our side. Please choose a different model or try again later.';
 
 /**
  * Final reply when a reasoning model spent its whole output budget and the caller set `max_tokens`
@@ -5149,6 +5154,9 @@ export class ChatCompletionProcess {
       // Models already tried this request, seeded with the primary. Passed to getLlmWithFallback
       // so no hop re-selects a model that just failed.
       const triedModelIds = new Set<string>([modelInfo.id]);
+      // Backends whose provider account hit its spend limit this request: every model on them
+      // fails identically, so no hop goes back to one.
+      const spendLimitedBackends = new Set<string>();
       // Why the REQUESTED model failed; later hops fail for their own reasons, which would misattribute.
       let primaryFailureReason: string | undefined;
       let overloadRetryCount = 0;
@@ -5614,6 +5622,16 @@ export class ChatCompletionProcess {
               isOutputBudgetExhaustedError(lastError)
             ) {
               logger.warn(lastError);
+            } else if (isProviderSpendLimitError(lastError)) {
+              // Operator action needed (raise the provider limit): one error line per backend per
+              // request, worded so the alert says so, instead of the raw dump plus a rethrow.
+              if (!spendLimitedBackends.has(currentModel.backend)) {
+                logger.error(
+                  `[Provider Spend Limit] ${currentModel.backend} account limit reached on ${currentModel.id}; ` +
+                    `falling back off this backend: ${lastError.message}`
+                );
+              }
+              spendLimitedBackends.add(currentModel.backend);
             } else {
               logger.error(lastError);
             }
@@ -5821,6 +5839,7 @@ export class ChatCompletionProcess {
                   forceSwitch: overloadRetriesExhausted || isSlowModelTimeout,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
+                  excludeBackends: spendLimitedBackends,
                   endUserId: this.user.id,
                   // the identity tool alone does not need a tool-capable fallback
                   requireTools: !!options.tools?.some(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME),
@@ -7289,6 +7308,14 @@ export class ChatCompletionProcess {
         // User-friendly error message instead of stuck spinner
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
         setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (err instanceof Error && isProviderSpendLimitError(err)) {
+        // Already logged at error once in the attempt loop; warn here so one request is one alert.
+        logger.warn(`[Provider Spend Limit] Quest ${questId}: no fallback model could answer`);
+        setErrorReply(PROVIDER_SPEND_LIMIT_REPLY);
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);

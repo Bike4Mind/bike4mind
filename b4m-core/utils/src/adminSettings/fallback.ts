@@ -1,7 +1,8 @@
-import { ModelInfo } from '@bike4mind/common';
+import { ModelBackend, ModelInfo } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { isAxiosError } from 'axios';
 import {
+  directTwinId,
   getLlmByModel,
   isLlmTimeoutError,
   isStreamEndedWithoutFinishError,
@@ -87,11 +88,35 @@ export function isSafetyRefusalError(error: Error): boolean {
   return error.message.toLowerCase().includes(SAFETY_REFUSAL_MESSAGE);
 }
 
+// Provider account spend/credit exhaustion: the operator's key is out of budget, so every model on
+// that backend fails the same way until someone raises the limit. Anthropic returns these as a 400
+// invalid_request_error, OpenAI as a 429 insufficient_quota.
+const PROVIDER_SPEND_LIMIT_MESSAGES = [
+  'reached your specified api usage limits',
+  'credit balance is too low',
+  'insufficient_quota',
+  'exceeded your current quota',
+];
+
+/**
+ * Whether the provider refused the call because the operator's account hit its spend limit or ran
+ * out of credit. Never transient: retrying the same backend is pointless, so the caller should
+ * leave the whole backend and hop to another provider path for the same model.
+ */
+export function isProviderSpendLimitError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return PROVIDER_SPEND_LIMIT_MESSAGES.some(trigger => message.includes(trigger));
+}
+
 /**
  * Error types that should trigger fallback attempts
  */
 export function shouldTriggerFallback(error: Error): boolean {
   const message = error.message.toLowerCase();
+
+  if (isProviderSpendLimitError(error)) {
+    return true;
+  }
 
   // Rate limiting, server errors, timeouts. Status sourced from both Axios and AWS SDK
   // (e.g. Bedrock's 503 ServiceUnavailableException) error shapes.
@@ -171,6 +196,11 @@ export function shouldTriggerFallback(error: Error): boolean {
 export function isOverloadedError(error: Error): boolean {
   // Our own timers gave up on a slow model; the provider never said it was busy.
   if (isLlmTimeoutError(error)) {
+    return false;
+  }
+
+  // An exhausted account quota can arrive as a 429 (OpenAI) but backing off never clears it.
+  if (isProviderSpendLimitError(error)) {
     return false;
   }
 
@@ -389,7 +419,8 @@ function findAutomaticFallback(
   logger: Logger,
   excludeModelIds?: Set<string>,
   preferUntriedBackend?: boolean,
-  requireTools?: boolean
+  requireTools?: boolean,
+  excludeBackends?: ReadonlySet<string>
 ): ModelInfo | null {
   logger.info(`🔍 Finding automatic fallback for ${originalModel.id}`);
 
@@ -397,7 +428,30 @@ function findAutomaticFallback(
   // run (see ChatCompletionInvoke). Selecting one here would trade a clean fallback for
   // a raw provider error on the next hop, so it is not a candidate.
   const hasValidKey = (m: ModelInfo) =>
-    !m.disabled && canServeChat(m, requireTools) && !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
+    !excludeBackends?.has(m.backend) &&
+    !m.disabled &&
+    canServeChat(m, requireTools) &&
+    !!apiKeyTable[m.backend] &&
+    apiKeyTable[m.backend] !== 'expired';
+
+  // The original's whole backend is out (spend limit): the same model over Bedrock is the closest
+  // substitute. Bedrock takes no key (IAM), and is listed only when reachable, so a listed,
+  // enabled twin is runnable even though hasValidKey would skip it.
+  if (originalModel.backend && excludeBackends?.has(originalModel.backend)) {
+    const routeTwin = availableModels.find(
+      m =>
+        m.backend === ModelBackend.Bedrock &&
+        !excludeBackends.has(m.backend) &&
+        !excludeModelIds?.has(m.id) &&
+        !m.disabled &&
+        canServeChat(m, requireTools) &&
+        directTwinId(m) === originalModel.id
+    );
+    if (routeTwin) {
+      logger.info(`Found same-model fallback on Bedrock: ${routeTwin.id}`);
+      return routeTwin;
+    }
+  }
 
   // Get preference list for this model. Copied because the table is shared and
   // the generic tail below is pushed onto this list.
@@ -496,6 +550,11 @@ export type LlmWithFallbackOptions = {
   /** The request carries tools, so only a tool-capable model may take over. */
   requireTools?: boolean;
   /**
+   * Backends that cannot serve any model this request (e.g. the provider account hit its spend
+   * limit). Never selected, and an original on one of them hops to its Bedrock twin first.
+   */
+  excludeBackends?: ReadonlySet<string>;
+  /**
    * The caller's model admission (b4m-core/services/src/llm/modelAdmission.ts). A fallback the user
    * could not have picked directly - entitlement-gated, admin-disabled, or unpriced - is never
    * selected: a non-admitted frontend fallback is dropped in favour of automatic selection, and
@@ -537,6 +596,17 @@ export async function getLlmWithFallback(
     fallbackModelId = undefined;
   }
 
+  const excludeBackends = options.excludeBackends;
+  if (fallbackModelId && excludeBackends?.size) {
+    const fallbackBackend = availableModels.find(m => m.id === fallbackModelId)?.backend;
+    if (fallbackBackend && excludeBackends.has(fallbackBackend)) {
+      logger.warn(
+        `Fallback model ${fallbackModelId} is on unavailable backend ${fallbackBackend}; selecting automatically`
+      );
+      fallbackModelId = undefined;
+    }
+  }
+
   const isAdmitted = options.isAdmitted;
   if (isAdmitted) {
     const admitted = await Promise.all(availableModels.map(m => isAdmitted(m.id)));
@@ -558,7 +628,8 @@ export async function getLlmWithFallback(
       logger,
       excludeModelIds,
       options.preferUntriedBackend,
-      options.requireTools
+      options.requireTools,
+      excludeBackends
     );
 
     if (!automaticFallback) {
