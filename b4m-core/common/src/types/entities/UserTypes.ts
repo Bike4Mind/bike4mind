@@ -345,6 +345,8 @@ export interface IUser extends ICreditHolder {
   isModerated: boolean;
   /** Admin override that trusts the account for personal API keys (userApiKeyService/trust.ts). Absent on legacy docs. */
   apiKeyTrustApproved?: boolean;
+  /** Admin override that exempts a young account from the new-account spend cap (creditService/newAccountSpendCap.ts). */
+  newAccountSpendCapLifted?: boolean;
   /**
    * Per-user moderation tracking + auto-throttle/suspend state.
    * Absent until the user's first moderation hit. Independent of `isModerated`, the admin's

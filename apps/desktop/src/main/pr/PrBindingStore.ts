@@ -16,7 +16,7 @@ function normalize(value: unknown): PrBinding | null {
     repo: raw.repo,
     number: raw.number,
     url: raw.url,
-    source: raw.source === 'manual' || raw.source === 'branch' ? raw.source : 'shell',
+    source: raw.source === 'manual' || raw.source === 'agent' || raw.source === 'branch' ? raw.source : 'shell',
     boundAt: typeof raw.boundAt === 'string' ? raw.boundAt : new Date(0).toISOString(),
     ...(Array.isArray(raw.autoFixHandled) ? { autoFixHandled: raw.autoFixHandled.slice(-MAX_HANDLED) } : {}),
     // A damaged budget is dropped so the default applies; kept only when it is a whole positive count.

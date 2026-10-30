@@ -1651,6 +1651,18 @@ export class GeminiBackend implements ICompletionBackend {
     model: ModelInfo,
     options: Partial<ICompletionOptions>
   ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {
+    const config = this.getUncappedGenerationConfig(model, options);
+    // The thinking reserve sits on top of the caller's cap; a billing ceiling bounds the sum.
+    const ceiling = options.outputTokenCeiling;
+    return ceiling !== undefined && (config.maxOutputTokens ?? Infinity) > ceiling
+      ? { ...config, maxOutputTokens: ceiling }
+      : config;
+  }
+
+  private getUncappedGenerationConfig(
+    model: ModelInfo,
+    options: Partial<ICompletionOptions>
+  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {
     const callerCap = options.maxTokens ?? 8192;
     if (!model.can_think) {
       return {

@@ -150,7 +150,8 @@ def release_notes(version, previous, repository, destination):
     lines.extend(['', '## Installation', '',
                   'Run this in a terminal on macOS (Apple Silicon) or Linux (x64); rerun it to update:', '',
                   f'    curl -fsSL https://github.com/{destination}/releases/latest/download/install.sh | sh', '',
-                  'Or download arm64.dmg for Apple Silicon or x64.AppImage for Linux. Intel Mac builds are temporarily paused.',
+                  'Or download arm64.dmg for Apple Silicon, x64.AppImage for Linux, or setup.exe for Windows x64. Intel Mac builds are temporarily paused.',
+                  'The Windows installer is not code signed yet, so SmartScreen shows a warning on first run.',
                   'SHA256SUMS.txt contains installer and update metadata checksums.',
                   'In-app updates require an installed build configured with this feed. Older unsigned macOS builds require a manual signed installation.', ''])
     return '\n'.join(lines)

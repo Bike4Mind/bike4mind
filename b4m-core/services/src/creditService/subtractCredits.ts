@@ -119,6 +119,8 @@ export async function subtractCreditsWithLedgerRow(
       sessionId: params.sessionId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'completion_api_usage') {
     tx = await db.creditTransactions.createTransaction('completion_api_usage', {
@@ -130,8 +132,11 @@ export async function subtractCreditsWithLedgerRow(
       source,
       model: params.model,
       apiKeyId: params.apiKeyId, // Optional - present for API key auth, undefined for JWT
+      sessionId: params.sessionId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'decision_usage') {
     tx = await db.creditTransactions.createTransaction('decision_usage', {
@@ -145,6 +150,8 @@ export async function subtractCreditsWithLedgerRow(
       apiKeyId: params.apiKeyId, // Optional - present for API key auth, undefined for JWT
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'image_generation_usage') {
     tx = await db.creditTransactions.createTransaction('image_generation_usage', {
