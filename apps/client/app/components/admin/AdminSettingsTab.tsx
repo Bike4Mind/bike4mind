@@ -152,8 +152,7 @@ type SettingConfig = SettingDefinition<string>;
 type CoreSettingConfig = (typeof settingsMap)[keyof typeof settingsMap];
 
 // Edited only on the Growth and Pricing tab (GROWTH_PRICING_SECTIONS in AdminGrowthPricingTab); the
-// Credits System group links there instead. ReferralCreditsAmount is on that tab too but keeps its
-// Referrals editor here, so it is not listed.
+// Credits System group links there instead.
 export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
   'allowOpenRegistration',
   'defaultFreeCredits',
@@ -164,6 +163,7 @@ export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<Setting
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
+  'ReferralCreditsAmount',
   'ReferralFirstAnswerCredits',
   'ReferralFirstPaymentCredits',
   'ReferralSecondPaymentCredits',
