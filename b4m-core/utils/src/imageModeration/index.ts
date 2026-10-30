@@ -49,6 +49,13 @@ const MAX_THROTTLED_ATTEMPTS = 6;
 const BACKOFF_BASE_MS = 200;
 const BACKOFF_CAP_MS = 3000;
 
+/**
+ * Wall-clock budget for one `checkImage` call. Per-frame backoff adds up across an animation's frames,
+ * so without it a slowly recovering throttle could outlast the upload-complete Lambda's 2-minute
+ * timeout (infra/queues.ts), which kills the process before its claim-release handler runs.
+ */
+const DEFAULT_DEADLINE_MS = 75_000;
+
 const THROTTLING_ERROR_NAMES = new Set([
   'ThrottlingException',
   'ProvisionedThroughputExceededException',
@@ -143,6 +150,8 @@ export function isThrottlingError(err: unknown): boolean {
 export interface RekognitionImageModerationOptions {
   /** Injected for tests; defaults to a real timer. */
   sleep?: (ms: number) => Promise<void>;
+  /** See DEFAULT_DEADLINE_MS. */
+  deadlineMs?: number;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -151,10 +160,12 @@ export class RekognitionImageModerationService implements ImageModerationService
   private client: RekognitionClient;
   private logger: Logger;
   private sleep: (ms: number) => Promise<void>;
+  private deadlineMs: number;
 
   constructor(logger: Logger, client?: RekognitionClient, options: RekognitionImageModerationOptions = {}) {
     this.logger = logger;
     this.sleep = options.sleep ?? defaultSleep;
+    this.deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
     // Same construction posture as S3Storage: region from env, ambient IAM creds.
     // maxAttempts: 1 - retries are owned by checkImage's own loop (see MAX_ATTEMPTS).
     this.client =
@@ -258,8 +269,9 @@ export class RekognitionImageModerationService implements ImageModerationService
    * one that cannot be split or is over the frame cap is unsupported, so blocked as well.
    */
   async checkImage(bytes: Buffer, _mimeType: string): Promise<void> {
+    const deadline = Date.now() + this.deadlineMs;
     const frames = await extractAnimationFrames(bytes);
-    if (!frames) return this.checkStillImage(bytes);
+    if (!frames) return this.checkStillImage(bytes, deadline);
 
     // ponytail: up to MAX_MODERATED_FRAMES Rekognition calls per image; sample frames if cost matters.
     // Stops scheduling on the first failure: any one already fails the image closed.
@@ -269,7 +281,7 @@ export class RekognitionImageModerationService implements ImageModerationService
       Array.from({ length: Math.min(FRAME_CONCURRENCY, frames.length) }, async () => {
         while (next < frames.length && errors.length === 0) {
           const frame = frames[next++];
-          await this.checkStillImage(frame).catch(err => errors.push(err));
+          await this.checkStillImage(frame, deadline).catch(err => errors.push(err));
         }
       })
     );
@@ -281,7 +293,7 @@ export class RekognitionImageModerationService implements ImageModerationService
     if (error) throw error;
   }
 
-  private async checkStillImage(bytes: Buffer): Promise<void> {
+  private async checkStillImage(bytes: Buffer, deadline: number): Promise<void> {
     let image = await this.fitForInlineDetection(bytes);
     let triedTranscode = false;
     for (let attempt = 1; ; attempt++) {
@@ -343,14 +355,17 @@ export class RekognitionImageModerationService implements ImageModerationService
 
         const throttled = isThrottlingError(err);
         const budget = throttled ? MAX_THROTTLED_ATTEMPTS : MAX_ATTEMPTS;
+        const backoff = Math.random() * Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** (attempt - 1));
         // Fail closed: never treat an unavailable detector as "clean".
-        if (attempt >= budget) throw new ModerationUnavailableError(attempt, err, throttled);
+        if (attempt >= budget || Date.now() + backoff > deadline) {
+          throw new ModerationUnavailableError(attempt, err, throttled);
+        }
 
         const message = `[ImageModeration] Rekognition attempt ${attempt}/${budget} failed: ${(err as Error).message}`;
         // A throttle is expected under load and usually recovers on backoff; only exhausting it is news.
         if (throttled) this.logger.info(message);
         else this.logger.warn(message);
-        await this.sleep(Math.random() * Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** (attempt - 1)));
+        await this.sleep(backoff);
       }
     }
   }
