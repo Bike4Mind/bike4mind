@@ -6,6 +6,7 @@ import {
   IMongoDocument,
   ILakeUsageSummary,
   IModelDayMargin,
+  IUserUsageActivity,
   IOwnerSpendDay,
   IOwnerSpendFeature,
   IOwnerSpendMember,
@@ -203,6 +204,32 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       },
     ]);
     return row?.credits ?? 0;
+  }
+
+  async activitySummaryByUser(userId: string, from: Date, to: Date): Promise<IUserUsageActivity> {
+    const [row] = await this.model.aggregate<IUserUsageActivity>([
+      { $match: { userId, createdAt: { $gte: from, $lt: to } } },
+      {
+        $group: {
+          _id: null,
+          events: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $eq: ['$status', 'ok'] }, 1, 0] } },
+          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+          latestAt: { $max: '$createdAt' },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          events: 1,
+          completed: 1,
+          failed: { $subtract: ['$events', '$completed'] },
+          credits: 1,
+          latestAt: 1,
+        },
+      },
+    ]);
+    return row ?? { events: 0, completed: 0, failed: 0, credits: 0, latestAt: null };
   }
 
   async creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>> {

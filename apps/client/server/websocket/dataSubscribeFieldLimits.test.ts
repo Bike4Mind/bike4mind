@@ -63,6 +63,7 @@ describe('resolveFieldLimits', () => {
       resetPasswordToken: false,
       signupGrantAssessment: false,
       riskScore: false,
+      riskEvidence: false,
     });
   });
 

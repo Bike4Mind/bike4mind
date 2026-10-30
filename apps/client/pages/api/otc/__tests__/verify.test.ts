@@ -1,5 +1,6 @@
 import { signupProtection } from '@server/auth/signupProtection';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 import { createMocks } from 'node-mocks-http';
 import {
   BadRequestError,

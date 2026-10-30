@@ -78,6 +78,7 @@ export function resolveFieldLimits(
       resetPasswordToken: false,
       signupGrantAssessment: false,
       riskScore: false,
+      riskEvidence: false,
     };
   }
   if (collectionName === questCollectionName) {

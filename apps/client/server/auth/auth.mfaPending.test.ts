@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 import { EventEmitter } from 'events';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 import nc from 'next-connect';

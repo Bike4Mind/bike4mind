@@ -7,6 +7,7 @@ import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
 import UserSubscriptionStatus from '../../Details/UserSubscriptionStatus';
 import { Fact, SectionCard, StatusChip, formatUtc } from '../../../shared';
 import type { ProfileAction } from '../actions/profileActions';
+import { RiskEvidenceCard } from '../RiskEvidenceCard';
 import { UserNotesCard } from './UserNotesCard';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
 import { timelineItem } from './timelineItems';
@@ -234,6 +235,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
     <Stack gap={2}>
       <AccountCard user={user} onAction={onAction} />
       <AccessCard user={user} onAction={onAction} />
+      <RiskEvidenceCard userId={user.id} />
       <SectionCard
         title="Subscription"
         body="custom"

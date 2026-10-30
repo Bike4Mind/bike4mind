@@ -5,6 +5,7 @@ import { isDeployedStage } from '@bike4mind/server-utils/utils/config';
 import { getClientIp, getClientNetwork, type ClientIpRequest } from '@bike4mind/server-utils/utils/ip';
 import { CLOUDFRONT_VIEWER_JA4_HEADER } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import { DATACENTER_ASNS } from './datacenterAsns';
+import { requestRiskEvidenceRefresh } from './riskEvidence';
 
 // x-amzn-waf- + the InsertHeaders name of the forward-anon-ip-label / forward-bot-signal-label rules
 // in infra/waf/bike4mind-api-protection-dev.json.
@@ -50,6 +51,14 @@ function warnNotRecorded(what: string, err: unknown): void {
   console.warn(`[auth] ${what} not recorded`, err instanceof Error ? err.message : err);
 }
 
+async function requestRiskEvidenceRefreshSafely(userId: string, trigger: 'signup' | 'login'): Promise<void> {
+  try {
+    await requestRiskEvidenceRefresh(userId, trigger, console);
+  } catch (err) {
+    warnNotRecorded('risk evidence refresh request', err);
+  }
+}
+
 /**
  * Stamp the signup's network on the new user (once: a retried handler keeps the first capture) and
  * log a signup AuthEvent. Each write fails on its own. Never throws: losing this metadata must not
@@ -74,6 +83,7 @@ export async function recordSignupNetwork(opts: {
   } catch (err) {
     warnNotRecorded('signup event', err);
   }
+  await requestRiskEvidenceRefreshSafely(opts.userId, 'signup');
 }
 
 /** Log a login AuthEvent. Never throws: a lost row must not fail the sign-in. */
@@ -88,4 +98,5 @@ export async function recordLoginEvent(opts: { req: NetworkRequest; userId: stri
   } catch (err) {
     warnNotRecorded('login event', err);
   }
+  await requestRiskEvidenceRefreshSafely(opts.userId, 'login');
 }

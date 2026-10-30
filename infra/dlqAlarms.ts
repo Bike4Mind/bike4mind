@@ -43,6 +43,7 @@ import {
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
@@ -349,6 +350,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'lakeMemoryQueue',
     queue: lakeMemoryQueueDLQ,
+  },
+  {
+    label: 'risk-evidence',
+    displayName: 'Account Risk Evidence',
+    application: 'Signup',
+    sourceQueue: 'riskEvidenceQueue',
+    queue: riskEvidenceQueueDLQ,
   },
   {
     label: 'lake-inconsistency-model',
