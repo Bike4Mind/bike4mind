@@ -45,4 +45,10 @@ describe('ThoughtBubbles', () => {
     expect(screen.getByText(/first reasoning/)).toBeInTheDocument();
     expect(screen.getByText(/second reasoning/)).toBeInTheDocument();
   });
+
+  it('shows the full reasoning text on the render it arrives in', () => {
+    renderWithTheme(<ThoughtBubbles content="<think>step one" isStreaming={true} />);
+
+    expect(screen.getByText('step one')).toBeInTheDocument();
+  });
 });

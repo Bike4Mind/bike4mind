@@ -69,6 +69,11 @@ export interface ReplyContainerProps {
   search?: string;
   isExpandable?: boolean;
   completed?: boolean;
+  /**
+   * Only a running quest streams. Distinct from `!completed`: a stopped, errored or status-less
+   * row is not done but will never grow, so it renders through the single-parse path.
+   */
+  streaming?: boolean;
   /** Machine-readable classifier for an error quest, drives targeted error UI (e.g. the Add Credits CTA). */
   errorCode?: IChatHistoryItem['errorCode'];
   questMasterPlanId?: string;

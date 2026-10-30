@@ -2,10 +2,16 @@ import { Button } from '@mui/joy';
 import { useState, type ComponentProps } from 'react';
 import ImageContainer from './ImageContainer';
 
-type Props = Pick<ComponentProps<typeof ImageContainer>, 'src' | 'alt' | 'onSendMessage'>;
+type Props = Pick<ComponentProps<typeof ImageContainer>, 'src' | 'alt' | 'onSendMessage'> & {
+  // The reply's approvals, so one survives this image remounting (e.g. StreamingMarkdown dropping its
+  // block split when a reply with a footnote or reference definition completes).
+  approvedSources?: Set<string>;
+};
 
-export function ReplyMarkdownImage({ src, alt, onSendMessage }: Props) {
-  const [approvedSource, setApprovedSource] = useState<string | null>(null);
+export function ReplyMarkdownImage({ src, alt, onSendMessage, approvedSources }: Props) {
+  const [approvedSource, setApprovedSource] = useState<string | null>(() =>
+    src && approvedSources?.has(src) ? src : null
+  );
   if (!src || /^(?:\/mnt\/|\/tmp\/|file:|sandbox:)/i.test(src) || src.includes('/mnt/data/')) return null;
   let imageUrl: URL;
   try {
@@ -17,7 +23,15 @@ export function ReplyMarkdownImage({ src, alt, onSendMessage }: Props) {
 
   if (approvedSource !== src) {
     return (
-      <Button data-testid="reply-image-load-btn" variant="outlined" title={src} onClick={() => setApprovedSource(src)}>
+      <Button
+        data-testid="reply-image-load-btn"
+        variant="outlined"
+        title={src}
+        onClick={() => {
+          approvedSources?.add(src);
+          setApprovedSource(src);
+        }}
+      >
         {`Load image${alt ? `: ${alt}` : ''} (${src.startsWith('/') && !src.startsWith('//') ? 'this site' : imageUrl.host})`}
       </Button>
     );
