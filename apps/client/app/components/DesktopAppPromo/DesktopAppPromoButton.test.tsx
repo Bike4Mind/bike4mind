@@ -10,7 +10,6 @@ const state = vi.hoisted(() => ({
   isHydrated: true,
   dismissed: false,
   updatePreferences: vi.fn(),
-  navigate: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/useDesktopPromoEnabled', () => ({ useDesktopPromoEnabled: () => state.enabled }));
@@ -21,9 +20,9 @@ vi.mock('@client/app/contexts/UserSettingsContext', () => ({
     updatePreferences: state.updatePreferences,
   }),
 }));
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => state.navigate }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
+let openSpy: ReturnType<typeof vi.spyOn>;
 
 function renderButton() {
   return render(
@@ -52,26 +51,33 @@ function setWideScreenWithMouse(matches: boolean) {
 beforeEach(() => {
   Object.assign(state, { enabled: true, isHydrated: true, dismissed: false });
   state.updatePreferences.mockReset();
-  state.navigate.mockReset();
+  openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
   setWideScreenWithMouse(true);
 });
 
 afterEach(() => {
+  openSpy.mockRestore();
   setWideScreenWithMouse(false);
 });
 
 describe('DesktopAppPromoButton', () => {
-  it('opens the desktop download page', () => {
+  it('opens the desktop download page in a new tab when the pill is clicked', () => {
     renderButton();
-    fireEvent.click(screen.getByTestId('desktop-promo-open-btn'));
-    expect(state.navigate).toHaveBeenCalledWith({ to: '/desktop' });
+    fireEvent.click(screen.getByTestId('desktop-promo'));
+    expect(openSpy).toHaveBeenCalledWith('/desktop', '_blank', 'noopener,noreferrer');
+  });
+
+  it('opens the desktop download page from the keyboard', () => {
+    renderButton();
+    fireEvent.keyDown(screen.getByTestId('desktop-promo'), { key: 'Enter' });
+    expect(openSpy).toHaveBeenCalledWith('/desktop', '_blank', 'noopener,noreferrer');
   });
 
   it('remembers a dismissal in the user preferences', () => {
     renderButton();
     fireEvent.click(screen.getByTestId('desktop-promo-dismiss-btn'));
     expect(state.updatePreferences).toHaveBeenCalledWith({ desktopPromoDismissed: true });
-    expect(state.navigate).not.toHaveBeenCalled();
+    expect(openSpy).not.toHaveBeenCalled();
   });
 
   it('stays hidden once the user dismissed it', () => {
