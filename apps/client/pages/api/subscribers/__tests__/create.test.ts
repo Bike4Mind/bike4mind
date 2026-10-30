@@ -36,6 +36,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   isE2EEnabled: () => false,
   isProduction: () => false,
   isDevelopment: () => true,
+  isDeployedStage: () => false,
 }));
 vi.mock('sst', () => ({ Resource: {} }));
 
