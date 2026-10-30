@@ -61,6 +61,10 @@ export function isFullPriceProfessionalInvoice(invoice: Stripe.Invoice, subscrip
   return true;
 }
 
+/** Transaction id and lot reference of a reward's grant; the take-back finds the lot through it. */
+const rewardGrantRef = ({ inviterId, invoiceId }: { inviterId: string; invoiceId: string }) =>
+  `referral-subscription:${inviterId}:${invoiceId}`;
+
 const REWARD_SETTINGS = ['ReferralFirstPaymentCredits', 'ReferralSecondPaymentCredits', 'ReferralHoldDays'] as const;
 
 /**
@@ -200,7 +204,7 @@ export async function releaseDueSubscriptionRewards({
             ownerType: CreditHolderType.User,
             credits: claimed.credits,
             type: 'generic_add',
-            transactionId: `referral-subscription:${claimed.inviterId}:${claimed.invoiceId}`,
+            transactionId: rewardGrantRef(claimed),
             reason: REFERRAL_REWARD_REASON,
             description: 'Referral reward: subscription payment from an invited friend',
             metadata: { step: claimed.step, referredUserId: claimed.payerId, invoiceId: claimed.invoiceId },
@@ -208,6 +212,7 @@ export async function releaseDueSubscriptionRewards({
           {
             db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
             creditHolderMethods: userRepository,
+            lotRef: rewardGrantRef(claimed),
           }
         );
         return grant.creditTransactionId ?? '';
@@ -305,6 +310,10 @@ export async function reverseSubscriptionRewardForRefund({
             },
             { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
           );
+          // Shrinks the reward's own lot too, so the lot sweep cannot charge the take-back to another lot.
+          await creditService.clawbackCreditLotsByStripeRef(rewardGrantRef(reward), 'proportional', takeBack, {
+            db: { creditLots: creditLotRepository },
+          });
         }
         return true;
       });
