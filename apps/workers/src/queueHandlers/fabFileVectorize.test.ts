@@ -1561,6 +1561,20 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     );
   });
 
+  it('attributes the indexing charge to the API key that uploaded the file', async () => {
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile(undefined), apiKeyId: 'key-1' });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.reservationSettle).toHaveBeenCalledWith(1, expect.objectContaining({ apiKeyId: 'key-1' }));
+  });
+
+  it('attributes no API key to the indexing charge of a JWT upload', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.reservationSettle.mock.calls[0][1]).not.toHaveProperty('apiKeyId');
+  });
+
   it('fails the file without embedding, and consumes the message, when the holder cannot cover it', async () => {
     const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
     h.reserveRequestCredits.mockRejectedValue(

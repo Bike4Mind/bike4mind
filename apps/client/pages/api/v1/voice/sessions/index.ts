@@ -252,6 +252,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       userId: req.user.id,
       sessionId: session.id,
       priorStartedAt: priorHoldStartedAt,
+      apiKeyId: req.apiKeyInfo?.keyId,
       reservedCredits: enforceCredits ? reservedCredits : null,
       startedAt: holdStartedAt,
       realtime: false,
