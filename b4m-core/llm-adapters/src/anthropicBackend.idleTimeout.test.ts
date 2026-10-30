@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatModels } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { AnthropicBackend } from './anthropicBackend';
+import type { ICompletionOptions } from './backend';
 import { LlmTimeoutError } from './llmTimeoutErrors';
 
 const { sendMetric } = vi.hoisted(() => ({ sendMetric: vi.fn(async (_command: { input: unknown }) => ({})) }));
@@ -65,8 +66,10 @@ function buildBackend(stream: unknown) {
   return backend;
 }
 
+type TurnInternal = NonNullable<ICompletionOptions['_internal']>;
+
 /** Starts a streaming turn that stalls after message_start; the outcome is captured, not thrown. */
-function startStalledTurn(model: string) {
+function startStalledTurn(model: string, internal: Omit<TurnInternal, 'enableIdleTimeout'> = {}) {
   const { stream, abortedState } = stalledStream();
   const backend = buildBackend(stream);
   const outcome: { settled: boolean; error?: Error } = { settled: false };
@@ -74,7 +77,7 @@ function startStalledTurn(model: string) {
     .complete(
       model,
       [{ role: 'user', content: 'hi' }],
-      { stream: true, _internal: { enableIdleTimeout: true } },
+      { stream: true, _internal: { ...internal, enableIdleTimeout: true } },
       async () => {}
     )
     .catch((error: unknown) => {
@@ -141,6 +144,36 @@ describe('AnthropicBackend - stream idle timeout selection', () => {
       [{ Name: 'Model', Value: ChatModels.CLAUDE_4_5_SONNET }, stage],
       [stage],
     ]);
+  });
+
+  it('carries the completed tool rounds of the call on the timeout, output included', async () => {
+    const { turn, outcome } = startStalledTurn(ChatModels.CLAUDE_4_5_SONNET, {
+      accumInputTokens: 300,
+      accumOutputTokens: 250,
+      accumCacheReadTokens: 4000,
+      accumCacheWriteTokens: 60,
+    });
+
+    await vi.advanceTimersByTimeAsync(91_000);
+    await turn;
+
+    expect(outcome.error).toMatchObject({
+      name: 'LlmTimeoutError',
+      usage: { inputTokens: 310, outputTokens: 250, cacheReadInputTokens: 4000, cacheCreationInputTokens: 60 },
+    });
+  });
+
+  it('leaves output off the timeout when no earlier round completed', async () => {
+    const { turn, outcome } = startStalledTurn(ChatModels.CLAUDE_4_5_SONNET);
+
+    await vi.advanceTimersByTimeAsync(91_000);
+    await turn;
+
+    expect((outcome.error as LlmTimeoutError).usage).toEqual({
+      inputTokens: 10,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    });
   });
 });
 

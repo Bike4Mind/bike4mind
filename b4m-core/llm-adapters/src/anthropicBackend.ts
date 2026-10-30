@@ -1551,8 +1551,10 @@ export class AnthropicBackend implements ICompletionBackend {
               inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens ?? 0),
               cacheReadInputTokens: accumCacheReadTokens + (streamingTurnUsage?.cache_read_input_tokens ?? 0),
               cacheCreationInputTokens: accumCacheWriteTokens + (streamingTurnUsage?.cache_creation_input_tokens ?? 0),
+              ...(accumOutputTokens > 0 ? { outputTokens: accumOutputTokens } : {}),
             };
-            const hasUsage = usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens > 0;
+            const hasUsage =
+              usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens + accumOutputTokens > 0;
             return createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError, {
               keepalive: idleTimeoutKeepalive,
               usage: hasUsage ? usage : undefined,

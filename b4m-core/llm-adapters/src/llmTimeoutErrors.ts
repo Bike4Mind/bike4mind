@@ -8,11 +8,16 @@ export type LlmTimeoutKind = 'first_event' | 'stream_idle' | 'request';
 
 export type LlmStreamTimeoutKind = Exclude<LlmTimeoutKind, 'request'>;
 
-/** Prompt usage the provider reported (message_start) before the stream was cut; output is never known. */
+/**
+ * Usage the provider reported before the stream was cut: the cut request's prompt (message_start)
+ * plus any tool rounds of the same call that completed. The cut request's own output is never known.
+ */
 export interface LlmTimeoutUsage {
   inputTokens: number;
   cacheReadInputTokens: number;
   cacheCreationInputTokens: number;
+  /** Output of the completed tool rounds only; absent when none completed. */
+  outputTokens?: number;
 }
 
 export interface LlmTimeoutDetails {

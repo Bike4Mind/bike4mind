@@ -6595,7 +6595,7 @@ describe('ChatCompletionProcess', () => {
       expect(timeoutRow.costUsd).toBeCloseTo(getTextModelCost(primaryModel, 1000, 0, 2000, 400, 3400), 12);
     });
 
-    it('leaves a timeout that ends the turn to the aborted-reservation settlement', async () => {
+    it('records a timeout that ends the turn once, with nothing charged for it', async () => {
       const { usageEventsRecord } = arrangeUsageEventScenario({
         enforceCredits: true,
         primaryComplete: async () => {
@@ -6609,7 +6609,55 @@ describe('ChatCompletionProcess', () => {
 
       await runUsageEventScenario().catch(() => undefined);
 
-      expect(usageEventsRecord).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'timeout' }));
+      const timeoutRows = usageEventsRecord.mock.calls.filter(([event]) => event.status === 'timeout');
+      expect(timeoutRows).toHaveLength(1);
+      expect(timeoutRows[0][0]).toMatchObject({
+        model: ChatModels.GPT4,
+        inputTokens: 0,
+        providerInputTokens: 1000,
+        settledBasis: 'provider',
+        creditsCharged: 0,
+      });
+      expect(usageEventsRecord).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'ok' }));
+    });
+
+    it('prices the output of completed tool rounds on the timeout row', async () => {
+      const usage = { inputTokens: 1000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 700 };
+      const { usageEventsRecord } = arrangeUsageEventScenario({
+        enforceCredits: true,
+        primaryComplete: async () => {
+          throw createAnthropicStreamTimeoutError('stream_idle', 1_280_000, { keepalive: true, usage });
+        },
+      });
+
+      await runUsageEventScenario();
+
+      const timeoutRow = usageEventsRecord.mock.calls.find(([event]) => event.status === 'timeout')?.[0];
+      expect(timeoutRow).toMatchObject({ outputTokens: 0, providerInputTokens: 1000, providerOutputTokens: 700 });
+      const [primaryModel] = await mockedGetAvailableModels.mock.results[0].value;
+      expect(timeoutRow.costUsd).toBeCloseTo(getTextModelCost(primaryModel, 1000, 700, 0, 0, 1000), 12);
+    });
+
+    it('still answers from the fallback when the timeout row fails to write', async () => {
+      const { usageEventsRecord, fallbackModel } = arrangeUsageEventScenario({
+        enforceCredits: true,
+        primaryComplete: async () => {
+          throw createAnthropicStreamTimeoutError('stream_idle', 1_280_000, {
+            keepalive: true,
+            usage: { inputTokens: 1000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+          });
+        },
+      });
+      usageEventsRecord.mockImplementation(async event =>
+        event.status === 'timeout' ? Promise.reject(new Error('ledger down')) : null
+      );
+
+      await runUsageEventScenario();
+
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ model: fallbackModel.id, status: 'ok' })
+      );
+      expect((mockQuest.replies ?? []).join('')).toContain('Hello from the fallback');
     });
 
     it('records no refusal row when enforceCredits is off', async () => {
