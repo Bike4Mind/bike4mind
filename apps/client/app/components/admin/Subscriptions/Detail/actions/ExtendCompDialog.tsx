@@ -23,7 +23,7 @@ type ExtendMonths = (typeof EXTEND_OPTIONS)[number]['value'];
 
 /**
  * Extend comp: moves the end date out by whole months from the later of today and the current end. A comp
- * holds no Stripe state, so this only changes our record; undo restores the previous end date.
+ * holds no Stripe state, so this only changes our record; undo restores the previous end date, when there was one.
  */
 export const ExtendCompDialog: React.FC<SubscriptionDialogProps> = ({ detail, onClose, onAudit }) => {
   const { subscription } = detail;
@@ -42,10 +42,12 @@ export const ExtendCompDialog: React.FC<SubscriptionDialogProps> = ({ detail, on
     onClose();
     showUndo({
       message: `Comp extended to ${targetLabel}`,
-      onUndo: async () => {
-        if (!previousEndsAt) return;
-        await change.mutateAsync({ action: 'setEndsAt', periodEndsAt: previousEndsAt, reason: undoReason(reason) });
-      },
+      // setEndsAt cannot restore "no end date", so a comp that had none gets no Undo.
+      onUndo: previousEndsAt
+        ? async () => {
+            await change.mutateAsync({ action: 'setEndsAt', periodEndsAt: previousEndsAt, reason: undoReason(reason) });
+          }
+        : undefined,
       onViewAudit: onAudit,
     });
   };

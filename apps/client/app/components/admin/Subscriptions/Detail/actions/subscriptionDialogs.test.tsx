@@ -82,6 +82,16 @@ describe('ExtendCompDialog', () => {
     expect(screen.getByTestId('extend-comp-preview-after')).toHaveTextContent('29 Nov 2026');
   });
 
+  it('offers no undo when the comp had no end date to restore', async () => {
+    const { onClose } = open(ExtendCompDialog, buildDetail({ subscription: { periodEndsAt: null } }));
+    pickReason('extend-comp-dialog');
+    confirm('extend-comp-dialog');
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Comp extended to 29 Nov 2026');
+    expect(screen.queryByTestId('undo-toast-undo-btn')).not.toBeInTheDocument();
+  });
+
   it('stays open when the write fails', async () => {
     mocks.comp.mockRejectedValueOnce(new Error('nope'));
     const { onClose } = open(ExtendCompDialog, buildDetail());

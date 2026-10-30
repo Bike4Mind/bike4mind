@@ -240,6 +240,26 @@ describe('POST /api/admin/subscriptions/[id]/comp', () => {
       );
     });
 
+    // Rows from the UserSubscription migration skipped validation, so the stored end date can be null or absent.
+    it.each([
+      ['null', { periodEndsAt: null }],
+      ['missing', { periodEndsAt: undefined }],
+    ])('sets an end date on a comp whose periodEndsAt is %s', async (_label, overrides) => {
+      mockFindById.mockResolvedValue(compRow(overrides));
+      const periodEndsAt = isoIn(90);
+      const { res, run } = call({ body: { action: 'setEndsAt', periodEndsAt } });
+      await run();
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          summary: `set comp end date to ${periodEndsAt.slice(0, 10)}`,
+          changes: [{ field: 'periodEndsAt', before: null, after: periodEndsAt }],
+        })
+      );
+    });
+
     // Undoing an extend on a comp that had already lapsed restores a past end date.
     it('allows a past date', async () => {
       const { res, run } = call({ body: { action: 'setEndsAt', periodEndsAt: isoIn(-5) } });

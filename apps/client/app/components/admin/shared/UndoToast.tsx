@@ -7,8 +7,9 @@ export const UNDO_TOAST_DURATION_MS = 30_000;
 
 export type UndoToastOptions = {
   message: string;
-  /** The reverse write. It must record its own audit entry; the toast adds no undo semantics. */
-  onUndo: () => void | Promise<void>;
+  /** The reverse write. It must record its own audit entry; the toast adds no undo semantics. Omit when the
+   * write cannot be reversed: the toast then shows no Undo button. */
+  onUndo?: () => void | Promise<void>;
   /** Opens the audit entry for the write being offered for undo. */
   onViewAudit?: () => void;
 };
@@ -37,7 +38,7 @@ export const UndoToastProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const handleUndo = async () => {
-    if (!toast) return;
+    if (!toast?.onUndo) return;
     setUndoing(true);
     setUndoError(null);
     try {
@@ -91,16 +92,18 @@ export const UndoToastProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 View audit entry
               </Button>
             )}
-            <Button
-              size="sm"
-              variant="soft"
-              color="neutral"
-              loading={undoing}
-              onClick={() => void handleUndo()}
-              data-testid="undo-toast-undo-btn"
-            >
-              Undo
-            </Button>
+            {toast.onUndo && (
+              <Button
+                size="sm"
+                variant="soft"
+                color="neutral"
+                loading={undoing}
+                onClick={() => void handleUndo()}
+                data-testid="undo-toast-undo-btn"
+              >
+                Undo
+              </Button>
+            )}
           </Stack>
         </Snackbar>
       )}

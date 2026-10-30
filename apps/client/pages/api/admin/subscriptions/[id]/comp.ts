@@ -58,13 +58,18 @@ const planSetEndsAt = (subscription: ISubscription, periodEndsAt: string, now: D
   if (next.getTime() > latestAllowedEndsAt(now).getTime()) {
     throw new BadRequestError(`The end date can be at most ${COMP_MAX_MONTHS_AHEAD} months from now.`);
   }
-  const current = new Date(subscription.periodEndsAt);
-  if (next.getTime() === current.getTime()) throw new BadRequestError('The end date is unchanged.');
-  const verb = next.getTime() > current.getTime() ? 'extended comp to' : 'moved comp end date to';
+  // Rows from the UserSubscription migration skipped validation and can lack periodEndsAt despite the schema.
+  const current = subscription.periodEndsAt ? new Date(subscription.periodEndsAt) : null;
+  if (current && next.getTime() === current.getTime()) throw new BadRequestError('The end date is unchanged.');
+  const verb = !current
+    ? 'set comp end date to'
+    : next.getTime() > current.getTime()
+      ? 'extended comp to'
+      : 'moved comp end date to';
   return {
     update: { periodEndsAt: next },
     summary: `${verb} ${toIsoDay(next)}`,
-    changes: [{ field: 'periodEndsAt', before: current.toISOString(), after: next.toISOString() }],
+    changes: [{ field: 'periodEndsAt', before: current?.toISOString() ?? null, after: next.toISOString() }],
   };
 };
 
