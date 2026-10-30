@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   release: vi.fn(),
   remove: vi.fn(),
   user: vi.fn(),
+  grantLookup: vi.fn(),
 }));
 vi.mock('@bike4mind/database', async () => ({
   mongoose: (await import('mongoose')).default,
@@ -24,7 +25,8 @@ vi.mock('@bike4mind/database', async () => ({
     tryAcquireLease: mocks.lease,
     releaseLease: mocks.release,
   },
-  creditTransactionRepository: {},
+  CreditGrantIdentityClaim: { createIndexes: vi.fn() },
+  creditTransactionRepository: { findOne: mocks.grantLookup },
   userRepository: { findById: mocks.user },
 }));
 vi.mock('@bike4mind/services', () => ({ userService: {} }));
@@ -48,9 +50,13 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
 }));
 import {
   CardVerificationFailure,
+  cardNetworkDigest,
   cardVerificationRuntime,
   reconcileCardVerifications,
+  resetCardVerificationRuntimeCache,
   resumableVerificationSecret,
+  verificationFailure,
+  verificationOffer,
 } from './cardVerificationRuntime';
 import { finishCardVerification } from './cardVerificationRuntime';
 vi.mock('./cardVerificationLifecycle', async importOriginal => ({
@@ -80,6 +86,7 @@ const defense = {
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  resetCardVerificationRuntimeCache();
   vi.stubEnv('CARD_VERIFICATION_RECOVERY_ENABLED', 'true');
   vi.stubEnv('CARD_VERIFICATION_DEFENSE_POLICY', JSON.stringify(defense));
   mocks.setting.mockImplementation(async (key: string) => ({
@@ -131,7 +138,7 @@ describe('mandatory verification defenses', () => {
       { $set: { state: 'refused' } }
     );
   });
-  it('skips a recent pending verification quietly when the offer is disabled', async () => {
+  it('skips a recent pending saved-card verification quietly when the offer is disabled', async () => {
     vi.spyOn(CardVerification, 'find').mockReturnValue({
       sort: () => ({
         limit: () => ({
@@ -140,6 +147,7 @@ describe('mandatory verification defenses', () => {
               verificationId: 'synthetic',
               userId: 'synthetic-user',
               state: 'pending',
+              saveCard: true,
               setupIntentId: 'seti_synthetic',
               createdAt: new Date(),
             },
@@ -379,5 +387,92 @@ describe('mandatory verification defenses', () => {
       expect.objectContaining({ $setOnInsert: expect.objectContaining({ userId: 'synthetic-user' }) }),
       { upsert: true }
     );
+  });
+  it('reports lease contention as busy instead of failing the caller', async () => {
+    mocks.lease.mockResolvedValue(false);
+    const findOne = vi.spyOn(CardVerification, 'findOne');
+    expect(await finishCardVerification('synthetic-verification', 'synthetic-user')).toBe('busy');
+    expect(findOne).not.toHaveBeenCalled();
+    expect(mocks.release).not.toHaveBeenCalled();
+  });
+  it('detaches a succeeded default-detach card without granting while the offer is disabled', async () => {
+    const row = {
+      verificationId: 'synthetic',
+      userId: 'synthetic-user',
+      state: 'pending',
+      environment: 'test',
+      livemode: false,
+      saveCard: false,
+      customerId: 'cus_synthetic',
+      setupIntentId: 'seti_synthetic',
+      createdAt: new Date(),
+    };
+    vi.spyOn(CardVerification, 'find').mockReturnValue({
+      sort: () => ({ limit: () => ({ lean: async () => [row] }) }),
+    } as never);
+    vi.spyOn(CardVerification, 'updateOne').mockResolvedValue({ modifiedCount: 1 } as never);
+    mocks.setting.mockImplementation(async (key: string) => ({
+      settingValue: key === 'cardUnlockEnabled' ? 'false' : '17',
+    }));
+    mocks.retrieve.mockResolvedValue({
+      id: row.setupIntentId,
+      customer: row.customerId,
+      livemode: false,
+      status: 'succeeded',
+      payment_method: 'pm_synthetic',
+      metadata: { verificationId: row.verificationId, purpose: 'card_verification', environment: 'test' },
+    });
+    await expect(reconcileCardVerifications()).resolves.toBeUndefined();
+    expect(CardVerification.updateOne).toHaveBeenCalledWith(
+      { verificationId: 'synthetic', state: 'pending' },
+      { $set: { state: 'refused', paymentMethodId: 'pm_synthetic' } }
+    );
+    expect(mocks.remove).toHaveBeenCalledWith('synthetic', 'synthetic-user', expect.any(Object));
+    expect(CardVerification.updateOne).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ $set: expect.objectContaining({ state: 'verified' }) })
+    );
+    expect(mocks.account).not.toHaveBeenCalled();
+  });
+  it('shares one per-IP counter across an IPv6 /64', async () => {
+    expect(cardNetworkDigest('2001:db8::1')).toBe(cardNetworkDigest('2001:db8::ffff:2'));
+    expect(cardNetworkDigest('2001:db8::1')).not.toBe(cardNetworkDigest('2001:db8:0:1::1'));
+    const runtime = await cardVerificationRuntime();
+    await runtime.guards!.authorizeAttempt({ ...context, ip: '2001:db8::1' });
+    await runtime.guards!.authorizeAttempt({ ...context, ip: '2001:db8::ffff:2' });
+    const ipKeys = mocks.limit.mock.calls.map(call => String(call[0])).filter(key => key.includes(':ip:'));
+    expect(ipKeys).toHaveLength(2);
+    expect(ipKeys[0]).toBe(ipKeys[1]);
+  });
+  it('memoizes the account attestation and index check across offer reads', async () => {
+    await cardVerificationRuntime();
+    await cardVerificationRuntime();
+    expect(mocks.account).toHaveBeenCalledTimes(1);
+    expect(CardVerification.collection.listIndexes).toHaveBeenCalledTimes(1);
+  });
+  it('logs an unavailable runtime and serves a disabled offer', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    mocks.setting.mockRejectedValue(new Error('synthetic settings outage'));
+    vi.spyOn(CardVerification, 'find').mockReturnValue({
+      sort: () => ({ limit: () => ({ lean: async () => [] }) }),
+    } as never);
+    mocks.grantLookup.mockResolvedValue(null);
+    expect(await verificationOffer('synthetic-user')).toMatchObject({ available: false, siteKey: '' });
+    expect(warn).toHaveBeenCalledWith('card-verification-offer-unavailable', {
+      reason: 'synthetic settings outage',
+    });
+    expect(mocks.account).not.toHaveBeenCalled();
+  });
+  it('explains an ineligible account to the user', () => {
+    expect(verificationFailure(new CardVerificationRefused('ineligible'))).toEqual({
+      status: 403,
+      error: 'This account is not eligible for the card verification offer.',
+    });
+  });
+  it('explains a card that is still in use instead of blaming the account', () => {
+    expect(verificationFailure(new CardVerificationRefused('card_in_use'))).toEqual({
+      status: 409,
+      error: 'This card is in use as a payment method, so it cannot be removed here.',
+    });
   });
 });

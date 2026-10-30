@@ -2,12 +2,19 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { z } from 'zod';
 import type Stripe from 'stripe';
-import { adminSettingsRepository, cacheRepository, mongoose, userRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  cacheRepository,
+  CreditGrantIdentityClaim,
+  mongoose,
+  userRepository,
+} from '@bike4mind/database';
 import { settingsMap } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { stripe, isStripeConfigured } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { Config, isProduction } from '@bike4mind/server-utils/utils/config';
+import { ipBucket } from '@bike4mind/server-utils/utils/ipBucket';
 import { verifyTurnstile } from '@bike4mind/server-utils/utils/turnstile';
 import { ForbiddenError, ServiceUnavailableError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { getTurnstilePolicy, turnstileAllowedHostnames } from '@server/utils/auth/turnstile';
@@ -26,6 +33,7 @@ import {
 
 const DAY = 86400000;
 const NOTIFY_RETRY_WINDOW = 7 * DAY;
+const ACCOUNT_ATTESTATION_TTL_MS = 5 * 60 * 1000;
 const logger = new Logger({ metadata: { service: 'card-verification' } });
 interface CardVerificationFailureRecord {
   attemptId: string;
@@ -50,9 +58,27 @@ export const CardVerificationFailure =
 export async function ensureCardVerificationIndexes() {
   await CardVerification.createIndexes();
   await CardVerificationFailure.createIndexes();
+  await CreditGrantIdentityClaim.createIndexes();
+}
+
+// Per-process memos so the offer GET does not hit Stripe and listIndexes on every request.
+let attestedAccount: { id: string; expiresAt: number } | undefined;
+let indexesReady = false;
+
+export function resetCardVerificationRuntimeCache() {
+  attestedAccount = undefined;
+  indexesReady = false;
+}
+
+async function currentStripeAccountId(): Promise<string> {
+  if (attestedAccount && attestedAccount.expiresAt > Date.now()) return attestedAccount.id;
+  const account = await stripe.accounts.retrieve(null);
+  attestedAccount = { id: account.id, expiresAt: Date.now() + ACCOUNT_ATTESTATION_TTL_MS };
+  return account.id;
 }
 
 async function verificationIndexesReady() {
+  if (indexesReady) return;
   for (const [model, field] of [
     [CardVerification, 'verificationId'],
     [CardVerificationFailure, 'attemptId'],
@@ -70,12 +96,16 @@ async function verificationIndexesReady() {
     )
       throw new ServiceUnavailableError('Verification storage is not ready.');
   }
+  indexesReady = true;
 }
 
+/** Per-IP limit subject: IPv6 is bucketed by /64 so one holder cannot rotate addresses for a fresh budget. */
 export function cardNetworkDigest(ip: string): string {
   const key = Config.CARD_VERIFICATION_IDENTITY_KEY ?? '';
   if (key.length < 32) throw new ServiceUnavailableError('Card verification is unavailable.');
-  return createHmac('sha256', key).update(`network:${ip}`).digest('hex');
+  return createHmac('sha256', key)
+    .update(`network:${ipBucket(ip)}`)
+    .digest('hex');
 }
 
 export async function cardAccountEligible(userId: string): Promise<boolean> {
@@ -122,8 +152,8 @@ export async function cardVerificationRuntime(): Promise<CardVerificationDepende
   if (!ready || !defense) return { stripe, policy: async () => policy };
   await verificationIndexesReady();
   // The attestation is private, account-bound and expires; it is not an imaginary Stripe risk-score field.
-  const account = await stripe.accounts.retrieve(null);
-  if (account.id !== defense.accountId) return { stripe, policy: async () => ({ ...policy, enabled: false }) };
+  if ((await currentStripeAccountId()) !== defense.accountId)
+    return { stripe, policy: async () => ({ ...policy, enabled: false }) };
 
   const failureCounts = async (userId: string, ipDigest: string) => {
     const at = { $gte: new Date(Date.now() - DAY) };
@@ -231,11 +261,11 @@ function cleanupRuntime(): CardVerificationDependencies {
   };
 }
 
+/** Returns 'busy' when another worker (client, webhook or recovery) holds this verification's lease. */
 export async function finishCardVerification(verificationId: string, userId: string, remove = false) {
   const lease = randomUUID();
   const key = `card-verification:completion:${verificationId}`;
-  if (!(await cacheRepository.tryAcquireLease(key, lease, 1, 120000)))
-    throw new ServiceUnavailableError('Verification is being processed. Try again shortly.');
+  if (!(await cacheRepository.tryAcquireLease(key, lease, 1, 120000))) return 'busy' as const;
   try {
     if (remove) {
       await removeVerificationCard(verificationId, userId, cleanupRuntime());
@@ -284,19 +314,24 @@ async function notifyVerification(verificationId: string, userId: string) {
   if (sent) await CardVerification.updateOne({ verificationId, userId }, { $set: { notifiedAt: new Date() } });
 }
 
+async function retrieveBoundIntent(row: CardVerificationRecord, setupIntentId: string) {
+  const intent = await stripe.setupIntents.retrieve(setupIntentId);
+  const customer = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
+  if (
+    intent.id !== setupIntentId ||
+    intent.livemode !== row.livemode ||
+    customer !== row.customerId ||
+    intent.metadata?.verificationId !== row.verificationId ||
+    intent.metadata?.purpose !== 'card_verification' ||
+    intent.metadata?.environment !== row.environment
+  )
+    throw new CardVerificationRefused('not_found');
+  return intent;
+}
+
 async function expirePendingVerification(row: CardVerificationRecord): Promise<boolean> {
   if (row.setupIntentId) {
-    const intent = await stripe.setupIntents.retrieve(row.setupIntentId);
-    const customer = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
-    if (
-      intent.id !== row.setupIntentId ||
-      intent.livemode !== row.livemode ||
-      customer !== row.customerId ||
-      intent.metadata?.verificationId !== row.verificationId ||
-      intent.metadata?.purpose !== 'card_verification' ||
-      intent.metadata?.environment !== row.environment
-    )
-      throw new CardVerificationRefused('not_found');
+    const intent = await retrieveBoundIntent(row, row.setupIntentId);
     if (intent.status === 'succeeded' || intent.status === 'processing') return false;
     if (intent.status !== 'canceled') await stripe.setupIntents.cancel(intent.id);
   }
@@ -305,6 +340,23 @@ async function expirePendingVerification(row: CardVerificationRecord): Promise<b
     { $set: { state: 'refused' } }
   );
   return true;
+}
+
+/**
+ * With the offer off, a succeeded default-detach setup never reaches completion (which records the card),
+ * so retire it without a grant and detach the card the user was promised would be removed.
+ */
+async function releaseUngrantedCard(row: CardVerificationRecord): Promise<void> {
+  if (row.state !== 'pending' || row.saveCard || !row.setupIntentId) return;
+  const intent = await retrieveBoundIntent(row, row.setupIntentId);
+  if (intent.status !== 'succeeded') return;
+  const paymentMethodId = typeof intent.payment_method === 'string' ? intent.payment_method : intent.payment_method?.id;
+  if (!paymentMethodId) return;
+  const retired = await CardVerification.updateOne(
+    { verificationId: row.verificationId, state: 'pending' },
+    { $set: { state: 'refused', paymentMethodId } }
+  );
+  if (retired.modifiedCount === 1) await finishCardVerification(row.verificationId, row.userId, true);
 }
 
 /** Client secret of the caller's own unconfirmed setup, so the original Elements session can be reopened. */
@@ -369,7 +421,10 @@ export async function reconcileCardVerifications() {
         if (row.state === 'pending' || row.state === 'verified') {
           runtime ??= cardVerificationRuntime();
           const deps = await runtime;
-          if (!(await deps.policy()).enabled) continue;
+          if (!(await deps.policy()).enabled) {
+            await releaseUngrantedCard(row);
+            continue;
+          }
           if (!(await cardAccountEligible(row.userId))) {
             if (row.state === 'pending' && !(await expirePendingVerification(row))) continue;
             await CardVerification.updateOne(
@@ -387,9 +442,15 @@ export async function reconcileCardVerifications() {
         await finishCardVerification(row.verificationId, row.userId);
       }
     } catch (error) {
-      if (error instanceof CardVerificationRefused && error.code === 'ineligible')
-        logger.warn('card-verification-recovery-refused', { verificationId: row.verificationId, state: row.state });
-      if (!(error instanceof CardVerificationRefused && ['unavailable', 'ineligible'].includes(error.code)))
+      if (error instanceof CardVerificationRefused && ['ineligible', 'card_in_use'].includes(error.code))
+        logger.warn('card-verification-recovery-refused', {
+          verificationId: row.verificationId,
+          state: row.state,
+          code: error.code,
+        });
+      if (!(
+        error instanceof CardVerificationRefused && ['unavailable', 'ineligible', 'card_in_use'].includes(error.code)
+      ))
         failures += 1;
     } finally {
       await CardVerification.updateOne({ verificationId: row.verificationId }, { $set: { updatedAt: new Date() } });
@@ -399,16 +460,12 @@ export async function reconcileCardVerifications() {
 }
 
 export async function verificationOffer(userId: string) {
-  const runtime = await cardVerificationRuntime().catch((): CardVerificationDependencies => ({
-    stripe,
-    policy: async () => ({
-      enabled: false,
-      cardUnlockCredits: 0,
-      identityKey: '',
-      environment: Config.STAGE,
-      livemode: isProduction(),
-    }),
-  }));
+  const runtime = await cardVerificationRuntime().catch((error: unknown) => {
+    logger.warn('card-verification-offer-unavailable', {
+      reason: error instanceof Error ? error.message : 'unknown',
+    });
+    return cleanupRuntime();
+  });
   const policy = await runtime.policy();
   const rows = await CardVerification.find({
     userId,
@@ -444,6 +501,10 @@ export function verificationFailure(error: unknown) {
   if (!(error instanceof CardVerificationRefused)) throw error;
   if (error.code === 'not_found') return { status: 404, error: 'Verification not found.' };
   if (error.code === 'unavailable') return { status: 503, error: 'Card verification is unavailable.' };
+  if (error.code === 'ineligible')
+    return { status: 403, error: 'This account is not eligible for the card verification offer.' };
+  if (error.code === 'card_in_use')
+    return { status: 409, error: 'This card is in use as a payment method, so it cannot be removed here.' };
   return {
     status: 403,
     error:

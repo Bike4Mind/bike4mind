@@ -1,6 +1,7 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type Stripe from 'stripe';
 import { CardVerification, type CardVerificationRecord } from './cardVerificationModel';
+import { CardVerificationRefused } from './cardVerificationErrors';
 import { grantVerifiedCardCredits, hasCardVerificationGrant } from './grantVerifiedCardCredits';
 
 export type CardVerificationPolicy = {
@@ -36,11 +37,7 @@ export interface CardVerificationDependencies {
   guards?: CardVerificationGuards;
 }
 
-export class CardVerificationRefused extends Error {
-  constructor(readonly code: 'unavailable' | 'not_found' | 'ineligible' | 'unsupported_card' | 'risk_refused') {
-    super(`Card verification ${code}`);
-  }
-}
+export { CardVerificationRefused };
 
 function configured(policy: CardVerificationPolicy, guards?: CardVerificationGuards): guards is CardVerificationGuards {
   return !!(
@@ -174,7 +171,10 @@ export async function completeCardVerification(
       intent.payment_method_types[0] !== 'card'
     )
       throw new CardVerificationRefused('not_found');
-    if (intent.last_setup_error || intent.status === 'canceled') await deps.guards.recordFailure(intent, record);
+    // last_setup_error describes an earlier confirmation; on a succeeded intent it is stale and the failed
+    // attempt was already counted by its own setup_failed webhook.
+    if ((intent.last_setup_error && intent.status !== 'succeeded') || intent.status === 'canceled')
+      await deps.guards.recordFailure(intent, record);
     if (intent.status === 'canceled') {
       await CardVerification.updateOne({ verificationId, state: 'pending' }, { $set: { state: 'refused' } });
       return 'refused';
@@ -197,7 +197,7 @@ export async function completeCardVerification(
     await CardVerification.updateOne({ verificationId, state: 'pending' }, { $set: { paymentMethodId } });
     let approved: boolean;
     try {
-      approved = !!supported && !intent.last_setup_error && (await deps.guards.approveRisk(intent));
+      approved = !!supported && (await deps.guards.approveRisk(intent));
     } catch (error) {
       await CardVerification.updateOne({ verificationId, state: 'pending' }, { $set: { state: 'refused' } });
       await removeVerificationCard(verificationId, userId, deps);
@@ -252,14 +252,14 @@ export async function removeVerificationCard(
       customer.livemode !== record.livemode ||
       customer.metadata?.verificationId !== verificationId ||
       customer.metadata?.purpose !== 'card_verification' ||
-      customer.metadata?.environment !== record.environment ||
-      customer.invoice_settings.default_payment_method ||
-      customer.default_source
+      customer.metadata?.environment !== record.environment
     )
       throw new CardVerificationRefused('ineligible');
+    if (customer.invoice_settings.default_payment_method || customer.default_source)
+      throw new CardVerificationRefused('card_in_use');
     for await (const subscription of stripe.subscriptions.list({ customer: record.customerId, status: 'all' })) {
       if (!['canceled', 'incomplete_expired'].includes(subscription.status))
-        throw new CardVerificationRefused('ineligible');
+        throw new CardVerificationRefused('card_in_use');
     }
     await stripe.paymentMethods.detach(record.paymentMethodId);
   }

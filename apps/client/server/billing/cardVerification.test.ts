@@ -288,6 +288,21 @@ describe('no-charge verification lifecycle', () => {
     expect(state.record?.paymentMethodId).toBeUndefined();
   });
 
+  it('grants a succeeded setup despite a stale error from an earlier confirmation attempt', async () => {
+    const f = fixture();
+    Object.assign(f.intent, { last_setup_error: { code: 'card_declined' } });
+    expect(await completeCardVerification(f.record.verificationId, f.record.userId, f.deps)).toBe('granted');
+    expect(f.guards.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('records the failure of a setup that is still awaiting a working card', async () => {
+    const f = fixture();
+    Object.assign(f.intent, { status: 'requires_payment_method', last_setup_error: { code: 'card_declined' } });
+    expect(await completeCardVerification(f.record.verificationId, f.record.userId, f.deps)).toBe('pending');
+    expect(f.guards.recordFailure).toHaveBeenCalledTimes(1);
+    expect(grantVerifiedCardCredits).not.toHaveBeenCalled();
+  });
+
   it('recovers posting failure after detaching without needing provider evidence again', async () => {
     const f = fixture();
     vi.mocked(grantVerifiedCardCredits).mockRejectedValueOnce(new Error('synthetic balance failure'));
@@ -329,7 +344,7 @@ describe('no-charge verification lifecycle', () => {
         })() as ReturnType<typeof f.stripe.subscriptions.list>
     );
     await expect(removeVerificationCard(f.record.verificationId, f.record.userId, f.deps)).rejects.toMatchObject({
-      code: 'ineligible',
+      code: 'card_in_use',
     });
     expect(f.stripe.paymentMethods.detach).not.toHaveBeenCalled();
   });

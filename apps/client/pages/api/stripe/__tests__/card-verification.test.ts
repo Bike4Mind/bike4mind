@@ -96,6 +96,18 @@ describe('verification route', () => {
     expect(mocks.finish).toHaveBeenCalledWith(id, 'synthetic-owner', true);
     expect(mocks.resumable).not.toHaveBeenCalled();
   });
+  it('reports a verification another worker is finishing as pending instead of failing', async () => {
+    mocks.finish.mockResolvedValue('busy');
+    const { req, res } = request({ verificationId: id });
+    await mocks.handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ outcome: 'pending' });
+    expect(mocks.resumable).not.toHaveBeenCalled();
+    const removal = request({ verificationId: id });
+    await mocks.handlers.delete(removal.req, removal.res);
+    expect(removal.res._getStatusCode()).toBe(409);
+    expect(removal.res._getJSONData()).toEqual({ error: expect.stringContaining('still being processed') });
+  });
   it('returns the owner setup secret only for a resumable pending verification', async () => {
     mocks.finish.mockResolvedValue('pending');
     mocks.resumable.mockResolvedValueOnce('synthetic-secret');

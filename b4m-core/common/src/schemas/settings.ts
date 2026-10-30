@@ -4386,6 +4386,7 @@ export const settingsMap = {
     name: 'Card Verification Credits',
     defaultValue: 30000,
     min: 1,
+    max: 100_000_000,
     int: true,
     description: 'Additional promotional credits granted once per eligible account and verified card identity.',
     category: 'Users',

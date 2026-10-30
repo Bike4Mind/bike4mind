@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mongoose, User, CreditTransaction, CreditGrantIdentityClaim, userRepository } from '@bike4mind/database';
+import {
+  mongoose,
+  User,
+  CreditLot,
+  CreditTransaction,
+  CreditGrantIdentityClaim,
+  userRepository,
+} from '@bike4mind/database';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -17,6 +24,7 @@ beforeAll(async () => {
   await settleAutoIndexBuilds(mongoose);
   await User.createCollection();
   await CreditTransaction.createCollection();
+  await CreditLot.createCollection();
   await CreditGrantIdentityClaim.createIndexes();
   await CardVerification.createIndexes();
   await CreditTransaction.collection.createIndex({ transactionId: 1 }, { unique: true, sparse: true });
@@ -30,6 +38,7 @@ beforeEach(async () => {
   await Promise.all([
     User.deleteMany({}),
     CreditTransaction.deleteMany({}),
+    CreditLot.deleteMany({}),
     CreditGrantIdentityClaim.deleteMany({}),
     CardVerification.deleteMany({}),
   ]);
@@ -64,6 +73,15 @@ describe('verified card grant transaction', () => {
     expect(row).toMatchObject({ credits: 17, type: 'generic_add', reason: 'card_verified' });
     expect(await CreditTransaction.countDocuments()).toBe(1);
     expect((await CardVerification.findOne({ userId: user.id }))?.state).toBe('granted');
+  });
+
+  it('stamps an expiring promotional lot for the grant', async () => {
+    const user = await seed('synthetic-lot');
+    expect(await grantVerifiedCardCredits('synthetic-lot', user.id, eligible)).toBe('granted');
+    const lots = await CreditLot.find({ ownerId: user.id }).lean();
+    expect(lots).toHaveLength(1);
+    expect(lots[0]).toMatchObject({ source: 'promo', amount: 17 });
+    expect(lots[0].expiresAt.getTime()).toBeGreaterThan(Date.now());
   });
 
   it('allows only one account to receive the same identity grant', async () => {
@@ -115,9 +133,9 @@ describe('verified card grant transaction', () => {
     await expect(grantVerifiedCardCredits('synthetic-refused', 'synthetic-other', eligible)).rejects.toThrow(
       'not been approved'
     );
-    await expect(grantVerifiedCardCredits('synthetic-refused', user.id, async () => false)).rejects.toThrow(
-      'not eligible'
-    );
+    await expect(grantVerifiedCardCredits('synthetic-refused', user.id, async () => false)).rejects.toMatchObject({
+      code: 'ineligible',
+    });
     expect(await CreditTransaction.countDocuments()).toBe(0);
     expect(await CreditGrantIdentityClaim.countDocuments()).toBe(0);
   });

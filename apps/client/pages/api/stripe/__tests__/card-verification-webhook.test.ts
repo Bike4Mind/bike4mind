@@ -2,7 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const mocks = vi.hoisted(() => ({ construct: vi.fn(), find: vi.fn(), finish: vi.fn(), recordFailure: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  construct: vi.fn(),
+  find: vi.fn(),
+  finish: vi.fn(),
+  recordFailure: vi.fn(),
+  runtime: vi.fn(),
+}));
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (fn: unknown) => fn }) }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test', CARD_VERIFICATION_WEBHOOK_SECRET: 'whsec_synthetic' },
@@ -15,7 +21,7 @@ vi.mock('@server/billing/cardVerificationModel', () => ({
 }));
 vi.mock('@server/billing/cardVerificationRuntime', () => ({
   finishCardVerification: mocks.finish,
-  cardVerificationRuntime: async () => ({ guards: { recordFailure: mocks.recordFailure } }),
+  cardVerificationRuntime: mocks.runtime,
 }));
 import handler from '../card-verification-webhook';
 import { CardVerificationRefused } from '@server/billing/cardVerificationLifecycle';
@@ -34,6 +40,7 @@ const call = async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   Config.CARD_VERIFICATION_WEBHOOK_SECRET = 'whsec_synthetic';
+  mocks.runtime.mockResolvedValue({ guards: { recordFailure: mocks.recordFailure } });
   mocks.find.mockResolvedValue({
     verificationId: 'synthetic-verification',
     userId: 'synthetic-user',
@@ -86,5 +93,20 @@ describe('signed verification webhook', () => {
     await call();
     expect(mocks.recordFailure).toHaveBeenCalledWith(intent, expect.objectContaining({ userId: 'synthetic-user' }));
     expect(mocks.finish).not.toHaveBeenCalled();
+  });
+  it('acknowledges a signed failure while the offer is disabled instead of making Stripe retry', async () => {
+    mocks.construct.mockReturnValue({
+      type: 'setup_intent.setup_failed',
+      livemode: false,
+      data: { object: { id: 'seti_synthetic' } },
+    });
+    mocks.runtime.mockResolvedValue({});
+    expect((await call()).statusCode).toBe(200);
+    expect(mocks.construct).toHaveBeenCalled();
+    expect(mocks.recordFailure).not.toHaveBeenCalled();
+  });
+  it('acknowledges a completion another worker is already finishing', async () => {
+    mocks.finish.mockResolvedValueOnce('busy');
+    expect((await call()).statusCode).toBe(200);
   });
 });

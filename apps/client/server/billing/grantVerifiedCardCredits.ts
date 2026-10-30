@@ -1,12 +1,14 @@
 import { CreditHolderType } from '@bike4mind/common';
 import {
   claimCreditGrantIdentity,
+  creditLotRepository,
   creditTransactionRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import { CardVerification } from './cardVerificationModel';
+import { CardVerificationRefused } from './cardVerificationErrors';
 
 export function cardVerificationTransactionId(userId: string): string {
   return `unlock-grant:card_verified:${userId}`;
@@ -25,7 +27,7 @@ export async function grantVerifiedCardCredits(
   if (!record || !['verified', 'granted'].includes(record.state) || !record.identityDigest)
     throw new Error('Card verification has not been approved');
   if (!Number.isSafeInteger(record.credits) || record.credits <= 0) throw new Error('Invalid verification entitlement');
-  if (!(await eligible(userId))) throw new Error('Account is not eligible for a verification grant');
+  if (!(await eligible(userId))) throw new CardVerificationRefused('ineligible');
   const transactionId = cardVerificationTransactionId(userId);
   if (!(await claimCreditGrantIdentity({ identityDigest: record.identityDigest, ownerId: userId, transactionId }))) {
     await CardVerification.updateOne({ verificationId, state: 'verified' }, { $set: { state: 'refused' } });
@@ -43,7 +45,7 @@ export async function grantVerifiedCardCredits(
         }
         return 'already_granted' as const;
       }
-      if (!(await eligible(userId))) throw new Error('Account is not eligible for a verification grant');
+      if (!(await eligible(userId))) throw new CardVerificationRefused('ineligible');
       await creditService.addCreditsWithLedgerRow(
         {
           type: 'generic_add',
@@ -55,7 +57,7 @@ export async function grantVerifiedCardCredits(
           metadata: { verificationId },
         },
         {
-          db: { creditTransactions: creditTransactionRepository },
+          db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
           creditHolderMethods: userRepository,
           duplicateTransactionId: 'throw',
         }

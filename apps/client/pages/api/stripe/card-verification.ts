@@ -28,6 +28,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
       if (req.body?.verificationId) {
         const id = verificationIdSchema.parse(req.body.verificationId);
         const outcome = await finishCardVerification(id, req.user.id);
+        // Another worker is finishing this verification; the client refreshes the offer on 'pending'.
+        if (outcome === 'busy') return res.json({ outcome: 'pending' });
         if (outcome === 'pending') {
           const clientSecret = await resumableVerificationSecret(id, req.user.id);
           if (clientSecret) return res.json({ outcome, clientSecret, publishableKey: Config.STRIPE_PUBLISHABLE_KEY });
@@ -56,7 +58,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
   })
   .delete(async (req, res) => {
     try {
-      await finishCardVerification(verificationIdSchema.parse(req.body?.verificationId), req.user.id, true);
+      const outcome = await finishCardVerification(
+        verificationIdSchema.parse(req.body?.verificationId),
+        req.user.id,
+        true
+      );
+      if (outcome === 'busy')
+        return res.status(409).json({ error: 'This card is still being processed. Try again in a moment.' });
       return res.json({ removed: true });
     } catch (error) {
       const failure = verificationFailure(error);

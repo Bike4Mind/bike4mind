@@ -30,10 +30,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   if (!record || record.environment !== Config.STAGE) return res.status(200).end();
   if (event.type === 'setup_intent.setup_failed') {
     const runtime = await cardVerificationRuntime();
-    if (!runtime.guards) return res.status(503).end();
+    // The signature was verified above, so a disabled offer is a definitive no-op rather than a retryable outage.
+    if (!runtime.guards) return res.status(200).end();
     await runtime.guards.recordFailure(intent, record);
   } else {
     try {
+      // A 'busy' outcome is acked too: the recovery cron re-processes every unfinished row within minutes.
       await finishCardVerification(record.verificationId, record.userId);
     } catch (error) {
       // A refusal is final for this event; the recovery cron owns any follow-up, so Stripe must not retry.
