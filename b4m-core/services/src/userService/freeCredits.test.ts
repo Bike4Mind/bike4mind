@@ -323,7 +323,7 @@ describe('free credits service', () => {
 
       expect(adapters.logger.warn).toHaveBeenCalledExactlyOnceWith(
         SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE,
-        expect.objectContaining({ largestGrant: 500, unset: expect.arrayContaining(['signupGrantRiskPolicy']) })
+        expect.objectContaining({ largestGrant: 500, unset: expect.arrayContaining(['maxSignupsPerIpPerDay']) })
       );
     });
 

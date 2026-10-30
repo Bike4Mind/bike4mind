@@ -7,6 +7,7 @@ import {
   newSignupGrant,
   raisesGrantAboveLimit,
   signupGrantPathTotal,
+  signupGrantProtectionGap,
   signupGrantWriteGap,
   resolveSignupGrantSettings,
 } from './signupGrant';
@@ -100,7 +101,9 @@ describe('signup grant protections', () => {
     const unset = ['signupGrantRiskPolicy'];
     expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: { enabled: true } })).toEqual(unset);
     expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: '{"enabled":true}' })).toEqual(unset);
-    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: { ...VALID_POLICY, rules: [] } })).toEqual(unset);
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: { ...VALID_POLICY, rules: [] } })).toEqual(
+      unset
+    );
     expect(
       findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: { ...VALID_POLICY, reviewAt: 1, reducedAt: 3 } })
     ).toEqual(unset);
@@ -159,6 +162,20 @@ describe('signup grant protections', () => {
     expect(signupGrantPathTotal('signupGrantCredits', { defaultFreeCredits: 90, signupGrantCredits: 0 })).toBe(0);
   });
 
+  it('reports a gap only for protections a live over-limit path relies on', () => {
+    const noPolicy = { ...allOn, signupGrantRiskPolicy: undefined };
+    expect(signupGrantProtectionGap({ ...noPolicy, defaultFreeCredits: 500 })).toBeNull();
+    expect(signupGrantProtectionGap({ ...noPolicy, signupGrantCredits: 500 })).toBeNull();
+    expect(signupGrantProtectionGap({ ...noPolicy, stagedSignupGrantEnabled: true, signupGrantCredits: 500 })).toEqual({
+      largestGrant: 500,
+      unset: ['signupGrantRiskPolicy'],
+    });
+    expect(signupGrantProtectionGap({ defaultFreeCredits: 500 })).toEqual({
+      largestGrant: 500,
+      unset: ['maxSignupsPerIpPerDay', 'maxSignupsPerAsnPerHour', 'signupBurstAutoHold'],
+    });
+  });
+
   it('keeps the log message the infra alarm filter matches', () => {
     expect(SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE).toBe('signup-grant-protections-off');
   });
@@ -182,7 +199,7 @@ describe('signupGrantWriteGap', () => {
   const LARGE = LARGE_SIGNUP_GRANT_CREDITS + 1;
 
   it('refuses raising a grant path above the limit, the dormant staged path included', () => {
-    expect(signupGrantWriteGap({}, { defaultFreeCredits: LARGE })).toContain('signupGrantRiskPolicy');
+    expect(signupGrantWriteGap({}, { defaultFreeCredits: LARGE })).toContain('maxSignupsPerIpPerDay');
     expect(signupGrantWriteGap({}, { signupGrantCredits: LARGE })).toContain('signupGrantRiskPolicy');
     expect(signupGrantWriteGap({}, { defaultFreeCredits: LARGE_SIGNUP_GRANT_CREDITS })).toBeNull();
   });
@@ -207,6 +224,27 @@ describe('signupGrantWriteGap', () => {
     expect(signupGrantWriteGap(before, { ...before, stagedSignupGrantEnabled: true })).not.toBeNull();
     const small = { ...before, signupGrantCredits: 50 };
     expect(signupGrantWriteGap(small, { ...small, stagedSignupGrantEnabled: true })).toBeNull();
+  });
+
+  it('does not require the risk policy, which only scores staged grants, for the flat grant', () => {
+    const noPolicy = { ...allOn, signupGrantRiskPolicy: undefined };
+    expect(signupGrantWriteGap(noPolicy, { ...noPolicy, defaultFreeCredits: 5000 })).toBeNull();
+    const live = { ...allOn, defaultFreeCredits: 500 };
+    expect(signupGrantWriteGap(live, { ...live, signupGrantRiskPolicy: { enabled: false } })).toBeNull();
+    expect(signupGrantWriteGap({}, { defaultFreeCredits: LARGE })).not.toContain('signupGrantRiskPolicy');
+  });
+
+  it('requires the risk policy for the staged path', () => {
+    const noPolicy = { ...allOn, signupGrantRiskPolicy: undefined };
+    expect(signupGrantWriteGap(noPolicy, { ...noPolicy, signupGrantCredits: 500 })).toEqual(['signupGrantRiskPolicy']);
+    const staged = { ...allOn, stagedSignupGrantEnabled: true, signupGrantCredits: 500 };
+    expect(signupGrantWriteGap(staged, { ...staged, signupGrantRiskPolicy: { enabled: false } })).toEqual([
+      'signupGrantRiskPolicy',
+    ]);
+    const dormant = { ...noPolicy, signupGrantCredits: 500 };
+    expect(signupGrantWriteGap(dormant, { ...dormant, stagedSignupGrantEnabled: true })).toEqual([
+      'signupGrantRiskPolicy',
+    ]);
   });
 
   it('allows lowering an over-limit grant while protections are off', () => {

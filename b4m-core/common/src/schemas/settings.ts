@@ -4084,7 +4084,8 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Credits released after email verification for newly enrolled staged accounts. Migrated from the installed default grant without increasing it.' +
-      ` Raising the total signup grant (signup plus unlock credits) above ${LARGE_SIGNUP_GRANT_CREDITS} credits is refused until Signup Grant Assessment Policy is enabled and the per-IP, per-network and burst-hold limits are set.`,
+      ` Raising the total signup grant (signup plus unlock credits) above ${LARGE_SIGNUP_GRANT_CREDITS} credits is refused until Signup Grant Assessment Policy is enabled and the per-IP, per-network and burst-hold limits are set.` +
+      ' The policy has no editor in this panel: write a complete valid policy with PUT /api/settings/update, since a bare enabled flag is ignored.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4097,7 +4098,8 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Maximum additional credits available after server-validated unlocks. Stronger evidence pays only the cumulative difference. Does not enable a verification flow.' +
-      ` Raising the total signup grant (signup plus unlock credits) above ${LARGE_SIGNUP_GRANT_CREDITS} credits is refused until Signup Grant Assessment Policy is enabled and the per-IP, per-network and burst-hold limits are set.`,
+      ` Raising the total signup grant (signup plus unlock credits) above ${LARGE_SIGNUP_GRANT_CREDITS} credits is refused until Signup Grant Assessment Policy is enabled and the per-IP, per-network and burst-hold limits are set.` +
+      ' The policy has no editor in this panel: write a complete valid policy with PUT /api/settings/update, since a bare enabled flag is ignored.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4244,8 +4246,7 @@ export const settingsMap = {
     defaultValue: 0,
     description:
       'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.' +
-      ` Raising this grant above ${LARGE_SIGNUP_GRANT_CREDITS} credits is refused until Signup Grant Assessment Policy is enabled and the per-IP, per-network and burst-hold limits are set.` +
-      ' The policy is required here although it only scores staged grants, and it has no editor in this panel: write a complete valid policy with PUT /api/settings/update first, since a bare enabled flag is ignored.',
+      ` Raising this grant above ${LARGE_SIGNUP_GRANT_CREDITS} credits is refused until the per-IP, per-network and burst-hold limits are set.`,
     category: 'Users',
   }),
   noCardUnlockEnabled: makeBooleanSetting({

@@ -87,7 +87,7 @@ describe('settings/update large signup grant guard', () => {
   it.each(['defaultFreeCredits', 'signupGrantCredits', 'verifiedUnlockCredits'])(
     'refuses raising %s above the limit while protections are at their defaults',
     async key => {
-      await expectRefusal(runHandler(key, LARGE), /signupGrantRiskPolicy/);
+      await expectRefusal(runHandler(key, LARGE), /maxSignupsPerIpPerDay/);
       expect(findOneAndUpdate).not.toHaveBeenCalled();
       expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
         expect.anything(),
@@ -123,18 +123,24 @@ describe('settings/update large signup grant guard', () => {
     expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses when the policy is a bare enabled flag the runtime would ignore', async () => {
+  it('refuses a staged raise when the policy is a bare enabled flag the runtime would ignore', async () => {
     rows = PROTECTIONS.map(row =>
       row.settingName === 'signupGrantRiskPolicy' ? { ...row, settingValue: '{"enabled":true}' } : row
     );
-    await expectRefusal(runHandler('defaultFreeCredits', LARGE), /signupGrantRiskPolicy/);
+    await expectRefusal(runHandler('signupGrantCredits', LARGE), /signupGrantRiskPolicy/);
+  });
+
+  it('allows a large flat grant without the risk policy, which only scores staged grants', async () => {
+    rows = PROTECTIONS.filter(row => row.settingName !== 'signupGrantRiskPolicy');
+    await runHandler('defaultFreeCredits', LARGE);
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('treats a policy stored as a JSON string as enabled', async () => {
     rows = PROTECTIONS.map(row =>
       row.settingName === 'signupGrantRiskPolicy' ? { ...row, settingValue: JSON.stringify(VALID_POLICY) } : row
     );
-    await runHandler('defaultFreeCredits', LARGE);
+    await runHandler('signupGrantCredits', LARGE);
     expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
   });
 

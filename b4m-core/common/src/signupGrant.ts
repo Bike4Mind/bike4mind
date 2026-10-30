@@ -157,14 +157,38 @@ export function largestSignupGrant(values: SignupGrantValues): number {
 /** Matched verbatim by the log metric filter in infra/signupAlarms.ts; change both together. */
 export const SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE = 'signup-grant-protections-off';
 
-/** The exposed state: a grant above the limit is live while a protection is still off, else null. */
+type SignupGrantPath = 'defaultFreeCredits' | 'signupGrantCredits';
+
+const SIGNUP_GRANT_PATHS: readonly SignupGrantPath[] = ['defaultFreeCredits', 'signupGrantCredits'];
+
+/** The risk policy only scores staged grants, so the flat path does not depend on it. */
+function protectionsFor(path: SignupGrantPath): readonly SignupGrantProtectionKey[] {
+  return path === 'defaultFreeCredits'
+    ? SIGNUP_GRANT_PROTECTION_KEYS.filter(key => key !== 'signupGrantRiskPolicy')
+    : SIGNUP_GRANT_PROTECTION_KEYS;
+}
+
+const isLivePath = (path: SignupGrantPath, values: SignupGrantValues) =>
+  path === 'defaultFreeCredits' || isOn(values.stagedSignupGrantEnabled);
+
+const stagedKeysChanged = (before: SignupGrantValues, after: SignupGrantValues) =>
+  before.signupGrantCredits !== after.signupGrantCredits ||
+  before.verifiedUnlockCredits !== after.verifiedUnlockCredits;
+
+const inProtectionOrder = (keys: Set<SignupGrantProtectionKey>) =>
+  SIGNUP_GRANT_PROTECTION_KEYS.filter(key => keys.has(key));
+
+/** The exposed state: a live grant path above the limit while a protection it relies on is still off, else null. */
 export function signupGrantProtectionGap(
   values: SignupGrantValues
 ): { largestGrant: number; unset: SignupGrantProtectionKey[] } | null {
-  const largestGrant = largestSignupGrant(values);
-  if (largestGrant <= LARGE_SIGNUP_GRANT_CREDITS) return null;
-  const unset = findUnsetSignupProtections(values);
-  return unset.length > 0 ? { largestGrant, unset } : null;
+  const unsetAll = findUnsetSignupProtections(values);
+  const unset = new Set<SignupGrantProtectionKey>();
+  for (const path of SIGNUP_GRANT_PATHS) {
+    if (!isLivePath(path, values) || signupGrantPathTotal(path, values) <= LARGE_SIGNUP_GRANT_CREDITS) continue;
+    for (const key of protectionsFor(path)) if (unsetAll.includes(key)) unset.add(key);
+  }
+  return unset.size > 0 ? { largestGrant: largestSignupGrant(values), unset: inProtectionOrder(unset) } : null;
 }
 
 /**
@@ -176,26 +200,34 @@ export function raisesGrantAboveLimit(before: number, after: number): boolean {
 }
 
 /**
- * Protections still off when a save would leave a grant above the limit less protected than before, else
- * null. Refuses raising either path total (a dormant staged total included, so enabling staging later is
- * never the first time it is checked), enabling staging over a larger staged total, and turning a
- * protection off while a large grant is live.
+ * Protections still off when a save would leave a grant path above the limit less protected than before,
+ * else null. Per path, refuses raising its total (a dormant staged total included, so enabling staging later
+ * is never the first time it is checked), making it live over the limit (enabling staging), and turning off
+ * a protection it relies on while it is live over the limit.
  */
 export function signupGrantWriteGap(
   before: SignupGrantValues,
   after: SignupGrantValues
 ): SignupGrantProtectionKey[] | null {
-  const unset = findUnsetSignupProtections(after);
-  if (unset.length === 0) return null;
-  const raisedPath = (['defaultFreeCredits', 'signupGrantCredits'] as const).some(path =>
-    raisesGrantAboveLimit(signupGrantPathTotal(path, before), signupGrantPathTotal(path, after))
-  );
-  const largest = largestSignupGrant(after);
+  const unsetAfter = findUnsetSignupProtections(after);
+  if (unsetAfter.length === 0) return null;
   const unsetBefore = findUnsetSignupProtections(before);
-  const exposed =
-    largest > LARGE_SIGNUP_GRANT_CREDITS &&
-    (largest > largestSignupGrant(before) || unset.some(key => !unsetBefore.includes(key)));
-  return raisedPath || exposed ? unset : null;
+  const gap = new Set<SignupGrantProtectionKey>();
+  for (const path of SIGNUP_GRANT_PATHS) {
+    const missing = protectionsFor(path).filter(key => unsetAfter.includes(key));
+    if (missing.length === 0) continue;
+    const total = signupGrantPathTotal(path, after);
+    // A dormant staged total that moved only through its flat-grant fallback is checked when staging is enabled.
+    const raised =
+      raisesGrantAboveLimit(signupGrantPathTotal(path, before), total) &&
+      (isLivePath(path, after) || stagedKeysChanged(before, after));
+    const exposed =
+      isLivePath(path, after) &&
+      total > LARGE_SIGNUP_GRANT_CREDITS &&
+      (!isLivePath(path, before) || missing.some(key => !unsetBefore.includes(key)));
+    if (raised || exposed) for (const key of missing) gap.add(key);
+  }
+  return gap.size > 0 ? inProtectionOrder(gap) : null;
 }
 
 /** Missing new settings preserve the installed grant; migration never enables staging. */
