@@ -11,6 +11,7 @@ import {
   adminSettingsRepository,
   agentExecutionRepository,
   connectDB,
+  loopDirectiveRepository,
   loopEventRepository,
   loopRepository,
   workItemRepository,
@@ -38,6 +39,8 @@ import { syncLoopNotices } from './loopNotices';
 /** Claim lease; covers one dispatch, after which `activeExecutionId` keeps the loop from overlapping. */
 export const LOOP_LEASE_MS = 5 * 60 * 1000;
 export const MAX_DISPATCH_PER_TICK = 25;
+/** Open directives shown to a run, oldest first; the rest wait for a later run. */
+export const LOOP_PROMPT_DIRECTIVES = 10;
 /** Non-credit failures in a row before a loop stops at `error`. */
 export const MAX_CONSECUTIVE_FAILURES = 3;
 /** Resumed unsure runs folded per tick; the rest wait for the next one. */
@@ -294,12 +297,19 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
   let result: Awaited<ReturnType<typeof startAgentExecution>>;
   try {
     ticket = await claimNextTicket(loop);
+    const [directives, overseen] = await Promise.all([
+      loopDirectiveRepository.listOpenForLoop(loop.userId, loop.id, LOOP_PROMPT_DIRECTIVES),
+      Promise.all((loop.oversees ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
+    ]);
     result = await startAgentExecution(
       {
         userId: loop.userId,
         sessionId: loop.sessionId,
         questId: loop.sessionId,
-        query: buildLoopQuery(loop.goal, loop.memory, ticket ? { item: ticket, stages: loop.stages } : undefined),
+        query: buildLoopQuery(loop.goal, loop.memory, ticket ? { item: ticket, stages: loop.stages } : undefined, {
+          directives,
+          overseen: overseen.filter((watched): watched is ILoop => !!watched),
+        }),
         model: loop.model,
         connectionId: HEADLESS_CONNECTION_ID,
         apiKeyInfo: undefined,

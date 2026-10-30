@@ -33,7 +33,7 @@ const LIST_DESCRIPTION_CHARS = 500;
 const LIST_LIMIT = 100;
 
 /** Same text for another user's loop and a missing one, so a refusal never confirms a foreign loop exists. */
-const LOOP_NOT_FOUND = 'loop not found';
+export const LOOP_NOT_FOUND = 'loop not found';
 const TICKET_NOT_FOUND = 'ticket not found';
 
 interface LoopTicketScope {
@@ -74,7 +74,7 @@ const summarize = (ticket: IWorkItem) => ({
 });
 
 /** Validation and authz errors go back to the model as the tool result; anything else is a real failure. */
-async function asToolResult(run: () => Promise<unknown>): Promise<string> {
+export async function asToolResult(run: () => Promise<unknown>): Promise<string> {
   try {
     return JSON.stringify(await run());
   } catch (error) {

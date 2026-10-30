@@ -118,6 +118,7 @@ import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAcce
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { resolveLoopTicketTools } from './agentExecutor.loopTicketTools';
+import { resolveLoopDirectiveTools } from './agentExecutor.loopDirectiveTools';
 // Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
 // header for why the start-payload/doc precedence is the part worth pinning in a test.
 import {
@@ -2134,11 +2135,21 @@ async function processExecution(
       startPayloadEnableLattice: startPayload?.enableLattice,
       executionEnableLattice: execution.enableLattice,
     });
-    // Loop runs get the loop_ticket_* tools, appended like Lattice; see agentExecutor.loopTicketTools.ts.
+    // Loop runs get the loop_ticket_* and directive tools, appended like Lattice; see
+    // agentExecutor.loopTicketTools.ts and agentExecutor.loopDirectiveTools.ts.
+    const loopsEnabled = execution.loopId
+      ? (await adminSettingsRepository.getSettingsValue('EnableLoops')) === true
+      : false;
     const { loopTicketEnabledTools, loopTicketExternalTools } = resolveLoopTicketTools({
       loopId: execution.loopId,
-      loopsEnabled: execution.loopId ? (await adminSettingsRepository.getSettingsValue('EnableLoops')) === true : false,
+      loopsEnabled,
       userId: execution.userId,
+    });
+    const { loopDirectiveEnabledTools, loopDirectiveExternalTools } = await resolveLoopDirectiveTools({
+      loopId: execution.loopId,
+      loopsEnabled,
+      userId: execution.userId,
+      executionId,
     });
 
     const subagentToolConfig = buildSubagentToolConfig({
@@ -2225,6 +2236,7 @@ async function processExecution(
           ...MISSION_CHAT_TOOL_NAMES,
           ...latticeEnabledTools,
           ...loopTicketEnabledTools,
+          ...loopDirectiveEnabledTools,
         ]),
       ],
       session,
@@ -2254,6 +2266,7 @@ async function processExecution(
         ...missionChatTools,
         ...latticeExternalTools,
         ...loopTicketExternalTools,
+        ...loopDirectiveExternalTools,
       },
       config: subagentToolConfig,
       mcpToolsByServer,

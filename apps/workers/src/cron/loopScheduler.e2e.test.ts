@@ -8,6 +8,7 @@ import {
   agentExecutionRepository,
   Loop,
   LoopEvent,
+  loopDirectiveRepository,
   loopEventRepository,
   loopRepository,
   WorkItem,
@@ -643,5 +644,52 @@ describe('runLoopSchedulerTick - unsure', () => {
     const events = await eventsOf(loop.id);
     expect(events).toHaveLength(1);
     expect(events[0].resolution).toMatchObject({ outcome: 'rejected', by: 'user-1', at: NOW });
+  });
+});
+
+describe('runLoopSchedulerTick - directives', () => {
+  it("shows a run its loop's open and accepted directives, and the loops it oversees", async () => {
+    const worker = await createLoop({ nextRunAt: new Date(NOW.getTime() + 60_000) });
+    const overseer = await createLoop({
+      name: 'Lead',
+      oversees: [worker.id],
+      nextRunAt: new Date(NOW.getTime() + 60_000),
+    });
+    const directive = (instruction: string, state: string, replies: unknown[] = []) =>
+      loopDirectiveRepository.create({
+        loopId: worker.id,
+        userId: 'user-1',
+        fromLoopId: overseer.id,
+        fromLoopName: 'Lead',
+        executionId: 'exec-lead',
+        instruction,
+        reason: 'because',
+        state,
+        replies,
+      } as never);
+    await directive('open one', 'open');
+    await directive('accepted one', 'accepted');
+    await directive('finished one', 'done');
+    await directive('withdrawn one', 'withdrawn');
+    const insisted = await directive('insisted one', 'open', [
+      { by: 'worker', outcome: 'pushed_back', note: 'no', executionId: 'x', at: PAST },
+      { by: 'owner', outcome: 'overruled', userId: 'user-1', at: PAST },
+    ]);
+
+    await Loop.updateOne({ _id: worker.id }, { $set: { nextRunAt: PAST } });
+    await runLoopSchedulerTick(NOW, logger);
+    const workerQuery: string = h.startAgentExecution.mock.calls[0][0].query;
+    expect(workerQuery).toContain('"open one"');
+    expect(workerQuery).toContain('"accepted one"');
+    expect(workerQuery).not.toContain('finished one');
+    expect(workerQuery).not.toContain('withdrawn one');
+    expect(workerQuery).toContain(`Directive id: ${insisted.id} (owner insists)`);
+    expect(workerQuery).not.toContain('You oversee');
+
+    await Loop.updateOne({ _id: overseer.id }, { $set: { nextRunAt: PAST } });
+    await runLoopSchedulerTick(NOW, logger);
+    const overseerQuery: string = h.startAgentExecution.mock.calls[1][0].query;
+    expect(overseerQuery).toContain(`You oversee these loops: "Digest" (${worker.id}).`);
+    expect(overseerQuery).not.toContain('Directives from loops');
   });
 });

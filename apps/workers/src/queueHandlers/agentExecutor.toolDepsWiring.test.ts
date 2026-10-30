@@ -108,6 +108,16 @@ describe('agentExecutor toolDeps wiring', () => {
     expect(source).toMatch(/externalTools: \{[^}]*\.\.\.loopTicketExternalTools,/);
   });
 
+  // Same shape for the directive tools; the overseer pair is offered only when the loop has `oversees`
+  // (agentExecutor.loopDirectiveTools.test.ts).
+  it('offers the loop directive tools to loop runs after the profile, from the persisted execution', () => {
+    expect(source).toMatch(/resolveLoopDirectiveTools\(\{\s*loopId: execution\.loopId,/);
+    expect(source).toMatch(
+      /applySessionToolPolicy\(\{\s*toolNames: \[[^\]]*\.\.\.loopTicketEnabledTools,\s*\.\.\.loopDirectiveEnabledTools,/
+    );
+    expect(source).toMatch(/externalTools: \{[^}]*\.\.\.loopDirectiveExternalTools,/);
+  });
+
   it('subtracts the persisted scope denials in the final tool policy pass', () => {
     expect(source).toMatch(/applySessionToolPolicy\(\{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
   });

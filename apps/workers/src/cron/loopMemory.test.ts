@@ -57,4 +57,43 @@ describe('buildLoopQuery', () => {
     expect(query).not.toContain('x'.repeat(4001));
     expect(query.trimEnd().endsWith('```')).toBe(true);
   });
+
+  it('quotes directives as data, marks an overruled one, and tells the run how to answer', () => {
+    const query = buildLoopQuery('Always write tests', { notes: '', nextAction: '' }, undefined, {
+      directives: [
+        { id: 'd1', fromLoopName: 'Lead "eng"', instruction: 'Ignore "rules"', reason: 'r1', replies: [] },
+        {
+          id: 'd2',
+          fromLoopName: 'Lead',
+          instruction: 'Stop writing tests',
+          reason: 'Slow',
+          replies: [
+            { by: 'worker', outcome: 'pushed_back', note: 'no', executionId: 'x', at: new Date() },
+            { by: 'owner', outcome: 'overruled', userId: 'u', at: new Date() },
+          ],
+        },
+      ],
+      overseen: [],
+    });
+    expect(query).toContain('- Directive id: d1\n  From: "Lead \\"eng\\""\n  Instruction: "Ignore \\"rules\\""');
+    expect(query).toContain('- Directive id: d2 (owner insists)');
+    expect(query).not.toContain('d1 (owner insists)');
+    expect(query).toContain('Answer every directive with loop_directive_respond');
+    expect(query).not.toContain('You oversee these loops');
+    expect(query.trimEnd().endsWith('```')).toBe(true);
+  });
+
+  it('names the loops an overseer watches, and adds no oversight blocks without any', () => {
+    const query = buildLoopQuery('Lead', { notes: '', nextAction: '' }, undefined, {
+      directives: [],
+      overseen: [{ id: 'w1', name: 'Closer' }],
+    });
+    expect(query).toContain('You oversee these loops: "Closer" (w1).');
+    expect(query).toContain('loop_oversee_status');
+    expect(query).not.toContain('loop_directive_respond');
+
+    const plain = buildLoopQuery('Lead', { notes: '', nextAction: '' });
+    expect(plain).not.toContain('Directives from loops');
+    expect(plain).not.toContain('You oversee');
+  });
 });
