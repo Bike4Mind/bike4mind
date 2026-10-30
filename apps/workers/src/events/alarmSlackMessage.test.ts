@@ -309,6 +309,8 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG['signup-code-send-burst'].level).toBe('page');
     expect(ALARM_CATALOG['ungranted-credit-purchases'].level).toBe('page');
     expect(ALARM_CATALOG['signup-code-send-rate'].level).toBe('warn');
+    expect(ALARM_CATALOG['llm-spend-young-accounts'].level).toBe('page');
+    expect(ALARM_CATALOG['completion-credit-overdraft'].level).toBe('warn');
   });
 });
 
@@ -403,6 +405,8 @@ describe('lookupCatalog', () => {
     expect(lookupCatalog('NewAccountApiKeys')).toBe(ALARM_CATALOG.NewAccountApiKeys);
     expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
     expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
+    expect(lookupCatalog('llm-spend-young-accounts')).toBe(ALARM_CATALOG['llm-spend-young-accounts']);
+    expect(lookupCatalog('completion-credit-overdraft')).toBe(ALARM_CATALOG['completion-credit-overdraft']);
     expect(lookupCatalog('account-creation-metrics-missing')).toBe(ALARM_CATALOG['account-creation-metrics-missing']);
   });
 

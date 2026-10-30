@@ -1179,6 +1179,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
           // Check for negative balance (should be rare with atomic reservation)
           if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
+            // Message text is matched by the overdraft metric filter in infra/llmSpend.ts.
             logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
               userId,
               holderId,
