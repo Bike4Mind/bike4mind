@@ -238,7 +238,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Disputes',
         testid: 'admin-stripe-disputes-btn',
       },
-      { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants' },
+      {
+        Icon: HandCoins,
+        tab: AdminTab.HeldSignupGrants,
+        label: 'Held signup grants',
+        testid: 'admin-held-signup-grants-tab-btn',
+      },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
     ],
   },

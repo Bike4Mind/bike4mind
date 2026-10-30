@@ -4,6 +4,7 @@ import path from 'path';
 import { seedAuthStorageState } from './helpers/auth-seed';
 import { apiCreateTestUser, apiCreateInviteCode, apiUpdateAdminSetting } from './helpers/api';
 import { saveCoreData, saveTestRunId, getE2ETestId } from './helpers/test-users';
+import { isSharedRealEnv } from './helpers/env';
 
 // Marker recording whether open registration was already ON before setup, so global-teardown
 // restores the prior state (and never clobbers an env where it's intentionally on).
@@ -11,14 +12,6 @@ const OPEN_REG_MARKER = path.resolve(__dirname, '.auth/open-registration-prior.j
 
 // Toggling allowOpenRegistration is only safe on ephemeral preview builds/localhost - on a shared
 // long-lived env (staging/prod) an aborted run would leave open signup enabled, so refuse to touch it there.
-const SHARED_REAL_HOSTS = ['app.staging.bike4mind.com', 'app.bike4mind.com'];
-function isSharedRealEnv(apiUrl: string): boolean {
-  try {
-    return SHARED_REAL_HOSTS.includes(new URL(apiUrl).hostname);
-  } catch {
-    return false;
-  }
-}
 
 const TEST_RUN_ID = Date.now().toString().slice(-8);
 const E2E_ID = getE2ETestId();
