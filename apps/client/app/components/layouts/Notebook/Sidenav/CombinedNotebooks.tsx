@@ -648,7 +648,7 @@ const CombinedNotebooks = () => {
                 {t('llm.favorites_count', { count: filteredFavoriteSession.length })}
                 <FavoriteIcon sx={{ fontSize: '14px', color: 'primary.500' }} />
               </Typography>
-              <div>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 {filteredFavoriteSession.map(d => (
                   <Box
                     key={d.id}
@@ -696,7 +696,7 @@ const CombinedNotebooks = () => {
                     </Box>
                   </Box>
                 ))}
-              </div>
+              </Box>
             </div>
           )}
 

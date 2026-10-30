@@ -1,8 +1,8 @@
-import { Box, Chip, Divider, Stack, Typography } from '@mui/joy';
+import { Box, Chip, Divider, Dropdown, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
 import { useTheme, type Theme } from '@mui/joy/styles';
 import { useNavigate, useLocation } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { Fragment, ReactNode, useEffect, useRef } from 'react';
+import { Fragment, ReactNode, useEffect, useRef, useState } from 'react';
 import AddIcon from '@mui/icons-material/Add';
 import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
@@ -17,6 +17,8 @@ import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import PermMediaOutlinedIcon from '@mui/icons-material/PermMediaOutlined';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
+import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import { canAccessTavern, FirstRunEvents } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
@@ -38,12 +40,17 @@ import { gray } from '@client/app/utils/themes/colors';
 import { useNotebookLayout } from '..';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
+import { menuItemListSx, menuRowSx, menuSurfaceSx } from './menuSurfaceSx';
 
 const NAV_ROW_HEIGHT = 32;
 const NAV_TAG_HEIGHT = 24;
 /** A row's right padding when it carries a tag: the gap left above and below
  *  the tag, so it sits evenly inset on three sides. */
 const NAV_TAG_INSET = (NAV_ROW_HEIGHT - NAV_TAG_HEIGHT) / 2;
+/** Rows kept at the top in the unified-scroll sidebar's pinned section. */
+const PINNED_COUNT = 2;
+/** Past this many rows, the lowest-priority ones fold into a More menu; More counts toward it. */
+const MAX_NAV_ROWS = 8;
 
 /** Shared by the tags on the right of a row: labels, not controls - the row
  *  under them is what gets clicked. */
@@ -79,7 +86,34 @@ type NavItem = {
   dividerAbove?: boolean;
   // Pinned to the row's right edge.
   trailing?: ReactNode;
+  // Lower stays in the nav longer once rows overflow MAX_NAV_ROWS; ties fold in display order.
+  priority: number;
 };
+
+const navRowSx = (theme: Theme, isActive: boolean, hasTrailing: boolean) => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '12px',
+  pl: '12px',
+  pr: hasTrailing ? `${NAV_TAG_INSET}px` : '12px',
+  height: `${NAV_ROW_HEIGHT}px`,
+  minHeight: `${NAV_ROW_HEIGHT}px`,
+  borderRadius: '8px',
+  cursor: 'pointer',
+  color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary,
+  backgroundColor: isActive ? theme.palette.notebooklist.focusedBackground : 'transparent',
+  transition: 'background 0.15s',
+  '&:hover': {
+    backgroundColor: isActive ? theme.palette.notebooklist.focusedBackground : theme.palette.notebooklist.hoverBg,
+  },
+  '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
+});
+
+const navLabel = (label: string) => (
+  <Typography level="body-sm" sx={{ fontSize: '14px', fontWeight: 400, color: 'inherit' }} noWrap>
+    {label}
+  </Typography>
+);
 
 /**
  * Primary sidebar navigation - a vertical icon list (New Chat, Files Manager, Agents, Projects,
@@ -99,6 +133,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const setOpenSideNav = useNotebookLayout(s => s.setOpenSideNav);
   const { mutate: logEvent } = useLogEvent();
   const startHereShownRef = useRef(false);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
   // Mirror the footer gating: entitlement-aware opti access (admin/developer/OptiHashi Pro, plus
@@ -190,6 +225,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const items: NavItem[] = [
     {
       key: 'new-chat',
+      priority: 0,
       label: t('sidenav.sessions.new'),
       icon: (
         <Box
@@ -217,6 +253,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'opti',
+            priority: 1,
             label: 'OptiHashi',
             icon: iconSlot(<TempleBuddhistOutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname.startsWith('/opti'),
@@ -232,6 +269,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'bob',
+            priority: 1,
             label: 'Bob',
             icon: iconSlot(BobIcon ? <BobIcon /> : <Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname.startsWith('/bob'),
@@ -248,6 +286,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'meetings',
+            priority: 1,
             label: 'Interactive Meetings',
             icon: iconSlot(<GroupsOutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname.startsWith('/meetings'),
@@ -263,6 +302,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
     // and since #1943 the only surface - the standalone page is retired.
     {
       key: 'files',
+      priority: 0,
       label: t('files.manager', 'Files Manager'),
       icon: iconSlot(<FolderSharedIcon sx={{ fontSize: '18px' }} />),
       isActive: fileBrowserOpen,
@@ -278,6 +318,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       return {
         key,
         label: item.label,
+        priority: 3,
         icon: iconSlot(ContributedIcon ? <ContributedIcon /> : <ExtensionOutlinedIcon sx={{ fontSize: '18px' }} />),
         isActive: location.pathname === item.path || location.pathname.startsWith(`${item.path}/`),
         onClick: () => {
@@ -291,6 +332,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'agents',
+            priority: 0,
             label: t('agents.title'),
             icon: iconSlot(<SmartToyOutlinedIcon sx={{ fontSize: '18px' }} />),
             // Active only on the overall agents grid, not a specific agent screen (/agents/:id),
@@ -305,6 +347,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       : []),
     {
       key: 'projects',
+      priority: 3,
       label: t('projects.projects'),
       // Active only on the overall projects grid, not a specific project screen
       // (/projects/:id), which highlights its own row in the list below instead.
@@ -319,6 +362,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'studio',
+            priority: 1,
             label: t('sidenav.studio', 'Studio'),
             icon: iconSlot(<PermMediaOutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname.startsWith('/studio/'),
@@ -333,6 +377,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       // Live Artifacts (published shares) are the product's lead-gen surface -
       // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).
       key: 'published',
+      priority: 2,
       label: t('sidenav.published', 'Live Artifacts'),
       icon: iconSlot(<PublicOutlinedIcon sx={{ fontSize: '18px' }} />),
       isActive: location.pathname === '/profile' && (location.search as { tab?: string }).tab === 'published',
@@ -344,6 +389,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
     {
       // A discovery surface, so it sits in the nav rather than behind Profile -> Skills.
       key: 'skill-market',
+      priority: 2,
       label: t('sidenav.skillMarket', 'Skill Market'),
       icon: iconSlot(<StorefrontOutlinedIcon sx={{ fontSize: '18px' }} />),
       isActive: location.pathname.startsWith('/skills/market'),
@@ -359,6 +405,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'quests-v5',
+            priority: 0,
             label: t('sidenav.questsV5', 'Quests v5'),
             icon: iconSlot(<AccountTreeOutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname.startsWith('/quests-v5'),
@@ -373,6 +420,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'tavern',
+            priority: 3,
             label: 'Tavern',
             icon: iconSlot(<CastleOutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname === '/tavern',
@@ -391,6 +439,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       // Also the only nav-level way into the Help Center, which it links out to -
       // the rail no longer carries a row of its own.
       key: 'gears',
+      priority: 0,
       label: t('sidenav.gears', 'Gears'),
       icon: iconSlot(<SettingsOutlinedIcon sx={{ fontSize: '18px' }} />),
       isActive: location.pathname === '/gears',
@@ -453,10 +502,28 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // elided when absent, else Files Manager itself, which is always present.
   // Overlay-contributed rows sit after Files Manager, so they can never be items[1].
   // The split is purely positional, so it holds regardless of which entries are present.
-  const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;
+  const pinnedItems = items.slice(0, PINNED_COUNT);
+  const restItems = items.slice(PINNED_COUNT);
+  // Counted after gating, so a user who sees fewer rows keeps them all rather than losing some
+  // to a fixed More list. The fold always takes at least two rows: More never replaces just one.
+  const keepCount = MAX_NAV_ROWS - 1 - PINNED_COUNT;
+  const foldedKeys = new Set(
+    items.length > MAX_NAV_ROWS
+      ? [...restItems]
+          .sort((a, b) => a.priority - b.priority)
+          .slice(keepCount)
+          .map(item => item.key)
+      : []
+  );
+  const moreItems = restItems.filter(item => foldedKeys.has(item.key));
+  const scrollItems = restItems.filter(item => !foldedKeys.has(item.key));
+  const shownItems =
+    section === 'pinned' ? pinnedItems : section === 'scroll' ? scrollItems : [...pinnedItems, ...scrollItems];
+  const showMore = section !== 'pinned' && moreItems.length > 0;
+  const moreActive = moreItems.some(item => item.isActive);
 
   return (
-    <Stack className="notebook-sidenav-nav" sx={{ gap: '4px' }}>
+    <Stack className="notebook-sidenav-nav" sx={{ gap: '2px', mt: '2px' }}>
       {shownItems.map(item => (
         <Fragment key={item.key}>
           {item.dividerAbove && <Divider sx={{ my: '4px', opacity: 0.6 }} />}
@@ -472,35 +539,66 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
                 item.onClick?.();
               }
             }}
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              pl: '12px',
-              pr: item.trailing ? `${NAV_TAG_INSET}px` : '12px',
-              height: `${NAV_ROW_HEIGHT}px`,
-              minHeight: `${NAV_ROW_HEIGHT}px`,
-              borderRadius: '8px',
-              cursor: 'pointer',
-              color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary,
-              backgroundColor: item.isActive ? theme.palette.notebooklist.focusedBackground : 'transparent',
-              transition: 'background 0.15s',
-              '&:hover': {
-                backgroundColor: item.isActive
-                  ? theme.palette.notebooklist.focusedBackground
-                  : theme.palette.notebooklist.hoverBg,
-              },
-              '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
-            }}
+            sx={navRowSx(theme, item.isActive, !!item.trailing)}
           >
             {item.icon}
-            <Typography level="body-sm" sx={{ fontSize: '14px', fontWeight: 400, color: 'inherit' }} noWrap>
-              {item.label}
-            </Typography>
+            {navLabel(item.label)}
             {item.trailing && <Box sx={{ ml: 'auto', display: 'flex', flexShrink: 0 }}>{item.trailing}</Box>}
           </Box>
         </Fragment>
       ))}
+      {showMore && (
+        <Dropdown open={moreOpen} onOpenChange={(_, open) => setMoreOpen(open)}>
+          <MenuButton
+            slots={{ root: Box }}
+            slotProps={{
+              root: {
+                'data-testid': 'sidenav-nav-more',
+                role: 'button',
+                tabIndex: 0,
+                'aria-current': moreActive ? 'page' : undefined,
+                sx: navRowSx(theme, moreActive, false),
+              },
+            }}
+          >
+            {iconSlot(<FormatListBulletedIcon sx={{ fontSize: '18px' }} />)}
+            {navLabel(t('common.more', 'More'))}
+            <ChevronLeftIcon
+              sx={{
+                ml: 'auto',
+                fontSize: '18px',
+                color: 'text.tertiary',
+                transition: 'transform 0.2s ease',
+                transform: moreOpen ? 'rotate(0deg)' : 'rotate(180deg)',
+              }}
+            />
+          </MenuButton>
+          <Menu
+            placement="right-start"
+            modifiers={[{ name: 'offset', options: { offset: [0, 18] } }]}
+            sx={menuTheme => ({
+              ...menuSurfaceSx(menuTheme, '12px'),
+              ...menuItemListSx(menuTheme, { gap: '2px', radius: '12px' }),
+              minWidth: 220,
+              // Portals to body, so it has to clear the sidebar's own floating layers.
+              zIndex: 10001,
+            })}
+          >
+            {moreItems.map(item => (
+              <MenuItem
+                key={item.key}
+                data-testid={`sidenav-more-${item.key}`}
+                selected={item.isActive}
+                onClick={item.onClick}
+                sx={menuTheme => menuRowSx(menuTheme)}
+              >
+                {item.icon}
+                {navLabel(item.label)}
+              </MenuItem>
+            ))}
+          </Menu>
+        </Dropdown>
+      )}
     </Stack>
   );
 };

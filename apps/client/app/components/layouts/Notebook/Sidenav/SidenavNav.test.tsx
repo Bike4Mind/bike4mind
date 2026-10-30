@@ -455,6 +455,108 @@ describe('SidenavNav overlay-contributed sidebar rows', () => {
   });
 });
 
+describe('SidenavNav More overflow', () => {
+  const navRowIds = (container: HTMLElement) =>
+    within(container)
+      .getAllByRole('button')
+      .map(row => row.getAttribute('data-testid'))
+      .filter((id): id is string => !!id?.startsWith('sidenav-nav-'));
+  const openMore = () => {
+    fireEvent.click(screen.getByTestId('sidenav-nav-more'));
+    return screen.getByRole('menu');
+  };
+  const moreItemIds = (menu: HTMLElement) =>
+    within(menu)
+      .getAllByRole('menuitem')
+      .map(item => item.getAttribute('data-testid'));
+
+  // 13 rows: every flag, Opti, Bob, two overlay rows and Studio.
+  const seeEverything = () => {
+    useFeatureEnabledMock.mockReturnValue(true);
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    navItems.push(
+      { path: '/bob', label: 'Bob' },
+      { path: '/launch', label: 'Launch Pad', sidebar: true },
+      { path: '/forge', label: 'Forge', sidebar: true }
+    );
+    useVideoModelsMock.mockReturnValue({ data: [{ id: 'v' }] });
+  };
+
+  it('draws no More row for a user who sees only the baseline rows', () => {
+    renderNav();
+    expect(screen.queryByTestId('sidenav-nav-more')).not.toBeInTheDocument();
+  });
+
+  it('draws no More row at exactly the limit', () => {
+    useFeatureEnabledMock.mockReturnValue(true);
+    const { container } = renderNav();
+    expect(navRowIds(container)).toHaveLength(8);
+    expect(screen.queryByTestId('sidenav-nav-more')).not.toBeInTheDocument();
+  });
+
+  it('folds the lowest-priority rows into More, keeping eight rows in all', () => {
+    seeEverything();
+    const { container } = renderNav();
+
+    expect(navRowIds(container)).toEqual([
+      'sidenav-nav-new-chat',
+      'sidenav-nav-opti',
+      'sidenav-nav-bob',
+      'sidenav-nav-files',
+      'sidenav-nav-agents',
+      'sidenav-nav-quests-v5',
+      'sidenav-nav-gears',
+      'sidenav-nav-more',
+    ]);
+    expect(moreItemIds(openMore())).toEqual([
+      'sidenav-more-premium-launch',
+      'sidenav-more-premium-forge',
+      'sidenav-more-projects',
+      'sidenav-more-studio',
+      'sidenav-more-published',
+      'sidenav-more-skill-market',
+    ]);
+  });
+
+  it('never folds a single row: one over the limit moves two', () => {
+    useFeatureEnabledMock.mockReturnValue(true);
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    const { container } = renderNav();
+
+    expect(navRowIds(container)).toHaveLength(8);
+    expect(moreItemIds(openMore())).toEqual(['sidenav-more-projects', 'sidenav-more-skill-market']);
+  });
+
+  it('navigates from a More item', () => {
+    seeEverything();
+    renderNav();
+    fireEvent.click(within(openMore()).getByTestId('sidenav-more-skill-market'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/skills/market' });
+  });
+
+  it('marks More as the current page while a folded row is active', () => {
+    seeEverything();
+    location.pathname = '/skills/market';
+    renderNav();
+    expect(screen.getByTestId('sidenav-nav-more')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('leaves More unmarked while a visible row is active', () => {
+    seeEverything();
+    location.pathname = '/agents';
+    renderNav();
+    expect(screen.getByTestId('sidenav-nav-more')).not.toHaveAttribute('aria-current');
+  });
+
+  it('keeps the pinned rows out of the fold and puts More last in the scrolling section', () => {
+    seeEverything();
+    expect(navRowIds(renderNav('pinned').container)).toEqual(['sidenav-nav-new-chat', 'sidenav-nav-opti']);
+    expect(navRowIds(renderNav('scroll').container).at(-1)).toBe('sidenav-nav-more');
+  });
+});
+
 /**
  * The default system prompts ship on every turn, so a sidebar row they name that does not exist sends
  * every user to a dead end. Any quoted name in a sentence about the sidebar must be a row the
