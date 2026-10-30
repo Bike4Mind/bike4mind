@@ -3,9 +3,8 @@
 // Usage: node gen.mjs --name <id> --out <file.png> --model <model> --size <WxH> [--background transparent|opaque|auto]
 //          --prompt-file <txt> [--api-url <origin>]
 // The API origin comes from --api-url, else B4M_API_URL, else the CLI config's custom URL.
-// Auth is read at runtime from ~/.bike4mind/config.json (never printed). When the access token is
-// expired it is refreshed exactly like the CLI does (POST /api/oauth/refresh, client_id b4m-cli) and
-// the rotated tokens are written back to the CLI config so the CLI session stays valid.
+// Auth is read at runtime from ~/.bike4mind/config.json (never printed) and never written: refreshing
+// here would rotate the CLI's tokens behind its back, so an expired token means signing in again.
 // Records {name: {model, size, background, prompt, date}} in generations.json next to --out; keep that
 // ledger out of the repo, it is a local scratch record.
 import fs from 'node:fs';
@@ -13,7 +12,6 @@ import os from 'node:os';
 import path from 'node:path';
 
 const CONFIG_PATH = path.join(os.homedir(), '.bike4mind', 'config.json');
-const CLI_CLIENT_ID = 'b4m-cli';
 const POLL_INTERVAL_MS = 4000;
 const POLL_TIMEOUT_MS = 6 * 60 * 1000;
 
@@ -31,24 +29,12 @@ async function getAccessToken(apiUrl) {
   const baseUrl = apiUrl ?? process.env.B4M_API_URL ?? config.apiConfig?.customUrl;
   if (!baseUrl) throw new Error('no API origin: pass --api-url or set B4M_API_URL');
   const auth = config.auth;
-  if (!auth?.refreshToken) throw new Error('not logged in: run `b4m login`');
-  if (new Date(auth.expiresAt).getTime() - 60_000 > Date.now()) return { baseUrl, token: auth.accessToken };
-
-  const response = await fetch(`${baseUrl}/api/oauth/refresh`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: auth.refreshToken, client_id: CLI_CLIENT_ID }),
-  });
-  if (!response.ok) throw new Error(`token refresh failed: HTTP ${response.status}`);
-  const grant = await response.json();
-  config.auth = {
-    ...auth,
-    accessToken: grant.access_token,
-    refreshToken: grant.refresh_token ?? auth.refreshToken,
-    expiresAt: new Date(Date.now() + grant.expires_in * 1000).toISOString(),
-  };
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-  return { baseUrl, token: grant.access_token };
+  if (!auth?.accessToken) throw new Error('not logged in: run `b4m login`');
+  // Negated so a missing or unparseable expiry counts as expired; a minute of slack for a token about to lapse.
+  if (!(new Date(auth.expiresAt).getTime() - 60_000 > Date.now())) {
+    throw new Error('token expired: run `b4m login` and retry');
+  }
+  return { baseUrl, token: auth.accessToken };
 }
 
 async function api(baseUrl, token, method, route, body) {

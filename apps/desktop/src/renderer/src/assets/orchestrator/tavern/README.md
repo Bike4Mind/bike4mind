@@ -36,7 +36,7 @@ The prompt id names a file in `apps/desktop/scripts/orchestrator-art/prompts/`; 
 
 ## Regenerating
 
-From `apps/desktop/scripts/orchestrator-art/`, signed in with the Bike4Mind CLI (`b4m login`; the script reads and refreshes that session and never prints the token). The API origin comes from `--api-url`, `B4M_API_URL`, or the CLI's configured custom URL:
+From `apps/desktop/scripts/orchestrator-art/`, signed in with the Bike4Mind CLI (`b4m login`; the script only reads that session, never refreshes or rewrites it, and never prints the token - if the token has expired, run `b4m login` again and retry). The API origin comes from `--api-url`, `B4M_API_URL`, or the CLI's configured custom URL:
 
 ```bash
 mkdir -p /tmp/tavern-raw
