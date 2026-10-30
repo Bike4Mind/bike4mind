@@ -74,6 +74,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.note.deleted': { category: 'support', severity: 'notice', write: 'strict' },
   'user.note.restored': { category: 'support', severity: 'notice', write: 'strict' },
   'user.tags.updated': { category: 'account', severity: 'notice', write: 'strict' },
+  // Name and username as written, plus a requested email change that the user still has to verify.
+  'user.identity.updated': { category: 'identity', severity: 'notice', write: 'strict' },
 
   'org.seats.changed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },

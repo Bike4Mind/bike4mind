@@ -91,6 +91,8 @@ const changeSentence = ({ field, before, after }: AuditChange): string => {
       return after ? 'Marked email verified' : 'Marked email unverified';
     case 'tags':
       return tagSentence(before, after);
+    case 'pendingEmail':
+      return `Requested an email change to ${formatAuditValue(after)}`;
     case 'currentCredits': {
       if (typeof before !== 'number' || typeof after !== 'number') return 'Adjusted credits';
       const delta = after - before;

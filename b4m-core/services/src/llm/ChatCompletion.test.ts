@@ -6860,10 +6860,7 @@ describe('ChatCompletionProcess', () => {
         expect(event).not.toHaveProperty('turnUsage');
       });
 
-      it('rates local-estimate cache reads at the folded multiplier the charge used', async () => {
-        // The local branch bills cache reads inside the input term at CACHE_READ_MULTIPLIER and
-        // bills no cache writes; stamping the tier's own cacheRead would recompute to a charge
-        // ~9x the one made.
+      it('rates local-estimate cache reads at the default multiplier when the tier publishes none', async () => {
         const event = await settle({ cacheReadInputTokens: 40 });
         expect(event.settledBasis).toBe('local');
         expect(event.cachedInputTokens).toBe(40);
@@ -6872,6 +6869,29 @@ describe('ChatCompletionProcess', () => {
           cacheRead: (2 / 1_000_000) * 0.1,
           cacheWrite: 0,
         });
+      });
+
+      it('bills and stamps local-estimate cache reads at the tier published cache_read', async () => {
+        // A published cache_read below 0.1x input (Claude Opus 5.5 is 0.05x) must not be
+        // replaced by the default multiplier just because the provider reported no output.
+        const published = 0.05 * (2 / 1_000_000);
+        const event = await settle(
+          { cacheReadInputTokens: 40 },
+          {
+            pricing: {
+              200000: { input: 2 / 1_000_000, output: 12 / 1_000_000, cache_read: published },
+              1_000_000: { input: 4 / 1_000_000, output: 18 / 1_000_000 },
+            },
+          }
+        );
+        expect(event.settledBasis).toBe('local');
+        expect(event.rates).toMatchObject({ ...LOW, cacheRead: published, cacheWrite: 0 });
+        const r = event.rates;
+        const uncachedInput = event.inputTokens - event.cachedInputTokens;
+        expect(event.costUsd).toBeCloseTo(
+          r.input * uncachedInput + r.output * event.outputTokens + r.cacheRead * event.cachedInputTokens,
+          15
+        );
       });
 
       it('writes turnUsage with each turn tier for a multi-turn completion', async () => {

@@ -3,7 +3,6 @@ import { Box, Button, Link, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import BlockIcon from '@mui/icons-material/Block';
 import { useComplianceModal } from '../ComplianceModal';
-import { useAdminProfileModal } from '../../AdminProfileModal';
 import GrantSubscriptionModal from '../Details/GrantSubscriptionModal';
 import BulkAbuseResponseModal from '../BulkAbuseResponseModal';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
@@ -11,6 +10,7 @@ import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminComman
 import { Kbd } from '../../shared';
 import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
+import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
 import {
   ApiKeyTrustDialog,
@@ -49,6 +49,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
   ...props
 }) => {
   switch (action) {
+    case 'editProfile':
+      return <EditProfileDialog {...props} />;
     case 'credits':
       return <AdjustCreditsDialog {...props} />;
     case 'suspend':
@@ -167,7 +169,6 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
   const [revokeKeysOpen, setRevokeKeysOpen] = useState(false);
   const queryClient = useQueryClient();
   const setComplianceUserId = useComplianceModal(state => state.setUserId);
-  const setEditProfileUserId = useAdminProfileModal(state => state.setUserId);
   const openAdminLog = () => onTabChange('admin');
 
   // The palette ignores its single-key shortcuts while any dialog is open, so `c` never fires behind one.
@@ -222,12 +223,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
         onReinstate={() => setAction('reinstate')}
         onLiftRestriction={() => setAction('restrict')}
       />
-      <UserProfileHeader
-        user={user}
-        onAction={setAction}
-        onEditProfile={() => setEditProfileUserId(user.id)}
-        onCompliance={() => setComplianceUserId(user.id)}
-      />
+      <UserProfileHeader user={user} onAction={setAction} onCompliance={() => setComplianceUserId(user.id)} />
       <UserProfileStats user={user} />
       <UserRiskBadges userId={user.id} onOpenCompliance={() => setComplianceUserId(user.id)} />
       <Box>

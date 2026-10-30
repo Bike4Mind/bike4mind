@@ -670,7 +670,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         // Global endpoint; cache hits are 0.05x input on Sonnet 5.5, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 2 / 1_000_000, output: 10 / 1_000_000, cache_read: 0.1 / 1_000_000 },
+          1_000_000: {
+            input: 2 / 1_000_000,
+            output: 10 / 1_000_000,
+            cache_read: 0.1 / 1_000_000,
+            cache_write: 2.5 / 1_000_000,
+          },
         },
         supportsVision: true,
         supportsTools: true,
@@ -787,7 +792,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         // Global endpoint; cache hits are 0.025x input on Fable 5.1, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 10 / 1_000_000, output: 50 / 1_000_000, cache_read: 0.25 / 1_000_000 },
+          1_000_000: {
+            input: 10 / 1_000_000,
+            output: 50 / 1_000_000,
+            cache_read: 0.25 / 1_000_000,
+            cache_write: 12.5 / 1_000_000,
+          },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -832,7 +842,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         // Global endpoint, first-party parity; cache hits are 0.05x input on Opus 5.5, not the default 0.1x.
         pricing: {
-          1_000_000: { input: 4 / 1_000_000, output: 20 / 1_000_000, cache_read: 0.2 / 1_000_000 },
+          1_000_000: {
+            input: 4 / 1_000_000,
+            output: 20 / 1_000_000,
+            cache_read: 0.2 / 1_000_000,
+            cache_write: 5 / 1_000_000,
+          },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
