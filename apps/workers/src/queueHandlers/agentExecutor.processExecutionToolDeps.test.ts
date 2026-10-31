@@ -181,7 +181,7 @@ vi.mock('@bike4mind/services/llm/shadowTier', async () => {
 vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
 
 const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
-vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
     'responding-workspace': { ownedFields: [], resolve: async () => ({}), respond: async () => null },
@@ -200,11 +200,11 @@ vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', (
   },
 }));
 
-vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumLlmTools.generated', () => ({
   premiumLlmTools: { fixture_tool: { name: 'fixture_tool' } },
 }));
 
-vi.mock('@server/premium-generated/premiumAgentExtensions.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumAgentExtensions.generated', () => ({
   premiumAgentExtensions: [
     {
       surfaceProfiles: [
@@ -620,6 +620,18 @@ describe('processExecution tool deps', () => {
           outputTokens: 5,
           questId: 'quest-1',
         }),
+        expect.anything()
+      );
+    });
+
+    it("stamps the run's API key on an in-process subagent charge", async () => {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({ ...execDoc, apiKeyId: 'key-1' } as never);
+      const tracker = await subagentTracker();
+      await tracker.onComplete({ childExecutionId: 'child-1', result: childResult });
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'text_generation_usage', apiKeyId: 'key-1' }),
         expect.anything()
       );
     });

@@ -12,7 +12,7 @@ vi.mock('@bike4mind/server-utils/cli/toolsHandler.shared', () => ({
   executeToolWithLogging: vi.fn().mockResolvedValue({ success: true, content: 'ok' }),
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -21,8 +21,8 @@ vi.mock('@server/websocket/utils', () => ({
 
 import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
 import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
-import { sendToConnection } from '@server/websocket/utils';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { func } from './cliToolExecution';
 

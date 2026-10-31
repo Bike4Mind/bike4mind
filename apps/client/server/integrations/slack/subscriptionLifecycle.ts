@@ -6,8 +6,8 @@ import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-uti
 import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';
 import { planChangeDirection, planDetails, type PlanChangeDirection } from '@server/analytics/billingEventDetails';
 import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { postMessageToSlack } from './slack';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 
 // Subscription lifecycle posts to the SlackSubscriptionsWebhookUrl channel. The event types carry
 // internal IDs, plan names and amounts only: there is no field a customer name or email could ride in.

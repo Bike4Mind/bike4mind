@@ -107,6 +107,7 @@ export async function createVideoJob(
     {
       ...owner,
       requestedBy: input.user.id,
+      ...(input.apiKeyId && { apiKeyId: input.apiKeyId }),
       source: input.source,
       state: 'pending',
       payload: { request, providerId: caps.provider },

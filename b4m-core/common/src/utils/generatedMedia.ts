@@ -2,7 +2,7 @@
  * Extension sets for files a quest tool drops onto `quest.images` (image_generation,
  * edit_image, music_generation, audio_generation, excel_generation, ...). Single source of
  * truth shared by the web renderer (PromptReplies.classifyGeneratedFiles) and the API file
- * classifier (server/utils/generatedFiles), so the two never drift on how a generated file
+ * classifier (packages/server-utils/src/utils/generatedFiles), so the two never drift on how a generated file
  * renders. Browser-safe (regex literals only) - importable from either build.
  */
 

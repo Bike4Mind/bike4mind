@@ -31,7 +31,7 @@ import {
   syncSreIssueStateFromWebhook,
   SreIssuePayloadSchema,
 } from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
-import { dispatchReviewToSreRevision } from '@server/integrations/github/sreRevisionDispatch';
+import { dispatchReviewToSreRevision } from '@bike4mind/server-utils/integrations/github/sreRevisionDispatch';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { randomUUID } from 'crypto';
 

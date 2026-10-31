@@ -1,6 +1,6 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
-import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
+import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
@@ -48,7 +48,7 @@ import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@s
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHandler';
@@ -101,6 +101,8 @@ const OPERATOR_SIDE_4XX_PATTERNS = [
   /api key (?:not valid|is invalid|has expired|is missing)/i,
   /invalid api key/i,
   /credit balance/i,
+  // Anthropic's org spend cap; keep in sync with isProviderSpendLimitError (@bike4mind/utils).
+  /reached your specified api usage limits/i,
 ];
 
 function isUpstreamCallerError(error: unknown): error is Error {

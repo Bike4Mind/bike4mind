@@ -44,10 +44,10 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn().mockResolvedValue(undefined) }));
 
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { apiKeyRateLimit } from './apiKeyRateLimit';
 import { rateLimit as rateLimitMiddleware } from './rateLimit';
 import { buildRateLimitKeys } from '@server/utils/apiKeyRateLimitCheck';

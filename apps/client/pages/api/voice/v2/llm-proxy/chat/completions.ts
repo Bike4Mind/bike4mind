@@ -33,8 +33,8 @@ import {
 } from '@bike4mind/voice';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
-import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
+import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import { getVoiceVideoToolConfigResolver } from '@server/videoGenerations/voiceVideoToolConfig';
@@ -158,7 +158,12 @@ async function runFullPipeline(
     }: {
       organizationId: string | null;
       featureLabel: string;
-    }) => createCompletionMeter(user, logger, featureLabel, { sessionId: sessionCtx.sessionId, organizationId }),
+    }) =>
+      createCompletionMeter(user, logger, featureLabel, {
+        sessionId: sessionCtx.sessionId,
+        organizationId,
+        apiKeyId: sessionCtx.apiKeyId,
+      }),
     // Forward streamed reply updates to the SSE writer in the handler.
     onReplyStream,
     // No-op: we run process() inline in this request handler, so we deliberately

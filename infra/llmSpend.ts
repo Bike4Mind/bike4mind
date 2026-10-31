@@ -3,7 +3,7 @@
  * (b4m-core/services/src/llm/llmUsageSettledLog.ts): metric filters, a dashboard, and a
  * 5-minute spend-rate alarm and an hourly spend alarm per provider (LLM_SPEND_ALARM_USD_PER_5MIN,
  * LLM_SPEND_ALARM_USD_PER_HOUR, LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC) plus hourly and 5-minute
- * ceilings on young-account spend, and a count of completions settled below zero credits.
+ * ceilings on young-account spend, and a count of completions that cost more than the balance could pay.
  * See infra/signup-code-send-alarm.md.
  */
 
@@ -24,9 +24,9 @@ export const LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT = 75;
 export const YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 2;
 export const LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN_DEFAULT = 3;
 const USAGE_MESSAGE = 'llm-usage-settled';
-/** Must stay in sync with the negative-balance log line in b4m-core/services/src/cliCompletions.ts. */
+/** Must stay in sync with the charged-down-to-zero log line in b4m-core/services/src/cliCompletions.ts. */
 export const COMPLETION_CREDIT_OVERDRAFT_MESSAGE =
-  '[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment';
+  '[CLI_CREDITS] ALERT: Completion cost more than the balance could pay - charged down to zero';
 
 export function llmSpendFilterPattern(value: 'usd' | 'outputTokens', byModel = false): string {
   // CloudWatch only extracts fields selected by the pattern, including metric values/dimensions.
@@ -224,7 +224,7 @@ if (isMonitoredStage) {
 
   new aws.cloudwatch.MetricAlarm('completionCreditOverdraft', {
     name: `${prefix}-completion-credit-overdraft`,
-    alarmDescription: 'A completion settled for more credits than its holder had, leaving the balance negative',
+    alarmDescription: 'A completion cost more credits than its holder had; the balance was charged down to zero',
     comparisonOperator: 'GreaterThanOrEqualToThreshold',
     evaluationPeriods: 1,
     metricName: 'CompletionCreditOverdrafts',

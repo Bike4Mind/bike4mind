@@ -539,6 +539,30 @@ describe('creditService - addCredits', () => {
       );
     });
 
+    it('stamps the lot funding override for an admin-comped subscription', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+      const mockCreditLotCreate = vi.fn().mockResolvedValue({ id: 'lot1' });
+
+      const parameters: AddCreditsParameters = {
+        type: 'subscription',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 150,
+        description: 'Admin-granted subscription credits',
+        metadata: { subscriptionId: 'sub_123' },
+      };
+
+      await addCredits(parameters, {
+        ...mockAdapters,
+        db: { ...mockAdapters.db, creditLots: { create: mockCreditLotCreate } as any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+        lotFundingSource: 'granted',
+      });
+
+      expect(mockCreditLotCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'subscription', fundingSource: 'granted', amount: 150 })
+      );
+    });
+
     it('stamps the lotRef adapter option when the grant has no payment intent', async () => {
       mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
       const mockCreditLotCreate = vi.fn().mockResolvedValue({ id: 'lot1' });

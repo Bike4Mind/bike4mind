@@ -15,7 +15,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   sreErrorTrackingRepository: {},
 }));
 vi.mock('@bike4mind/database/infra', () => ({}));
-vi.mock('@server/services/githubService', () => ({ GitHubService: {} }));
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({ GitHubService: {} }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/github/sreWebhookDispatch', () => ({}));
 

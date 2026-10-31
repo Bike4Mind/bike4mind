@@ -20,7 +20,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { requestRiskEvidenceRefresh, riskEvidenceDb } from '@server/auth/riskEvidence';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';

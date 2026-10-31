@@ -7,7 +7,7 @@ import type { Readable } from 'stream';
 import path from 'path';
 import { existsSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { buildMcpChildEnv } from './childEnv';
+import { assertMcpServerStartable, buildMcpChildEnv } from './childEnv';
 
 const createSdkClient = () => new Client({ name: 'mcp-client-cli', version: '1.0.0' });
 
@@ -101,6 +101,8 @@ export class MCPClient {
         args = this.customArgs ?? [];
         // Silently use external command - no console output during startup
       } else {
+        assertMcpServerStartable(this.serverName, this.envVariables);
+
         // Resolve server script relative to this module - both this file and the
         // server scripts live in the same dist/ directory after building:
         //   dist/index.mjs        (this module)

@@ -1,10 +1,11 @@
 import { adminSettingsRepository, dataLakeBatchRepository, FabFile, User, withTransaction } from '@bike4mind/database';
 import { isMediaOnlyMimeType, isStorageCharged } from '@bike4mind/common';
-import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
+import { decodeS3Key, findWithRetry, withContext } from '@bike4mind/server-utils/s3/utils';
 import { isUntrackedFabFileKey } from '@bike4mind/server-utils/s3/untrackedFabFileKey';
 import {
   claimModerationScan,
   recordLandedObject,
+  releaseModerationClaim,
   scanUploadedObject,
   toVerdictPatch,
   writeModerationVerdict,
@@ -13,10 +14,10 @@ import {
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
 import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
 import { recordRejectedUploadBatch } from '@server/s3/recordRejectedUploadBatch';
-import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
+import { recomputeStatsForUploadedFile } from '@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile';
 import { completedBatchStatus, finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 
 export const func = withContext(async (event, context, logger) => {
@@ -201,6 +202,16 @@ export const func = withContext(async (event, context, logger) => {
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;
+    }).catch(async (err: unknown) => {
+      // Hand a won claim back before the throw sends this event to Lambda's async retry: left on
+      // 'scanning', the retry would lose the claim to this very invocation and skip the scan, leaving
+      // the file unservable until the daily rescue sweep. No-op once a verdict has committed.
+      if (scanClaimed) {
+        await releaseModerationClaim(metadata._id, claimedAt).catch((releaseErr: unknown) =>
+          logger.warn(`[Q2b] could not release moderation claim for ${objectKey}: ${String(releaseErr)}`)
+        );
+      }
+      throw err;
     });
     // No owner means no charge and no retry, so nothing is left to judge by the old status.
     if (!user && deferStatusFlip) await markComplete();

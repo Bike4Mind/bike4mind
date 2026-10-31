@@ -17,7 +17,7 @@ import { modelDiscoveryService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitDiscoveryMetrics, emitDiscoveryRunFailure } from '@workers/modelDiscovery/metrics';
-import { runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
+import { runScheduledDiscovery } from '@bike4mind/server-utils/modelDiscovery/scheduledRun';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'modelDiscovery' } });

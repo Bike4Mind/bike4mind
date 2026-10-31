@@ -31,7 +31,7 @@ vi.mock('@server/entitlements/embedKeyEntitlement', () => ({
 // Real parseEmbedOrigin from @bike4mind/common - the CSP filter is exercised
 // against the actual canonicalizer, not a stub.
 import handler from '../serve';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const VALID_INFO = {

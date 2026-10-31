@@ -21,7 +21,7 @@ import {
   DEFAULT_SLOS,
   type LLMAnalysis,
   type SloConfig,
-} from '@server/utils/telemetryAnalysis';
+} from '@bike4mind/server-utils/utils/telemetryAnalysis';
 
 // Route parameter schema (includes optional force flag to bypass cache)
 const paramsSchema = z.object({

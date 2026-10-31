@@ -36,8 +36,8 @@ vi.mock('@bike4mind/server-utils/auth/signupNetworkSignals', () => ({
   hashSignupNetwork: (ip: string | null) => ({ ipHash: ip ? `hash:${ip}` : null, prefixHash: null }),
 }));
 // Loaded through subscriptionLifecycle (admin links); its model needs a real mongoose.
-vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ subscriptionRepository: {} }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 
 import { findLinkedAccounts, lockIfPaidWithBlockedCard, propagateAccountRisk } from './linkedAccounts';
 

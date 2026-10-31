@@ -11,6 +11,22 @@ function createMockMcpData(tools: unknown[]) {
 }
 
 describe('generateMcpTools', () => {
+  describe('getTools failures', () => {
+    const failWith = (name: string) => {
+      const error = new Error('The github integration is missing GITHUB_ACCESS_TOKEN. Reconnect it in Settings.');
+      error.name = name;
+      return { ...createMockMcpData([]), getTools: vi.fn().mockRejectedValue(error) };
+    };
+
+    it('goes without the tools of a server that lacks a startup credential', async () => {
+      await expect(generateMcpTools(failWith('McpServerConfigError'))).resolves.toEqual([]);
+    });
+
+    it('still throws any other failure', async () => {
+      await expect(generateMcpTools(failWith('Error'))).rejects.toThrow('GITHUB_ACCESS_TOKEN');
+    });
+  });
+
   describe('schema properties fix', () => {
     it('should add empty properties to object schema without properties', async () => {
       const mcpData = createMockMcpData([

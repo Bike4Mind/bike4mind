@@ -19,7 +19,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
 });
 vi.mock('sst', () => ({ Resource: {} }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 vi.mock('@bike4mind/database/social', () => ({ Connection: {} }));
 
 import '@pages/api/keep/command';

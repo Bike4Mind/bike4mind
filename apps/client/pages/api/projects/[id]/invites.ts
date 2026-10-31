@@ -11,7 +11,7 @@ import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sharingService } from '@bike4mind/services';
 import { InviteEvents, InviteType, ProjectEvents, Permission } from '@bike4mind/common';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {

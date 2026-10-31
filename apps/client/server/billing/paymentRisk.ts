@@ -6,7 +6,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { hashSignupNetwork } from '@bike4mind/server-utils/auth/signupNetworkSignals';
 import { hostingNetworkOf } from '@server/auth/datacenterAsns';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { adminOwnerSlackRef } from '@server/integrations/slack/subscriptionLifecycle';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { lockIfPaidWithBlockedCard } from '@server/billing/linkedAccounts';

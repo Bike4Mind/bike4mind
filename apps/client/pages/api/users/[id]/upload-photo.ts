@@ -8,7 +8,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/er
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { FileEvents } from '@bike4mind/common';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
 

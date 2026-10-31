@@ -4,7 +4,7 @@ import { IRegInviteDocument } from './RegistrationInviteType';
 import { IOrganizationDocument } from './OrganizationTypes';
 import { ICounters } from './CounterTypes';
 import { IMementoDocument } from './MementoTypes';
-import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
+import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
 import type { SignupRiskSignal } from '../../schemas/settings';
@@ -817,7 +817,8 @@ export interface IAuthProviders {
 
 export interface IUserDocument extends IUser, IMongoDocument {}
 
-export interface IUserRepository extends IBaseRepository<IUserDocument>, ICreditHolderMethods {
+export interface IUserRepository
+  extends IBaseRepository<IUserDocument>, ICreditHolderMethods, ICreditHolderFlooredDebit {
   findByUsernameOrEmail: (username: string, email?: string | null) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
   /**

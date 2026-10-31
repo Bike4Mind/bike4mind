@@ -10,8 +10,12 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import type { ApiKeyInfo } from '@server/cli/auth';
 import { requestTurnAuth, type TurnAuth } from '@server/auth/turnAuth';
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
-import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import {
+  assertApiKeyScope,
+  holdsApiKeyScope,
+  type ScopedRequest,
+} from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
 /**
  * The `requiredScopes` lists every `/api/data-lakes` route declares, and the

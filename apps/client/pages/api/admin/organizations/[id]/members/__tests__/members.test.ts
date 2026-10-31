@@ -65,7 +65,7 @@ vi.mock('@bike4mind/services', () => ({
   organizationService: { addMember: mocks.addMember, revokeAccess: mocks.revokeAccess },
 }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mocks.logEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mocks.logEvent }));
 vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({
   reportAndNotifyKeptPersonalLakeShares: mocks.keptShares,
 }));

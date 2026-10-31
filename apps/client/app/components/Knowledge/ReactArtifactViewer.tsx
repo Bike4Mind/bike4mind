@@ -22,7 +22,7 @@ import {
 } from '@mui/joy';
 import { type ReactArtifact } from '@bike4mind/common';
 import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
-import { validateArtifactContent } from '@client/app/utils/artifactParser';
+import { validateArtifactContent } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { codeImportDependencies } from '@client/app/utils/importStatements';
 import Editor from 'react-simple-code-editor';
 import Prism from 'prismjs';
