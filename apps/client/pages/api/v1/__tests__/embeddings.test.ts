@@ -1,5 +1,6 @@
 import { CreditHolderType, isZodError } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
+import { Logger } from '@bike4mind/observability';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
@@ -101,8 +102,11 @@ vi.mock('@bike4mind/fab-pipeline', async importActual => {
     },
   };
 });
+const createTokenizer = vi.hoisted(() =>
+  vi.fn((_opts: unknown) => ({ countTokens: (...a: unknown[]) => countTokens(...a) }))
+);
 vi.mock('@bike4mind/utils', () => ({
-  createTokenizer: () => ({ countTokens: (...a: unknown[]) => countTokens(...a) }),
+  createTokenizer,
   getSettingsByNames: vi.fn(),
   getSettingsMap,
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
@@ -143,6 +147,13 @@ describe('POST /api/v1/embeddings', () => {
       refund,
       settle,
     });
+  });
+
+  it('builds the cached tokenizer with a neutral logger, not the request logger it would pin', async () => {
+    const { status } = await run({ model: 'text-embedding-3-small', input: 'hello' });
+    expect(status).toBe(200);
+    // Must stay the first request in this file: the tokenizer is cached for the module's life.
+    expect(createTokenizer).toHaveBeenCalledExactlyOnceWith({ logger: expect.any(Logger) });
   });
 
   it('reads fresh credit enforcement before reserving', async () => {

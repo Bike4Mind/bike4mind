@@ -91,6 +91,9 @@ const mockFirstPurchaseCardOptions = vi.fn();
 vi.mock('@server/integrations/stripe/threeDSecure', () => ({
   firstPurchaseCardOptions: (...args: unknown[]) => mockFirstPurchaseCardOptions(...args),
 }));
+// The gate's own rules are covered in server/billing/checkoutGate.test.ts; here only that the route calls it.
+const { mockAssertCheckoutAllowed } = vi.hoisted(() => ({ mockAssertCheckoutAllowed: vi.fn() }));
+vi.mock('@server/billing/checkoutGate', () => ({ assertCheckoutAllowed: mockAssertCheckoutAllowed }));
 
 import handler from '../start-payment';
 

@@ -30,6 +30,7 @@ export * from './verifyOTC';
 export * from './moderationPolicy';
 export * from './accountState';
 export * from './flagDisputePending';
+export * from './setThrottleTier';
 export * from './requestModerationAppeal';
 export * from './usagePatternSignals';
 export * from './noCardUnlock';

@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Box, Button, Link, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { authMethodLabel, type UserSignIn, type UserSignInResult } from '@bike4mind/common';
-import { useUserSignIns, useUserSignupCluster } from '@client/app/hooks/data/adminUserTimeline';
+import { useUserLinkedAccounts, useUserSignIns, useUserSignupCluster } from '@client/app/hooks/data/adminUserTimeline';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { DataTable, Fact, RelativeTime, SectionCard, StatusChip, type DataColumn } from '../../../shared';
 import { BlockIpDialog } from '../../../BlockedIPs/IpBlockDialogs';
@@ -109,6 +109,40 @@ const SignupCluster: React.FC<{ userId: string }> = ({ userId }) => {
   );
 };
 
+const LINK_VIA_LABELS = { card: 'same card', paymentNetwork: 'same payment IP', signupNetwork: 'same signup IP' };
+
+/** Accounts sharing this user's card (strong) or only an IP (weak); the payment-risk actions act on these. */
+const LinkedAccounts: React.FC<{ userId: string }> = ({ userId }) => {
+  const linked = useUserLinkedAccounts(userId);
+  const openProfile = useOpenUserProfile();
+  if (linked.isLoading) return <>Checking...</>;
+  if (linked.isError || !linked.data) return <>Could not be checked</>;
+  if (linked.data.length === 0) return <>No account shares a card or IP</>;
+  return (
+    <Stack gap={0.5} data-testid="user-linked-accounts">
+      {linked.data.map(account => (
+        <Stack key={account.id} direction="row" gap={1} alignItems="center" flexWrap="wrap">
+          <Link
+            component="button"
+            type="button"
+            level="body-sm"
+            onClick={() => void openProfile(account.id)}
+            sx={{ textAlign: 'left' }}
+            data-testid="user-linked-account-link"
+          >
+            {account.name || account.email || account.id}
+          </Link>
+          <StatusChip
+            tone={account.strength === 'strong' ? 'warn' : 'neutral'}
+            label={account.via.map(how => LINK_VIA_LABELS[how]).join(', ')}
+          />
+          {account.blocked && <StatusChip tone="bad" label="Blocked" />}
+        </Stack>
+      ))}
+    </Stack>
+  );
+};
+
 /** How the account was made: the record written once at signup plus accounts that share its client. */
 const SignupRecord: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const navigate = useNavigate();
@@ -163,6 +197,9 @@ const SignupRecord: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
       </Fact>
       <Fact label="Signup cluster">
         <SignupCluster userId={user.id} />
+      </Fact>
+      <Fact label="Linked accounts">
+        <LinkedAccounts userId={user.id} />
       </Fact>
     </SectionCard>
   );

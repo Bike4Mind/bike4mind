@@ -3,9 +3,15 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { buildProfile, ProfileTestWrapper } from '../profileTestUtils';
 import type { AdminUserProfile } from '../userProfileModel';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), navigate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), linked: vi.fn(), navigate: vi.fn() }));
 
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
+// Linked accounts load on their own query; kept off `get` so the sign-in and cluster mocks stay as they are.
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: {
+    get: (url: string, ...rest: unknown[]) =>
+      url.endsWith('/linked-accounts') ? mocks.linked(url) : mocks.get(url, ...rest),
+  },
+}));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('./ActiveSessions', () => ({ ActiveSessions: () => <div data-testid="stub-active-sessions" /> }));
 
@@ -47,6 +53,7 @@ const renderTab = (user: AdminUserProfile = buildProfile()) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.linked.mockResolvedValue({ data: [] });
 });
 
 describe('sign-in labels', () => {
@@ -165,5 +172,40 @@ describe('SignInsTab', () => {
     );
     renderTab();
     expect(await screen.findByText('Could not be checked')).toBeInTheDocument();
+  });
+
+  it('lists linked accounts with how they are linked, and links each to its profile', async () => {
+    respond([], NO_CLUSTER);
+    mocks.linked.mockResolvedValue({
+      data: [
+        {
+          id: 'card-1',
+          name: 'Card Twin',
+          email: null,
+          strength: 'strong',
+          via: ['card', 'paymentNetwork'],
+          blocked: true,
+        },
+        { id: 'net-1', name: '', email: 'net@example.com', strength: 'weak', via: ['signupNetwork'], blocked: false },
+      ],
+    });
+    renderTab();
+
+    const linked = await screen.findByTestId('user-linked-accounts');
+    expect(linked).toHaveTextContent('Card Twin');
+    expect(linked).toHaveTextContent('same card, same payment IP');
+    expect(linked).toHaveTextContent('Blocked');
+    expect(linked).toHaveTextContent('net@example.com');
+    expect(linked).toHaveTextContent('same signup IP');
+    expect(mocks.linked).toHaveBeenCalledWith('/api/admin/users/test-user-1/linked-accounts');
+
+    fireEvent.click(within(linked).getAllByTestId('user-linked-account-link')[0]);
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/admin/users/$userId', params: { userId: 'card-1' } });
+  });
+
+  it('says when no account is linked', async () => {
+    respond([], NO_CLUSTER);
+    renderTab();
+    expect(await screen.findByText('No account shares a card or IP')).toBeInTheDocument();
   });
 });

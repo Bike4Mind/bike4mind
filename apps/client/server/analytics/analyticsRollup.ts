@@ -6,24 +6,16 @@ import {
   analyticsUserDayRepository,
   UsageEvent,
   User,
-  UserApiKey,
   type IAnalyticsDailySignups,
   type IAnalyticsUserDay,
 } from '@bike4mind/database';
-import {
-  INTERNAL_ACCOUNT_FLAGS,
-  internalStaffEmailRegex,
-  parseInternalStaffDomains,
-  UNCLASSIFIED_SOURCE,
-} from '@bike4mind/common';
-import { isSuspectedSignup } from '@client/app/utils/signupSignals';
-import { classifySignups, DORMANCY_MIN_AGE_MS, SPIKE_BASELINE_HOURS } from '../users/signupClassifier';
-import { countByBucket, loadCandidates } from '../users/signupTimeseries';
+import { INTERNAL_ACCOUNT_FLAGS, UNCLASSIFIED_SOURCE } from '@bike4mind/common';
+import { signupVerdictOf } from '../users/signupClassifier';
+import { classifySignupWindow, currentStaffRegex, isCountedUser, loadUserFlags } from './signupCohort';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const QUERY_DEADLINE_MS = 120_000;
 const USER_BATCH = 1000;
-const HOUR_MS = 60 * 60 * 1000;
 const MAU_WINDOW_DAYS = 28;
 const WAU_WINDOW_DAYS = 7;
 
@@ -51,54 +43,6 @@ const toRecord = (map: Map<string, number>, limit?: number): Record<string, numb
   return Object.fromEntries(limit ? entries.slice(0, limit) : entries);
 };
 
-type UserFlags = {
-  _id: unknown;
-  email?: string;
-  createdAt?: Date;
-  isAdmin?: boolean;
-  isSystem?: boolean;
-  isSynthetic?: boolean;
-};
-
-// Negation of internalAccountCondition: only admin/system/synthetic/staff-domain accounts are excluded, so
-// orphaned and non-ObjectId ids still count and DAU matches a direct distinct count over usageevents.
-const isCountedUser = (user: UserFlags | undefined, staffRegex: RegExp | null): boolean =>
-  !user ||
-  !(INTERNAL_ACCOUNT_FLAGS.some(flag => user[flag]) || (staffRegex && user.email && staffRegex.test(user.email)));
-
-const currentStaffRegex = () =>
-  internalStaffEmailRegex(parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS));
-
-const OBJECT_ID = /^[a-f\d]{24}$/i;
-
-async function loadUsers(userIds: string[]): Promise<Map<string, UserFlags>> {
-  const valid = userIds.filter(id => OBJECT_ID.test(id));
-  const users = new Map<string, UserFlags>();
-  for (let i = 0; i < valid.length; i += USER_BATCH) {
-    const rows = await User.find({ _id: { $in: valid.slice(i, i + USER_BATCH) } })
-      .select('_id email createdAt isAdmin isSystem isSynthetic')
-      .maxTimeMS(QUERY_DEADLINE_MS)
-      .lean<UserFlags[]>();
-    for (const row of rows) users.set(String(row._id), row);
-  }
-  return users;
-}
-
-type ApiActivity = { firstApiKeyAt: Date; lastApiUseAt: Date | null };
-
-async function loadApiActivity(userIds: string[]): Promise<Map<string, ApiActivity>> {
-  const activity = new Map<string, ApiActivity>();
-  for (let i = 0; i < userIds.length; i += USER_BATCH) {
-    // A returning API user may have created their active key long after the signup cohort window.
-    const rows = await UserApiKey.aggregate<{ _id: string } & ApiActivity>([
-      { $match: { userId: { $in: userIds.slice(i, i + USER_BATCH) } } },
-      { $group: { _id: '$userId', firstApiKeyAt: { $min: '$createdAt' }, lastApiUseAt: { $max: '$lastUsedAt' } } },
-    ]).option({ maxTimeMS: QUERY_DEADLINE_MS });
-    for (const row of rows) activity.set(row._id, row);
-  }
-  return activity;
-}
-
 type CohortResult = { signups: IAnalyticsDailySignups; classifiedIds: string[]; suspectedIds: string[] };
 
 async function classifyCohort(
@@ -106,35 +50,13 @@ async function classifyCohort(
   { now = new Date(), logger = console }: RollupOptions
 ): Promise<CohortResult> {
   const { start, end } = dayBounds(day);
-  const staffRegex = currentStaffRegex();
-  // A one-day margin each side lets cohort signals (bursts, shared network) see accounts across midnight.
-  const scanSince = new Date(start.getTime() - DAY_MS);
-  const [{ candidates, truncated }, hourlyCounts] = await Promise.all([
-    loadCandidates(scanSince, new Date(end.getTime() + DAY_MS), QUERY_DEADLINE_MS),
-    // UTC hours, same baseline window as getSignupTimeseries, so the spike signal agrees with the live view.
-    countByBucket(
-      new Date(scanSince.getTime() - SPIKE_BASELINE_HOURS * HOUR_MS),
-      new Date(end.getTime() + DAY_MS),
-      'hour',
-      0,
-      QUERY_DEADLINE_MS
-    ),
-  ]);
+  const { counted, signalsById, truncated } = await classifySignupWindow(start, end, {
+    now,
+    deadlineMs: QUERY_DEADLINE_MS,
+  });
   if (truncated) logger.warn(`analytics rollup: signup candidate scan truncated for ${day}`);
 
-  const onDay = candidates.filter(c => c.createdAt >= start && c.createdAt < end);
-  const users = await loadUsers(onDay.map(c => c.id));
-  const counted = onDay.filter(c => isCountedUser(users.get(c.id), staffRegex));
-  const apiActivity = await loadApiActivity(counted.map(candidate => candidate.id));
-  const signalsById = classifySignups(
-    candidates.map(candidate => ({
-      ...candidate,
-      ...apiActivity.get(candidate.id),
-    })),
-    now,
-    hourlyCounts
-  );
-
+  const staffRegex = currentStaffRegex();
   const total = truncated
     ? await User.countDocuments({
         createdAt: { $gte: start, $lt: end },
@@ -155,15 +77,9 @@ async function classifyCohort(
   for (const candidate of counted) {
     const signals = signalsById.get(candidate.id) ?? [];
     for (const signal of signals) signups.bySignal[signal] = (signups.bySignal[signal] ?? 0) + 1;
-    if (isSuspectedSignup(signals)) {
-      signups.suspected += 1;
-      suspectedIds.push(candidate.id);
-    } else if (signals.length < 2 && now.getTime() - candidate.createdAt.getTime() < DORMANCY_MIN_AGE_MS) {
-      // Too young for dormancy to be evaluable, and one more weak signal would make it suspected.
-      signups.unclassified += 1;
-    } else {
-      signups.legit += 1;
-    }
+    const verdict = signupVerdictOf(signals, candidate.createdAt, now);
+    signups[verdict] += 1;
+    if (verdict === 'suspected') suspectedIds.push(candidate.id);
   }
   return { signups, classifiedIds: counted.map(candidate => candidate.id), suspectedIds };
 }
@@ -279,7 +195,7 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
     .allowDiskUse(true)
     .option({ maxTimeMS: QUERY_DEADLINE_MS });
 
-  const users = await loadUsers([...new Set(groups.map(g => g._id.userId))]);
+  const users = await loadUserFlags([...new Set(groups.map(g => g._id.userId))], QUERY_DEADLINE_MS);
 
   type Acc = {
     requests: number;

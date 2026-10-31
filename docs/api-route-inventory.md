@@ -34,7 +34,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-957 routes: 61 contracted, 9 aliases of another route, 208 with no static caller in `apps/client/app`.
+958 routes: 61 contracted, 9 aliases of another route, 208 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -103,7 +103,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | oauth | 13 | 0 | 1 | 4 | 0 | 8 | 9 |
 | ollama | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
 | organizations | 36 | 0 | 35 | 1 | 0 | 0 | 1 |
-| otc | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
+| otc | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | overwatch | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
 | ping | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | projects | 9 | 0 | 9 | 0 | 0 | 0 | 0 |
@@ -1104,6 +1104,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
+| `/api/otc/form-token` | GET | handler | - | no | - | 1: `hooks/data/auth.ts` |
 | `/api/otc/send` | POST | handler | - | no | - | 1: `hooks/data/auth.ts` |
 | `/api/otc/verify` | POST | handler | - | no | - | 1: `hooks/data/auth.ts` |
 

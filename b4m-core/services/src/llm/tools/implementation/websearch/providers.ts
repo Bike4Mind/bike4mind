@@ -389,6 +389,29 @@ function logSerpApiAttemptFailure(retryable: boolean, message: string, details: 
   else Logger.globalInstance.error(message, details);
 }
 
+const isTransientSerpApiStatus = (status: number): boolean => status === 429 || status >= 500;
+
+// A network-level failure (DNS, connection reset, TLS, ...) surfaces from fetch as a TypeError;
+// anything else is unexpected and is not treated as transient.
+const isTransientFetchError = (error: unknown): boolean => isAbortError(error) || error instanceof TypeError;
+
+/**
+ * Image and place lookups are one supplementary attempt each that degrades to []. A transient failure
+ * warns: a real SerpAPI outage still surfaces at error through the organic search, whose final failure
+ * the tool loop logs. A non-transient one (e.g. a revoked key) stays at error.
+ */
+function logSupplementarySerpApiFailure(message: string, failure: { status: number } | { error: unknown }): void {
+  if ('status' in failure) {
+    logSerpApiAttemptFailure(isTransientSerpApiStatus(failure.status), message, { status: failure.status });
+    return;
+  }
+  const { error } = failure;
+  logSerpApiAttemptFailure(isTransientFetchError(error), message, {
+    timedOut: isAbortError(error),
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 /**
  * One SerpAPI organic-search attempt, bounded by SERPAPI_ATTEMPT_TIMEOUT_MS. Never throws -
  * failures (timeout, network error, non-OK response) come back as a tagged result so
@@ -414,7 +437,7 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     if (response.ok) return { ok: true, data: (await response.json()) as SerpApiResponse };
 
     const errorText = await response.text();
-    const retryable = response.status === 429 || response.status >= 500;
+    const retryable = isTransientSerpApiStatus(response.status);
     logSerpApiAttemptFailure(retryable, '❌ WebSearch Tool: API error details:', {
       status: response.status,
       statusText: response.statusText,
@@ -432,9 +455,7 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     };
   } catch (error) {
     const timedOut = isAbortError(error);
-    // A network-level failure (DNS, connection reset, TLS, ...) surfaces from fetch as a
-    // TypeError; anything else is unexpected and is not treated as transient.
-    const retryable = timedOut || error instanceof TypeError;
+    const retryable = isTransientFetchError(error);
     logSerpApiAttemptFailure(retryable, '❌ WebSearch Tool: SerpAPI request failed:', {
       attempt,
       request,
@@ -566,39 +587,41 @@ async function serpApiImageSearch(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  // Only the request is inside the try, so the failure classification sees fetch and body errors alone.
+  let data: SerpApiImagesResponse | null;
   try {
     const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
     if (!response.ok) {
-      Logger.globalInstance.error('WebSearch Tool: SerpAPI image search failed', { status: response.status });
+      logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI image search failed', { status: response.status });
       return [];
     }
-    const data = (await response.json()) as SerpApiImagesResponse;
-    const entries = Array.isArray(data.images_results) ? data.images_results : [];
-
-    const seen = new Set<string>();
-    const images: WebSearchImageResult[] = [];
-    for (const entry of entries) {
-      if (!entry) continue;
-      const image = safeImageUrl(entry.original) ?? safeImageUrl(entry.thumbnail);
-      const pageUrl = typeof entry.link === 'string' ? entry.link : '';
-      // A picture with no page cannot be attributed or linked, which is the whole point of a card.
-      if (!image || !pageUrl || seen.has(image)) continue;
-      seen.add(image);
-      images.push({
-        url: image,
-        pageUrl,
-        title: entry.title ?? '',
-        source: entry.source || safeHost(pageUrl),
-      });
-      if (images.length >= limit) break;
-    }
-    return images;
+    data = (await response.json()) as SerpApiImagesResponse | null;
   } catch (error) {
-    Logger.globalInstance.error('WebSearch Tool: SerpAPI image search request failed:', error);
+    logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI image search request failed:', { error });
     return [];
   } finally {
     clearTimeout(timeoutId);
   }
+
+  const entries = Array.isArray(data?.images_results) ? data.images_results : [];
+  const seen = new Set<string>();
+  const images: WebSearchImageResult[] = [];
+  for (const entry of entries) {
+    if (!entry) continue;
+    const image = safeImageUrl(entry.original) ?? safeImageUrl(entry.thumbnail);
+    const pageUrl = typeof entry.link === 'string' ? entry.link : '';
+    // A picture with no page cannot be attributed or linked, which is the whole point of a card.
+    if (!image || !pageUrl || seen.has(image)) continue;
+    seen.add(image);
+    images.push({
+      url: image,
+      pageUrl,
+      title: entry.title ?? '',
+      source: entry.source || safeHost(pageUrl),
+    });
+    if (images.length >= limit) break;
+  }
+  return images;
 }
 
 /** An entry of the `google_maps` engine's `local_results`, or its single-match `place_results`. */
@@ -657,21 +680,23 @@ async function serpApiPlaceSearch(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  let data: SerpApiMapsResponse | null;
   try {
     const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
     if (!response.ok) {
-      Logger.globalInstance.error('WebSearch Tool: SerpAPI place search failed', { status: response.status });
+      logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI place search failed', { status: response.status });
       return [];
     }
-    const data = (await response.json()) as SerpApiMapsResponse;
-    const local = Array.isArray(data.local_results) ? data.local_results : [];
-    return dedupePlaces([fromSerpApiMapsPlace(data.place_results), ...local.map(fromSerpApiMapsPlace)], limit);
+    data = (await response.json()) as SerpApiMapsResponse | null;
   } catch (error) {
-    Logger.globalInstance.error('WebSearch Tool: SerpAPI place search request failed:', error);
+    logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI place search request failed:', { error });
     return [];
   } finally {
     clearTimeout(timeoutId);
   }
+
+  const local = Array.isArray(data?.local_results) ? data.local_results : [];
+  return dedupePlaces([fromSerpApiMapsPlace(data?.place_results), ...local.map(fromSerpApiMapsPlace)], limit);
 }
 
 /** Hostname of a URL, or the URL itself when it will not parse. */

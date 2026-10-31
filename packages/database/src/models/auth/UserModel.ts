@@ -1,4 +1,10 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
+import {
+  THROTTLE_SOURCES,
+  THROTTLE_TIERS,
+  USER_RISK_SIGNAL_TYPES,
+  VERIFIED_SLACK_IDENTITY_FILTER,
+  canonicalizeEmail,
+} from '@bike4mind/common';
 import {
   ADMIN_PERMISSIONS,
   AuthStrategy,
@@ -266,6 +272,40 @@ const UserModerationSchema = new Schema(
   },
   { _id: false }
 );
+
+const UserThrottleSchema = new Schema(
+  {
+    tier: { type: String, enum: [...THROTTLE_TIERS], required: true },
+    reason: { type: String, required: true },
+    source: { type: String, enum: [...THROTTLE_SOURCES], required: true },
+    changedAt: { type: Date, required: true },
+    changedBy: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const UserRiskSignalSchema = new Schema(
+  {
+    type: {
+      type: String,
+      enum: [...USER_RISK_SIGNAL_TYPES],
+      required: true,
+    },
+    at: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
+/** An account as the payment-risk linked-account checks read it; the blocked fields match accountBlockReasons. */
+export type UserLinkState = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  createdAt: Date | null;
+  isBanned: boolean;
+  disputePending: boolean;
+  moderation: { status: UserModerationStatus } | null;
+};
 
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
@@ -656,6 +696,37 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .select('email')
       .lean({ virtuals: true });
     return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
+  }
+
+  /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
+  async findIdsBySignupIp(ip: string, excludeId: string, limit: number): Promise<string[]> {
+    const docs = await this.model
+      .find({ 'signupMeta.ip': ip, _id: { $ne: convertIds([excludeId])[0] } })
+      .select('_id')
+      .sort({ _id: -1 })
+      .limit(limit)
+      .maxTimeMS(2000)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */
+  async findLinkStatesByIds(ids: string[]): Promise<UserLinkState[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('name email createdAt isBanned disputePending moderation.status')
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      name: d.name ?? null,
+      email: d.email ?? null,
+      createdAt: d.createdAt ?? null,
+      isBanned: d.isBanned ?? false,
+      disputePending: d.disputePending ?? false,
+      moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+    }));
   }
 
   async searchCollections(
@@ -1093,6 +1164,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Per-user moderation tracking + auto-throttle/suspend state.
     // Lazily populated - undefined until the user's first moderation hit.
     moderation: { type: UserModerationSchema, required: false, default: undefined },
+    throttle: { type: UserThrottleSchema, required: false, default: undefined },
+    riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
@@ -1451,6 +1524,13 @@ UserSchema.index({ createdAt: 1 });
 // accounts created before signup network capture carry no signupMeta. Explicit name so migration
 // 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
 UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
+// Serves the linked-account lookup by signup IP (apps/client/server/billing/linkedAccounts.ts). Partial:
+// the signupIpRetention cron clears the IP, and older accounts never had one. Explicit name so migration
+// 20260921236600 and autoIndex agree.
+UserSchema.index(
+  { 'signupMeta.ip': 1 },
+  { name: 'user_signupMeta_ip', partialFilterExpression: { 'signupMeta.ip': { $type: 'string' } } }
+);
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });

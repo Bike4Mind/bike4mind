@@ -9,17 +9,20 @@ import { hostingNetworkOf } from '@server/auth/datacenterAsns';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { adminOwnerSlackRef } from '@server/integrations/slack/subscriptionLifecycle';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { lockIfPaidWithBlockedCard } from '@server/billing/linkedAccounts';
 import type Stripe from 'stripe';
 
 const MINUTE_MS = 60_000;
 
 /**
- * Payment risk alerting. Two layers, both alert-only (nothing is blocked or refunded here):
+ * Payment risk alerting. Two layers, both alert-only here (nothing is blocked or refunded in this file):
  * - Stripe's own risk events (early fraud warnings, reviews, Radar blocks) are forwarded to LiveOps.
  * - Every card payment is recorded as a PaymentAttempt and checked for app-side signals Stripe
  *   cannot see: a young account, one card on several accounts, several cards from one account or
  *   network, a hosting/VPN network. Thresholds are admin settings (settings.ts, paymentRisk*).
  * Never throws into the Stripe webhook: a failed alert must not fail a delivery whose money landed.
+ * The automatic actions built on these records live in earlyFraudWarning.ts, checkoutGate.ts and
+ * linkedAccounts.ts.
  */
 
 export type PaymentRiskThresholds = {
@@ -192,7 +195,9 @@ export async function recordPaymentStart(
 /**
  * Records a Stripe-reported payment outcome and posts one LiveOps alert when it trips any signal.
  * `chargeRef` is the intent's latest (or failing) charge, read for the card fingerprint and Radar
- * outcome. Never throws.
+ * outcome. The record is kept even with alerts off: the checkout gate and the linked-account
+ * checks (checkoutGate.ts, linkedAccounts.ts) read it. A successful payment on a card a blocked
+ * account used locks the payer. Never throws.
  */
 export async function screenPaymentOutcome(
   input: {
@@ -212,7 +217,6 @@ export async function screenPaymentOutcome(
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
     const thresholds = readPaymentRiskThresholds(settings);
-    if (!thresholds.enabled) return;
 
     const [risk, user] = await Promise.all([
       retrieveChargeRisk(input.chargeRef),
@@ -235,12 +239,25 @@ export async function screenPaymentOutcome(
       outcome: input.outcome,
       cardFingerprint,
       riskLevel: risk?.riskLevel ?? null,
+      radarBlocked: risk?.outcomeType === 'blocked',
       hostingNetwork: signupHosting,
     });
     if (!changed) {
       logger.info('[PaymentRisk] redelivered outcome, already screened', { paymentIntentId: input.paymentIntentId });
       return;
     }
+
+    if (attempt.outcome === 'succeeded') {
+      await lockIfPaidWithBlockedCard(
+        {
+          userId: attempt.userId,
+          paymentIntentId: attempt.paymentIntentId,
+          cardFingerprints: attempt.cardFingerprints,
+        },
+        logger
+      );
+    }
+    if (!thresholds.enabled) return;
 
     const since = new Date(now.getTime() - thresholds.cardWindowMinutes * MINUTE_MS);
     const [accountsForCard, recentCards] = await Promise.all([
