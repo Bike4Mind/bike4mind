@@ -110,6 +110,7 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'users/[userId]/resend-email-change.ts',
   'users/[userId]/resend-verification.ts',
   'users/[userId]/revoke-api-keys.ts',
+  'users/[userId]/risk-evidence.ts',
   'users/[userId]/risk-flags.ts',
   'users/[userId]/sessions.ts',
   'users/[userId]/sign-ins.ts',
