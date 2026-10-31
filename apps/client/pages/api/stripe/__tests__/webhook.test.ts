@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
   findByPaymentIntentId: vi.fn(),
   updateTransactionStatus: vi.fn(),
   emitBillingEvent: vi.fn(),
+  subtractCredits: vi.fn(),
+  clawbackCreditLotsByStripeRef: vi.fn(),
   forfeitSignupUnlock: vi.fn(),
   forfeitHeldUnlockForRefund: vi.fn(),
   forfeitHeldUnlockForFraudWarning: vi.fn(),
@@ -52,7 +54,10 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/services', () => ({
-  creditService: {},
+  creditService: {
+    subtractCredits: mocks.subtractCredits,
+    clawbackCreditLotsByStripeRef: mocks.clawbackCreditLotsByStripeRef,
+  },
   userService: { flagDisputePending: mocks.flagDisputePending },
 }));
 vi.mock('@server/models/Subscription', () => ({
@@ -97,10 +102,14 @@ vi.mock('@server/billing/paymentRisk', () => ({
   radarRiskLine: vi.fn().mockResolvedValue(null),
   screenPaymentOutcome: vi.fn(),
 }));
+vi.mock('@server/billing/earlyFraudWarning', () => ({ respondToEarlyFraudWarning: vi.fn() }));
+vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: vi.fn() }));
 vi.mock('@server/analytics/signupEvents', () => ({
   emitPurchaseEvents: vi.fn(),
   emitBillingEvent: mocks.emitBillingEvent,
 }));
+const { reverseReward } = vi.hoisted(() => ({ reverseReward: vi.fn() }));
+vi.mock('@server/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: reverseReward }));
 vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: mocks.notifyPaymentFailed,
   notifyCanceledForNonPayment: mocks.notifyCanceledForNonPayment,
@@ -591,5 +600,88 @@ describe('billing events for Overwatch', () => {
     await deliver(failedIntent({ environment: 'test' }));
     await deliver(failedIntent({ environment: 'production', credits: '100' }));
     expect(mocks.emitBillingEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('charge.refunded - inviter reward', () => {
+  const refundedCharge = (overrides: Record<string, unknown> = {}) => ({
+    type: 'charge.refunded',
+    data: {
+      object: {
+        id: 'ch_1',
+        amount: 3000,
+        amount_captured: 3000,
+        amount_refunded: 1500,
+        payment_intent: 'pi_1',
+        refunds: { data: [{ id: 're_1', amount: 1500 }] },
+        ...overrides,
+      },
+    },
+  });
+
+  it('hands the payment and the cumulative refunded amount to the inviter reward, even with no credit row', async () => {
+    const res = await deliver(refundedCharge());
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(reverseReward).toHaveBeenCalledExactlyOnceWith({
+      paymentIntentId: 'pi_1',
+      amountRefunded: 1500,
+      amountCaptured: 3000,
+    });
+  });
+
+  it('falls back to the charge amount when nothing was captured', async () => {
+    await deliver(refundedCharge({ amount_captured: 0 }));
+    expect(reverseReward).toHaveBeenCalledWith(expect.objectContaining({ amountCaptured: 3000 }));
+  });
+
+  it('leaves the reward alone when the charge has no payment intent', async () => {
+    await deliver(refundedCharge({ payment_intent: null }));
+    expect(reverseReward).not.toHaveBeenCalled();
+  });
+
+  it('still hands the refund to the inviter reward when the charge carries no refund list', async () => {
+    await deliver(refundedCharge({ refunds: undefined }));
+    await deliver(refundedCharge({ refunds: { data: [] } }));
+    expect(reverseReward).toHaveBeenCalledTimes(2);
+    expect(reverseReward).toHaveBeenCalledWith({ paymentIntentId: 'pi_1', amountRefunded: 1500, amountCaptured: 3000 });
+  });
+});
+
+describe('charge.dispute.created - inviter reward', () => {
+  const dispute = (overrides: Record<string, unknown> = {}) => ({
+    type: 'charge.dispute.created',
+    data: {
+      object: {
+        id: 'dp_1',
+        amount: 3000,
+        currency: 'usd',
+        reason: 'fraudulent',
+        payment_intent: 'pi_1',
+        charge: null,
+        ...overrides,
+      },
+    },
+  });
+
+  it('reverses the inviter reward as a full refund before the payer clawback runs', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.flagDisputePending.mockResolvedValue({ deactivatedKeys: false });
+    const res = await deliver(dispute());
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(reverseReward).toHaveBeenCalledExactlyOnceWith({
+      paymentIntentId: 'pi_1',
+      amountRefunded: 3000,
+      amountCaptured: 3000,
+      reason: 'disputed',
+    });
+    expect(mocks.subtractCredits).toHaveBeenCalledOnce();
+    expect(reverseReward.mock.invocationCallOrder[0]).toBeLessThan(mocks.subtractCredits.mock.invocationCallOrder[0]);
+  });
+
+  it('leaves the reward alone when the dispute has no payment intent', async () => {
+    await deliver(dispute({ payment_intent: null }));
+    expect(reverseReward).not.toHaveBeenCalled();
   });
 });

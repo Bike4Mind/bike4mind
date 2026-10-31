@@ -532,8 +532,47 @@ export function PermissionsSettings({
               />
             ))}
           </Stack>
+
+          <ApprovalSummaryExport />
         </Stack>
       </fieldset>
+    </Stack>
+  );
+}
+
+/** Saves a shareable digest of the local approval log: what asked, why, and how it was answered. */
+function ApprovalSummaryExport() {
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  return (
+    <Stack spacing={1}>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Typography level="title-sm" sx={{ flex: 1 }}>
+          Approval history
+        </Typography>
+        <Button
+          size="sm"
+          variant="outlined"
+          loading={status === 'saving'}
+          data-testid="permissions-export-summary-btn"
+          onClick={async () => {
+            setStatus('saving');
+            try {
+              setStatus((await window.b4m.permissions.exportApprovalSummary()) ? 'saved' : 'idle');
+            } catch {
+              setStatus('failed');
+            }
+          }}
+        >
+          Export summary
+        </Button>
+      </Stack>
+      <Typography level="body-xs" textColor="text.tertiary" data-testid="permissions-export-summary-note">
+        {status === 'saved'
+          ? 'Saved. Share it with a maintainer to show which approvals ask most often.'
+          : status === 'failed'
+            ? 'Could not save the summary.'
+            : 'A Markdown report of which tool calls asked for approval, why, and how you answered. It lists command patterns and project names only, never full commands, paths or file contents.'}
+      </Typography>
     </Stack>
   );
 }

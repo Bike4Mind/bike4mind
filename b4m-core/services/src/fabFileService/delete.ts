@@ -63,7 +63,7 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
   db: LakeMembershipAuditAdapters['db'] & {
     fabFiles: Pick<
       IFabFileRepository,
-      'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds'
+      'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds' | 'shareable'
     >;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'>;
     users: Pick<IUserRepository, 'findById' | 'update'>;
@@ -227,8 +227,9 @@ export const deleteFabFile = async (
   Logger.globalInstance.log(
     `[deleteFabFile] Removing user from shared file — fileId: ${sharedFile.id}, fileName: ${sharedFile.fileName}, userId: ${userId}`
   );
+  // Atomic, so a grant to someone else landing between the read above and this write survives.
+  await db.fabFiles.shareable.updateUserShares(sharedFile.id, { remove: { userId } });
   sharedFile.users = sharedFile.users.filter(u => u.userId.toString() !== userId);
-  await db.fabFiles.update({ id: sharedFile.id, users: sharedFile.users });
 
   // Clean up any sessions owned by this user that reference the now-inaccessible file
   const sessionsWithFile = await db.sessions.findAllWithKnowledgeId(sharedFile.id);

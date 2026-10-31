@@ -12,6 +12,8 @@ import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkou
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { readNetworkMeta } from '@server/auth/networkMeta';
+import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -51,6 +53,8 @@ const handler = baseApi()
         throw new BadRequestError('This plan is not available yet');
       }
     }
+
+    await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'subscription');
 
     const planSubscription = await subscriptionRepository.findUserSubscriptionByPriceId(priceId, req.user.id);
     if (planSubscription) {

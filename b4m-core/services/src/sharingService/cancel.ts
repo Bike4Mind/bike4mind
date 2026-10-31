@@ -29,6 +29,7 @@ interface CancelInviteAdapters {
     invites: {
       findAllByDocumentId: (documentId: string) => Promise<IInviteDocument[]>;
       update: (data: Partial<IInviteDocument>) => Promise<unknown>;
+      cancelPendingRecipient: (id: string, email: string) => Promise<IInviteDocument | null>;
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
@@ -104,36 +105,31 @@ export const cancelInvite = async (
   const invites = await db.invites.findAllByDocumentId(id);
   if (invites.length === 0) throw new NotFoundError('Invite not found');
 
+  const result: IInviteDocument[] = [];
   for (const invite of invites) {
     // Skip the write entirely for invites this cancel doesn't touch, so we don't churn
     // updatedAt (and needless writes) on every sibling invite for the document.
-    let changes: Partial<IInviteDocument> | null = null;
-
-    // If email is provided, we need to remove it from the pending list
     if (email && invite.recipients?.pending) {
-      const before = invite.recipients.pending.length;
       // Case-insensitive, matching how createInvite resolved the address in the first place.
+      // `remaining` is clamped to the pending left, not decremented. A named invite can carry a
+      // `remaining` larger than its recipient count (the create body takes `available` at face value),
+      // and every gate that treats an empty `pending` as "nobody named" leans on `remaining` reaching
+      // zero when the last address goes - inviteVisibility's legacy inference, canViewInvite and
+      // acceptInvite. Decrementing left slots behind, so cancelling the only named recipient on such a
+      // row turned it into a redeemable share link. See inviteVisibility.ts's docblock.
       const target = email.toLowerCase();
-      invite.recipients.pending = invite.recipients.pending.filter(p => p.toLowerCase() !== target);
-      if (invite.recipients.pending.length < before) {
-        // Clamped, not decremented. A named invite can carry a `remaining` larger than its
-        // recipient count (the create body takes `available` at face value), and every gate that
-        // treats an empty `pending` as "nobody named" leans on `remaining` reaching zero when the
-        // last address goes - inviteVisibility's legacy inference, canViewInvite and acceptInvite.
-        // Decrementing left slots behind, so cancelling the only named recipient on such a row
-        // turned it into a redeemable share link. See inviteVisibility.ts's docblock.
-        invite.remaining = Math.max(0, Math.min(invite.remaining - 1, invite.recipients.pending.length));
-        changes = { recipients: invite.recipients, remaining: invite.remaining };
+      const cancelled = invite.recipients.pending.some(p => p.toLowerCase() === target)
+        ? await db.invites.cancelPendingRecipient(invite.id, email)
+        : null;
+      result.push(cancelled ?? invite);
+    } else {
+      if (invite.remaining !== 0) {
+        invite.remaining = 0;
+        await db.invites.update({ id: invite.id, remaining: 0 });
       }
-    } else if (invite.remaining !== 0) {
-      invite.remaining = 0;
-      changes = { remaining: 0 };
-    }
-
-    if (changes) {
-      await db.invites.update({ id: invite.id, ...changes });
+      result.push(invite);
     }
   }
 
-  return invites;
+  return result;
 };
