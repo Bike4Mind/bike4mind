@@ -13,6 +13,7 @@ import {
   holdsPrompt,
   isToolRefusal,
   OpenAICompatibleRuntime,
+  probeToolSupport,
   redactServerResponse,
   serverContextTokens,
   toolsOffHint,
@@ -112,8 +113,13 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
         headers: Object.fromEntries(headers.entries()),
       });
       if (response.ok) return response;
-      const text = redactServerResponse(await response.text(), response);
-      return new Response(text, { status: response.status, statusText: response.statusText });
+      const responseHeaders = new Headers(response.headers);
+      responseHeaders.delete('content-length');
+      return new Response(withErrorKey(redactServerResponse(await response.text(), response)), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+      });
     };
   }
 
@@ -158,6 +164,20 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       }
     }
     return this.contexts.get(name);
+  }
+
+  /**
+   * `isToolRefusal` matches any 400/500 that mentions tools, including a bad tool history, so a sticky
+   * tools-off waits for a one-token probe. An inconclusive probe keeps the refusal reading.
+   */
+  private async refusesTools(name: string): Promise<boolean> {
+    const verdict = await probeToolSupport(this.options.fetch, this.runtime.baseUrl, name);
+    if (verdict === 'accepted') {
+      this.logger.warn(`${this.options.label} rejected a request with tools but accepts tools, so they stay on.`);
+      return false;
+    }
+    if (verdict === null) this.logger.warn(`Could not confirm that ${this.options.label} refuses tools.`);
+    return true;
   }
 
   private notifyToolsOff() {
@@ -255,7 +275,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     } catch (error) {
       if (sendTools && error instanceof OpenAI.APIError && error.status !== undefined) {
         const detail = typeof error.error === 'string' ? error.error : JSON.stringify(error.error ?? error.message);
-        if (isToolRefusal(error.status, `${error.message} ${detail}`)) {
+        if (isToolRefusal(error.status, `${error.message} ${detail}`) && (await this.refusesTools(name))) {
           this.toolsOff = true;
           this.notifyToolsOff();
           await this.complete(
@@ -526,6 +546,22 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       } as unknown as IMessage);
     }
   }
+}
+
+/**
+ * The SDK reads an error's detail only from a body's top-level `error` key, so a flat body (vLLM's
+ * `{"object":"error","message":...}`) or plain text would surface as "(no body)" and hide a tool refusal.
+ */
+function withErrorKey(text: string): string {
+  if (!text) return text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return JSON.stringify({ error: { message: text } });
+  }
+  if (typeof parsed === 'object' && parsed !== null && 'error' in parsed) return text;
+  return JSON.stringify({ error: parsed });
 }
 
 function textOf(message: IMessage): string {

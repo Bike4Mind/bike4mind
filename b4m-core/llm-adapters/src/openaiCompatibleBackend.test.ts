@@ -8,6 +8,7 @@ import {
   startFakeVllm,
   type FakeServer,
   type FakeVllm,
+  type RecordedRequest,
 } from '@bike4mind/local-models/testing';
 import type { ServerResponse } from 'node:http';
 import type { CompletionInfo, ICompletionOptionTools } from './backend';
@@ -75,6 +76,9 @@ async function run(
   return { text, info };
 }
 
+const bodyOf = (request: RecordedRequest) =>
+  JSON.parse(request.body || '{}') as { stream?: boolean; tools?: unknown[]; messages?: { role: string }[] };
+
 function sse(response: ServerResponse, deltas: object[], usage = { prompt_tokens: 3, completion_tokens: 2 }) {
   response.writeHead(200, { 'content-type': 'text/event-stream' });
   deltas.forEach((delta, i) =>
@@ -137,6 +141,67 @@ describe('OpenAICompatibleBackend against vLLM', () => {
     expect(notices).toHaveLength(1);
     const [info] = await backend.getModelInfo();
     expect(info.supportsTools).toBe(false);
+  });
+
+  it('reads a refusal from a flat error body', async () => {
+    const refusal = '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set';
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (req, res) =>
+        bodyOf(req).tools
+          ? sendJson(res, { object: 'error', message: refusal, type: 'BadRequestError', code: 400 }, 400)
+          : sse(res, [{ content: 'Hello.' }]),
+    });
+    const { backend, notices } = make(server.baseUrl, 'vllm');
+    const { text } = await run(backend, 'm', [weatherTool(async () => '')]);
+    expect(text).toBe('Hello.');
+    expect(notices).toHaveLength(1);
+  });
+
+  it('keeps the message of a flat error body that is not a refusal', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': json({ object: 'error', message: 'The model `m` does not exist.', code: 404 }, 404),
+    });
+    const { backend } = make(server.baseUrl, 'vllm');
+    await expect(run(backend, 'm')).rejects.toThrow(/^gpu-box returned HTTP 404: The model `m` does not exist\.$/);
+  });
+
+  it('keeps the message of a plain-text error body', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (_req, res) => {
+        res.writeHead(502, { 'content-type': 'text/plain' });
+        res.end('upstream down');
+      },
+    });
+    const { backend } = make(server.baseUrl, null);
+    await expect(run(backend, 'm')).rejects.toThrow(/^gpu-box returned HTTP 502: upstream down$/);
+  });
+
+  it('keeps tools on when a tool-shaped error is not a refusal', async () => {
+    let turns = 0;
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (req, res) => {
+        const body = bodyOf(req);
+        if (!body.stream) return sendJson(res, { choices: [{ index: 0, message: { content: 'p' } }] });
+        if (turns++ === 0)
+          return sendJson(
+            res,
+            {
+              object: 'error',
+              message: "messages with role 'tool' must be a response to a preceeding message with 'tool_calls'",
+            },
+            400
+          );
+        return sse(res, [{ content: 'ok' }]);
+      },
+    });
+    const { backend, notices } = make(server.baseUrl, 'vllm');
+    const tools = [weatherTool(async () => '')];
+    await expect(run(backend, 'm', tools)).rejects.toThrow(/HTTP 400: messages with role 'tool' must be/);
+    expect(notices).toEqual([]);
+    expect((await run(backend, 'm', tools)).text).toBe('ok');
+    const chats = server.requests.map(bodyOf).filter(body => body.stream);
+    expect(chats).toHaveLength(2);
+    expect(chats[1].tools).toHaveLength(1);
   });
 
   it('sends no tools when the context cannot hold them, with one notice', async () => {
