@@ -4,7 +4,36 @@ import {
   hostInertNotice,
   isHostLaunchWithQueuedPrompt,
   shouldPromptMcpApproval,
+  shouldShowEndpointPicker,
+  type EndpointPickerGateInput,
 } from './startupTrustGates.js';
+
+describe('shouldShowEndpointPicker', () => {
+  const baked: EndpointPickerGateInput = {
+    endpointSource: 'baked-default',
+    endpointChosen: false,
+    hasAuthTokens: false,
+  };
+
+  it.each<[string, EndpointPickerGateInput, boolean]>([
+    ['fresh install with a default', baked, true],
+    ['fork with no endpoint', { endpointSource: 'unconfigured', endpointChosen: false, hasAuthTokens: false }, true],
+    [
+      'fork with no endpoint, marker set',
+      { endpointSource: 'unconfigured', endpointChosen: true, hasAuthTokens: false },
+      true,
+    ],
+    ['signed in', { ...baked, hasAuthTokens: true }, false],
+    ['expired token', { ...baked, hasAuthTokens: true }, false],
+    ['saved customUrl', { ...baked, endpointSource: 'custom' }, false],
+    ['marker set', { ...baked, endpointChosen: true }, false],
+    ['--prod / --dev / --api-url / --reset-api (marker set)', { ...baked, endpointChosen: true }, false],
+    ['after logout (marker kept, no tokens)', { ...baked, endpointChosen: true, hasAuthTokens: false }, false],
+    ['source-mode dev default', { ...baked, endpointSource: 'dev-default' }, false],
+  ])('%s', (_name, input, expected) => {
+    expect(shouldShowEndpointPicker(input)).toBe(expected);
+  });
+});
 
 describe('isHostLaunchWithQueuedPrompt', () => {
   it('is false with no initial prompt, whatever host flags are set', () => {
