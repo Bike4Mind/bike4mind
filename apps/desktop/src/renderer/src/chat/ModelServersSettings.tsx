@@ -377,6 +377,11 @@ function ServerRow({
               Unencrypted
             </Chip>
           )}
+          {server.toolsHint && (
+            <Chip size="sm" variant="soft" color="warning" data-testid="model-servers-tools-off-chip">
+              Tools off
+            </Chip>
+          )}
           {!server.local && server.auth.type !== 'none' && !server.credentialsPersisted && (
             <Chip size="sm" variant="soft" color="neutral" data-testid="model-servers-session-only-chip">
               Credentials kept until Desktop quits
@@ -402,6 +407,11 @@ function ServerRow({
           <Typography level="body-xs" textColor="text.tertiary">
             Plain http on a private network: anyone on that network can read the conversation. Credentials are not sent
             over it.
+          </Typography>
+        )}
+        {server.toolsHint && (
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-tools-hint">
+            {server.toolsHint}
           </Typography>
         )}
         {!server.local && (

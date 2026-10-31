@@ -14,6 +14,9 @@ import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
 
 export type AlarmLevel = 'page' | 'warn' | 'info';
 
+/** Extra data the relay loads before posting; see youngAccountSpendDetail.ts. */
+export type AlarmDetailKind = 'young-account-spend';
+
 export type AlarmLinkKey =
   | 'signup-activity'
   | 'waf-block-list'
@@ -33,6 +36,8 @@ export interface AlarmCatalogEntry {
   unit?: string;
   /** Admin pages the "what to do" text points at; rendered as buttons when the app URL is known. */
   links?: AlarmLinkKey[];
+  /** Data the relay fetches for the breaching window and passes in as FormatOptions.details. */
+  detail?: AlarmDetailKind;
 }
 
 export interface FormatOptions {
@@ -40,6 +45,8 @@ export interface FormatOptions {
   appUrl?: string;
   /** Mention setting, as parseMentionSetting reads it; applied to production alarms only. */
   mention?: string;
+  /** Escaped mrkdwn sections placed between "why it matters" and "what to do". */
+  details?: string[];
 }
 
 export interface SlackAttachment {
@@ -322,8 +329,9 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     meaning:
       'Accounts under 7 days old spent more estimated AI dollars in one hour than the ceiling. Credit farms spend their free credits fast.',
     action:
-      'Read the young-account spend post in LiveOps for the top accounts, then check the signup activity and the WAF block list.',
+      'Open the top accounts listed above on the admin users page and suspend any that look like abuse, then check the signup activity and the WAF block list.',
     links: SIGNUP_LINKS,
+    detail: 'young-account-spend',
   },
   'llm-spend-young-accounts': {
     title: 'Young-account LLM spend is spiking',
@@ -331,9 +339,9 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     unit: 'USD',
     meaning:
       'Accounts under 7 days old spent more estimated AI dollars in five minutes than the ceiling. New accounts rarely spend this fast on their own.',
-    action:
-      'Read the latest young-account spend post in LiveOps for the top accounts, open them on the admin users page, and suspend any that look like abuse.',
+    action: 'Open the top accounts listed above on the admin users page and suspend any that look like abuse.',
     links: ['signup-activity'],
+    detail: 'young-account-spend',
   },
   'completion-credit-overdraft': {
     title: 'A completion cost more than its account could pay',
@@ -497,7 +505,7 @@ export function lookupCatalog(suffix: string): AlarmCatalogEntry | undefined {
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const formatClock = (d: Date) => `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
 
-function parseStateChangeTime(value: string): Date | undefined {
+export function parseStateChangeTime(value: string): Date | undefined {
   const d = new Date((value ?? '').replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
@@ -636,6 +644,11 @@ function resolveEntry(alarm: CloudWatchAlarmPayload, stage: string) {
   if (entry) return { entry, title: entry.title, level: entry.level };
   const words = suffix.replace(/-/g, ' ');
   return { entry: undefined, title: words.charAt(0).toUpperCase() + words.slice(1), level: DEFAULT_ALARM_LEVEL };
+}
+
+/** The catalog entry an alarm resolves to, so the relay knows what else to load before posting. */
+export function alarmCatalogEntry(alarm: CloudWatchAlarmPayload, stage: string): AlarmCatalogEntry | undefined {
+  return resolveEntry(alarm, stage).entry;
 }
 
 export function consoleUrl(alarm: CloudWatchAlarmPayload): string | undefined {
@@ -795,6 +808,7 @@ export function formatAlarmSlackMessage(
   const why = entry?.meaning ?? alarm.AlarmDescription;
   const sections = [`*What happened*\n${escapeMrkdwn(happened)}`];
   if (why) sections.push(`*Why it matters*\n${escapeMrkdwn(why)}`);
+  sections.push(...(options.details ?? []));
   if (entry?.action) sections.push(`*What to do*\n${escapeMrkdwn(entry.action)}`);
 
   const buttons: { label: string; url: string }[] = [];

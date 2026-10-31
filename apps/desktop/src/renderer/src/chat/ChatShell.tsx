@@ -11,7 +11,7 @@ import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
@@ -365,7 +365,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * it and is silent for the rest, so treating silence as "no" would refuse images on models
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
-  const modelOption = catalog.models.find(model => model.id === conversation.session?.model);
+  const modelOption = findModelOption(catalog.models, conversation.session?.model);
   const sessionCacheTtl = conversation.session?.promptCacheTtl ?? DEFAULT_PROMPT_CACHE_TTL;
   // Main sends the hour only to a model that takes it; see ChatService cacheTtlField.
   const cacheTtlFor = (model: ChatModelOption | undefined): PromptCacheTtl =>
@@ -396,7 +396,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const sessionModel = conversation.session?.model;
   const sessionKey = conversation.session?.id;
   const listed = catalog.models.length > 0 && !catalog.loading;
-  const modelListed = catalog.models.some(model => model.id === sessionModel);
+  const modelListed = !!findModelOption(catalog.models, sessionModel);
   useEffect(() => {
     if (!localMode || !listed || !sessionKey || !sessionModel || modelListed) return;
     const key = `${sessionKey}:${sessionModel}:${catalog.models[0]?.id}`;

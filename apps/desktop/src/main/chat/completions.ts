@@ -111,6 +111,8 @@ export interface CompletionRequest {
    * conversation's turn, such as naming a session.
    */
   sessionId?: string;
+  /** Set when the tools were left out because the model's fixed context cannot hold them: Desktop's prompt plus tools. */
+  toolPromptTokens?: number;
 }
 
 /**

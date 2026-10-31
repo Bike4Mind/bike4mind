@@ -119,6 +119,14 @@ describe('OpenAICompatibleChat', () => {
     await collect(client, request);
     await collect(client, request);
     expect(bodies.map(body => 'tools' in body)).toEqual([true, false, false]);
+    expect(client.toolsHint()).toMatch(/llama box refuses tool calls.*--jinja/);
+  });
+
+  it('does not probe a server that is not vLLM until it refuses tools', async () => {
+    const fetch = vi.fn<FetchLike>();
+    await chat(fetch).recheckTools('qwen2.5-0.5b');
+    await chat(fetch, null).recheckTools('qwen2.5-0.5b');
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('refuses a model id that belongs to another server', async () => {
@@ -149,6 +157,67 @@ describe('OpenAICompatibleChat', () => {
       );
     const [model] = await chat(fetch).listModels();
     expect(model).toMatchObject({ id: MODEL, name: 'qwen2.5-0.5b' });
+  });
+});
+
+describe('OpenAICompatibleChat on a server that fronts several models', () => {
+  const MODEL_A = 'local:srv-abc123:a';
+  const MODEL_B = 'local:srv-abc123:b';
+  const tools = [{ toolSchema: { name: 'read_file', parameters: { type: 'object' } } }];
+  const ask = (model: string) => ({ model, messages: [{ role: 'user' as const, content: 'hi' }], tools });
+
+  function proxy(maxModelLen?: number) {
+    const bodies: Record<string, unknown>[] = [];
+    let listings = 0;
+    let refuseA = true;
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models')) {
+        listings += 1;
+        const entry = (name: string) => ({
+          id: name,
+          object: 'model',
+          ...(maxModelLen ? { max_model_len: maxModelLen } : {}),
+        });
+        return new Response(JSON.stringify({ object: 'list', data: [entry('a'), entry('b')] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      bodies.push(body);
+      if (body.tools && body.model === 'a' && refuseA)
+        return new Response('{"error":{"message":"tools param requires --jinja flag"}}', { status: 500 });
+      return body.stream
+        ? sse([delta({ content: 'ok' }, 'stop'), '[DONE]'])
+        : new Response(JSON.stringify({ choices: [{ message: { content: 'p' } }] }), { status: 200 });
+    };
+    return { fetch, bodies, listings: () => listings, acceptA: () => (refuseA = false) };
+  }
+
+  it('turns tools off only for the model that refused them, and probes that model on a recheck', async () => {
+    const server = proxy();
+    const client = chat(server.fetch, null);
+    await collect(client, ask(MODEL_A));
+    await collect(client, ask(MODEL_B));
+    expect(server.bodies.map(body => [body.model, 'tools' in body])).toEqual([
+      ['a', true],
+      ['a', false],
+      ['b', true],
+    ]);
+    expect((await client.listModels()).map(model => [model.name, model.supportsTools])).toEqual([
+      ['a', false],
+      ['b', undefined],
+    ]);
+
+    server.acceptA();
+    await client.recheckTools('b');
+    expect(server.bodies.at(-1)).toMatchObject({ model: 'a', max_tokens: 1 });
+    expect(client.toolsHint()).toBeNull();
+  });
+
+  it('asks a server that lists no context once, not on every turn', async () => {
+    const server = proxy();
+    const client = chat(server.fetch, null);
+    await client.contextTokens(MODEL_A);
+    await client.contextTokens(MODEL_A);
+    expect(server.listings()).toBe(1);
   });
 });
 

@@ -1278,6 +1278,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       cacheWriteTokens: finalCacheCreationTokens,
       usd: finalUsdCost,
       source,
+      userId: storedActor?.id,
       accountCreatedAt: storedActor?.createdAt,
     });
 
