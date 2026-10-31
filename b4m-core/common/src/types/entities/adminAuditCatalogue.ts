@@ -205,6 +205,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.emergency_login.denied': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.generated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.subscription.removed': { category: 'credits', severity: 'critical', write: 'strict' },
+  // Written after a suspend, contain or delete commits, so it cannot be strict: the block already happened.
+  'user.subscriptions.canceled': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
   'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },

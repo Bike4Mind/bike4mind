@@ -149,6 +149,13 @@ export type AdminSubscriptionBilledInterval = { interval: BilledInterval; interv
 /** A row's contribution to MRR: the billed amount per month, in minor units of `currency`, rounded. */
 export type AdminSubscriptionMrr = { amount: number; currency: string };
 
+/**
+ * A live Stripe-billed row whose paying account is gone or blocked (banned, disputed, suspended):
+ * it will keep renewing against that account's card until someone cancels it. For an organization
+ * the paying account is its billing owner.
+ */
+export type AdminSubscriptionOwnerAlert = 'owner_deleted' | 'owner_blocked';
+
 export type AdminSubscriptionRow = {
   id: string;
   subscriptionId: string;
@@ -156,6 +163,8 @@ export type AdminSubscriptionRow = {
   ownerId: string;
   /** `null` when the owner record is gone. */
   owner: AdminSubscriptionOwner | null;
+  /** `null` for a healthy owner, and for any row Stripe no longer bills. */
+  ownerAlert: AdminSubscriptionOwnerAlert | null;
   plan: AdminSubscriptionPlan;
   /** Mirrored from Stripe; `null` on comps and on rows not synced yet, which fall back to `plan.interval`. */
   billedInterval: AdminSubscriptionBilledInterval | null;

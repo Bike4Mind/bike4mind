@@ -350,6 +350,13 @@ export type BulkAbuseExecuteAdapters = {
   withTransaction: <T>(fn: () => Promise<T>) => Promise<T>;
   /** A strict audit write; called inside the user's transaction so the entry and the step commit together. */
   audit: (entry: BulkAbuseAuditEntry) => Promise<unknown>;
+  /**
+   * Cancels the banned user's Stripe subscriptions, and audits it, after the ban commits. Should
+   * not throw; a Stripe refusal comes back in `failed` and never undoes the ban.
+   */
+  cancelSubscriptions: (
+    user: Pick<IUser, 'id' | 'email' | 'username'>
+  ) => Promise<{ canceled: string[]; failed: { reason: string }[] }>;
   logger?: Logger;
 };
 
@@ -440,6 +447,20 @@ const withBanImpliedKeyRevoke = (actions: BulkAbuseActions): BulkAbuseActions =>
   revokeApiKeys: actions.revokeApiKeys || actions.ban,
 });
 
+/** Outside the transaction: a Stripe cancel cannot roll back, so it runs only once the ban has committed. */
+async function cancelSubscriptionsAfterBan(
+  user: IUser,
+  adapters: BulkAbuseExecuteAdapters
+): Promise<{ canceled: string[]; error?: string }> {
+  try {
+    const { canceled, failed } = await adapters.cancelSubscriptions(user);
+    return failed.length > 0 ? { canceled, error: failed.map(failure => failure.reason).join('; ') } : { canceled };
+  } catch (error) {
+    adapters.logger?.error('Bulk abuse subscription cancel failed for user', user.id, error);
+    return { canceled: [], error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 async function executeForUser(
   user: IUser,
   requested: BulkAbuseActions,
@@ -467,6 +488,8 @@ async function executeForUser(
           ? { userId: user.id, sessionsOnly: true }
           : null;
     if (endFilter) await endRealtimeConnections(endFilter, { db: adapters.db, logger: adapters.logger });
+    // Also when the user was already banned: a ban from before this step existed may still renew.
+    const subscriptions = actions.ban ? await cancelSubscriptionsAfterBan(user, adapters) : null;
     return {
       userId: user.id,
       email: user.email,
@@ -479,6 +502,8 @@ async function executeForUser(
       },
       revokedApiKeys: steps.revokeApiKeys.revokedApiKeys ?? 0,
       clawedBackCredits: steps.clawbackFreeCredits.clawedBackCredits ?? 0,
+      canceledSubscriptions: subscriptions?.canceled ?? [],
+      ...(subscriptions?.error && { subscriptionCancelError: subscriptions.error }),
     };
   } catch (error) {
     adapters.logger?.error('Bulk abuse response failed for user', user.id, error);
@@ -489,6 +514,7 @@ async function executeForUser(
       steps: { ban: 'skipped', revokeApiKeys: 'skipped', revokeSessions: 'skipped', clawbackFreeCredits: 'skipped' },
       revokedApiKeys: 0,
       clawedBackCredits: 0,
+      canceledSubscriptions: [],
       error: error instanceof Error ? error.message : String(error),
     };
   }
