@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
 import type { ServerSubagentTracker } from '@bike4mind/services/llm';
-import { OPTI_SURFACE } from '@bike4mind/common';
+import { OPTI_SURFACE, isShadowTier } from '@bike4mind/common';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
@@ -158,6 +158,26 @@ vi.mock('@bike4mind/services/llm', async () => {
   };
 });
 
+vi.mock('@bike4mind/services/llm/shadowTier', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services/llm/shadowTier')>(
+    '@bike4mind/services/llm/shadowTier'
+  );
+  const settings = { allowlist: ['cheap-model'], dailyTokenCap: 20000, requestsPerMin: 3 };
+  return {
+    ...actual,
+    resolveShadowRouting: vi.fn(async ({ user, requested, models, logger }) =>
+      isShadowTier(user)
+        ? {
+            settings,
+            modelInfo: requested
+              ? actual.resolveShadowModelInfo(user, requested, models, settings.allowlist, logger)
+              : undefined,
+          }
+        : { settings: null, modelInfo: undefined }
+    ),
+  };
+});
+
 vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
 
 const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
@@ -261,6 +281,11 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
   vi.spyOn(repo, 'markComplete').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'incrementCreditsUsed').mockResolvedValue(undefined as never);
+  vi.spyOn(actual.cacheRepository, 'tryAddWithinLimitFixedWindow').mockResolvedValue({
+    success: true,
+    count: 1,
+    expiresAt: new Date(),
+  } as never);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 
@@ -1237,6 +1262,187 @@ describe('processExecution tool deps', () => {
 
       expect(resolve.mock.results[0].value).toBeUndefined();
       expect(guard).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('restricted tier', () => {
+    const model = (id: string, backend: string) => ({
+      id,
+      type: 'text',
+      name: id,
+      backend,
+      max_tokens: 64_000,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+    });
+    const premium = model('claude-sonnet-5', 'anthropic');
+    const cheap = model('cheap-model', 'gemini');
+
+    async function runRestricted({ capReached = false, user = {} as Record<string, unknown> } = {}) {
+      const { getAvailableModels, getLlmByModel } = await import('@bike4mind/llm-adapters');
+      const { User, cacheRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(getAvailableModels).mockResolvedValueOnce([premium, cheap] as never);
+      vi.mocked(User.findById).mockResolvedValueOnce({
+        id: 'user-1',
+        currentCredits: 100,
+        throttle: { tier: 'shadow' },
+        ...user,
+      } as never);
+      vi.mocked(cacheRepository.tryAddWithinLimitFixedWindow).mockResolvedValue({
+        success: !capReached,
+        count: 1,
+        expiresAt: new Date(),
+      } as never);
+      const { handler } = await import('./agentExecutor');
+      await handler(continuationEvent(), lambdaContext).catch(() => undefined);
+      return {
+        llmModels: vi
+          .mocked(getLlmByModel)
+          .mock.calls.map(call => (call[1] as { modelInfo?: { id: string } }).modelInfo?.id),
+        markFailed: vi.mocked(agentExecutionRepository.markFailed),
+        counter: vi.mocked(cacheRepository.tryAddWithinLimitFixedWindow),
+      };
+    }
+
+    it('builds the backend and tools on the allowlisted model', async () => {
+      const { llmModels, counter } = await runRestricted();
+
+      expect(llmModels).toEqual(['cheap-model']);
+      const deps = buildSharedToolsMock.mock.calls[0][0] as Record<string, unknown>;
+      expect(deps.model).toBe('cheap-model');
+      expect((deps.subagentModels as Array<{ id: string }>).map(m => m.id)).toEqual(['cheap-model']);
+      expect(counter).toHaveBeenCalledWith(
+        expect.stringMatching(/^shadow-tokens:user-1:/),
+        1,
+        20000,
+        expect.any(Number)
+      );
+    });
+
+    it('records tool usage under the requested model', async () => {
+      await runRestricted();
+      const { toLedgerModel } = buildSharedToolsMock.mock.calls[0][0] as { toLedgerModel: (id: string) => string };
+
+      expect(toLedgerModel('cheap-model')).toBe('claude-sonnet-5');
+      expect(toLedgerModel('gpt-4')).toBe('gpt-4');
+    });
+
+    it('has current_model_details report the requested model, not the substitute', async () => {
+      await runRestricted();
+      const { servingModel } = buildSharedToolsMock.mock.calls[0][0] as { servingModel?: { current: { id: string } } };
+
+      expect(servingModel?.current.id).toBe('claude-sonnet-5');
+    });
+
+    it('counts untracked subagent cache tokens toward the daily cap, as chat does', async () => {
+      const { counter } = await runRestricted();
+      const { onSubagentCredits } = buildSharedToolsMock.mock.calls[0][1] as {
+        onSubagentCredits: (
+          credits: number,
+          meta?: {
+            model: string;
+            inputTokens: number;
+            outputTokens: number;
+            cacheReadTokens?: number;
+            cacheWriteTokens?: number;
+          }
+        ) => Promise<void>;
+      };
+      counter.mockClear();
+
+      await onSubagentCredits(4, {
+        model: 'cheap-model',
+        inputTokens: 2,
+        outputTokens: 1,
+        cacheReadTokens: 10,
+        cacheWriteTokens: 5,
+      });
+
+      expect(counter).toHaveBeenCalledWith(
+        expect.stringMatching(/^shadow-tokens:user-1:/),
+        18,
+        Number.MAX_SAFE_INTEGER,
+        expect.any(Number)
+      );
+    });
+
+    it('runs deep_research on the substitute, with no OpenAI key to swap it onto GPT-4.1', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      await runRestricted();
+      await runRestricted({ user: { isAdmin: true } });
+
+      const [restricted, admin] = vi.mocked(buildSubagentToolConfig).mock.calls.map(call => call[0]);
+      expect(restricted).toMatchObject({ model: 'cheap-model', apiKeyTable: undefined });
+      expect(admin).toMatchObject({ model: 'claude-sonnet-5' });
+      expect(admin.apiKeyTable).toBeDefined();
+    });
+
+    it('names the requested model for the identity reminder only when substituted', async () => {
+      const { ReActAgent } = await import('@bike4mind/agents');
+      const contexts: Array<Record<string, unknown>> = [];
+      const on = vi.spyOn(ReActAgent.prototype, 'on').mockImplementation(function (this: unknown) {
+        // any: reads the private AgentContext the constructor stored
+        contexts.push((this as { context: Record<string, unknown> }).context);
+        return this as never;
+      });
+      buildSharedToolsMock.mockImplementation(() => []);
+      try {
+        await runRestricted();
+        await runRestricted({ user: { isAdmin: true } });
+      } finally {
+        on.mockRestore();
+      }
+
+      expect(contexts[0]).toMatchObject({ model: 'cheap-model', modelIdentityId: 'claude-sonnet-5' });
+      expect(contexts[contexts.length - 1]).not.toHaveProperty('modelIdentityId');
+    });
+
+    it('runs an admin on the requested model and reads no counter', async () => {
+      const { llmModels, counter } = await runRestricted({ user: { isAdmin: true } });
+
+      expect(llmModels).toEqual(['claude-sonnet-5']);
+      expect(counter).not.toHaveBeenCalled();
+    });
+
+    it('persists a subagent started on the substitute under the requested model', async () => {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const create = vi.spyOn(agentExecutionRepository, 'create').mockResolvedValueOnce({ id: 'child-1' } as never);
+      vi.spyOn(agentExecutionRepository, 'addChildExecution').mockResolvedValueOnce(undefined as never);
+      await runRestricted();
+      const { subagentTracker } = buildSharedToolsMock.mock.calls[0][1] as { subagentTracker: ServerSubagentTracker };
+
+      await subagentTracker.onStart({
+        task: 't',
+        agentName: 'researcher',
+        model: 'cheap-model',
+        isBackground: false,
+      } as Parameters<ServerSubagentTracker['onStart']>[0]);
+
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-sonnet-5' }));
+    });
+
+    it('charges untracked subagent spend under the requested model', async () => {
+      await runRestricted();
+      const { onSubagentCredits } = buildSharedToolsMock.mock.calls[0][1] as {
+        onSubagentCredits: (
+          credits: number,
+          meta?: { model: string; inputTokens: number; outputTokens: number }
+        ) => Promise<void>;
+      };
+
+      await onSubagentCredits(4, { model: 'cheap-model', inputTokens: 2, outputTokens: 1 });
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ credits: 4, model: 'claude-sonnet-5' }),
+        expect.anything()
+      );
+    });
+
+    it('over the daily token cap fails like an out-of-credits run', async () => {
+      const { markFailed } = await runRestricted({ capReached: true });
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
     });
   });
 });

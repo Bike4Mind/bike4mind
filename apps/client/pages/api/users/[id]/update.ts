@@ -284,6 +284,7 @@ const handler = baseApi().put(
       // Validated before any write so a missing reason never leaves a half-applied update.
       const roleChangeReason = changesRole ? parseAdminActionReason(body.roleChangeReason) : undefined;
       const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
+      const throttleReason = body.throttleTier ? parseAdminActionReason(body.throttleReason) : undefined;
       const statusChangeReason = statusChanges.length > 0 ? parseAdminActionReason(body.statusChangeReason) : undefined;
 
       // Lockout guard: an explicit demote must not remove the ONLY remaining Super Admin.
@@ -363,6 +364,23 @@ const handler = baseApi().put(
               related: creditTransactionId ? { creditTransactionId } : undefined,
             });
           }
+          if (body.throttleTier && throttleReason) {
+            const tierChange = await userService.setThrottleTier(
+              userId,
+              body.throttleTier,
+              { reason: throttleReason, source: 'admin', changedBy: currentUser.id },
+              { db: { users: userRepository } }
+            );
+            if (tierChange.changed) {
+              await recordAdminActionFromRequest(req, {
+                action: 'user.throttle_tier.changed',
+                target: auditTarget,
+                summary: `set the restricted tier to ${tierChange.after} (source: admin, reason: ${throttleReason})`,
+                reason: throttleReason,
+                changes: [{ field: 'throttle.tier', before: tierChange.before, after: tierChange.after }],
+              });
+            }
+          }
           return { snapshot, updated };
         },
         // adminUpdateUser returns the user as written, read inside the same transaction.
@@ -398,7 +416,7 @@ const handler = baseApi().put(
       // Admin branch: symmetric with the admin view of GET /users/[id].
       const safeUser = redactUserSecretsForSelf(finalUser, {
         keep: ['securityQuestions'],
-        keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment'],
+        keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment', 'throttle', 'riskSignals'],
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.

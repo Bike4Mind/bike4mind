@@ -39,6 +39,19 @@ describe('AnthropicBackend identity reminder', () => {
     expect(captured[0].system).toBe(buildIdentityReminder(ChatModels.CLAUDE_4_8_OPUS));
   });
 
+  it('names the identity model in place of the serving model when one is passed', async () => {
+    const { backend, captured } = buildCapturingBackend();
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'hi' }],
+      { stream: false, tools: [], modelDisplayName: 'GPT Big', modelIdentityId: 'gpt-big' },
+      async () => {}
+    );
+
+    expect(captured[0].system).toBe(buildIdentityReminder('gpt-big', 'GPT Big'));
+  });
+
   it('sends NO system parameter when the caller omits the reminder and supplies no system messages', async () => {
     const { backend, captured } = buildCapturingBackend();
 
