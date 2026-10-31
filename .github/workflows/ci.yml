@@ -219,6 +219,15 @@ jobs:
         env:
           SMART_PUNCTUATION_BASE: ${{ steps.ascii-base.outputs.base }}
 
+      # Every changed path, any extension: blocked paths, cloud identifiers in added lines.
+      # Mirrors the husky pre-commit guard; same base resolution as above. The restricted-term
+      # list is not available here (it is a git-ignored local file), so that rule is skipped
+      # and the Restricted Terms workflow remains the authority for it.
+      - name: Check for leak shapes in changed paths and added lines
+        run: bash scripts/check-no-leak-shapes.sh --changed "$LEAK_SHAPES_BASE"
+        env:
+          LEAK_SHAPES_BASE: ${{ steps.ascii-base.outputs.base }}
+
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
 

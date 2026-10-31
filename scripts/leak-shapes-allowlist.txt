@@ -1,0 +1,43 @@
+# Allowlist for scripts/check-no-leak-shapes.sh: one extended regex per line, blank lines and
+# # comments skipped. A content hit is dropped when a pattern matches "<path>:<line>", a path
+# hit when it matches "<path>". Restricted-term hits are never allowlisted.
+#
+# Every entry carries a comment saying why the match is legitimate. Prefer the narrowest
+# pattern that covers the case: a path for a fixture file, "path:" plus a fragment for one
+# line in a source file.
+
+# Test and fixture files hold synthetic addresses, ARNs and account ids by design (SSRF
+# guards, IP blocklists, Slack integrations). LIMITATION: a real value pasted into a test file
+# is not caught here; review is the backstop, as it is for check-no-account-ids.sh.
+^[^:]*\.(test|spec)\.[cm]?[jt]sx?:
+^[^:]*/(__tests__|__test__|__fixtures__|fixtures)/
+
+# Vendored browser bundles: minified code tripping the number and address shapes.
+^apps/client/public/(scalar|static/lib)/
+
+# Binary assets forced through --text; a NUL-free run of bytes can still look like a number.
+^[^:]*\.(ttf|otf|woff2?|png|jpe?g|gif|ico|pdf|wasm):
+
+# IP-parsing code whose comments walk through arbitrary example addresses.
+^b4m-core/fab-pipeline/src/ssrfProtection\.ts:
+^packages/server-utils/src/utils/ssrfProtection\.ts:
+
+# A doc comment quoting a sample alarm log line.
+^b4m-core/utils/src/slack\.ts:
+
+# Twelve-hex-character route-scope fingerprints; one of them happens to be all digits.
+^packages/scripts/src/routeScopePostureBaseline\.ts:
+
+# Planning documents tracked before this guard existed. Edit or delete; do not add siblings.
+^docs/superpowers/plans/2026-08-11-datalake-remove-auto-attach\.md$
+^docs/superpowers/plans/2026-08-12-chunk-char-length\.md$
+^docs/superpowers/plans/2026-08-13-accesscontext-org-set\.md$
+^docs/superpowers/plans/2026-08-14-lake-systemprompt-copy\.md$
+^docs/superpowers/plans/2026-08-14-membership-followups\.md$
+^docs/superpowers/plans/2026-10-26-gears-discovery-modal\.md$
+^docs/superpowers/specs/2026-08-11-datalake-remove-auto-attach-design\.md$
+^docs/superpowers/specs/2026-08-12-chunk-char-length-design\.md$
+^docs/superpowers/specs/2026-08-13-accesscontext-org-set-design\.md$
+^docs/superpowers/specs/2026-08-14-lake-systemprompt-copy-design\.md$
+^docs/superpowers/specs/2026-08-14-membership-followups-design\.md$
+^docs/superpowers/specs/2026-10-26-gears-discovery-modal-design\.md$

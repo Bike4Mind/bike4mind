@@ -85,6 +85,13 @@ if ! bash scripts/check-no-smart-punctuation.sh; then
   FINAL_EXIT_CODE=1
 fi
 
+# Check EVERY staged path (any extension) for leak shapes: local planning artifacts and root
+# HTML pages by path, cloud identifiers and restricted terms in added lines.
+echo "Running leak-shape check..."
+if ! bash scripts/check-no-leak-shapes.sh --staged; then
+  FINAL_EXIT_CODE=1
+fi
+
 # Check that no workflow interpolates ${{ }} inside a run: body
 echo "Running workflow run-interpolation check..."
 if ! python3 scripts/check-no-run-interpolation.py; then
