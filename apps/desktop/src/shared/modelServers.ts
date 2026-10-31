@@ -50,6 +50,8 @@ export interface ModelServerView {
   models: string[];
   /** Hardware entered in Settings; null when none is. */
   specs: ModelServerSpecs | null;
+  /** Set while the server refuses tool calls: why, and how to turn them on. */
+  toolsHint?: string;
 }
 
 /**

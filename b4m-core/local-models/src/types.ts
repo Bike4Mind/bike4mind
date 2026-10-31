@@ -23,6 +23,12 @@ export interface InstalledModel {
   modifiedAt: string | null;
   /** All false when the runtime does not report capabilities; false means "not reported", not "absent". */
   capabilities: ModelCapabilities;
+  /** The context the server runs this model with (vLLM's `max_model_len`), when it says. */
+  contextLength?: number;
+  /** Other names the server answers to for this same model, such as vLLM's extra `--served-model-name`s. */
+  aliases?: string[];
+  /** A LoRA adapter's base model, by the name this list shows it under. */
+  baseModel?: string;
 }
 
 /** Attention layers that share one KV layout. */
