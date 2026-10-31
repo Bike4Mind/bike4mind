@@ -539,6 +539,32 @@ describe('creditService - addCredits', () => {
       );
     });
 
+    it('stamps the lotRef adapter option when the grant has no payment intent', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+      const mockCreditLotCreate = vi.fn().mockResolvedValue({ id: 'lot1' });
+
+      await addCredits(
+        {
+          type: 'generic_add',
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 100,
+          transactionId: 'promo:1',
+          reason: 'promo',
+          description: 'Promo grant',
+        } as AddCreditsParameters,
+        {
+          ...mockAdapters,
+          db: { ...mockAdapters.db, creditLots: { create: mockCreditLotCreate } as any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+          lotRef: 'promo:1',
+        }
+      );
+
+      expect(mockCreditLotCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'promo', amount: 100, stripeRef: 'promo:1' })
+      );
+    });
+
     it('does not stamp a lot when no creditLots adapter is provided (leaves the grant unstamped)', async () => {
       mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
 

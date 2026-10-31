@@ -50,7 +50,9 @@ export async function isFreeTierCapUser(
   // Dynamic: userRateTier pulls in the Subscription model at module init, which crashes route tests
   // that mock @bike4mind/database but never reach the cap check.
   const { resolveUserRateTier } = await import('@server/utils/userRateTier');
-  return (await resolveUserRateTier(user, req, options)) === 'free';
+  // Without `throttle`: a restricted user keeps the cap of their subscription tier.
+  const tier = await resolveUserRateTier({ id: user.id, isAdmin: user.isAdmin, tags: user.tags }, req, options);
+  return tier === 'free';
 }
 
 /**

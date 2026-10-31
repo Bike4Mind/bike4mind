@@ -989,7 +989,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // shouldOmitIdentityReminder) - must stay in sync with anthropicBackend.
     const identityReminder = shouldOmitIdentityReminder(options)
       ? null
-      : buildIdentityReminder(model, options.modelDisplayName);
+      : buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName);
 
     let systemMessage = systemBlocks.map(block => block.text).join('\n');
     if (identityReminder) {

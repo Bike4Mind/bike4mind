@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -125,7 +126,7 @@ describe('/api/otc/verify - trusted device', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     for (const key of Object.keys(settingsValues)) delete settingsValues[key];
-    mockValidateNonce.mockResolvedValue('hash');
+    mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
     mockFindByEmail.mockResolvedValue({ id: 'user-1', tokenVersion: 3, emailVerified: true });
     mockConsumeTrustedDevice.mockResolvedValue(null);
     mockUserHasMFA.mockReturnValue(true);

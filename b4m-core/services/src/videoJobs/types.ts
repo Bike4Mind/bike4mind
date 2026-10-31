@@ -74,6 +74,8 @@ export type CreateVideoJobInput = {
   /** Untrusted: parsed and validated by createVideoJob. */
   request: unknown;
   source: GenerationJobSource;
+  /** The UserApiKey that authenticated the request, kept on the job for its settlement row. */
+  apiKeyId?: string;
   idempotencyKey?: string;
   questId?: string;
   delivery?: GenerationJobDelivery;

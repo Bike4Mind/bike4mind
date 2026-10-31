@@ -230,6 +230,23 @@ describe('checkFreeTierDailySpendCap', () => {
     await expect(callGate(makeUser(2 * DAY_MS))).rejects.toBeInstanceOf(TooManyRequestsError);
   });
 
+  it('holds a restricted free user to the free-tier cap', async () => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+    resolveUserRateTierMock.mockImplementation(async (user: { throttle?: unknown }) =>
+      user.throttle ? 'shadow' : 'free'
+    );
+    findDailySpendByUserMock.mockResolvedValue(201);
+    const user = Object.assign(makeUser(10 * DAY_MS), {
+      throttle: { tier: 'shadow', reason: 'test', source: 'admin', changedAt: new Date() },
+    });
+
+    await expect(callGate(user)).rejects.toBeInstanceOf(TooManyRequestsError);
+  });
+
   it('uses steady-state cap for an account older than 7 days', async () => {
     getSettingsValueMock.mockImplementation((key: string) => {
       if (key === 'enforceCredits') return true;
@@ -440,7 +457,11 @@ describe('checkFreeTierDailySpendCap', () => {
 
     await expect(callGate(user)).resolves.toBeUndefined();
 
-    expect(resolveUserRateTierMock).toHaveBeenCalledWith(user, undefined, { strict: true });
+    expect(resolveUserRateTierMock).toHaveBeenCalledWith(
+      { id: user.id, isAdmin: user.isAdmin, tags: user.tags },
+      undefined,
+      { strict: true }
+    );
     expect(findDailySpendByUserMock).not.toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalledWith('[freeTierDailyCapGate] cap check failed; allowing request', {
       error,

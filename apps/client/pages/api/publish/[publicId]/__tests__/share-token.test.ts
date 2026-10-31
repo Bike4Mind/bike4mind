@@ -10,6 +10,11 @@ const { mockLoad, mockFindOneAndUpdate, mockCurrent, mockUpdateOne, mockSelect }
   mockUpdateOne: vi.fn(), // DELETE revoke
 }));
 
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
+
 // baseApi mock: callable chain routed by req.method; supports .post()/.delete().
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {

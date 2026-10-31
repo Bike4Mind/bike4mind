@@ -7,6 +7,7 @@ export type ProfileAction =
   | 'suspend'
   | 'reinstate'
   | 'restrict'
+  | 'shadowTier'
   | 'role'
   | 'productAccess'
   | 'tags'

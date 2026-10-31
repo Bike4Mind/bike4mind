@@ -999,6 +999,58 @@ describe('UsageEventRepository.creditsSpentByUser', () => {
   });
 });
 
+describe('UsageEventRepository.activitySummaryByUser', () => {
+  const from = new Date('2026-10-20T10:00:00Z');
+  const to = new Date('2026-10-21T10:00:00Z');
+  const at = async (createdAt: Date, overrides: Partial<IUsageEventInput> = {}) => {
+    const event = await record(overrides);
+    // Raw driver update: mongoose timestamps make createdAt immutable via the model.
+    await UsageEvent.collection.updateOne({ _id: event!._id }, { $set: { createdAt } });
+  };
+
+  it('counts events by outcome and sums credits inside [from, to) for that user only', async () => {
+    const latest = new Date('2026-10-21T09:00:00Z');
+    await at(from, { creditsCharged: 30 });
+    await at(latest, { creditsCharged: 0, writtenOffCredits: 5, status: 'error' });
+    await at(new Date('2026-10-20T12:00:00Z'), { creditsCharged: 0, status: 'refusal' });
+    await at(to, { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T12:00:00Z'), { userId: 'someone-else', creditsCharged: 1000 });
+
+    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to, 100)).resolves.toEqual({
+      events: 3,
+      completed: 1,
+      failed: 2,
+      credits: 35,
+      latestAt: latest,
+    });
+  });
+
+  it('returns zeros and no latestAt when the user had no usage in the window', async () => {
+    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to, 100)).resolves.toEqual({
+      events: 0,
+      completed: 0,
+      failed: 0,
+      credits: 0,
+      latestAt: null,
+    });
+  });
+
+  it('summarises only the newest `limit` events, so a busy account is a bounded read', async () => {
+    const latest = new Date('2026-10-21T09:00:00Z');
+    await at(new Date('2026-10-20T11:00:00Z'), { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T12:00:00Z'), { creditsCharged: 7 });
+    await at(latest, { creditsCharged: 3 });
+
+    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to, 2)).resolves.toEqual({
+      events: 2,
+      completed: 2,
+      failed: 0,
+      credits: 10,
+      latestAt: latest,
+    });
+  });
+});
+
 describe('UsageEventRepository.creditsSpentByUsers', () => {
   it('sums charged and written-off credits per user, leaving out users who spent nothing', async () => {
     await record({ userId: 'user-1', creditsCharged: 30 });

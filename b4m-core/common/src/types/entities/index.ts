@@ -50,6 +50,7 @@ export * from './ModelPriceTypes';
 export * from './ModelCatalogTypes';
 export * from './ProviderInvoiceTypes';
 export * from './SpendReconciliationTypes';
+export * from './SpendMonitorTypes';
 export * from './StorageDriftTypes';
 export * from './CreditHolderTypes';
 export * from './CreditLotTypes';

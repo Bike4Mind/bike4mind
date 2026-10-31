@@ -37,7 +37,7 @@ const {
   mockInvokeOptions: vi.fn(),
   mockOptionsFindUser: vi.fn(),
   mockSseChunk: vi.fn(),
-  processState: { terminalError: undefined as Error | undefined },
+  processState: { terminalError: undefined as Error | undefined, options: undefined as unknown },
 }));
 
 // Bypass baseApi's whole middleware chain (connectDB, passport, api-key auth) - this
@@ -111,6 +111,9 @@ vi.mock('@bike4mind/services/llm', () => ({
     invoke = (...args: unknown[]) => mockInvoke(...args);
   },
   ChatCompletionProcess: class {
+    constructor(options: unknown) {
+      processState.options = options;
+    }
     terminalError = processState.terminalError;
     process = (...args: unknown[]) => mockProcess(...args);
   },
@@ -245,6 +248,32 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     );
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body).toEqual(
       expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key-1' })
+    );
+  });
+
+  it("hands the token's key to the QuestMaster completion meter", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    const { createCompletionMeter: createMeter } = processState.options as {
+      createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
+    };
+    createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
+    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    expect(createCompletionMeter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'QuestMaster planning',
+      expect.objectContaining({ apiKeyId: 'key-1' })
     );
   });
 

@@ -98,6 +98,12 @@ export const UsageEvent = z.object({
   provider: z.string(),
   /** Exact model id string used for the call. */
   model: z.string(),
+  /**
+   * Admin-only: the provider/model that actually ran, set only when the restricted tier substituted it.
+   * provider/model above keep the requested ids; costUsd prices the executed model. Never return to users.
+   */
+  executedProvider: z.string().optional(),
+  executedModel: z.string().optional(),
 
   // Token quantities. inputTokens/outputTokens are ALWAYS the local tokenizer
   // estimate and providerInputTokens/providerOutputTokens ALWAYS the provider's
@@ -628,6 +634,14 @@ export interface ISessionUsageResponse {
   executions: ISessionAgentExecution[];
 }
 
+export interface IUserUsageActivity {
+  events: number;
+  completed: number;
+  failed: number;
+  credits: number;
+  latestAt: Date | null;
+}
+
 export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocument> {
   /** Append one event. Must never throw into the billing path; callers fire-and-forget. */
   record(event: IUsageEventInput): Promise<IUsageEventDocument | null>;
@@ -637,6 +651,13 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Credits the user spent in [from, to): charged plus written off. */
   creditsSpentByUser(userId: string, from: Date, to: Date): Promise<number>;
+
+  /**
+   * The user's usage in [from, to): event count, `ok` events, the rest (error/timeout/refusal/
+   * degenerate), credits charged plus written off, and the newest event's time (null when none).
+   * Reads at most `limit` of the newest events, so `events === limit` means the counts are a floor.
+   */
+  activitySummaryByUser(userId: string, from: Date, to: Date, limit: number): Promise<IUserUsageActivity>;
 
   /** Credits each user has spent in total, charged plus written off; users with none are absent. */
   creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>>;
