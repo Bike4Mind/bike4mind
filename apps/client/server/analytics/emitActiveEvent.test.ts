@@ -254,6 +254,17 @@ describe('emitVisitEvent', () => {
     expect('metadata' in body.event).toBe(false);
   });
 
+  it('carries the landing path as metadata, and nothing about a user beside it', async () => {
+    resetConfig();
+    await emitVisitEvent({ sessionId: 'visit-3', landingPath: '/pricing' });
+
+    const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+      event: Record<string, unknown>;
+    };
+    expect(body.event.metadata).toEqual({ landingPath: '/pricing' });
+    expect(body.event.userId).toBe(OVERWATCH_ANONYMOUS_USER_ID);
+  });
+
   it('omits referrer and utm when there are none', async () => {
     resetConfig();
     await emitVisitEvent({ sessionId: 'visit-2' });

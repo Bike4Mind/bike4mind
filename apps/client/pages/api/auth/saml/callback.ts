@@ -15,6 +15,7 @@ import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
+import { readVisitId } from '@server/analytics/visitSession';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { Logger } from '@bike4mind/observability';
@@ -154,6 +155,9 @@ const handleSamlCallback = async (req: any, res: any) => {
           method: AuthStrategy.SAML,
           emailVerified: user.emailVerified === true,
           creditsGranted: (user as OAuthUser).signupCreditsGranted ?? 0,
+          // Usually absent: the IdP's cross-site POST carries no Lax cookie, so a SAML signup
+          // mostly names no visit. Read anyway for the same-site case.
+          visitId: readVisitId(req.headers.cookie),
         });
       }
 
