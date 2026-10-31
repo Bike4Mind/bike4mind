@@ -689,6 +689,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '7c55bfdeaea409d972ba757cc5e3c8d50a5a0d1e8fd8629afab3473284bbbd6e'
   ),
   broker(
+    'queue:infra/spendMonitorDeadLetter.ts:spendMonitorDlq',
+    '1cf26770977879e377a4c62a5d06cc22ad09892a0a144d012deb4070368f2223'
+  ),
+  broker(
     'queue:infra/signupGrantHeldReleaseDeadLetter.ts:signupGrantHeldReleaseDlq',
     '1856afc8013710101dc260617d02b2feca7f30a05c0a2444f823a5e1ae6b21c8'
   ),
@@ -964,6 +968,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'schedule:infra/cron.ts:youngAccountSpendAlert',
     '0f351e3081a732ae7ebcb35c048e4d5a5031666986942fbba872f472c6fa7ad2',
     'Hosted production abuse alert to Slack; not applicable to a portable deployment.'
+  ),
+  hostedOnly(
+    'schedule:infra/cron.ts:spendMonitor',
+    'd9b098e7dc3e30b070b148a13625050b057541918960ed8259c2901866c22096',
+    'Hosted spend alerting to Slack; not applicable to a portable deployment.',
+    ['ssm:GetParameter']
   ),
   hostedOnly(
     'schedule:infra/cron.ts:signupBaselineReport',

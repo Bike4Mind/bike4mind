@@ -207,8 +207,10 @@ export async function settleCompletion(
     cacheCreationInputTokens?: number;
     sessionId?: string;
     feature?: 'completion_api' | 'embedding';
+    apiKeyId?: string;
   }
 ): Promise<number> {
+  const apiKeyId = charge.apiKeyId ?? req.apiKeyInfo?.keyId;
   // Per call, never the session id: UsageEvent rollups group by requestId, so one id shared across a
   // session's calls would merge them.
   const requestId = randomUUID();
@@ -217,7 +219,7 @@ export async function settleCompletion(
     type: 'completion_api_usage',
     sessionId: charge.sessionId ?? requestId,
     model: charge.model,
-    apiKeyId: req.apiKeyInfo?.keyId,
+    apiKeyId,
     // Web JWT calls keep the ledger's 'web' default; resolveRequestUsageSource would label them 'api'.
     source,
     inputTokens: charge.inputTokens,
@@ -244,7 +246,7 @@ export async function settleCompletion(
       creditsCharged,
       status: 'ok',
       source,
-      apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyId,
     })
     .catch(err => req.logger.warn('[meterPlatformCompletion] usage event failed', err));
   await recordShadowTokenUsage(
@@ -258,7 +260,13 @@ export async function settleCompletion(
   return creditsCharged;
 }
 
-type CompletionMeterOptions = { sessionId?: string; organizationId?: string | null; systemModel?: boolean };
+type CompletionMeterOptions = {
+  sessionId?: string;
+  organizationId?: string | null;
+  systemModel?: boolean;
+  /** The UserApiKey behind queued work that has no request; ledger attribution only, never the billing owner. */
+  apiKeyId?: string;
+};
 
 /**
  * A CompletionMeter (b4m-core/services/src/billing/completionMeter.ts) for platform-key work with no
@@ -306,6 +314,7 @@ export function createRequestCompletionMeter(
           cacheReadInputTokens: usage.cacheReadInputTokens,
           cacheCreationInputTokens: usage.cacheCreationInputTokens,
           sessionId: opts.sessionId,
+          apiKeyId: opts.apiKeyId,
         }),
     };
   };

@@ -1236,6 +1236,8 @@ export class ChatCompletionProcess {
   private reservedCreditsOwnerId: string = '';
   private reservedCreditsOwnerType: CreditHolderType = CreditHolderType.User;
   private reservedCreditHolder: ICreditHolder | null = null;
+  // The UserApiKey that authenticated the current turn (parsedBody.apiKeyId), stamped on its ledger rows.
+  private turnApiKeyId: string | undefined;
   // What the reservation was priced on: a turn that ends on a thrown abort settles the tokens it
   // streamed against it (settleAbortedReservation) instead of refunding the whole hold.
   private reservationBasis: {
@@ -2048,6 +2050,7 @@ export class ChatCompletionProcess {
     // Started now so its reads overlap context assembly instead of delaying the first token.
     void this.resolveThinkingVisibility();
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
+    this.turnApiKeyId = initContext.parsedBody.apiKeyId;
     const {
       parsedBody,
       quest,
@@ -6909,6 +6912,7 @@ export class ChatCompletionProcess {
                   credits: toolCreditsUsed,
                   description: `Tool usage: ${toolNames}`,
                   source: 'web',
+                  apiKeyId: this.turnApiKeyId,
                 },
                 {
                   db: {
@@ -6935,6 +6939,7 @@ export class ChatCompletionProcess {
                 model: settledLedgerModel.id,
                 inputTokens,
                 outputTokens,
+                apiKeyId: this.turnApiKeyId,
                 cacheReadTokens: cacheReadInputTokens || undefined,
                 cacheWriteTokens: cacheCreationInputTokens || undefined,
               },
@@ -7751,6 +7756,7 @@ export class ChatCompletionProcess {
           model: usageLedgerModel.id,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
+          apiKeyId: this.turnApiKeyId,
           cacheReadTokens: usage.cacheReadInputTokens,
           cacheWriteTokens: usage.cacheCreationInputTokens,
         },
@@ -7779,6 +7785,7 @@ export class ChatCompletionProcess {
           credits: toolCredits,
           description: `Tool usage: ${Array.from(this.toolCreditsMap.keys()).join(', ')}`,
           source: 'web',
+          apiKeyId: this.turnApiKeyId,
         },
         {
           db: { creditTransactions: this.db.creditTransactions },

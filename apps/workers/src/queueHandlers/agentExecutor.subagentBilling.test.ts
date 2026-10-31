@@ -221,6 +221,18 @@ describe('processSubagentDispatch admission and billing', () => {
     );
   });
 
+  it('records the API key that started the run on the subagent charge', async () => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({ ...childDoc, apiKeyId: 'key-1' } as never);
+
+    await dispatch();
+
+    expect(deductCreditsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'text_generation_usage', credits: 7, apiKeyId: 'key-1' }),
+      expect.anything()
+    );
+  });
+
   it('charges what a subagent spent before it failed', async () => {
     delegateToAgentMock.mockRejectedValue(Object.assign(new Error('provider 500'), { spent: childResult }));
 

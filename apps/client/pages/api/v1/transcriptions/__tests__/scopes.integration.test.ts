@@ -133,6 +133,12 @@ describe('/api/v1/transcriptions scope enforcement (real middleware chain)', () 
     expect(res._getJSONData()).toEqual({ text: 'hello' });
   });
 
+  it('hands the authenticating key to the transcription charge', async () => {
+    withScopes([ApiKeyScope.AI_GENERATE]);
+    expect((await transcribe())._getStatusCode()).toBe(200);
+    expect(mockTranscribe).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'k1' }));
+  });
+
   it('a key without ai:generate is refused (403) and nothing is minted or transcribed', async () => {
     withScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES]);
     for (const res of [await upload(), await transcribe()]) {

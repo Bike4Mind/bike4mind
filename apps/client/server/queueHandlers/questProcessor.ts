@@ -361,7 +361,11 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     sessionId: params.sessionId,
     user,
     createCompletionMeter: ({ organizationId, featureLabel }) =>
-      createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
+      createCompletionMeter(user, logger, featureLabel, {
+        sessionId: params.sessionId,
+        organizationId,
+        apiKeyId: params.apiKeyId,
+      }),
   });
   logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
 

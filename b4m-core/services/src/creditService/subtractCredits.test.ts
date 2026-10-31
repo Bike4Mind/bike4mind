@@ -209,6 +209,42 @@ describe('creditService - subtractCredits', () => {
     });
   });
 
+  describe('apiKeyId attribution on usage transactions', () => {
+    const questScoped = { model: 'm', questId: 'q1', sessionId: 's1' };
+    const questLess = { model: 'm', sessionId: 's1' };
+    it.each([
+      ['text_generation_usage', { ...questScoped, inputTokens: 1, outputTokens: 1 }],
+      ['image_generation_usage', questScoped],
+      ['image_edit_usage', questScoped],
+      ['video_generation_usage', questScoped],
+      ['tool_usage', questScoped],
+      ['realtime_voice_usage', questLess],
+      ['speech_to_text_usage', questLess],
+      ['text_to_speech_usage', questLess],
+      ['sound_effects_usage', questLess],
+      ['music_generation_usage', questLess],
+    ] as const)('writes apiKeyId on %s', async (type, fields) => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await subtractCredits(
+        {
+          type,
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 5,
+          apiKeyId: 'apikey-123',
+          ...fields,
+        } as SubtractCreditsParameters,
+        mockAdapters
+      );
+
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        type,
+        expect.objectContaining({ apiKeyId: 'apikey-123' })
+      );
+    });
+  });
+
   describe('completion_api_usage transactions', () => {
     it('should forward source field through to createTransaction (CLI/API attribution)', async () => {
       mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);

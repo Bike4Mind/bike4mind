@@ -70,6 +70,7 @@ const createRouter = nextRouteForContract(createMusicGenerationContract, {
       user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
       request,
       source,
+      apiKeyId: req.apiKeyInfo?.keyId,
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),
     },
     getCreateMusicJobDeps()

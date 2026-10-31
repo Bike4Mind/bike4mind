@@ -195,6 +195,7 @@ export const musicGenerationTool: ToolDefinition = {
             },
             request,
             source: 'agent',
+            apiKeyId: context.apiKeyId,
             sessionId: context.sessionId,
             questId: context.questId,
             idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, request),
