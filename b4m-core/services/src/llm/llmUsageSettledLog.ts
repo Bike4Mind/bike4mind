@@ -19,6 +19,8 @@ export type LlmUsageSettled = {
   cacheWriteTokens?: number;
   usd: number;
   source: LlmUsageSource;
+  /** Lets the young-account spend alarm name the accounts behind a breach; see youngAccountSpendDetail.ts. */
+  userId?: string | null;
   accountCreatedAt?: Date | null;
 };
 
@@ -53,14 +55,16 @@ export function llmUsageSettledFields(usage: LlmUsageSettled, now: Date = new Da
     usd: Number.isFinite(usage.usd) ? Number(usage.usd.toFixed(6)) : 0,
     source: usage.source,
     isYoungAccount: isYoungAccount(usage.accountCreatedAt, now),
+    ...(usage.userId ? { userId: String(usage.userId) } : {}),
+    ...(usage.accountCreatedAt ? { accountCreatedAt: new Date(usage.accountCreatedAt).toISOString() } : {}),
   };
 }
 
 /** One line per settled text completion; CloudWatch metric filters turn it into the LLM spend metrics. */
 export function logLlmUsageSettled(usage: LlmUsageSettled): void {
   try {
-    // Request loggers inherit user ids and other request metadata. Metrics have their own
-    // bounded context, and must survive a higher application log-level threshold.
+    // Request loggers inherit request metadata. Metrics carry only the fields above (the account
+    // id is deliberate, not inherited), and must survive a higher application log-level threshold.
     const logger = new Logger({
       metadata: { service: 'llmSpend' },
       logInJson: true,
