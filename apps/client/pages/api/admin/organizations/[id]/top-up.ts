@@ -104,6 +104,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           {
             db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
             creditHolderMethods: organizationRepository,
+            lotFundingSource: 'granted',
             // A refund dedupes on transactionId, which createTransaction swallows. Inside the
             // transaction the duplicate write has already aborted the session, so the duplicate
             // must be raised here rather than re-read: any further operation on the dead session

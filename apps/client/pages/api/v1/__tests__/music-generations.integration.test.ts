@@ -81,6 +81,7 @@ describe('POST /api/v1/music-generations', () => {
         user: { id: 'user-1', organizationId: null, adminRoleWithheld: true },
         source: 'api',
         request: { model: 'test-music', prompt: 'a calm piano piece' },
+        apiKeyId: 'k1',
       },
       expect.anything()
     );

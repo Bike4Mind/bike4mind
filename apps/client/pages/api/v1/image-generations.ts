@@ -143,6 +143,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
 
     const quest = await getImageGeneration().invoke({
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
+      apiKeyId: req.apiKeyInfo?.keyId,
       userId: req.user.id,
       body: enhancedBody,
     });

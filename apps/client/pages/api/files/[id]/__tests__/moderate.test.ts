@@ -127,7 +127,7 @@ describe('POST /api/files/[id]/moderate', () => {
 
   it('reconciles the current version before claiming without rewriting its ETag', async () => {
     await handler(makeReq(), makeRes());
-    expect(h.reconcile).toHaveBeenCalledWith('oid1', 'masks/m.png');
+    expect(h.reconcile).toHaveBeenCalledWith('oid1', 'masks/m.png', expect.anything());
     expect(h.claim).toHaveBeenCalledWith('oid1', expect.any(Date));
     expect(h.reconcile.mock.invocationCallOrder[0]).toBeLessThan(h.claim.mock.invocationCallOrder[0]);
   });

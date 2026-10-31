@@ -79,6 +79,7 @@ vi.mock('@server/auth/signupNetworkLimits', () => ({
   assertSignupNetworkWithinLimits: vi.fn().mockResolvedValue(undefined),
   createSignupRiskCollector: vi.fn(() => vi.fn()),
 }));
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {

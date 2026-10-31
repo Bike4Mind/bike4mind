@@ -1039,7 +1039,7 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
           action: 'user.credits.adjusted',
           target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
           reason: CREDIT_REASON,
-          details: { credits },
+          details: { credits, selfGrant: false },
           changes: [{ field: 'currentCredits', before: 100, after: 100 + credits }],
           related: { creditTransactionId: 'ctx-1' },
         })
@@ -1109,36 +1109,39 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       expect(mockAdminUpdateUser.mock.calls[1][1].currentCredits).toBeUndefined();
     });
 
-    it('denies a self credit change with a 403 and user.credits.denied', async () => {
+    it('allows a self credit change and flags it in the audit entry', async () => {
       mockUserFindById.mockReturnValue(target({ id: ADMIN.id }));
-      const { promise } = run({
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: ADMIN.id }), creditAdjustment: adjustment(50) });
+      const { res, promise } = run({
         user: ADMIN,
         userId: ADMIN.id,
         body: { creditDelta: 50, creditReason: CREDIT_REASON },
       });
+      await promise;
 
-      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
-      expect(mockDeny).toHaveBeenCalledWith(
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockDeny).not.toHaveBeenCalled();
+      expect(mockRecord).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.credits.denied', attempted: 'user.credits.adjusted' })
+        expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: 50, selfGrant: true } })
       );
-      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
     });
 
-    it('denies an impersonating admin changing the credits of the account they impersonate from', async () => {
+    it('flags a credit change to the account an impersonating admin impersonates from', async () => {
       mockUserFindById.mockReturnValue(target({ id: 'A' }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: 'A' }), creditAdjustment: adjustment(50) });
       const { promise } = run({
         user: { id: 'B', isAdmin: true, impersonatedBy: 'A' },
         userId: 'A',
         body: { creditDelta: 50, creditReason: CREDIT_REASON },
       });
+      await promise;
 
-      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
-      expect(mockDeny).toHaveBeenCalledWith(
+      expect(mockDeny).not.toHaveBeenCalled();
+      expect(mockRecord).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.credits.denied', attempted: 'user.credits.adjusted' })
+        expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: 50, selfGrant: true } })
       );
-      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
     });
 
     it('still lets an admin edit their own profile without a credit change', async () => {

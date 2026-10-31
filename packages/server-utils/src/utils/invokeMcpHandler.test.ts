@@ -79,6 +79,9 @@ vi.stubEnv('IS_LOCAL', 'true');
 
 import { invokeMcpHandler } from './invokeMcpHandler';
 
+// A github record whose server can start; one without a token is refused before any invoke.
+const GITHUB_ENV = [{ key: 'GITHUB_ACCESS_TOKEN', value: 'test-token' }];
+
 const USER_ID = 'user-1';
 
 // Mock breaker whose execute() runs the given function
@@ -110,7 +113,7 @@ describe('invokeMcpHandler circuit breaker', () => {
 
   describe('DB-backed circuit breaker (Layer 1)', () => {
     it('should call the handler when integration is available', async () => {
-      const payload = { name: 'github', action: 'callTool', params: {} } as unknown as Parameters<
+      const payload = { name: 'github', envVariables: GITHUB_ENV, action: 'callTool', params: {} } as Parameters<
         typeof invokeMcpHandler
       >[0];
 
@@ -127,7 +130,7 @@ describe('invokeMcpHandler circuit breaker', () => {
         reason: 'github integration is currently unavailable (3 consecutive failures). Retry later.',
       });
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as unknown as Parameters<
+      const payload = { name: 'github', envVariables: GITHUB_ENV, action: 'callTool', params: {} } as Parameters<
         typeof invokeMcpHandler
       >[0];
 
@@ -138,7 +141,7 @@ describe('invokeMcpHandler circuit breaker', () => {
     it('should throw with default message when reason is null', async () => {
       mockIsMcpServerAvailable.mockResolvedValue({ available: false, reason: null });
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as unknown as Parameters<
+      const payload = { name: 'github', envVariables: GITHUB_ENV, action: 'callTool', params: {} } as Parameters<
         typeof invokeMcpHandler
       >[0];
 
@@ -163,9 +166,13 @@ describe('invokeMcpHandler circuit breaker', () => {
       const mockBreaker = createMockBreaker();
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
-        typeof invokeMcpHandler
-      >[0];
+      const payload = {
+        name: 'github',
+        envVariables: GITHUB_ENV,
+        action: 'callTool',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0];
 
       await invokeMcpHandler(payload);
 
@@ -175,7 +182,7 @@ describe('invokeMcpHandler circuit breaker', () => {
     });
 
     it('should run a call with no user outside any shared breaker', async () => {
-      const payload = { name: 'github', action: 'callTool', params: {} } as unknown as Parameters<
+      const payload = { name: 'github', envVariables: GITHUB_ENV, action: 'callTool', params: {} } as Parameters<
         typeof invokeMcpHandler
       >[0];
 
@@ -192,6 +199,7 @@ describe('invokeMcpHandler circuit breaker', () => {
 
       const payload = {
         name: 'github',
+        envVariables: GITHUB_ENV,
         action: 'callTool',
         toolName: 'create_issue',
         userId: USER_ID,
@@ -211,6 +219,7 @@ describe('invokeMcpHandler circuit breaker', () => {
 
       const payload = {
         name: 'github',
+        envVariables: GITHUB_ENV,
         action: 'callTool',
         toolName: 'get_issue',
         userId: USER_ID,
@@ -226,9 +235,13 @@ describe('invokeMcpHandler circuit breaker', () => {
     it('should convert CircuitBreakerError to user-friendly message', async () => {
       mockGetBreaker.mockReturnValue(createOpenBreaker('github'));
 
-      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
-        typeof invokeMcpHandler
-      >[0];
+      const payload = {
+        name: 'github',
+        envVariables: GITHUB_ENV,
+        action: 'callTool',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow(
         'github integration is temporarily unavailable due to repeated failures'
@@ -238,9 +251,13 @@ describe('invokeMcpHandler circuit breaker', () => {
     it('should emit CloudWatch rejection metric when circuit breaker rejects', async () => {
       mockGetBreaker.mockReturnValue(createOpenBreaker('github'));
 
-      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
-        typeof invokeMcpHandler
-      >[0];
+      const payload = {
+        name: 'github',
+        envVariables: GITHUB_ENV,
+        action: 'callTool',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow();
 
@@ -260,6 +277,7 @@ describe('invokeMcpHandler circuit breaker', () => {
 
       const call = invokeMcpHandler({
         name: 'github',
+        envVariables: GITHUB_ENV,
         action: 'callTool',
         userId: USER_ID,
         params: {},
@@ -289,6 +307,7 @@ describe('invokeMcpHandler circuit breaker', () => {
 
       const call = invokeMcpHandler({
         name: 'github',
+        envVariables: GITHUB_ENV,
         action: 'callTool',
         userId: USER_ID,
         params: {},
@@ -313,9 +332,13 @@ describe('invokeMcpHandler circuit breaker', () => {
       };
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
-        typeof invokeMcpHandler
-      >[0];
+      const payload = {
+        name: 'github',
+        envVariables: GITHUB_ENV,
+        action: 'callTool',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow('MCP handler invocation failed: 502');
     });
@@ -329,9 +352,13 @@ describe('invokeMcpHandler circuit breaker', () => {
       const mockBreaker = createMockBreaker();
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
-        typeof invokeMcpHandler
-      >[0];
+      const payload = {
+        name: 'github',
+        envVariables: GITHUB_ENV,
+        action: 'callTool',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow('github blocked by admin');
 

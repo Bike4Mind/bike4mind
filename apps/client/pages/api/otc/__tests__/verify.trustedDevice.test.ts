@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({

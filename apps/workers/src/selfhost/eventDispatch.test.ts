@@ -17,6 +17,9 @@ vi.mock('@workers/events/sessionTagging', () => ({ handler: handlers.sessionTagg
 
 vi.mock('@workers/events/notebookCuration', () => ({ handler: handlers.notebookCuration }));
 
+const { requestRiskEvidenceRefresh } = vi.hoisted(() => ({ requestRiskEvidenceRefresh: vi.fn() }));
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh }));
+
 const { dispatchSelfHostEvent } = await import('./eventDispatch');
 
 describe('dispatchSelfHostEvent', () => {
@@ -46,6 +49,22 @@ describe('dispatchSelfHostEvent', () => {
       if (otherKey !== key) expect(fn).not.toHaveBeenCalled();
     }
   });
+
+  it('requests a risk evidence refresh alongside memento creation for a valid completion userId', async () => {
+    const userId = 'a'.repeat(24);
+    await dispatchSelfHostEvent('completion.completed', { userId });
+    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith(userId, 'completion', console);
+    expect(handlers.createMemento).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([[{ userId: 'not-an-object-id' }], [{ userId: 42 }], [{}], [null]])(
+    'skips the risk evidence refresh but still creates the memento for detail %j',
+    async detail => {
+      await dispatchSelfHostEvent('completion.completed', detail);
+      expect(requestRiskEvidenceRefresh).not.toHaveBeenCalled();
+      expect(handlers.createMemento).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it('debug-logs and ignores an unknown detail type', async () => {
     const debug = vi.fn();

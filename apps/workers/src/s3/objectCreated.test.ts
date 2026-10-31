@@ -162,7 +162,7 @@ describe('objectCreated - overwrite of a judged object', () => {
 
     await run('uploads/report.pdf', undefined, 'etag-b');
 
-    expect(h.recordLandedObject).toHaveBeenCalledWith('ff1', 'uploads/report.pdf');
+    expect(h.recordLandedObject).toHaveBeenCalledWith('ff1', 'uploads/report.pdf', logger);
     expect(h.recordLandedObject.mock.invocationCallOrder[0]).toBeLessThan(
       h.findOneAndUpdate.mock.invocationCallOrder[0]
     );
@@ -369,6 +369,50 @@ describe('objectCreated - moderation claim identity', () => {
       { _id: 'ff1', moderationStatus: 'scanning', moderationClaimedAt: claimStamp },
       { $set: { moderationStatus: 'clean' }, $unset: { moderationClaimedAt: 1 } },
       { session: undefined }
+    );
+  });
+
+  it('hands its claim back when the scan throws, so the async retry of this event can rescan', async () => {
+    // Left on 'scanning', the Lambda retry loses the claim to this very invocation, skips the scan
+    // and exits cleanly - the file then stays unservable until the daily rescue sweep.
+    h.moderateUploadedFile.mockRejectedValue(new Error('moderation unavailable after 6 attempts'));
+
+    await expect(run()).rejects.toThrow('moderation unavailable');
+
+    const claimStamp = h.findOneAndUpdate.mock.calls[0][1].$set.moderationClaimedAt;
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', moderationStatus: 'scanning', moderationClaimedAt: claimStamp },
+      expect.objectContaining({ $set: expect.objectContaining({ moderationStatus: 'pending' }) })
+    );
+  });
+
+  it('still surfaces the scan failure when releasing the claim also fails', async () => {
+    h.moderateUploadedFile.mockRejectedValue(new Error('moderation unavailable after 6 attempts'));
+    h.updateOne.mockImplementation(async (filter: Record<string, unknown>) => {
+      if ('moderationClaimedAt' in filter) throw new Error('mongo down');
+      return { matchedCount: 1, modifiedCount: 1 };
+    });
+
+    await expect(run()).rejects.toThrow('moderation unavailable');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not release moderation claim'));
+  });
+
+  it('does not touch a claim it never won when the transaction throws', async () => {
+    h.findOneAndUpdate.mockResolvedValue(null);
+    h.findById.mockReturnValue({ session: () => ({ moderationStatus: 'scanning' }) });
+    h.userFindById.mockReturnValue({
+      session: () => ({
+        id: 'u1',
+        currentStorageSize: 1,
+        save: vi.fn().mockRejectedValue(new Error('write conflict')),
+      }),
+    });
+
+    await expect(run()).rejects.toThrow('write conflict');
+
+    expect(h.updateOne).not.toHaveBeenCalledWith(
+      expect.objectContaining({ moderationStatus: 'scanning' }),
+      expect.anything()
     );
   });
 

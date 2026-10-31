@@ -57,6 +57,8 @@ export interface RecordOperationalUsageParams {
   priceStamp?: UsagePriceStamp;
   latencyMs?: number;
   source?: CompletionSource;
+  /** The UserApiKey that authenticated the triggering request, recorded on the debit's ledger row. */
+  apiKeyId?: string;
   /** Provider stop reason of the underlying completion, e.g. `CompletionInfo.stopReason`. */
   finishReason?: string;
   /**
@@ -184,6 +186,7 @@ export async function recordOperationalUsage(
             inputTokens: params.inputTokens,
             outputTokens,
             source: params.source ?? 'system',
+            apiKeyId: params.apiKeyId,
           },
           {
             db: {

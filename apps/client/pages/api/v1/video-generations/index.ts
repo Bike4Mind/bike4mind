@@ -92,6 +92,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
       user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
       request,
       source,
+      apiKeyId: req.apiKeyInfo?.keyId,
       // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per
       // source keeps a studio retry from replaying an API job that reused the same key.
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),

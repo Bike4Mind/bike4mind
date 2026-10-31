@@ -207,6 +207,15 @@ describe('POST /api/v1/video-generations', () => {
     expect(h.createVideoJob.mock.calls[0][0].source).toBe('api');
   });
 
+  it('records the authenticating key on the job so its settlement is attributed to the key', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(h.createVideoJob.mock.calls[0][0].apiKeyId).toBe('k1');
+  });
+
   it('the same Idempotency-Key from two org members reaches the domain under different keys', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });

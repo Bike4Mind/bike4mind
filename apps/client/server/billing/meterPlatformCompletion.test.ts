@@ -303,6 +303,25 @@ describe('meterPlatformCompletion credits', () => {
     }
   );
 
+  it("stamps a queued turn's API key on the ledger row and usage event without changing the billing owner", async () => {
+    m.findBySettingName.mockResolvedValue(null);
+    const metered = await createRequestCompletionMeter(req(), 'queued chat', { apiKeyId: 'k-queued' })(
+      model,
+      [],
+      1000,
+      [model]
+    );
+
+    await metered.settle({ inputTokens: 1000, outputTokens: 500 });
+
+    expect(m.deductCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKeyId: 'k-queued', source: undefined }),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(m.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'k-queued' }));
+  });
+
   it('holds the ceiling once per provider turn and charges one turn when no usage is reported', async () => {
     m.findBySettingName.mockResolvedValue(null);
     const messages = [{ role: 'user' as const, content: 'x'.repeat(250) }];

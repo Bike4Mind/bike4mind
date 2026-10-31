@@ -45,7 +45,7 @@ import {
   Permission,
   type ModelInfo,
 } from '@bike4mind/common';
-import { MCPClient } from '@bike4mind/mcp';
+import { MCPClient, assertMcpServerStartable } from '@bike4mind/mcp';
 import { apiKeyService } from '@bike4mind/services';
 import type { IChatCompletionServiceOptions } from '@bike4mind/services/llm';
 import { ApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
@@ -248,6 +248,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
           const client = new LambdaClient({});
 
           const envVariables = await buildMcpEnvVariables(mcpServer);
+          assertMcpServerStartable(mcpServer.name, envVariables);
           const command = new InvokeCommand({
             FunctionName: Resource.mcpHandler.name,
             Payload: JSON.stringify({
@@ -268,6 +269,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
           const client = new LambdaClient({});
 
           const envVariables = await buildMcpEnvVariables(mcpServer);
+          assertMcpServerStartable(mcpServer.name, envVariables);
           const command = new InvokeCommand({
             FunctionName: Resource.mcpHandler.name,
             Payload: JSON.stringify({

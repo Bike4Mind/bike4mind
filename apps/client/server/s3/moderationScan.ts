@@ -32,21 +32,49 @@ export const toVerdictPatch = (result: Awaited<ReturnType<typeof moderateUploade
 export const normalizeETag = (eTag: string | null | undefined): string | undefined =>
   eTag?.replace(/^"|"$/g, '') || undefined;
 
+/** A landing that kept losing its compare-and-set to concurrent reconciliations; the caller retries it. */
+export class ModerationVersionRaceError extends Error {
+  constructor(objectKey: string) {
+    super(`Moderation version changed for ${objectKey}; retry the landing`);
+    this.name = 'ModerationVersionRaceError';
+  }
+}
+
+// One lost race is expected (a concurrent re-upload landed first) and a fresh read settles it, so
+// it is retried here at warn rather than failing the invocation. Losing every attempt is not.
+const MAX_LANDING_ATTEMPTS = 3;
+
 /**
  * Reconciles moderation with the object currently in storage, never a notification's historical
  * ETag. A delayed event for A must not reopen a terminal verdict for the unchanged current B.
  * Read the row before HEAD and compare-and-set that snapshot: a delayed HEAD must not rewind a
- * newer reconciliation, even when the ETag has cycled back to an older value. Lookup failures
- * and lost update races retry the landing instead of rescanning bytes under an unknown or stale version.
+ * newer reconciliation, even when the ETag has cycled back to an older value. A lost update race
+ * re-runs the whole read-HEAD-CAS with a fresh snapshot; lookup failures and an exhausted race
+ * throw so the landing retries instead of rescanning bytes under an unknown or stale version.
  */
-export const recordLandedObject = async (fabFileId: FabFileKey, objectKey: string): Promise<void> => {
+export const recordLandedObject = async (
+  fabFileId: FabFileKey,
+  objectKey: string,
+  logger: { warn: (message: string) => void }
+): Promise<void> => {
+  for (let attempt = 1; attempt <= MAX_LANDING_ATTEMPTS; attempt++) {
+    if (await tryRecordLandedObject(fabFileId, objectKey)) return;
+    if (attempt < MAX_LANDING_ATTEMPTS) {
+      logger.warn(`Moderation version changed for ${objectKey} during landing; re-reading (attempt ${attempt})`);
+    }
+  }
+  throw new ModerationVersionRaceError(objectKey);
+};
+
+/** One read-HEAD-CAS pass. Returns false only when a concurrent reconciliation won the race. */
+const tryRecordLandedObject = async (fabFileId: FabFileKey, objectKey: string): Promise<boolean> => {
   const observed = await FabFile.findById(fabFileId).select('moderationETag moderationRevision').lean();
-  if (!observed) return;
+  if (!observed) return true;
 
   const eTag = normalizeETag((await getFilesStorage().getMetadata(objectKey)).etag);
   if (!eTag) throw new Error(`No ETag for ${objectKey}; moderation version not reconciled`);
   // An unchanged version needs no write: even a delayed HEAD here cannot reset a successor.
-  if (observed.moderationETag === eTag) return;
+  if (observed.moderationETag === eTag) return true;
 
   const snapshot = {
     _id: fabFileId,
@@ -65,11 +93,9 @@ export const recordLandedObject = async (fabFileId: FabFileKey, objectKey: strin
       },
     },
   ]);
-  if (!result.matchedCount) {
-    const current = await FabFile.findById(fabFileId).select('moderationETag').lean();
-    if (current?.moderationETag === eTag) return;
-    throw new Error(`Moderation version changed for ${objectKey}; retry the landing`);
-  }
+  if (result.matchedCount) return true;
+  const current = await FabFile.findById(fabFileId).select('moderationETag').lean();
+  return current?.moderationETag === eTag;
 };
 
 /**

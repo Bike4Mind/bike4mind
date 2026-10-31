@@ -1,5 +1,6 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { Buffer } from 'node:buffer';
+import { assertMcpServerStartable, type McpEnvVariable } from '@bike4mind/mcp';
 import { handler as localMcpHandler } from './mcpCall';
 import { isMcpServerAvailable } from '../services/integrationCircuitBreaker';
 import {
@@ -76,7 +77,18 @@ export type InvokeMcpHandlerPayload = {
   selectedRepositories?: string[];
 };
 
+const isMcpEnvVariable = (value: unknown): value is McpEnvVariable =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as Record<string, unknown>).key === 'string' &&
+  typeof (value as Record<string, unknown>).value === 'string';
+
 export async function invokeMcpHandler<T = unknown>(payload: InvokeMcpHandlerPayload): Promise<T> {
+  // A record whose server would exit before its handshake fails here, not in the Lambda: thrown
+  // there it is an ERROR line that pages and a strike on this tenant's breaker, for what is the
+  // user's own integration setup.
+  assertMcpServerStartable(payload.name, (payload.envVariables ?? []).filter(isMcpEnvVariable));
+
   // Circuit breaker: short-circuit if the integration is known to be unhealthy
   if (payload?.name) {
     const { available, reason } = await isMcpServerAvailable(payload.name);

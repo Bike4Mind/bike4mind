@@ -4,10 +4,11 @@ import { IRegInviteDocument } from './RegistrationInviteType';
 import { IOrganizationDocument } from './OrganizationTypes';
 import { ICounters } from './CounterTypes';
 import { IMementoDocument } from './MementoTypes';
-import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
+import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
 import type { SignupRiskSignal } from '../../schemas/settings';
+import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } from '../../schemas/riskEvidence';
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 import type { AdminPermissionId } from '../../adminPermissions';
 
@@ -70,6 +71,14 @@ export interface ISignupMeta extends INetworkMeta {
  */
 export const SIGNUP_RISK_REVIEW_STATES = ['none', 'pending', 'approved', 'banned'] as const;
 export type SignupRiskReviewState = (typeof SIGNUP_RISK_REVIEW_STATES)[number];
+
+export interface RiskEvidenceCoverage {
+  accounts: number;
+  withSignupMeta: number;
+  withJa4: number;
+  /** WAF label forwarding was on: both WAF fields are booleans, not null. */
+  withWafSignals: number;
+}
 
 export interface ISignupRiskScore {
   /** 0-100, from scoreSignupRisk (b4m-core/services/src/userService/signupRiskScore.ts). */
@@ -754,6 +763,12 @@ export interface IUser extends ICreditHolder {
   riskScore?: ISignupRiskScore | null;
 
   /**
+   * Behavioral evidence and its refresh state (b4m-core/common/src/schemas/riskEvidence.ts).
+   * Shadow-only: never feeds riskScore.reviewState. Admin-only, like riskScore.
+   */
+  riskEvidence?: RiskEvidenceRecord | null;
+
+  /**
    * A test persona or test-domain account, decided at signup. Funnel analytics skip or tag these so
    * synthetic traffic never reaches conversion metrics.
    */
@@ -802,7 +817,8 @@ export interface IAuthProviders {
 
 export interface IUserDocument extends IUser, IMongoDocument {}
 
-export interface IUserRepository extends IBaseRepository<IUserDocument>, ICreditHolderMethods {
+export interface IUserRepository
+  extends IBaseRepository<IUserDocument>, ICreditHolderMethods, ICreditHolderFlooredDebit {
   findByUsernameOrEmail: (username: string, email?: string | null) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
   /**
@@ -956,6 +972,25 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * (already decided or no score). Used for admin approve and its undo.
    */
   setRiskReviewState: (userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState) => Promise<boolean>;
+  /**
+   * Mark an evidence refresh queued, only if none is pending or the pending one is older than
+   * `staleBefore` (its message was lost). True when this call claimed it and should enqueue.
+   */
+  claimRiskEvidenceRefresh: (
+    userId: string,
+    options: { now: Date; staleBefore: Date; trigger: RiskEvidenceTrigger }
+  ) => Promise<boolean>;
+  /** Clear the pending marker as a refresh starts, so activity during the refresh queues another. */
+  releaseRiskEvidenceRefresh: (userId: string, claimedAt: Date) => Promise<void>;
+  /**
+   * Store a summary unless a newer one (by computedAt) is already stored; false when it lost that
+   * race. Clears lastFailure. Touches nothing outside riskEvidence.
+   */
+  setRiskEvidenceSummary: (userId: string, summary: RiskEvidenceSummary) => Promise<boolean>;
+  /** Record why a refresh failed, for the admin view. */
+  recordRiskEvidenceFailure: (userId: string, failure: { at: Date; error: string }) => Promise<void>;
+  /** Signup metadata coverage of accounts created at or after `since`, for the evidence baseline. */
+  riskEvidenceCoverage: (since: Date) => Promise<RiskEvidenceCoverage>;
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores
    * the appeal text for admin review. Returns the updated user.

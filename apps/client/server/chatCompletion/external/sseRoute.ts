@@ -101,6 +101,8 @@ const OPERATOR_SIDE_4XX_PATTERNS = [
   /api key (?:not valid|is invalid|has expired|is missing)/i,
   /invalid api key/i,
   /credit balance/i,
+  // Anthropic's org spend cap; keep in sync with isProviderSpendLimitError (@bike4mind/utils).
+  /reached your specified api usage limits/i,
 ];
 
 function isUpstreamCallerError(error: unknown): error is Error {

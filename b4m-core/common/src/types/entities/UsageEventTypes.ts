@@ -73,6 +73,24 @@ export type IUsageEventTurn = z.infer<typeof UsageEventTurn>;
 export const USAGE_EVENT_TURN_USAGE_CAP = 100;
 
 /**
+ * What funded the credits a usage event spent. `unknown` covers legacy-backfill lots and
+ * credits no lot accounts for (lot stamping is best-effort and an admin absolute-set
+ * balance can leave lots short of the real history).
+ */
+export const USAGE_FUNDING_SOURCES = ['granted', 'purchased', 'subscription', 'unknown'] as const;
+export type UsageFundingSource = (typeof USAGE_FUNDING_SOURCES)[number];
+
+/** Credits per funding source; the four values sum to the event's creditsCharged. */
+export const UsageFundingBreakdown = z.object({
+  granted: z.number(),
+  purchased: z.number(),
+  subscription: z.number(),
+  unknown: z.number(),
+});
+
+export type IUsageFundingBreakdown = z.infer<typeof UsageFundingBreakdown>;
+
+/**
  * One row per provider API call. Ties true COGS (costUsd, frozen
  * at write time) to what the user was debited (creditsCharged) so margin per
  * model/user is queryable. Dual-written at settlement time; never part of the
@@ -129,6 +147,12 @@ export const UsageEvent = z.object({
    * sum(creditsCharged) - sum(writtenOffCredits); absent means nothing written off.
    */
   writtenOffCredits: z.number().optional(),
+  /**
+   * creditsCharged split by what funded it, stamped by UsageEventRepository.record() from
+   * the holder's credit lots (see attributeChargeToFundingSources). Absent on zero-credit
+   * rows and on rows written before stamping existed.
+   */
+  fundingBreakdown: UsageFundingBreakdown.optional(),
 
   status: z.enum(USAGE_EVENT_STATUSES).default('ok'),
   latencyMs: z.number().optional(),
@@ -235,6 +259,25 @@ export interface ISettlementBreakdown {
   outputTokenDelta: number;
   /** Count of rows contributing to the token deltas above (providerInputTokens/providerOutputTokens both > 0). */
   deltaSampleSize: number;
+}
+
+/**
+ * Provider cost and credits by funding source for one signup-week cohort over the report
+ * window (admin usage-margin view 'funding-cohort').
+ */
+export interface IFundingCohortCost {
+  /** Monday 00:00 UTC of the spending users' signup week; null when the user record is gone. */
+  cohortWeek: Date | null;
+  /** Distinct spending users in the cohort over the window. */
+  accounts: number;
+  /** Each row's costUsd split by its fundingBreakdown shares. */
+  costUsd: Record<UsageFundingSource, number>;
+  credits: Record<UsageFundingSource, number>;
+  /**
+   * Provider cost on rows without a fundingBreakdown: zero-credit calls, rows written before
+   * stamping, and rows whose funding lookup failed.
+   */
+  unattributedCostUsd: number;
 }
 
 /** Shared spend totals for any owner-scoped usage aggregation bucket. */
@@ -634,6 +677,14 @@ export interface ISessionUsageResponse {
   executions: ISessionAgentExecution[];
 }
 
+export interface IUserUsageActivity {
+  events: number;
+  completed: number;
+  failed: number;
+  credits: number;
+  latestAt: Date | null;
+}
+
 export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocument> {
   /** Append one event. Must never throw into the billing path; callers fire-and-forget. */
   record(event: IUsageEventInput): Promise<IUsageEventDocument | null>;
@@ -643,6 +694,13 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Credits the user spent in [from, to): charged plus written off. */
   creditsSpentByUser(userId: string, from: Date, to: Date): Promise<number>;
+
+  /**
+   * The user's usage in [from, to): event count, `ok` events, the rest (error/timeout/refusal/
+   * degenerate), credits charged plus written off, and the newest event's time (null when none).
+   * Reads at most `limit` of the newest events, so `events === limit` means the counts are a floor.
+   */
+  activitySummaryByUser(userId: string, from: Date, to: Date, limit: number): Promise<IUserUsageActivity>;
 
   /** Credits each user has spent in total, charged plus written off; users with none are absent. */
   creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>>;
@@ -666,6 +724,9 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
   settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;
+
+  /** Provider cost by funding source per signup-week cohort over the trailing N days (default 30), newest cohort first. */
+  costByFundingCohort(days?: number): Promise<IFundingCohortCost[]>;
 
   /**
    * All spend for one credit holder (org/user/agent) over the trailing N days

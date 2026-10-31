@@ -65,6 +65,7 @@
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "backfill:session-image-count": "tsx src/backfill-session-image-count.ts",
     "backfill:analytics-rollup": "tsx src/backfill-analytics-rollup.ts",
+    "backfill:spend-rollups": "tsx src/backfill-spend-rollups.ts",
     "backfill:orphaned-published-artifacts": "tsx src/backfill-orphaned-published-artifacts.ts",
     "backfill:publish-thumbnails": "tsx src/backfill-publish-thumbnails.ts",
     "trim:ai-edit-versions": "tsx src/trim-ai-edit-versions.ts",

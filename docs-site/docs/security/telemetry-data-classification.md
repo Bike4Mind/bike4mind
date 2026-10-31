@@ -233,6 +233,17 @@ Every self-service signup stores the network it came from on the new account (`s
 
 Signup grant assessments also emit one of the `signup-grant-assessed-full`, `signup-grant-assessed-reduced`, or `signup-grant-assessed-review` log markers after commit. These markers contain only the outcome band, without account identifiers, policy weights, network observations, or challenge tokens. CloudWatch metric filters count them for monitoring and an optional review-volume alarm. The markers follow the server log group's retention; metric counts follow CloudWatch retention. Emission is best effort, so counts are operational monitoring rather than an exact grant ledger.
 
+## Account behavioral evidence
+
+Each account carries one summary of what the server recorded about it over the trailing 30 days, kept on the user document and replaced whole on every refresh. It holds counts, booleans and timestamps only: sign-in and signup counts, distinct IP and network counts (never the addresses), API key counts, completed and failed request counts, credits spent, active agent executions, and counts of sensitive account actions such as failed step-up checks. Each fact records its source, how many records backed it and when the newest one was written. It never holds IP addresses, fingerprints, prompt or document text, or client-reported data. The summary is visible only to admins, is removed with the account, and does not change the account's review state or access.
+
+A failed refresh stores a short error message (200 characters at most) and a timestamp on the same record. Operational metrics for refresh lag, failures and volume carry no user identifiers or content.
+
+| Data                | Storage                | Lifetime                   | Purpose                                       |
+| ------------------- | ---------------------- | -------------------------- | --------------------------------------------- |
+| Evidence summary    | `riskEvidence.summary` | Account lifetime, replaced | Give admins context when reviewing an account |
+| Refresh diagnostics | `riskEvidence.refresh` | Account lifetime, replaced | Show when and why a refresh failed            |
+
 ## Chat turn timing
 
 Each chat reply records where its wall-clock time went, so a slow or retried reply can be diagnosed from the reply itself. The record holds durations, counts and provider metadata only: no prompt or reply text. It is shown in the reply's Answer diagnosis panel, and a short summary with a copyable turn ID appears under replies that retried, switched model or took a minute or more.

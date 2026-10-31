@@ -59,12 +59,21 @@ vi.stubEnv('IS_LOCAL', 'true');
 import { invokeMcpHandler } from './invokeMcpHandler';
 import { UNATTRIBUTED_MCP_TENANT } from './mcpTenantKey';
 
+// A github record whose server can start; one without a token is refused before any invoke.
+const GITHUB_ENV = [{ key: 'GITHUB_ACCESS_TOKEN', value: 'test-token' }];
+
 type Payload = Parameters<typeof invokeMcpHandler>[0];
 
 const RESET_IN_MS = 5_000;
 
 function callAs(userId: string | undefined, server: string): Promise<unknown> {
-  return invokeMcpHandler({ name: server, action: 'callTool', toolName: 'get_issue', userId } as Payload);
+  return invokeMcpHandler({
+    name: server,
+    action: 'callTool',
+    toolName: 'get_issue',
+    userId,
+    envVariables: GITHUB_ENV,
+  } as Payload);
 }
 
 /** Fail every call for one tenant with an outage-class error, succeed for everyone else. */

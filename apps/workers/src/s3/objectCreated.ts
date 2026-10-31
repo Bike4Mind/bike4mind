@@ -5,6 +5,7 @@ import { isUntrackedFabFileKey } from '@bike4mind/server-utils/s3/untrackedFabFi
 import {
   claimModerationScan,
   recordLandedObject,
+  releaseModerationClaim,
   scanUploadedObject,
   toVerdictPatch,
   writeModerationVerdict,
@@ -86,7 +87,7 @@ export const func = withContext(async (event, context, logger) => {
 
     // An overwrite of an already-judged object (a re-PUT of a still valid presigned URL) sends its
     // verdict back to 'pending', so the claim below rescans the new bytes.
-    await recordLandedObject(metadata._id, objectKey);
+    await recordLandedObject(metadata._id, objectKey, logger);
 
     // Atomically claim the right to scan this file BEFORE the transaction
     // below touches it. `metadata` above was read outside a transaction with retry/backoff
@@ -201,6 +202,16 @@ export const func = withContext(async (event, context, logger) => {
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;
+    }).catch(async (err: unknown) => {
+      // Hand a won claim back before the throw sends this event to Lambda's async retry: left on
+      // 'scanning', the retry would lose the claim to this very invocation and skip the scan, leaving
+      // the file unservable until the daily rescue sweep. No-op once a verdict has committed.
+      if (scanClaimed) {
+        await releaseModerationClaim(metadata._id, claimedAt).catch((releaseErr: unknown) =>
+          logger.warn(`[Q2b] could not release moderation claim for ${objectKey}: ${String(releaseErr)}`)
+        );
+      }
+      throw err;
     });
     // No owner means no charge and no retry, so nothing is left to judge by the old status.
     if (!user && deferStatusFlip) await markComplete();

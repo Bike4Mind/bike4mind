@@ -1,6 +1,9 @@
-import { MCPClient } from '@bike4mind/mcp';
+import { MCPClient, McpServerConfigError } from '@bike4mind/mcp';
 import { Resource } from 'sst';
 import { resolveMcpTenantKey } from './mcpTenantKey';
+
+const STDERR_TAIL_LINES = 5;
+const STDERR_LINE_MAX_CHARS = 500;
 
 const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
   return Promise.race([
@@ -16,6 +19,9 @@ export const handler = async (params: any) => {
   // All rate limit logging uses console.error in the child process (stderr),
   // because MCP uses stdout for JSON-RPC protocol.
   const rateLimitEvents: Record<string, unknown>[] = [];
+  // A child that exits during the handshake surfaces only as "Connection closed"; its own last
+  // stderr lines are the reason, so keep a few for the failure log.
+  const stderrTail: string[] = [];
   const mcp = new MCPClient({
     envVariables,
     name,
@@ -26,7 +32,10 @@ export const handler = async (params: any) => {
         } catch {
           /* ignore parse errors */
         }
+        return;
       }
+      stderrTail.push(line.slice(0, STDERR_LINE_MAX_CHARS));
+      if (stderrTail.length > STDERR_TAIL_LINES) stderrTail.shift();
     },
   });
 
@@ -118,9 +127,20 @@ export const handler = async (params: any) => {
         continue;
       }
 
+      // The user's integration setup, not a platform fault. Callers check this before invoking
+      // (invokeMcpHandler), so reaching it here means one skipped that check.
+      if (lastError instanceof McpServerConfigError) {
+        console.warn(`MCP Handler: ${action} refused for ${name}: ${lastError.message}`);
+        throw lastError;
+      }
+
       const errorMessage = lastError.message;
       const enhancedError = new Error(`MCP Handler failed for ${name} (action: ${action}): ${errorMessage}`);
-      console.error(`❌ MCP Handler Error for ${name}:`, enhancedError);
+      console.error(
+        `❌ MCP Handler Error for ${name}:`,
+        enhancedError,
+        ...(stderrTail.length ? ['\nchild stderr:', stderrTail.join('\n')] : [])
+      );
       throw enhancedError;
     } finally {
       if (isConnected) {
