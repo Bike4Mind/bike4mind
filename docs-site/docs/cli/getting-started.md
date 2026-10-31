@@ -78,33 +78,29 @@ To use AI features, authenticate with your Bike4Mind account:
 
 The CLI will display the device authorization screen and **automatically open your browser**:
 
-```
-╭────────────────────────────────────────────────────────╮
-│                                                        │
-│ 🔐 Device Authorization                                │
-│                                                        │
-│ Opening browser automatically...                       │
-│ If it doesn't open, please visit:                     │
-│                                                        │
-│   https://app.bike4mind.com/activate                  │
-│                                                        │
-│ And enter this code when prompted:                    │
-│                                                        │
-│   L2JQ-CRZ9                                           │
-│                                                        │
-│                                                        │
-│ ⠏ Waiting for user authorization...                   │
-│                                                        │
-│ Expires in 10 minutes                                 │
-│                                                        │
-╰────────────────────────────────────────────────────────╯
+```text
+Device Authorization
+
+Opening browser automatically... If it doesn't open, visit this link:
+
+  https://app.bike4mind.com/activate?code=L2JQ-CRZ9
+
+Or open https://app.bike4mind.com/activate and enter this code:
+
+  L2JQ-CRZ9
+
+Press c to copy the link
+
+Waiting for user authorization...
+
+Expires in 10 minutes
 ```
 
 **What happens:**
-1. **Browser opens automatically** with the activation URL
+1. **Browser opens automatically** with the sign-in link
 2. **Code is prepopulated** in the browser (you don't need to type it)
 3. **Verify the code** matches what's shown in the CLI
-4. **Click "Approve"** to authorize the CLI
+4. **Click "Approve"** to authorize the CLI. Opening the link never approves on its own.
 5. The CLI automatically detects the authorization and continues
 
 **Success:**
@@ -114,8 +110,9 @@ Logged in as: john@example.com
 ```
 
 **If browser doesn't open:**
-- Manually visit the URL shown in the terminal
-- The code is already prepopulated, just verify and approve
+- Press `c` to copy the sign-in link, then paste it into a browser on any device. The code is already filled in; verify it and approve.
+- The copy uses your terminal's clipboard support (OSC 52, which also works over SSH) and the system clipboard tool when one is available (`pbcopy`, `clip`, `wl-copy`, `xclip` or `xsel`). If the CLI reports that the copy failed, select the link with your mouse instead.
+- Or open the activation URL yourself and type the code shown below it.
 
 ### 3. Start Chatting
 

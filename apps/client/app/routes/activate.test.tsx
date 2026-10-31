@@ -73,6 +73,37 @@ describe('ActivatePage', () => {
     verifyState.mutateImpl = () => {};
   });
 
+  it('pre-fills the code from ?code= and waits for an explicit Approve click', () => {
+    mockSearch = { code: 'nxn69q6u' };
+    renderPage();
+
+    expect(screen.getByPlaceholderText('XXXX-XXXX')).toHaveValue('NXN6-9Q6U');
+    expect(screen.getByRole('button', { name: /approve device/i })).toBeEnabled();
+    expect(mockMutate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /approve device/i }));
+    expect(mockMutate).toHaveBeenCalledWith(
+      { user_code: 'NXN6-9Q6U', action: 'approve' },
+      expect.objectContaining({ onSuccess: expect.any(Function) })
+    );
+  });
+
+  it('keeps the code through the sign-in redirect for a signed-out visitor', () => {
+    mockCurrentUser = null;
+    renderPage();
+
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { redirectTo: '/activate?code=NXN6-9Q6U' } });
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  it('leaves the code empty without a query param', () => {
+    mockSearch = {};
+    renderPage();
+
+    expect(screen.getByPlaceholderText('XXXX-XXXX')).toHaveValue('');
+    expect(screen.getByRole('button', { name: /approve device/i })).toBeDisabled();
+  });
+
   it('shows a policy-acceptance message with a link to /accept-policies instead of "Invalid code"', () => {
     verifyState.isError = true;
     verifyState.error = {

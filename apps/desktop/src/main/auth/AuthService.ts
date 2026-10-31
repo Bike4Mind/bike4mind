@@ -179,19 +179,21 @@ export class AuthService {
     try {
       const flow = await device.initiateDeviceFlow();
       if (generation !== this.signInGeneration) return;
+      // The complete URI is optional; without it the browser opens the plain page and the user types the code.
+      const openTarget = flow.verification_uri_complete ?? flow.verification_uri;
 
       this.patch({
         status: 'awaiting-approval',
         pending: {
           userCode: flow.user_code,
           verificationUri: flow.verification_uri,
-          verificationUriComplete: flow.verification_uri_complete,
+          verificationUriComplete: openTarget,
           expiresAt: new Date(Date.now() + flow.expires_in * 1000).toISOString(),
           browserOpened: false,
         },
       });
 
-      const browserOpened = await this.tryOpenExternal(flow.verification_uri_complete);
+      const browserOpened = await this.tryOpenExternal(openTarget);
       if (generation !== this.signInGeneration) return;
       if (this.state.pending) {
         this.patch({ pending: { ...this.state.pending, browserOpened } });
