@@ -32,7 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
   Group: {},
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws://test' } } }));
 
 import '@pages/api/invites/[id]/refuse';

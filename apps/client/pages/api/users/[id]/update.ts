@@ -24,6 +24,7 @@ import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
+import { propagateAccountRisk } from '@server/billing/linkedAccounts';
 import {
   diffProfileFields,
   profileFieldsSent,
@@ -262,20 +263,14 @@ const handler = baseApi().put(
       const statusChanges = statusFlagChanges(body, targetBefore);
       const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
 
-      // No self-service privilege: an admin cannot move their own balance or change their own
-      // admin flag. The attempt is recorded as a critical denied entry and answered with a 403.
-      const deniesSelf = isSelfOrImpersonator(currentUser, userId);
-      if (deniesSelf && changesRole) {
+      // No self-service privilege: an admin cannot change their own admin flag. The attempt is
+      // recorded as a critical denied entry and answered with a 403. Self credit adjustments are
+      // allowed for now, pending scoped admin permissions, and flagged in their audit entry.
+      const targetsSelf = isSelfOrImpersonator(currentUser, userId);
+      if (targetsSelf && changesRole) {
         await denySelfAdminAction(req, {
           action: 'user.role.denied',
           attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
-          target: auditTarget,
-        });
-      }
-      if (deniesSelf && changesCredits) {
-        await denySelfAdminAction(req, {
-          action: 'user.credits.denied',
-          attempted: 'user.credits.adjusted',
           target: auditTarget,
         });
       }
@@ -283,6 +278,7 @@ const handler = baseApi().put(
       // Validated before any write so a missing reason never leaves a half-applied update.
       const roleChangeReason = changesRole ? parseAdminActionReason(body.roleChangeReason) : undefined;
       const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
+      const throttleReason = body.throttleTier ? parseAdminActionReason(body.throttleReason) : undefined;
       const statusChangeReason = statusChanges.length > 0 ? parseAdminActionReason(body.statusChangeReason) : undefined;
 
       // Lockout guard: an explicit demote must not remove the ONLY remaining Super Admin.
@@ -302,7 +298,7 @@ const handler = baseApi().put(
       const profileBefore = profileFields.length > 0 ? await readProfileSnapshot(userId, profileFields) : null;
 
       req.logger.updateMetadata({ updatedFields: Object.keys(body) });
-      await commitWithSessionEnd(
+      const { snapshot: blockSnapshot, updated: blockUpdated } = await commitWithSessionEnd(
         req,
         async () => {
           // Read inside the transaction so the reason sees the state the write saw; an
@@ -358,9 +354,26 @@ const handler = baseApi().put(
               summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
               reason: creditAdjustment.note,
               changes: [{ field: 'currentCredits', before: previousBalance, after: resultingBalance }],
-              details: { credits },
+              details: { credits, selfGrant: targetsSelf },
               related: creditTransactionId ? { creditTransactionId } : undefined,
             });
+          }
+          if (body.throttleTier && throttleReason) {
+            const tierChange = await userService.setThrottleTier(
+              userId,
+              body.throttleTier,
+              { reason: throttleReason, source: 'admin', changedBy: currentUser.id },
+              { db: { users: userRepository } }
+            );
+            if (tierChange.changed) {
+              await recordAdminActionFromRequest(req, {
+                action: 'user.throttle_tier.changed',
+                target: auditTarget,
+                summary: `set the restricted tier to ${tierChange.after} (source: admin, reason: ${throttleReason})`,
+                reason: throttleReason,
+                changes: [{ field: 'throttle.tier', before: tierChange.before, after: tierChange.after }],
+              });
+            }
           }
           return { snapshot, updated };
         },
@@ -370,6 +383,15 @@ const handler = baseApi().put(
           return reason && { userId, reason, actorUserId: currentUser.id !== userId ? currentUser.id : undefined };
         }
       );
+
+      // A ban, suspension or dispute flag reaches accounts linked by card or network. After commit
+      // and never throws, so it cannot undo the admin's change.
+      if (blockSnapshot && blockUpdated && userService.entersBlockedState(blockSnapshot, blockUpdated)) {
+        await propagateAccountRisk(
+          { sourceUserId: userId, trigger: 'blocked by an admin', key: `admin-block:${userId}:${Date.now()}` },
+          req.logger
+        );
+      }
 
       if (profileFields.length > 0) {
         await recordProfileUpdate(req, {
@@ -388,7 +410,7 @@ const handler = baseApi().put(
       // Admin branch: symmetric with the admin view of GET /users/[id].
       const safeUser = redactUserSecretsForSelf(finalUser, {
         keep: ['securityQuestions'],
-        keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment'],
+        keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment', 'throttle', 'riskSignals'],
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.

@@ -23,7 +23,7 @@ import { scrapeWithRetry } from '@bike4mind/services/llm/tools/implementation/we
 import { taskScheduleRepository } from '@bike4mind/database';
 import { ResearchTaskStatus } from '@bike4mind/common';
 import { fileTagRepository } from '@bike4mind/database';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { Logger } from '@bike4mind/observability';
 import { researchTaskJobs } from '@server/utils/researchTasks';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';

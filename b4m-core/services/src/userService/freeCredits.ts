@@ -44,6 +44,8 @@ export type GrantFreeCreditsResult = {
   withheld?: boolean;
   /** Set when the grant stayed held because the daily budget was spent. */
   budgetExhausted?: boolean;
+  /** Set when a payment unlock is held until its payment settles. */
+  heldUntil?: Date;
   creditsGranted: number;
   currentCredits: number | null;
 };
@@ -122,9 +124,24 @@ async function grantFlatFreeCredits(
 
   // The transactionId dedupes per account; the claim dedupes the open-registration default per
   // inbox, so an alias of an address that already earned it (x+1@gmail.com, x.y@gmail.com) earns
-  // none. An invite-resolved amount is an explicit grant to that account and is not claimed.
-  // Claimed before the draw so an alias that earns nothing is never held; the claim is idempotent
-  // per account, so a held grant re-claims when released.
+  // none. Claimed before the budget draw below so an alias that earns nothing is never held; the
+  // claim is idempotent per account, so a held grant re-claims when released.
+  //
+  // Invite-resolved amounts are deliberately exempt. `pendingCreditGrant` is set only on
+  // the invite path (register.ts), so the exemption is "an operator issued this account a specific
+  // amount", not anything the signer-up controls: self-serve registration leaves it null and takes
+  // the claimed branch below. The cost of an extra identity on this path is an invite code rather
+  // than a fresh inbox, which is the bound we rely on instead of the claim.
+  //
+  // Two consequences, both accepted:
+  //   - The inbox is left UNCLAIMED, so a sibling alias can still earn the open-registration
+  //     default later. One inbox can therefore hold an invited grant and one default grant.
+  //   - An invite carrying a target email is redeemable only by that inbox (register.ts), but an
+  //     admin bulk code with `unlimitedUse` and no email is freely redeemable, so such a code is
+  //     the one shape here that an actor could spread across aliases. Issuing one is an operator
+  //     decision; bound it with the invite's own limits, not with this claim.
+  // Claiming here instead would be wrong: it would let a self-serve signup on an alias silently
+  // consume the entitlement an operator meant for the invited account.
   const isDefaultGrant = user.pendingCreditGrant === null || user.pendingCreditGrant === undefined;
   if (isDefaultGrant && !(await db.users.claimFreeCreditGrant(user.id))) {
     return { creditsGranted: 0, currentCredits: null };

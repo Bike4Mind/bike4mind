@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   assertProjectsReadScope,
@@ -10,7 +11,7 @@ import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sharingService } from '@bike4mind/services';
 import { InviteEvents, InviteType, ProjectEvents, Permission } from '@bike4mind/common';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -71,6 +72,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
   })
   .post(
     rateLimit(PROJECT_INVITE_RATE_LIMIT),
+    outboundActionGate(),
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
       assertProjectsWriteScope(req);
       const { id } = req.query as { id: string };

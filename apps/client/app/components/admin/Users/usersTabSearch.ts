@@ -2,11 +2,14 @@ import { USER_ID_PARAM } from '@bike4mind/common';
 import {
   ADMIN_USERS_PAGE_SIZES,
   ADMIN_USERS_SORT_FIELDS,
+  isUtcDay,
+  USER_FUNNEL_STEP_FILTERS,
   USER_PLAN_FILTERS,
   USER_RISK_FILTERS,
   USER_SIGNED_UP_FILTERS,
   USER_SIGNUP_METHOD_FILTERS,
   USER_STATUS_FILTERS,
+  USER_VERDICT_FILTERS,
   YES_NO_FILTERS,
   type AdminUsersFilter,
   type AdminUsersSortField,
@@ -57,6 +60,10 @@ export const USERS_FILTER_PARAMS = {
   risk: 'risk',
   createdFrom: 'createdFrom',
   createdTo: 'createdTo',
+  verdict: 'verdict',
+  activeFrom: 'activeFrom',
+  activeTo: 'activeTo',
+  funnelStep: 'funnelStep',
 } as const satisfies Partial<Record<keyof UsersListView, string>>;
 export type UsersFilterKey = keyof typeof USERS_FILTER_PARAMS;
 export const USERS_FILTER_KEYS = Object.keys(USERS_FILTER_PARAMS) as UsersFilterKey[];
@@ -111,6 +118,10 @@ export type UsersSearch = {
   risk?: UsersListView['risk'];
   createdFrom?: string;
   createdTo?: string;
+  verdict?: UsersListView['verdict'];
+  activeFrom?: string;
+  activeTo?: string;
+  funnelStep?: UsersListView['funnelStep'];
 };
 
 const parseLimit = (value: unknown): number | undefined => {
@@ -124,6 +135,10 @@ export const parseInstant = (value: unknown): string | undefined => {
   const time = Date.parse(value);
   return Number.isNaN(time) ? undefined : new Date(time).toISOString();
 };
+
+// Mirrors AdminUsersFilterSchema's active window days.
+export const parseUtcDay = (value: unknown): string | undefined =>
+  typeof value === 'string' && isUtcDay(value) ? value : undefined;
 
 // Mirrors AdminUsersFilterSchema.emailDomain, so a link can never carry a domain the API rejects.
 export const parseDomain = (value: unknown): string | undefined => {
@@ -170,6 +185,10 @@ export const USERS_SEARCH_PARSERS: {
   risk: oneOf(USER_RISK_FILTERS),
   createdFrom: parseInstant,
   createdTo: parseInstant,
+  verdict: oneOf(USER_VERDICT_FILTERS),
+  activeFrom: parseUtcDay,
+  activeTo: parseUtcDay,
+  funnelStep: oneOf(USER_FUNNEL_STEP_FILTERS),
 };
 
 function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView, UsersFilterKey> {
@@ -186,6 +205,10 @@ function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView,
     risk: USERS_SEARCH_PARSERS.risk(search.risk),
     createdFrom: parseInstant(search.createdFrom),
     createdTo: parseInstant(search.createdTo),
+    verdict: USERS_SEARCH_PARSERS.verdict(search.verdict),
+    activeFrom: parseUtcDay(search.activeFrom),
+    activeTo: parseUtcDay(search.activeTo),
+    funnelStep: USERS_SEARCH_PARSERS.funnelStep(search.funnelStep),
   };
 }
 
@@ -257,6 +280,10 @@ export function usersViewToSearch(params: UsersListView): Omit<UsersSearch, type
     risk: params.risk,
     createdFrom: parseInstant(params.createdFrom),
     createdTo: parseInstant(params.createdTo),
+    verdict: params.verdict,
+    activeFrom: parseUtcDay(params.activeFrom),
+    activeTo: parseUtcDay(params.activeTo),
+    funnelStep: params.funnelStep,
   };
 }
 
@@ -282,9 +309,17 @@ export const CLEARED_FILTER_PARAMS: Partial<UsersListParams> = {
   ...Object.fromEntries(USERS_FILTER_KEYS.map(key => [key, undefined])),
 };
 
+/** A window's end, counted only when its start is unset: a window is one filter however many ends are set. */
+const WINDOW_ENDS: Partial<Record<UsersFilterKey, UsersFilterKey>> = {
+  createdTo: 'createdFrom',
+  activeTo: 'activeFrom',
+};
+
 export const countActiveFilters = (params: UsersListView): number =>
-  // The created-at window is one filter however many of its two ends are set.
-  USERS_FILTER_KEYS.filter(key => params[key] !== undefined && !(key === 'createdTo' && params.createdFrom)).length +
+  USERS_FILTER_KEYS.filter(key => {
+    const start = WINDOW_ENDS[key];
+    return params[key] !== undefined && !(start && params[start] !== undefined);
+  }).length +
   (params.orgSearch.length > 0 && !params.orgSearch.includes('all') ? 1 : 0) +
   (params.tags.length > 0 ? 1 : 0);
 

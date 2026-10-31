@@ -7,7 +7,7 @@ import type { z } from 'zod';
 import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
 // these tests parse frames against). Only the seams below are mocked.
@@ -199,6 +199,7 @@ const UPSTREAM_OPERATOR_ERRORS = [
   [404, 'The model `gpt-x` does not exist or you do not have access to it.'],
   [404, 'Claude Fable 5 is not available. Please use Opus 4.8'],
   [400, 'Your credit balance is too low to access the Anthropic API.'],
+  [400, 'You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.'],
   [404, 'The model claude-3-5-haiku-20241022 does not exist'],
   [400, 'The provided model identifier is invalid'],
   [404, 'Model not available'],

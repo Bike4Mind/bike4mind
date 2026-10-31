@@ -12,7 +12,7 @@ import qs from 'qs';
 import { accessibleBy } from '@casl/mongoose';
 import { HTTPError } from '@bike4mind/common';
 import { InternalServerError, UnprocessableEntityError } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { respond } from '@server/utils/respond';
 
 const createProjectBodySchema = z.object({

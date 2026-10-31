@@ -74,6 +74,18 @@ vi.mock('@bike4mind/llm-adapters', async () => {
   };
 });
 
+const shadowRoutingMock = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/services/llm/shadowTier', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services/llm/shadowTier')>(
+    '@bike4mind/services/llm/shadowTier'
+  );
+  return {
+    ...actual,
+    resolveShadowRouting: (...args: unknown[]) => shadowRoutingMock(...args),
+    reserveShadowTokenBudget: vi.fn().mockResolvedValue(true),
+  };
+});
+
 const deductCreditsMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
@@ -186,6 +198,7 @@ async function dispatch() {
 describe('processSubagentDispatch admission and billing', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    shadowRoutingMock.mockResolvedValue({ settings: null, modelInfo: undefined });
     delegateToAgentMock.mockResolvedValue(childResult);
     const { getAvailableModels } = await import('@bike4mind/llm-adapters');
     vi.mocked(getAvailableModels).mockResolvedValue([testModel] as never);
@@ -204,6 +217,18 @@ describe('processSubagentDispatch admission and billing', () => {
         outputTokens: 5,
         questId: 'quest-1',
       }),
+      expect.anything()
+    );
+  });
+
+  it('records the API key that started the run on the subagent charge', async () => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({ ...childDoc, apiKeyId: 'key-1' } as never);
+
+    await dispatch();
+
+    expect(deductCreditsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'text_generation_usage', credits: 7, apiKeyId: 'key-1' }),
       expect.anything()
     );
   });
@@ -350,6 +375,18 @@ describe('processSubagentDispatch admission and billing', () => {
     expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
   });
 
+  it('fails a subagent whose model the catalog no longer carries instead of throwing', async () => {
+    const { getAvailableModels, getLlmByModel } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValue([] as never);
+    vi.mocked(getLlmByModel).mockReturnValueOnce(null);
+
+    const { markFailed } = await dispatch();
+
+    expect(markFailed).toHaveBeenCalledWith('child-1', { message: 'Model "test-model" is no longer available' });
+    expect(delegateToAgentMock).not.toHaveBeenCalled();
+    expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a subagent on a disabled model before it runs', async () => {
     const { getAvailableModels } = await import('@bike4mind/llm-adapters');
     vi.mocked(getAvailableModels).mockResolvedValue([{ ...testModel, disabled: true }] as never);
@@ -439,6 +476,36 @@ describe('processSubagentDispatch admission and billing', () => {
         })
       );
       expect(record.mock.calls[0][0].costUsd).toBeCloseTo(10 * 3e-6 + 5 * 15e-6, 12);
+    });
+
+    it('names the requested model on a restricted run and keeps the substitute as executedModel', async () => {
+      const substitute = { ...testModel, id: 'cheap-model', backend: 'openai' };
+      const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+      vi.mocked(getAvailableModels).mockResolvedValue([testModel, substitute] as never);
+      shadowRoutingMock.mockResolvedValue({
+        settings: { allowlist: ['cheap-model'], dailyTokenCap: 20000, requestsPerMin: 3 },
+        modelInfo: substitute,
+      });
+      delegateToAgentMock.mockResolvedValue({ ...childResult, model: 'cheap-model' });
+
+      await dispatch();
+
+      expect(await usageRecord()).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          provider: 'anthropic',
+          model: 'test-model',
+          executedProvider: 'openai',
+          executedModel: 'cheap-model',
+        })
+      );
+    });
+
+    it('leaves executedModel off an unrestricted run', async () => {
+      await dispatch();
+
+      const row = (await usageRecord()).mock.calls[0][0];
+      expect(row.model).toBe('test-model');
+      expect(row).not.toHaveProperty('executedModel');
     });
 
     it('records what a subagent spent before it failed', async () => {

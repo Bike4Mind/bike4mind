@@ -18,12 +18,12 @@ import type {
   FeedbackDeliverySkipReason,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { escapeRegex, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailEvents } from '@server/utils/eventBus';
-import { postFeedbackToSlack } from '@server/integrations/slack/slack';
+import { postFeedbackToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
@@ -185,7 +185,7 @@ function renderFeedbackLinksHtml(links: FeedbackDeepLinks | null): string {
 
 /**
  * Decides where feedback-to-email sends go for a given deploy stage, mirroring
- * resolveFeedbackSlackRoute (@server/integrations/slack/slack) so the two channels can't drift
+ * resolveFeedbackSlackRoute (@bike4mind/server-utils/integrations/slack/slack) so the two channels can't drift
  * apart on the same stage-leak bug. Non-production stages deliberately do NOT fall back to
  * FeedbackReceiveEmail - that fallback is exactly the leak this resolver closes (a real internal
  * recipient list otherwise inherited from a non-prod stage into the prod feedback inbox).

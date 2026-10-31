@@ -172,6 +172,8 @@ describe('POST /api/artifacts artifact gate', () => {
     await mockRefs.postHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(403);
+    // Released desktop builds match this exact body to tell the opt-out from other 403s.
+    expect(res._getJSONData()).toEqual({ error: 'Artifacts are disabled for this user' });
     expect(mockRefs.createArgs).toBeUndefined();
   });
 

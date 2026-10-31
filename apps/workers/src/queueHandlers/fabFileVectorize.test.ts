@@ -5,7 +5,7 @@ import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accou
 // Mirror of fabFileChunk.test.ts, scoped to the batchId log-metadata attach. We drive the raw
 // handler with a fully-vectorized FabFile so it hits the idempotency early-return right after the
 // updateMetadata call - no embedding path is exercised.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
   // Declared, not spread from the real module: this mock exists to keep `utils`' import-time
   // Config/DB wiring out of the test. Any NEW export the handler starts importing has to be added
@@ -134,7 +134,7 @@ vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   completedBatchStatus: vi.fn(),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 // #2027: its own dedicated unit tests (notifySlackIndexingComplete.test.ts) cover the resolution
 // chain and every skip case - mocked here so this suite doesn't have to exercise the real thing.
 vi.mock('@workers/queueHandlers/notifySlackIndexingComplete', () => ({
@@ -212,7 +212,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 
 import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 import { dispatch } from './fabFileVectorize';
 

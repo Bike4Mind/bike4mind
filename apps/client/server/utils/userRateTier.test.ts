@@ -22,7 +22,7 @@ const {
 }));
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: () => isDevelopmentMock() }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveUserSubscriptions: findActiveUserSubscriptionsMock,
     findActiveSubscriptionsByOwners: findActiveSubscriptionsByOwnersMock,
@@ -57,6 +57,7 @@ const TIER_LIMITS: Record<string, number> = {
   apiRateLimitFreePerMin: 10,
   apiRateLimitBasicPerMin: 30,
   apiRateLimitProPerMin: 60,
+  shadowTierRequestsPerMin: 3,
 };
 
 describe('resolveUserRateTier', () => {
@@ -129,6 +130,15 @@ describe('resolveUserRateTier', () => {
     findPlanHolderOrgIdsMock.mockResolvedValue(['org1']);
     findActiveSubscriptionsByOwnersMock.mockResolvedValue([]);
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('basic');
+  });
+
+  it('returns "shadow" for a shadow-tier user without reading subscriptions', async () => {
+    expect(await resolveUserRateTier({ id: 'u1', throttle: { tier: 'shadow' } })).toBe('shadow');
+    expect(findActiveUserSubscriptionsMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps bypass for a shadow-tier admin', async () => {
+    expect(await resolveUserRateTier({ id: 'u1', isAdmin: true, throttle: { tier: 'shadow' } })).toBe('bypass');
   });
 
   it('treats tier-less standalone plans as "free" (not on the ladder)', async () => {
@@ -260,6 +270,18 @@ describe('resolveUserRateLimitPerMin', () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_pro' }]);
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(60);
     expect(getSettingsValueMock).toHaveBeenCalledWith('apiRateLimitProPerMin', expect.anything());
+  });
+
+  it('reads the shadow setting for a shadow-tier user', async () => {
+    findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_pro' }]);
+    expect(await resolveUserRateLimitPerMin({ id: 'u1', throttle: { tier: 'shadow' } })).toBe(3);
+    expect(getSettingsValueMock).toHaveBeenCalledWith('shadowTierRequestsPerMin', expect.anything());
+  });
+
+  it('restores the subscription limit on the next call once the tier is cleared', async () => {
+    findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_pro' }]);
+    expect(await resolveUserRateLimitPerMin({ id: 'u1', throttle: { tier: 'shadow' } })).toBe(3);
+    expect(await resolveUserRateLimitPerMin({ id: 'u1', throttle: { tier: 'none' } })).toBe(60);
   });
 });
 

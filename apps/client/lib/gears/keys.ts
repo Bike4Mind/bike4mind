@@ -52,5 +52,7 @@ export type GearKind = 'destination' | 'skill';
 export type GearPendingReason = 'unverified' | 'too_new' | 'reward_check';
 
 /** Gear payouts also need a verified email and an account at least this many days old
- *  (anti-farm: the unlocks are trivial to automate on fresh accounts). The Gears page copy quotes it. */
+ *  (anti-farm: the unlocks are trivial to automate on fresh accounts). The live value is the
+ *  gearRewardMinAccountAgeDays admin setting; this is its default, and the Gears page copy's
+ *  fallback when the status response predates the setting. */
 export const GEAR_TRUST_MIN_AGE_DAYS = 7;

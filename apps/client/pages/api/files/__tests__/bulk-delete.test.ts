@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   findByIdAndUserId: vi.fn(),
   findById: vi.fn(),
   update: vi.fn(),
+  updateUserShares: vi.fn(),
   deleteManyByFabFileId: vi.fn(),
   findAllWithKnowledgeId: vi.fn(),
   sessionUpdate: vi.fn(),
@@ -42,7 +43,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.storageDelete, upload: vi.fn(), getSignedUrl: vi.fn() }),
   getGeneratedImageStorage: () => ({ delete: vi.fn() }),
@@ -68,6 +69,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     findById: h.findById,
     update: h.update,
     computeDataLakeStats: h.computeDataLakeStats,
+    shareable: { updateUserShares: h.updateUserShares },
   },
   fileTagRepository: { touchLastActivityBy: h.touchLastActivityBy },
   sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },

@@ -19,7 +19,7 @@ vi.mock('@bike4mind/services', () => ({
 const recallMementosV2Mock =
   vi.fn<(...args: unknown[]) => Promise<Array<{ fact: string; relevance: number }> | null>>();
 
-vi.mock('@server/memory/recallMementosV2', () => ({
+vi.mock('@bike4mind/server-utils/memory/recallMementosV2', () => ({
   recallMementosV2: (...args: unknown[]) => recallMementosV2Mock(...args),
 }));
 

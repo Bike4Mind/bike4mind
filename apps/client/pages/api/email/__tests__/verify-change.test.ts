@@ -16,7 +16,7 @@ vi.mock('@server/middlewares/csrfProtection', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 // logAuditEvent writes a CounterLog row; an own email change must never reach it.
 const mockLogAuditEvent = vi.fn();
 vi.mock('@server/utils/auditLog', () => ({

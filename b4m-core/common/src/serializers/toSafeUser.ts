@@ -50,9 +50,12 @@ export const USER_SECRET_FIELDS = [
   'loginRecords',
   'signupMeta',
   'riskScore',
+  'riskEvidence',
   'freeCreditClaimEmail',
   'signupGrantAssessment',
   'userNotes',
+  'throttle',
+  'riskSignals',
   'stripeCustomerId',
 ] as const;
 
@@ -140,7 +143,14 @@ export type SelfKeepableSecretField = (typeof SELF_KEEPABLE_SECRET_FIELDS)[numbe
  * every user the admin's private notes about them. Re-including one requires `keepAdminOnly`,
  * whose name is the reminder that the caller must have checked the VIEWER, not the subject.
  */
-export const ADMIN_ONLY_USER_FIELDS = ['userNotes', 'loginRecords', 'signupMeta', 'signupGrantAssessment'] as const;
+export const ADMIN_ONLY_USER_FIELDS = [
+  'userNotes',
+  'loginRecords',
+  'signupMeta',
+  'signupGrantAssessment',
+  'throttle',
+  'riskSignals',
+] as const;
 export type AdminOnlyUserField = (typeof ADMIN_ONLY_USER_FIELDS)[number];
 
 /**

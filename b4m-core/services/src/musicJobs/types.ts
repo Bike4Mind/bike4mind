@@ -75,6 +75,8 @@ export type CreateMusicJobInput = {
   /** Untrusted: parsed and validated by createMusicJob. */
   request: unknown;
   source: GenerationJobSource;
+  /** The UserApiKey that authenticated the request, kept on the job for its settlement row. */
+  apiKeyId?: string;
   idempotencyKey?: string;
   /** The notebook and message the song belongs to, for in-chat producers. */
   sessionId?: string;

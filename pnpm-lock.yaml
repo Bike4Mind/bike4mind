@@ -7,8 +7,6 @@ settings:
 overrides:
   esbuild: 0.28.1
   esbuild-wasm: 0.28.1
-  '@smithy/core': 3.36.1
-  '@smithy/types': 4.19.0
   axios@<1.20.0: 1.20.0
   minimatch@<3.1.3: 3.1.5
   tar@<7.5.8: ^7.5.8
@@ -2620,6 +2618,9 @@ importers:
       '@aws-sdk/client-iam':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-lambda':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-s3':
         specifier: ^3.1150.0
         version: 3.1151.0
@@ -2686,6 +2687,12 @@ importers:
       axios:
         specifier: 1.20.0
         version: 1.20.0
+      axios-retry:
+        specifier: ^4.5.0
+        version: 4.5.0(axios@1.20.0)
+      dayjs:
+        specifier: ^1.11.23
+        version: 1.11.23
       file-type:
         specifier: ^22.1.0
         version: 22.1.0

@@ -30,7 +30,7 @@ import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authS
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logSignInSuccess, resolveSecondFactor, type SecondFactorOutcome } from '@server/auth/signInSecondFactor';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -54,6 +54,7 @@ import {
   emitSignupFunnelEvents,
   recordSignupAcquisition,
 } from '@server/analytics/funnel';
+import { readVisitId } from '@server/analytics/visitSession';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 
@@ -510,6 +511,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         method: AuthStrategy.Okta,
         emailVerified: userInfo.email_verified === true,
         creditsGranted: signupCreditsGranted,
+        visitId: readVisitId(req.headers.cookie),
       });
     }
 

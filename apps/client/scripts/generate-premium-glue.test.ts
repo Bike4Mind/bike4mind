@@ -10,8 +10,7 @@ const SCRIPT = fileURLToPath(new URL('./generate-premium-glue.mjs', import.meta.
 const SCRIPT_SOURCE = fs.readFileSync(SCRIPT, 'utf8');
 
 const GENERATED = 'apps/client/app/premium-generated';
-const SERVER_GENERATED = 'apps/client/server/premium-generated';
-const LLM_TOOLS = `${SERVER_GENERATED}/premiumLlmTools.generated.ts`;
+const LLM_TOOLS = 'packages/server-utils/src/premium-generated/premiumLlmTools.generated.ts';
 const LS_KEYS = `${GENERATED}/premiumLocalStorageKeys.generated.ts`;
 const ROUTES = `${GENERATED}/premiumRoutes.generated.ts`;
 const API_STUB = 'apps/client/pages/api/premium-fx/ping.ts';
@@ -34,7 +33,9 @@ const makeTree = (opts: { premiumDir: boolean; packages?: Fixture[] }): string =
     const dir = path.join(root, 'packages/premium', pkg.dir);
     fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'src/ping.ts'), 'export default () => {};\n');
-    const manifest: Record<string, unknown> = { name: pkg.name };
+    fs.writeFileSync(path.join(dir, 'src/tools.ts'), 'export const tools = {};\n');
+    // The server-utils glue imports an overlay by its declared exports path, not by package name.
+    const manifest: Record<string, unknown> = { name: pkg.name, exports: { './tools': './src/tools.ts' } };
     if (pkg.contributions) manifest.b4mContributions = pkg.contributions;
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(manifest));
     if (pkg.linked !== false) {
@@ -126,7 +127,7 @@ describe('generate-premium-glue.mjs', () => {
 
       expect(result.status).toBe(0);
       expect(read(root, API_STUB)).toContain("export { default } from '@fixture/fx/api/ping';");
-      expect(read(root, LLM_TOOLS)).toContain("from '@fixture/fx/tools'");
+      expect(read(root, LLM_TOOLS)).toContain("from '../../../premium/fx/src/tools'");
       expect(read(root, LS_KEYS)).toContain("'fx:'");
     });
 
@@ -196,7 +197,7 @@ describe('generate-premium-glue.mjs', () => {
       fs.rmSync(path.join(root, 'node_modules'), { recursive: true });
       expect(run(root).status).toBe(0);
       expect(exists(root, API_STUB)).toBe(false);
-      expect(read(root, LLM_TOOLS)).not.toContain('@fixture/fx/tools');
+      expect(read(root, LLM_TOOLS)).not.toContain('premium/fx/src/tools');
       expect(read(root, LS_KEYS)).not.toContain("'fx:'");
       expect(read(root, ROUTES)).toContain('PremiumRouteDescriptor[] = [];');
     });

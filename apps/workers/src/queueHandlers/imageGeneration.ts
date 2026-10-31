@@ -1,4 +1,4 @@
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 import { getImageGeneration } from '@server/imageGenerations/imageGeneration';
 

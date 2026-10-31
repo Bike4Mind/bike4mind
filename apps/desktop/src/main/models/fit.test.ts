@@ -1,23 +1,26 @@
 import {
-  computeBufferBytes,
   estimateFit,
+  estimateFitFromSize,
   type FitPlacement,
   type FitResult,
   type HardwareProfile,
   type ModelArch,
+  type SizeFit,
 } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatMemory } from '@shared/models';
 import { fitFromArch, fitFromSize, machineView } from './fit';
 
 // The estimator's numbers belong to @bike4mind/common; these tests pin only how a plan becomes a badge.
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
   estimateFit: vi.fn(),
-  computeBufferBytes: vi.fn(),
+  estimateFitFromSize: vi.fn(),
 }));
 
+const actualCommon = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+
 const GIB = 1024 ** 3;
-const MIB = 1024 ** 2;
 
 const DENSE: ModelArch = {
   contextMax: 131072,
@@ -77,9 +80,7 @@ function stub(totalGiB: number, options: { fits?: boolean; placement?: FitPlacem
 
 beforeEach(() => {
   vi.mocked(estimateFit).mockReset();
-  vi.mocked(computeBufferBytes)
-    .mockReset()
-    .mockReturnValue(GIB / 2);
+  vi.mocked(estimateFitFromSize).mockReset().mockImplementation(actualCommon.estimateFitFromSize);
 });
 
 describe('fitFromArch', () => {
@@ -135,35 +136,46 @@ describe('fitFromArch', () => {
 });
 
 describe('fitFromSize', () => {
-  it("adds the estimator's compute buffer for the context's ubatch, with no cache to size", () => {
-    fitFromSize(3 * GIB, cpu(16), 16384);
-    const [model, context, ubatch, options] = vi.mocked(computeBufferBytes).mock.calls[0];
-    expect(model.weightsBytes).toBe(3 * GIB);
-    expect(model.arch.full.layers).toBe(1);
-    expect(model.arch.recurrent).toBeUndefined();
-    expect([context, ubatch, options.memoryKind]).toEqual([16384, 1024, 'cpu']);
+  it('rates every size, machine and context exactly as the shared size-only estimate does', () => {
+    for (const hardware of [cpu(8), cpu(16), cpu(128), gpu(8, 32), gpu(24, 64)])
+      for (const size of [0.3, 3, 9, 12, 30, 100].map(sizeGiB => sizeGiB * GIB))
+        for (const context of [2048, 16384, 131072]) {
+          const shared = actualCommon.estimateFitFromSize(size, hardware, context);
+          const fit = fitFromSize(size, hardware, context);
+          expect(fit).toMatchObject({ level: shared.level, basis: 'size', context });
+          expect(fit.detail).toContain(`about ${formatMemory(shared.needBytes)} before`);
+          expect(fit.detail).toContain(`the ${formatMemory(shared.budgetBytes)} a model can use here`);
+        }
     expect(estimateFit).not.toHaveBeenCalled();
   });
 
-  it('sizes compute in the tens to hundreds of MiB for a small model', async () => {
-    const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
-    vi.mocked(computeBufferBytes).mockImplementation(actual.computeBufferBytes);
-    fitFromSize(500 * 1e6, cpu(16), 16384);
-    const bytes = vi.mocked(computeBufferBytes).mock.results[0].value as number;
-    expect(bytes).toBeGreaterThan(10 * MIB);
-    expect(bytes).toBeLessThan(GIB);
+  const sized = (overrides: Partial<SizeFit>): SizeFit => ({
+    level: 'fits',
+    needBytes: 3.5 * GIB,
+    budgetBytes: 12 * GIB,
+    offloadBytes: 0,
+    cpuOnly: false,
+    context: 16384,
+    ...overrides,
   });
 
-  // cpu(16): a 12 GiB budget and a 256 MiB margin; compute is stubbed at 0.5 GiB.
   it.each([
-    [3, 'fits', 'about 3.5 GiB'],
-    [9, 'tight', 'about 9.5 GiB'],
-    [12, 'too-large', 'about 12.5 GiB'],
-  ])('rates %d GiB of weights as %s on the CPU, keeping 20%% headroom for the context', (sizeGiB, level, figure) => {
-    const fit = fitFromSize(sizeGiB * GIB, cpu(16), 16384);
+    ['fits', ', of the 12 GiB', sized({})],
+    ['tight', ', close to the 12 GiB', sized({ level: 'tight' })],
+    ['tight', 'part of it runs from system RAM', sized({ level: 'tight', offloadBytes: GIB })],
+    ['too-large', ', more than the 12 GiB', sized({ level: 'too-large', offloadBytes: GIB })],
+  ])('words a %s verdict with "%s"', (level, phrase, verdict) => {
+    vi.mocked(estimateFitFromSize).mockReturnValue(verdict);
+    const fit = fitFromSize(3 * GIB, gpu(12, 32), 16384);
     expect(fit).toMatchObject({ level, basis: 'size', context: 16384 });
-    expect(fit.detail).toContain('file size');
-    expect(fit.detail).toContain(figure);
+    expect(fit.detail).toContain('Rough estimate from the file size: about 3.5 GiB');
+    expect(fit.detail).toContain(phrase);
+    expect(fit.detail).not.toContain('No GPU memory');
+  });
+
+  it('notes the CPU assumption when no GPU memory was detected', () => {
+    vi.mocked(estimateFitFromSize).mockReturnValue(sized({ cpuOnly: true }));
+    expect(fitFromSize(3 * GIB, cpu(16), 16384).detail).toContain('No GPU memory was detected');
   });
 
   it('is tight when the spill fits in system RAM, and will not fit past it', () => {

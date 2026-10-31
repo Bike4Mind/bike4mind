@@ -1,7 +1,7 @@
 import { isValidObjectId } from 'mongoose';
 import { Quest } from '@bike4mind/database';
 import type { HistoricalBaselines } from '@bike4mind/common';
-import type { AnalysisSource, LLMAnalysis } from '@server/utils/telemetryAnalysis';
+import type { AnalysisSource, LLMAnalysis } from '@bike4mind/server-utils/utils/telemetryAnalysis';
 
 export interface CachedTelemetryAnalysis {
   analysis: LLMAnalysis;

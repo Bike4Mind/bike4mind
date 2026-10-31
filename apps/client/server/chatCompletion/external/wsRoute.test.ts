@@ -4,11 +4,11 @@ import type { Server } from 'http';
 import express from 'express';
 import { ApiKeyScope, BadRequestError, CliCompletionChunkAction, TooManyRequestsError } from '@bike4mind/common';
 import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { Connection } from '@bike4mind/database/social';
-import { sendToConnection } from '@server/websocket/utils';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
@@ -41,6 +41,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: {},
   organizationRepository: {},
+  cacheRepository: {},
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue(null) },
 }));
 
@@ -56,7 +57,7 @@ vi.mock('@server/cli/auth', () => ({
 }));
 
 vi.mock('@server/utils/logCompletionAnalytics', () => ({ logCompletionAnalytics: vi.fn() }));
-vi.mock('@server/websocket/utils', () => ({ sendToConnection: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToConnection: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
 }));

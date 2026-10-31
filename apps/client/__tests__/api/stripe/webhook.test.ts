@@ -74,7 +74,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   },
 }));
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     updateByStripeSubscriptionIdReturningBefore: (...args: unknown[]) => mockUpdateByStripeSubscriptionId(...args),
     markPastDue: (...args: unknown[]) => mockMarkPastDue(...args),
@@ -87,7 +87,7 @@ vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyCanceledForNonPayment: vi.fn(),
 }));
 
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
 }));
 
@@ -97,7 +97,7 @@ vi.mock('@server/integrations/slack/subscriptionLifecycle', async importOriginal
   postSubscriptionLifecycleToSlack: (...args: unknown[]) => mockPostSubscriptionLifecycleToSlack(...args),
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: (...args: unknown[]) => mockSendToClient(...args),
 }));
 
@@ -112,12 +112,12 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
 }));
 
 const mockVoidOpenSubscriptionInvoices = vi.fn();
-vi.mock('@server/integrations/stripe/dunning', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: (...args: unknown[]) => mockVoidOpenSubscriptionInvoices(...args),
 }));
 
 const mockLogEventSafe = vi.fn();
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEventSafe: (...args: unknown[]) => mockLogEventSafe(...args),
 }));
 
@@ -136,10 +136,28 @@ vi.mock('@server/billing/paymentRisk', () => ({
   radarRiskLine: (...args: unknown[]) => mockRadarRiskLine(...args),
 }));
 
+// The forfeit helpers have their own suite (server/credits/paymentUnlockForfeit.test.ts); here only the wiring.
+const mockForfeitHeldUnlockForFraudWarning = vi.fn();
+vi.mock('@server/credits/paymentUnlockForfeit', () => ({
+  forfeitSignupUnlock: vi.fn(),
+  forfeitHeldUnlockForRefund: vi.fn(),
+  forfeitHeldUnlockForFraudWarning: (...args: unknown[]) => mockForfeitHeldUnlockForFraudWarning(...args),
+}));
+// The fraud-warning response and linked-account propagation have their own suites
+// (server/billing/earlyFraudWarning.test.ts, linkedAccounts.test.ts); here only the wiring.
+const mockRespondToEarlyFraudWarning = vi.fn();
+const mockPropagateAccountRisk = vi.fn();
+vi.mock('@server/billing/earlyFraudWarning', () => ({
+  respondToEarlyFraudWarning: (...args: unknown[]) => mockRespondToEarlyFraudWarning(...args),
+}));
+vi.mock('@server/billing/linkedAccounts', () => ({
+  propagateAccountRisk: (...args: unknown[]) => mockPropagateAccountRisk(...args),
+}));
+
 // The real source-product emitter runs (signupEvents.ts); only the network edge is mocked, with an
 // ingest key for one made-up product.
 const mockEmitProductEvent = vi.fn();
-vi.mock('@server/analytics/emitActiveEvent', () => ({
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
   HOST_PRODUCT_ID: 'bike4mind',
   emitProductEvent: (...args: unknown[]) => mockEmitProductEvent(...args),
   ingestKeyFor: (p: string) => (p === 'widgets' ? 'key' : undefined),
@@ -277,12 +295,31 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
   });
 
   describe('payment risk wiring', () => {
-    it.each(['radar.early_fraud_warning.created', 'review.opened'])('forwards %s to the risk alert', async type => {
-      const event = { type, data: { object: { id: 'obj_1', charge: 'ch_1' } } };
+    it('forwards an opened review to the risk alert', async () => {
+      const event = { type: 'review.opened', data: { object: { id: 'prv_1', charge: 'ch_1' } } };
 
       const { res } = await invokeWebhookWithEvent(event);
 
       expect(mockAlertStripeRiskEvent).toHaveBeenCalledWith(event, expect.anything());
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('also cancels a held signup unlock on an early fraud warning, and only then', async () => {
+      const warning = { id: 'issfr_1', charge: 'ch_1' };
+      await invokeWebhookWithEvent({ type: 'radar.early_fraud_warning.created', data: { object: warning } });
+      await invokeWebhookWithEvent({ type: 'review.opened', data: { object: { id: 'prv_1', charge: 'ch_1' } } });
+
+      expect(mockForfeitHeldUnlockForFraudWarning).toHaveBeenCalledTimes(1);
+      expect(mockForfeitHeldUnlockForFraudWarning).toHaveBeenCalledWith(warning, expect.anything());
+    });
+
+    it('hands an early fraud warning to the automatic response, which owns its alert', async () => {
+      const event = { type: 'radar.early_fraud_warning.created', data: { object: { id: 'issfr_1', charge: 'ch_1' } } };
+
+      const { res } = await invokeWebhookWithEvent(event);
+
+      expect(mockRespondToEarlyFraudWarning).toHaveBeenCalledWith(event, expect.anything());
+      expect(mockAlertStripeRiskEvent).not.toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
@@ -719,6 +756,19 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       expect(updatedUser.disputePending).toBe(true);
 
       expect(mockClawbackCreditLotsByStripeRef).toHaveBeenCalledWith('pi_123', 'full', 200, expect.anything());
+    });
+
+    it('carries the lock to linked accounts, keyed by the dispute', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+      mockSubtractCredits.mockResolvedValue({ currentCredits: 300 });
+
+      await invokeWebhookWithEvent(disputeEvent);
+
+      expect(mockPropagateAccountRisk).toHaveBeenCalledWith(
+        { sourceUserId: 'user123', trigger: 'dispute', key: 'dispute:dp_abc:linked' },
+        expect.anything()
+      );
     });
 
     it('sends a Slack alert with dispute details', async () => {

@@ -37,6 +37,7 @@ import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
 import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
+import { parseSubscriptionDetailSearch } from './components/admin/Subscriptions/Detail/subscriptionDetailSearch';
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import {
   isIntegrationsPageSource,
@@ -95,12 +96,17 @@ const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/cal
 const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
 const AdminUserProfilePage = lazy(() => import('./routes/admin/users/$userId'));
+const AdminSubscriptionDetailPage = lazy(() => import('./routes/admin/subscriptions/$subscriptionId'));
+const AdminSubscriptionByStripeIdPage = lazy(
+  () => import('./routes/admin/subscriptions/by-stripe/$stripeSubscriptionId')
+);
 const QuestsPage = lazy(() => import('./routes/quests'));
 const SlackInstallPage = lazy(() => import('./routes/integrations/slack/install'));
 const SlackSuccessPage = lazy(() => import('./routes/integrations/slack/success'));
 const SlackErrorPage = lazy(() => import('./routes/integrations/slack/error'));
 const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
 const DesktopDownloadPage = lazy(() => import('./routes/desktop'));
+const ArenaPage = lazy(() => import('./routes/arena'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
@@ -396,6 +402,17 @@ export const integrationsRoute = createRoute({
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <IntegrationsPage />
+    </Suspense>
+  ),
+});
+
+// Preference arena - verified users compare two blind answers and earn capped promotional credits.
+const arenaRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/arena',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ArenaPage />
     </Suspense>
   ),
 });
@@ -1214,6 +1231,22 @@ export const adminUserProfileRoute = createRoute({
   validateSearch: parseUserProfileSearch,
 });
 
+// Admin subscription detail, opened from the Subscriptions tab and the profile's subscription cards.
+export const adminSubscriptionDetailRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/subscriptions/$subscriptionId',
+  component: AdminSubscriptionDetailPage,
+  validateSearch: parseSubscriptionDetailSearch,
+});
+
+// Resolves a Stripe `sub_...` id to the detail page. The static `by-stripe` segment outranks the
+// `$subscriptionId` param in TanStack's ranking, so the detail route never captures it.
+export const adminSubscriptionByStripeIdRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/subscriptions/by-stripe/$stripeSubscriptionId',
+  component: AdminSubscriptionByStripeIdPage,
+});
+
 // Email unsubscribe route - public page for managing email preferences
 const emailUnsubscribeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1282,6 +1315,7 @@ const routeTree = rootRoute.addChildren([
     notebookShellRoute.addChildren([newRoute, notebookRoute]),
     gearsRoute,
     integrationsRoute,
+    arenaRoute,
     projectsRoute,
     projectRoute,
     profileRoute,
@@ -1335,7 +1369,12 @@ const routeTree = rootRoute.addChildren([
   gitHubLakeCallbackRoute,
   subscribeRoute,
   activateRoute,
-  adminLayoutRoute.addChildren([adminRoute, adminUserProfileRoute]),
+  adminLayoutRoute.addChildren([
+    adminRoute,
+    adminUserProfileRoute,
+    adminSubscriptionDetailRoute,
+    adminSubscriptionByStripeIdRoute,
+  ]),
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,
   // Slack integration routes (no layout)

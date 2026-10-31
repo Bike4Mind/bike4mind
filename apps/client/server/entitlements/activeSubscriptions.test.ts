@@ -4,7 +4,7 @@ const { findActiveUserSubscriptions, findActiveSubscriptionsByOwners } = vi.hois
   findActiveUserSubscriptions: vi.fn(),
   findActiveSubscriptionsByOwners: vi.fn(),
 }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findActiveUserSubscriptions, findActiveSubscriptionsByOwners },
 }));
 

@@ -3,7 +3,7 @@ import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
-import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';
+import { authorizeLakeConnectorAccess } from '@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess';
 import { withConnectionId, withLakeConnectorClaim } from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import {
   isValidDriveFolderId,
@@ -14,7 +14,10 @@ import {
   REJECTED_DRIVE_TOKEN_MESSAGE,
   type FolderAccess,
 } from '@bike4mind/server-utils/integrations/google/drive/driveClient';
-import { getValidUserDriveAccessToken, isTerminalDriveGrantError } from '@server/integrations/google/drive/common';
+import {
+  getValidUserDriveAccessToken,
+  isTerminalDriveGrantError,
+} from '@bike4mind/server-utils/integrations/google/drive/common';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
 import {

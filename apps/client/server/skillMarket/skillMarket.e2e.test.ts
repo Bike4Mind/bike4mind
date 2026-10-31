@@ -99,7 +99,7 @@ import type { ISkill, ISkillListing } from '@bike4mind/common';
 import { submitListingVersion, decideVersion, rescanVersion } from './submitVersion';
 import { recommendListings, searchListings } from './search';
 import { attachMarketStatus } from './marketStatus';
-import { serializeListing, skillContentHash, withdrawAuthorListings } from './market';
+import { serializeListing, skillContentHash, withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
 import { listMyListings, publishListing } from './author';
 import { MAX_SLA_REMINDERS, runSkillMarketReviewSla } from './reviewSla';
 import type { ClassifierLlm } from './classifySkill';

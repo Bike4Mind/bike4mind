@@ -176,6 +176,20 @@ describe('CreditTransactionRepository.apiKeyUsageForOwner', () => {
     ]);
   });
 
+  it('adds every key-attributed row to creditsSpent but counts only completion and decision rows as requests', async () => {
+    await seed([
+      // One chat turn writes a text row and a tool row; neither is an API request of its own.
+      { type: 'text_generation_usage', apiKeyId: 'key-a', credits: -40, createdAt: recent() },
+      { type: 'tool_usage', apiKeyId: 'key-a', credits: -5, createdAt: recent() },
+      { type: 'completion_api_usage', apiKeyId: 'key-a', credits: -10, createdAt: recent() },
+      { type: 'decision_usage', apiKeyId: 'key-a', credits: -3, createdAt: recent() },
+    ]);
+
+    const rows = await creditTransactionRepository.apiKeyUsageForOwner(ORG, CreditHolderType.Organization);
+
+    expect(rows).toMatchObject([{ apiKeyId: 'key-a', requests: 2, creditsSpent: 58 }]);
+  });
+
   it('scopes to the owner and the trailing window', async () => {
     await seed([{ type: 'completion_api_usage', apiKeyId: 'key-a', credits: -10, createdAt: recent() }]);
     await seed([

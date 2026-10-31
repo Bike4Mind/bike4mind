@@ -741,6 +741,94 @@ describe('planLifecycle docs suggestions', () => {
   });
 });
 
+describe('planLifecycle snapshot-alias suggestions', () => {
+  const SNAPSHOT = 'gpt-4.1-2025-04-14';
+
+  const aliasRun = (resolvedInForce: Map<string, ResolvedCatalogRecord>, overrides: Partial<LifecyclePlanInput> = {}) =>
+    plan({ base: resolvedInForce, resolvedInForce, ...overrides });
+
+  it('queues the alias for retirement onto its snapshot, and writes nothing', () => {
+    const result = aliasRun(new Map([active('gpt-4.1'), active(SNAPSHOT)]), { autoRemap: 'apply' });
+
+    // Even under 'apply': a sunset catalog-only row leaves the merged list, so the
+    // status may only land together with the successor, i.e. through accept.
+    expect(result.transitions).toEqual([]);
+    expect(result.rows).toEqual([]);
+    expect(result.suggestions).toEqual([
+      expect.objectContaining({
+        modelId: 'gpt-4.1',
+        status: 'deprecated',
+        replacedBy: SNAPSHOT,
+        source: 'snapshot-alias',
+      }),
+    ]);
+  });
+
+  it('names the newest active snapshot when the alias has several', () => {
+    const result = aliasRun(
+      new Map([
+        active('gpt-4.1'),
+        active('gpt-4.1-2025-01-01'),
+        active(SNAPSHOT),
+        active('gpt-4.1-2026-01-01', { lifecycle: { status: 'deprecated' } }),
+      ])
+    );
+
+    expect(result.suggestions.map(suggestion => suggestion.replacedBy)).toEqual([SNAPSHOT]);
+  });
+
+  it('leaves an alias whose snapshot is itself sunset', () => {
+    const result = aliasRun(new Map([active('o3'), active('o3-2025-04-16', { lifecycle: { status: 'deprecated' } })]));
+
+    expect(result.suggestions).toEqual([]);
+  });
+
+  it('stops re-queueing once the alias is sunset', () => {
+    const result = aliasRun(
+      new Map([active('gpt-4.1', { lifecycle: { status: 'deprecated', replacedBy: SNAPSHOT } }), active(SNAPSHOT)])
+    );
+
+    expect(result.suggestions).toEqual([]);
+  });
+
+  it('leaves an alias the static adapter tables ship', () => {
+    const result = aliasRun(new Map([active('gpt-5.4-mini'), active('gpt-5.4-mini-2026-03-17')]), {
+      staticModelIds: new Set(['gpt-5.4-mini', 'gpt-5.4-mini-2026-03-17']),
+    });
+
+    expect(result.suggestions).toEqual([]);
+  });
+
+  it('leaves an alias served by another backend than the snapshot', () => {
+    const result = aliasRun(new Map([active('gpt-4.1', { backend: ModelBackend.Bedrock }), active(SNAPSHOT)]));
+
+    expect(result.suggestions).toEqual([]);
+  });
+
+  it('keeps a docs suggestion for the same alias ahead of its own', () => {
+    const resolvedInForce = new Map([active('gpt-4.1'), active(SNAPSHOT)]);
+    const signals = planLifecycleSignals({
+      contributions: [
+        provider('openai-docs', [
+          {
+            modelId: 'gpt-4.1',
+            patch: { lifecycle: { status: 'deprecated', retirementDate: '2027-01-01' } },
+            lifecycleEvidence: 'docs',
+          },
+        ]),
+      ],
+    });
+
+    const result = aliasRun(resolvedInForce, {
+      catalogPlan: catalogPlan(signals.contributions, resolvedInForce),
+      docs: signals.docs,
+    });
+
+    expect(result.suggestions).toHaveLength(1);
+    expect(result.suggestions[0]).toMatchObject({ modelId: 'gpt-4.1', source: 'openai-docs' });
+  });
+});
+
 describe('planLifecycle replacedBy', () => {
   /** gpt-5 sunsets by absence, with gpt-6 as the only sibling that could replace it. */
   const sunset = (base: Map<string, ResolvedCatalogRecord>, overrides: Partial<LifecyclePlanInput> = {}) =>

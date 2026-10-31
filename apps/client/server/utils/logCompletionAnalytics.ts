@@ -1,4 +1,4 @@
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import {
   UserApiKeyEvents,
   AiEvents,

@@ -30,14 +30,14 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
   return { baseApi: () => chain };
 });
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: vi.fn().mockResolvedValue(undefined) }));
 const scopeAccess = vi.hoisted(() => ({ entitlements: new Set<string>() }));
 vi.mock('@server/entitlements', () => ({
   getUserEntitlements: vi.fn(async () => [...scopeAccess.entitlements]),
   getRequestEntitlements: vi.fn(async () => [...scopeAccess.entitlements]),
 }));
 
-vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated', () => ({
   premiumApiKeyScopes: [
     {
       value: 'acme:read',

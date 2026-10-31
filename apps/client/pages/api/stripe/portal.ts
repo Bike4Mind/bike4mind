@@ -3,7 +3,7 @@ import { BadRequestError } from '@bike4mind/utils';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';

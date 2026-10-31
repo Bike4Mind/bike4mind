@@ -31,7 +31,7 @@ vi.mock('@server/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));
 
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 // parseAdminActionReason stays real so the route's required-reason check runs here too.
 vi.mock('@server/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),

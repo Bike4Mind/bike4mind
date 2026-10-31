@@ -1,7 +1,7 @@
 import { User } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
-import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
+import { isRotatedSecretWithinGraceWindow } from '@bike4mind/server-utils/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';

@@ -17,7 +17,7 @@ import { ImageGenerationService } from '@bike4mind/services/llm/ImageGeneration'
 import { SQSService } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { Logger } from '@bike4mind/observability';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
@@ -51,7 +51,7 @@ export const getImageGeneration = (): ImageGenerationService => {
         imageModerationIncidents,
       },
       imageProcessorLambdaName: Resource.ImageProcessor.name,
-      imageModerationService: new RekognitionImageModerationService(Logger.globalInstance),
+      imageModerationService: new RekognitionImageModerationService(),
       // Owner-wide lake arms for the input-image lookup, parity with the chat/agent attachment
       // doors - a lake-only image the workbench admitted must still resolve as an image-gen input.
       resolveLakeAccess: (user: IUserDocument, logger: Logger) => createAttachmentLakeAccess(user, logger)(),

@@ -25,6 +25,7 @@ import { resolveHighsWasm } from '../../apps/client/scripts/resolve-highs-wasm.m
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const INFRA_DIR = path.join(REPO_ROOT, 'infra');
 const CLIENT_DIR = path.join(REPO_ROOT, 'apps/client');
+const SERVER_UTILS_SRC = path.join(REPO_ROOT, 'packages/server-utils/src');
 
 /** The generated premium tool map. A handler that reaches it can execute the premium tools. */
 const PREMIUM_TOOL_MAP = 'premium-generated/premiumLlmTools.generated';
@@ -63,10 +64,17 @@ function resolveSourceFile(withoutExtension: string): string | null {
   return null;
 }
 
-/** Resolves the local specifiers we can follow; returns null for node_modules and packages. */
+/**
+ * Resolves the local specifiers we can follow, including @bike4mind/server-utils (source-only, so
+ * code moved there from apps/client stays on the walk); returns null for node_modules and other
+ * packages.
+ */
 function resolveImport(specifier: string, fromFile: string): string | null {
   if (specifier.startsWith('.')) {
     return resolveSourceFile(path.resolve(path.dirname(fromFile), specifier));
+  }
+  if (specifier.startsWith('@bike4mind/server-utils/')) {
+    return resolveSourceFile(path.join(SERVER_UTILS_SRC, specifier.slice('@bike4mind/server-utils/'.length)));
   }
   for (const [prefix, base] of CLIENT_ALIASES) {
     if (specifier.startsWith(prefix)) {

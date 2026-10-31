@@ -37,7 +37,7 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   deleteFromQueue: remove,
 }));
 vi.mock('sst', () => ({ Resource: { lakeMemoryQueue: { url: 'http://sqs/lake-memory' } } }));
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger:
     (handler: (event: SQSEvent, context: Context, logger: Logger) => Promise<unknown>) =>
     (event: SQSEvent, context: Context) =>

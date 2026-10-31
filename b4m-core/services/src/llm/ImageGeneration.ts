@@ -151,6 +151,8 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
    */
   generationId: z.string().optional(),
   adminRoleWithheld: z.boolean().optional(),
+  /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
+  apiKeyId: z.string().optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
@@ -278,7 +280,9 @@ export class ImageGenerationService {
     this.fabFileStorage = options.fabFileStorage;
     this.saveGeneratedAsset = options.saveGeneratedAsset;
     this.abilityGetter = options.abilityGetter;
-    this.tokenizer = new TiktokenTokenizer({ logger: Logger.globalInstance });
+    // The service is cached per container, so the tokenizer must not keep a request's logger;
+    // request-scoped calls go through withLogger(logger) instead.
+    this.tokenizer = new TiktokenTokenizer({ logger: new Logger({ metadata: { component: 'tokenizer' } }) });
     this.invokeSessionAutoNaming = options.invokeSessionAutoNaming;
     this.invokeSummarizeSession = options.invokeSummarizeSession;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
@@ -311,8 +315,10 @@ export class ImageGenerationService {
     body,
     userId,
     adminRoleWithheld,
+    apiKeyId,
   }: {
     adminRoleWithheld?: boolean;
+    apiKeyId?: string;
     body: z.infer<typeof GenerateImageIvokeParamsSchema>;
     userId: string;
   }) {
@@ -486,6 +492,7 @@ export class ImageGenerationService {
           intent,
           generationId: uuidv4(),
           adminRoleWithheld,
+          apiKeyId,
         })
       );
 
@@ -847,6 +854,7 @@ export class ImageGenerationService {
       questId,
       userId,
       adminRoleWithheld,
+      apiKeyId,
       prompt,
       model,
       n = 1,
@@ -952,7 +960,8 @@ export class ImageGenerationService {
       let usageCostUsd = 0;
 
       // Encode the prompt to tokens
-      const promptTokens = await this.tokenizer.encodeTokens(prompt, model);
+      const tokenizer = this.tokenizer.withLogger(logger);
+      const promptTokens = await tokenizer.encodeTokens(prompt, model);
 
       this.addStatusToQuest(quest, 'Preparing to paint...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
@@ -983,7 +992,7 @@ export class ImageGenerationService {
         prompt,
         promptTokens,
         maxTokens: models.find(m => m.id === model)?.max_tokens,
-        tokenizer: this.tokenizer,
+        tokenizer,
         modelId: model,
         logger,
       });
@@ -1640,7 +1649,7 @@ export class ImageGenerationService {
         const creditsCharged = await this.creditHolds.settle(
           creditHold,
           settlement.credits,
-          { type: 'image_generation_usage', sessionId, questId, model },
+          { type: 'image_generation_usage', sessionId, questId, model, apiKeyId },
           { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger }
         );
         creditHold = undefined;

@@ -54,7 +54,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockSubCreate = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { create: (...a: unknown[]) => mockSubCreate(...a) },
 }));
 
@@ -62,7 +62,7 @@ vi.mock('@server/models/Subscription', () => ({
 vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 // parseAdminActionReason stays real so the reason 400s come from the route itself.
 vi.mock('@server/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
@@ -170,7 +170,13 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        details: expect.objectContaining({ ownerId: 'owner-1', seats: 5, initialCredits: 1000, credits: 1000 }),
+        details: expect.objectContaining({
+          ownerId: 'owner-1',
+          seats: 5,
+          initialCredits: 1000,
+          credits: 1000,
+          subscriptionId: mockSubCreate.mock.calls[0][0].subscriptionId,
+        }),
       })
     );
   });

@@ -158,6 +158,12 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     can_stream: record.canStream,
     can_think: record.reasoning?.supported ?? false,
     thinkingStyle: toThinkingStyle(record),
+    ...(record.reasoning?.supported === true && record.reasoning.style === 'openai-effort'
+      ? { openaiReasoningEffort: true as const }
+      : {}),
+    ...(record.reasoning?.effortIncompatibleWithTools !== undefined
+      ? { effortIncompatibleWithTools: record.reasoning.effortIncompatibleWithTools }
+      : {}),
     // The dispatch group rides through to the runtime unchanged: getLlmByModel
     // routes on adapterFamily and the request builders read dispatchProfile.
     // Absent stays absent - that is what keeps a seeded model on the adapter
@@ -189,7 +195,7 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
 /**
  * ModelInfo.thinkingStyle only describes the two Anthropic request shapes. Other
  * reasoning styles map to undefined rather than to a wrong shape; the backends
- * treat unset as their own default.
+ * treat unset as their own default. OpenAI's style rides on openaiReasoningEffort.
  */
 function toThinkingStyle(record: RenderableModelRecord): ModelInfo['thinkingStyle'] {
   switch (record.reasoning?.style) {
@@ -204,9 +210,10 @@ function toThinkingStyle(record: RenderableModelRecord): ModelInfo['thinkingStyl
 
 type ReasoningStyle = NonNullable<ModelRecord['reasoning']>['style'];
 
-function fromThinkingStyle(style: ModelInfo['thinkingStyle']): ReasoningStyle {
-  if (style === 'adaptive') return 'anthropic-adaptive';
-  if (style === 'legacy') return 'anthropic-legacy';
+function fromThinkingStyle(info: ModelInfo): ReasoningStyle {
+  if (info.thinkingStyle === 'adaptive') return 'anthropic-adaptive';
+  if (info.thinkingStyle === 'legacy') return 'anthropic-legacy';
+  if (info.openaiReasoningEffort === true) return 'openai-effort';
   return undefined;
 }
 
@@ -327,9 +334,18 @@ export function toModelRecord(info: ModelInfo): RenderableModelRecord {
     // `supported: false` would claim the reasoning group and turn every silent
     // model's can_think from undefined into an explicit false.
     reasoning:
-      info.can_think === undefined && info.thinkingStyle === undefined
+      info.can_think === undefined &&
+      info.thinkingStyle === undefined &&
+      info.openaiReasoningEffort === undefined &&
+      info.effortIncompatibleWithTools === undefined
         ? undefined
-        : { supported: info.can_think === true, style: fromThinkingStyle(info.thinkingStyle) },
+        : {
+            supported: info.can_think === true,
+            style: fromThinkingStyle(info),
+            ...(info.effortIncompatibleWithTools !== undefined
+              ? { effortIncompatibleWithTools: info.effortIncompatibleWithTools }
+              : {}),
+          },
     adapterFamily: info.adapterFamily,
     dispatchProfile: info.dispatchProfile,
     supportsVision: info.supportsVision,

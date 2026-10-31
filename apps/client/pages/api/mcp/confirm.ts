@@ -8,7 +8,7 @@ import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';

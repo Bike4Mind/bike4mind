@@ -39,6 +39,30 @@ export const EXPLICIT_NUDITY_CONFIDENCE = 90;
 const MAX_ATTEMPTS = 3;
 
 /**
+ * A throttle gets a longer budget than other transient errors: the DetectModerationLabels quota is
+ * account-wide and low (single-digit TPS), so a burst of uploads (each animated image fanning out
+ * per frame) throttles routinely and recovers once the backoff spreads the calls out.
+ */
+const MAX_THROTTLED_ATTEMPTS = 6;
+
+/** Full-jitter exponential backoff between attempts, in ms: random in [0, min(cap, base * 2^n)). */
+const BACKOFF_BASE_MS = 200;
+const BACKOFF_CAP_MS = 3000;
+
+/**
+ * Wall-clock budget for one `checkImage` call. Per-frame backoff adds up across an animation's frames,
+ * so without it a slowly recovering throttle could outlast the upload-complete Lambda's 2-minute
+ * timeout (infra/queues.ts), which kills the process before its claim-release handler runs.
+ */
+const DEFAULT_DEADLINE_MS = 75_000;
+
+const THROTTLING_ERROR_NAMES = new Set([
+  'ThrottlingException',
+  'ProvisionedThroughputExceededException',
+  'LimitExceededException',
+]);
+
+/**
  * Rekognition's inline `Image.Bytes` hard limit is 5 MB. HD PNGs from FLUX Pro Ultra /
  * GPT-Image can exceed it, which would make `checkImage` fail-closed and break legitimate
  * large-image generation. Anything over this threshold is downscaled (moderation does not
@@ -49,8 +73,11 @@ const MAX_INLINE_IMAGE_BYTES = 4.5 * 1024 * 1024;
 /** Rekognition rejects any image with a side over this, however few bytes it takes. */
 const MAX_REKOGNITION_DIMENSION_PX = 10000;
 
-/** Frames of one animated image moderated at once. */
-const FRAME_CONCURRENCY = 5;
+/**
+ * Frames of one animated image moderated at once. Kept low because the Rekognition quota is
+ * account-wide: at 5, a single animated upload alone exceeded it.
+ */
+const FRAME_CONCURRENCY = 2;
 
 export interface ModerationLabelHit {
   name: string;
@@ -99,12 +126,48 @@ export class UnsupportedImageFormatError extends Error {
   }
 }
 
+/**
+ * The detector could not be reached within the retry budget. Transient by nature, so callers
+ * rethrow it to be retried later rather than mapping it to a verdict; never treated as clean.
+ */
+export class ModerationUnavailableError extends Error {
+  readonly throttled: boolean;
+  constructor(attempts: number, cause: unknown, throttled: boolean) {
+    super(`[ImageModeration] moderation unavailable after ${attempts} attempts: ${(cause as Error)?.message}`, {
+      cause,
+    });
+    this.name = 'ModerationUnavailableError';
+    this.throttled = throttled;
+  }
+}
+
+export function isThrottlingError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const retryable = (err as { $retryable?: { throttling?: boolean } }).$retryable;
+  return THROTTLING_ERROR_NAMES.has(err.name) || retryable?.throttling === true;
+}
+
+export interface RekognitionImageModerationOptions {
+  /** Injected for tests; defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>;
+  /** See DEFAULT_DEADLINE_MS. */
+  deadlineMs?: number;
+}
+
+const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
 export class RekognitionImageModerationService implements ImageModerationService {
   private client: RekognitionClient;
-  private logger: Logger;
+  private readonly fixedLogger?: Logger;
+  private sleep: (ms: number) => Promise<void>;
+  private deadlineMs: number;
 
-  constructor(logger: Logger, client?: RekognitionClient) {
-    this.logger = logger;
+  // Without a logger, resolve Logger.globalInstance per call so a long-lived instance logs with
+  // the current request's context instead of the one active at construction.
+  constructor(logger?: Logger, client?: RekognitionClient, options: RekognitionImageModerationOptions = {}) {
+    this.fixedLogger = logger;
+    this.sleep = options.sleep ?? defaultSleep;
+    this.deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
     // Same construction posture as S3Storage: region from env, ambient IAM creds.
     // maxAttempts: 1 - retries are owned by checkImage's own loop (see MAX_ATTEMPTS).
     this.client =
@@ -113,6 +176,10 @@ export class RekognitionImageModerationService implements ImageModerationService
         region: process.env.AWS_REGION || 'us-east-2',
         maxAttempts: 1,
       });
+  }
+
+  private get logger(): Logger {
+    return this.fixedLogger ?? Logger.globalInstance;
   }
 
   /**
@@ -208,8 +275,9 @@ export class RekognitionImageModerationService implements ImageModerationService
    * one that cannot be split or is over the frame cap is unsupported, so blocked as well.
    */
   async checkImage(bytes: Buffer, _mimeType: string): Promise<void> {
+    const deadline = Date.now() + this.deadlineMs;
     const frames = await extractAnimationFrames(bytes);
-    if (!frames) return this.checkStillImage(bytes);
+    if (!frames) return this.checkStillImage(bytes, deadline);
 
     // ponytail: up to MAX_MODERATED_FRAMES Rekognition calls per image; sample frames if cost matters.
     // Stops scheduling on the first failure: any one already fails the image closed.
@@ -219,7 +287,7 @@ export class RekognitionImageModerationService implements ImageModerationService
       Array.from({ length: Math.min(FRAME_CONCURRENCY, frames.length) }, async () => {
         while (next < frames.length && errors.length === 0) {
           const frame = frames[next++];
-          await this.checkStillImage(frame).catch(err => errors.push(err));
+          await this.checkStillImage(frame, deadline).catch(err => errors.push(err));
         }
       })
     );
@@ -231,11 +299,10 @@ export class RekognitionImageModerationService implements ImageModerationService
     if (error) throw error;
   }
 
-  private async checkStillImage(bytes: Buffer): Promise<void> {
+  private async checkStillImage(bytes: Buffer, deadline: number): Promise<void> {
     let image = await this.fitForInlineDetection(bytes);
     let triedTranscode = false;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    for (let attempt = 1; ; attempt++) {
       try {
         const res = await this.client.send(
           new DetectModerationLabelsCommand({
@@ -292,16 +359,21 @@ export class RekognitionImageModerationService implements ImageModerationService
           throw new UnsupportedImageFormatError(`Rekognition rejected the image (${err.name}): ${err.message}`);
         }
 
-        lastError = err;
-        this.logger.warn(
-          `[ImageModeration] Rekognition attempt ${attempt}/${MAX_ATTEMPTS} failed: ${(err as Error).message}`
-        );
+        const throttled = isThrottlingError(err);
+        const budget = throttled ? MAX_THROTTLED_ATTEMPTS : MAX_ATTEMPTS;
+        const backoff = Math.random() * Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** (attempt - 1));
+        // Fail closed: never treat an unavailable detector as "clean".
+        if (attempt >= budget || Date.now() + backoff > deadline) {
+          throw new ModerationUnavailableError(attempt, err, throttled);
+        }
+
+        const message = `[ImageModeration] Rekognition attempt ${attempt}/${budget} failed: ${(err as Error).message}`;
+        // A throttle is expected under load and usually recovers on backoff; only exhausting it is news.
+        if (throttled) this.logger.info(message);
+        else this.logger.warn(message);
+        await this.sleep(backoff);
       }
     }
-    // Fail closed: never treat an unavailable detector as "clean".
-    throw new Error(
-      `[ImageModeration] moderation unavailable after ${MAX_ATTEMPTS} attempts: ${(lastError as Error)?.message}`
-    );
   }
 }
 
