@@ -1,4 +1,8 @@
-import type { AdminSubscriptionRow, SubscriptionStatusFilter } from '@client/app/utils/adminSubscriptionsFilter';
+import type {
+  AdminSubscriptionOwnerAlert,
+  AdminSubscriptionRow,
+  SubscriptionStatusFilter,
+} from '@client/app/utils/adminSubscriptionsFilter';
 import { isCompSubscription, isTerminalSubscriptionStatus } from '@client/app/utils/adminSubscriptionDetail';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 
@@ -25,6 +29,22 @@ const CANCELING: SubscriptionStatusDisplay = { label: 'Canceling', tone: 'warn' 
 
 /** Shown beside the status chip of an admin grant. Comps are not revenue, so they never show a price. */
 export const COMPED_DISPLAY: SubscriptionStatusDisplay = { label: 'Comped', tone: 'neutral' };
+
+/** Shown beside the status chip of a live subscription that still bills a deleted or blocked account. */
+export const OWNER_ALERT_DISPLAY: Readonly<
+  Record<AdminSubscriptionOwnerAlert, SubscriptionStatusDisplay & { title: string }>
+> = {
+  owner_deleted: {
+    label: 'Owner deleted',
+    tone: 'bad',
+    title: 'The paying account is deleted but Stripe still bills it. Cancel it in Stripe.',
+  },
+  owner_blocked: {
+    label: 'Owner blocked',
+    tone: 'bad',
+    title: 'The paying account is banned, suspended or disputed but Stripe still bills it. Cancel it in Stripe.',
+  },
+};
 
 /** The fields that decide a status chip; a list row and a profile subscription both carry them. */
 export type SubscriptionStatusFields = {

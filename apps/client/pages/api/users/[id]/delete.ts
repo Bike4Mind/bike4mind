@@ -26,6 +26,7 @@ import { emitBillingEvent } from '@server/analytics/signupEvents';
 import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { resolveUserType } from '@server/analytics/resolveUserType';
+import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
 
 const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' | 'username' | 'email'> | null) => ({
   kind: 'user' as const,
@@ -86,14 +87,19 @@ const handler = baseApi().delete(
           integrationGrants = await readUserIntegrationGrants(id);
           const target = await userRepository.findById(id);
           deletedAccount = target;
+          // Before the delete: the Stripe customer ids live on the row. A deleted account must never
+          // renew, but a Stripe failure must not block the delete, so it is reported in the entry below.
+          const cancellation = await cancelAccountSubscriptions({ userId: id, reason: 'account_deleted' }, req.logger);
+          const canceledEntry = subscriptionCancellationAudit(cancellation, 'account_deleted');
           // The delete and its audit entry commit together; cascades and notifications run after.
           const result = await withTransaction(async () => {
             const deleted = await userRepository.delete(id);
             await recordAdminActionFromRequest(req, {
               action: 'user.deleted',
               target: deletedUserTarget(id, target),
-              summary: 'deleted the user',
+              summary: canceledEntry ? `deleted the user; ${canceledEntry.summary}` : 'deleted the user',
               reason,
+              ...(canceledEntry && { details: canceledEntry.details }),
             });
             return deleted;
           });

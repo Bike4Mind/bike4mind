@@ -96,6 +96,9 @@ async function revertUser(snapshot: UserUndoSnapshot, record: UndoRecord, deps: 
     else details.keysReactivated = await db.reactivateApiKeys(userId, snapshot.apiKeys, record.batchId);
   }
 
+  // Stripe cannot reinstate a canceled subscription; the user subscribes again if the ban was a mistake.
+  if (snapshot.canceledSubscriptions) details.subscriptionsNotRestored = snapshot.canceledSubscriptions;
+
   await store.casDeleteDedup(userOwnerKey(userId), 'batchId', record.batchId);
   await deps.audit({
     action: 'user.bulk.undone',
@@ -159,6 +162,7 @@ export async function undoAdminUsersBulk(
     remaining: notAttempted.length,
     unblockedDomains: (record.blockedDomains ?? []).filter(domain => !stillBlocked.has(domain)),
     stillBlockedDomains,
+    subscriptionsNotRestored: record.users.slice(0, attempted).flatMap(user => user.canceledSubscriptions ?? []),
   };
 }
 

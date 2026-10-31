@@ -301,6 +301,49 @@ describe('listAdminSubscriptions', () => {
     expect(result.subscriptions[0].owner).toBeNull();
   });
 
+  describe('owner alert', () => {
+    const alertOf = (rows: Array<{ id: string; ownerAlert: string | null }>, id: unknown) =>
+      rows.find(row => row.id === String(id))?.ownerAlert;
+
+    it('flags a live row billing a deleted, banned or suspended owner, and an org whose billing owner is blocked', async () => {
+      const healthy = await seedUser('healthy');
+      const banned = await seedUser('banned', { isBanned: true });
+      const suspended = await seedUser('suspended', { moderation: { status: 'suspended' } });
+      const bannedOrg = await seedOrganization('banned-org', String(banned._id));
+      const healthyOrg = await seedOrganization('healthy-org', String(healthy._id));
+      const goneOrg = await seedOrganization('gone-org', String(new mongoose.Types.ObjectId()));
+
+      const ok = await seedSubscription(String(healthy._id));
+      const onBanned = await seedSubscription(String(banned._id), { status: 'past_due' });
+      const onSuspended = await seedSubscription(String(suspended._id), { status: 'trialing' });
+      const onDeleted = await seedSubscription(String(new mongoose.Types.ObjectId()));
+      const onBannedOrg = await seedSubscription(String(bannedOrg._id), { ownerType: 'Organization' });
+      const onHealthyOrg = await seedSubscription(String(healthyOrg._id), { ownerType: 'Organization' });
+      const onGoneOrgOwner = await seedSubscription(String(goneOrg._id), { ownerType: 'Organization' });
+
+      const { subscriptions } = await listAdminSubscriptions(params, NOW);
+
+      expect(alertOf(subscriptions, ok._id)).toBeNull();
+      expect(alertOf(subscriptions, onBanned._id)).toBe('owner_blocked');
+      expect(alertOf(subscriptions, onSuspended._id)).toBe('owner_blocked');
+      expect(alertOf(subscriptions, onDeleted._id)).toBe('owner_deleted');
+      expect(alertOf(subscriptions, onBannedOrg._id)).toBe('owner_blocked');
+      expect(alertOf(subscriptions, onHealthyOrg._id)).toBeNull();
+      expect(alertOf(subscriptions, onGoneOrgOwner._id)).toBe('owner_deleted');
+    });
+
+    it('does not flag an ended subscription or an admin grant', async () => {
+      const banned = await seedUser('banned', { isBanned: true });
+      const ended = await seedSubscription(String(banned._id), { status: 'canceled', canceledAt: NOW });
+      const grant = await seedSubscription(String(new mongoose.Types.ObjectId()), { source: 'admin_grant' });
+
+      const { subscriptions } = await listAdminSubscriptions(params, NOW);
+
+      expect(alertOf(subscriptions, ended._id)).toBeNull();
+      expect(alertOf(subscriptions, grant._id)).toBeNull();
+    });
+  });
+
   it('lists a legacy row that has no period dates or createdAt', async () => {
     const user = await seedUser('jane');
     await seedSubscription(String(user._id));

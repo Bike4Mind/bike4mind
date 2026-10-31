@@ -14,6 +14,7 @@ import { hashSignupNetwork } from '@bike4mind/server-utils/auth/signupNetworkSig
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { adminOwnerSlackRef } from '@server/integrations/slack/subscriptionLifecycle';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { cancelAccountSubscriptions } from '@server/billing/cancelAccountSubscriptions';
 
 /**
  * Accounts linked to one another through what they paid or signed up with. A shared card
@@ -120,13 +121,18 @@ export function formatLinkPropagationAlert(input: {
   trigger: string;
   locked: LinkedAccount[];
   review: LinkedAccount[];
+  canceledSubscriptions?: string[];
 }): string {
+  const canceled = input.canceledSubscriptions ?? [];
   const line = (account: LinkedAccount) => `\u2022 ${userRef(account.id)} (${describeVia(account)})`;
   return [
     `:link: *Linked accounts: ${input.trigger}*`,
     `*Source:* ${userRef(input.sourceUserId)}`,
     ...(input.locked.length > 0 ? ['*Locked (same card):*', ...input.locked.map(line)] : []),
     ...(input.review.length > 0 ? ['*Review (shared network only, not locked):*', ...input.review.map(line)] : []),
+    ...(canceled.length > 0
+      ? [`*Subscriptions canceled on the locked accounts:* ${canceled.map(id => `\`${id}\``).join(', ')}`]
+      : []),
   ].join('\n');
 }
 
@@ -149,18 +155,34 @@ export async function propagateAccountRisk(
     const linked = await findLinkedAccounts(source);
     const toLock = linked.filter(account => account.strength === 'strong' && !account.blocked);
     const review = linked.filter(account => account.strength === 'weak' && !account.blocked);
-    for (const account of toLock) await lockAccountForPaymentRisk(account);
+    const canceledSubscriptions: string[] = [];
+    for (const account of toLock) {
+      await lockAccountForPaymentRisk(account);
+      // Same card as the flagged account, so a renewal would charge it again. Never throws.
+      const { canceled } = await cancelAccountSubscriptions(
+        { userId: account.id, reason: 'payment_risk_lock' },
+        logger
+      );
+      canceledSubscriptions.push(...canceled);
+    }
 
     logger.info('[PaymentRisk] propagated account risk to linked accounts', {
       sourceUserId: input.sourceUserId,
       trigger: input.trigger,
       locked: toLock.map(account => account.id),
       review: review.map(account => account.id),
+      canceledSubscriptions,
     });
     if (toLock.length === 0 && review.length === 0) return none;
     if (await paymentRiskActionRepository.claimStep(input.key, 'linkedAlert', input.sourceUserId)) {
       await postMessageToSlack(
-        formatLinkPropagationAlert({ sourceUserId: input.sourceUserId, trigger: input.trigger, locked: toLock, review })
+        formatLinkPropagationAlert({
+          sourceUserId: input.sourceUserId,
+          trigger: input.trigger,
+          locked: toLock,
+          review,
+          canceledSubscriptions,
+        })
       );
     }
     return { locked: toLock.map(account => account.id), review: review.map(account => account.id) };

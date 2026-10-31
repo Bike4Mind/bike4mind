@@ -73,6 +73,8 @@ const UserUndoSnapshotSchema = z.object({
   /** Signed ledger delta this batch applied. */
   creditDelta: z.number().optional(),
   apiKeys: z.array(RevokedApiKeySchema).optional(),
+  /** Stripe subscription ids canceled after the ban committed. Kept so undo can say they stay canceled. */
+  canceledSubscriptions: z.array(z.string()).optional(),
 });
 export type UserUndoSnapshot = z.infer<typeof UserUndoSnapshotSchema>;
 

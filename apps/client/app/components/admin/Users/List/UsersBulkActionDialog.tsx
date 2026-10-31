@@ -258,9 +258,16 @@ export function UsersBulkActionDialog({
         toast.info('No users were changed.');
         return;
       }
+      if (result.subscriptionCancelFailures.length > 0)
+        toast.warning(
+          `Could not cancel the Stripe subscriptions of ${plural(result.subscriptionCancelFailures.length)}. Cancel them in Stripe.`
+        );
       const message =
         `${copy.done} ${plural(result.applied)}` +
-        (result.blockedDomains.length > 0 ? `; blocked signups from ${result.blockedDomains.join(', ')}` : '');
+        (result.blockedDomains.length > 0 ? `; blocked signups from ${result.blockedDomains.join(', ')}` : '') +
+        (result.canceledSubscriptions > 0
+          ? `; canceled ${result.canceledSubscriptions.toLocaleString()} Stripe subscription(s)`
+          : '');
       // The server sets undoExpiresAt to no later than now when it could not store an undo record.
       if (Date.parse(result.undoExpiresAt) <= Date.now()) {
         toast.success(message);
@@ -278,6 +285,10 @@ export function UsersBulkActionDialog({
           if (restored.partial)
             toast.warning(
               `${plural(restored.remaining)} not restored before the time limit. Check them on their profiles.`
+            );
+          if (restored.subscriptionsNotRestored.length > 0)
+            toast.warning(
+              `${restored.subscriptionsNotRestored.length.toLocaleString()} canceled Stripe subscription(s) stay canceled; the users must subscribe again.`
             );
           if (restored.failed.length > 0)
             toast.warning(`${restored.failed.length.toLocaleString()} users could not be restored.`);
