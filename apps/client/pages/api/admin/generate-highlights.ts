@@ -14,7 +14,7 @@ import {
   HIGHLIGHTS_NOTE_LIMIT,
   loadHighlightsReleaseNotes,
   parseHighlightsEndDate,
-} from '@server/whatsNew/releaseNoteHighlights';
+} from '@bike4mind/server-utils/whatsNew/releaseNoteHighlights';
 
 // Rate limiting - 1 request per minute to prevent abuse
 const GENERATE_RATE_LIMIT = 1;

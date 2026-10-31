@@ -11,7 +11,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 vi.mock('@server/analytics/signupEvents', () => ({ emitSignupForSourceProducts: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },

@@ -16,7 +16,7 @@ import {
   IArtifactDocument,
   IArtifactVersionDocument,
 } from '@bike4mind/common';
-import { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import Dexie, { Table } from 'dexie';
 
 export class DexieStore extends Dexie {

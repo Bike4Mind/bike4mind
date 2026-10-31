@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userService } from '@bike4mind/services';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';

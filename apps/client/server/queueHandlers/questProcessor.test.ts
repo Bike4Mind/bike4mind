@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 // The same module instance the handler imports, so the assertion below pins identity, not a copy.
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 const mockProcess = vi.hoisted(() => vi.fn());
 const processOptions = vi.hoisted(() => vi.fn());

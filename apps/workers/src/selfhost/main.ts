@@ -17,7 +17,7 @@ import { dispatch as imageGenerationDispatch } from '@workers/queueHandlers/imag
 import { dispatch as imageEditDispatch } from '@workers/queueHandlers/imageEdit';
 import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';
 import { dispatch as generationJobDispatch } from '@workers/queueHandlers/generationJob';
-import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
+import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@bike4mind/server-utils/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
 import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule';

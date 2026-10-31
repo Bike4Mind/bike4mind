@@ -253,6 +253,13 @@ The [PR template](./.github/pull_request_template.md) is not decoration; fill in
 - **Screenshots/video** — required for any UI change.
 - **Checklist** — actually do the items, don't just tick them.
 
+When the PR adds or changes a security control (a rate limit, WAF rule, bot challenge, alarm, header check), the description, the commit messages and the review comments describe what the code now does. Everything else about the weakness lives on the private tracker, which the PR may reference by bare number only. Leave out:
+
+- Exposure or impact statements: what an attacker could reach, for how long, how many accounts or how much money.
+- Reproduction inputs: payloads, bypass spellings, header names or exact thresholds paired with the route they protect, commands against production.
+- Names of surfaces that are still unprotected, including "X still holds" or "Y is left for a follow-up" notes.
+- Quoted text or titles from private issues, and teammate names in commit messages or trailers. Thank reviewers in the PR conversation instead.
+
 ### Scope hygiene
 
 - No drive-by reformatting or mass renames mixed into functional changes.
@@ -289,6 +296,8 @@ Two details the location tells you:
 
 - A hit named `commit <sha> ...` is in that commit's own diff, which stays in the branch history even if a later commit removes the line. Squash or rewrite that commit; editing the file in a new commit does not clear it.
 - A file GitHub cannot show a diff for (binary, or too large) is checked in full at the commit being checked (for binary files, its readable text), not line by line.
+
+The check does not read issue comments, reviews or review replies, so give those the same care by hand. A force-push does not remove a pushed commit from GitHub: it stays reachable by SHA, so a push that should not have happened needs a maintainer to file a support request, not a history rewrite.
 
 ### Fixing a dependency advisory
 

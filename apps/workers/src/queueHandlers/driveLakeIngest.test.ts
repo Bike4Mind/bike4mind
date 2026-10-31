@@ -13,7 +13,7 @@ const storageRefusal = () =>
   });
 
 // Passthrough the wrapper so we drive the raw handler directly.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
 
@@ -183,7 +183,7 @@ vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
 // common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: take the real
 // isTerminalDriveGrantError from its Config-free module instead.
-vi.mock('@server/integrations/google/drive/common', async () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', async () => ({
   getValidConnectionDriveAccessToken: h.getValidConnectionDriveAccessToken,
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
   releaseDriveConnection: h.releaseDriveConnection,
@@ -210,9 +210,9 @@ vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async i
 });
 // Mocks only the network-touching calls; keeps the real DriveWalkTimeBudgetExceededError export so
 // tests and the handler agree on the class an `instanceof` check below is testing against.
-vi.mock('@server/integrations/google/drive/driveContent', async () => {
-  const actual = await vi.importActual<typeof import('@server/integrations/google/drive/driveContent')>(
-    '@server/integrations/google/drive/driveContent'
+vi.mock('@bike4mind/server-utils/integrations/google/drive/driveContent', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/integrations/google/drive/driveContent')>(
+    '@bike4mind/server-utils/integrations/google/drive/driveContent'
   );
   return {
     ...actual,
@@ -235,7 +235,7 @@ import {
   MAX_INGEST_SLICES,
 } from './driveLakeIngest';
 import { MAX_INGEST_CANDIDATES } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
-import { DriveWalkTimeBudgetExceededError } from '@server/integrations/google/drive/driveContent';
+import { DriveWalkTimeBudgetExceededError } from '@bike4mind/server-utils/integrations/google/drive/driveContent';
 import { REJECTED_DRIVE_TOKEN_MESSAGE } from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;

@@ -5,7 +5,7 @@ import {
   type ApiKeyRateLimitHeader,
   type ApiKeyRateLimitUsage,
 } from '@bike4mind/common';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 
 const MINUTE_IN_MS = 60_000;
 const DAY_IN_MS = 86_400_000;

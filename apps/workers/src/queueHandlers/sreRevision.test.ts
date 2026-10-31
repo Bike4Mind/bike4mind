@@ -46,7 +46,7 @@ vi.mock('@bike4mind/services', () => ({
 
 const mockHasCommentWithMarker = vi.fn();
 const mockAddIssueComment = vi.fn();
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: {
     forSystem: vi.fn().mockResolvedValue({
       getFileContent: vi.fn(),
@@ -103,7 +103,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsByNames: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 

@@ -43,7 +43,7 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockFindByStripeSubId = vi.fn();
 const mockDelete = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findByStripeSubscriptionId: (...a: unknown[]) => mockFindByStripeSubId(...a),
     delete: (...a: unknown[]) => mockDelete(...a),
@@ -63,7 +63,9 @@ vi.mock('@server/utils/adminAudit', async importOriginal => {
 });
 
 const mockSendToClient = vi.fn();
-vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => mockSendToClient(...a) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
+  sendToClient: (...a: unknown[]) => mockSendToClient(...a),
+}));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE } from '@bike4mind/server-utils/lib/subscriptions/types';

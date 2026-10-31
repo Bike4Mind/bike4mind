@@ -27,7 +27,7 @@ import {
   updateFileContract,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { decideScopeGate } from '@server/middlewares/apiKeyScopeGate';
+import { decideScopeGate } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { encodeCursor } from '@server/utils/cursorPagination';
 
 const {
@@ -83,7 +83,7 @@ vi.mock('@server/files/createPresignedUpload', () => ({
 }));
 vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: mockLoadAccessibleFabFile }));
 vi.mock('@server/files/deleteFileForUser', () => ({ deleteFileForUser: mockDeleteFileForUser }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mockLogEvent }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));

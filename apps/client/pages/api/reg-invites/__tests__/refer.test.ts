@@ -13,7 +13,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/managers/regInviteManager', () => ({
   createRegInvite: vi.fn(async (invite: any) => ({ ...invite, id: 'invite-1' })),
   generateCode: vi.fn(() => 'CODE123'),
@@ -22,7 +22,7 @@ vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
   getLogoUrl: vi.fn(() => ''),
   buildEmailLogoImg: vi.fn(() => ''),
 }));
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...a: unknown[]) => mockPostMessageToSlack(...a),
 }));
 const mockPostMessageToSlack = vi.fn();

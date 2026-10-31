@@ -25,10 +25,10 @@ import {
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createLiveopsTriageService, sanitizeErrorMessage } from '@server/services/liveopsTriageService';
 import { createIssueTracker } from '@server/services/issueTrackers';
-import { resolveSlackBotToken } from '@server/services/liveopsConnectionResolver';
+import { resolveSlackBotToken } from '@bike4mind/server-utils/services/liveopsConnectionResolver';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { Resource } from 'sst';
 import {
   LiveOpsTriageJobMessageSchema,

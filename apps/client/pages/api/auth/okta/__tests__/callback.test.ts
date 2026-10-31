@@ -81,7 +81,7 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
   resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
   logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.fn() }));
 vi.mock('@server/utils/validators', () => ({

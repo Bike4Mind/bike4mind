@@ -1,7 +1,7 @@
 // apps/client/pages/api/skills/market/[id]/versions.ts
 import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { serializeListing, submitRateLimits } from '@server/skillMarket/market';
+import { serializeListing, submitRateLimits } from '@bike4mind/server-utils/skillMarket/market';
 import { submitNewVersion } from '@server/skillMarket/author';
 
 const bodySchema = z.object({ tags: z.array(z.string()).optional() });

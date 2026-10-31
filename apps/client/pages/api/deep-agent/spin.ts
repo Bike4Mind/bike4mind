@@ -13,7 +13,7 @@ import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { createDeepAgentToolMaterializer } from '@server/deepAgent/toolMaterializer';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
-import { loadLinkedAgentContext } from '@server/deepAgent/missions';
+import { loadLinkedAgentContext } from '@bike4mind/server-utils/deepAgent/missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { resolveThinkingVisibilityForUserId } from '@server/utils/thinkingVisibility';
 

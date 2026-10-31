@@ -23,7 +23,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
 import { chargeStampedKnowledgeStorage, stampImportedKnowledgeRows } from '@bike4mind/server-utils/s3/storageCharge';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
-import { withContext } from '@server/s3/utils';
+import { withContext } from '@bike4mind/server-utils/s3/utils';
 import { createOwnedArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';
 import type { ClientSession, FilterQuery } from 'mongoose';
 import type {

@@ -26,7 +26,7 @@ import { modelDiscoveryRunRepository } from '@bike4mind/database';
 import { modelDiscoveryService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { buildModelDiscoveryAdapters } from '@bike4mind/server-utils/modelDiscovery/adapters';
-import { awaitCatalogSeed, modelDiscoveryIntervalMs } from './scheduledRun';
+import { awaitCatalogSeed, modelDiscoveryIntervalMs } from '@bike4mind/server-utils/modelDiscovery/scheduledRun';
 
 export const DISCOVERY_DRIVER_ENV = 'B4M_DISCOVERY_DRIVER';
 

@@ -44,7 +44,7 @@ import { Logger } from '@bike4mind/observability';
 import type { RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import { getRequestMembershipOrgIds } from '@bike4mind/server-utils/dataLakes/requestMembership';
-import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
 import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';

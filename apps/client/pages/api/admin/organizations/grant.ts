@@ -12,10 +12,10 @@ import { ApiKeyScope, CreditHolderType, dayjs, TEAM_PLAN_SEATS_HARD_LIMIT } from
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -91,6 +91,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         throw new BadRequestError('Failed to create organization');
       }
 
+      const subscriptionId = `admin_grant_${randomUUID()}`;
       await subscriptionRepository.create({
         ownerType: SubscriptionOwnerType.Organization,
         ownerId: org.id,
@@ -98,7 +99,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         // unique index on subscriptionId is non-sparse (DocumentDB constraint),
         // so every row needs a real value. The `admin_grant_` prefix is the
         // discriminator separate from Stripe's `sub_` ids.
-        subscriptionId: `admin_grant_${randomUUID()}`,
+        subscriptionId,
         priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
         status: 'active',
         source: SubscriptionSource.AdminGrant,
@@ -133,7 +134,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         target: { kind: 'organization', id: org.id, displayName: org.name },
         summary: `granted org with ${seats} seats and ${initialCredits} initial credits`,
         reason,
-        details: { ownerId: owner.id, seats, initialCredits, credits: initialCredits },
+        details: { ownerId: owner.id, seats, initialCredits, credits: initialCredits, subscriptionId },
         related: ledger?.creditTransactionId ? { creditTransactionId: ledger.creditTransactionId } : undefined,
       });
 

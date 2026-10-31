@@ -262,6 +262,7 @@ import EnsurePaymentRiskLinkIndexes from './20260921236700_ensure-payment-risk-l
 import EnsureUserHeldUnlockIndex from './20260921236800_ensure-user-held-unlock-index';
 import EnsurePendingCreditHoldUserIndex from './20260921236900_ensure-pending-credit-hold-user-index';
 import EnsureReferralSubscriptionRewardIndexes from './20260921237000_ensure-referral-subscription-reward-indexes';
+import EnsureRevenueSnapshotIndex from './20260921237100_ensure-revenue-snapshot-index';
 import EnsureSpendRollupIndexes from './20260921237200_ensure-spend-rollup-indexes';
 import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-signup-grants-for-risk-review';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
@@ -460,6 +461,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureUserHeldUnlockIndex,
   EnsurePendingCreditHoldUserIndex,
   EnsureReferralSubscriptionRewardIndexes,
+  EnsureRevenueSnapshotIndex,
   EnsureSpendRollupIndexes,
   QueueHeldSignupGrantsForRiskReview,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.

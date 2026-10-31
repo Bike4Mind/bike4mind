@@ -9,7 +9,7 @@ import {
   organizationRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';

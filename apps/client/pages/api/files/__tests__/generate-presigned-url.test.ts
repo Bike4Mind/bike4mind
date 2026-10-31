@@ -39,7 +39,7 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn(async () =
 
 // The assertion point: whatever tags reach here are what gets persisted on the FabFile.
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },

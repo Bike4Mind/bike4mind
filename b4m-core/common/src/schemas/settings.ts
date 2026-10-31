@@ -463,6 +463,9 @@ export const SettingKeySchema = z.enum([
   'otcLimitSendPerIpDaily',
   'otcLimitVerifyPerEmailPerIp',
   'otcLimitVerifyPerIp',
+  'subscriberLimitPerIp',
+  'subscriberLimitPerIpDaily',
+  'subscriberLimitSlackAlertsPerHour',
   'signupBurstThreshold',
   'signupBurstWindowHours',
   'signupBurstAutoHold',
@@ -504,6 +507,7 @@ export const SettingKeySchema = z.enum([
   'spendMonitorAccountSpikeRatio',
   'spendMonitorAccountSpikeFloorCredits',
   'spendMonitorAccountCeilingCredits',
+  'freeTierDailySystemCostCapUsd',
   'stagedSignupGrantEnabled',
   'signupGrantCredits',
   'verifiedUnlockCredits',
@@ -2267,6 +2271,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
       { key: 'spendMonitorAccountSpikeFloorCredits', order: 19.48 },
       { key: 'spendMonitorAccountCeilingCredits', order: 19.49 },
+      { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
       { key: 'turnstileFailClosed', order: 22 },
@@ -2462,6 +2467,18 @@ export const API_SERVICE_GROUPS = {
       { key: 'otcLimitVerifyPerEmailPerIp', order: 9 },
       { key: 'otcLimitVerifyPerIp', order: 10 },
       { key: 'otcLimitFormTokenPerIp', order: 11 },
+    ],
+  },
+  SUBSCRIBER_LIMITS: {
+    id: 'subscriberLimitsService',
+    name: 'Subscriber Limits',
+    description:
+      'Tightens the public subscribe form (/api/subscribers/create) during an incident. Unrelated to billing subscriptions. Each value can only lower its built-in limit; 0 keeps the built-in. Changes take up to 5 minutes to apply.',
+    icon: 'Security',
+    settings: [
+      { key: 'subscriberLimitPerIp', order: 1 },
+      { key: 'subscriberLimitPerIpDaily', order: 2 },
+      { key: 'subscriberLimitSlackAlertsPerHour', order: 3 },
     ],
   },
   AUTH_ABUSE: {
@@ -4309,6 +4326,46 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
     order: 11,
   }),
+  subscriberLimitPerIp: makeNumberSetting({
+    key: 'subscriberLimitPerIp',
+    name: 'Subscribers: Per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in SUBSCRIBER_LIMITS (apps/client/server/utils/subscriberLimits.ts).
+    max: 5,
+    int: true,
+    description: 'Subscribe requests one IP may make in 15 minutes. Built-in: 5. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SUBSCRIBER_LIMITS.id,
+    order: 1,
+  }),
+  subscriberLimitPerIpDaily: makeNumberSetting({
+    key: 'subscriberLimitPerIpDaily',
+    name: 'Subscribers: Per IP (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in SUBSCRIBER_LIMITS (apps/client/server/utils/subscriberLimits.ts).
+    max: 10,
+    int: true,
+    description: 'Subscribe requests one IP may make in a day. Built-in: 10. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SUBSCRIBER_LIMITS.id,
+    order: 2,
+  }),
+  subscriberLimitSlackAlertsPerHour: makeNumberSetting({
+    key: 'subscriberLimitSlackAlertsPerHour',
+    name: 'Subscribers: Slack alerts per hour',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in SUBSCRIBER_LIMITS (apps/client/server/utils/subscriberLimits.ts).
+    max: 10,
+    int: true,
+    description:
+      'New-subscriber Slack alerts posted per hour across all sources; past it, one notice and then silence until the hour ends. Signups are still saved. Built-in: 10. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SUBSCRIBER_LIMITS.id,
+    order: 3,
+  }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',
     name: 'Block Disposable Emails',
@@ -4841,6 +4898,16 @@ export const settingsMap = {
       'Credits per 15-minute window. Any single account spending this much in the window raises an alert regardless of its baseline. Minimum 1.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
+  }),
+  freeTierDailySystemCostCapUsd: makeNumberSetting({
+    key: 'freeTierDailySystemCostCapUsd',
+    name: 'Free Tier Daily System Cost Cap (USD)',
+    defaultValue: 0.1,
+    min: 0,
+    description:
+      'Daily provider cost, in USD, a free-tier account may incur through system work it triggers (file indexing, knowledge-base search, tool and session operations), counted per UTC calendar day whether or not that work was charged credits. Once reached, new chat, API and session-operation requests are refused with the same 429 as the daily spend cap until the next UTC midnight; work already admitted (e.g. tool calls inside a running turn, queued file indexing) is not interrupted. Set to 0 to disable.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
   }),
   teamPlanMinSeats: makeNumberSetting({
     key: 'teamPlanMinSeats',
@@ -7486,7 +7553,7 @@ export function buildPublicSettingsProjection(settings: AdminSettingDoc[]): Publ
 //
 // An extension package registers its own setting definitions here instead of adding literals to
 // `SettingKeySchema`. Registration is a side effect of importing the generated contribution module
-// (apps/client: premiumAdminSettings.generated.ts, via lib/settings/registerContributedSettings.ts),
+// (@bike4mind/server-utils: premiumAdminSettings.generated.ts, via lib/settings/registerContributedSettings.ts),
 // so a read that runs before that import sees only the core catalog.
 //
 // The contribution module also ships in the client bundle, so a sensitive contributed setting may not

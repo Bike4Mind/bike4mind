@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/common';
 import { validateSkillName } from '@server/utils/skillValidation';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { canSeeListing, findListing, memberOrgIdsFor, skillContentHash, type MarketActor } from './market';
+import { canSeeListing, findListing, memberOrgIdsFor, skillContentHash, type MarketActor } from '@bike4mind/server-utils/skillMarket/market';
 
 export type ImportListingInput = {
   token?: string;

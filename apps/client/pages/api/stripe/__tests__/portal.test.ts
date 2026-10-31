@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockFindActiveByOwner = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveSubscriptionsByOwner: (...args: unknown[]) => mockFindActiveByOwner(...args),
   },

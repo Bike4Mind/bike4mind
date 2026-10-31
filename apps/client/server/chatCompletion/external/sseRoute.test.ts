@@ -7,7 +7,7 @@ import type { z } from 'zod';
 import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
 // these tests parse frames against). Only the seams below are mocked.

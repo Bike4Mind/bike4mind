@@ -15,7 +15,7 @@ import { withRequestCompletionQuota, type CompletionQuotaContext } from '@server
  */
 
 import { Request, Response } from 'express';
-import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
 import {
   createRequestCompletionMeter,
   isCreditsEnforced,

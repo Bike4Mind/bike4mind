@@ -33,7 +33,7 @@ import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import type { SreRevisionRequest, SreJobType } from '@bike4mind/common';
 import { SreSourceType } from '@bike4mind/common';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 
 /** HTML marker so the CI-retry-exhausted escalation comment is posted at most once per PR/issue.
  *  (Mirrors SRE_SELFHEAL_ESCALATION_MARKER in sreRevision.ts; kept per-file since each owns its marker.) */

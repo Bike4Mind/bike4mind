@@ -4,7 +4,7 @@ import React, { createContext, useContext, useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from './ApiContext';
 import { allSettingDefinitions } from '@bike4mind/common';
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { ADMIN_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 

@@ -18,7 +18,7 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, RETRYABLE_STATUSES } from '@bike4mind/database';
 import { SreSourceType, SreClassification, SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';
 import type { SreEventPayload, SreJobType } from '@bike4mind/common';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import {
   dispatchIssueToSre,
   parseIssueNumberFromUrl,

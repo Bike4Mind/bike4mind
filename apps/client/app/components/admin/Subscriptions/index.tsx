@@ -37,7 +37,7 @@ import {
   useAdminSubscriptionsSummary,
   useSubscriptionsViewCounts,
 } from './useAdminSubscriptionsList';
-import { useOpenSubscriptionRow } from './useOpenSubscriptionRow';
+import { useOpenSubscriptionOwner, useOpenSubscriptionRow } from './useOpenSubscriptionRow';
 import { useSubscriptionsParams, useSubscriptionsTab, useSubscriptionsTabUrlSync } from './useSubscriptionsTabParams';
 
 const copyToClipboard = async (value: string, what: string) => {
@@ -49,7 +49,15 @@ const copyToClipboard = async (value: string, what: string) => {
   }
 };
 
-function SubscriptionRowActions({ row, onOpen }: { row: AdminSubscriptionRow; onOpen: () => void }) {
+function SubscriptionRowActions({
+  row,
+  onOpen,
+  onOpenOwner,
+}: {
+  row: AdminSubscriptionRow;
+  onOpen: () => void;
+  onOpenOwner: () => void;
+}) {
   return (
     <Dropdown>
       <MenuButton
@@ -63,15 +71,18 @@ function SubscriptionRowActions({ row, onOpen }: { row: AdminSubscriptionRow; on
           },
         }}
         data-testid={`admin-subscriptions-row-actions-${row.id}`}
-        // The row opens the customer on click; the menu must not.
+        // The row opens the subscription on click; the menu must not.
         onClick={event => event.stopPropagation()}
         onKeyDown={event => event.stopPropagation()}
       >
         <MoreHorizIcon sx={{ fontSize: 18 }} />
       </MenuButton>
       <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }} onClick={event => event.stopPropagation()}>
+        <MenuItem onClick={onOpen} data-testid={`admin-subscriptions-row-open-${row.id}`}>
+          Open subscription
+        </MenuItem>
         {row.owner && (
-          <MenuItem onClick={onOpen} data-testid={`admin-subscriptions-row-open-${row.id}`}>
+          <MenuItem onClick={onOpenOwner} data-testid={`admin-subscriptions-row-open-owner-${row.id}`}>
             Open customer
           </MenuItem>
         )}
@@ -105,6 +116,7 @@ const AdminSubscriptions: React.FC = () => {
   useSubscriptionsTabUrlSync();
   const [params, setParams] = useSubscriptionsParams();
   const openRow = useOpenSubscriptionRow();
+  const openOwner = useOpenSubscriptionOwner();
   const setAdminTab = useAdminModal(state => state.setActiveTab);
   const [exporting, setExporting] = useState(false);
 
@@ -325,7 +337,9 @@ const AdminSubscriptions: React.FC = () => {
         onRowActivate={openRow}
         sort={sort}
         onSortChange={onSortChange}
-        rowActions={row => <SubscriptionRowActions row={row} onOpen={() => openRow(row)} />}
+        rowActions={row => (
+          <SubscriptionRowActions row={row} onOpen={() => openRow(row)} onOpenOwner={() => openOwner(row)} />
+        )}
         pagination={{
           page: params.page,
           pageSize: params.limit,
