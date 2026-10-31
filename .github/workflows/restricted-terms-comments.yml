@@ -14,6 +14,10 @@ name: Restricted Terms (comments)
 # payload as data. Never check out or run the PR head in this workflow.
 #
 # pull-requests: write is needed only to post the nudge comment.
+#
+# No concurrency group on purpose: a group holds at most one pending run, so a
+# third comment in quick succession would cancel the second's check and leave
+# that comment unread. The cost is a possible duplicate nudge in a tight race.
 
 on:
   issue_comment:
