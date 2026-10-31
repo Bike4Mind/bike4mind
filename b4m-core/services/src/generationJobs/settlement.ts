@@ -36,7 +36,7 @@ export async function settleJobHold(
     ? await settleCreditHold(
         job.creditHold,
         params.credits,
-        params.entry,
+        job.apiKeyId && !params.entry.apiKeyId ? { ...params.entry, apiKeyId: job.apiKeyId } : params.entry,
         { featureLabel: params.featureLabel, logger: deps.logger },
         deps.credits
       )

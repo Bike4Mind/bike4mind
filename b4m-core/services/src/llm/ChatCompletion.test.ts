@@ -20,6 +20,7 @@ import {
   FORCE_FALLBACK_TEST_MARKER,
   FORCE_STREAM_STALL_TEST_MARKER,
   SLOW_MODEL_ERROR_REPLY,
+  PROVIDER_SPEND_LIMIT_REPLY,
   MODEL_UNAVAILABLE_ERROR_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY,
@@ -32,6 +33,7 @@ import {
   getSettingByName,
   shouldTriggerFallback,
   isOverloadedError,
+  isProviderSpendLimitError,
   getLlmWithFallback,
   usdToCredits,
   usdToCreditsStochastic,
@@ -141,6 +143,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   processFabFilesServer: vi.fn(),
   fetchAndConvertFabFiles: vi.fn(),
   isOverloadedError: vi.fn().mockReturnValue(false),
+  isProviderSpendLimitError: vi.fn().mockReturnValue(false),
   shouldTriggerFallback: vi.fn().mockReturnValue(false),
   getLlmWithFallback: vi.fn().mockResolvedValue(null),
   stripAllToolBlocks: vi.fn().mockImplementation((messages: unknown[]) => messages),
@@ -213,6 +216,7 @@ const mockedFetchAndProcessPreviousMessages = vi.mocked(fetchAndProcessPreviousM
 const mockedProcessUrlsFromPrompt = vi.mocked(processUrlsFromPrompt);
 const mockedShouldTriggerFallback = vi.mocked(shouldTriggerFallback);
 const mockedIsOverloadedError = vi.mocked(isOverloadedError);
+const mockedIsProviderSpendLimitError = vi.mocked(isProviderSpendLimitError);
 const mockedGetLlmWithFallback = vi.mocked(getLlmWithFallback);
 const mockedUsdToCredits = vi.mocked(usdToCredits);
 const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
@@ -373,6 +377,7 @@ describe('ChatCompletionProcess', () => {
     mockedFetchAndConvertFabFiles.mockReset().mockResolvedValue({ files: [], missingIds: [] });
     mockedShouldTriggerFallback.mockReset();
     mockedIsOverloadedError.mockReset();
+    mockedIsProviderSpendLimitError.mockReset().mockReturnValue(false);
     mockedGetLlmWithFallback.mockReset();
     // Reset token/credit mocks so per-test overrides don't leak across tests.
     mockedCalculateTotalTokenLength.mockReset();
@@ -5950,6 +5955,33 @@ describe('ChatCompletionProcess', () => {
       expect(mockQuest.promptMeta.functionCalls ?? []).toEqual([]);
     });
 
+    it("records the turn's authenticating API key on its text usage row", async () => {
+      const { complete } = reservationOrgSetup();
+      mockedUsdToCreditsStochastic.mockReturnValue(60);
+      complete.mockImplementation(
+        async (
+          _model: string,
+          _messages: unknown,
+          _options: unknown,
+          callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+        ) => {
+          await callback(['answer'], { inputTokens: 10, outputTokens: 1000 });
+        }
+      );
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await service.process({
+        body: { ...reservationBody(), authOrigin: 'apiKey', apiKeyId: 'key-1' },
+        logger: mockLogger,
+      });
+
+      expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+        'text_generation_usage',
+        expect.objectContaining({ apiKeyId: 'key-1' })
+      );
+    });
+
     it('refunds the whole hold when a tool call is refused for credits before anything was spent', async () => {
       const { complete } = reservationOrgSetup();
       complete.mockImplementation(async () => {
@@ -7495,6 +7527,89 @@ describe('ChatCompletionProcess', () => {
         expect(event.turnUsage).toHaveLength(100);
         expect(event.turnUsageTruncated).toBe(true);
         expect(event.turnUsage[99]).toEqual({ inputTokens: 20, outputTokens: 2, tierKey: 200_000 });
+      });
+    });
+
+    describe('provider spend limit', () => {
+      const SPEND_LIMIT_MESSAGE = '400 invalid_request_error: You have reached your specified API usage limits.';
+      const gpt4 = {
+        id: ChatModels.GPT4,
+        type: 'text',
+        name: 'GPT-4',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        pricing: { 200000: { input: 0, output: 0 } },
+        supportsImageVariation: false,
+      };
+
+      const setupSpendLimitedPrimary = () => {
+        mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+        mockedShouldTriggerFallback.mockReturnValue(true);
+        mockedIsOverloadedError.mockReturnValue(false);
+        mockedIsProviderSpendLimitError.mockImplementation(error => error.message === SPEND_LIMIT_MESSAGE);
+        const complete = vi.fn().mockRejectedValue(new Error(SPEND_LIMIT_MESSAGE));
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([gpt4]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+        return complete;
+      };
+
+      it('leaves the exhausted backend and answers from the fallback', async () => {
+        setupSpendLimitedPrimary();
+        let excludeBackendsSeen: ReadonlySet<string> | undefined;
+        mockedGetLlmWithFallback.mockImplementation(async (...callArgs: any[]) => {
+          excludeBackendsSeen = new Set(callArgs[5]?.excludeBackends ?? []);
+          return {
+            model: { ...gpt4, id: 'route-twin', backend: ModelBackend.Bedrock },
+            backend: {
+              complete: vi
+                .fn()
+                .mockImplementation(
+                  async (_m: unknown, _ms: unknown, _o: unknown, cb: (chunks: string[]) => Promise<void>) => {
+                    await cb(['Hi!']);
+                  }
+                ),
+              getModelInfo: vi.fn().mockResolvedValue([]),
+              currentModel: 'route-twin',
+            },
+            attempt: 1,
+          } as any;
+        });
+
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+        await service.process({ body, logger: mockLogger });
+
+        expect(excludeBackendsSeen).toEqual(new Set([ModelBackend.OpenAI]));
+        expect(mockDb.quests.update).toHaveBeenCalledWith(expect.objectContaining({ replies: ['Hi!'] }));
+      });
+
+      it('settles with a clear reply and one error line when no fallback can answer', async () => {
+        const complete = setupSpendLimitedPrimary();
+        mockedGetLlmWithFallback.mockResolvedValue(null);
+
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+        // Terminal, not rethrown: /process would otherwise log a second, generic failure.
+        await service.process({ body, logger: mockLogger });
+
+        // No same-model backoff retries for an exhausted account.
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ reply: PROVIDER_SPEND_LIMIT_REPLY, type: 'error', status: 'done' })
+        );
+        const spendLimitErrors = vi
+          .mocked(mockLogger.error)
+          .mock.calls.filter(args => args.some(arg => String(arg).includes(SPEND_LIMIT_MESSAGE)));
+        expect(spendLimitErrors).toHaveLength(1);
       });
     });
 
