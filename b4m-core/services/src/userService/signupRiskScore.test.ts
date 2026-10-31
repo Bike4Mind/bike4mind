@@ -78,6 +78,27 @@ describe('scoreSignupRisk', () => {
     expect(result.signals.map(s => s.signal)).toEqual(['riskyDomain']);
   });
 
+  it('puts a scripted free-tier signup above the default review threshold', () => {
+    // Burner domain, counter-style address, a key minted minutes after signup, then heavy first-day spend.
+    const result = scoreSignupRisk(
+      {
+        email: 'person28af6a@a.example.net',
+        riskyDomain: true,
+        minutesToFirstApiKey: 4,
+        creditsSpentFirst24h: 2000,
+      },
+      scoring()
+    );
+
+    expect(result.signals.map(s => s.signal)).toEqual([
+      'riskyDomain',
+      'quickApiKey',
+      'fastSpend',
+      'generatedLocalPart',
+    ]);
+    expect(result.needsReview).toBe(true);
+  });
+
   it('caps the score at 100', () => {
     const result = scoreSignupRisk(
       {

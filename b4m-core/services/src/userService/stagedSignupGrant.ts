@@ -5,6 +5,7 @@ import {
   PENDING_FREE_CREDITS_TAG,
   settingsMap,
   signupGrantRemaining,
+  SignupRiskScoringSchema,
   type IUserDocument,
   type PaymentUnlockReason,
   type SignupGrant,
@@ -14,7 +15,13 @@ import {
 import { withTransaction } from '@bike4mind/db-core';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService';
 import type { FreeCreditAdapters, GrantFreeCreditsResult } from './freeCredits';
-import { evaluateSignupRisk, signupRiskPolicySchema, type SignupRiskBand, type SignupRiskSignals } from './signupRisk';
+import {
+  evaluateSignupRisk,
+  isSignupGrantHeldForReview,
+  signupRiskPolicySchema,
+  type SignupRiskBand,
+  type SignupRiskSignals,
+} from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
 import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './signupGrantBudget';
@@ -73,6 +80,20 @@ function isReleaseEligible(
   if (expected === 'pending_email') return user.signupGrant.stage === expected;
   // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or subscription unlock.
   return user.signupGrant.stage !== 'pending_email';
+}
+
+/** Whether the stored risk score alone keeps the account in review (refreshSignupRiskScore's needsReview). */
+async function scoreNeedsReview(score: number, adminSettings: GrantAdapters['db']['adminSettings']) {
+  const setting = await adminSettings.findBySettingName('signupRiskScoring');
+  let value: unknown = setting?.settingValue ?? {};
+  try {
+    if (typeof value === 'string') value = JSON.parse(value);
+  } catch {
+    value = undefined;
+  }
+  const parsed = SignupRiskScoringSchema.safeParse(value);
+  // An unreadable setting keeps the account queued rather than releasing it unreviewed.
+  return !parsed.success || score >= parsed.data.reviewThreshold;
 }
 
 async function releaseStage(
@@ -233,22 +254,51 @@ async function releaseStage(
       }
       const released = grant.creditsReleased + amount;
       const unlocked = released >= maximum;
+      const nextGrant: SignupGrant = {
+        ...(unlocked ? withoutHeldUnlock(grant) : grant),
+        stage: unlocked ? 'unlocked' : 'signup',
+        creditsReleased: released,
+        nextCondition: unlocked ? null : 'verification',
+        ...(reason ? { unlockedBy: reason } : {}),
+        ...(dripDay ? { dripCredits: (grant.dripCredits ?? 0) + dripAmount, lastDripDay: dripDay } : {}),
+        ...(dripPeriod ? { lastDripPeriod: dripPeriod } : {}),
+        ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
+          ? { unlockedOrgId: evidence.unlockedOrgId }
+          : {}),
+      };
+      // A held tranche is released only from the admin risk review queue, and not every caller rescores
+      // after this (refreshSignupRiskScore), so queue it here. An admin decision already taken stands.
+      const enterRiskReview =
+        !!assessedBand &&
+        isSignupGrantHeldForReview({ signupGrant: nextGrant, signupGrantAssessment: assessment }) &&
+        (user.riskScore?.reviewState ?? 'none') === 'none';
+      // An unlock that pays the held tranche (card, subscription, ...) ends the hold, so an account queued
+      // only for it leaves the queue. An admin release is approved by its caller (admin/signup-risk-reviews).
+      const leaveRiskReview =
+        reason !== 'admin' &&
+        user.riskScore?.reviewState === 'pending' &&
+        isSignupGrantHeldForReview(user) &&
+        !isSignupGrantHeldForReview({ signupGrant: nextGrant, signupGrantAssessment: assessment }) &&
+        !(await scoreNeedsReview(user.riskScore.score, db.adminSettings));
       const updated = await db.users.update({
         id: userId,
         ...(assessment ? { signupGrantAssessment: assessment } : {}),
         ...(user.signupGrantHeldReason ? { signupGrantHeldReason: null } : {}),
-        signupGrant: {
-          ...(unlocked ? withoutHeldUnlock(grant) : grant),
-          stage: unlocked ? 'unlocked' : 'signup',
-          creditsReleased: released,
-          nextCondition: unlocked ? null : 'verification',
-          ...(reason ? { unlockedBy: reason } : {}),
-          ...(dripDay ? { dripCredits: (grant.dripCredits ?? 0) + dripAmount, lastDripDay: dripDay } : {}),
-          ...(dripPeriod ? { lastDripPeriod: dripPeriod } : {}),
-          ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
-            ? { unlockedOrgId: evidence.unlockedOrgId }
-            : {}),
-        },
+        ...(enterRiskReview
+          ? {
+              riskScore: {
+                score: 0,
+                signals: [],
+                computedAt: new Date(),
+                ...user.riskScore,
+                reviewState: 'pending' as const,
+              },
+            }
+          : {}),
+        ...(leaveRiskReview && user.riskScore
+          ? { riskScore: { ...user.riskScore, reviewState: 'none' as const } }
+          : {}),
+        signupGrant: nextGrant,
       });
       if (!updated) throw new Error('Staged grant account update failed');
       await audit?.({ userId, credits: amount, creditTransactionId });
