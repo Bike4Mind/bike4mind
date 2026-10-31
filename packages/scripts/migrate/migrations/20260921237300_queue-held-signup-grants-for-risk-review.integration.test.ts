@@ -39,7 +39,7 @@ const seed = async (fields: Record<string, unknown>) => {
     username: `u-${_id}`,
     name: 'fixture',
     email: `${_id}@example.test`,
-    signupGrantAssessment: { band: 'review' },
+    signupGrantAssessment: { band: 'review', status: 'evaluated' },
     signupGrant: { stage: 'signup', signupCredits: 12, unlockCredits: 28, creditsReleased: 0 },
     ...fields,
   });
@@ -74,6 +74,11 @@ describe('queue-held-signup-grants-for-risk-review', () => {
   it.each([
     ['an approved account', { riskScore: scored('approved') }, 'approved'],
     ['a banned account', { riskScore: scored('banned') }, 'banned'],
+    [
+      'an unavailable-policy review-band tranche',
+      { riskScore: scored('none'), signupGrantAssessment: { band: 'review', status: 'unavailable' } },
+      'none',
+    ],
     ['a reduced-band tranche', { riskScore: scored('none'), signupGrantAssessment: { band: 'reduced' } }, 'none'],
     [
       'a paid tranche',

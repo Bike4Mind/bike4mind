@@ -203,10 +203,10 @@ describe('assessSignupGrant', () => {
 
 describe('isSignupGrantHeldForReview', () => {
   type GrantFields = Pick<IUserDocument, 'signupGrant' | 'signupGrantAssessment'>;
-  const held = (band: string, stage: string, creditsReleased: number) =>
+  const held = (band: string, stage: string, creditsReleased: number, status = 'evaluated') =>
     ({
       signupGrant: { stage, signupCredits: 500, unlockCredits: 500, creditsReleased, nextCondition: null },
-      signupGrantAssessment: { band },
+      signupGrantAssessment: { band, status },
     }) as unknown as GrantFields;
 
   it('holds an unpaid tranche assessed into the review band', () => {
@@ -219,5 +219,9 @@ describe('isSignupGrantHeldForReview', () => {
     expect(isSignupGrantHeldForReview(held('review', 'signup', 500))).toBe(false);
     expect(isSignupGrantHeldForReview(held('review', 'pending_email', 0))).toBe(false);
     expect(isSignupGrantHeldForReview({})).toBe(false);
+  });
+
+  it('does not hold a review-band assessment whose policy was unavailable', () => {
+    expect(isSignupGrantHeldForReview(held('review', 'signup', 0, 'unavailable'))).toBe(false);
   });
 });

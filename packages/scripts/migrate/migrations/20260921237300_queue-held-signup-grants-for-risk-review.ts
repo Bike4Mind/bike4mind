@@ -18,6 +18,7 @@ const migration: MigrationFile = {
     const result = await User.collection.updateMany(
       {
         'signupGrantAssessment.band': 'review',
+        'signupGrantAssessment.status': 'evaluated',
         'signupGrant.stage': 'signup',
         $expr: { $lt: ['$signupGrant.creditsReleased', '$signupGrant.signupCredits'] },
         $or: [{ riskScore: null }, { 'riskScore.reviewState': 'none' }],

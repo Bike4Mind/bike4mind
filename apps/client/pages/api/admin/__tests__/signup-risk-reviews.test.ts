@@ -233,7 +233,11 @@ describe('signup risk review queue', () => {
   it('flags rows whose signup tranche the grant policy holds for review', async () => {
     const grant = { stage: 'signup', signupCredits: 500, unlockCredits: 500, creditsReleased: 0 };
     h.findPending.mockResolvedValue([
-      { ...pendingUser(USER_A, 'a@example.com', 0), signupGrant: grant, signupGrantAssessment: { band: 'review' } },
+      {
+        ...pendingUser(USER_A, 'a@example.com', 0),
+        signupGrant: grant,
+        signupGrantAssessment: { band: 'review', status: 'evaluated' },
+      },
       { ...pendingUser(USER_B, 'b@example.com', 60), signupGrant: grant, signupGrantAssessment: { band: 'full' } },
     ]);
     const { req, res } = request('GET');

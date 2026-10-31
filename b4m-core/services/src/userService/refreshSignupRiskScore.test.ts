@@ -111,7 +111,9 @@ describe('refreshSignupRiskScore', () => {
 
   it('proposes pending below the threshold while the signup grant policy holds the tranche for review', async () => {
     const grant = { stage: 'signup', signupCredits: 500, unlockCredits: 500, creditsReleased: 0 };
-    const { adapters, stored } = setup({ user: { signupGrant: grant, signupGrantAssessment: { band: 'review' } } });
+    const { adapters, stored } = setup({
+      user: { signupGrant: grant, signupGrantAssessment: { band: 'review', status: 'evaluated' } },
+    });
 
     await refreshSignupRiskScore('u1', adapters);
 
@@ -120,7 +122,9 @@ describe('refreshSignupRiskScore', () => {
 
   it('leaves state none once the held tranche has been paid', async () => {
     const grant = { stage: 'signup', signupCredits: 500, unlockCredits: 500, creditsReleased: 500 };
-    const { adapters, stored } = setup({ user: { signupGrant: grant, signupGrantAssessment: { band: 'review' } } });
+    const { adapters, stored } = setup({
+      user: { signupGrant: grant, signupGrantAssessment: { band: 'review', status: 'evaluated' } },
+    });
 
     await refreshSignupRiskScore('u1', adapters);
 
