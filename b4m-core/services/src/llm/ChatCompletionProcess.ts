@@ -54,7 +54,6 @@ import {
   tokenEstimateMultiplier,
   pairDataLakeTools,
   isClaudeModelId,
-  REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
   filterRunnableModels,
@@ -148,6 +147,7 @@ import {
   type OutputBudgetExhaustedError,
   type ICompletionOptionTools,
   convertOpenAIToolHistoryToCanonical,
+  openAIEffortIncompatibleWithTools,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { timedOutAttemptUsageFields } from './timedOutAttemptUsage';
@@ -642,14 +642,19 @@ export const FORCE_STREAM_STALL_TEST_MARKER = '[[force-stream-stall]]';
  * openaiBackend usesResponsesToolTransport). Shared by the primary-turn trim and the per-hop fallback
  * override so they cannot drift.
  */
-function withholdIdentityTool(
-  model: { id: string; supportsTools?: boolean; dispatchProfile?: { toolTransport?: string } },
+export function withholdIdentityTool(
+  model: {
+    id: string;
+    supportsTools?: boolean;
+    effortIncompatibleWithTools?: boolean;
+    openaiReasoningEffort?: true;
+    dispatchProfile?: { toolTransport?: string };
+  },
   toolNames: string[]
 ): boolean {
   return (
     !model.supportsTools ||
-    ((REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model.id) ||
-      model.dispatchProfile?.toolTransport === 'responses') &&
+    ((openAIEffortIncompatibleWithTools(model, model.id) || model.dispatchProfile?.toolTransport === 'responses') &&
       toolNames.length === 1 &&
       toolNames[0] === CURRENT_MODEL_DETAILS_TOOL_NAME)
   );
