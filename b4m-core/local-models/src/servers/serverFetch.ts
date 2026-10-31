@@ -3,7 +3,7 @@ import http, { type IncomingMessage } from 'node:http';
 import https from 'node:https';
 import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
-import type { FetchLike } from '@bike4mind/local-models';
+import type { FetchLike } from '../types';
 import { scopeOfIp, transportVerdict } from './addressPolicy';
 import { credentialRedactor, type CredentialRedactor } from './redact';
 

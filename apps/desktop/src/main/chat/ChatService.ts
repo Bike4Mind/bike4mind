@@ -144,13 +144,8 @@ import type { CompletionStreamEvent } from './streamEvents';
 import { LocalModelRemovedError, OllamaLocal, toMessages } from './OllamaLocal';
 import type { LocalChat } from './localChat';
 import { ServerCredentialsError } from '../modelServers/errors';
-import {
-  ContextOverflowError,
-  estimateTokens,
-  holdsPrompt,
-  localTranscriptChars,
-  shrunkTranscriptChars,
-} from './localContext';
+import { holdsPrompt } from '@bike4mind/local-models/servers';
+import { ContextOverflowError, estimateTokens, localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';

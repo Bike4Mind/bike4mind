@@ -5,10 +5,19 @@ import {
   type InstalledModel,
   type OpenAICompatibleProduct,
 } from '@bike4mind/local-models';
+import {
+  contextTooSmallHint as sharedContextTooSmallHint,
+  holdsPrompt,
+  refusesTools,
+  probeToolSupport,
+  serverContextTokens,
+  toolsOffHint as sharedToolsOffHint,
+  type HintApp,
+} from '@bike4mind/local-models/servers';
 import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
-import { holdsPrompt, LOCAL_CONTEXT_TARGET_TOKENS, replyRoom } from '../chat/localContext';
+import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
 
@@ -25,22 +34,14 @@ export interface OpenAICompatibleServer {
   toolsChanged?: () => void;
 }
 
-const PROPS_TIMEOUT_MS = 5_000;
-/** Long enough for a busy server to produce the probe's one token. */
-const TOOLS_PROBE_TIMEOUT_MS = 20_000;
-const PROBE_TOOL = {
-  type: 'function',
-  function: { name: 'ping', description: 'Replies pong.', parameters: { type: 'object', properties: {} } },
+const DESKTOP_HINTS: HintApp = {
+  name: 'Desktop',
+  recheck: 'and Desktop turns them back on at its next check, within a minute.',
 };
 
 /** Why tools are off and how to turn them on, for the server's settings row and the chat it happened in. */
 export function toolsOffHint(label: string, product: OpenAICompatibleProduct | null): string {
-  const after = 'and Desktop turns them back on at its next check, within a minute.';
-  if (product === 'vllm')
-    return `${label} was started without tool calling, so its chats run without tools. Restart vLLM with --enable-auto-tool-choice and a --tool-call-parser for the model, ${after}`;
-  if (product === 'llama-server')
-    return `${label} refuses tool calls, so its chats run without tools. Restart llama-server with --jinja, ${after}`;
-  return `${label} refuses tool calls, so its chats run without tools. Turn tool calling on there, ${after}`;
+  return sharedToolsOffHint(label, product, DESKTOP_HINTS);
 }
 
 /** Why one turn ran without tools when its message, not Desktop's prompt and tools, overflowed the context. */
@@ -55,20 +56,7 @@ export function contextTooSmallHint(
   small: readonly { name: string; context: number }[],
   toolPromptTokens: number
 ): string {
-  const smallest = Math.min(...small.map(model => model.context));
-  const names = small.map(model => model.name).join(', ');
-  const sizes =
-    new Set(small.map(model => model.context)).size === 1
-      ? `a ${smallest}-token context`
-      : `contexts as small as ${smallest} tokens`;
-  const target = Math.max(16_384, 2 ** Math.ceil(Math.log2(toolPromptTokens + replyRoom(16_384))));
-  const restart =
-    product === 'vllm'
-      ? `Restart vLLM with --max-model-len ${target}`
-      : product === 'llama-server'
-        ? `Restart llama-server with --ctx-size ${target}`
-        : `Give it a context of ${target} tokens or more`;
-  return `${label} runs ${names} with ${sizes}, too small for Desktop's instructions and tools (about ${toolPromptTokens} tokens), so its chats run without tools. ${restart}, and Desktop turns them back on at its next check, within a minute.`;
+  return sharedContextTooSmallHint(label, product, small, toolPromptTokens, DESKTOP_HINTS);
 }
 
 type Block = {
@@ -226,7 +214,7 @@ export class OpenAICompatibleChat implements LocalChat {
     const known = this.contexts.get(name);
     if (known !== undefined) return known;
     if (this.server.product === 'llama-server') {
-      const measured = await this.llamaServerContext(signal);
+      const measured = await serverContextTokens(this.server.fetch, this.server.baseUrl, this.server.product, signal);
       if (measured !== undefined) this.contexts.set(name, measured);
     } else if (this.server.product !== 'lmstudio' && !this.unlistedContexts.has(name)) {
       const models = await this.runtime.list().catch(() => null);
@@ -255,7 +243,7 @@ export class OpenAICompatibleChat implements LocalChat {
     const target = this.refused.values().next().value ?? model;
     if (!target) return Promise.resolve();
     if (this.refused.size === 0 && (this.server.product !== 'vllm' || this.toolsAsked)) return Promise.resolve();
-    this.probing = this.probeTools(target)
+    this.probing = probeToolSupport(this.server.fetch, this.server.baseUrl, target)
       .then(verdict => {
         if (verdict === null) return;
         this.toolsAsked = true;
@@ -303,7 +291,7 @@ export class OpenAICompatibleChat implements LocalChat {
       this.learnToolPrompt(measured !== undefined && !longMessage ? measured : undefined);
     }
     let response = await post(true);
-    if (!response.ok && tools.length > 0 && (await refusedTools(response))) {
+    if (!response.ok && tools.length > 0 && (await refusesTools(response))) {
       this.setRefused(model, true);
       response = await post(false);
     }
@@ -458,45 +446,6 @@ export class OpenAICompatibleChat implements LocalChat {
     return small.length > 0 ? contextTooSmallHint(this.server.label, this.server.product, small, measured) : null;
   }
 
-  private async probeTools(model: string): Promise<'accepted' | 'refused' | null> {
-    try {
-      const response = await this.server.fetch(`${this.server.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        signal: AbortSignal.timeout(TOOLS_PROBE_TIMEOUT_MS),
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: 'ping' }],
-          max_tokens: 1,
-          tools: [PROBE_TOOL],
-        }),
-      });
-      if (response.ok) {
-        await response.body?.cancel();
-        return 'accepted';
-      }
-      if (await refusedTools(response)) return 'refused';
-      await response.body?.cancel();
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  private async llamaServerContext(signal?: AbortSignal): Promise<number | undefined> {
-    try {
-      const timeout = AbortSignal.timeout(PROPS_TIMEOUT_MS);
-      const response = await this.server.fetch(`${this.server.baseUrl}/props`, {
-        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-      });
-      if (!response.ok) return undefined;
-      const body = (await response.json()) as { default_generation_settings?: { n_ctx?: unknown }; n_ctx?: unknown };
-      return tokenCount(body.default_generation_settings?.n_ctx) || tokenCount(body.n_ctx) || undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
   private modelName(modelId: string): string {
     const parsed = parseLocalModelId(modelId);
     if (parsed?.runtimeId !== this.server.runtimeId) throw new Error('Invalid local model id.');
@@ -516,13 +465,4 @@ export class OpenAICompatibleChat implements LocalChat {
           : '';
     return new Error(`${this.server.label} returned HTTP ${response.status}${detail ? `: ${detail}` : '.'}`);
   }
-}
-
-/**
- * llama-server without --jinja (500), vLLM without --enable-auto-tool-choice (400, `"auto" tool choice requires
- * --enable-auto-tool-choice and --tool-call-parser to be set`), and some proxies refuse a request that declares tools.
- */
-async function refusedTools(response: Response): Promise<boolean> {
-  if (response.status !== 400 && response.status !== 500) return false;
-  return /\btools?\b/i.test(await response.clone().text());
 }

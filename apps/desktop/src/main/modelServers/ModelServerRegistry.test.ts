@@ -6,7 +6,7 @@ import type { ChatModelOption } from '@shared/chat';
 import type { ModelServerProbeResult } from '@shared/modelServers';
 import { ModelServerRegistry, PICKER_CHECK_WAIT_MS } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
-import type { ServerEndpoint } from './serverFetch';
+import type { ServerEndpoint } from '@bike4mind/local-models/servers';
 
 const TOKEN = 'tok-secret-zz';
 

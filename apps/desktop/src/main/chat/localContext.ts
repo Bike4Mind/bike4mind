@@ -1,5 +1,6 @@
 /** Context sizing and history fitting for local Ollama chat requests. */
 import { estimateFit, isCpuOnly, type FitInput, type HardwareProfile, type ModelArch } from '@bike4mind/common';
+import { OUTPUT_RESERVE_TOKENS, replyRoom } from '@bike4mind/local-models/servers';
 import { estimateTextTokens } from '@shared/contextLimit';
 import { LOCAL_CONTEXT_SIZES, type LocalContextSetting } from '@shared/localContextSetting';
 
@@ -31,7 +32,6 @@ export const LOCAL_CONTEXT_TARGET_TOKENS = 16_384;
 // CPU prefill runs at tens of tokens a second, so a larger window only costs RAM and load time;
 // a conversation that needs more still grows past it.
 export const CPU_ONLY_CONTEXT_CAP_TOKENS = 32_768;
-const OUTPUT_RESERVE_TOKENS = 2_048;
 const CHARS_PER_TOKEN = 4;
 /** Ollama's own per-image figure when it fits chat history (ollama server/prompt.go). */
 const IMAGE_TOKENS = 768;
@@ -160,16 +160,6 @@ export function grownContext(
   }
   const step = steps.find(size => plan(input, size)?.fits);
   return step === undefined ? { reason: 'memory' } : { tokens: step, slower: !resident(input, step) };
-}
-
-/** Tokens a `numCtx` context keeps free for the reply. */
-export function replyRoom(numCtx: number, maxTokens?: number): number {
-  return Math.min(maxTokens ?? OUTPUT_RESERVE_TOKENS, Math.floor(numCtx / 4));
-}
-
-/** Whether a context the server fixes holds a prompt of `promptTokens` plus room for the reply. */
-export function holdsPrompt(numCtx: number, promptTokens: number, maxTokens?: number): boolean {
-  return promptTokens + replyRoom(numCtx, maxTokens) <= numCtx;
 }
 
 export function estimateTokens(messages: readonly OllamaMessage[], tools: readonly unknown[] = []): number {
