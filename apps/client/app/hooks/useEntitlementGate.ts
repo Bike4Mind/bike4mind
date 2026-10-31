@@ -1,6 +1,6 @@
 import { useUser } from '@client/app/contexts/UserContext';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
-import { normalizeTag } from '@client/lib/entitlements/registry';
+import { normalizeTag } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { userIsDeveloper } from '@client/app/utils/user';
 
 /** A gate requirement is satisfied, definitively unsatisfied, or still resolving. */

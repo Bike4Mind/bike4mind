@@ -64,7 +64,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
 
 // Avoids constructing a real S3Storage (which reads an SST-bound bucket resource
 // unavailable in a test process) - only PUT's adapters touch this.
@@ -106,7 +106,7 @@ vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: (...a: unknown[]) => mockCreateLakeAccess(...a),
 }));
 
-vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'example-workspace': {
       ownedFields: ['enabledTools', 'temperature'],

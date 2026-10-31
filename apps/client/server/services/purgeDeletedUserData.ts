@@ -8,8 +8,8 @@ import {
 import type { IUserDocument } from '@bike4mind/common';
 import { retainDeletedSignupTraces } from '@server/auth/signupNetworkLimits';
 import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
-import { withdrawAuthorListings } from '@server/skillMarket/market';
-import { decryptStoredToken, revokeDriveGrant } from '@server/integrations/google/drive/common';
+import { withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
+import { decryptStoredToken, revokeDriveGrant } from '@bike4mind/server-utils/integrations/google/drive/common';
 import { flagConnectionsStoppedByDisconnect } from '@server/integrations/google/drive/flagConnectionsStoppedByDisconnect';
 import { revokeAtlassianGrant } from '@server/integrations/jira/revokeAtlassianGrant';
 

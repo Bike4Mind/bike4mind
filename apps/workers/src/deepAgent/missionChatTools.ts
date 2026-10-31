@@ -7,8 +7,8 @@ import {
   findAgentsByName,
   formatMissionStatusReport,
   listMissionsForAgent,
-} from '@server/deepAgent/missions';
-import { canCreateMissions } from '@server/deepAgent/missionAccess';
+} from '@bike4mind/server-utils/deepAgent/missions';
+import { canCreateMissions } from '@bike4mind/server-utils/deepAgent/missionAccess';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { runMissionFirstWake } from '@server/deepAgent/firstWake';
 import { assertOwnerCanFundWake } from '@server/deepAgent/wakeMetering';

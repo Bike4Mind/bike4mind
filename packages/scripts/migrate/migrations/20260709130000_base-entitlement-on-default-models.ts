@@ -31,7 +31,7 @@ import { type MigrationFile } from './index';
  * skips, so a re-run touches nothing.
  */
 
-const BASE_ENTITLEMENT_KEY = 'base'; // keep in sync with apps/client/lib/entitlements/registry.ts
+const BASE_ENTITLEMENT_KEY = 'base'; // keep in sync with packages/server-utils/src/lib/entitlements/registry.ts
 
 // Historical `getDefaultModelConfig` seed sets (lowercased), each meaning "everyone".
 const DEFAULT_SEED_TAG_SETS: ReadonlyArray<ReadonlySet<string>> = [

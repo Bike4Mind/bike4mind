@@ -16,6 +16,7 @@ import {
 import {
   DataTable,
   ErrorState,
+  Fact,
   RelativeTime,
   SectionCard,
   SegmentedControl,
@@ -55,6 +56,20 @@ const Muted: React.FC<{ children: React.ReactNode; 'data-testid'?: string }> = (
 );
 
 const CREDITS_PER_DAY_FORMAT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+// Provider cost of system work is often a fraction of a cent, so show up to four decimals.
+const PROVIDER_USD_FORMAT = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
+});
+// The cap is an admin-typed value, so keep enough digits that a sub-cent cap never reads as $0.00.
+const PROVIDER_CAP_FORMAT = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 6,
+});
 
 /** One line of monospace text, cut with an ellipsis; the full value stays on hover. */
 const CodeText: React.FC<{ text: string; title?: string }> = ({ text, title = text }) => (
@@ -201,6 +216,33 @@ const SummaryStrip: React.FC<{ summary: AdminCreditSummary | undefined; balance:
   </StatStrip>
 );
 
+/** Provider cost of system-sourced work (file indexing, search, tool and session operations), charged or not. */
+const SystemCostCard: React.FC<{ summary: AdminCreditSummary | undefined }> = ({ summary }) => {
+  const cost = summary?.systemCost;
+  const capOn = cost !== undefined && cost.dailyCapUsd > 0;
+  const chip = !capOn ? undefined : !cost.capApplies ? (
+    <StatusChip tone="neutral" label="Exempt from cap" />
+  ) : cost.todayUsd >= cost.dailyCapUsd ? (
+    <StatusChip tone="bad" label="Daily cap reached" />
+  ) : undefined;
+  return (
+    <SectionCard title="System-sourced cost" data-testid="user-credits-system-cost" action={chip}>
+      <Fact label="Today (UTC)" data-testid="user-credits-system-cost-today">
+        {cost && PROVIDER_USD_FORMAT.format(cost.todayUsd)}
+      </Fact>
+      <Fact label="Last 7 days" data-testid="user-credits-system-cost-7d">
+        {cost && PROVIDER_USD_FORMAT.format(cost.last7dUsd)}
+      </Fact>
+      <Fact label="Last 30 days" data-testid="user-credits-system-cost-30d">
+        {cost && PROVIDER_USD_FORMAT.format(cost.last30dUsd)}
+      </Fact>
+      <Fact label="Free-tier daily cap" data-testid="user-credits-system-cost-cap">
+        {cost && (cost.dailyCapUsd > 0 ? PROVIDER_CAP_FORMAT.format(cost.dailyCapUsd) : 'Off')}
+      </Fact>
+    </SectionCard>
+  );
+};
+
 const SpendCard: React.FC<{ summary: ReturnType<typeof useAdminCreditSummary> }> = ({ summary }) => {
   const [range, setRange] = useState<SpendRange>('30');
   const [view, setView] = useState<SpendView>('day');
@@ -296,6 +338,7 @@ export const CreditsTab: React.FC<{ user: AdminUserProfile; onAdjust: () => void
     <Stack gap={2} data-testid="user-profile-credits">
       <SummaryStrip summary={summary.data} balance={user.currentCredits ?? 0} />
       <SpendCard summary={summary} />
+      <SystemCostCard summary={summary.data} />
       <SectionCard
         title="Credit ledger"
         body="custom"

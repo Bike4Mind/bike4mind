@@ -922,6 +922,18 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     ]);
     return result?.total ?? 0;
   }
+
+  /**
+   * Provider cost (USD) of the system-sourced calls a user triggered since `since`, charged or not.
+   * Keyed on the acting user, not the billing owner, so org-billed system work still counts.
+   */
+  async systemCostUsdByUserSince(userId: string, since: Date): Promise<number> {
+    const [result] = await this.model.aggregate<{ usd: number }>([
+      { $match: { userId, source: 'system', createdAt: { $gte: since } } },
+      { $group: { _id: null, usd: { $sum: '$costUsd' } } },
+    ]);
+    return result?.usd ?? 0;
+  }
 }
 
 export const UsageEvent =

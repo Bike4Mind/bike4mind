@@ -46,10 +46,10 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
 

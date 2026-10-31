@@ -4,7 +4,7 @@ import { friendshipService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { FriendshipEvents } from '@bike4mind/common';
 
 const CreateFriendRequestSchema = z.object({

@@ -1,7 +1,7 @@
 import { DataUnsubscribeRequestAction } from '@bike4mind/common';
 import { QuerySubscription } from '@bike4mind/database';
 import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
-import { withWebSocketContext } from '@server/websocket/utils';
+import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
 

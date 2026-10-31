@@ -19,7 +19,9 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: mocks.getSettingsMap }));
-vi.mock('@server/integrations/slack/slack', () => ({ resolveSlackWebhookUrl: mocks.resolveSlackWebhookUrl }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
+  resolveSlackWebhookUrl: mocks.resolveSlackWebhookUrl,
+}));
 vi.mock('axios', () => ({ default: { post: mocks.post } }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {

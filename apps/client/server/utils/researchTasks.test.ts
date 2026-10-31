@@ -7,7 +7,7 @@ const { sendToQueueMock, sendToClientMock, getSourceQueueUrlMock } = vi.hoisted(
 }));
 
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: sendToQueueMock }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: sendToClientMock }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: sendToClientMock }));
 // Enqueue resolves the queue via getSourceQueueUrl - one mechanism, hosted + self-host
 // (the self-host Resource shim now backs sourceQueueUrls from env, see @bike4mind/resource).
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: getSourceQueueUrlMock }));

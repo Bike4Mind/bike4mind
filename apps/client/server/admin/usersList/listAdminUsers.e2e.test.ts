@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 import { AnalyticsUserDay, CreditTransaction, Organization, User, UserApiKey } from '@bike4mind/database';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { FUNNEL_COHORT_MAX } from '@server/analytics/activationFunnel';
 import {
   createMongoServer,

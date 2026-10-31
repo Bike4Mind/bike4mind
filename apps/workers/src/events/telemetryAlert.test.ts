@@ -33,14 +33,14 @@ vi.mock('@server/utils/telemetryIssueCreator', () => ({
   createTelemetryIssue: h.createTelemetryIssue,
 }));
 
-vi.mock('@server/utils/telemetryAnalysis', () => ({
+vi.mock('@bike4mind/server-utils/utils/telemetryAnalysis', () => ({
   DEFAULT_SLOS: {},
   computeHistoricalBaselines: async () => null,
   generateRuleBasedAnalysis: () => h.analysis,
   generateLLMAnalysis: vi.fn(),
 }));
 
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: { forSystem: async () => ({}) },
 }));
 

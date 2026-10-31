@@ -61,12 +61,12 @@ vi.mock('@server/s3/moderationScan', () => ({
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getMetadata: getMetadataMock }),
 }));
-vi.mock('@server/s3/utils', () => ({
+vi.mock('@bike4mind/server-utils/s3/utils', () => ({
   decodeS3Key: (k: string) => decodeURIComponent(k.replace(/\+/g, ' ')),
   findWithRetry: <T>(fn: () => Promise<T>) => fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: sendToQueueMock }));
-vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: recomputeUploadedMock,
 }));
 vi.mock('sst', () => ({

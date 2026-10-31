@@ -3,7 +3,7 @@ import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
-import { ADMIN_ONLY_API_KEY_SCOPES, type ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import { ADMIN_ONLY_API_KEY_SCOPES, type ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import WarningIcon from '@mui/icons-material/Warning';

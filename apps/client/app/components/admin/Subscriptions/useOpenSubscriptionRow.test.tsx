@@ -5,7 +5,7 @@ import type { AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsF
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 
-import { useOpenSubscriptionRow } from './useOpenSubscriptionRow';
+import { useOpenSubscriptionOwner, useOpenSubscriptionRow } from './useOpenSubscriptionRow';
 
 const row = (owner: AdminSubscriptionRow['owner']): AdminSubscriptionRow => ({
   id: 's1',
@@ -23,26 +23,52 @@ const row = (owner: AdminSubscriptionRow['owner']): AdminSubscriptionRow => ({
   periodStartsAt: '2026-10-01T00:00:00.000Z',
   periodEndsAt: '2026-11-01T00:00:00.000Z',
   canceledAt: null,
+  cancelAt: null,
   createdAt: '2026-10-01T00:00:00.000Z',
 });
+
+const USER_OWNER: AdminSubscriptionRow['owner'] = {
+  kind: 'User',
+  id: 'user1',
+  name: null,
+  username: null,
+  email: null,
+  stripeCustomerId: null,
+};
 
 beforeEach(() => {
   navigate.mockReset();
 });
 
+describe('subscription row navigation', () => {
+  it('opens the subscription detail page by its record id', () => {
+    const { result } = renderHook(() => useOpenSubscriptionRow());
+    act(() => result.current(row(USER_OWNER)));
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/admin/subscriptions/$subscriptionId',
+      params: { subscriptionId: 's1' },
+    });
+  });
+
+  it('opens the detail page for a deleted customer too', () => {
+    const { result } = renderHook(() => useOpenSubscriptionRow());
+    act(() => result.current(row(null)));
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/admin/subscriptions/$subscriptionId',
+      params: { subscriptionId: 's1' },
+    });
+  });
+});
+
 describe('subscription customer navigation', () => {
   it('opens an individual customer profile', () => {
-    const { result } = renderHook(() => useOpenSubscriptionRow());
-    act(() =>
-      result.current(
-        row({ kind: 'User', id: 'user1', name: null, username: null, email: null, stripeCustomerId: null })
-      )
-    );
+    const { result } = renderHook(() => useOpenSubscriptionOwner());
+    act(() => result.current(row(USER_OWNER)));
     expect(navigate).toHaveBeenCalledWith({ to: '/admin/users/$userId', params: { userId: 'user1' } });
   });
 
   it('opens the organization while removing subscription view params', () => {
-    const { result } = renderHook(() => useOpenSubscriptionRow());
+    const { result } = renderHook(() => useOpenSubscriptionOwner());
     act(() =>
       result.current(
         row({
@@ -70,7 +96,7 @@ describe('subscription customer navigation', () => {
   });
 
   it('does not navigate for a deleted customer', () => {
-    const { result } = renderHook(() => useOpenSubscriptionRow());
+    const { result } = renderHook(() => useOpenSubscriptionOwner());
     act(() => result.current(row(null)));
     expect(navigate).not.toHaveBeenCalled();
   });

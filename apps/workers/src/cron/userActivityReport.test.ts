@@ -27,7 +27,9 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   getEffectiveApiKeyByBackend: vi.fn(),
   OperationsModelService: { getOperationsModel: vi.fn().mockRejectedValue(new Error('no model')) },
 }));
-vi.mock('@server/integrations/slack/slack', () => ({ resolveSlackWebhookUrl: () => 'https://hooks.example.com/x' }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
+  resolveSlackWebhookUrl: () => 'https://hooks.example.com/x',
+}));
 vi.mock('axios', () => ({ default: { post: h.axiosPost } }));
 
 import { handler, previousIsoWeek } from './userActivityReport';

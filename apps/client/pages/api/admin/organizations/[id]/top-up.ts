@@ -10,7 +10,7 @@ import { creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';

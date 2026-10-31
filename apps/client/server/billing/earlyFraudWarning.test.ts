@@ -45,13 +45,13 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
     subscriptions: { retrieve: mocks.subscriptionsRetrieve, cancel: mocks.subscriptionsCancel },
   },
 }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findNonTerminalSubscriptionsByOwner: mocks.findNonTerminalSubscriptionsByOwner },
 }));
-vi.mock('@server/integrations/stripe/dunning', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: mocks.voidOpenSubscriptionInvoices,
 }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 vi.mock('@server/billing/refundClawback', () => ({ clawbackRefundCredits: mocks.clawbackRefundCredits }));
 vi.mock('@server/billing/linkedAccounts', () => ({
   lockAccountForPaymentRisk: mocks.lockAccountForPaymentRisk,

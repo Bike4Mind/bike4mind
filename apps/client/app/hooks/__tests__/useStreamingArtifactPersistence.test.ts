@@ -17,7 +17,7 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: { getState: () => llmState },
 }));
 
-vi.mock('../../utils/artifactParser', () => ({
+vi.mock('@bike4mind/server-utils/app/utils/artifactParser', () => ({
   parseArtifactsWithFallback: (...args: unknown[]) => parseArtifactsWithFallback(...args),
   getArtifactTimestamp: () => 1000,
   generateCompleteArtifactId: (type: string, identifier: string, _ts: number, index: number) =>

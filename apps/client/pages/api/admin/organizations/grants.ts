@@ -3,7 +3,7 @@ import { ApiKeyScope, passthroughField } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { respond } from '@server/utils/respond';
 import { z } from 'zod';
 

@@ -3,7 +3,7 @@ import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { respond } from '@server/utils/respond';
 import { ProjectEvents, projectResponseSchema } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';

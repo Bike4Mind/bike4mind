@@ -2,7 +2,7 @@ import type { TeamPlanSettings } from '@bike4mind/common';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import type { CreditPackageId } from '@client/lib/credits/types';
 import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
-import type { SubscriptionPlanInterval } from '@client/lib/userSubscriptions/types';
+import type { SubscriptionPlanInterval } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 
 /**
  * What checkout sells, read from the constants the checkout paths charge and grant from:

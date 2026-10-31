@@ -23,7 +23,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateMusicJobDeps } from '@server/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';

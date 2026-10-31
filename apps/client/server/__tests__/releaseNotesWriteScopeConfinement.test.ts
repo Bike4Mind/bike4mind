@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
-import { decideScopeGate } from '@server/middlewares/apiKeyScopeGate';
+import { decideScopeGate } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { FILES_WRITE_OR_RELEASE_NOTES_SCOPES } from '@server/files/fileScopes';
 import { stripComments, tsFiles } from './scopeCoverageHelpers';
 
@@ -17,6 +17,10 @@ const SERVER = path.join(__dirname, '..');
 const SERVER_UTILS = path.join(__dirname, '..', '..', '..', '..', 'packages', 'server-utils', 'src');
 
 const EXPECTED_REFERENCES = [
+  // Generated listing of the routes each scope already reaches; derived from the routes, grants no reach.
+  '../../packages/server-utils/src/app/constants/apiKeyScopeEndpoints.generated.ts',
+  // The scope catalog: lists it among the admin-only scopes for the mint UI; grants no reach.
+  '../../packages/server-utils/src/app/constants/apiKeyScopes.ts',
   'pages/api/admin/release-notes/[id].ts',
   'pages/api/admin/release-notes/index.ts',
   'pages/api/admin/users/[userId]/generate-api-key.ts',

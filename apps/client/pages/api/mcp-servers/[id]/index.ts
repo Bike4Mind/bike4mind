@@ -4,7 +4,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { MCPClient } from '@bike4mind/mcp';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { encryptEnvVariables, decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { mcpServerUpdateBodySchema } from '@server/validators/mcpServerValidators';

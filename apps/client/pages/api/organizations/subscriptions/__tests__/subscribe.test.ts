@@ -55,7 +55,7 @@ const mockFindNonTerminalSubscriptionsByOwner = vi.fn();
 const mockFindByPriceIdAndOwner = vi.fn(() => {
   throw new Error('the org guard must read non-terminal rows; active-only lets a past_due org double-subscribe');
 });
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findNonTerminalSubscriptionsByOwner: (...args: unknown[]) => mockFindNonTerminalSubscriptionsByOwner(...args),
     findByPriceIdAndOwner: (...args: unknown[]) => mockFindByPriceIdAndOwner(...args),

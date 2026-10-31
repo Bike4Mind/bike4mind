@@ -80,7 +80,7 @@ vi.mock('@bike4mind/database', () => ({
   agentRepository: { findById: agentFindById },
 }));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 // The real gateEmbedBrandingWrite AND embedKeyOwnerHasEntitlement run; only the
 // leaf entitlement source (getUserEntitlements) is stubbed, so these tests
@@ -104,7 +104,7 @@ vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
 }));
 
 // One contributed scope, so the merged catalog the route screens against holds a non-built-in row.
-vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated', () => ({
   premiumApiKeyScopes: [
     {
       value: 'acme:read',

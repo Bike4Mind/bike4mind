@@ -83,7 +83,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const mockLogEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: (...a: unknown[]) => mockLogEvent(...a),
   // Matches logEventSafe's contract: a failed write is swallowed, never rethrown.
   logEventSafe: async (event: unknown, options: unknown) => {
@@ -95,7 +95,7 @@ vi.mock('@server/utils/analyticsLog', () => ({
   },
 }));
 
-vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated', () => ({
   premiumApiKeyScopes: [
     {
       value: 'acme:read',

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { UserSubscriptionTier } from './types';
+import { UserSubscriptionTier } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 
 // Price ids are read from env at module load, so stub before importing.
 vi.stubEnv('NEXT_PUBLIC_SEED_STAGE_NAME', 'test');

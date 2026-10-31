@@ -11,7 +11,7 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, sreErrorTrackingRepository, cacheRepository } from '@bike4mind/database';
 import { SreAgentConfigSchema, getConfiguredRepoSlugs, resolveFullConfig } from '@bike4mind/common';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import {
   matchesLabelFilter,
   dispatchIssueToSre,

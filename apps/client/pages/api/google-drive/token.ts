@@ -3,7 +3,11 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { User } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import dayjs from 'dayjs';
-import { getAuthUrl, isInvalidGrantError, refreshAccessToken } from '@server/integrations/google/drive/common';
+import {
+  getAuthUrl,
+  isInvalidGrantError,
+  refreshAccessToken,
+} from '@bike4mind/server-utils/integrations/google/drive/common';
 import { encryptToken, decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 /**

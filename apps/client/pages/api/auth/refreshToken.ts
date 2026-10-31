@@ -1,7 +1,7 @@
 import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
+import { isRotatedSecretWithinGraceWindow } from '@bike4mind/server-utils/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';

@@ -1,5 +1,5 @@
 import { organizationRepository, withTransaction } from '@bike4mind/database';
-import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
+import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import {
@@ -15,16 +15,16 @@ import {
   subscriptionEventUser,
 } from '@server/analytics/billingEventDetails';
 import type Stripe from 'stripe';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { setSeats } from '@server/services/organizationService';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StripeEvents } from '@server/utils/eventBus';
-import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
+import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
 import { postSubscriptionChangesToSlack } from '@server/integrations/slack/subscriptionLifecycle';
 import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
 import { withEventContext } from '@workers/utils/eventContext';
