@@ -230,6 +230,24 @@ describe('ModelServersSettings credentials form', () => {
   });
 });
 
+describe('ModelServersSettings tools hint', () => {
+  const hint = 'gpu box was started without tool calling, so its chats run without tools.';
+  const chip = () => document.querySelector('[data-testid="model-servers-tools-off-chip"]');
+  const text = () => document.querySelector('[data-testid="model-servers-tools-hint"]')?.textContent ?? null;
+
+  it('marks a server that refuses tools and says how to turn them on', async () => {
+    await show({ ...saved('openai-compatible', 'chat'), toolsHint: hint });
+    expect(chip()?.textContent).toBe('Tools off');
+    expect(text()).toBe(hint);
+  });
+
+  it('says nothing while the server takes tools', async () => {
+    await show(saved('openai-compatible', 'chat'));
+    expect(chip()).toBeNull();
+    expect(text()).toBeNull();
+  });
+});
+
 describe('ModelServersSettings access note', () => {
   const note = () => document.querySelector<HTMLElement>('[data-testid="model-servers-access-note"]');
   const saved = (kind: ModelServerKind, access: ModelServerAccess) =>

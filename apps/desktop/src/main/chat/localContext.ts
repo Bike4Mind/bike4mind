@@ -162,6 +162,16 @@ export function grownContext(
   return step === undefined ? { reason: 'memory' } : { tokens: step, slower: !resident(input, step) };
 }
 
+/** Tokens a `numCtx` context keeps free for the reply. */
+export function replyRoom(numCtx: number, maxTokens?: number): number {
+  return Math.min(maxTokens ?? OUTPUT_RESERVE_TOKENS, Math.floor(numCtx / 4));
+}
+
+/** Whether a context the server fixes holds a prompt of `promptTokens` plus room for the reply. */
+export function holdsPrompt(numCtx: number, promptTokens: number, maxTokens?: number): boolean {
+  return promptTokens + replyRoom(numCtx, maxTokens) <= numCtx;
+}
+
 export function estimateTokens(messages: readonly OllamaMessage[], tools: readonly unknown[] = []): number {
   const toolChars = tools.length > 0 ? JSON.stringify(tools).length : 0;
   return Math.ceil(toolChars / CHARS_PER_TOKEN) + messages.reduce((sum, message) => sum + messageTokens(message), 0);
@@ -195,7 +205,7 @@ export function fitToContext(
   maxTokens?: number,
   scale = 1
 ): ContextFit {
-  const budget = numCtx - Math.min(maxTokens ?? OUTPUT_RESERVE_TOKENS, Math.floor(numCtx / 4));
+  const budget = numCtx - replyRoom(numCtx, maxTokens);
   const starts = turnStarts(messages);
   const first = messages.findIndex(message => message.role !== 'system');
   if (first === -1 || starts.length === 0) return { messages: [...messages], dropped: 0, visible: 0 };
