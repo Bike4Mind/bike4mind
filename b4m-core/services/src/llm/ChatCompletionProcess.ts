@@ -947,6 +947,30 @@ export const AUTO_ADDED_TOOL_NAMES = [
 ];
 
 /**
+ * USD hold for one turn on the primary model. A 1-hour session writes its cacheable prefix (the whole
+ * prompt: the system head through the history anchor) at the 1-hour rate on a cold cache, so its input
+ * is held at that rate; any other TTL holds input at 1x. Prices the write segment the same way as
+ * estimateReservationUsd in cliCompletions.ts.
+ */
+export function primaryTurnReservationUsd(
+  model: ModelInfo,
+  inputTokens: number,
+  outputTokens: number,
+  cacheTtl: PromptCacheTtl
+): number {
+  const oneHourWrites = oneHourWritesOf(inputTokens, undefined, cacheTtl);
+  return getTextModelCost(
+    model,
+    inputTokens - oneHourWrites,
+    outputTokens,
+    0,
+    oneHourWrites,
+    inputTokens,
+    oneHourWrites
+  );
+}
+
+/**
  * Reconciliation delta with the zero-balance floor. Pre-reservation (the only
  * insufficient-funds check) runs on the local estimate, so a provider-basis
  * settlement (cache writes in particular) can exceed the reservation. When the
@@ -2351,6 +2375,13 @@ export class ChatCompletionProcess {
         { user: this.user, logger },
         this.workspaceSessionSettings
       );
+      // The TTL this session's requests carry on a model; the reservation and every round resolve it here.
+      const sessionCacheTtlFor = (model: ModelInfo): PromptCacheTtl =>
+        resolvePromptCacheTtl({
+          model,
+          chatTtl: session.promptCacheTtl,
+          userDefaultTtl: this.user.preferences?.promptCacheTtl,
+        });
       // A stop can land between invoke creating the quest and this point (the client defers a
       // first-turn Stop until the quest exists). The save below would write 'running' back over
       // it and the cancel watcher would never see it, so honour it here. The finally block sends
@@ -4784,13 +4815,14 @@ export class ChatCompletionProcess {
           : null;
         const usdCost = researchCosts
           ? researchCosts.reduce((sum, cost) => sum + cost.hold, 0)
-          : getTextModelCost(
+          : primaryTurnReservationUsd(
               modelInfo,
               inputTokens,
               reservationOutputTokens(
                 sentMaxTokens,
                 sentMaxTokens > safeMaxTokens || reasonsWithinOutputBudget(modelInfo)
-              )
+              ),
+              sessionCacheTtlFor(modelInfo)
             );
         const requiredCredits = usdToCredits(usdCost);
 
@@ -5497,11 +5529,7 @@ export class ChatCompletionProcess {
               assistant: outboundMessages.filter(m => m.role === 'assistant').length,
             };
 
-            const roundCacheTtl = resolvePromptCacheTtl({
-              model: currentModel,
-              chatTtl: session.promptCacheTtl,
-              userDefaultTtl: this.user.preferences?.promptCacheTtl,
-            });
+            const roundCacheTtl = sessionCacheTtlFor(currentModel);
             const cacheStrategy: ICacheStrategy = {
               enableCaching: messageCount >= 2, // Enable caching for multi-turn conversations
               cacheSystemPrompt: true, // Always cache system prompts

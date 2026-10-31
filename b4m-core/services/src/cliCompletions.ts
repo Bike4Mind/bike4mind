@@ -430,7 +430,7 @@ function estimateReservationUsd(
     readTokens,
     writeTokens,
     undefined,
-    cacheTtl === '1h' ? writeTokens : 0
+    oneHourWritesOf(writeTokens, undefined, cacheTtl)
   );
   const uncachedInputUsd = getTextModelCost(tieredModel, estimatedInputTokens, 0);
   const outputUsd = getTextModelCost(tieredModel, 0, estimatedOutputTokens);

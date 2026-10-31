@@ -5376,6 +5376,44 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedHold);
     });
 
+    // A cold 1-hour write bills at 2x input, so a 1h session holds its input at that rate; holding
+    // it at 1x left the excess to be written off on a near-empty balance.
+    it('holds the input of a 1h session at the 1-hour write rate and leaves a 5m session at 1x', async () => {
+      const holdFor = async (ttl: string | undefined): Promise<number> => {
+        reservationOrgSetup({
+          id: ChatModels.CLAUDE_4_8_OPUS,
+          backend: ModelBackend.Anthropic,
+          // Output priced at $0 so the hold is the input side alone.
+          pricing: { 200_000: { input: 1 / 1_000, output: 0 } },
+        });
+        mockDb.organizations.findById.mockResolvedValue({
+          id: 'org1',
+          name: 'Cap Org',
+          currentCredits: 100_000,
+          maxCreditsPerMember: null,
+          userDetails: [{ id: 'user1', usedCredits: 0 }],
+        });
+        mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+        mockSession.promptCacheTtl = ttl;
+        const body = reservationBody();
+        body.params = { ...body.params, model: ChatModels.CLAUDE_4_8_OPUS };
+
+        await service.process({ body, logger: mockLogger });
+
+        const [, held] = mockDb.organizations.incrementCredits.mock.calls[0];
+        return -held;
+      };
+
+      const unsetHold = await holdFor(undefined);
+      const fiveMinuteHold = await holdFor('5m');
+      const oneHourHold = await holdFor('1h');
+
+      expect(unsetHold).toBeGreaterThan(0);
+      expect(fiveMinuteHold).toBe(unsetHold);
+      // Within one credit of 2x: each figure is rounded to whole credits on its own.
+      expect(Math.abs(oneHourHold - 2 * fiveMinuteHold)).toBeLessThanOrEqual(1);
+    });
+
     // 'adaptive' is what the real reasonsWithinOutputBudget keys off - it is not mocked here,
     // so dropping that argument at the call site would show up as the 16K figure.
     it('holds the larger reasoning ceiling for a model that reasons inside its output budget', async () => {
@@ -7477,6 +7515,47 @@ describe('ChatCompletionProcess', () => {
           outputTokens: 50,
         });
         expect(event.rates).toMatchObject(HIGH);
+      });
+
+      // The adapter reports no 5m/1h split, so every write took the request TTL (withRequestTtlWrites).
+      it('settles the unsplit cache writes of a 1h Bedrock Claude turn at the 1-hour rate', async () => {
+        const writes = 100_000;
+        const { usageEventsRecord } = arrangeUsageEventScenario({
+          enforceCredits: true,
+          primaryComplete: async (_m, _ms, _o, cb) => {
+            await cb(['Hello'], {
+              inputTokens: 10,
+              outputTokens: 10,
+              cacheCreationInputTokens: writes,
+              turnUsage: [{ inputTokens: 10, outputTokens: 10, cacheCreationInputTokens: writes }],
+            });
+          },
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          stampedModel({
+            id: ChatModels.CLAUDE_4_5_SONNET_BEDROCK,
+            backend: ModelBackend.Bedrock,
+            pricing: { 200_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 } },
+          }),
+        ]);
+        mockSession.promptCacheTtl = '1h';
+
+        await service.process({
+          body: {
+            ...startQuestParams,
+            params: { ...startQuestParams.params, model: ChatModels.CLAUDE_4_5_SONNET_BEDROCK },
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          },
+          logger: mockLogger,
+        });
+
+        expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+        const [event] = usageEventsRecord.mock.calls[0];
+        // 2x the $5/M input rate on the writes, plus 10 input and 10 output tokens.
+        expect(event.costUsd).toBeCloseTo(writes * 10e-6 + 10 * 5e-6 + 10 * 25e-6, 6);
+        expect(event.cacheWrite1hTokens).toBe(writes);
       });
 
       it('stamps the local-estimate tier when the provider reported no usage', async () => {

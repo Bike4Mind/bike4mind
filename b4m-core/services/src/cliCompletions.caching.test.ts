@@ -399,7 +399,7 @@ describe('executeCompletion - 1-hour cache TTL', () => {
 
     const hold = -(users.incrementCredits.mock.calls[0][1] as number);
     const settled = Math.ceil((30_000 * perM(3) * 2 + maxTokens * perM(15)) * CREDITS_PER_USD);
-    expect(users.incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - settled);
+    expect(users.decrementCreditsFloored).toHaveBeenCalledWith('user1', settled - hold);
     expect(onChunk.mock.calls.at(-1)?.[1]).toMatchObject({ creditsUsed: settled, cacheWrite1hInputTokens: 30_000 });
   });
 
@@ -417,7 +417,7 @@ describe('executeCompletion - 1-hour cache TTL', () => {
     const hold = -(users.incrementCredits.mock.calls[0][1] as number);
     const writeUsd = 20_000 * perM(3) * 1.25 + 10_000 * perM(3) * 2;
     const settled = Math.ceil((writeUsd + maxTokens * perM(15)) * CREDITS_PER_USD);
-    expect(users.incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - settled);
+    expect(users.decrementCreditsFloored).toHaveBeenCalledWith('user1', settled - hold);
   });
 
   it('stamps the usage event with the 1-hour writes and rate', async () => {
