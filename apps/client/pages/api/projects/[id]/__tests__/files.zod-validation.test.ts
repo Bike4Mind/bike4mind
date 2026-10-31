@@ -42,7 +42,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   inviteRepository: {},
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
 
 import '@pages/api/projects/[id]/files';

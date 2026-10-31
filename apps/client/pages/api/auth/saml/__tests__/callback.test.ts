@@ -38,7 +38,7 @@ vi.mock('@server/auth/auth', () => ({ setupSamlStrategy: () => 'saml-idp-1' }));
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: vi.fn().mockResolvedValue({ accessToken: 'tok' }),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 
 const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);

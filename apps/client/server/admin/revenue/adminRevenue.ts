@@ -8,7 +8,7 @@ import {
   type RevenueRange,
 } from '@client/app/utils/adminRevenue';
 import { MRR_CURRENCY } from '@client/app/utils/adminSubscriptionsFilter';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { planOf, subscriptionPlanCatalog, type PlanCatalog } from '../subscriptionsList/adminSubscriptionsQuery';
 import { toAdminSubscriptionRows, type SubscriptionDoc } from '../subscriptionsList/listAdminSubscriptions';
 import {

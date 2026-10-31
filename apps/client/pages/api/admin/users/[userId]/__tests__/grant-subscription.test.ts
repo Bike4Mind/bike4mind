@@ -50,7 +50,7 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockSubCreate = vi.fn();
 const mockFindUserSub = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     create: (...a: unknown[]) => mockSubCreate(...a),
     findByPriceIdAndOwner: vi.fn().mockResolvedValue(null),
@@ -61,7 +61,7 @@ vi.mock('@server/models/Subscription', () => ({
 vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 3, maxSeats: 8, creditsPerSeat: 1000 })),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 // parseAdminActionReason and isSameUserId stay real; the denied helper records, then throws a 403.
 vi.mock('@server/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
@@ -83,7 +83,7 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoin
 
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import handler from '../grant-subscription';
 
 const REASON = 'Comped for the design partner pilot';

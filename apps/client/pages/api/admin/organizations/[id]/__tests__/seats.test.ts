@@ -14,10 +14,10 @@ vi.mock('@server/services/organizationService', () => ({
   pickPrimarySubscription: (subs: Array<{ subscriptionId?: string }>) => subs[0] ?? null,
 }));
 const mockFindActiveSubs = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwner: (...a: unknown[]) => mockFindActiveSubs(...a) },
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 vi.mock('@server/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
   return { ...actual, recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) };

@@ -1,5 +1,5 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
+import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { holdsApiKeyScope, type ScopedRequest } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
 /**

@@ -72,7 +72,7 @@ vi.mock('@server/billing/paymentRisk', () => ({
 const network = { ip: '203.0.113.7', isDatacenter: true, wafAnonIp: null };
 vi.mock('@server/auth/networkMeta', () => ({ readNetworkMeta: () => network }));
 
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEventSafe: (...args: unknown[]) => mockLogEventSafe(...args),
 }));
 

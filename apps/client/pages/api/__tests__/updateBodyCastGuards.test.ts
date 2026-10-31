@@ -135,7 +135,7 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptEnvVariables: (v: unknown) => v,
 }));
 
-vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: () => Promise.resolve([]) }));
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: () => Promise.resolve([]) }));
 // A full replacement, not a partial mock: `importOriginal` would pull the MCP SDK into a node
 // suite that never spawns a child. `findForbiddenMcpEnvKeys` reaches these routes through
 // `@server/utils/mcpEnvValidation`, and every body below declares no env variables, so the stub

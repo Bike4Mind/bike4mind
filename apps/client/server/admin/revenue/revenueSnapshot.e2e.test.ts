@@ -5,7 +5,7 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { computeRevenueSnapshot } from './revenueSnapshot';
 import { adminRevenue } from './adminRevenue';
 

@@ -15,7 +15,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 
 const mockFindByStripeId = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findByStripeSubscriptionId: (...args: unknown[]) => mockFindByStripeId(...args) },
 }));
 

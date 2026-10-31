@@ -3,9 +3,9 @@ import { organizationRepository } from '@bike4mind/database';
 import { setSeats } from '@server/services/organizationService';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
-import { sendToClient } from '@server/websocket/utils';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { handler } from './customerSubscriptionUpdated';
 import { BadRequestError } from '@bike4mind/utils';
 
@@ -21,7 +21,7 @@ vi.mock('@bike4mind/database', async () => {
   };
 });
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     updateByStripeSubscriptionIdReturningBefore: vi.fn().mockResolvedValue({}),
   },
@@ -56,7 +56,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   },
 }));
 
-vi.mock('@server/integrations/stripe/dunning', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: vi.fn().mockResolvedValue({ voided: [], failed: [] }),
 }));
 
@@ -66,7 +66,7 @@ vi.mock('@server/utils/eventBus', () => ({
   },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 

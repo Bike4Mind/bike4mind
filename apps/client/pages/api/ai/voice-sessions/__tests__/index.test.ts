@@ -79,7 +79,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   };
 });
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: () => 'web' }));
 
 import voiceSessionsHandler from '@pages/api/ai/voice-sessions';

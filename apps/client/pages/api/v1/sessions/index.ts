@@ -16,7 +16,7 @@ import {
   User,
   activityRepository,
 } from '@bike4mind/database';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import {

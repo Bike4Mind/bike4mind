@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
-import { isAnalyticsConfigured, emitVisitEvent } from '@server/analytics/emitActiveEvent';
+import { isAnalyticsConfigured, emitVisitEvent } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { readUtmCookie } from '@bike4mind/server-utils/analytics/cookies';
 import {
   isProbableBot,

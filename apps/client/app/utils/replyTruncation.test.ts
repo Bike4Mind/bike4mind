@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { parseArtifactsWithFallback } from './artifactParser';
+import { parseArtifactsWithFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { getReplyTruncationState, repairTruncatedArtifact } from './replyTruncation';
 
 const OPEN_ARTIFACT = '<artifact identifier="x" type="text/html" title="Dashboard"><html><body>';

@@ -12,7 +12,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { SessionEvents, redactSessionForClient, sessionCloneContract } from '@bike4mind/common';
 import { copySurfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';

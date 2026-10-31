@@ -14,7 +14,7 @@ import type {
   AdminSubscriptionsListResponse,
   AdminSubscriptionsSummary,
 } from '@client/app/utils/adminSubscriptionsFilter';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import {
   adminSubscriptionsSort,
   buildAdminSubscriptionsMatch,

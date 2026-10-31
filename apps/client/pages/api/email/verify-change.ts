@@ -5,7 +5,7 @@ import { userService } from '@bike4mind/services';
 import { commitWithSessionEnd } from '@server/auth/endUserSessions';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { AuthEvents, ConflictError } from '@bike4mind/common';
 import { calculateTokenAge } from '@server/utils/auditLog';
 import { logAuthAudit } from '@server/utils/authAudit';

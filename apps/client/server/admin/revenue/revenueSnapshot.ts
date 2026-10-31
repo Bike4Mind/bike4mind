@@ -8,7 +8,7 @@ import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/ty
 import type { AdminRevenueTotals } from '@client/app/utils/adminRevenue';
 import { addUtcDays, utcDayStart } from '@client/app/utils/adminRevenue';
 import { MRR_CURRENCY, type AdminSubscriptionsMrrTotal } from '@client/app/utils/adminSubscriptionsFilter';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import {
   billedGroupStages,
   mrrGroupStages,

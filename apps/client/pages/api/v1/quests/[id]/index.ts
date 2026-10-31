@@ -2,7 +2,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { getQuestContract } from '@bike4mind/common';
-import { toQuestPollBody } from '@server/utils/questPollBody';
+import { toQuestPollBody } from '@bike4mind/server-utils/utils/questPollBody';
 import {
   applyRecoveryInMemory,
   resolveQuestTimeoutRecovery,

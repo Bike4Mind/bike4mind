@@ -11,7 +11,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { baseApi } from '@server/middlewares/baseApi';
 import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import Stripe from 'stripe';
 import { z } from 'zod';
 

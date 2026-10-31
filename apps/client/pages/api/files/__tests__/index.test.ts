@@ -143,7 +143,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ bucket: 'files', getSignedUrl: browserSigner, delete: vi.fn() }),
   getGeneratedImageStorage: () => ({ bucket: 'generated', delete: vi.fn() }),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...args: unknown[]) => {
     mockRefs.unpublishArgs = args;

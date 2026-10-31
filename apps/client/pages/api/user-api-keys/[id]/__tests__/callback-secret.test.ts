@@ -51,7 +51,7 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const organizationRepository = vi.hoisted(() => ({ findIdsAdministeredBy: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository }));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 import { ApiKeyScope } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';

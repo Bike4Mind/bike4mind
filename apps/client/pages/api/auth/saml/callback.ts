@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { setupSamlStrategy } from '@server/auth/auth';
 import { issueBrowserSession } from '@server/auth/issueSession';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy, clientIdFromAuthorizeRedirect } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';

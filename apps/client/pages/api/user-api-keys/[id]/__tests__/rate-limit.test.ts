@@ -52,7 +52,7 @@ const updateApiKeyRateLimit = vi.hoisted(() =>
 vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateApiKeyRateLimit } }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 import '@pages/api/user-api-keys/[id]/rate-limit';
 

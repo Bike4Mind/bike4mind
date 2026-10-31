@@ -7,7 +7,7 @@ import type {
   AdminSubscriptionSeats,
 } from '@client/app/utils/adminSubscriptionDetail';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { toAdminSubscriptionRows, type SubscriptionDoc } from '../subscriptionsList/listAdminSubscriptions';
 import { subscriptionPlanCatalog } from '../subscriptionsList/adminSubscriptionsQuery';
 

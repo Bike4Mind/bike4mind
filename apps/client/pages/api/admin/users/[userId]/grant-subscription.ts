@@ -14,10 +14,10 @@ import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSe
 import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { isSelfOrImpersonator, parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';

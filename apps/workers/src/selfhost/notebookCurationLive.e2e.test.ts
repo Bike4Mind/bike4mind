@@ -20,7 +20,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 const { notify } = vi.hoisted(() => ({ notify: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: notify }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: notify }));
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (fn: unknown) => fn }) }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({

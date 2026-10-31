@@ -4,7 +4,7 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
-import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
+import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 interface IUserRepository {
   findById(id: string): Promise<IUserDocument | null>;

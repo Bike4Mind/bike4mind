@@ -9,10 +9,10 @@ import {
   isLiveStripeBilledSubscription,
   LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 

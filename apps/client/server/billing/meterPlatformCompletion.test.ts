@@ -1,6 +1,6 @@
 import { CREDITS_PER_USD_COST, CreditHolderType, getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 const m = vi.hoisted(() => ({
   deductCredits: vi.fn(),

@@ -4,7 +4,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { requireTurnstile } from '@server/middlewares/requireTurnstile';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { ipSubject, otcLimitOf } from '@server/utils/otcLimits';
 import { SUBSCRIBER_LIMITS, reserveSubscriberAlert } from '@server/utils/subscriberLimits';
 import * as z from 'zod';

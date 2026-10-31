@@ -1,7 +1,7 @@
 import React, { useMemo, useEffect } from 'react';
 import { Box, Typography, Alert } from '@mui/joy';
 import { type SvgArtifact } from '@bike4mind/common';
-import { validateArtifactContent } from '@client/app/utils/artifactParser';
+import { validateArtifactContent } from '@bike4mind/server-utils/app/utils/artifactParser';
 import DOMPurify from 'dompurify';
 
 interface SvgArtifactViewerProps {

@@ -5,7 +5,7 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { getAdminSubscriptionDetail } from './getAdminSubscriptionDetail';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.

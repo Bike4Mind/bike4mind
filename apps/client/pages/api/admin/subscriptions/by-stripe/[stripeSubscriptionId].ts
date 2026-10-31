@@ -4,7 +4,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import type { AdminSubscriptionByStripeIdResponse } from '@client/app/utils/adminSubscriptionDetail';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 
 /** Resolves a Stripe subscription id to the Mongo id the detail page is keyed on. */
 const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(

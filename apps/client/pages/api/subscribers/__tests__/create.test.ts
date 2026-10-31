@@ -78,7 +78,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
     getSettingsMap: (db: Parameters<typeof actual.getSettingsMap>[0]) => actual.getSettingsMap(db, { skipCache: true }),
   };
 });
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 
 import handler from '@pages/api/subscribers/create';
 

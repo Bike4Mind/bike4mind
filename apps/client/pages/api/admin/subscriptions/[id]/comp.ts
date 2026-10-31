@@ -17,7 +17,7 @@ import {
 } from '@client/app/utils/adminSubscriptionDetail';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { Subscription, subscriptionRepository } from '@server/models/Subscription';
+import { Subscription, subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { subscriptionPlanCatalog } from '@server/admin/subscriptionsList/adminSubscriptionsQuery';
 import { toAdminSubscriptionRows, type SubscriptionDoc } from '@server/admin/subscriptionsList/listAdminSubscriptions';
 import {
@@ -26,7 +26,7 @@ import {
   parseAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 
 type AuditTarget = Parameters<typeof recordAdminActionFromRequest>[1]['target'];

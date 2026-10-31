@@ -15,10 +15,10 @@ import {
   TERMINAL_SUBSCRIPTION_STATUSES,
   resolveSubscriptionSource,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { adminOwnerSlackRef } from '@server/integrations/slack/subscriptionLifecycle';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { alertStripeRiskEvent, chargeRiskOf, formatAmount } from '@server/billing/paymentRisk';
 import { clawbackRefundCredits } from '@server/billing/refundClawback';
 import { lockAccountForPaymentRisk, propagateAccountRisk } from '@server/billing/linkedAccounts';

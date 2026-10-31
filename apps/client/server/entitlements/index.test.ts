@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import {
   getRequestEntitlements,
   getUserEntitlements,
@@ -20,7 +20,7 @@ const makeReq = (user: {
   emailVerified?: boolean | null;
 }) => ({ user }) as unknown as Request;
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveUserSubscriptions: vi.fn(),
     findActiveSubscriptionsByOwners: vi.fn(async () => []),
