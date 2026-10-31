@@ -1020,6 +1020,33 @@ const spendReconciliationCron = runsScheduledJobs
     })
   : undefined;
 
+// Provider Usage Poll - reads the previous complete hour from the Anthropic and OpenAI admin usage
+// reports, prices it with our model rates and publishes ProviderReportedUsd per provider; alarmed in
+// infra/providerSpend.ts. Minute 7 leaves room for the providers' ingestion lag. Enabled: production + dev.
+// No VPC, unlike its neighbours: it reaches only the provider APIs and CloudWatch, never Mongo.
+const providerUsagePollCron = runsScheduledJobs
+  ? new sst.aws.Cron('providerUsagePoll', {
+      schedule: 'cron(7 * * * ? *)',
+      function: {
+        handler: 'apps/workers/src/cron/providerUsagePoll.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        // A retry would republish the providers that succeeded and double their hourly Sum.
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
+      },
+    })
+  : undefined;
+
 // Credit Purchase Reconciliation -- alerts on Stripe credit purchases that
 // succeeded with no credit grant.
 const creditPurchaseReconciliationCron = runsScheduledJobs
@@ -1357,6 +1384,7 @@ export {
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
+  providerUsagePollCron,
   creditPurchaseReconciliationCron,
   storageReconciliationCron,
   driveLakeResyncPollCron,
