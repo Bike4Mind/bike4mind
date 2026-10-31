@@ -641,7 +641,8 @@ export const TIER_SLOTS: Record<(typeof TIER_KINDS)[number], readonly CuratedSlo
   cpu: ['best', 'fast', 'light'],
 };
 const TierPickSchema = z.object({ slot: z.enum(CURATED_SLOTS), entry: SlugSchema, build: SlugSchema });
-// minGiB is GPU memory on a discrete machine and total memory otherwise, in the GiB the hardware is sold with.
+// minGiB is GPU memory on a discrete machine, what the GPU can use on AMD unified memory and total memory otherwise,
+// in the GiB the hardware is sold with.
 const TierSchema = z.object({
   memoryKind: z.enum(TIER_KINDS),
   minGiB: z.number().int().nonnegative().max(65536),

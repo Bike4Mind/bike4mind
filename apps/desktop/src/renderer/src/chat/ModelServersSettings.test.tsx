@@ -3,9 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MachineView } from '@shared/models';
 import type { ModelServerAccess, ModelServerKind, ModelServerProbeResult, ModelServerView } from '@shared/modelServers';
 import { desktopTheme } from '../theme';
-import { ModelServersSettings } from './ModelServersSettings';
+import { ModelServersSettings, probedSummary } from './ModelServersSettings';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 window.matchMedia ??= ((query: string) => ({
@@ -279,6 +280,7 @@ describe('ModelServersSettings hardware', () => {
     totalMemoryBytes: 62 * 1024 ** 3,
     gpuMemoryBytes: null,
     gpuName: null,
+    confidence: 'high' as const,
   }));
 
   async function type(testId: string, value: string) {
@@ -342,5 +344,35 @@ describe('ModelServersSettings hardware', () => {
     expect(update).toHaveBeenCalledWith('local', {
       specs: { ramGiB: null, gpuMemoryGiB: 16, bandwidthGBps: null, unified: false },
     });
+  });
+});
+
+describe('probedSummary', () => {
+  const GIB = 1024 ** 3;
+
+  it.each([
+    [
+      'a Mac as memory shared with its GPU',
+      { memoryKind: 'unified', totalMemoryBytes: 32 * GIB, gpuMemoryBytes: null, gpuName: null, confidence: 'high' },
+      '32 GiB of memory shared with the GPU',
+    ],
+    [
+      'a Strix Halo carve-out as what the GPU can use beside the RAM the OS sees',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 31 * GIB,
+        gpuMemoryBytes: 96 * GIB,
+        gpuName: 'AMD Radeon 8060S Graphics',
+        confidence: 'high',
+      },
+      '31 GiB of RAM, and the GPU (AMD Radeon 8060S Graphics) can use 96 GiB of memory',
+    ],
+    [
+      'an unconfirmed Strix Halo budget as a lower bound',
+      { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: 31 * GIB, gpuName: null, confidence: 'low' },
+      '62 GiB of RAM, and the GPU can use at least 31 GiB of memory',
+    ],
+  ] satisfies [string, MachineView, string][])('describes %s', (_label, machine, text) => {
+    expect(probedSummary(machine)).toBe(text);
   });
 });
