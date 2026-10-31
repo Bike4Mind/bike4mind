@@ -17,6 +17,7 @@ import {
   dataLakeResearchQueue,
   generationCallbackQueue,
   generationJobQueue,
+  riskEvidenceQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { appUrlForLambdaEnv } from './router';
@@ -351,6 +352,29 @@ const signupIpRetentionCron = runsScheduledJobs
         timeout: '10 minutes',
         link: [...allSecrets],
         environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
+// Signup risk sweep - requests a risk evidence refresh for every unsettled account in the window (the
+// per-user claim dedupes against in-flight refreshes), repairing dropped triggers. Sends to
+// riskEvidenceQueue, so it links the queue.
+const signupRiskSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('signupRiskSweep', {
+      schedule: 'cron(15 * * * ? *)', // Hourly at :15
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupRiskSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets, riskEvidenceQueue],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
       },
     })
   : undefined;
@@ -1366,6 +1390,7 @@ export {
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   signupIpRetentionCron,
+  signupRiskSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,

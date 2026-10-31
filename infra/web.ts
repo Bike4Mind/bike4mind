@@ -52,6 +52,8 @@ import {
   dataLakeResearchQueueDLQ,
   lakeMemoryQueue,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueue,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueue,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueue,
@@ -157,6 +159,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
     'data-lake-research': dataLakeResearchQueueDLQ.url,
     'lake-memory': lakeMemoryQueueDLQ.url,
+    'risk-evidence': riskEvidenceQueueDLQ.url,
     'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
     'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
@@ -221,6 +224,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
     dataLakeResearchQueue: dataLakeResearchQueue.url,
     lakeMemoryQueue: lakeMemoryQueue.url,
+    riskEvidenceQueue: riskEvidenceQueue.url,
     lakeInconsistencyModelQueue: lakeInconsistencyModelQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
     driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
@@ -301,6 +305,9 @@ export const web = new sst.aws.Nextjs(
       // Resource.generationCallbackQueue.url, which also has to resolve in the generation queue
       // Lambdas and the timeout sweep, where only direct links exist.
       generationCallbackQueue,
+      // apps/client/server/auth/riskEvidence.ts reads Resource.riskEvidenceQueue.url directly to enqueue
+      // refreshes; via sourceQueueUrls alone the key would not resolve on the Resource proxy.
+      riskEvidenceQueue,
     ],
     permissions: [
       {

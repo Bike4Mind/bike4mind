@@ -4,6 +4,7 @@ import { CreditHolderType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
 
 // Middleware is stripped so the handler body runs directly (same pattern as

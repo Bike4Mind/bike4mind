@@ -5,6 +5,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Linking an account that promotes emailVerified runs applyEmailVerifiedGrants, which rescores.
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
 
 const mockFindOne = vi.fn();

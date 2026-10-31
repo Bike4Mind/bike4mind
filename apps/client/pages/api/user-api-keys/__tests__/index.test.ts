@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 import { createMocks } from 'node-mocks-http';
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
@@ -119,6 +120,7 @@ vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
 import { CreditHolderType } from '@bike4mind/common';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
+import { requestRiskEvidenceRefresh } from '@server/auth/riskEvidence';
 import '@pages/api/user-api-keys/index';
 
 function post(body: unknown, opts: { isAdmin?: boolean } = {}) {
@@ -168,6 +170,33 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
     const refused = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', allowedOrigins: 'nope' });
     await mockRefs.postHandler!(refused.req, refused.res).catch(() => undefined);
     expect(refreshSignupRiskScore).not.toHaveBeenCalled();
+  });
+
+  it('requests a risk evidence refresh after a key is created, and not when creation is refused or fails', async () => {
+    vi.mocked(requestRiskEvidenceRefresh).mockClear();
+    const created = post({
+      name: 'widget',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      allowedOrigins: ['https://example.com'],
+    });
+    await mockRefs.postHandler!(created.req, created.res);
+    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'api_key_created', expect.anything());
+
+    vi.mocked(requestRiskEvidenceRefresh).mockClear();
+    const refused = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', allowedOrigins: 'nope' });
+    await mockRefs.postHandler!(refused.req, refused.res).catch(() => undefined);
+    expect(requestRiskEvidenceRefresh).not.toHaveBeenCalled();
+
+    createUserApiKey.mockRejectedValueOnce(new Error('service refused'));
+    const failed = post({
+      name: 'widget',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      allowedOrigins: ['https://example.com'],
+    });
+    await mockRefs.postHandler!(failed.req, failed.res).catch(() => undefined);
+    expect(requestRiskEvidenceRefresh).not.toHaveBeenCalled();
   });
 
   it('(b) rejects a first-party (self) host origin with 400 and never calls the service', async () => {
