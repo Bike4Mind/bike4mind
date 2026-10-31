@@ -104,6 +104,8 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'users/[userId]/entitlements.ts',
   'users/[userId]/generate-api-key.ts',
   'users/[userId]/grant-subscription.ts',
+  'users/[userId]/linked-accounts.ts',
+  'users/[userId]/new-account-spend-cap.ts',
   'users/[userId]/profile.ts',
   'users/[userId]/resend-email-change.ts',
   'users/[userId]/resend-verification.ts',
