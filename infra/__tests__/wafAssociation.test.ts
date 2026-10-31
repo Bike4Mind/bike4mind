@@ -1,6 +1,6 @@
 /** @vitest-environment node */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { resolveExternalWafAssociation, resolveWafLogDestination } from '../wafAssociation';
+import { resolveExternalWafAssociation, resolveWafLabelForwarding, resolveWafLogDestination } from '../wafAssociation';
 
 describe('resolveExternalWafAssociation', () => {
   it('returns the trimmed ACL name for production', () => {
@@ -35,6 +35,26 @@ describe('resolveExternalWafAssociation', () => {
 
   it('ignores a name on a non-production stage when ENABLE_WAF is not true', () => {
     expect(resolveExternalWafAssociation({ stage: 'dev', enableWaf: 'false', webAclName: 'acl' })).toBeUndefined();
+  });
+});
+
+describe('resolveWafLabelForwarding', () => {
+  it.each([undefined, 'false', 'true'])(
+    'forwards on the stage-owned ACL regardless of WAF_LABEL_FORWARDING=%j',
+    flag => {
+      expect(resolveWafLabelForwarding({ attachedAcl: 'stage', labelForwarding: flag })).toBe(true);
+    }
+  );
+
+  it('forwards on an external ACL only when the deployer vouches for its rules', () => {
+    expect(resolveWafLabelForwarding({ attachedAcl: 'external', labelForwarding: 'true' })).toBe(true);
+    for (const flag of [undefined, '', 'false', 'TRUE', '1']) {
+      expect(resolveWafLabelForwarding({ attachedAcl: 'external', labelForwarding: flag })).toBe(false);
+    }
+  });
+
+  it('never forwards without an attached ACL', () => {
+    expect(resolveWafLabelForwarding({ attachedAcl: 'none', labelForwarding: 'true' })).toBe(false);
   });
 });
 
@@ -218,6 +238,28 @@ describe('non-production WAF wiring', () => {
     );
     expect(createdNames()).not.toContain('WafAlarmSlackHandler');
     expect(resources.lookup).not.toHaveBeenCalled();
+  });
+});
+
+describe('WAF label forwarding wiring', () => {
+  it('stays off for the production external ACL until the deployer sets WAF_LABEL_FORWARDING', async () => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', 'custom-firewall');
+    vi.stubEnv('WAF_LABEL_FORWARDING', '');
+    expect((await loadWaf('production')).wafLabelForwarding).toBe(false);
+  });
+
+  it('turns on for the production external ACL with WAF_LABEL_FORWARDING=true', async () => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', 'custom-firewall');
+    vi.stubEnv('WAF_LABEL_FORWARDING', 'true');
+    expect((await loadWaf('production')).wafLabelForwarding).toBe(true);
+  });
+
+  it('is on for a stage-owned ACL and off with WAF disabled', async () => {
+    vi.stubEnv('WAF_WEB_ACL_NAME', '');
+    vi.stubEnv('WAF_LABEL_FORWARDING', '');
+    expect((await loadWaf('pr5655')).wafLabelForwarding).toBe(true);
+    vi.stubEnv('WAF_LABEL_FORWARDING', 'true');
+    expect((await loadWaf('pr5655', 'false')).wafLabelForwarding).toBe(false);
   });
 });
 

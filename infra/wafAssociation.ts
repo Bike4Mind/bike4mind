@@ -43,3 +43,18 @@ export function resolveExternalWafAssociation(args: {
 
   return args.enableWaf === 'true' && webAclName ? { webAclName } : undefined;
 }
+
+/**
+ * Whether the attached ACL inserts the WAF label headers that apps/client/server/auth/networkMeta.ts
+ * reads. The stage-owned ACL is built from infra/waf/bike4mind-api-protection-dev.json, which carries
+ * the label-forward rules. An external ACL is managed outside this stack, so its deployer vouches for
+ * them with WAF_LABEL_FORWARDING=true; without it the signup WAF fields stay null. The flag also
+ * vouches for the forged-header block: networkMeta.ts trusts the headers at face value.
+ */
+export function resolveWafLabelForwarding(args: {
+  attachedAcl: 'none' | 'stage' | 'external';
+  labelForwarding: string | undefined;
+}): boolean {
+  if (args.attachedAcl === 'stage') return true;
+  return args.attachedAcl === 'external' && args.labelForwarding === 'true';
+}
