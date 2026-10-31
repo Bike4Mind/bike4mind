@@ -37,7 +37,7 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
 }));
 
 import defineAbilitiesFor from '../ability';
-import { Prompt, FabFile, FeedbackModel, Organization } from '@bike4mind/database';
+import { Prompt, FabFile, FeedbackModel, Organization, ModalModel, User, AdminSettings } from '@bike4mind/database';
 import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
@@ -318,5 +318,46 @@ describe('defineAbilitiesFor - org manager rule', () => {
     const query = JSON.stringify(accessibleBy(ability, 'update').ofType(Organization));
     expect(query).toContain('"adminUserIds":"u1"');
     expect(query).toContain('"users":{"$elemMatch":{"userId":"u1"}}');
+  });
+});
+
+describe('defineAbilitiesFor - modal management follows settings:manage', () => {
+  const MODAL_ACTIONS = ['create', 'update', 'delete', 'manage'] as const;
+  const delegate = () => defineAbilitiesFor(makeUser({ isAdmin: false, adminPermissions: ['settings:manage'] }));
+
+  it('lets a settings:manage delegate manage modals and the modal tool subject', () => {
+    const ability = delegate();
+    for (const action of MODAL_ACTIONS) expect(ability.can(action, ModalModel)).toBe(true);
+    expect(ability.can('manage', 'Modal')).toBe(true);
+  });
+
+  it('lets a full admin manage modals', () => {
+    const ability = defineAbilitiesFor(makeUser({ isAdmin: true }));
+    for (const action of MODAL_ACTIONS) expect(ability.can(action, ModalModel)).toBe(true);
+    expect(ability.can('manage', 'Modal')).toBe(true);
+  });
+
+  it.each([
+    ['no permissions', { adminPermissions: undefined }],
+    ['an empty grant list', { adminPermissions: [] }],
+    ['a different permission', { adminPermissions: ['support:read'] }],
+  ])('denies modal writes with %s', (_label, overrides) => {
+    const ability = defineAbilitiesFor(makeUser({ isAdmin: false, ...overrides }));
+    for (const action of MODAL_ACTIONS) expect(ability.can(action, ModalModel)).toBe(false);
+    expect(ability.can('manage', 'Modal')).toBe(false);
+    expect(ability.can('read', ModalModel)).toBe(true);
+  });
+
+  it('does not hand a delegate the User, Organization or AdminSettings abilities', () => {
+    const ability = delegate();
+    expect(ability.can('update', User)).toBe(false);
+    expect(ability.can('delete', User)).toBe(false);
+    // Organization has conditional share rules for everyone, so compare against a plain user.
+    const plain = defineAbilitiesFor(makeUser({ isAdmin: false }));
+    for (const action of ['read', 'update', 'delete'] as const) {
+      expect(ability.can(action, Organization)).toBe(plain.can(action, Organization));
+    }
+    expect(ability.can('update', AdminSettings)).toBe(false);
+    expect(ability.can('create', AdminSettings)).toBe(false);
   });
 });
