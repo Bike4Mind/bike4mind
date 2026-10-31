@@ -8,6 +8,9 @@ name: Restricted Terms
 # rather than passing it. Logs on this repo are public, so a hit names only the
 # location, never the term or the matched text.
 #
+# PR comments, review summaries and review-thread comments are checked by
+# restricted-terms-comments.yml with the same list and script.
+#
 # pull_request_target (not pull_request) so the secret is available on fork PRs.
 # This is the safe use of pull_request_target: the only checkout is the BASE
 # branch's copy of the script, and the PR's title, commits and diff are read as
