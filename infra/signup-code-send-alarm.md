@@ -131,8 +131,10 @@ completions API, CLI and desktop over the service's WebSocket, embeds) logs one
 JSON line with the message `llm-usage-settled`. It carries `provider`
 (`anthropic`, `openai`, `bedrock`, `google`, or `other`), the raw `backend`,
 `model`, token counts, `usd` (the same per-model price the credit settlement
-uses, 6 decimals), `source`, and `isYoungAccount` (account created in the last
-168 hours, the young-account spend definition). It has no user id or prompt.
+uses, 6 decimals), `source`, `isYoungAccount` (account created in the last
+168 hours, the young-account spend definition), and, when the caller knows them,
+`userId` and `accountCreatedAt` (ISO), so the young-account alarm below can name
+the accounts behind a breach. It has no email, name or prompt.
 The line is written by a dedicated info-level JSON logger in
 `b4m-core/services/src/llm/llmUsageSettledLog.ts`, without inheriting request
 metadata. Research completions log each settled configuration, including when
@@ -158,6 +160,17 @@ and WAF edge-signal counts from the alarms above.
 An hourly alarm on `EstimatedUsdYoungAccounts` fires when accounts under 7 days
 old sum to at least `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` (whole USD) and
 routes to the same Slack DLQ topic. It is not listed in the dashboard alarm-status widget.
+
+When it (or the 5-minute `llm-spend-young-accounts` alarm) fires, the Slack relay
+(`apps/workers/src/events/youngAccountSpendDetail.ts`) runs a Logs Insights query
+over the ChatCompletion log group for the breaching window and adds a "Top
+accounts in the window" section: up to five accounts with id, estimated USD,
+call count, age at the end of the window, top models, and an admin-page link.
+The sum matches the alarm's measured value because both read the same lines
+(unless the query hits its 500-row cap, which the post then says).
+Lines logged before `userId` was added are skipped. The relay has `logs:StartQuery`
+on that log group only and a 60-second timeout; a query that fails or runs past
+its 25-second budget leaves a one-line note in the post instead of blocking it.
 
 A second alarm per provider pages when `EstimatedUsd` sums to at least
 `LLM_SPEND_ALARM_USD_PER_HOUR` (whole USD, default 20) in one hour, or
