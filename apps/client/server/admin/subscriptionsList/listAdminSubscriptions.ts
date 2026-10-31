@@ -34,7 +34,7 @@ export const OWNER_SEARCH_LIMIT = 500;
 
 type Condition = Record<string, unknown>;
 
-type SubscriptionDoc = {
+export type SubscriptionDoc = {
   _id: mongoose.Types.ObjectId;
   subscriptionId: string;
   ownerType: AdminSubscriptionRow['ownerType'];
