@@ -1,10 +1,9 @@
 import React, { useCallback, useState } from 'react';
 import { Box, Button, Modal, ModalDialog, Typography } from '@mui/joy';
 import { FilePond, registerPlugin } from 'react-filepond';
+import type { FilePondOptions, ProcessServerConfigFunction } from 'filepond';
 import 'filepond/dist/filepond.min.css';
 
-// Type assertion for FilePond component
-const FilePondComponent = FilePond as any;
 import FilePondPluginImageExifOrientation from 'filepond-plugin-image-exif-orientation';
 import FilePondPluginImagePreview from 'filepond-plugin-image-preview';
 import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.css';
@@ -18,23 +17,16 @@ registerPlugin(FilePondPluginImageExifOrientation, FilePondPluginImagePreview, F
 interface UploadProfilePhotoModalProps {
   open: boolean;
   onClose: () => void;
-  onUploadComplete: (photoUrl: string) => void;
+  onUploadComplete: () => void;
 }
 
 const UploadProfilePhotoModal: React.FC<UploadProfilePhotoModalProps> = ({ open, onClose, onUploadComplete }) => {
-  const [files, setFiles] = useState<any[]>([]);
-  const { currentUser } = useUser();
+  const [files, setFiles] = useState<FilePondOptions['files']>([]);
+  const { currentUser, refreshUser } = useUser();
   const uploadPhoto = useUploadProfilePhoto();
 
-  const handleProcessFile = useCallback(
-    async (
-      fieldName: string,
-      file: File,
-      metadata: any,
-      load: (fileId: string | number) => void,
-      error: (message: string) => void,
-      progress: (computable: boolean, loaded: number, total: number) => void
-    ) => {
+  const handleProcessFile = useCallback<ProcessServerConfigFunction>(
+    async (_fieldName, file, _metadata, load, error) => {
       if (!currentUser?.id) {
         error('User not found');
         toast.error('User not found');
@@ -52,9 +44,12 @@ const UploadProfilePhotoModal: React.FC<UploadProfilePhotoModalProps> = ({ open,
           file,
         });
 
-        load((result as any)?.id || file.name);
-        onUploadComplete((result as any)?.photoUrl || URL.createObjectURL(file));
+        load(result);
+        onUploadComplete();
         setFiles([]);
+        // The sidebar avatar reads the zustand store, which the mutation's react-query
+        // invalidation never touches. Fire-and-forget so the upload UI does not wait on it.
+        void refreshUser({ fresh: true });
         toast.success('Profile photo updated successfully');
       } catch (err) {
         error('Upload failed');
@@ -62,7 +57,7 @@ const UploadProfilePhotoModal: React.FC<UploadProfilePhotoModalProps> = ({ open,
         console.error('Upload error:', err);
       }
     },
-    [onUploadComplete, currentUser, uploadPhoto]
+    [onUploadComplete, currentUser, uploadPhoto, refreshUser]
   );
 
   return (
@@ -80,9 +75,9 @@ const UploadProfilePhotoModal: React.FC<UploadProfilePhotoModalProps> = ({ open,
           Upload Profile Photo
         </Typography>
         <Box className="profile-photo-upload-filepond-container" sx={{ width: '100%' }}>
-          <FilePondComponent
+          <FilePond
             files={files}
-            onupdatefiles={setFiles}
+            onupdatefiles={updatedFiles => setFiles(updatedFiles.map(updatedFile => updatedFile.file))}
             allowMultiple={false}
             maxFiles={1}
             server={{

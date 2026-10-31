@@ -340,6 +340,46 @@ describe('refreshUser single-flight guard', () => {
     expect(mockGet).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['resolve', 'reject'] as const)(
+    'starts a fresh read after an older read settles (%s), coalescing fresh callers',
+    async outcome => {
+      const olderRequest = Promise.withResolvers<unknown>();
+      const freshRequest = Promise.withResolvers<unknown>();
+      mockGet.mockReturnValueOnce(olderRequest.promise).mockReturnValueOnce(freshRequest.promise);
+      const { refreshUser } = useUser.getState();
+
+      const olderRefresh = refreshUser();
+      const firstFresh = refreshUser({ fresh: true });
+      const secondFresh = refreshUser({ fresh: true });
+      expect(mockGet).toHaveBeenCalledTimes(1);
+
+      if (outcome === 'reject') {
+        olderRequest.reject(new Error('old request failed'));
+      } else {
+        olderRequest.resolve({ data: { user: fakeUser({ photoUrl: 'old.png' }) } });
+      }
+      await olderRefresh;
+      expect(mockGet).toHaveBeenCalledTimes(2);
+
+      const concurrentRefresh = refreshUser();
+      expect(mockGet).toHaveBeenCalledTimes(2);
+      freshRequest.resolve({ data: { user: fakeUser({ photoUrl: 'new.png' }) } });
+      await Promise.all([firstFresh, secondFresh, concurrentRefresh]);
+      expect(useUser.getState().currentUser?.photoUrl).toBe('new.png');
+      expect(mockGet).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("writes the identify response's photoUrl into currentUser", async () => {
+    mockGet.mockResolvedValueOnce({ data: { user: fakeUser({ photoUrl: 'uploads/avatar-1.png' }) } });
+
+    await useUser.getState().refreshUser();
+
+    // The sidebar avatar renders currentUser.photoUrl. Dropping the response from the set
+    // leaves the avatar on its fallback initial, which is the bug this refresh exists to fix.
+    expect(useUser.getState().currentUser?.photoUrl).toBe('uploads/avatar-1.png');
+  });
+
   it('clears the guard even when the request rejects, so a retry can still fire', async () => {
     mockGet.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ data: { user: fakeUser() } });
     const { refreshUser } = useUser.getState();
