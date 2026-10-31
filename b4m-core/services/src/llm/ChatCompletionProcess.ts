@@ -60,12 +60,12 @@ import {
   tokenEstimateMultiplier,
   pairDataLakeTools,
   isClaudeModelId,
-  REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
+  respondFromWorkspace,
   createReasoningWithholder,
   reasoningChannelOf,
   withholdsReasoning,
@@ -95,6 +95,7 @@ import {
   processFabFilesServer,
   processUrlsFromPrompt,
   isOverloadedError,
+  isProviderSpendLimitError,
   shouldTriggerFallback,
   isSafetyRefusalError,
   stripAllToolBlocks,
@@ -152,6 +153,7 @@ import {
   type OutputBudgetExhaustedError,
   type ICompletionOptionTools,
   convertOpenAIToolHistoryToCanonical,
+  openAIEffortIncompatibleWithTools,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { timedOutAttemptUsageFields } from './timedOutAttemptUsage';
@@ -190,6 +192,14 @@ import {
   loadModelConfigurations,
   type ModelAdmission,
 } from './modelAdmission';
+import {
+  executedModelFields,
+  recordShadowTokenUsage,
+  reserveShadowTokenBudget,
+  resolveShadowModelInfo,
+  resolveShadowRouting,
+  shadowCandidates,
+} from './shadowTier';
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
@@ -280,6 +290,7 @@ import {
   getMemberCreditCap,
   getMemberCreditPeriodEnd,
   isMemberCreditCapExceeded,
+  checkNewAccountSpendCap,
 } from '../creditService';
 import {
   TelemetryBuilder,
@@ -306,6 +317,7 @@ import {
 import { resolveMementoGates } from './mementoGating';
 import { resolveAdminAssistantTools } from './adminAssistantGate';
 import { withAdminAssistantPrompt } from './adminAssistantPrompt';
+import { diffFields, type FieldSnapshot } from './fieldSnapshot';
 import {
   ContextTelemetryAlertsSchema,
   sanitizeTelemetryError,
@@ -341,6 +353,14 @@ const STREAMING_HEARTBEAT_ERROR_ESCALATION_THRESHOLD = 3;
 
 /** Final reply when the model stayed too slow through its retry and any fallback. Not "busy": the provider never said so. */
 export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
+// Shown when the provider account behind the model is out of budget and no other route could answer.
+// The fault is ours, not the user's credits, so it must not read like their balance ran out.
+export const PROVIDER_SPEND_LIMIT_REPLY =
+  'This model is temporarily unavailable on our side. Please choose a different model or try again later.';
+
+/** Final reply when every allowlisted model failed a substituted turn; the provider's own wording would name the substitute. */
+export const MODEL_UNAVAILABLE_ERROR_REPLY =
+  'The AI service is temporarily unavailable. Please try again in a few minutes.';
 
 /**
  * Final reply when a reasoning model spent its whole output budget and the caller set `max_tokens`
@@ -544,6 +564,15 @@ export function resolveModelAwareHistoryCount({
 const SESSION_LENGTH_WARNING_THRESHOLD = 100;
 
 const questSaveMutex = new Mutex();
+// Identity and server-owned keys; `deletedAt` belongs to soft delete, never to a turn's save.
+const QUEST_FIELDS_NEVER_SAVED: ReadonlySet<string> = new Set([
+  'id',
+  '_id',
+  '__v',
+  'createdAt',
+  'updatedAt',
+  'deletedAt',
+]);
 
 interface ProcessInitContext {
   parsedBody: z.infer<typeof QuestStartBodySchema>;
@@ -619,14 +648,19 @@ export const FORCE_STREAM_STALL_TEST_MARKER = '[[force-stream-stall]]';
  * openaiBackend usesResponsesToolTransport). Shared by the primary-turn trim and the per-hop fallback
  * override so they cannot drift.
  */
-function withholdIdentityTool(
-  model: { id: string; supportsTools?: boolean; dispatchProfile?: { toolTransport?: string } },
+export function withholdIdentityTool(
+  model: {
+    id: string;
+    supportsTools?: boolean;
+    effortIncompatibleWithTools?: boolean;
+    openaiReasoningEffort?: true;
+    dispatchProfile?: { toolTransport?: string };
+  },
   toolNames: string[]
 ): boolean {
   return (
     !model.supportsTools ||
-    ((REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model.id) ||
-      model.dispatchProfile?.toolTransport === 'responses') &&
+    ((openAIEffortIncompatibleWithTools(model, model.id) || model.dispatchProfile?.toolTransport === 'responses') &&
       toolNames.length === 1 &&
       toolNames[0] === CURRENT_MODEL_DETAILS_TOOL_NAME)
   );
@@ -975,7 +1009,10 @@ export function warnOnSettlementDebt(
 
 /** One model's share of a turn's usage, priced against the turn's credit reservation. */
 export interface ReservationUsage {
+  /** The model that ran, which prices the usage. */
   modelInfo: ModelInfo;
+  /** The requested model its ledger row names, when known per usage (Research mode); else ledgerModel() maps it. */
+  ledgerModelInfo?: ModelInfo;
   /** Uncached input; cache reads and writes are counted separately, as the provider reports them. */
   inputTokens: number;
   outputTokens: number;
@@ -996,14 +1033,21 @@ export function researchModeUsages(
   inputTokens: number
 ): ReservationUsage[] {
   return results.flatMap(result => {
-    const modelInfo = models.find(m => m.id === result.model);
+    const ledgerModelInfo = models.find(m => m.id === result.model);
+    const modelInfo = result.runModel ? models.find(m => m.id === result.runModel) : ledgerModelInfo;
     const reported = result.completionInfo;
-    if (!modelInfo || (!reported && !result.streamedChars)) return [];
+    if (!modelInfo || !ledgerModelInfo || (!reported && !result.streamedChars)) return [];
+    const streamedEstimate = estimateStreamedOutputTokens(result.streamedChars, modelInfo.id);
     return [
       {
         modelInfo,
+        ledgerModelInfo,
         inputTokens: reported?.inputTokens || inputTokens,
-        outputTokens: reported?.outputTokens || estimateStreamedOutputTokens(result.streamedChars, result.model),
+        // A failed run's last report can predate output it streamed afterwards (e.g. a timed-out stream
+        // that never stopped), so it is only a floor.
+        outputTokens: result.success
+          ? reported?.outputTokens || streamedEstimate
+          : Math.max(reported?.outputTokens ?? 0, streamedEstimate),
       },
     ];
   });
@@ -1180,6 +1224,9 @@ export class ChatCompletionProcess {
   private abortControllers: Map<string, AbortController> | null = null;
   private tokenizer: ITokenizer;
   private cacheRepository?: IChatCompletionServiceOptions['cacheRepository'];
+  // Set for a restricted-tier turn that runs a substitute; ledger rows the user can read name the requested model.
+  // substituteIds: every id that served this turn as a substitute, so ledger rows stay mapped after a hop.
+  private shadowSubstitution: { requested: ModelInfo; actual: ModelInfo; substituteIds: Set<string> } | null = null;
   private publishTelemetryAlert?: IChatCompletionServiceOptions['publishTelemetryAlert'];
   private telemetryHmacSecret?: string;
   private gpcSignalDetected: boolean = false;
@@ -1202,6 +1249,8 @@ export class ChatCompletionProcess {
   private reservedCreditsOwnerId: string = '';
   private reservedCreditsOwnerType: CreditHolderType = CreditHolderType.User;
   private reservedCreditHolder: ICreditHolder | null = null;
+  // The UserApiKey that authenticated the current turn (parsedBody.apiKeyId), stamped on its ledger rows.
+  private turnApiKeyId: string | undefined;
   // What the reservation was priced on: a turn that ends on a thrown abort settles the tokens it
   // streamed against it (settleAbortedReservation) instead of refunding the whole hold.
   private reservationBasis: {
@@ -2020,6 +2069,7 @@ export class ChatCompletionProcess {
     // Started now so its reads overlap context assembly instead of delaying the first token.
     void this.resolveThinkingVisibility();
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
+    this.turnApiKeyId = initContext.parsedBody.apiKeyId;
     const {
       parsedBody,
       quest,
@@ -2089,6 +2139,7 @@ export class ChatCompletionProcess {
     });
     let rapidReplyResult: Awaited<typeof rapidReplyPromise> | undefined = undefined;
 
+    let persistedQuestFields: { questId: string; fields: FieldSnapshot } | undefined;
     const saveQuest = async (quest: IChatHistoryItemDocument): Promise<IChatHistoryItemDocument | null> => {
       // Use the mutex to serialize the save operations
       return await questSaveMutex.runExclusive(async () => {
@@ -2101,12 +2152,20 @@ export class ChatCompletionProcess {
             `💾 [saveQuest] Saving quest ${quest.id} with ${quest.researchModeResults.length} Research Mode results`
           );
         }
-        // Deliberate whole-doc write: this is the streaming owner of `quest`, mutated across the
-        // pipeline and by tools, so no fixed field list exists. Narrowing needs a snapshot-diff.
+        // Tools and the pipeline mutate `quest` freely, so the write is the diff against what this
+        // turn last persisted, not a fixed field list; a whole-doc write would revert concurrent edits.
+        const previous = persistedQuestFields?.questId === quest.id ? persistedQuestFields.fields : undefined;
+        const { changed, snapshot } = diffFields(quest, previous, QUEST_FIELDS_NEVER_SAVED);
+        const running = quest.status === 'running';
+        // A running save is also the heartbeat that keeps `updatedAt` fresh, so it writes regardless.
+        if (previous && !running && Object.keys(changed).length === 0) return quest;
         // A mid-turn save must not put 'running' back over a user Stop (stopReply in
         // sessionOperations.ts) before the cancellation watcher reads it.
-        if (quest.status === 'running') return await this.db.quests.updateIfUnfinished(quest);
-        return await this.db.quests.update(quest);
+        const saved = running
+          ? await this.db.quests.updateIfUnfinished({ id: quest.id, ...changed })
+          : await this.db.quests.update({ id: quest.id, ...changed });
+        if (saved) persistedQuestFields = { questId: quest.id, fields: snapshot };
+        return saved;
       });
     };
 
@@ -2222,6 +2281,10 @@ export class ChatCompletionProcess {
       logger.warn('[NarratedToolCall] Reply wrote a tool call as text; stripped and not run', { questId, toolNames });
       if (quest.promptMeta) quest.promptMeta.narratedToolCall = { toolNames };
     };
+    // The running attempt's provider counts, until a settlement adds them to the restricted tier's daily counter.
+    let unrecordedShadowUsage:
+      | Pick<CompletionInfo, 'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'>
+      | undefined;
 
     try {
       const abilityStartTime = Date.now();
@@ -2299,6 +2362,32 @@ export class ChatCompletionProcess {
         // The finally block's terminal frame carries the record, so end it here rather than
         // leaving a total-less record that would read as "still running" forever.
         turnTiming.finish();
+        return;
+      }
+
+      const workspaceReply = await respondFromWorkspace(
+        {
+          user: this.user,
+          logger,
+          session,
+          quest: { id: questId, prompt: quest.prompt, fabFileIds: quest.fabFileIds },
+        },
+        this.workspaceSessionSettings
+      );
+      if (workspaceReply) {
+        quest.replies = workspaceReply.replies;
+        quest.reply = workspaceReply.replies.join('');
+        if (workspaceReply.structuredReplies) quest.structuredReplies = workspaceReply.structuredReplies;
+        if (workspaceReply.toolResults) quest.toolResults = workspaceReply.toolResults;
+        if (workspaceReply.uiSideEffects) quest.uiSideEffects = workspaceReply.uiSideEffects;
+        // Invoke stamped the session's model; no model wrote this reply.
+        if (quest.promptMeta?.model) {
+          const { model: _unused, ...promptMeta } = quest.promptMeta;
+          quest.promptMeta = promptMeta;
+        }
+        setTerminalQuestStatus(quest, 'done');
+        turnTiming.finish();
+        await saveQuest(quest);
         return;
       }
       quest.status = 'running';
@@ -2603,7 +2692,18 @@ export class ChatCompletionProcess {
       // to its modern equivalent before lookup. getAvailableModels filters retired ids out, so
       // without this the find returns undefined and the run dies with "Invalid LLM backend".
       const resolvedModelId = resolveDeprecatedModelId(model, 'ChatCompletionProcess');
-      const modelInfo = models.find(m => m.id === resolvedModelId);
+      const requestedModelInfo = models.find(m => m.id === resolvedModelId);
+      // Substitute only the executing model; see resolveShadowModelInfo.
+      const { settings: shadowSettings, modelInfo: shadowModelInfo } = await resolveShadowRouting({
+        user: this.user,
+        requested: requestedModelInfo,
+        models,
+        adminSettings: this.db.adminSettings,
+        logger,
+      });
+      const modelInfo = shadowModelInfo ?? requestedModelInfo;
+      // The model id handed to features and tools that call the backend themselves.
+      const runModel = shadowModelInfo ? shadowModelInfo.id : model;
       // Reuse trusted federation provenance across primary and fallback chat backends.
       // Direct-SDK consumers below keep the original static key table.
       const chatApiKeyTable = withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable));
@@ -2613,8 +2713,23 @@ export class ChatCompletionProcess {
         endUserId: this.user.id,
       });
 
-      if (!modelInfo || !llm) {
+      if (!requestedModelInfo || !modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
+      }
+      this.shadowSubstitution = shadowModelInfo
+        ? { requested: requestedModelInfo, actual: shadowModelInfo, substituteIds: new Set([shadowModelInfo.id]) }
+        : null;
+      // Backends report retries under the substitute's id, and status/request-id formats hint at its provider.
+      const maskSubstituteRetries = () =>
+        turnTiming.maskStoredRetries(retry => ({
+          ...retry,
+          status: undefined,
+          requestId: undefined,
+          model: this.isSubstituteId(retry.model) ? requestedModelInfo.id : retry.model,
+        }));
+      if (shadowModelInfo) {
+        logger.info('[ModelRouting] tier substitution', { requested: requestedModelInfo.id, actual: modelInfo.id });
+        maskSubstituteRetries();
       }
       this.modelAdmission = createModelAdmission({
         user: this.user,
@@ -2630,14 +2745,14 @@ export class ChatCompletionProcess {
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
-      await this.modelAdmission.assert(modelInfo.id);
-      const servingModel = { current: modelInfo };
+      await this.modelAdmission.assert(requestedModelInfo.id);
+      const servingModel = { current: this.ledgerModel(modelInfo) };
       // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
       // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
       if (quest.promptMeta && resolvedModelId !== model) {
         quest.promptMeta.redirectedFrom ??= model;
         if (quest.promptMeta.model) {
-          Object.assign(quest.promptMeta.model, buildPromptMetaModel(modelInfo));
+          Object.assign(quest.promptMeta.model, buildPromptMetaModel(requestedModelInfo));
         }
       }
       if (quest.promptMeta?.redirectedFrom) {
@@ -2755,7 +2870,7 @@ export class ChatCompletionProcess {
             telemetryBuilder.setCaptureLevel(telemetryLevel);
 
             // Set requested model info
-            telemetryBuilder.setRequestedModel(modelInfo.id, mapBackendToProvider(modelInfo.backend));
+            telemetryBuilder.setRequestedModel(requestedModelInfo.id, mapBackendToProvider(requestedModelInfo.backend));
 
             // Set thinking mode if applicable (will be updated later if reasoning is enabled)
             const usesThinking = modelInfo.can_think ?? false;
@@ -2862,7 +2977,7 @@ export class ChatCompletionProcess {
               session,
               startParams: params,
               llm,
-              model,
+              model: runModel,
               modelInfo,
               message,
               historyCount,
@@ -3429,6 +3544,7 @@ export class ChatCompletionProcess {
         onToolPreamble: this.onToolPreamble,
         modelAdmission: this.modelAdmission,
         decide: this.decide,
+        toLedgerModel: id => (this.isSubstituteId(id) ? this.shadowSubstitution?.requested : undefined),
       });
 
       const { mcpToolsByServer, serverAgentConfig } = await toolBuilder.buildMcpTools({
@@ -3534,7 +3650,9 @@ export class ChatCompletionProcess {
         : null;
 
       const subagentModels = agentStore
-        ? await this.loadSubagentModels(models, modelInfo, entitlementKeys, logger)
+        ? shadowSettings
+          ? [modelInfo]
+          : await this.loadSubagentModels(models, modelInfo, entitlementKeys, logger)
         : undefined;
 
       const buildToolsArgs: Parameters<ToolBuilder['buildTools']>[0] = {
@@ -3556,9 +3674,11 @@ export class ChatCompletionProcess {
         config: {
           deep_research: {
             ...deepResearchConfig,
-            model,
-            apiKeys: apiKeyTable,
+            model: runModel,
+            // An OpenAI key swaps the analysis model; restricted users keep their own.
+            apiKeys: shadowSettings ? undefined : apiKeyTable,
           },
+          edit_file: shadowSettings ? { model: runModel } : undefined,
           image_generation: imageConfig,
           edit_image: imageConfig,
           audio_generation: audioConfig,
@@ -3566,13 +3686,20 @@ export class ChatCompletionProcess {
           video_generation: videoToolConfig ?? undefined,
           music_generation: musicToolConfig ?? undefined,
         },
-        model,
+        model: runModel,
         organization,
         precomputed: {
           adminSettingsEnforceCredits: !!adminSettingsEnforceCredits,
           models,
         },
         subagentModels,
+        substituteIdentity: this.shadowSubstitution
+          ? {
+              substituteId: this.shadowSubstitution.actual.id,
+              identityId: this.shadowSubstitution.requested.id,
+              displayName: this.shadowSubstitution.requested.name,
+            }
+          : undefined,
         agentOnlyMcpServers,
         apiKeyTable,
         getAbortSignal: () => abortSignalHolder.signal,
@@ -4157,7 +4284,7 @@ export class ChatCompletionProcess {
       // user as the assistant ignoring their file rather than as a misconfiguration.
       if (!messages || messages.length === 0) {
         throw new Error(
-          `Cannot build a prompt for ${modelInfo.name || model}: no input budget. The model's context window ` +
+          `Cannot build a prompt for ${requestedModelInfo.name || model}: no input budget. The model's context window ` +
             `(${contextLimit}) minus its reserved output (${safeMaxTokens}) leaves no room for input. Lower the ` +
             `max output tokens for this model, or pick a model with a larger context window.`
         );
@@ -4583,7 +4710,7 @@ export class ChatCompletionProcess {
 
         throw new Error(
           buildContextOverflowMessage({
-            modelName: modelInfo.name || model,
+            modelName: requestedModelInfo.name || model,
             inputTokens,
             maxSafeInputTokens,
             tokensBySource,
@@ -4598,6 +4725,21 @@ export class ChatCompletionProcess {
       if (this.user.disputePending) {
         throw new InsufficientCreditsError(
           'Your account is under review due to a payment dispute. Please contact support to resolve this.'
+        );
+      }
+
+      // Restricted-tier daily token cap; refused like an empty balance.
+      if (
+        shadowSettings &&
+        !(await reserveShadowTokenBudget(this.user, shadowSettings.dailyTokenCap, { cache: this.db.caches }))
+      ) {
+        throw new InsufficientCreditsError(
+          buildInsufficientCreditsMessage({
+            available: 0,
+            required: usdToCredits(getTextModelCost(modelInfo, inputTokens, safeMaxTokens)) || 1,
+            organizationName: organization?.name,
+          }),
+          'insufficient_credits'
         );
       }
 
@@ -4689,6 +4831,14 @@ export class ChatCompletionProcess {
               'insufficient_credits'
             );
           }
+        }
+
+        if (!organization) {
+          const spendCapMessage = await checkNewAccountSpendCap(
+            { user: this.user, requestedCredits: requiredCredits, billedToOrganization: false, logger },
+            this.db.newAccountSpendCap
+          );
+          if (spendCapMessage) throw new InsufficientCreditsError(spendCapMessage, 'insufficient_credits');
         }
 
         // Preserve low-credits notification (checks current balance before reservation)
@@ -4858,6 +5008,7 @@ export class ChatCompletionProcess {
       };
       let cacheTtlForSettlement: PromptCacheTtl = DEFAULT_PROMPT_CACHE_TTL;
       if (this.reservationBasis) this.reservationBasis.reported = actualTokenUsage;
+      unrecordedShadowUsage = actualTokenUsage;
 
       if (THROTTLE_INTERVAL) {
         logger.info(`🚫 [STREAMING] Server throttling DISABLED for maximum TTFVT in ${process.env.NODE_ENV} mode`);
@@ -5048,7 +5199,16 @@ export class ChatCompletionProcess {
           `🔬 [Research Mode] Starting parallel processing with ${researchMode.configurations.length} configurations`
         );
 
-        const researchModeService = new ResearchModeService(apiKeyTable, models, logger, this.user.id);
+        const researchModeService = new ResearchModeService(
+          apiKeyTable,
+          models,
+          logger,
+          this.user.id,
+          shadowSettings
+            ? requested =>
+                resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger) ?? requested
+            : undefined
+        );
 
         // Handle Research Mode parallel processing
         const researchResults = await researchModeService.processResearchMode(
@@ -5072,8 +5232,17 @@ export class ChatCompletionProcess {
         // Update quest with Research Mode results. A Stop makes the cancellation watcher
         // abort the controller, so the terminal status has to reflect that rather than
         // unconditionally claiming the turn finished.
-        quest.researchModeResults = researchResults;
+        // runModel stays server-side: the client only ever sees the requested model.
+        quest.researchModeResults = researchResults.map(({ runModel: _runModel, ...result }) => result);
         setTerminalQuestStatus(quest, successStatus());
+
+        if (shadowSettings) {
+          const researchTokens = researchModeUsages(researchResults, models, inputTokens).reduce(
+            (sum, usage) => sum + usage.inputTokens + usage.outputTokens,
+            0
+          );
+          await recordShadowTokenUsage(this.user, researchTokens, { cache: this.db.caches });
+        }
 
         // This branch returns before the normal settlement, so each configuration's usage settles
         // the hold here; one that streamed nothing (failed or cancelled up front) costs nothing.
@@ -5161,6 +5330,9 @@ export class ChatCompletionProcess {
       // Models already tried this request, seeded with the primary. Passed to getLlmWithFallback
       // so no hop re-selects a model that just failed.
       const triedModelIds = new Set<string>([modelInfo.id]);
+      // Backends whose provider account hit its spend limit this request: every model on them
+      // fails identically, so no hop goes back to one.
+      const spendLimitedBackends = new Set<string>();
       // Why the REQUESTED model failed; later hops fail for their own reasons, which would misattribute.
       let primaryFailureReason: string | undefined;
       let overloadRetryCount = 0;
@@ -5188,6 +5360,9 @@ export class ChatCompletionProcess {
             feature: 'chat',
             source: 'web',
             ...timedOutAttemptUsageFields(attemptModel, error.usage),
+            provider: this.ledgerModel(attemptModel).backend,
+            model: this.ledgerModel(attemptModel).id,
+            ...executedModelFields(this.ledgerModel(attemptModel), attemptModel),
             latencyMs: Date.now() - processStartTime,
           })
           .catch((usageEventError: unknown) => {
@@ -5282,7 +5457,7 @@ export class ChatCompletionProcess {
               } LLM COMPLETION === (${currentModel.id})`
             );
 
-            if (!isInitialAttempt) {
+            if (!isInitialAttempt && !this.shadowSubstitution) {
               // Update quest metadata to reflect fallback attempt
               quest.promptMeta!.model!.name = currentModel.id;
               quest.promptMeta!.model!.backend = currentModel.backend;
@@ -5396,6 +5571,7 @@ export class ChatCompletionProcess {
               : null;
             this.withheldReasoningChars = 0;
             let lastStreamIndex = 0;
+            const attemptLedgerModel = this.ledgerModel(currentModel);
 
             // A fallback hop gets its identity line back wherever the primary turn would have.
             const hopWithholdsIdentity =
@@ -5421,8 +5597,12 @@ export class ChatCompletionProcess {
                 ...options,
                 tools: hopRequest.tools,
                 ...(hopWithholdsIdentity ? { identityViaTool: false } : {}),
+                // A substitute may answer from its own training instead of calling the tool, so the
+                // line naming the requested model is always sent.
+                ...(this.shadowSubstitution ? { identityViaTool: false } : {}),
                 // Per attempt: a fallback hop must name the model that actually serves it.
-                modelDisplayName: currentModel.name,
+                modelDisplayName: attemptLedgerModel.name,
+                modelIdentityId: attemptLedgerModel.id,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
                 // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
                 // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
@@ -5639,6 +5819,16 @@ export class ChatCompletionProcess {
               isOutputBudgetExhaustedError(lastError)
             ) {
               logger.warn(lastError);
+            } else if (isProviderSpendLimitError(lastError)) {
+              // Operator action needed (raise the provider limit): one error line per backend per
+              // request, worded so the alert says so, instead of the raw dump plus a rethrow.
+              if (!spendLimitedBackends.has(currentModel.backend)) {
+                logger.error(
+                  `[Provider Spend Limit] ${currentModel.backend} account limit reached on ${currentModel.id}; ` +
+                    `falling back off this backend: ${lastError.message}`
+                );
+              }
+              spendLimitedBackends.add(currentModel.backend);
             } else {
               logger.error(lastError);
             }
@@ -5648,6 +5838,7 @@ export class ChatCompletionProcess {
             // the user got no output, and the backend throws before reporting usage, so its
             // tokens and COGS are unknown and left at 0.
             if (adminSettingsEnforceCredits && isSafetyRefusalError(lastError)) {
+              const refusalLedgerModel = this.ledgerModel(currentModel);
               this.db.usageEvents
                 ?.record({
                   requestId: quest.id,
@@ -5656,8 +5847,8 @@ export class ChatCompletionProcess {
                   ownerType: this.reservedCreditsOwnerType,
                   sessionId: quest.sessionId,
                   feature: 'chat',
-                  provider: currentModel.backend,
-                  model: currentModel.id,
+                  provider: refusalLedgerModel.backend,
+                  model: refusalLedgerModel.id,
                   source: 'web',
                   inputTokens: 0,
                   outputTokens: 0,
@@ -5691,7 +5882,7 @@ export class ChatCompletionProcess {
               );
               messages = stripAllToolBlocks(messages, logger);
               outboundMessages = stripAllToolBlocks(outboundMessages, logger);
-              turnTiming.recordRetry(lastError, 0, currentModel.id);
+              turnTiming.recordRetry(lastError, 0, this.ledgerModel(currentModel).id);
 
               resetStreamStateForRetry();
 
@@ -5731,7 +5922,7 @@ export class ChatCompletionProcess {
                   { statusAt: new Date() }
                 );
 
-                turnTiming.recordRetry(lastError, totalDelay, currentModel.id);
+                turnTiming.recordRetry(lastError, totalDelay, this.ledgerModel(currentModel).id);
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
                 resetStreamStateForRetry();
@@ -5757,7 +5948,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
-              turnTiming.recordRetry(lastError, TIMEOUT_RETRY_DELAY_MS + jitter, currentModel.id);
+              turnTiming.recordRetry(lastError, TIMEOUT_RETRY_DELAY_MS + jitter, this.ledgerModel(currentModel).id);
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5787,7 +5978,7 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
-              turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, currentModel.id);
+              turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, this.ledgerModel(currentModel).id);
               recordTimedOutAttempt(lastError, currentModel);
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
@@ -5822,6 +6013,40 @@ export class ChatCompletionProcess {
               logger.warn(`🚫 [Fallback] Multi-hop budget exhausted (${MAX_FALLBACK_HOPS} hops), no more attempts`);
               throw lastError;
             }
+            // The restricted tier never takes the fallback chain: every chain model is outside its
+            // allowlist. A substituted turn walks the rest of the allowlist instead, as silently as
+            // the substitution itself (no status, no fallbackInfo, the requested id stays shown).
+            // A failing allowlisted requested model starts a substitution here.
+            if (shadowSettings) {
+              const next = shadowCandidates(models, shadowSettings.allowlist).find(m => !triedModelIds.has(m.id));
+              const nextLlm =
+                next && getLlmByModel(chatApiKeyTable, { modelInfo: next, logger, endUserId: this.user.id });
+              if (!next || !nextLlm) {
+                throw isOverloadedError(lastError) || isSlowModelTimeout
+                  ? lastError
+                  : new Error(MODEL_UNAVAILABLE_ERROR_REPLY);
+              }
+              logger.info('[ModelRouting] substitute failed; trying the next allowlisted model', {
+                failed: currentModel.id,
+                next: next.id,
+              });
+              // No turnTiming retry: a normal user's failed request records none, so one here would show.
+              if (!this.shadowSubstitution) {
+                this.shadowSubstitution = { requested: requestedModelInfo, actual: next, substituteIds: new Set() };
+                maskSubstituteRetries();
+              }
+              this.shadowSubstitution.actual = next;
+              this.shadowSubstitution.substituteIds.add(next.id);
+              currentModel = next;
+              currentLlm = nextLlm;
+              if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;
+              triedModelIds.add(next.id);
+              fallbackAttempt++;
+              resetStreamStateForRetry();
+              deliverableCountAtFallbackHop = countDeliverables();
+              pendingActionAtFallbackHop = quest.pendingAction;
+              continue;
+            }
 
             // Fallback: try to get a fallback model
             try {
@@ -5846,6 +6071,7 @@ export class ChatCompletionProcess {
                   forceSwitch: overloadRetriesExhausted || isSlowModelTimeout,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
+                  excludeBackends: spendLimitedBackends,
                   endUserId: this.user.id,
                   // the identity tool alone does not need a tool-capable fallback
                   requireTools: !!options.tools?.some(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME),
@@ -6440,6 +6666,12 @@ export class ChatCompletionProcess {
         // usage event, and the ledger deduction below so they can never
         // disagree about what was charged.
         const textCreditsUsed = usdToCreditsStochastic(estimatedCost);
+        unrecordedShadowUsage = undefined;
+        await recordShadowTokenUsage(
+          this.user,
+          settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens + settledOutputTokens,
+          { cache: this.db.caches }
+        );
         quest.promptMeta!.tokenUsage = {
           ...quest.promptMeta!.tokenUsage,
           // Local-estimate counts stay in outputTokens/totalTokens (comparable
@@ -6644,6 +6876,7 @@ export class ChatCompletionProcess {
 
           // Dual-write usage event: ties frozen COGS to credits debited
           // for margin reporting. Fire-and-forget - must never affect billing.
+          const settledLedgerModel = this.ledgerModel(currentModel);
           this.db.usageEvents
             ?.record({
               requestId: quest.id,
@@ -6652,8 +6885,9 @@ export class ChatCompletionProcess {
               ownerType: this.reservedCreditsOwnerType,
               sessionId: quest.sessionId,
               feature: 'chat',
-              provider: currentModel.backend,
-              model: currentModel.id,
+              provider: settledLedgerModel.backend,
+              model: settledLedgerModel.id,
+              ...executedModelFields(settledLedgerModel, currentModel),
               // 'web' covers all callers of ChatCompletionProcess today (matches
               // the paired ledger writes below); no API-key auth on this path.
               source: 'web',
@@ -6729,6 +6963,7 @@ export class ChatCompletionProcess {
                   credits: toolCreditsUsed,
                   description: `Tool usage: ${toolNames}`,
                   source: 'web',
+                  apiKeyId: this.turnApiKeyId,
                 },
                 {
                   db: {
@@ -6752,9 +6987,10 @@ export class ChatCompletionProcess {
                 credits: textCreditsUsed,
                 sessionId: quest.sessionId,
                 questId: quest.id,
-                model: currentModel.id,
+                model: settledLedgerModel.id,
                 inputTokens,
                 outputTokens,
+                apiKeyId: this.turnApiKeyId,
                 cacheReadTokens: cacheReadInputTokens || undefined,
                 cacheWriteTokens: cacheCreationInputTokens || undefined,
               },
@@ -6794,16 +7030,21 @@ export class ChatCompletionProcess {
         }
 
         // Context window usage tracking
-        const utilizationPercentage = (inputTokens / maxSafeInputTokens) * 100;
+        // Shown against the requested model's window; the substitute's sized the actual run.
+        const shownModel = this.shadowSubstitution?.requested;
+        const shownSafeInput = shownModel
+          ? safeInputWindow(shownModel, safeMaxTokens, safetyBuffer)
+          : maxSafeInputTokens;
+        const utilizationPercentage = (inputTokens / shownSafeInput) * 100;
         quest.promptMeta!.context!.contextWindowUsage = {
-          contextLimit,
+          contextLimit: shownModel ? effectiveContextWindow(shownModel) : contextLimit,
           maxOutputTokens: safeMaxTokens,
-          safeMaxInputTokens: maxSafeInputTokens,
+          safeMaxInputTokens: shownSafeInput,
           actualInputTokens: inputTokens,
           bufferTokens: safetyBuffer,
           utilizationPercentage: parseFloat(utilizationPercentage.toFixed(2)),
-          overflowDetected: inputTokens > maxSafeInputTokens,
-          overflowAmount: inputTokens > maxSafeInputTokens ? inputTokens - maxSafeInputTokens : undefined,
+          overflowDetected: inputTokens > shownSafeInput,
+          overflowAmount: inputTokens > shownSafeInput ? inputTokens - shownSafeInput : undefined,
           verbatimTurnsExcluded: verbatimExcludedCount > 0 ? verbatimExcludedCount : undefined,
         };
 
@@ -7090,7 +7331,7 @@ export class ChatCompletionProcess {
               session,
               messages,
               questMaster,
-              model,
+              model: runModel,
               historyCount,
               oldestIncludedQuestId,
               verbatimExcludedCount,
@@ -7114,7 +7355,7 @@ export class ChatCompletionProcess {
               session,
               messages,
               questMaster,
-              model,
+              model: runModel,
               historyCount,
               oldestIncludedQuestId,
               verbatimExcludedCount,
@@ -7176,6 +7417,18 @@ export class ChatCompletionProcess {
       const totalResponseTime = Date.now() - processStartTime;
       // Every branch below that saves the quest keeps the failed turn's timing too.
       turnTiming.finish();
+      if (unrecordedShadowUsage) {
+        const partial = unrecordedShadowUsage;
+        unrecordedShadowUsage = undefined;
+        await recordShadowTokenUsage(
+          this.user,
+          (partial.inputTokens ?? 0) +
+            (partial.cacheReadInputTokens ?? 0) +
+            (partial.cacheCreationInputTokens ?? 0) +
+            (partial.outputTokens ?? 0),
+          { cache: this.db.caches }
+        );
+      }
 
       // A Stop or disconnect that threw, or a later tool call refused for credits, still bills what
       // streamed and the tools already delivered; the rollback below then has nothing left to refund.
@@ -7254,7 +7507,11 @@ export class ChatCompletionProcess {
         quest.replies = combined;
         quest.reply = combined.join('');
       };
-      setErrorReply((err as Error).message);
+      // Provider text on a restricted-tier turn can name the substitute. Credit errors keep their
+      // message; the categorized branches below overwrite this reply with fixed text anyway.
+      const masksMessage =
+        this.shadowSubstitution && !(err instanceof InsufficientCreditsError || resolveQuestErrorCode(err));
+      setErrorReply(masksMessage ? MODEL_UNAVAILABLE_ERROR_REPLY : (err as Error).message);
       quest.type = 'error';
       setTerminalQuestStatus(quest, 'done');
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
@@ -7326,6 +7583,14 @@ export class ChatCompletionProcess {
         // User-friendly error message instead of stuck spinner
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
         setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (err instanceof Error && isProviderSpendLimitError(err)) {
+        // Already logged at error once in the attempt loop; warn here so one request is one alert.
+        logger.warn(`[Provider Spend Limit] Quest ${questId}: no fallback model could answer`);
+        setErrorReply(PROVIDER_SPEND_LIMIT_REPLY);
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
@@ -7426,6 +7691,15 @@ export class ChatCompletionProcess {
     return this.statusManager.sendStatusUpdate(q, status, options);
   }
 
+  private ledgerModel(modelInfo: ModelInfo): ModelInfo {
+    const substitution = this.shadowSubstitution;
+    return substitution && this.isSubstituteId(modelInfo.id) ? substitution.requested : modelInfo;
+  }
+
+  private isSubstituteId(id: string): boolean {
+    return this.shadowSubstitution?.substituteIds.has(id) ?? false;
+  }
+
   /**
    * Settle the turn's credit reservation against `usages` (plus `toolCredits`, the tool charges the
    * turn reserved) outside the normal completion path (a Research-mode turn, or one ended by a thrown
@@ -7497,6 +7771,7 @@ export class ChatCompletionProcess {
         source: 'chat',
         accountCreatedAt: this.user.createdAt,
       });
+      const usageLedgerModel = usage.ledgerModelInfo ?? this.ledgerModel(usage.modelInfo);
       this.db.usageEvents
         ?.record({
           requestId: quest.id,
@@ -7505,8 +7780,9 @@ export class ChatCompletionProcess {
           ownerType,
           sessionId: quest.sessionId,
           feature: 'chat',
-          provider: usage.modelInfo.backend,
-          model: usage.modelInfo.id,
+          provider: usageLedgerModel.backend,
+          model: usageLedgerModel.id,
+          ...executedModelFields(usageLedgerModel, usage.modelInfo),
           source: 'web',
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
@@ -7533,9 +7809,10 @@ export class ChatCompletionProcess {
           credits: usage.credits,
           sessionId: quest.sessionId,
           questId: quest.id,
-          model: usage.modelInfo.id,
+          model: usageLedgerModel.id,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
+          apiKeyId: this.turnApiKeyId,
           cacheReadTokens: usage.cacheReadInputTokens,
           cacheWriteTokens: usage.cacheCreationInputTokens,
         },
@@ -7564,6 +7841,7 @@ export class ChatCompletionProcess {
           credits: toolCredits,
           description: `Tool usage: ${Array.from(this.toolCreditsMap.keys()).join(', ')}`,
           source: 'web',
+          apiKeyId: this.turnApiKeyId,
         },
         {
           db: { creditTransactions: this.db.creditTransactions },

@@ -12,20 +12,37 @@ import { WORKSPACE_SURFACES } from '../../../b4m-core/common/src/surfaces';
  */
 
 const REAL_SCRIPT = join(__dirname, '../scripts/generate-premium-glue.mjs');
-const GENERATED = 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts';
+const GENERATED = 'packages/server-utils/src/premium-generated/premiumWorkspaceSessionSettings.generated.ts';
 
 let sandbox: string;
 let script: string;
 let clientRoot: string;
+
+// The generator imports an overlay's declared export by relative path, so give each subpath the
+// contributions name an `exports` entry pointing at src/<subpath>.ts.
+function declaredExports(name: string, contributions: Record<string, unknown>) {
+  const specifiers = Object.values(contributions).flatMap(value =>
+    value && typeof value === 'object' && !Array.isArray(value) ? Object.values(value) : [value]
+  );
+  return Object.fromEntries(
+    specifiers
+      .filter((s): s is string => typeof s === 'string' && s.startsWith(`${name}/`))
+      .map(s => [`.${s.slice(name.length)}`, `./src${s.slice(name.length)}.ts`])
+  );
+}
 
 function writeOverlay(dir: string, contributions: Record<string, unknown>) {
   const overlayDir = join(sandbox, 'packages/premium', dir);
   mkdirSync(overlayDir, { recursive: true });
   writeFileSync(
     join(overlayDir, 'package.json'),
-    JSON.stringify({ name: `@bike4mind/premium-${dir}`, b4mContributions: contributions })
+    JSON.stringify({
+      name: `@bike4mind/premium-${dir}`,
+      exports: declaredExports(`@bike4mind/premium-${dir}`, contributions),
+      b4mContributions: contributions,
+    })
   );
-  // The generator emits bare-specifier imports, so it only reads overlays linked into node_modules.
+  // Linked the way a pnpm workspace link would; an unlinked overlay gets the absent form.
   const linkDir = join(clientRoot, 'node_modules/@bike4mind');
   mkdirSync(linkDir, { recursive: true });
   symlinkSync(overlayDir, join(linkDir, `premium-${dir}`));
@@ -38,7 +55,7 @@ function runCodegen() {
 function generate() {
   const result = runCodegen();
   expect(result.status, result.stderr).toBe(0);
-  return readFileSync(join(clientRoot, GENERATED), 'utf8');
+  return readFileSync(join(sandbox, GENERATED), 'utf8');
 }
 
 beforeAll(() => {
@@ -88,7 +105,7 @@ describe('premium workspace session settings', () => {
     const out = generate();
 
     expect(out).toContain(
-      "import { workspaceSessionSettings as settings0 } from '@bike4mind/premium-alpha/session-settings';"
+      "import { workspaceSessionSettings as settings0 } from '../../../premium/alpha/src/session-settings';"
     );
     expect(out).toContain('"opti": settings0,');
     expect(out).toContain('= defineWorkspaceSessionSettingsTable({');
@@ -144,7 +161,7 @@ describe('premium workspace session settings', () => {
     expect(out).toContain('"opti": settings0,');
     expect(out).toContain('"private-example": settings1,');
     expect(out).toContain(
-      "import { workspaceSessionSettings as settings1 } from '@bike4mind/premium-mixed/private-settings';"
+      "import { workspaceSessionSettings as settings1 } from '../../../premium/mixed/src/private-settings';"
     );
   });
 

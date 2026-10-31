@@ -2,17 +2,17 @@ import { organizationRepository, userRepository, withTransaction } from '@bike4m
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, IMongoDocument } from '@bike4mind/common';
-import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
+import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
 import {
   SubscriptionOwnerType,
   ISubscription,
   isLiveStripeBilledSubscription,
   LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 

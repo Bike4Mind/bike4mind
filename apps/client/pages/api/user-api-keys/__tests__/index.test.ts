@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 import { createMocks } from 'node-mocks-http';
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
@@ -79,7 +80,7 @@ vi.mock('@bike4mind/database', () => ({
   agentRepository: { findById: agentFindById },
 }));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 // The real gateEmbedBrandingWrite AND embedKeyOwnerHasEntitlement run; only the
 // leaf entitlement source (getUserEntitlements) is stubbed, so these tests
@@ -103,7 +104,7 @@ vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
 }));
 
 // One contributed scope, so the merged catalog the route screens against holds a non-built-in row.
-vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated', () => ({
   premiumApiKeyScopes: [
     {
       value: 'acme:read',
@@ -119,6 +120,7 @@ vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
 
 import { CreditHolderType } from '@bike4mind/common';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
+import { requestRiskEvidenceRefresh } from '@server/auth/riskEvidence';
 import '@pages/api/user-api-keys/index';
 
 function post(body: unknown, opts: { isAdmin?: boolean } = {}) {
@@ -168,6 +170,33 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
     const refused = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', allowedOrigins: 'nope' });
     await mockRefs.postHandler!(refused.req, refused.res).catch(() => undefined);
     expect(refreshSignupRiskScore).not.toHaveBeenCalled();
+  });
+
+  it('requests a risk evidence refresh after a key is created, and not when creation is refused or fails', async () => {
+    vi.mocked(requestRiskEvidenceRefresh).mockClear();
+    const created = post({
+      name: 'widget',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      allowedOrigins: ['https://example.com'],
+    });
+    await mockRefs.postHandler!(created.req, created.res);
+    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'api_key_created', expect.anything());
+
+    vi.mocked(requestRiskEvidenceRefresh).mockClear();
+    const refused = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', allowedOrigins: 'nope' });
+    await mockRefs.postHandler!(refused.req, refused.res).catch(() => undefined);
+    expect(requestRiskEvidenceRefresh).not.toHaveBeenCalled();
+
+    createUserApiKey.mockRejectedValueOnce(new Error('service refused'));
+    const failed = post({
+      name: 'widget',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      allowedOrigins: ['https://example.com'],
+    });
+    await mockRefs.postHandler!(failed.req, failed.res).catch(() => undefined);
+    expect(requestRiskEvidenceRefresh).not.toHaveBeenCalled();
   });
 
   it('(b) rejects a first-party (self) host origin with 400 and never calls the service', async () => {

@@ -5,7 +5,7 @@ import {
 } from '@bike4mind/database';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { IInternalTeamMemberDocument } from '@bike4mind/common';
+import { IInternalTeamMemberDocument, type CreateIpBlockRequest, type IpBlockScope } from '@bike4mind/common';
 
 export interface LiveOpsTriageEnv {
   stage: string;
@@ -145,15 +145,50 @@ export const useGetAllRecentSecurityEvents = () => {
 };
 
 // Blocked IPs
+export type BlockedIPItem = {
+  _id: string;
+  /** A bare address or a CIDR range. */
+  ip: string;
+  /** Absent on rows written before scopes, which were all login lockouts. */
+  scope?: IpBlockScope;
+  reason?: string;
+  source?: 'auto' | 'manual';
+  blockedAt: string;
+  expiresAt: string;
+  blockedByName?: string;
+};
+
 export const useGetBlockedIPs = () => {
   return useQuery({
     queryKey: BLOCKED_IPS_KEY,
     queryFn: async () => {
-      const res = await api.get<{ items: Array<{ ip: string; reason?: string; blockedAt: string }> }>(
-        '/api/security/blocked-ips?limit=10'
-      );
+      const res = await api.get<{ items: BlockedIPItem[] }>('/api/security/blocked-ips?limit=50');
       return res.data.items;
     },
+  });
+};
+
+export const useBlockIP = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (request: CreateIpBlockRequest) => {
+      const res = await api.post<{ item: BlockedIPItem; alreadyBlocked: boolean; extended: boolean }>(
+        '/api/security/blocked-ips',
+        request
+      );
+      return res.data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: BLOCKED_IPS_KEY }),
+  });
+};
+
+export const useUnblockIP = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      await api.delete('/api/security/blocked-ips', { data: { id, reason } });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: BLOCKED_IPS_KEY }),
   });
 };
 

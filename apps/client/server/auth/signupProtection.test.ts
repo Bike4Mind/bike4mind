@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Logger } from '@bike4mind/observability';
-import { postMessageToSlackWithOutcome } from '@server/integrations/slack/slack';
+import { postMessageToSlackWithOutcome } from '@bike4mind/server-utils/integrations/slack/slack';
 import { signupProtection } from './signupProtection';
 
 vi.mock('@bike4mind/database', () => ({ signupProtectionRepository: {} }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlackWithOutcome: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlackWithOutcome: vi.fn() }));
 
 const review = {
   domain: '<example.net>',

@@ -8,7 +8,7 @@ import {
   type VideoJobOutput,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import type { SignedOutput } from '../generations/signedOutput';
+import type { SignedOutput } from '@bike4mind/server-utils/generations/signedOutput';
 
 // Slack accepts far larger files, but the whole clip is buffered in the job worker before the upload.
 export const SLACK_VIDEO_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;

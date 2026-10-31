@@ -23,7 +23,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: { paymentIntents: { list: (...args: unknown[]) => mockList(...args) } },
 }));
 const mockPostMessageToSlack = vi.fn();
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));

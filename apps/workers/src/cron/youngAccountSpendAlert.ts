@@ -3,7 +3,7 @@ import { getSettingsMap } from '@bike4mind/utils';
 import { classifyStage, escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import type { YoungAccountSpendSummary, YoungAccountSpender } from '@bike4mind/database';
-import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
+import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/slack/slack';
 import { appUrlFromEnv } from '../events/alarmSlackMessage';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import axios from 'axios';

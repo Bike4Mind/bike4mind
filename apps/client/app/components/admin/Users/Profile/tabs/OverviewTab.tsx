@@ -4,9 +4,10 @@ import { USER_TIMELINE_TYPES, resolveUserStorageLimit, storageLimitToBytes, type
 import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
-import UserSubscriptionStatus from '../../Details/UserSubscriptionStatus';
+import { SubscriptionSummaryList } from '../../../Subscriptions/SubscriptionSummaryList';
 import { Fact, SectionCard, StatusChip, formatUtc } from '../../../shared';
 import type { ProfileAction } from '../actions/profileActions';
+import { RiskEvidenceCard } from '../RiskEvidenceCard';
 import { UserNotesCard } from './UserNotesCard';
 import { OrganizationsCard } from './OrganizationsCard';
 import { HeaderAction, RowAction } from './cardActions';
@@ -68,6 +69,14 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
           {user.apiKeyTrustApproved ? 'Trusted' : 'Usual checks'}
           <RowAction onClick={() => onAction('apiKeyTrust')} data-testid="user-profile-key-trust-btn">
+            Change
+          </RowAction>
+        </Stack>
+      </Fact>
+      <Fact label="New-account spend cap" data-testid="user-profile-fact-spend-cap">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {user.newAccountSpendCapLifted ? 'Lifted' : 'Applies while the account is new'}
+          <RowAction onClick={() => onAction('newAccountSpendCap')} data-testid="user-profile-spend-cap-btn">
             Change
           </RowAction>
         </Stack>
@@ -209,6 +218,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
       <AccountCard user={user} onAction={onAction} />
       <OrganizationsCard user={user} onAudit={onAudit} />
       <AccessCard user={user} onAction={onAction} />
+      <RiskEvidenceCard userId={user.id} />
       <SectionCard
         title="Subscription"
         body="custom"
@@ -219,8 +229,8 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
         }
         data-testid="user-profile-subscription-card"
       >
-        <Box sx={{ p: 2 }}>
-          <UserSubscriptionStatus user={user} />
+        <Box sx={{ p: 0.5 }}>
+          <SubscriptionSummaryList userId={user.id} />
         </Box>
       </SectionCard>
     </Stack>

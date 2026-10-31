@@ -20,6 +20,8 @@ import {
   FORCE_FALLBACK_TEST_MARKER,
   FORCE_STREAM_STALL_TEST_MARKER,
   SLOW_MODEL_ERROR_REPLY,
+  PROVIDER_SPEND_LIMIT_REPLY,
+  MODEL_UNAVAILABLE_ERROR_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY,
 } from './ChatCompletionProcess';
@@ -31,6 +33,7 @@ import {
   getSettingByName,
   shouldTriggerFallback,
   isOverloadedError,
+  isProviderSpendLimitError,
   getLlmWithFallback,
   usdToCredits,
   usdToCreditsStochastic,
@@ -39,6 +42,7 @@ import {
   processFabFilesServer,
   fetchAndConvertFabFiles,
   ClientMessageSender,
+  effectiveContextWindow,
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
@@ -57,6 +61,7 @@ import {
   StreamEndedWithoutFinishError,
   bedrockEmptyResponseMessage,
   type ICompletionBackend,
+  type ICompletionOptions,
   federatedSharedKeyProviders,
 } from '@bike4mind/llm-adapters';
 import {
@@ -138,6 +143,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   processFabFilesServer: vi.fn(),
   fetchAndConvertFabFiles: vi.fn(),
   isOverloadedError: vi.fn().mockReturnValue(false),
+  isProviderSpendLimitError: vi.fn().mockReturnValue(false),
   shouldTriggerFallback: vi.fn().mockReturnValue(false),
   getLlmWithFallback: vi.fn().mockResolvedValue(null),
   stripAllToolBlocks: vi.fn().mockImplementation((messages: unknown[]) => messages),
@@ -210,6 +216,7 @@ const mockedFetchAndProcessPreviousMessages = vi.mocked(fetchAndProcessPreviousM
 const mockedProcessUrlsFromPrompt = vi.mocked(processUrlsFromPrompt);
 const mockedShouldTriggerFallback = vi.mocked(shouldTriggerFallback);
 const mockedIsOverloadedError = vi.mocked(isOverloadedError);
+const mockedIsProviderSpendLimitError = vi.mocked(isProviderSpendLimitError);
 const mockedGetLlmWithFallback = vi.mocked(getLlmWithFallback);
 const mockedUsdToCredits = vi.mocked(usdToCredits);
 const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
@@ -370,6 +377,7 @@ describe('ChatCompletionProcess', () => {
     mockedFetchAndConvertFabFiles.mockReset().mockResolvedValue({ files: [], missingIds: [] });
     mockedShouldTriggerFallback.mockReset();
     mockedIsOverloadedError.mockReset();
+    mockedIsProviderSpendLimitError.mockReset().mockReturnValue(false);
     mockedGetLlmWithFallback.mockReset();
     // Reset token/credit mocks so per-test overrides don't leak across tests.
     mockedCalculateTotalTokenLength.mockReset();
@@ -773,6 +781,34 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('quest saves', () => {
+    it('write only changed fields, never deletedAt, and leave every final field persisted', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.deletedAt = null;
+      const writes: Record<string, unknown>[] = [];
+      const record = async (patch: Record<string, unknown>) => {
+        writes.push(JSON.parse(JSON.stringify(patch)));
+        return patch;
+      };
+      mockDb.quests.update.mockImplementation(record);
+      mockDb.quests.updateIfUnfinished.mockImplementation(record);
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      expect(writes.length).toBeGreaterThan(1);
+      for (const w of writes) {
+        expect(w).not.toHaveProperty('deletedAt');
+        expect(w).not.toHaveProperty('createdAt');
+      }
+      expect(writes.filter(w => 'timestamp' in w)).toHaveLength(1);
+
+      const persisted: Record<string, unknown> = Object.assign({}, ...writes);
+      const final = JSON.parse(JSON.stringify(mockQuest));
+      for (const key of ['deletedAt', 'createdAt', 'updatedAt']) delete final[key];
+      expect(persisted).toEqual(final);
+    });
+  });
+
   describe('an unrecognised timezone', () => {
     it('falls back to server time instead of failing the turn', async () => {
       mockSession.userId = 'user1';
@@ -1009,6 +1045,433 @@ describe('ChatCompletionProcess', () => {
       expect(options?.isAdmitted).toEqual(expect.any(Function));
       await expect(options!.isAdmitted!(ChatModels.GPT4_1)).resolves.toBe(false);
       await expect(options!.isAdmitted!(ChatModels.GPT4)).resolves.toBe(true);
+    });
+  });
+
+  describe('a restricted-tier user', () => {
+    const cheapModel = {
+      id: 'cheap-model',
+      type: 'text',
+      name: 'Cheap',
+      backend: ModelBackend.Gemini,
+      max_tokens: 100,
+      contextWindow: 1000,
+      can_stream: false,
+      pricing: {},
+      supportsImageVariation: false,
+    };
+    const restrict = (overrides: Record<string, unknown> = {}, allowlist = ['cheap-model']) => {
+      (service as any).user = { ...mockUser, throttle: { tier: 'shadow' }, ...overrides }; // any: user is private
+      const prev = mockedGetSettingsValue.getMockImplementation();
+      mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) => {
+        if (key === 'shadowTierModelAllowlist') return allowlist;
+        if (key === 'shadowTierDailyTokenCap') return 20000;
+        return prev?.(key as never, settings);
+      }) as typeof getSettingsValue);
+      onTestFinished(() => {
+        if (prev) mockedGetSettingsValue.mockImplementation(prev);
+        else mockedGetSettingsValue.mockReset();
+      });
+    };
+    const wireRestrictedTurn = (cacheSuccess = true) => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['Hi!'], { inputTokens: 40, outputTokens: 2 });
+      });
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: '' } as any); // any: minimal backend shape, as elsewhere in this file
+      mockDb.caches = {
+        tryAddWithinLimitFixedWindow: vi
+          .fn()
+          .mockResolvedValue({ success: cacheSuccess, count: 1, expiresAt: new Date() }),
+      };
+      return { body, complete };
+    };
+
+    it('runs the allowlisted model while every client-visible field keeps the requested id', async () => {
+      const { body, complete } = wireRestrictedTurn();
+      const requested = ((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0];
+      mockedGetAvailableModels.mockResolvedValue([requested, cheapModel] as never);
+      restrict();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockedGetLlmByModel.mock.calls.map(call => call[1]?.modelInfo?.id)).toEqual(['cheap-model']);
+      expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model']);
+      expect(complete.mock.calls[0][2]).toMatchObject({
+        modelDisplayName: requested.name,
+        modelIdentityId: requested.id,
+      });
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave.promptMeta.context.contextWindowUsage.contextLimit).toBe(effectiveContextWindow(requested));
+      expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
+      expect(lastSave.promptMeta.redirectedFrom).toBeUndefined();
+      expect(lastSave.fallbackInfo ?? null).toBeNull();
+      expect(JSON.stringify(vi.mocked(service.sendStatusUpdate).mock.calls)).not.toContain('cheap-model');
+      expect(mockDb.caches.tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+        expect.stringMatching(/^shadow-tokens:user1:/),
+        1,
+        20000,
+        expect.any(Number)
+      );
+      expect(mockDb.caches.tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+        expect.stringMatching(/^shadow-tokens:user1:/),
+        42,
+        Number.MAX_SAFE_INTEGER,
+        expect.any(Number)
+      );
+    });
+
+    it('withholds research keys and limits delegation when the requested model is already allowlisted', async () => {
+      const { body } = wireRestrictedTurn();
+      const requested = { ...((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0], supportsTools: true };
+      mockedGetAvailableModels.mockResolvedValue([requested, { ...cheapModel, supportsTools: true }] as never);
+      restrict({}, [requested.id]);
+      mockSession.agentIds = ['some-agent-id'];
+      const buildTools = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      buildTools.mockClear();
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        const args = buildTools.mock.calls[0]?.[0];
+        expect(args?.config?.deep_research?.model).toBe(requested.id);
+        expect(args?.config?.deep_research?.apiKeys).toBeUndefined();
+        expect(args?.subagentModels?.map(model => model.id)).toEqual([requested.id]);
+        expect(args?.substituteIdentity).toBeUndefined();
+      } finally {
+        buildTools.mockRestore();
+      }
+    });
+
+    it('hands delegated subagents the requested identity on a substituted turn', async () => {
+      const { body } = wireRestrictedTurn();
+      const requested = { ...((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0], supportsTools: true };
+      mockedGetAvailableModels.mockResolvedValue([requested, { ...cheapModel, supportsTools: true }] as never);
+      restrict();
+      mockSession.agentIds = ['some-agent-id'];
+      const buildTools = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      buildTools.mockClear();
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        const args = buildTools.mock.calls[0]?.[0];
+        expect(args?.subagentModels?.map(model => model.id)).toEqual(['cheap-model']);
+        expect(args?.substituteIdentity).toEqual({
+          substituteId: 'cheap-model',
+          identityId: requested.id,
+          displayName: requested.name,
+        });
+      } finally {
+        buildTools.mockRestore();
+      }
+    });
+
+    it('pins edit_file to the run model when the requested model is already allowlisted', async () => {
+      const { body } = wireRestrictedTurn();
+      const requested = { ...((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0], supportsTools: true };
+      mockedGetAvailableModels.mockResolvedValue([requested, { ...cheapModel, supportsTools: true }] as never);
+      restrict({}, [requested.id]);
+      const buildTools = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      buildTools.mockClear();
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        const args = buildTools.mock.calls[0]?.[0];
+        expect(args?.config?.edit_file?.model).toBe(requested.id);
+      } finally {
+        buildTools.mockRestore();
+      }
+    });
+
+    it('current_model_details reports the requested model while the substitute runs', async () => {
+      const { body } = wireRestrictedTurn();
+      const requested = { ...((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0], supportsTools: true };
+      mockedGetAvailableModels.mockResolvedValue([requested, { ...cheapModel, supportsTools: true }] as never);
+      let reported: string | undefined;
+      const complete = vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+        const tool = opts.tools.find(
+          (t: { toolSchema: { name: string } }) => t.toolSchema.name === 'current_model_details'
+        );
+        reported = await tool.toolFn({});
+        await cb(['Hi!'], { inputTokens: 40, outputTokens: 2 });
+      });
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: '' } as any); // any: minimal backend shape, as elsewhere in this file
+      restrict();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model']);
+      expect(JSON.parse(reported ?? '{}').id).toBe(requested.id);
+      // The substitute may not call the tool, so the identity line is sent as well.
+      expect(complete.mock.calls[0][2].identityViaTool).toBe(false);
+    });
+
+    it('skips the fallback chain when the substitute fails', async () => {
+      const { body } = wireRestrictedTurn();
+      const requested = ((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0];
+      mockedGetAvailableModels.mockResolvedValue([requested, cheapModel] as never);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException')),
+        getModelInfo: vi.fn(),
+        currentModel: 'cheap-model',
+      } as any); // any: minimal backend shape, as elsewhere in this file
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      restrict();
+
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+      expect(JSON.stringify(vi.mocked(service.sendStatusUpdate).mock.calls)).not.toContain('Trying alternative model');
+    });
+
+    describe('when the substitute fails', () => {
+      const secondCheap = { ...cheapModel, id: 'cheap-model-2', name: 'Cheap 2', backend: ModelBackend.OpenAI };
+      const wireFailingSubstitute = async (failing: string[]) => {
+        const { body } = wireRestrictedTurn();
+        const requested = ((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0];
+        mockedGetAvailableModels.mockResolvedValue([requested, secondCheap, cheapModel] as never);
+        const complete = vi.fn().mockImplementation(async (modelId: string, _messages, _opts, cb) => {
+          if (failing.includes(modelId)) throw new Error('401 Incorrect API key provided: sk-proj-***');
+          await cb(['Hi!'], { inputTokens: 40, outputTokens: 2 });
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: '' } as any); // any: minimal backend shape, as elsewhere in this file
+        mockedShouldTriggerFallback.mockReturnValue(true);
+        mockedIsOverloadedError.mockReturnValue(false);
+        restrict({}, ['cheap-model', 'cheap-model-2']);
+        return { body, complete, requested };
+      };
+      const statusText = () => JSON.stringify(vi.mocked(service.sendStatusUpdate).mock.calls);
+
+      it('silently runs the next allowlisted model under the requested id', async () => {
+        const { body, complete, requested } = await wireFailingSubstitute(['cheap-model']);
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model', 'cheap-model-2']);
+        expect(complete.mock.calls[1][2]).toMatchObject({
+          modelDisplayName: requested.name,
+          modelIdentityId: requested.id,
+        });
+        expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+        const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+        expect(lastSave.type).not.toBe('error');
+        expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
+        expect(lastSave.fallbackInfo ?? null).toBeNull();
+        expect(statusText()).not.toMatch(/cheap-model|Trying alternative model/);
+      });
+
+      it('records no retry for the silent hop and masks the substitute retries it does store', async () => {
+        const { body, complete, requested } = await wireFailingSubstitute(['cheap-model']);
+        const inner = complete.getMockImplementation()!;
+        complete.mockImplementation(
+          async (modelId: string, messages: unknown, opts: ICompletionOptions, cb: unknown) => {
+            if (modelId === 'cheap-model-2') {
+              const error = Object.assign(new Error('rate limited'), { status: 429, requestID: 'req_provider' });
+              opts._internal?.turnTelemetry?.onRetry({ error, delayMs: 0, model: modelId });
+            }
+            return inner(modelId, messages, opts, cb);
+          }
+        );
+
+        await service.process({ body, logger: mockLogger });
+
+        const retries = mockDb.quests.update.mock.calls.at(-1)?.[0].turnTiming.retries;
+        expect(retries).toHaveLength(1);
+        for (const retry of retries) {
+          expect(retry.model).toBe(requested.id);
+          expect(retry.status).toBeUndefined();
+          expect(retry.requestId).toBeUndefined();
+        }
+      });
+
+      it('current_model_details still reports the requested model after the hop', async () => {
+        const { body, complete, requested } = await wireFailingSubstitute(['cheap-model']);
+        mockedGetAvailableModels.mockResolvedValue([
+          { ...requested, supportsTools: true },
+          { ...secondCheap, supportsTools: true },
+          { ...cheapModel, supportsTools: true },
+        ] as never);
+        let reported: string | undefined;
+        const inner = complete.getMockImplementation()!;
+        complete.mockImplementation(
+          async (modelId: string, messages: unknown, opts: ICompletionOptions, cb: unknown) => {
+            if (modelId === 'cheap-model-2') {
+              const tool = opts.tools?.find(t => t.toolSchema.name === 'current_model_details');
+              reported = await tool?.toolFn({});
+            }
+            return inner(modelId, messages, opts, cb);
+          }
+        );
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model', 'cheap-model-2']);
+        expect(JSON.parse(reported ?? '{}').id).toBe(requested.id);
+      });
+
+      it('fails without naming the substitute once every allowlisted model fails', async () => {
+        const { body, complete } = await wireFailingSubstitute(['cheap-model', 'cheap-model-2']);
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model', 'cheap-model-2']);
+        expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+        const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+        expect(lastSave.type).toBe('error');
+        expect(lastSave.reply).toBe(MODEL_UNAVAILABLE_ERROR_REPLY);
+        expect(lastSave.fallbackInfo ?? null).toBeNull();
+        expect(statusText()).not.toMatch(/cheap-model|Trying alternative model/);
+      });
+
+      it('replaces a non-retryable provider error with the generic reply, only for restricted users', async () => {
+        const { body } = await wireFailingSubstitute(['cheap-model']);
+        mockedShouldTriggerFallback.mockReturnValue(false);
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+        expect(lastSave.type).toBe('error');
+        expect(lastSave.reply).toBe(MODEL_UNAVAILABLE_ERROR_REPLY);
+        expect(JSON.stringify(lastSave)).not.toContain('Incorrect API key');
+      });
+
+      it('keeps the provider error text for a non-restricted user', async () => {
+        const { body } = wireRestrictedTurn();
+        mockedShouldTriggerFallback.mockReturnValue(false);
+        mockedIsOverloadedError.mockReturnValue(false);
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockRejectedValue(new Error('401 Incorrect API key provided')),
+          getModelInfo: vi.fn(),
+          currentModel: '',
+        } as any); // any: minimal backend shape, as elsewhere in this file
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0].reply).toContain('Incorrect API key');
+      });
+
+      it('fails generically when the next allowlist entry is not in the model list', async () => {
+        const { body, complete } = await wireFailingSubstitute(['cheap-model']);
+        restrict({}, ['cheap-model', 'ghost-model']);
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model']);
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0].reply).toBe(MODEL_UNAVAILABLE_ERROR_REPLY);
+      });
+
+      it('falls through to the rest of the allowlist when an allowlisted requested model fails', async () => {
+        const { body, complete, requested } = await wireFailingSubstitute([ChatModels.GPT4]);
+        restrict({}, [requested.id, 'cheap-model', 'cheap-model-2']);
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual([requested.id, 'cheap-model']);
+        expect(complete.mock.calls[1][2]).toMatchObject({
+          modelDisplayName: requested.name,
+          modelIdentityId: requested.id,
+          identityViaTool: false,
+        });
+        expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+        const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+        expect(lastSave.type).not.toBe('error');
+        expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
+        expect(lastSave.fallbackInfo ?? null).toBeNull();
+        expect(statusText()).not.toMatch(/cheap-model|Trying alternative model/);
+        expect((service as any).ledgerModel(cheapModel as ModelInfo).id).toBe(requested.id); // any: private
+      });
+
+      it('keeps mapping the first substitute id to the requested model after a hop', async () => {
+        const { body, requested } = await wireFailingSubstitute(['cheap-model']);
+
+        await service.process({ body, logger: mockLogger });
+
+        const ledgerModel = (m: ModelInfo) => (service as any).ledgerModel(m); // any: private
+        expect(ledgerModel(cheapModel as ModelInfo).id).toBe(requested.id);
+        expect(ledgerModel(secondCheap as ModelInfo).id).toBe(requested.id);
+      });
+    });
+
+    it('counts the tokens a failed turn already used toward the daily cap', async () => {
+      const { body, complete } = wireRestrictedTurn();
+      complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['Hi'], { inputTokens: 40, outputTokens: 2 });
+        throw new Error('stream broke');
+      });
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      restrict();
+
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      expect(mockDb.quests.update.mock.calls.at(-1)?.[0].type).toBe('error');
+      expect(mockDb.caches.tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+        expect.stringMatching(/^shadow-tokens:user1:/),
+        42,
+        Number.MAX_SAFE_INTEGER,
+        expect.any(Number)
+      );
+    });
+
+    it('runs the requested model when no allowlisted model is available', async () => {
+      const { body, complete } = wireRestrictedTurn();
+      restrict();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete.mock.calls.map(call => call[0])).toEqual([ChatModels.GPT4]);
+    });
+
+    it('is not applied to an admin, and reads no counter', async () => {
+      const { body, complete } = wireRestrictedTurn();
+      const requested = ((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0];
+      mockedGetAvailableModels.mockResolvedValue([requested, cheapModel] as never);
+      restrict({ isAdmin: true });
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete.mock.calls.map(call => call[0])).toEqual([ChatModels.GPT4]);
+      expect(mockDb.caches.tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
+    });
+
+    it('over the daily token cap fails exactly like an out-of-credits user', async () => {
+      const priceModels = async () => {
+        const requested = ((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0];
+        mockedGetAvailableModels.mockResolvedValue([
+          { ...requested, pricing: { 1000: { input: 0.00001, output: 0.00003 } } },
+        ] as never);
+      };
+      const outcome = () => {
+        const saved = mockDb.quests.update.mock.calls.at(-1)?.[0];
+        return { type: saved.type, status: saved.status, errorCode: saved.errorCode, keys: Object.keys(saved).sort() };
+      };
+      {
+        const { body, complete } = wireRestrictedTurn();
+        await priceModels();
+        enableAdminFlags('enforceCredits');
+        mockedUsdToCredits.mockReturnValue(5);
+        mockDb.users.incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: -1 });
+        await service.process({ body, logger: mockLogger });
+        expect(complete).not.toHaveBeenCalled();
+      }
+      const outOfCredits = outcome();
+      expect(outOfCredits.errorCode).toBe('insufficient_credits');
+      expect(mockQuest.reply).toMatch(/out of credits/);
+
+      mockDb.quests.update.mockClear();
+      mockQuest.type = 'message';
+      mockQuest.errorCode = undefined;
+      mockQuest.reply = undefined;
+      {
+        const { body, complete } = wireRestrictedTurn(false);
+        await priceModels();
+        restrict();
+        await service.process({ body, logger: mockLogger });
+        expect(complete).not.toHaveBeenCalled();
+      }
+      expect(outcome()).toEqual(outOfCredits);
+      expect(mockQuest.reply).toMatch(/out of credits/);
     });
   });
 
@@ -5139,6 +5602,65 @@ describe('ChatCompletionProcess', () => {
         expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
       });
 
+      it('bills a substituted configuration at the model that ran and names both on its row', async () => {
+        const { complete } = reservationOrgSetup();
+        const [requested] = (await mockedGetAvailableModels()) as unknown as ModelInfo[];
+        const runModel = {
+          ...requested,
+          id: 'cheap-model',
+          name: 'Cheap',
+          pricing: { 200000: { input: 0, output: 3 / 1_000_000 } },
+        };
+        mockedGetAvailableModels.mockResolvedValue([requested, runModel] as never);
+        complete.mockImplementation(
+          async (
+            _model: string,
+            _messages: unknown,
+            _opts: unknown,
+            cb: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+          ) => {
+            await cb(['Answer'], { inputTokens: 10, outputTokens: 1000 });
+          }
+        );
+        (service as any).user = { ...mockUser, throttle: { tier: 'shadow' } }; // any: user is private
+        const previous = mockedGetSettingsValue.getMockImplementation();
+        mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) => {
+          if (key === 'shadowTierModelAllowlist') return ['cheap-model'];
+          if (key === 'shadowTierDailyTokenCap') return 20000;
+          return previous?.(key as never, settings);
+        }) as typeof getSettingsValue);
+        onTestFinished(() => {
+          if (previous) mockedGetSettingsValue.mockImplementation(previous);
+        });
+        mockDb.caches = {
+          tryAddWithinLimitFixedWindow: vi.fn().mockResolvedValue({ success: true, count: 1, expiresAt: new Date() }),
+        };
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        const body = researchReservationBody();
+        body.researchMode.configurations = body.researchMode.configurations.slice(0, 1);
+
+        await service.process({ body: body as never, logger: mockLogger });
+
+        expect(complete.mock.calls.map(call => call[0])).toEqual(['cheap-model']);
+        const runModelCredits = realUsdToCreditsStochastic((1000 * 3) / 1_000_000, () => 0);
+        const [[, row]] = mockDb.creditTransactions.createTransaction.mock.calls;
+        expect(row.model).toBe(requested.id);
+        expect(Math.abs(row.credits)).toBeGreaterThanOrEqual(runModelCredits);
+        expect(Math.abs(row.credits)).toBeLessThanOrEqual(runModelCredits + 1);
+        expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+        expect(usageEventsRecord.mock.calls[0][0]).toMatchObject({
+          model: requested.id,
+          provider: requested.backend,
+          executedModel: 'cheap-model',
+          executedProvider: runModel.backend,
+        });
+        expect(usageEventsRecord.mock.calls[0][0].costUsd).toBeCloseTo((1000 * 3) / 1_000_000, 9);
+        expect(JSON.stringify(mockQuest.researchModeResults)).not.toContain('cheap-model');
+      });
+
       it('refunds the hold when the research settlement fails', async () => {
         const { complete } = reservationOrgSetup();
         complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
@@ -5460,6 +5982,33 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold - textCharge);
       expect(mockQuest.creditsUsed).toBe(textCharge);
       expect(mockQuest.promptMeta.functionCalls ?? []).toEqual([]);
+    });
+
+    it("records the turn's authenticating API key on its text usage row", async () => {
+      const { complete } = reservationOrgSetup();
+      mockedUsdToCreditsStochastic.mockReturnValue(60);
+      complete.mockImplementation(
+        async (
+          _model: string,
+          _messages: unknown,
+          _options: unknown,
+          callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+        ) => {
+          await callback(['answer'], { inputTokens: 10, outputTokens: 1000 });
+        }
+      );
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await service.process({
+        body: { ...reservationBody(), authOrigin: 'apiKey', apiKeyId: 'key-1' },
+        logger: mockLogger,
+      });
+
+      expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+        'text_generation_usage',
+        expect.objectContaining({ apiKeyId: 'key-1' })
+      );
     });
 
     it('refunds the whole hold when a tool call is refused for credits before anything was spent', async () => {
@@ -7007,6 +7556,89 @@ describe('ChatCompletionProcess', () => {
         expect(event.turnUsage).toHaveLength(100);
         expect(event.turnUsageTruncated).toBe(true);
         expect(event.turnUsage[99]).toEqual({ inputTokens: 20, outputTokens: 2, tierKey: 200_000 });
+      });
+    });
+
+    describe('provider spend limit', () => {
+      const SPEND_LIMIT_MESSAGE = '400 invalid_request_error: You have reached your specified API usage limits.';
+      const gpt4 = {
+        id: ChatModels.GPT4,
+        type: 'text',
+        name: 'GPT-4',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        pricing: { 200000: { input: 0, output: 0 } },
+        supportsImageVariation: false,
+      };
+
+      const setupSpendLimitedPrimary = () => {
+        mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+        mockedShouldTriggerFallback.mockReturnValue(true);
+        mockedIsOverloadedError.mockReturnValue(false);
+        mockedIsProviderSpendLimitError.mockImplementation(error => error.message === SPEND_LIMIT_MESSAGE);
+        const complete = vi.fn().mockRejectedValue(new Error(SPEND_LIMIT_MESSAGE));
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([gpt4]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+        return complete;
+      };
+
+      it('leaves the exhausted backend and answers from the fallback', async () => {
+        setupSpendLimitedPrimary();
+        let excludeBackendsSeen: ReadonlySet<string> | undefined;
+        mockedGetLlmWithFallback.mockImplementation(async (...callArgs: any[]) => {
+          excludeBackendsSeen = new Set(callArgs[5]?.excludeBackends ?? []);
+          return {
+            model: { ...gpt4, id: 'route-twin', backend: ModelBackend.Bedrock },
+            backend: {
+              complete: vi
+                .fn()
+                .mockImplementation(
+                  async (_m: unknown, _ms: unknown, _o: unknown, cb: (chunks: string[]) => Promise<void>) => {
+                    await cb(['Hi!']);
+                  }
+                ),
+              getModelInfo: vi.fn().mockResolvedValue([]),
+              currentModel: 'route-twin',
+            },
+            attempt: 1,
+          } as any;
+        });
+
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+        await service.process({ body, logger: mockLogger });
+
+        expect(excludeBackendsSeen).toEqual(new Set([ModelBackend.OpenAI]));
+        expect(mockDb.quests.update).toHaveBeenCalledWith(expect.objectContaining({ replies: ['Hi!'] }));
+      });
+
+      it('settles with a clear reply and one error line when no fallback can answer', async () => {
+        const complete = setupSpendLimitedPrimary();
+        mockedGetLlmWithFallback.mockResolvedValue(null);
+
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+        // Terminal, not rethrown: /process would otherwise log a second, generic failure.
+        await service.process({ body, logger: mockLogger });
+
+        // No same-model backoff retries for an exhausted account.
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ reply: PROVIDER_SPEND_LIMIT_REPLY, type: 'error', status: 'done' })
+        );
+        const spendLimitErrors = vi
+          .mocked(mockLogger.error)
+          .mock.calls.filter(args => args.some(arg => String(arg).includes(SPEND_LIMIT_MESSAGE)));
+        expect(spendLimitErrors).toHaveLength(1);
       });
     });
 
@@ -9920,6 +10552,63 @@ describe('ChatCompletionProcess', () => {
       expect(turn.sessionPrompt).toBe('SESSION PROMPT');
       expect(turn.temperature).toBe(0.4);
       expect(turn.maxToolCalls).toBe(5);
+    });
+
+    describe('with a turn responder', () => {
+      const respond = vi.fn();
+      const respondingTable = { 'settings-surface': { ...table['settings-surface'], respond } };
+
+      beforeEach(() => {
+        respond.mockReset();
+        resolve.mockResolvedValue({});
+      });
+
+      it('saves the workspace reply as a finished turn and never calls the model', async () => {
+        const uiSideEffects = [{ type: 'example', payload: {} }];
+        const structuredReplies = [{ type: 'text', text: 'Scripted answer' }];
+        const toolResults = [{ toolName: 'example', result: 'ok' }];
+        respond.mockResolvedValue({ replies: ['Scripted ', 'answer'], uiSideEffects, structuredReplies, toolResults });
+
+        const turn = await runTurn({ surface: 'settings-surface' }, respondingTable);
+
+        expect(turn.processError).toBeUndefined();
+        expect(turn.modelCalled).toBe(false);
+        expect(respond).toHaveBeenCalledWith(
+          expect.objectContaining({
+            session: expect.objectContaining({ surface: 'settings-surface' }),
+            quest: expect.objectContaining({ id: 'quest1' }),
+          })
+        );
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({
+          status: 'done',
+          replies: ['Scripted ', 'answer'],
+          reply: 'Scripted answer',
+          uiSideEffects,
+          structuredReplies,
+          toolResults,
+        });
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0].promptMeta?.model).toBeUndefined();
+      });
+
+      it('hands the turn to the model when the responder returns null', async () => {
+        respond.mockResolvedValue(null);
+
+        const turn = await runTurn({ surface: 'settings-surface' }, respondingTable);
+
+        expect(respond).toHaveBeenCalledOnce();
+        expect(turn.modelCalled).toBe(true);
+      });
+
+      it('fails the turn without a model call when the responder throws', async () => {
+        respond.mockRejectedValue(new Error('script lookup failed'));
+
+        const turn = await runTurn({ surface: 'settings-surface' }, respondingTable);
+
+        expect(turn.processError).toEqual(
+          expect.objectContaining({ cause: expect.objectContaining({ message: 'script lookup failed' }) })
+        );
+        expect(turn.modelCalled).toBe(false);
+      });
     });
   });
 

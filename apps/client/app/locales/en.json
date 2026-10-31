@@ -772,5 +772,8 @@
     "dismissSuggestion": "Dismiss desktop app suggestion",
     "getTheApp": "Get the desktop app",
     "tryTheApp": "Try the desktop app"
+  },
+  "preferenceArena": {
+    "menuLabel": "Rate answers, earn credits"
   }
 }

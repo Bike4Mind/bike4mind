@@ -1,6 +1,6 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
-import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
+import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
@@ -25,6 +25,7 @@ import {
   userRepository,
   userApiKeyRepository,
   organizationRepository,
+  cacheRepository,
 } from '@bike4mind/database';
 import { Connection } from '@bike4mind/database/social';
 import {
@@ -36,8 +37,8 @@ import {
 } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { sendToConnection } from '@server/websocket/utils';
-import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { emitProcessingFailed } from '../processingFailedMetric';
@@ -287,6 +288,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               users: userRepository,
               usageEvents: usageEventRepository,
               organizations: organizationRepository,
+              cache: cacheRepository,
             },
             apiKeyInfo: apiKeyInfoForCompletion,
             scopeActor: actorScopeForKey(apiKeyInfo),

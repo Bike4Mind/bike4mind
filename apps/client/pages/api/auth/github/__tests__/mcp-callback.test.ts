@@ -36,7 +36,7 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
 }));
 
 // Tool discovery is best-effort; make it fail fast so only the connect write is exercised.
-vi.mock('@server/utils/invokeMcpHandler', () => ({
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({
   invokeMcpHandler: vi.fn().mockRejectedValue(new Error('discovery skipped in test')),
 }));
 
@@ -44,7 +44,7 @@ import jwt from 'jsonwebtoken';
 import handler from '@pages/api/auth/github/mcp-callback';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { getSettingsMap } from '@bike4mind/utils';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 
 const mockFindOne = vi.mocked(mcpServerRepository.findOne);
 const mockUpdate = vi.mocked(mcpServerRepository.update);

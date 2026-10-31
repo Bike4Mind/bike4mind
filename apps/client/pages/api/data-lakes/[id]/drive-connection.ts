@@ -18,7 +18,7 @@ import {
 import {
   authorizeLakeConnectorAccess,
   authorizeLakeConnectorRead,
-} from '@server/dataLakes/authorizeLakeConnectorAccess';
+} from '@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';

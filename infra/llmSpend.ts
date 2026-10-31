@@ -1,12 +1,14 @@
 /**
  * Estimated upstream LLM spend from the ChatCompletion service's `llm-usage-settled` log line
  * (b4m-core/services/src/llm/llmUsageSettledLog.ts): metric filters, a dashboard, and a
- * 5-minute spend-rate alarm per provider (LLM_SPEND_ALARM_USD_PER_5MIN).
+ * 5-minute spend-rate alarm and an hourly spend alarm per provider (LLM_SPEND_ALARM_USD_PER_5MIN,
+ * LLM_SPEND_ALARM_USD_PER_HOUR, LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC) plus hourly and 5-minute
+ * ceilings on young-account spend, and a count of completions that cost more than the balance could pay.
  * See infra/signup-code-send-alarm.md.
  */
 
 import { chatCompletion } from './chatCompletion';
-import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
+import { dlqAlarmTopic } from './dlqAlarms';
 import { parseAlarmThreshold } from './signupAlarmThreshold';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 
@@ -17,8 +19,14 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
 export const LLM_SPEND_PROVIDERS = ['anthropic', 'openai', 'bedrock', 'google', 'other'] as const;
 export const llmSpendNamespace = () => `${$app.name}/${$app.stage}/LLMSpend`;
 export const LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT = 25;
+export const LLM_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 20;
+export const LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT = 75;
 export const YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 2;
+export const LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN_DEFAULT = 3;
 const USAGE_MESSAGE = 'llm-usage-settled';
+/** Must stay in sync with the charged-down-to-zero log line in b4m-core/services/src/cliCompletions.ts. */
+export const COMPLETION_CREDIT_OVERDRAFT_MESSAGE =
+  '[CLI_CREDITS] ALERT: Completion cost more than the balance could pay - charged down to zero';
 
 export function llmSpendFilterPattern(value: 'usd' | 'outputTokens', byModel = false): string {
   // CloudWatch only extracts fields selected by the pattern, including metric values/dimensions.
@@ -27,11 +35,24 @@ export function llmSpendFilterPattern(value: 'usd' | 'outputTokens', byModel = f
 }
 
 export const LLM_SPEND_YOUNG_ACCOUNT_FILTER_PATTERN = `{ $.message = "${USAGE_MESSAGE}" && $.isYoungAccount IS TRUE && $.usd >= 0 }`;
+export const COMPLETION_CREDIT_OVERDRAFT_FILTER_PATTERN = `{ $.message = "${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}" }`;
 
 const spendThreshold = parseAlarmThreshold(
   'LLM_SPEND_ALARM_USD_PER_5MIN',
   process.env.LLM_SPEND_ALARM_USD_PER_5MIN,
   LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT
+);
+
+const hourlySpendThreshold = parseAlarmThreshold(
+  'LLM_SPEND_ALARM_USD_PER_HOUR',
+  process.env.LLM_SPEND_ALARM_USD_PER_HOUR,
+  LLM_SPEND_ALARM_USD_PER_HOUR_DEFAULT
+);
+
+const hourlyAnthropicSpendThreshold = parseAlarmThreshold(
+  'LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC',
+  process.env.LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC,
+  LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT
 );
 
 const youngAccountSpendThreshold = parseAlarmThreshold(
@@ -40,11 +61,17 @@ const youngAccountSpendThreshold = parseAlarmThreshold(
   YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT
 );
 
+const youngAccountSpendBurstThreshold = parseAlarmThreshold(
+  'LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN',
+  process.env.LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN,
+  LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN_DEFAULT
+);
+
 let llmSpendDashboard: aws.cloudwatch.Dashboard | undefined;
 
 if (isMonitoredStage) {
-  if (!dlqAlarmTopic || !oobAlarmTopic) {
-    throw new Error('alarm routing requires dlqAlarmTopic and oobAlarmTopic');
+  if (!dlqAlarmTopic) {
+    throw new Error('alarm routing requires dlqAlarmTopic');
   }
 
   // Same resolution as logMonitor.ts: SST does not expose the container log group as a node.
@@ -59,7 +86,7 @@ if (isMonitoredStage) {
       return name;
     });
 
-  const actions = [dlqAlarmTopic.arn, oobAlarmTopic.arn];
+  const actions = [dlqAlarmTopic.arn];
   const spendAlarms: aws.cloudwatch.MetricAlarm[] = [];
   const prefix = `${$app.name}-${$app.stage}`;
   const LLM_SPEND_NAMESPACE = llmSpendNamespace();
@@ -92,6 +119,8 @@ if (isMonitoredStage) {
     },
   });
 
+  // Two windows: the 5-minute alarm catches a runaway burst; the hourly one catches a sustained
+  // drain that stays under the burst ceiling.
   for (const provider of LLM_SPEND_PROVIDERS) {
     spendAlarms.push(
       new aws.cloudwatch.MetricAlarm(`llmSpendRate-${provider}`, {
@@ -109,6 +138,24 @@ if (isMonitoredStage) {
         alarmActions: actions,
         okActions: actions,
         tags: { Application: 'LLMSpend', Severity: 'High' },
+      })
+    );
+    spendAlarms.push(
+      new aws.cloudwatch.MetricAlarm(`llmSpendHourly-${provider}`, {
+        name: `${prefix}-llm-spend-hourly-${provider}`,
+        alarmDescription: `Estimated ${provider} LLM spend in one hour at or above the configured USD ceiling`,
+        comparisonOperator: 'GreaterThanOrEqualToThreshold',
+        evaluationPeriods: 1,
+        metricName: 'EstimatedUsd',
+        namespace: LLM_SPEND_NAMESPACE,
+        dimensions: { Provider: provider },
+        period: 3600,
+        statistic: 'Sum',
+        threshold: provider === 'anthropic' ? hourlyAnthropicSpendThreshold : hourlySpendThreshold,
+        treatMissingData: 'notBreaching',
+        alarmActions: actions,
+        okActions: actions,
+        tags: { Application: 'LLMSpend', Severity: 'Critical' },
       })
     );
   }
@@ -154,6 +201,51 @@ if (isMonitoredStage) {
     alarmActions: actions,
     okActions: actions,
     tags: { Application: 'LLMSpend', Severity: 'High' },
+  });
+
+  new aws.cloudwatch.MetricAlarm('llmSpendYoungAccounts', {
+    name: `${prefix}-llm-spend-young-accounts`,
+    alarmDescription:
+      'Estimated LLM spend per 5 minutes by accounts under 7 days old at or above the configured USD ceiling',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'EstimatedUsdYoungAccounts',
+    namespace: LLM_SPEND_NAMESPACE,
+    period: 300,
+    statistic: 'Sum',
+    threshold: youngAccountSpendBurstThreshold,
+    treatMissingData: 'notBreaching',
+    alarmActions: actions,
+    okActions: actions,
+    tags: { Application: 'LLMSpend', Severity: 'High' },
+  });
+
+  new aws.cloudwatch.LogMetricFilter('completionCreditOverdraftFilter', {
+    name: `${prefix}-completion-credit-overdraft`,
+    logGroupName,
+    pattern: COMPLETION_CREDIT_OVERDRAFT_FILTER_PATTERN,
+    metricTransformation: {
+      name: 'CompletionCreditOverdrafts',
+      namespace: LLM_SPEND_NAMESPACE,
+      value: '1',
+      unit: 'Count',
+    },
+  });
+
+  new aws.cloudwatch.MetricAlarm('completionCreditOverdraft', {
+    name: `${prefix}-completion-credit-overdraft`,
+    alarmDescription: 'A completion cost more credits than its holder had; the balance was charged down to zero',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'CompletionCreditOverdrafts',
+    namespace: LLM_SPEND_NAMESPACE,
+    period: 300,
+    statistic: 'Sum',
+    threshold: 1,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    okActions: [dlqAlarmTopic.arn],
+    tags: { Application: 'LLMSpend', Severity: 'Medium' },
   });
 
   // Emitted by signupAlarms.ts (default region) and waf.ts (us-east-1, production with WAF only).
@@ -224,6 +316,28 @@ if (isMonitoredStage) {
             type: 'metric',
             x: 0,
             y: 9,
+            width: 24,
+            height: 6,
+            properties: {
+              title: 'Estimated USD per hour by provider',
+              metrics: providerMetrics('EstimatedUsd', 'Sum'),
+              view: 'timeSeries',
+              stacked: true,
+              region,
+              period: 3600,
+              yAxis: { left: { min: 0, label: 'USD' } },
+              annotations: {
+                horizontal: [
+                  { label: 'Hourly alarm (anthropic)', value: hourlyAnthropicSpendThreshold },
+                  { label: 'Hourly alarm (other providers)', value: hourlySpendThreshold },
+                ],
+              },
+            },
+          },
+          {
+            type: 'metric',
+            x: 0,
+            y: 15,
             width: 12,
             height: 6,
             properties: {
@@ -239,7 +353,7 @@ if (isMonitoredStage) {
           {
             type: 'metric',
             x: 12,
-            y: 9,
+            y: 15,
             width: 12,
             height: 6,
             properties: {
@@ -264,7 +378,7 @@ if (isMonitoredStage) {
           {
             type: 'metric',
             x: 0,
-            y: 15,
+            y: 21,
             width: 24,
             height: 6,
             properties: {
@@ -287,7 +401,7 @@ if (isMonitoredStage) {
           {
             type: 'metric',
             x: 0,
-            y: 21,
+            y: 27,
             width: 12,
             height: 6,
             properties: {
@@ -305,7 +419,7 @@ if (isMonitoredStage) {
           {
             type: 'metric',
             x: 12,
-            y: 21,
+            y: 27,
             width: 12,
             height: 6,
             properties: {

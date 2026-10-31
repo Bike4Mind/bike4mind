@@ -18,7 +18,7 @@ import {
 import { organizationService } from '@bike4mind/services';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { adminApi } from '@server/middlewares/adminApi';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { parseAdminActionReason, recordAdminActionFromRequest, userAuditTarget } from '@server/utils/adminAudit';
 import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
 import { assertFullAdminForMembership } from '@server/organizations/adminMembership';

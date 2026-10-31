@@ -697,6 +697,17 @@ export type ModelInfo = {
    * Defaults to 'legacy' if unset and can_think is true.
    */
   thinkingStyle?: 'legacy' | 'adaptive';
+  /**
+   * The catalog says this model takes OpenAI's `reasoning_effort`. Set only for a
+   * record whose reasoning style is 'openai-effort'; absent means "not stated" and
+   * the OpenAI adapter falls back to REASONING_SUPPORTED_MODELS.
+   */
+  openaiReasoningEffort?: true;
+  /**
+   * Catalog form of REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: sending an effort
+   * level alongside function tools 400s. Absent means "not stated", not "compatible".
+   */
+  effortIncompatibleWithTools?: boolean;
   pricing: Record<number, PricingInfo>;
   /**
    * Where `pricing` came from. 'catalog' when applyModelPriceCatalog overlaid a ModelPrice row;

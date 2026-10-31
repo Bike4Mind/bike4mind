@@ -9,8 +9,9 @@ import {
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { baseApi } from '@server/middlewares/baseApi';
+import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import Stripe from 'stripe';
 import { z } from 'zod';
 
@@ -41,6 +42,7 @@ const idOf = (ref: string | { id: string } | null): string | null =>
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(requireStripeWebhook())
   .use(rateLimit({ limit: 5, windowMs: 60 * 1000 }))
+  .use(refuseBlockedAccount())
   .post(async (req, res) => {
     const user = req.user;
     if (!user) throw new BadRequestError(NOT_FOUND_MESSAGE);

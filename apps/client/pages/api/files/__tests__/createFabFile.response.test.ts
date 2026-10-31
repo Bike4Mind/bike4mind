@@ -11,7 +11,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ use: () => ({ post: (...fns: unknown[]) => fns[fns.length - 1] }) }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/browserUploadUrl', () => ({ resolveBrowserUploadUrl: (_id: string, url: string) => url }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn() }),

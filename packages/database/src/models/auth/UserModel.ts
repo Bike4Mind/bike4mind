@@ -1,4 +1,10 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
+import {
+  THROTTLE_SOURCES,
+  THROTTLE_TIERS,
+  USER_RISK_SIGNAL_TYPES,
+  VERIFIED_SLACK_IDENTITY_FILTER,
+  canonicalizeEmail,
+} from '@bike4mind/common';
 import {
   ADMIN_PERMISSIONS,
   AuthStrategy,
@@ -11,6 +17,10 @@ import {
   IUserNote,
   IModerationHit,
   ISignupRiskScore,
+  RISK_EVIDENCE_TRIGGERS,
+  type RiskEvidenceCoverage,
+  type RiskEvidenceSummary,
+  type RiskEvidenceTrigger,
   SIGNUP_RISK_REVIEW_STATES,
   SIGNUP_RISK_SIGNALS,
   type SignupRiskReviewState,
@@ -18,7 +28,9 @@ import {
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
   MFA_ATTEMPT_RESET_WINDOW_MS,
+  PAYMENT_UNLOCK_REASONS,
   SIGNUP_GRANT_UNLOCK_REASONS,
+  SIGNUP_UNLOCK_FORFEIT_CAUSES,
   Collection,
   PaginatedResponse,
 } from '@bike4mind/common';
@@ -265,6 +277,40 @@ const UserModerationSchema = new Schema(
   },
   { _id: false }
 );
+
+const UserThrottleSchema = new Schema(
+  {
+    tier: { type: String, enum: [...THROTTLE_TIERS], required: true },
+    reason: { type: String, required: true },
+    source: { type: String, enum: [...THROTTLE_SOURCES], required: true },
+    changedAt: { type: Date, required: true },
+    changedBy: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const UserRiskSignalSchema = new Schema(
+  {
+    type: {
+      type: String,
+      enum: [...USER_RISK_SIGNAL_TYPES],
+      required: true,
+    },
+    at: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
+/** An account as the payment-risk linked-account checks read it; the blocked fields match accountBlockReasons. */
+export type UserLinkState = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  createdAt: Date | null;
+  isBanned: boolean;
+  disputePending: boolean;
+  moderation: { status: UserModerationStatus } | null;
+};
 
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
@@ -657,6 +703,37 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
   }
 
+  /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
+  async findIdsBySignupIp(ip: string, excludeId: string, limit: number): Promise<string[]> {
+    const docs = await this.model
+      .find({ 'signupMeta.ip': ip, _id: { $ne: convertIds([excludeId])[0] } })
+      .select('_id')
+      .sort({ _id: -1 })
+      .limit(limit)
+      .maxTimeMS(2000)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */
+  async findLinkStatesByIds(ids: string[]): Promise<UserLinkState[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('name email createdAt isBanned disputePending moderation.status')
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      name: d.name ?? null,
+      email: d.email ?? null,
+      createdAt: d.createdAt ?? null,
+      isBanned: d.isBanned ?? false,
+      disputePending: d.disputePending ?? false,
+      moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+    }));
+  }
+
   async searchCollections(
     userId: string,
     options: { page: number; limit: number; search: string; type?: CollectionType },
@@ -932,6 +1009,92 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  async claimRiskEvidenceRefresh(
+    userId: string,
+    { now, staleBefore, trigger }: { now: Date; staleBefore: Date; trigger: RiskEvidenceTrigger }
+  ): Promise<boolean> {
+    const result = await this.model
+      .updateOne(
+        {
+          _id: userId,
+          $or: [
+            { 'riskEvidence.refresh.pendingSince': null },
+            { 'riskEvidence.refresh.pendingSince': { $lt: staleBefore } },
+          ],
+        },
+        { $set: { 'riskEvidence.refresh.pendingSince': now, 'riskEvidence.refresh.lastTrigger': trigger } }
+      )
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
+  async releaseRiskEvidenceRefresh(userId: string, claimedAt: Date): Promise<void> {
+    // Matching on claimedAt so a stale refresh cannot drop a newer request's claim.
+    await this.model
+      .updateOne(
+        { _id: userId, 'riskEvidence.refresh.pendingSince': claimedAt },
+        { $set: { 'riskEvidence.refresh.pendingSince': null } }
+      )
+      .exec();
+  }
+
+  async setRiskEvidenceSummary(userId: string, summary: RiskEvidenceSummary): Promise<boolean> {
+    const result = await this.model
+      .updateOne(
+        {
+          _id: userId,
+          $or: [
+            { 'riskEvidence.summary.computedAt': null },
+            { 'riskEvidence.summary.computedAt': { $lt: summary.computedAt } },
+          ],
+        },
+        {
+          $set: {
+            'riskEvidence.summary': summary,
+            'riskEvidence.refresh.lastFailureAt': null,
+            'riskEvidence.refresh.lastFailure': null,
+          },
+        }
+      )
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
+  async recordRiskEvidenceFailure(userId: string, failure: { at: Date; error: string }): Promise<void> {
+    await this.model
+      .updateOne(
+        { _id: userId },
+        {
+          $set: {
+            'riskEvidence.refresh.lastFailureAt': failure.at,
+            'riskEvidence.refresh.lastFailure': failure.error.slice(0, 200),
+          },
+        }
+      )
+      .exec();
+  }
+
+  async riskEvidenceCoverage(since: Date): Promise<RiskEvidenceCoverage> {
+    const isType = (path: string, type: string) => ({ $eq: [{ $type: path }, type] });
+    const countIf = (condition: unknown) => ({ $sum: { $cond: [condition, 1, 0] } });
+    const [row] = await this.model.aggregate<RiskEvidenceCoverage>([
+      { $match: { createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          accounts: { $sum: 1 },
+          withSignupMeta: countIf(isType('$signupMeta', 'object')),
+          withJa4: countIf(isType('$signupMeta.ja4', 'string')),
+          withWafSignals: countIf({
+            $and: [isType('$signupMeta.wafAnonIp', 'bool'), isType('$signupMeta.wafBotSignal', 'bool')],
+          }),
+        },
+      },
+      { $project: { _id: 0 } },
+    ]);
+    return row ?? { accounts: 0, withSignupMeta: 0, withJa4: 0, withWafSignals: 0 };
+  }
+
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores the
    * appeal text so admins can review it alongside the user's escalation state. Returns the
@@ -1007,6 +1170,28 @@ const RiskScoreSchema = new Schema(
   { _id: false }
 );
 
+const RiskEvidenceSchema = new Schema(
+  {
+    // Shape owned by riskEvidenceSummarySchema (Zod): validated on write and on read, versioned, so
+    // an old summary is never misread after the shape changes.
+    summary: { type: Schema.Types.Mixed, required: false, default: undefined },
+    refresh: {
+      type: new Schema(
+        {
+          pendingSince: { type: Date, default: null },
+          lastTrigger: { type: String, enum: [...RISK_EVIDENCE_TRIGGERS], default: null },
+          lastFailureAt: { type: Date, default: null },
+          lastFailure: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+    },
+  },
+  { _id: false }
+);
+
 export const UserSchema = new Schema<IUserDocument, IUserModel>(
   {
     username: { type: String, required: true, unique: true },
@@ -1056,6 +1241,27 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
             type: new Schema({ day: String, ms: Number, lastAt: Date, period: String }, { _id: false }),
             default: undefined,
           },
+          heldUnlock: {
+            type: new Schema(
+              {
+                reason: { type: String, enum: PAYMENT_UNLOCK_REASONS, required: true },
+                heldAt: { type: Date, required: true },
+                releaseAt: { type: Date, required: true },
+              },
+              { _id: false }
+            ),
+            default: undefined,
+          },
+          unlockForfeited: {
+            type: new Schema(
+              {
+                cause: { type: String, enum: SIGNUP_UNLOCK_FORFEIT_CAUSES, required: true },
+                at: { type: Date, required: true },
+              },
+              { _id: false }
+            ),
+            default: undefined,
+          },
         },
         { _id: false }
       ),
@@ -1067,9 +1273,12 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isBanned: { type: Boolean, default: false },
     isModerated: { type: Boolean, default: false },
     apiKeyTrustApproved: { type: Boolean, default: false },
+    newAccountSpendCapLifted: { type: Boolean, default: false },
     // Per-user moderation tracking + auto-throttle/suspend state.
     // Lazily populated - undefined until the user's first moderation hit.
     moderation: { type: UserModerationSchema, required: false, default: undefined },
+    throttle: { type: UserThrottleSchema, required: false, default: undefined },
+    riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
@@ -1307,6 +1516,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
     // Recomputed by userService.refreshSignupRiskScore - see IUser.riskScore.
     riskScore: { type: RiskScoreSchema, required: false, default: undefined },
+    // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
+    riskEvidence: { type: RiskEvidenceSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },
@@ -1428,6 +1639,13 @@ UserSchema.index({ createdAt: 1 });
 // accounts created before signup network capture carry no signupMeta. Explicit name so migration
 // 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
 UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
+// Serves the linked-account lookup by signup IP (apps/client/server/billing/linkedAccounts.ts). Partial:
+// the signupIpRetention cron clears the IP, and older accounts never had one. Explicit name so migration
+// 20260921236600 and autoIndex agree.
+UserSchema.index(
+  { 'signupMeta.ip': 1 },
+  { name: 'user_signupMeta_ip', partialFilterExpression: { 'signupMeta.ip': { $type: 'string' } } }
+);
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
@@ -1449,6 +1667,14 @@ UserSchema.index({ 'riskScore.reviewState': 1, 'riskScore.score': -1 }, { name: 
 UserSchema.index(
   { signupGrantHeldReason: 1, _id: 1 },
   { partialFilterExpression: { signupGrantHeldReason: { $type: 'string' } }, name: 'user_signupGrantHeldReason' }
+);
+// Serves the held-release job's scan for payment unlocks whose settling window has passed.
+UserSchema.index(
+  { 'signupGrant.heldUnlock.releaseAt': 1, _id: 1 },
+  {
+    partialFilterExpression: { 'signupGrant.heldUnlock.releaseAt': { $type: 'date' } },
+    name: 'user_signupGrant_heldUnlock_releaseAt',
+  }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 

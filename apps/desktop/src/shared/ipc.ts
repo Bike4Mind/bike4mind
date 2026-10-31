@@ -290,6 +290,7 @@ export const IPC_CHANNELS = {
   permissionsGetState: 'permissions:get-state',
   permissionsSetRules: 'permissions:set-rules',
   permissionsSetSharing: 'permissions:set-sharing',
+  permissionsExportApprovalSummary: 'permissions:export-approval-summary',
   capabilitiesGetState: 'capabilities:get-state',
   capabilitiesRevoke: 'capabilities:revoke',
   /**
@@ -1061,6 +1062,11 @@ export interface DesktopApi {
     /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
     setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
     setSharing(share: boolean): Promise<PermissionsState>;
+    /**
+     * Saves a Markdown digest of the local approval log where the user picks (see approvalSummary.ts).
+     * False when the save dialog was cancelled.
+     */
+    exportApprovalSummary(): Promise<boolean>;
   };
   capabilities: {
     getState(): Promise<CapabilityLedgerState>;

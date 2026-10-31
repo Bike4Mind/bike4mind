@@ -12,9 +12,10 @@ import { User, Quest, connectDB, sessionRepository } from '@bike4mind/database';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
 import { createSession } from '@server/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
+import { withRequestLogger } from '@server/middlewares/requestLogger';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';
 import {
   JiraResource,
@@ -2080,4 +2081,4 @@ export const config = {
   },
 };
 
-export default handler;
+export default withRequestLogger(handler);

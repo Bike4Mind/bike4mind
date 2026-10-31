@@ -7,9 +7,7 @@ import {
   PermissionDeniedError,
   FIXED_TEMPERATURE_MODELS,
   MIN_OUTPUT_TOKENS,
-  REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
   RESPONSES_API_TOOL_MODELS,
-  REASONING_SUPPORTED_MODELS,
   SpeechToTextModels,
   type ModelInfo,
   type ReasoningEffort,
@@ -52,6 +50,7 @@ import {
   stripUnstreamedToolResult,
 } from './toolStreamingHelper';
 import { DispatchModel } from './dispatchModel';
+import { openAIEffortIncompatibleWithTools, supportsOpenAIReasoningEffort } from './openaiReasoning';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import {
@@ -1152,7 +1151,7 @@ export class OpenAIBackend implements ICompletionBackend {
     };
 
     // Add parameters conditionally based on model type
-    const supportsReasoning = REASONING_SUPPORTED_MODELS.has(model);
+    const supportsReasoning = supportsOpenAIReasoningEffort(this._dispatch.for(model), model);
     // A reasoning model that is only known through the catalog is not in
     // FIXED_TEMPERATURE_MODELS, and OpenAI rejects any temperature but 1 on one.
     // Losing temperature control on a model that would have accepted it is
@@ -1179,7 +1178,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // /v1/responses, dropping reasoning_effort keeps tool calling functional.
       const toolsPresent = !!options.tools?.length;
       const reasoningEffortIncompatibleWithTools =
-        toolsPresent && REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model);
+        toolsPresent && openAIEffortIncompatibleWithTools(this._dispatch.for(model), model);
 
       if (supportsReasoning && !reasoningEffortIncompatibleWithTools) {
         // Determine reasoning effort: explicit setting takes precedence over auto-classification
@@ -1204,10 +1203,10 @@ export class OpenAIBackend implements ICompletionBackend {
         }
       } else if (supportsReasoning && reasoningEffortIncompatibleWithTools) {
         // `supportsReasoning` is re-checked here so the log only fires for models
-        // where `reasoning_effort` would otherwise have been set. Today the set
-        // invariant (REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS is a subset of
-        // REASONING_SUPPORTED_MODELS) makes the two checks equivalent, but the
-        // explicit conjunction prevents a noisy log if that invariant ever drifts.
+        // where `reasoning_effort` would otherwise have been set. The id sets keep
+        // incompatible a subset of supported, but a catalog row can state
+        // effortIncompatibleWithTools on a model it never marked reasoning, so the
+        // explicit conjunction is load-bearing.
         this.logger.debug(
           `Skipping reasoning_effort for ${model}: function tools present, ` +
             `OpenAI rejects this combination on /v1/chat/completions (requires /v1/responses).`
@@ -2076,7 +2075,10 @@ export class OpenAIBackend implements ICompletionBackend {
     // shouldOmitIdentityReminder). Must stay in sync with anthropicBackend / bedrockBackend.
     const mergedContent = shouldOmitIdentityReminder(options)
       ? callerSystem
-      : appendIdentityReminder(callerSystem, buildIdentityReminder(model, options.modelDisplayName));
+      : appendIdentityReminder(
+          callerSystem,
+          buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+        );
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',

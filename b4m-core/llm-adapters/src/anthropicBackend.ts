@@ -1094,7 +1094,7 @@ export class AnthropicBackend implements ICompletionBackend {
     // then carries no system at all.
     const identityReminder = shouldOmitIdentityReminder(options)
       ? null
-      : buildIdentityReminder(model, options.modelDisplayName);
+      : buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName);
     type SystemBlock = { type: 'text'; text: string; cache_control?: ReturnType<typeof ephemeralCacheControl> };
     let system: string | SystemBlock[] | undefined;
     if (anySystemCacheControlled) {

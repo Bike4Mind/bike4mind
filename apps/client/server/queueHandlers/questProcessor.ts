@@ -1,4 +1,4 @@
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import {
   connectDB,
   questRepository,
@@ -33,6 +33,7 @@ import {
   Quest,
   scopedSettingsRepository,
   usageEventRepository,
+  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError } from '@bike4mind/utils';
@@ -43,13 +44,13 @@ import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { adminAssistantToolDefinitions } from '@server/adminAssistant';
-import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
-import { ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
@@ -59,9 +60,9 @@ import { accessibleBy } from '@casl/mongoose';
 import { IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
-import { recallMementosV2 } from '@server/memory/recallMementosV2';
-import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
-import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
+import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
+import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
+import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
@@ -113,6 +114,7 @@ export const getStaticOptions = () => {
       projects: projectRepository,
       organizations: organizationRepository,
       mcpServers: mcpServerRepository,
+      newAccountSpendCap: newAccountSpendCapAdapters,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
       operationalBilling: operationalBillingAdapters,
@@ -359,7 +361,11 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     sessionId: params.sessionId,
     user,
     createCompletionMeter: ({ organizationId, featureLabel }) =>
-      createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
+      createCompletionMeter(user, logger, featureLabel, {
+        sessionId: params.sessionId,
+        organizationId,
+        apiKeyId: params.apiKeyId,
+      }),
   });
   logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
 

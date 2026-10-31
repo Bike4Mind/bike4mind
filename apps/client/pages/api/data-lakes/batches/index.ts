@@ -22,7 +22,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { recordReconcilerForcedTerminal } from '@bike4mind/server-utils/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatchProgress';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { resolveRequestBillingOrgId } from '@server/billing/resolveRequestBillingOrgId';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import { respond } from '@server/utils/respond';
 

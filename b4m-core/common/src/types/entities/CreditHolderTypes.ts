@@ -30,6 +30,14 @@ export type ICreditHolderIncrementer = (
   }
 ) => Promise<ICreditHolder | null>;
 
+/**
+ * Debit up to `credits` in one atomic update without taking the balance below zero (a balance that is
+ * already negative is left as is). Resolves the credits actually debited, so a caller can see a shortfall.
+ */
+export interface ICreditHolderFlooredDebit {
+  decrementCreditsFloored(ownerId: string, credits: number): Promise<number>;
+}
+
 export enum CreditHolderType {
   User = 'User',
   Organization = 'Organization',

@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({
   markImportComplete: vi.fn(),
 }));
 
-vi.mock('@server/s3/utils', () => ({ withContext: (fn: unknown) => fn }));
+vi.mock('@bike4mind/server-utils/s3/utils', () => ({ withContext: (fn: unknown) => fn }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   S3Storage: class {
     getMetadata = h.getMetadata;

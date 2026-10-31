@@ -61,6 +61,7 @@ function setResponses(overrides: Partial<Record<string, unknown>> = {}) {
     'view=user': { targetCreditsPerUsd: 1200, rows: [] },
     'view=provider-month': { targetCreditsPerUsd: 1200, rows: [providerRow()] },
     'view=settlement': { targetCreditsPerUsd: 1200, rows: SETTLEMENT_ROWS },
+    'view=funding-cohort': { targetCreditsPerUsd: 1200, rows: [] },
     'provider-invoices': { invoices: [] },
     ...overrides,
   };
@@ -297,5 +298,62 @@ describe('MarginDashboard settlement basis section', () => {
     expect(provider).toHaveTextContent('-5');
     const local = within(table).getByTestId('margin-settlement-row-local');
     expect(local).toHaveTextContent('n/a'); // deltaSampleSize 0
+  });
+});
+
+describe('MarginDashboard funding cohort section', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setResponses();
+    mockPost.mockResolvedValue({ data: { invoice: {} } });
+  });
+
+  const cohortRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
+    cohortWeek: '2026-07-06T00:00:00.000Z',
+    accounts: 1234,
+    costUsd: { granted: 3, purchased: 1, subscription: 0, unknown: 0 },
+    credits: { granted: 300, purchased: 100, subscription: 0, unknown: 0 },
+    unattributedCostUsd: 0.5,
+    ...overrides,
+  });
+
+  it('renders a cohort row with formatted values and granted share', async () => {
+    setResponses({ 'view=funding-cohort': { targetCreditsPerUsd: 1200, rows: [cohortRow()] } });
+    renderDashboard();
+    const row = await screen.findByTestId('margin-funding-cohort-row-2026-07-06');
+    expect(row).toHaveTextContent('1,234');
+    expect(row).toHaveTextContent('$3.00');
+    expect(row).toHaveTextContent('$0.50');
+    expect(screen.getByTestId('margin-funding-cohort-share-2026-07-06')).toHaveTextContent('75%');
+  });
+
+  it('labels a cohort whose user record is gone as Unknown', async () => {
+    setResponses({ 'view=funding-cohort': { targetCreditsPerUsd: 1200, rows: [cohortRow({ cohortWeek: null })] } });
+    renderDashboard();
+    expect(await screen.findByTestId('margin-funding-cohort-row-Unknown')).toHaveTextContent('Unknown');
+  });
+
+  it('shows a dash for granted share when no cost is attributed', async () => {
+    setResponses({
+      'view=funding-cohort': {
+        targetCreditsPerUsd: 1200,
+        rows: [cohortRow({ costUsd: { granted: 0, purchased: 0, subscription: 0, unknown: 0 } })],
+      },
+    });
+    renderDashboard();
+    expect(await screen.findByTestId('margin-funding-cohort-share-2026-07-06')).toHaveTextContent('-');
+  });
+
+  it('shows its own error and keeps the other sections when the cohort view fails', async () => {
+    const respond = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((url: string) =>
+      url.includes('view=funding-cohort')
+        ? Promise.reject({ response: { data: { error: 'aggregation timed out' } } })
+        : respond(url)
+    );
+    renderDashboard();
+    expect(await screen.findByTestId('margin-funding-cohort-error')).toHaveTextContent('aggregation timed out');
+    expect(screen.getByTestId('margin-invoice-enter-2026-06-openai')).toBeEnabled();
+    expect(screen.queryByTestId('margin-error')).not.toBeInTheDocument();
   });
 });

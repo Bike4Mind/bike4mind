@@ -57,11 +57,11 @@ vi.mock('@workers/integrations/github/handlers', () => ({
   getHandler: mockGetHandler,
 }));
 
-vi.mock('@server/integrations/github/sreRevisionDispatch', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/sreRevisionDispatch', () => ({
   dispatchReviewToSreRevision: mockDispatchReviewToSreRevision,
 }));
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger:
     (fn: (event: unknown, ctx: unknown, logger: unknown) => unknown) =>
     (event: unknown, ctx: unknown, logger: unknown) =>

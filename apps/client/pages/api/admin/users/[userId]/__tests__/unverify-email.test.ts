@@ -22,7 +22,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.findById, update: h.update },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 // parseAdminActionReason stays real so the 400s are the route's own.
 vi.mock('@server/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),

@@ -31,7 +31,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockFindActiveByOwner = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveSubscriptionsByOwner: (...args: unknown[]) => mockFindActiveByOwner(...args),
   },
@@ -70,6 +70,11 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   },
 }));
 
+const mockFirstPurchaseCardOptions = vi.fn();
+vi.mock('@server/integrations/stripe/threeDSecure', () => ({
+  firstPurchaseCardOptions: (...args: unknown[]) => mockFirstPurchaseCardOptions(...args),
+}));
+
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
 import handler from '../convert-to-paid';
@@ -77,6 +82,10 @@ import handler from '../convert-to-paid';
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
 const CALLBACK_URL = 'https://app.example.com/admin/organizations';
+
+beforeEach(() => {
+  mockFirstPurchaseCardOptions.mockResolvedValue({});
+});
 
 function makeReq(callbackUrl = CALLBACK_URL, extraBody: Record<string, unknown> = { reason: 'Billing correction' }) {
   const { req, res } = createMocks({ method: 'POST', query: { id: 'org_1' } });
@@ -213,5 +222,48 @@ describe('POST /api/admin/organizations/[id]/convert-to-paid - checkout currency
     expect(mockCreateCustomer).not.toHaveBeenCalled();
     expect(mockSessionsCreate).not.toHaveBeenCalled();
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/organizations/[id]/convert-to-paid - 3-D Secure on first purchase', () => {
+  const organizationCreatedAt = new Date('2026-10-01T00:00:00Z');
+  const challengeOptions = { payment_method_options: { card: { request_three_d_secure: 'challenge' } } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFirstPurchaseCardOptions.mockResolvedValue({});
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockOrgFindById.mockResolvedValue({
+      id: '507f1f77bcf86cd799439011',
+      userId: '507f1f77bcf86cd799439012',
+      name: 'Org One',
+      seats: 5,
+      stripeCustomerId: 'cus_org',
+      createdAt: organizationCreatedAt,
+    });
+    mockFindActiveByOwner.mockResolvedValue([{ id: 'sub_grant' }]);
+    mockResolveSubscriptionSource.mockReturnValue('admin_grant');
+    mockSessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe/session' });
+  });
+
+  it("adds the challenge options and asks the helper about the organization's customer and age", async () => {
+    mockFirstPurchaseCardOptions.mockResolvedValue(challengeOptions);
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockFirstPurchaseCardOptions.mock.calls[0][0]).toEqual({
+      stripeCustomerId: 'cus_org',
+      accountCreatedAt: organizationCreatedAt,
+    });
+    expect(mockSessionsCreate).toHaveBeenCalledWith(expect.objectContaining(challengeOptions));
+  });
+
+  it('leaves payment_method_options off when the helper returns nothing', async () => {
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate.mock.calls[0][0]).not.toHaveProperty('payment_method_options');
   });
 });

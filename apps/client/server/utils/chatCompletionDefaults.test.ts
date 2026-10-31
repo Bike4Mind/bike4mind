@@ -79,7 +79,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 // generated table through untouched, and a placeholder `{}` would otherwise pass a deep check.
 const workspaceDeniedToolsSentinel = vi.hoisted(() => ({ 'sentinel-surface': ['sentinel_tool'] }));
 
-vi.mock('@server/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
   premiumWorkspaceDeniedTools: workspaceDeniedToolsSentinel,
 }));
 

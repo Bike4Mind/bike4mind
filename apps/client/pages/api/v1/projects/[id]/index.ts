@@ -17,7 +17,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicProject } from '@server/projects/toPublicProject';
 

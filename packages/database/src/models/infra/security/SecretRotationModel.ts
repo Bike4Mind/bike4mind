@@ -49,7 +49,7 @@ export class SecretRotationRepository
   /**
    * Same lookup as `findByKeyName`, but with `previousKey` included. Only the token
    * verifiers applying the rotation grace window may use this (see
-   * apps/client/server/auth/secretRotationGrace.ts for the list) - never a route that
+   * packages/server-utils/src/auth/secretRotationGrace.ts for the list) - never a route that
    * serializes the result.
    */
   async findByKeyNameWithSecret(keyName: string) {

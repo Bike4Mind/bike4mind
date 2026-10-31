@@ -26,7 +26,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { verifyEmbedApiKey } from '@server/cli/auth';
-import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { agentRepository } from '@bike4mind/database';
 import {
   isAgentOwnedByEmbedKey,
@@ -37,7 +37,7 @@ import {
 } from '@bike4mind/common';
 import { renderEmbedWidgetHtml } from '@server/embed/embedWidgetPage';
 import { embedKeyOwnerHasEntitlement } from '@server/entitlements/embedKeyEntitlement';
-import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 /** Structural response shape shared by the Express/Next response baseApi hands us. */
 interface HtmlResponse {

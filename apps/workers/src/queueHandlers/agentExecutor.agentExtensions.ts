@@ -7,7 +7,7 @@
  * 1-99 and therefore always wrap inside the built-ins.
  */
 
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { z } from 'zod';
 import {
   createAgentExtensionRegistry,
@@ -19,7 +19,7 @@ import { OPTI_SURFACE } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { IOptiPlanState } from '@bike4mind/database';
 import type { ToolDefinition } from '@bike4mind/services/llm';
-import { premiumAgentExtensions } from '@server/premium-generated/premiumAgentExtensions.generated';
+import { premiumAgentExtensions } from '@bike4mind/server-utils/premium-generated/premiumAgentExtensions.generated';
 import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';

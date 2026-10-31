@@ -34,7 +34,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   NotFoundError: class NotFoundError extends Error {},
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
