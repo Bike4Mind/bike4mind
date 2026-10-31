@@ -6,6 +6,7 @@ export * from './FailedRefundModel';
 export * from './PaymentAttemptModel';
 export * from './PaymentRiskActionModel';
 export * from './PendingCreditHoldModel';
+export * from './ReferralSubscriptionRewardModel';
 export * from './UsageEventModel';
 export * from './ModelPriceModel';
 export * from './ProviderInvoiceModel';
