@@ -24,8 +24,9 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 }));
 
 // enforceMFA on, admin settings loaded.
+const { adminSettings } = vi.hoisted(() => ({ adminSettings: { enforceMFA: 'true' } }));
 vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
-  useAdminSettings: () => ({ settings: { enforceMFA: 'true' }, isLoading: false }),
+  useAdminSettings: () => ({ settings: { ...adminSettings }, isLoading: false }),
 }));
 
 // A signed-in user with no MFA configured (so enforcement wants to auto-start setup).
@@ -238,6 +239,39 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     expect(interceptorEject).toHaveBeenCalledWith(0);
   });
 
+  it('refetches once for a burst of refusals, not once per refused request', async () => {
+    const { queryClient } = renderWrapper();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const onRejected = await registeredRefusalHandler();
+    await Promise.all([1, 2, 3, 4].map(() => onRejected(enrollmentRefusal()).catch(() => undefined)));
+
+    expect(invalidate.mock.calls.filter(([arg]) => arg?.queryKey === ADMIN_SETTINGS_QUERY_KEY)).toHaveLength(1);
+  });
+
+  it('handles a refusal again once the refetch settles, even if it still reads enforcement off', async () => {
+    // The refusing server instance can be ahead of the one answering the settings refetch.
+    adminSettings.enforceMFA = 'false';
+    try {
+      const { queryClient } = renderWrapper();
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      const adminSettingsRefetches = () =>
+        invalidate.mock.calls.filter(([arg]) => arg?.queryKey === ADMIN_SETTINGS_QUERY_KEY).length;
+
+      const onRejected = await registeredRefusalHandler();
+      await onRejected(enrollmentRefusal()).catch(() => undefined);
+      expect(adminSettingsRefetches()).toBe(1);
+
+      await Promise.allSettled(invalidate.mock.results.map(r => r.value));
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      await onRejected(enrollmentRefusal()).catch(() => undefined);
+      expect(adminSettingsRefetches()).toBe(2);
+    } finally {
+      adminSettings.enforceMFA = 'true';
+    }
+  });
+
   it('renders the enrollment flow when the refusal arrives but the status query has failed', async () => {
     // The status endpoint is down; only the server's 403 reveals that this session owes enrollment.
     get.mockRejectedValue(new Error('status unavailable'));
@@ -322,6 +356,7 @@ describe('MFAEnforcementWrapper - an enrolled user is never sent into setup', ()
     get.mockResolvedValueOnce({ data: { enabled: false } }).mockResolvedValue({ data: { enabled: true } });
     post.mockRejectedValue(
       Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
         response: { status: 409, data: { error: 'MFA is already enabled for this account.' } },
       })
     );

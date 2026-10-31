@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
@@ -12,6 +12,7 @@ import { ADMIN_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 import MFAModal from '@client/app/components/common/MFAModal';
 import { Box, Typography, Alert, CircularProgress, Button } from '@mui/joy';
 import { toast } from 'sonner';
+import { isAxiosError } from 'axios';
 import { useQueryClient } from '@tanstack/react-query';
 
 interface MFAEnforcementWrapperProps {
@@ -69,29 +70,38 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
         setShowMFASetup(true);
         toast.info('Please complete MFA setup to continue');
       },
-      onError: (error: any) => {
+      onError: (error: unknown) => {
         if (isStepUpCancelled(error)) return;
+        const response = isAxiosError(error) ? error.response : undefined;
         // Already enrolled: this tab's status was stale, so refresh it rather than report an error.
-        if (error.response?.status === 409) {
+        if (response?.status === 409) {
           void mfaStatusQuery.refetch();
           return;
         }
-        // Extract the actual error message from axios response
-        const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
-        toast.error(errorMessage);
+        const serverMessage = (response?.data as { error?: string } | undefined)?.error;
+        toast.error(serverMessage || (error instanceof Error && error.message) || 'Failed to setup MFA');
       },
     });
   }, [setupMFAMutate, mfaStatusQuery.refetch]);
 
   // The server refuses a session that owes enrollment as soon as its own settings cache sees
-  // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on the
-  // first refusal so the enrollment flow renders instead of an app whose every call fails.
+  // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on a
+  // refusal so the enrollment flow renders instead of an app whose every call fails. One refetch
+  // at a time: a burst of refusals would otherwise re-run the settings load once per 403. Re-arm
+  // when it settles, since a failed or stale refetch must not leave later refusals ignored.
+  const refusalRefetchInFlightRef = useRef(false);
   useEffect(
     () =>
       registerMfaEnrollmentInterceptor(api, () => {
+        if (refusalRefetchInFlightRef.current) return;
+        refusalRefetchInFlightRef.current = true;
         setEnrollmentRefused(true);
-        void queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY });
-        void queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
+        void Promise.allSettled([
+          queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] }),
+        ]).then(() => {
+          refusalRefetchInFlightRef.current = false;
+        });
       }),
     [queryClient]
   );
