@@ -133,6 +133,14 @@ describe('readDesktopModelServers', () => {
     expect(result.problem).not.toContain(SECRET);
   });
 
+  it('reports a file it cannot read without quoting it', async () => {
+    const dir = path.join(root, '.config', '@bike4mind/desktop', 'model-servers.json');
+    await mkdir(dir, { recursive: true });
+    const result = await readDesktopModelServers(opts());
+    expect(result).toMatchObject({ servers: [], path: dir });
+    expect(result.problem).toMatch(/could not be read \(EISDIR\)/);
+  });
+
   it('reports a file with no server list', async () => {
     await put('@bike4mind/desktop', JSON.stringify({ version: 1 }));
     const result = await readDesktopModelServers(opts());
@@ -170,7 +178,7 @@ describe('readDesktopModelServers', () => {
     );
     const result = await readDesktopModelServers(opts());
     expect(JSON.stringify(result)).not.toContain('pw-zz');
-    expect(result.servers[0].transport.baseUrl).toContain('10.0.0.5:11434');
+    expect(result.servers[0].transport.baseUrl).toBe('http://10.0.0.5:11434');
   });
 });
 

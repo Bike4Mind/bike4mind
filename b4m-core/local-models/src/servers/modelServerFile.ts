@@ -54,7 +54,7 @@ export interface StoredServer extends Record<string, unknown> {
 export const MAX_SECRET_CHARS = 4_096;
 export const MAX_HEADER_NAME_CHARS = 64;
 
-// Must match MAX_SPEC_* in apps/desktop/src/shared/modelServers.ts.
+// Must match MAX_SPEC_* in apps/desktop/src/shared/modelServers.ts; sharedCopies.test.ts there checks it.
 const MAX_SPEC_MEMORY_GIB = 65_536;
 const MAX_SPEC_BANDWIDTH_GBPS = 100_000;
 
@@ -166,6 +166,7 @@ export function readSpecs(value: unknown): ModelServerSpecs | null {
 }
 
 // The next four must match apps/desktop/src/shared/chat.ts and shared/modelServers.ts; the renderer cannot import a Node package.
+// apps/desktop/src/main/modelServers/sharedCopies.test.ts fails when they drift.
 
 export type ModelServerManagement = 'allowed' | 'chat-only' | 'unsupported';
 
@@ -243,7 +244,9 @@ function withoutUserinfo(baseUrl: string): string {
     if (!url.username && !url.password) return baseUrl;
     url.username = '';
     url.password = '';
-    return url.toString();
+    // toString() adds a slash after a bare origin; keep the stored form, which has none.
+    const cleaned = url.toString();
+    return !baseUrl.endsWith('/') && cleaned.endsWith('/') ? cleaned.slice(0, -1) : cleaned;
   } catch {
     return baseUrl;
   }
