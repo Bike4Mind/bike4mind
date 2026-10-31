@@ -169,42 +169,15 @@ jobs:
       - name: Check tracked files against the overlay-literal allowlist
         run: bash scripts/check-no-overlay-literals.sh
 
-      # Resolve what "added" means for the two ASCII checks below.
-      #
-      # `pull_request.base.sha` is the base-branch head recorded when the PR was opened -
-      # NOT the fork point, and it does not move as the base branch advances. Both checks
-      # scan ADDED lines relative to that base, so on a long-lived PR every commit main
-      # gained in the meantime is attributed to the PR. That is not hypothetical: a PR
-      # opened 83 commits back failed this job on em-dashes that were already on main, in
-      # files it never touched, and no change to the PR could have cleared it.
-      #
-      # The real base is the merge base of the base branch and what we have checked out.
-      # On a `pull_request` run the checkout is the merge ref, so this resolves to the base
-      # branch tip and the diff is exactly the PR's net contribution. Falls back to the
-      # event's own sha for push / merge_group, and to the empty string if nothing resolves -
-      # which makes both scripts over-scan the whole tree rather than silently check nothing.
+      # Resolve what "added" means for the two ASCII checks below. Shared with the gitleaks range
+      # scan in `secret-scan`; the rationale (why not `pull_request.base.sha`, why empty means
+      # over-scan) lives in the script. Values arrive as env, never interpolated into the body.
       - name: Resolve base for the ASCII checks
         id: ascii-base
-        # Both values arrive as env, never interpolated into the script body. `BASE_REF` is a
-        # branch name, and git permits `;`, `$()`, backticks, `|` and quotes in a ref, so an
-        # inline `${{ }}` would let a crafted base branch break out of the quoting and run
-        # arbitrary commands on the runner. Env values are passed as data and are never parsed
-        # by the shell, which is also the pattern the two checks below already used.
         env:
           EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: |
-          set -euo pipefail
-          resolved="$EVENT_BASE"
-          if [ -n "$BASE_REF" ]; then
-            if git fetch --no-tags --quiet origin "$BASE_REF" 2>/dev/null; then
-              if merge_base=$(git merge-base FETCH_HEAD HEAD 2>/dev/null); then
-                resolved="$merge_base"
-              fi
-            fi
-          fi
-          echo "base=$resolved" >> "$GITHUB_OUTPUT"
-          echo "ASCII checks diff against ${resolved:-<whole tree>} (event base was ${EVENT_BASE:-<none>})"
+        run: echo "base=$(bash scripts/resolve-guard-base.sh)" >> "$GITHUB_OUTPUT"
 
       # Mirrors the husky pre-commit guard so a `--no-verify` bypass is still caught.
       - name: Check for raw control bytes in source files
@@ -221,40 +194,6 @@ jobs:
 
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
-
-      # Blocking secret scan of the commits this change adds. The secrets-scan workflow only
-      # feeds a dashboard (--exit-code=0, manual dispatch), so this is the gate that a
-      # `--no-verify` commit cannot skip. Version stays in step with secrets-scan.yml.
-      - name: Install gitleaks CLI
-        env:
-          GITLEAKS_VERSION: 8.24.3
-        run: |
-          echo "Installing gitleaks ${GITLEAKS_VERSION}..."
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
-          gitleaks version
-
-      - name: Verify gitleaks config actually detects
-        env:
-          GITLEAKS_REQUIRED: '1'
-        run: sh scripts/gitleaks-config-selftest.sh
-
-      # Scans base..HEAD with the same base the ASCII checks resolved. An empty or
-      # unreachable base falls back to a whole-checkout scan, mirroring their over-scan.
-      - name: Scan the commit range for secrets
-        env:
-          GITLEAKS_BASE: ${{ steps.ascii-base.outputs.base }}
-        run: |
-          set -euo pipefail
-          if [ -n "$GITLEAKS_BASE" ] && git cat-file -e "${GITLEAKS_BASE}^{commit}" 2>/dev/null; then
-            echo "Scanning commits ${GITLEAKS_BASE}..HEAD"
-            gitleaks detect --config .gitleaks.toml --redact --no-banner --exit-code 1 \
-              --log-opts="${GITLEAKS_BASE}..HEAD"
-          else
-            echo "Base unresolvable; scanning the whole checkout"
-            gitleaks detect --config .gitleaks.toml --redact --no-banner --exit-code 1 \
-              --no-git --source .
-          fi
 
       - name: Check workflows pass values through env, not run-body interpolation
         run: python3 scripts/check-no-run-interpolation.py
@@ -283,6 +222,63 @@ jobs:
             bash scripts/check-export-ignore.sh
           else
             echo "check-export-ignore.sh absent (post-cut snapshot) — skipping"
+          fi
+
+  # Blocking secret scan of the commits a change adds, so a `--no-verify` commit is still caught
+  # before merge. secrets-scan.yml only feeds a dashboard (--exit-code=0, manual dispatch).
+  #
+  # Deliberately NOT inside `repo-guards` and NOT gated on `changes`: a non-deployable change
+  # (docs, `**/*.md`, `**/.env.example`, docs-site/) skips repo-guards, and those are exactly the
+  # paths a pasted credential lands in. checkSecretScanJobWired.test.ts pins this.
+  secret-scan:
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: Secret Scan
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - name: Resolve base for the range scan
+        id: base
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: echo "base=$(bash scripts/resolve-guard-base.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Install gitleaks CLI
+        env:
+          # Keep in sync with secrets-scan.yml and gitleaks-config-guard.yml.
+          GITLEAKS_VERSION: 8.24.3
+        run: |
+          echo "Installing gitleaks ${GITLEAKS_VERSION}..."
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Verify gitleaks config actually detects
+        env:
+          GITLEAKS_REQUIRED: '1'
+        run: sh scripts/gitleaks-config-selftest.sh
+
+      # An empty or unreachable base falls back to a whole-checkout scan: over-scan, never skip.
+      - name: Scan the commit range for secrets
+        env:
+          GITLEAKS_BASE: ${{ steps.base.outputs.base }}
+        run: |
+          set -euo pipefail
+          if [ -n "$GITLEAKS_BASE" ] && git cat-file -e "${GITLEAKS_BASE}^{commit}" 2>/dev/null; then
+            echo "Scanning commits ${GITLEAKS_BASE}..HEAD"
+            gitleaks detect --config .gitleaks.toml --redact --no-banner --exit-code 1 \
+              --log-opts="${GITLEAKS_BASE}..HEAD"
+          else
+            echo "Base unresolvable; scanning the whole checkout"
+            gitleaks detect --config .gitleaks.toml --redact --no-banner --exit-code 1 \
+              --no-git --source .
           fi
 
   typecheck:
@@ -1184,7 +1180,7 @@ jobs:
   # of this repo to the internal deployer, so there is no deploy to gate; this
   # job re-exposes one stable check that turns red if any CI leg failed.
   #
-  # Red when ANY CI leg (changes/core-build/repo-guards/typecheck/lint/test-shards/cli-e2e/help-docs/
+  # Red when ANY CI leg (changes/core-build/repo-guards/secret-scan/typecheck/lint/test-shards/cli-e2e/help-docs/
   # verify-docs-build/docs-scan-gate/published-dts)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e and repo-guards, and a skipped
@@ -1211,6 +1207,7 @@ jobs:
       - changes
       - core-build
       - repo-guards
+      - secret-scan
       - typecheck
       - lint
       - openapi
@@ -1230,6 +1227,7 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           CORE_BUILD: ${{ needs.core-build.result }}
           REPO_GUARDS: ${{ needs.repo-guards.result }}
+          SECRET_SCAN: ${{ needs.secret-scan.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
           LINT: ${{ needs.lint.result }}
           OPENAPI: ${{ needs.openapi.result }}
@@ -1241,7 +1239,7 @@ jobs:
           DOCS_SCAN: ${{ needs.docs-scan-gate.result }}
           PUBLISHED_DTS: ${{ needs.published-dts.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test-shards=$TEST_SHARDS cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS secret-scan=$SECRET_SCAN typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test-shards=$TEST_SHARDS cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
           # Same rule as the `test` aggregator: on a deployable run every shard must succeed.
           if [ "$DEPLOYABLE" = "true" ] && [ "$TEST_SHARDS" != "success" ]; then
             echo "::error::Test shards did not all pass; failing the required check."
@@ -1249,7 +1247,7 @@ jobs:
           fi
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$TYPECHECK" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$SECRET_SCAN" "$TYPECHECK" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1
