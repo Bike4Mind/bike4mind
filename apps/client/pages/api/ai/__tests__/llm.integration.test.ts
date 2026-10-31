@@ -145,11 +145,11 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
 }));
 
-vi.mock('@server/utils/sessionSystemPromptResolver', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionSystemPromptResolver', () => ({
   sessionWillInjectAuthoredPrompt: (...a: unknown[]) => mockWillInjectAuthoredPrompt(...a),
 }));
 
-vi.mock('@server/utils/systemPrompts/loader', () => ({
+vi.mock('@bike4mind/server-utils/utils/systemPrompts/loader', () => ({
   loadBaseIdentitySystemPromptMessages: (...a: unknown[]) => mockLoadIdentityPrompts(...a),
 }));
 

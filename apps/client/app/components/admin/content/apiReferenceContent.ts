@@ -8,7 +8,7 @@ import {
   MIN_PASSAGE_TOKEN_TARGET,
   OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
 } from '@bike4mind/common';
-import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import type { ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 
 // Generated from the same catalog the New-Key modals offer, so the table can't drift from
 // what a user can actually select. A literal `|` would split a GFM table cell.

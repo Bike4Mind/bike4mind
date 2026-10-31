@@ -1,4 +1,4 @@
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -54,9 +54,9 @@ import { z } from 'zod';
 import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
-import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -79,7 +79,7 @@ import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '@server/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
-import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
+import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';

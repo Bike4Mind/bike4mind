@@ -10,7 +10,7 @@ import {
   UnprocessableEntityError,
   TooManyRequestsError,
 } from '@bike4mind/common';
-import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
+import { signupCreditsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));

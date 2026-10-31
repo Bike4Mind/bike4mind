@@ -54,7 +54,7 @@ import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import type { Request, Response } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
-import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';

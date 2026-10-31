@@ -1,5 +1,5 @@
 import { registerContributedSettings } from '@bike4mind/common';
-import { premiumAdminSettings } from '@client/app/premium-generated/premiumAdminSettings.generated';
+import { premiumAdminSettings } from '../../premium-generated/premiumAdminSettings.generated';
 
 // Imported for its side effect by each entrypoint that reads settings outside baseApi (the admin
 // settings context, generated server handler stubs, the queue and job handlers that import it, and

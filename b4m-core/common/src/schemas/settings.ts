@@ -7486,7 +7486,7 @@ export function buildPublicSettingsProjection(settings: AdminSettingDoc[]): Publ
 //
 // An extension package registers its own setting definitions here instead of adding literals to
 // `SettingKeySchema`. Registration is a side effect of importing the generated contribution module
-// (apps/client: premiumAdminSettings.generated.ts, via lib/settings/registerContributedSettings.ts),
+// (@bike4mind/server-utils: premiumAdminSettings.generated.ts, via lib/settings/registerContributedSettings.ts),
 // so a read that runs before that import sees only the core catalog.
 //
 // The contribution module also ships in the client bundle, so a sensitive contributed setting may not

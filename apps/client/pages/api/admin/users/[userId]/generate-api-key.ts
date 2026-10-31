@@ -20,7 +20,7 @@ import {
   USER_API_KEY_SCOPE_VALUES,
   isApiKeyScopeOffered,
   isKnownApiKeyScope,
-} from '@client/app/constants/apiKeyScopes';
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { toEntitlementUser } from '@server/entitlements';
 import { resolveApiKeyScopeAccessForUser } from '@server/entitlements/apiKeyScopeAccess';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';

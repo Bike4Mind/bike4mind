@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { CreditHolderType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
-import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
+import { signupCreditsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
 vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));

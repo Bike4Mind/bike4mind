@@ -1,4 +1,4 @@
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import {
   adminSettingsRepository,
@@ -57,15 +57,15 @@ import { operationalBillingAdapters } from '@server/billing/operationalBilling';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
-import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
+import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 import { LLMEvents, TelemetryEvents } from '@server/utils/eventBus';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';

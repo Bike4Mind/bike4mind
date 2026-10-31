@@ -4,9 +4,13 @@ import { BadRequestError } from '@bike4mind/utils';
 import mongoose from 'mongoose';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
+import {
+  decideScopeGate,
+  parseStagedScopes,
+  SCOPE_STAGING_ENV_VAR,
+} from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
+import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 
 /** ApiKeyUsageLog's TTL is 90 days, so a longer window would silently return less. */
 const MAX_WINDOW_DAYS = 90;

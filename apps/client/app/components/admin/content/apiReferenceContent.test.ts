@@ -4,7 +4,7 @@ import {
   GENERIC_MODAL_API_KEY_SCOPES,
   DEDICATED_FLOW_SCOPES,
   genericApiKeyScopesFor,
-} from '@client/app/constants/apiKeyScopes';
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { getApiReferenceContent, renderScopeTableRows } from './apiReferenceContent';
 
 const API_REFERENCE_CONTENT = getApiReferenceContent('https://b4m.test', GENERIC_MODAL_API_KEY_SCOPES);

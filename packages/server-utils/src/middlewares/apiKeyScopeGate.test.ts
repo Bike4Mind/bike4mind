@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
 import { decideScopeGate, parseStagedScopes } from './apiKeyScopeGate';
 
-vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+vi.mock('../premium-generated/premiumApiKeyScopes.generated', () => ({
   premiumApiKeyScopes: [
     { value: 'acme:read', label: 'Acme: Read', description: 'Read Acme records', endpoints: ['GET /api/acme'] },
   ],
