@@ -163,8 +163,9 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     if (!this.listed) {
       try {
         await this.getModelInfo();
-      } catch {
-        this.listed = true;
+      } catch (error) {
+        // Left unlisted so a later turn asks again.
+        this.logger.warn(`Could not list ${this.options.label}'s models: ${this.redact(describeFailure(error))}`);
       }
     }
     return this.contexts.get(name);
@@ -314,7 +315,8 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
         const out: string[] = [];
         if (chunk.usage) {
           inputTokens = Math.max(inputTokens, chunk.usage.prompt_tokens || 0);
-          outputTokens += chunk.usage.completion_tokens || 0;
+          // Some servers repeat the running total in every chunk, so the last report wins.
+          outputTokens = chunk.usage.completion_tokens || outputTokens;
         }
         for (const choice of chunk.choices ?? []) {
           if (choice.finish_reason) finishReason = choice.finish_reason;
@@ -363,7 +365,14 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       inThinking = false;
     }
 
-    const calls = func.filter(call => call?.name);
+    // A server that omits an id still needs one to pair the tool result with its call.
+    const calls = func
+      .filter(call => call?.name)
+      .map((call, index) => ({
+        name: call.name!,
+        parameters: call.parameters || '{}',
+        id: call.id || `call_${toolCallCount}_${index}`,
+      }));
     if (!sawProse && calls.length === 0) {
       if (finishReason === 'length') throw new OutputBudgetExhaustedError(this.options.label, name);
       if (finishReason === undefined && !options.abortSignal?.aborted) {
@@ -375,7 +384,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     }
     if (calls.length === 0) return;
 
-    for (const call of calls) toolsUsed.push({ name: call.name!, arguments: call.parameters || '{}', id: call.id });
+    for (const call of calls) toolsUsed.push({ name: call.name, arguments: call.parameters, id: call.id });
 
     if (options.executeTools === false) {
       await callback([null], { ...info(), ...(reasoning ? { thinking: [reasoning] } : {}) });
@@ -390,23 +399,31 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       toolFn: (params: Record<string, unknown>) => Promise<{ toString(): string }>;
     };
     const resolved: Resolved[] = [];
-    for (const call of calls) {
-      const { id, name: toolName } = call;
-      if (!id || !toolName) continue;
+    // Calls that cannot run still get an error result, so the next round's history changes and the model
+    // can correct itself instead of repeating the same call until the tool-call limit.
+    const round: ToolRoundResult[] = [];
+    const reject = (tool: IChoiceEndToolUse['tool'], observation: string) => {
+      recordToolResult(toolsUsed, tool, observation, false);
+      round.push({ tool, result: observation });
+    };
+    for (const { id, name: toolName, parameters } of calls) {
       const toolFn = requested.find(tool => tool.toolSchema.name === toolName)?.toolFn;
-      if (!toolFn) continue;
-      const parameters = call.parameters || '{}';
+      if (!toolFn) {
+        reject(
+          { id, name: toolName, parameters },
+          `Error: tool "${toolName}" is not available. Do not call it again; answer directly or use a listed tool.`
+        );
+        continue;
+      }
       try {
         resolved.push({ id, name: toolName, parameters, parsed: JSON.parse(parameters), toolFn });
       } catch {
         this.logger.warn(`JSON parse error for ${toolName} arguments`);
         const entry = toolsUsed.find(tool => tool.name === toolName && tool.id === id);
         if (entry) entry.arguments = '{}';
-        recordToolResult(
-          toolsUsed,
-          { id, name: toolName },
-          'Error: Tool arguments were malformed and could not be parsed.',
-          false
+        reject(
+          { id, name: toolName, parameters: '{}' },
+          'Error: Tool arguments were malformed and could not be parsed.'
         );
       }
     }
@@ -423,7 +440,6 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
 
     const inheritedGuard = options._internal?.artifactGuard;
     let guard = inheritedGuard;
-    const round: ToolRoundResult[] = [];
     for (const [i, outcome] of batch.entries()) {
       const target = resolved[i];
       if (outcome.ok) {
@@ -457,7 +473,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
 
     if (
       shouldEndTurnAfterTools(
-        calls.map(call => call.name!),
+        calls.map(call => call.name),
         requested,
         roundText
       )

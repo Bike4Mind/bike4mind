@@ -361,6 +361,105 @@ describe('OpenAICompatibleBackend against vLLM', () => {
   });
 });
 
+describe('OpenAICompatibleBackend tool rounds and usage', () => {
+  const toolCallOnce =
+    (call: object): Parameters<typeof startFakeServer>[0][string] =>
+    (req, res) =>
+      bodyOf(req).messages?.at(-1)?.role === 'tool'
+        ? sse(res, [{ content: 'Done.' }])
+        : sse(res, [{ tool_calls: [{ index: 0, ...call }] }]);
+  const chats = (server: FakeServer) =>
+    server.requests.filter(request => request.path === '/v1/chat/completions').map(bodyOf);
+
+  it('answers a call to an unknown tool with an error result', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': toolCallOnce({ id: 'call-1', function: { name: 'nope', arguments: '{}' } }),
+    });
+    const { backend } = make(server.baseUrl, null);
+    const { text } = await run(backend, 'm', [weatherTool(async () => '21C')]);
+    expect(text).toBe('Done.');
+    expect(chats(server)).toHaveLength(2);
+    const last = chats(server)[1].messages?.at(-1) as { tool_call_id?: string; content?: string };
+    expect(last).toMatchObject({ role: 'tool', tool_call_id: 'call-1' });
+    expect(last.content).toContain('tool \\"nope\\" is not available');
+  });
+
+  it('answers a call with malformed arguments with an error result', async () => {
+    const toolFn = vi.fn(async () => '21C');
+    const server = await fakeServer({
+      'POST /v1/chat/completions': toolCallOnce({ id: 'call-1', function: { name: 'get_weather', arguments: '{"ci' } }),
+    });
+    const { backend } = make(server.baseUrl, null);
+    expect((await run(backend, 'm', [weatherTool(toolFn)])).text).toBe('Done.');
+    expect(toolFn).not.toHaveBeenCalled();
+    expect(chats(server)).toHaveLength(2);
+    const last = chats(server)[1].messages?.at(-1) as { content?: string };
+    expect(last.content).toContain('malformed');
+  });
+
+  it('gives a call without an id one, so its result pairs with it', async () => {
+    const toolFn = vi.fn(async () => '21C');
+    const server = await fakeServer({
+      'POST /v1/chat/completions': toolCallOnce({ function: { name: 'get_weather', arguments: '{"city":"Paris"}' } }),
+    });
+    const { backend } = make(server.baseUrl, null);
+    expect((await run(backend, 'm', [weatherTool(toolFn)])).text).toBe('Done.');
+    expect(toolFn).toHaveBeenCalledWith({ city: 'Paris' });
+    const messages = chats(server)[1].messages as { tool_calls?: { id: string }[]; tool_call_id?: string }[];
+    expect(messages.at(-1)?.tool_call_id).toBe('call_0_0');
+    expect(messages.at(-2)?.tool_calls?.[0].id).toBe('call_0_0');
+  });
+
+  it('counts output tokens from a running total once', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        ['a', 'b', 'c'].forEach((content, i) =>
+          res.write(
+            `data: ${JSON.stringify({
+              id: 'c',
+              object: 'chat.completion.chunk',
+              model: 'm',
+              choices: [{ index: 0, delta: { content }, finish_reason: i === 2 ? 'stop' : null }],
+              usage: { prompt_tokens: 5, completion_tokens: i + 1 },
+            })}\n\n`
+          )
+        );
+        res.end('data: [DONE]\n\n');
+      },
+    });
+    const { backend } = make(server.baseUrl, null);
+    const { text, info } = await run(backend, 'm');
+    expect(text).toBe('abc');
+    expect(info?.outputTokens).toBe(3);
+  });
+
+  it('logs a failed model listing and lists again on the next turn', async () => {
+    let listings = 0;
+    const server = await fakeServer({
+      'GET /v1/models': (_req, res) =>
+        listings++ === 0
+          ? sendJson(res, { error: { message: 'busy' } }, 503)
+          : sendJson(res, { object: 'list', data: [{ id: 'm', object: 'model', owned_by: 'vllm' }] }),
+      'POST /v1/chat/completions': (_req, res) => sse(res, [{ content: 'ok' }]),
+    });
+    const warn = vi.fn();
+    const backend = new OpenAICompatibleBackend({
+      baseUrl: server.baseUrl,
+      label: 'gpu-box',
+      product: 'vllm',
+      fetch: globalThis.fetch,
+      logger: { ...silentLogger, warn } as never,
+    });
+    const tools = [weatherTool(async () => '')];
+    await run(backend, 'm', tools);
+    await run(backend, 'm', tools);
+    await run(backend, 'm', tools);
+    expect(listings).toBe(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^Could not list gpu-box's models: /));
+  });
+});
+
 describe('OpenAICompatibleBackend against other servers', () => {
   it('chats with llama-server and reads its context from /props', async () => {
     const server = await fakeServer({
