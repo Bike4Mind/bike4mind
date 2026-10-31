@@ -4,11 +4,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // loader so each test controls the "enabled with content" vs "admin-disabled -> null" outcomes that
 // the suppression decision turns on.
 const loadSystemPromptContent = vi.fn();
-vi.mock('@server/utils/systemPrompts/loader', () => ({
+vi.mock('./systemPrompts/loader', () => ({
   loadSystemPromptContent: (...args: unknown[]) => loadSystemPromptContent(...args),
 }));
 
-vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+vi.mock('../premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'prompt-workspace': {
       ownedFields: ['systemPromptText'],

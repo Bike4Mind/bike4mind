@@ -15,7 +15,7 @@ import {
   getClaudeMarketplaceContract,
   getClaudePluginZipContract,
 } from '@bike4mind/common';
-import { decideScopeGate } from '@server/middlewares/apiKeyScopeGate';
+import { decideScopeGate } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
 const {
   mockFind,

@@ -178,7 +178,9 @@ describe('apiKeyScopes vs the shared CONFINED_API_KEY_SCOPES', () => {
   });
 
   it('derives DEDICATED_FLOW_SCOPES as exactly the confined scopes documented for users', () => {
-    const documentedConfined = USER_API_KEY_SCOPES.map(s => s.value).filter(v => CONFINED_API_KEY_SCOPES.includes(v));
+    const documentedConfined = USER_API_KEY_SCOPES.map(s => s.value).filter(v =>
+      CONFINED_API_KEY_SCOPES.includes(v as ApiKeyScope)
+    );
     expect([...DEDICATED_FLOW_SCOPES].sort()).toEqual([...documentedConfined].sort());
   });
 
@@ -238,7 +240,7 @@ describe('genericApiKeyScopesFor', () => {
 
   it('drops only the gated product scopes without any product', () => {
     const values = genericApiKeyScopesFor(NO_ACCESS).map(s => s.value);
-    const gated = GENERIC_MODAL_API_KEY_SCOPES.filter(s => GATED_API_KEY_SCOPES[s.value]);
+    const gated = GENERIC_MODAL_API_KEY_SCOPES.filter(s => GATED_API_KEY_SCOPES[s.value as ApiKeyScope]);
     for (const { value } of gated) expect(values).not.toContain(value);
     expect(values).toHaveLength(GENERIC_MODAL_API_KEY_SCOPES.length - gated.length);
     expect(values).toContain(ApiKeyScope.ME_READ);
@@ -265,11 +267,13 @@ describe('genericApiKeyScopesFor', () => {
       /^(optihashi|hearth|overwatch|marketing-reports):/.test(v)
     );
     expect(productScopes.length).toBeGreaterThan(0);
-    for (const scope of productScopes) expect(GATED_API_KEY_SCOPES[scope]).toBeDefined();
+    for (const scope of productScopes) expect(GATED_API_KEY_SCOPES[scope as ApiKeyScope]).toBeDefined();
   });
 
   it('names no premium route paths in the premium scope docs', () => {
-    for (const scope of USER_API_KEY_SCOPES.filter(s => GATED_API_KEY_SCOPES[s.value] === 'hasOptiAccess')) {
+    for (const scope of USER_API_KEY_SCOPES.filter(
+      s => GATED_API_KEY_SCOPES[s.value as ApiKeyScope] === 'hasOptiAccess'
+    )) {
       for (const endpoint of scope.endpoints) expect(endpoint).not.toMatch(/\/api\//);
     }
   });

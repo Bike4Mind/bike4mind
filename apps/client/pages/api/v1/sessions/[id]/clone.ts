@@ -15,7 +15,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { SessionEvents, redactSessionForClient, sessionCloneContract } from '@bike4mind/common';
 import { copySurfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 const handler = nextRouteForContract(sessionCloneContract, {
   rateLimit: rateLimit({ limit: 10, windowMs: 60_000, bucket: 'sessions/clone' }),

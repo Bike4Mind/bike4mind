@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PremiumEntitlementGrants } from '@client/app/premiumContract';
+import type { PremiumEntitlementGrants } from '@bike4mind/common';
 
-const GENERATED = '@client/app/premium-generated/premiumEntitlementGrants.generated';
+const GENERATED = '../../premium-generated/premiumEntitlementGrants.generated';
 
 async function loadRegistry(premiumEntitlementGrants: unknown) {
   vi.resetModules();

@@ -37,7 +37,7 @@ import {
 } from '@bike4mind/common';
 import { renderEmbedWidgetHtml } from '@server/embed/embedWidgetPage';
 import { embedKeyOwnerHasEntitlement } from '@server/entitlements/embedKeyEntitlement';
-import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 /** Structural response shape shared by the Express/Next response baseApi hands us. */
 interface HtmlResponse {

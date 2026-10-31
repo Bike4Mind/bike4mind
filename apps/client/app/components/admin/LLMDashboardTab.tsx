@@ -40,7 +40,7 @@ import {
 import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { KNOWN_ENTITLEMENT_KEYS } from '@client/lib/entitlements/registry';
+import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 // Available user tags for permissions (used in table display)
 // 'admin' access is handled via user.isAdmin property, not tags

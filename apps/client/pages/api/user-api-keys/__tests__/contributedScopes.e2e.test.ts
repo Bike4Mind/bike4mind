@@ -37,7 +37,7 @@ vi.mock('@server/entitlements', () => ({
   getRequestEntitlements: vi.fn(async () => [...scopeAccess.entitlements]),
 }));
 
-vi.mock('@client/app/premium-generated/premiumApiKeyScopes.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated', () => ({
   premiumApiKeyScopes: [
     {
       value: 'acme:read',

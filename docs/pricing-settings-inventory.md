@@ -137,7 +137,7 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 - `apps/client/app/components/subscription/CreditsExplanation.tsx`
 - `apps/client/app/components/subscription/PlansSection.tsx`
 - `apps/client/app/utils/shareFooter.ts`
-- `apps/client/lib/entitlements/registry.ts`
+- `packages/server-utils/src/lib/entitlements/registry.ts`
 - `apps/client/server/utils/starterCredits.ts`
 - `b4m-core/common/src/types/entities/UserTypes.ts`
 - `b4m-core/services/src/userService/freeCredits.ts`

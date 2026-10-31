@@ -9,7 +9,7 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { AuthEvents, ConflictError } from '@bike4mind/common';
 import { calculateTokenAge } from '@server/utils/auditLog';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { entitlementsForEmail } from '@client/lib/entitlements/registry';
+import { entitlementsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
 import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { z } from 'zod';

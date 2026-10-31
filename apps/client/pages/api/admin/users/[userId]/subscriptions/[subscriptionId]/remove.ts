@@ -2,7 +2,7 @@ import { organizationRepository, userRepository, withTransaction } from '@bike4m
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, IMongoDocument } from '@bike4mind/common';
-import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
+import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
 import {
   SubscriptionOwnerType,
   ISubscription,

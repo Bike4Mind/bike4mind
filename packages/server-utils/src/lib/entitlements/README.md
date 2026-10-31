@@ -18,7 +18,7 @@ its `package.json`. For example:
 
 Run `pnpm --filter @bike4mind/client codegen` after changing the declaration.
 The generator validates the data and writes
-`apps/client/app/premium-generated/premiumEntitlementGrants.generated.ts`.
+`packages/server-utils/src/premium-generated/premiumEntitlementGrants.generated.ts`.
 The registry imports this data without importing overlay code. With no overlay,
 the generated contribution is `{}`.
 

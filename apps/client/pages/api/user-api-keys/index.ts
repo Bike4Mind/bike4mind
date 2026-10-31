@@ -8,7 +8,7 @@ import {
   gateEmbedBrandingWrite,
   type EmbedKeyOwnerRef,
 } from '@server/entitlements/embedKeyEntitlement';
-import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
 import {
@@ -24,7 +24,7 @@ import {
   USER_API_KEY_SCOPE_VALUES,
   isApiKeyScopeOffered,
   isKnownApiKeyScope,
-} from '@client/app/constants/apiKeyScopes';
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';

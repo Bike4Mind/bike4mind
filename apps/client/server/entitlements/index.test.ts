@@ -9,7 +9,7 @@ import {
 } from './index';
 import type { Request } from 'express';
 import type { IUserDocument } from '@bike4mind/common';
-import { __registryRows } from '@client/lib/entitlements/registry';
+import { __registryRows } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 // Minimal req shim - only the fields the entitlement helpers touch.
 const makeReq = (user: {
@@ -32,11 +32,11 @@ vi.mock('@bike4mind/database', () => ({ organizationRepository: { findPlanHolder
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn: vi.fn() } } }));
 
 // Fixture registry: behavior of the real rows is covered by
-// lib/entitlements/registry.test.ts; here we test the resolver's wiring and
+// server-utils lib/entitlements/registry.test.ts; here we test the resolver's wiring and
 // gate semantics against controlled mappings (and avoid product literals).
-vi.mock('@client/lib/entitlements/registry', async () => {
-  const actual = await vi.importActual<typeof import('@client/lib/entitlements/registry')>(
-    '@client/lib/entitlements/registry'
+vi.mock('@bike4mind/server-utils/lib/entitlements/registry', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/lib/entitlements/registry')>(
+    '@bike4mind/server-utils/lib/entitlements/registry'
   );
   return {
     ...actual,
