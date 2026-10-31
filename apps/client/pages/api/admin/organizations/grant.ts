@@ -124,6 +124,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
               {
                 db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
                 creditHolderMethods: organizationRepository,
+                lotFundingSource: 'granted',
               }
             )
           : undefined;

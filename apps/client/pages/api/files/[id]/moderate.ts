@@ -81,7 +81,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
     // Version reconciliation owns its compare-and-set. A separate HEAD followed by an unconditional
     // version write in the claim could rewind a newer event's version while this request waited.
     try {
-      await recordLandedObject(fabFile._id, objectKey);
+      await recordLandedObject(fabFile._id, objectKey, req.logger);
     } catch (error) {
       req.logger.warn('On-demand moderation could not reconcile the current object; leaving it pending', {
         fabFileId,

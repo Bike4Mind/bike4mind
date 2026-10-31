@@ -21,6 +21,7 @@ const handler = baseApi().post(
         fileKey: parsed.data.fileKey,
         receivedAt: req.receivedAt,
         logger: req.logger,
+        apiKeyId: req.apiKeyInfo?.keyId,
       })
     );
   })

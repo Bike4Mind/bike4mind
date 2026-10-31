@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import { htmlToMarkdown } from '../../../../lib/turndown';
-import { resolveAndVetUrl } from './ssrfGuard';
+import { refuseFetch, resolveAndVetUrl } from './ssrfGuard';
 
 const DEFAULT_PLAIN_FETCH_TIMEOUT_MS = 60_000;
 // Hard ceiling on a fetched body. deep_research fetches up to 3 URLs in parallel, so an unbounded
@@ -77,9 +77,7 @@ export async function plainFetchScrape(url: string, options?: { timeoutMs?: numb
 
   const target = new URL(url);
   const vetted = await resolveAndVetUrl(target);
-  if (!vetted.safe) {
-    throw new Error(`Refusing to fetch ${url}: ${vetted.reason}`);
-  }
+  if (!vetted.safe) throw refuseFetch(url, vetted);
 
   // Pin the vetted IP for http (see the function doc); https keeps the hostname.
   let fetchUrl = url;

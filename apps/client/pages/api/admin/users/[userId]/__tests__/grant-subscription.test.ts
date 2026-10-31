@@ -283,6 +283,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - reason and self-gr
     mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme' });
     mockSubCreate.mockResolvedValue({ id: 'sub-1' });
     mockFindUserSub.mockResolvedValue(null);
+    mockAddCredits.mockResolvedValue({ creditHolder: { currentCredits: 0 }, creditTransactionId: 'tx-sub-grant' });
   });
 
   describe.each(bodies)('%s grant', (_type, body) => {
@@ -297,26 +298,33 @@ describe('POST /api/admin/users/[userId]/grant-subscription - reason and self-gr
       expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
     });
 
-    it('denies a self-grant with a 403 and a user.subscription.denied entry', async () => {
-      await expect(callWith({ ...body, reason: REASON }, 'admin-1')()).rejects.toMatchObject({ statusCode: 403 });
+    it('allows a self-grant through the ledger and flags it in the audit entry', async () => {
+      await callWith({ ...body, reason: REASON }, 'admin-1')();
+      expect(mockAddCredits).toHaveBeenCalled();
       expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.subscription.denied' })
+        expect.objectContaining({
+          action: 'user.subscription.granted',
+          details: expect.objectContaining({ selfGrant: true }),
+        })
       );
-      expect(mockSubCreate).not.toHaveBeenCalled();
-      expect(mockAddCredits).not.toHaveBeenCalled();
     });
 
-    it('denies an impersonating admin granting to the account they impersonate from', async () => {
+    it('flags a grant to the account an impersonating admin impersonates from', async () => {
       const user = { isAdmin: true, id: 'admin-2', email: 'b@example.com', impersonatedBy: 'admin-1' };
-      await expect(callWith({ ...body, reason: REASON }, 'admin-1', user)()).rejects.toMatchObject({
-        statusCode: 403,
-      });
+      await callWith({ ...body, reason: REASON }, 'admin-1', user)();
       expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.subscription.denied' })
+        expect.objectContaining({ details: expect.objectContaining({ selfGrant: true }) })
       );
-      expect(mockSubCreate).not.toHaveBeenCalled();
+    });
+
+    it('does not flag a grant to another account', async () => {
+      await callWith({ ...body, reason: REASON })();
+      expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ details: expect.objectContaining({ selfGrant: false }) })
+      );
     });
   });
 });

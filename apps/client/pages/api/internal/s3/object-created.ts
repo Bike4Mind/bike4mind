@@ -173,7 +173,7 @@ const handler = baseApi({ auth: false }).post(
 
       // Reconcile against the current stored version before scanning. A failed HEAD or a competing
       // reconciliation must retry, so an old event cannot reopen a newer terminal verdict.
-      await recordLandedObject(metadata._id, objectKey);
+      await recordLandedObject(metadata._id, objectKey, req.logger);
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
 
       // Charged from the stored object's size, never the row's client-claimed fileSize. The

@@ -8,6 +8,7 @@ import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAl
 import { agentRepository } from '@bike4mind/database';
 import { ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { generateAgentSystemPrompt } from '@server/agents/authoring/generateAgentSystemPrompt';
+import { logSystemPromptGenerationFailure } from '@server/agents/systemPromptRateLimit';
 
 interface GenerateSystemPromptResponse {
   success: boolean;
@@ -42,7 +43,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
         message: 'System prompt generated successfully',
       });
     } catch (error) {
-      req.logger.error('Error generating system prompt:', error);
+      logSystemPromptGenerationFailure(req.logger, 'Error generating system prompt:', error);
 
       // Provide user-friendly error messages
       let errorMessage = 'Failed to generate system prompt. Please try again.';
