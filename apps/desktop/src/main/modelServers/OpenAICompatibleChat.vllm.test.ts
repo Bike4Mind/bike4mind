@@ -7,7 +7,7 @@ import type { CompletionRequest } from '../chat/completions';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
-import { contextTooSmallHint, OpenAICompatibleChat } from './OpenAICompatibleChat';
+import { contextTooSmallHint, longMessageNotice, OpenAICompatibleChat } from './OpenAICompatibleChat';
 
 /**
  * A vLLM stand-in that answers with vLLM's own shapes: ModelCard and ErrorResponse from
@@ -342,7 +342,7 @@ describe('OpenAICompatibleChat when the context is too small for Desktop prompt 
     ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
   });
 
-  it('says why once per conversation, lists tools off, and names --max-model-len; a larger one turns them back on', async () => {
+  it('says why once per conversation, hints on the server, and names --max-model-len; a larger one turns them back on', async () => {
     vllm = await startFakeVllm();
     const toolsChanged = vi.fn();
     const chat = client(vllm, toolsChanged);
@@ -357,12 +357,14 @@ describe('OpenAICompatibleChat when the context is too small for Desktop prompt 
     const notices: string[] = [];
     expect(texts(await turn(chat, ask('a', 9_000), notices))).toEqual(['Hello.']);
     await turn(chat, ask('a'), notices);
-    await turn(chat, ask('b'), notices);
+    // A turn is told only when it measured the overflow itself; there is no server-wide fallback to a stale figure.
+    await turn(chat, ask('b', 9_000), notices);
     expect(notices).toHaveLength(2);
     expect(notices[0]).toMatch(/qwen-small with a 4096-token context.*about 9000 tokens.*--max-model-len 16384/);
     expect(notices[0]).not.toMatch(/--enable-auto-tool-choice/);
     expect(toolsChanged).toHaveBeenCalledTimes(1);
-    expect((await chat.listModels()).map(model => model.supportsTools)).toEqual([false, false]);
+    // Listing never marks tools off for size: whether a turn carries tools is decided per turn, not by the server.
+    expect((await chat.listModels()).map(model => model.supportsTools)).toEqual([undefined, undefined]);
     expect(chat.toolsHint()).toMatch(/runs qwen-small, sql-lora with a 4096-token context/);
 
     vllm.maxModelLen = 16_384;
@@ -392,6 +394,46 @@ describe('OpenAICompatibleChat when the context is too small for Desktop prompt 
     expect(contextTooSmallHint('gpu', 'llama-server', [{ name: 'm', context: 4096 }], 9_000)).toMatch(
       /--ctx-size 16384/
     );
+  });
+});
+
+describe('OpenAICompatibleChat tools versus a fixed context', () => {
+  const chatTurn = (sessionId: string, extra: Partial<CompletionRequest> = {}): CompletionRequest => ({
+    model: id('qwen-small'),
+    messages: [{ role: 'user', content: 'Weather in Paris?' }],
+    sessionId,
+    ...extra,
+  });
+
+  it('keeps sending tools to a conversation that fits after another one overflowed, and clears the hint', async () => {
+    vllm = await startFakeVllm();
+    const chat = client(vllm);
+    await chat.listModels();
+    const notices: string[] = [];
+    await turn(chat, chatTurn('big', { toolPromptTokens: 9_000 }), notices);
+    expect(notices).toHaveLength(1);
+    expect(chat.toolsHint()).toMatch(/--max-model-len/);
+
+    const events = await turn(chat, chatTurn('small', { tools: [WEATHER_TOOL] }), notices);
+    expect(events[0]).toMatchObject({ type: 'tool_use' });
+    expect(vllm.requests.at(-1)?.tools).toHaveLength(1);
+    expect((await chat.listModels()).some(model => model.supportsTools === false)).toBe(false);
+    expect(chat.toolsHint()).toBeNull();
+  });
+
+  it('tells a turn whose message overflows so every time, without the server hint or the once-per-chat memory', async () => {
+    vllm = await startFakeVllm();
+    const chat = client(vllm);
+    await chat.listModels();
+    const notices: string[] = [];
+    await turn(chat, chatTurn('a', { toolPromptTokens: 1_000 }), notices);
+    await turn(chat, chatTurn('a', { toolPromptTokens: 1_000 }), notices);
+    expect(notices).toEqual([
+      longMessageNotice('qwen-small', MAX_MODEL_LEN),
+      longMessageNotice('qwen-small', MAX_MODEL_LEN),
+    ]);
+    expect(notices[0]).not.toMatch(/--max-model-len/);
+    expect(chat.toolsHint()).toBeNull();
   });
 });
 

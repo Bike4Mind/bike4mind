@@ -43,6 +43,11 @@ export function toolsOffHint(label: string, product: OpenAICompatibleProduct | n
   return `${label} refuses tool calls, so its chats run without tools. Turn tool calling on there, ${after}`;
 }
 
+/** Why one turn ran without tools when its message, not Desktop's prompt and tools, overflowed the context. */
+export function longMessageNotice(model: string, context: number): string {
+  return `This message is too long for ${model}'s ${context}-token context to also carry Desktop's tools, so this reply runs without them. A shorter message, or a larger context, keeps them.`;
+}
+
 /** Why tools are off when the server's context is too small for Desktop's prompt and tools. */
 export function contextTooSmallHint(
   label: string,
@@ -163,17 +168,24 @@ export class OpenAICompatibleChat implements LocalChat {
   private readonly runtime: OpenAICompatibleRuntime;
   private readonly contexts = new Map<string, number>();
   /**
-   * The server refused a request that declared tools, so chats go without them until a recheck sees tools
-   * accepted again. Tool flags are server-wide on vLLM and llama-server, so this is too.
+   * Models whose requests declaring tools were refused, so their chats go without tools until a recheck sees
+   * tools accepted again. Tool flags are server-wide on vLLM and llama-server, so one refusal turns tools off
+   * for every model there; elsewhere (a proxy fronting several backends) it is per model.
    */
-  private toolsOff = false;
+  private readonly refused = new Set<string>();
   /** Whether a vLLM server has been asked once if it takes tools, before any chat found out. */
   private toolsAsked = false;
   private probing: Promise<void> | null = null;
   /** Conversations already told that tools are off. */
   private readonly told = new Set<string>();
-  /** Desktop's prompt plus tools, from the last turn that left them out because the context was too small. */
+  /**
+   * Desktop's prompt plus tools, from the last turn that measured them and found the context too small; cleared
+   * by a turn whose prompt and tools fit. Feeds the server's hint only: whether a turn sends tools is decided per
+   * turn by toolPromptOverflow, since the prompt depends on the conversation's project context and grants.
+   */
   private toolPrompt: number | undefined;
+  /** Models a listing gave no context for, so a turn does not list the server again to look. */
+  private readonly unlistedContexts = new Set<string>();
   /** Names from the last listing, for the server's hint. */
   private listed: string[] = [];
 
@@ -205,7 +217,7 @@ export class OpenAICompatibleChat implements LocalChat {
       ...(model.aliases?.length
         ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
         : {}),
-      ...(this.toolsOff || this.tooSmall(model.name) ? { supportsTools: false } : {}),
+      ...(this.toolsOffFor(model.name) ? { supportsTools: false } : {}),
     }));
   }
 
@@ -216,31 +228,38 @@ export class OpenAICompatibleChat implements LocalChat {
     if (this.server.product === 'llama-server') {
       const measured = await this.llamaServerContext(signal);
       if (measured !== undefined) this.contexts.set(name, measured);
-    } else if (this.server.product !== 'lmstudio') {
-      this.learnContexts(await this.runtime.list().catch(() => []));
+    } else if (this.server.product !== 'lmstudio' && !this.unlistedContexts.has(name)) {
+      const models = await this.runtime.list().catch(() => null);
+      if (models) {
+        this.learnContexts(models);
+        if (!this.contexts.has(name)) this.unlistedContexts.add(name);
+      }
     }
     return this.contexts.get(name) ?? LOCAL_CONTEXT_TARGET_TOKENS;
   }
 
   /** Why chats on this server run without tools; null while they have them. */
   toolsHint(): string | null {
-    if (this.toolsOff) return toolsOffHint(this.server.label, this.server.product);
+    if (this.refused.size > 0) return toolsOffHint(this.server.label, this.server.product);
     return this.contextHint(this.listed);
   }
 
   /**
    * Asks the server whether it takes tools now, with a one-token request that declares one. Only asks while
    * tools are off, which costs a refusal that never reaches the model, and once on a vLLM server that has
-   * not been asked, which starts without tool calling unless told to.
+   * not been asked, which starts without tool calling unless told to. Probes a refused model when there is one,
+   * so a server that refuses tools for one model is not answered by another that takes them.
    */
   recheckTools(model: string | undefined): Promise<void> {
-    if (!model || this.probing) return this.probing ?? Promise.resolve();
-    if (!this.toolsOff && (this.server.product !== 'vllm' || this.toolsAsked)) return Promise.resolve();
-    this.probing = this.probeTools(model)
+    if (this.probing) return this.probing;
+    const target = this.refused.values().next().value ?? model;
+    if (!target) return Promise.resolve();
+    if (this.refused.size === 0 && (this.server.product !== 'vllm' || this.toolsAsked)) return Promise.resolve();
+    this.probing = this.probeTools(target)
       .then(verdict => {
         if (verdict === null) return;
         this.toolsAsked = true;
-        this.setToolsOff(verdict === 'refused');
+        this.setRefused(target, verdict === 'refused');
       })
       .finally(() => (this.probing = null));
     return this.probing;
@@ -258,7 +277,7 @@ export class OpenAICompatibleChat implements LocalChat {
     onNotice?: (message: string) => void
   ): Promise<void> {
     const model = this.modelName(request.model);
-    const tools = this.toolsOff
+    const tools = this.toolsOffFor(model)
       ? []
       : (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
     const post = (withTools: boolean) =>
@@ -275,24 +294,29 @@ export class OpenAICompatibleChat implements LocalChat {
           ...(withTools && tools.length > 0 ? { tools } : {}),
         }),
       });
-    if (request.toolPromptTokens !== undefined && request.toolPromptTokens !== this.toolPrompt) {
-      const before = this.smallKey();
-      this.toolPrompt = request.toolPromptTokens;
-      this.smallChanged(before);
+    const context = this.contexts.get(model);
+    const measured = request.toolPromptTokens;
+    // Desktop's prompt and tools fit, so the overflow came from this message: a notice for this turn, not the server.
+    const longMessage =
+      measured !== undefined && context !== undefined && holdsPrompt(context, measured, request.maxTokens);
+    if (measured !== undefined || (request.tools?.length ?? 0) > 0) {
+      this.learnToolPrompt(measured !== undefined && !longMessage ? measured : undefined);
     }
     let response = await post(true);
     if (!response.ok && tools.length > 0 && (await refusedTools(response))) {
-      this.setToolsOff(true);
+      this.setRefused(model, true);
       response = await post(false);
     }
-    const context = this.contexts.get(model);
-    const measured = request.toolPromptTokens ?? (this.tooSmall(model) ? this.toolPrompt : undefined);
-    const why = this.toolsOff
+    const why = this.toolsOffFor(model)
       ? toolsOffHint(this.server.label, this.server.product)
-      : measured !== undefined && context !== undefined
-        ? contextTooSmallHint(this.server.label, this.server.product, [{ name: model, context }], measured)
-        : null;
-    if (why && onNotice && request.sessionId && !this.told.has(request.sessionId)) {
+      : measured === undefined || context === undefined
+        ? null
+        : longMessage
+          ? longMessageNotice(model, context)
+          : contextTooSmallHint(this.server.label, this.server.product, [{ name: model, context }], measured);
+    if (why && onNotice && longMessage) {
+      onNotice(why);
+    } else if (why && onNotice && request.sessionId && !this.told.has(request.sessionId)) {
       this.told.add(request.sessionId);
       onNotice(why);
     }
@@ -384,11 +408,29 @@ export class OpenAICompatibleChat implements LocalChat {
     }
   }
 
-  private setToolsOff(off: boolean): void {
-    if (this.toolsOff === off) return;
-    this.toolsOff = off;
-    if (!off) this.told.clear();
+  private serverWideTools(): boolean {
+    return this.server.product === 'vllm' || this.server.product === 'llama-server';
+  }
+
+  private toolsOffFor(name: string): boolean {
+    return this.serverWideTools() ? this.refused.size > 0 : this.refused.has(name);
+  }
+
+  private setRefused(name: string, refused: boolean): void {
+    const before = this.refused.size;
+    if (refused) this.refused.add(name);
+    else if (this.serverWideTools()) this.refused.clear();
+    else this.refused.delete(name);
+    if (this.refused.size === before) return;
+    if (this.refused.size === 0) this.told.clear();
     this.server.toolsChanged?.();
+  }
+
+  private learnToolPrompt(tokens: number | undefined): void {
+    if (tokens === this.toolPrompt) return;
+    const before = this.smallKey();
+    this.toolPrompt = tokens;
+    this.smallChanged(before);
   }
 
   /** Whether the server's context for `name` cannot hold Desktop's prompt and tools, as last measured. */
