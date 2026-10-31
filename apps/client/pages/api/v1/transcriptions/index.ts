@@ -19,6 +19,7 @@ const handler = nextRouteForContract(createTranscriptionContract, {
     fileKey: req.validated.file_key,
     receivedAt: req.receivedAt,
     logger: req.logger,
+    apiKeyId: req.apiKeyInfo?.keyId,
     mapProviderError: err => {
       req.logger.error('Transcription provider failed', { err });
       return new BadGatewayError('The speech provider failed to transcribe the audio');

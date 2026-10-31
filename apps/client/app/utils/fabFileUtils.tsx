@@ -87,7 +87,13 @@ function isBufferLikelyText(buffer: Buffer): boolean {
   return true;
 }
 
-export async function extractTextFromFile(type: string, arrayBuffer: ArrayBuffer): Promise<string> {
+// `maxContentLength` is required on the server: the settings fallback goes through the browser API
+// client, whose relative URL cannot resolve in Node.
+export async function extractTextFromFile(
+  type: string,
+  arrayBuffer: ArrayBuffer,
+  maxContentLength?: number
+): Promise<string> {
   // When called from the browser, buffer is of type ArrayBuffer
   // When called from the server, buffer is of type Buffer
   const clientSide = typeof window !== 'undefined';
@@ -181,8 +187,7 @@ export async function extractTextFromFile(type: string, arrayBuffer: ArrayBuffer
     }
   }
 
-  // Get the max content length from settings or fallback to default
-  const maxLength = await getMaxContentLength();
+  const maxLength = maxContentLength ?? (await getMaxContentLength());
 
   // Apply content length limit to all text content
   return truncateContent(content, maxLength);
@@ -210,6 +215,7 @@ export const getContentFromFabfile = async ({
   mimeType,
   bustCache = false,
   strict = false,
+  maxContentLength,
 }: {
   fileUrl?: string;
   mimeType?: string;
@@ -219,6 +225,8 @@ export const getContentFromFabfile = async ({
   // successfully-read empty document apart from a retrieval failure (e.g. an expired presigned
   // URL) needs the rejection.
   strict?: boolean;
+  // See extractTextFromFile: a server caller passes the admin setting it read itself.
+  maxContentLength?: number;
 }) => {
   if (!fileUrl || !mimeType) {
     console.warn('Missing fileUrl or mimeType:', { fileUrl, mimeType });
@@ -240,7 +248,7 @@ export const getContentFromFabfile = async ({
       responseType: 'arraybuffer',
       headers,
     });
-    const content = await extractTextFromFile(mimeType, fileBuffer.data);
+    const content = await extractTextFromFile(mimeType, fileBuffer.data, maxContentLength);
     // No need to truncate here as extractTextFromFile already does it
     return content;
   } catch (error) {

@@ -233,6 +233,8 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(GenerateImageResponseSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke.mock.calls[0][0].adminRoleWithheld).toBe(true);
+    // Carried onto the queued job so its settled ledger row is attributed to the key.
+    expect(mockInvoke.mock.calls[0][0].apiKeyId).toBe('k1');
   });
 
   it('strips server-owned fields from the returned session', async () => {

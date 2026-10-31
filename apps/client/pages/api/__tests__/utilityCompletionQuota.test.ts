@@ -39,7 +39,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({ apiKeyService: {}, fabFilesService: {}, recordOperationalUsage: vi.fn() }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: {} }));
 vi.mock('@server/agents/assertAgentAccess', () => ({ assertAgentAccess: vi.fn() }));
-vi.mock('@client/server/agents/systemPromptRateLimit', () => ({ assertSystemPromptGenerationAllowed: vi.fn() }));
+vi.mock('@client/server/agents/systemPromptRateLimit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/server/agents/systemPromptRateLimit')>()),
+  assertSystemPromptGenerationAllowed: vi.fn(),
+}));
 vi.mock('@server/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
 vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow: vi.fn() }));
 vi.mock('@server/help/retrieval', () => ({ searchHelpContext: vi.fn() }));

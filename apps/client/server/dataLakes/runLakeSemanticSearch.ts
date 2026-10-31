@@ -505,6 +505,7 @@ export async function runLakeSemanticSearch(
               inputTokens: tokens,
               costUsd: getEmbeddingModelCost(model, tokens),
               source,
+              apiKeyId: req.apiKeyInfo?.keyId,
             },
             {
               db: {

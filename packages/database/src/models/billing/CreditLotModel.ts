@@ -6,6 +6,7 @@ import {
   ICreditLot,
   ICreditLotRepository,
   IMongoDocument,
+  USAGE_FUNDING_SOURCES,
 } from '@bike4mind/common';
 
 export type ICreditLotDocument = ICreditLot & IMongoDocument;
@@ -20,6 +21,7 @@ const CreditLotSchema = new Schema<ICreditLotDocument>(
     consumedAssigned: { type: Number, required: true, default: 0 },
     settledAt: { type: Date, required: false },
     stripeRef: { type: String, required: false },
+    fundingSource: { type: String, required: false, enum: [...USAGE_FUNDING_SOURCES] },
   },
   {
     timestamps: true,

@@ -11,6 +11,9 @@ vi.mock('@client/app/hooks/data/entitlements', () => ({
   useGetUserProductAccess: () => ({ data: undefined, isLoading: false }),
 }));
 vi.mock('../../Details/UserSubscriptionStatus', () => ({ default: () => null }));
+vi.mock('../RiskEvidenceCard', () => ({
+  RiskEvidenceCard: ({ userId }: { userId: string }) => <div data-testid="risk-evidence-card-stub">{userId}</div>,
+}));
 vi.mock('../actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => vi.fn() }));
 
 import { OverviewTab } from './OverviewTab';
@@ -62,6 +65,7 @@ describe('OverviewTab recent activity', () => {
     const rows = await screen.findAllByTestId('user-profile-recent-activity-row');
     expect(rows).toHaveLength(2);
     expect(rows[1]).toHaveTextContent('Bought credits');
+    expect(screen.getByTestId('risk-evidence-card-stub')).toHaveTextContent(buildProfile().id);
   });
 
   it('opens the audit drawer for an admin row and the Credits tab for a credit row', async () => {
