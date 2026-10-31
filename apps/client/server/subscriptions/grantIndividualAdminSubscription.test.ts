@@ -96,7 +96,11 @@ describe('grantIndividualAdminSubscription', () => {
 
     await grantIndividualAdminSubscription({ ...params, onGranted });
 
-    expect(onGranted).toHaveBeenCalledWith({ credits: plan.credits * 3, creditTransactionId: 'tx-ind' });
+    expect(onGranted).toHaveBeenCalledWith({
+      credits: plan.credits * 3,
+      creditTransactionId: 'tx-ind',
+      subscriptionId: expect.stringMatching(/^admin_grant_/),
+    });
   });
 
   it('reports the post-grant balance', async () => {

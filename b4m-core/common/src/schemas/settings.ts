@@ -507,6 +507,7 @@ export const SettingKeySchema = z.enum([
   'spendMonitorAccountSpikeRatio',
   'spendMonitorAccountSpikeFloorCredits',
   'spendMonitorAccountCeilingCredits',
+  'freeTierDailySystemCostCapUsd',
   'stagedSignupGrantEnabled',
   'signupGrantCredits',
   'verifiedUnlockCredits',
@@ -2270,6 +2271,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
       { key: 'spendMonitorAccountSpikeFloorCredits', order: 19.48 },
       { key: 'spendMonitorAccountCeilingCredits', order: 19.49 },
+      { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
       { key: 'turnstileFailClosed', order: 22 },
@@ -4896,6 +4898,16 @@ export const settingsMap = {
       'Credits per 15-minute window. Any single account spending this much in the window raises an alert regardless of its baseline. Minimum 1.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
+  }),
+  freeTierDailySystemCostCapUsd: makeNumberSetting({
+    key: 'freeTierDailySystemCostCapUsd',
+    name: 'Free Tier Daily System Cost Cap (USD)',
+    defaultValue: 0.1,
+    min: 0,
+    description:
+      'Daily provider cost, in USD, a free-tier account may incur through system work it triggers (file indexing, knowledge-base search, tool and session operations), counted per UTC calendar day whether or not that work was charged credits. Once reached, new chat, API and session-operation requests are refused with the same 429 as the daily spend cap until the next UTC midnight; work already admitted (e.g. tool calls inside a running turn, queued file indexing) is not interrupted. Set to 0 to disable.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
   }),
   teamPlanMinSeats: makeNumberSetting({
     key: 'teamPlanMinSeats',

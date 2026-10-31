@@ -247,6 +247,14 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       .lean({ virtuals: true });
   }
 
+  /** Removes the admin credit override, so the subscription grants its plan's own rate again. */
+  clearCustomCreditsPerCycle(subscriptionId: string): Promise<ISubscription | null> {
+    if (!subscriptionId) return Promise.resolve(null);
+    return this.model
+      .findOneAndUpdate({ subscriptionId }, { $unset: { customCreditsPerCycle: 1 } }, { new: true })
+      .lean({ virtuals: true });
+  }
+
   /**
    * The same write as updateByStripeSubscriptionId, resolving to the row as it stood just before
    * it. The pre-image comes from the write itself, so a caller comparing before and after sees

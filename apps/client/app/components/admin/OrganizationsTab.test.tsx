@@ -5,8 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule);
 
-const { useSearchOrganizationsMock, idleMutation } = vi.hoisted(() => ({
+const { useSearchOrganizationsMock, useAdminOrgGrantsMock, idleMutation } = vi.hoisted(() => ({
   useSearchOrganizationsMock: vi.fn(),
+  useAdminOrgGrantsMock: vi.fn(),
   idleMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
@@ -17,7 +18,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 }));
 vi.mock('@client/app/hooks/data/adminOrganizations', () => ({
   useAdjustOrgSeats: idleMutation,
-  useAdminOrgGrants: () => ({ data: [] }),
+  useAdminOrgGrants: useAdminOrgGrantsMock,
   useConvertOrgToPaid: idleMutation,
   useGrantOrganization: idleMutation,
   useReconcileOrgSeats: idleMutation,
@@ -75,6 +76,7 @@ beforeEach(() => {
   localStorage.removeItem('admin-organizations-tab-01');
   useSearchOrganizationsMock.mockReset();
   mockList();
+  useAdminOrgGrantsMock.mockReturnValue({ data: [] });
   act(() => {
     useOrganizationsTab.setState({ params: { ...DEFAULT_ORGANIZATIONS_PARAMS } });
     fakeAdminRouter.reset({ tab: 'organizations', orgsPage: 1 });
@@ -111,5 +113,23 @@ describe('OrganizationsTab', () => {
     fireEvent.click(within(row).getByRole('button', { name: /edit/i }));
 
     expect(fakeAdminRouter.search).toMatchObject({ tab: 'organizations', orgId: ORG_B });
+  });
+
+  it("offers View subscription only on a granted org and opens the grant's subscription record", () => {
+    const GRANT_ID = 'c'.repeat(24);
+    useAdminOrgGrantsMock.mockReturnValue({ data: [{ id: GRANT_ID, ownerId: ORG_A }] });
+    // The fake router models only the /admin search; the detail route is a path change.
+    fakeAdminRouter.navigate.mockImplementationOnce(() => undefined);
+    renderTab();
+
+    fireEvent.click(screen.getByTestId(`org-actions-${ORG_B}`));
+    expect(screen.queryByTestId(`view-subscription-${ORG_B}`)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`org-actions-${ORG_A}`));
+    fireEvent.click(screen.getByTestId(`view-subscription-${ORG_A}`));
+
+    expect(fakeAdminRouter.navigate).toHaveBeenCalledWith({
+      to: '/admin/subscriptions/$subscriptionId',
+      params: { subscriptionId: GRANT_ID },
+    });
   });
 });
