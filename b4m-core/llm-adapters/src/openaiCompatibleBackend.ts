@@ -14,6 +14,7 @@ import {
   isToolRefusal,
   OpenAICompatibleRuntime,
   probeToolSupport,
+  promptTooLargeHint,
   serverContextTokens,
   toolsOffHint,
   type FetchLike,
@@ -65,6 +66,8 @@ export interface OpenAICompatibleBackendOptions {
    */
   redact?: (text: string) => string;
   logger?: ILogger;
+  /** Deadline for each model-listing request (ms); defaults to the runtime's. */
+  listingTimeoutMs?: number;
   /** Called once per cause (tools refused, context too small) with a line that says how to fix it. */
   onNotice?: (text: string) => void;
   app?: HintApp;
@@ -97,6 +100,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       baseUrl: options.baseUrl,
       fetch: options.fetch,
       product: options.product,
+      requestTimeoutMs: options.listingTimeoutMs,
     });
     this.api = new OpenAI({
       apiKey: 'none',
@@ -175,8 +179,9 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
    * `isToolRefusal` matches any 400/500 that mentions tools, including a bad tool history, so a sticky
    * tools-off waits for a one-token probe. An inconclusive probe keeps the refusal reading.
    */
-  private async probeConfirmsRefusal(name: string): Promise<boolean> {
-    const verdict = await probeToolSupport(this.options.fetch, this.runtime.baseUrl, name);
+  private async probeConfirmsRefusal(name: string, signal: AbortSignal | undefined): Promise<boolean> {
+    const verdict = await probeToolSupport(this.options.fetch, this.runtime.baseUrl, name, undefined, signal);
+    if (signal?.aborted) return false;
     if (verdict === 'accepted') {
       this.logger.warn(`${this.options.label} rejected a request with tools but accepts tools, so they stay on.`);
       return false;
@@ -185,28 +190,50 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     return true;
   }
 
-  /** Whether this turn's tools fit a context the server fixes; unknown contexts are assumed to fit. */
-  private async toolsFit(
+  /**
+   * Fits this turn into a context the server fixes: whether its tools fit, and `maxTokens` capped by the room the
+   * whole prompt leaves. Throws with the restart hint when the instructions alone do not fit. Unknown contexts are
+   * assumed to fit.
+   */
+  private async fitContext(
     name: string,
     messages: IMessage[],
     tools: ICompletionOptionTools[],
     maxTokens: number | undefined
-  ): Promise<boolean> {
+  ): Promise<{ toolsFit: boolean; maxTokens: number | undefined }> {
     const context = await this.contextOf(name);
-    if (!context) return true;
-    const toolText = JSON.stringify(tools.map(tool => tool.toolSchema));
+    if (!context) return { toolsFit: true, maxTokens };
+    const tokens = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN);
+    const toolChars = tools.length ? JSON.stringify(tools.map(tool => tool.toolSchema)).length : 0;
     const system = messages.filter(message => message.role === 'system').map(textOf);
     const lastUser = messages.findLast(message => message.role === 'user');
-    const chars = toolText.length + system.join('').length + (lastUser ? textOf(lastUser).length : 0);
-    const promptTokens = Math.ceil(chars / CHARS_PER_TOKEN);
-    if (holdsPrompt(context, promptTokens, maxTokens)) return true;
-    if (!this.smallNoticed.has(name)) {
-      this.smallNoticed.add(name);
-      this.options.onNotice?.(
-        contextTooSmallHint(this.options.label, this.options.product, [{ name, context }], promptTokens, this.app)
+    const baseChars = system.join('').length + (lastUser ? textOf(lastUser).length : 0);
+    if (!holdsPrompt(context, tokens(baseChars), maxTokens)) {
+      throw new Error(
+        promptTooLargeHint(this.options.label, this.options.product, { name, context }, tokens(baseChars), this.app)
       );
     }
-    return false;
+    let toolsFit = true;
+    if (tools.length && !holdsPrompt(context, tokens(baseChars + toolChars), maxTokens)) {
+      toolsFit = false;
+      if (!this.smallNoticed.has(name)) {
+        this.smallNoticed.add(name);
+        this.options.onNotice?.(
+          contextTooSmallHint(
+            this.options.label,
+            this.options.product,
+            [{ name, context }],
+            tokens(baseChars + toolChars),
+            this.app
+          )
+        );
+      }
+    }
+    if (maxTokens === undefined) return { toolsFit, maxTokens };
+    // A reply budget past the room left makes the server refuse the request outright.
+    const allChars = messages.reduce((sum, message) => sum + textOf(message).length, 0) + (toolsFit ? toolChars : 0);
+    const room = context - tokens(allChars);
+    return { toolsFit, maxTokens: room > 0 ? Math.min(maxTokens, room) : maxTokens };
   }
 
   async complete(
@@ -243,8 +270,9 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       return;
     }
 
-    let sendTools = requested.length > 0 && !this.toolsOff;
-    if (sendTools && !(await this.toolsFit(name, messages, requested, options.maxTokens))) sendTools = false;
+    const wanted = requested.length > 0 && !this.toolsOff ? requested : [];
+    const fit = await this.fitContext(name, messages, wanted, options.maxTokens);
+    const sendTools = wanted.length > 0 && fit.toolsFit;
     if (requested.length && !sendTools) {
       await this.complete(
         model,
@@ -261,7 +289,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       messages: this.formatMessages(messages, name, options),
       stream: true,
       stream_options: { include_usage: true },
-      ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
+      ...(fit.maxTokens ? { max_tokens: fit.maxTokens } : {}),
       ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
       ...(options.topP !== undefined ? { top_p: options.topP } : {}),
       ...(options.stop ? { stop: options.stop } : {}),
@@ -274,7 +302,10 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     } catch (error) {
       if (sendTools && error instanceof OpenAI.APIError && error.status !== undefined) {
         const detail = typeof error.error === 'string' ? error.error : JSON.stringify(error.error ?? error.message);
-        if (isToolRefusal(error.status, `${error.message} ${detail}`) && (await this.probeConfirmsRefusal(name))) {
+        if (
+          isToolRefusal(error.status, `${error.message} ${detail}`) &&
+          (await this.probeConfirmsRefusal(name, options.abortSignal))
+        ) {
           // Concurrent turns can all get here; only the first one to turn tools off gives the notice.
           if (!this.toolsOff) {
             this.toolsOff = true;
@@ -289,6 +320,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
           );
           return;
         }
+        if (options.abortSignal?.aborted) throw new OpenAI.APIUserAbortError();
       }
       throw this.describeError(error);
     }

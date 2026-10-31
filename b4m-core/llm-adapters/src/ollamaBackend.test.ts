@@ -385,6 +385,23 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     expect(info.supportsTools).toBe(true);
     expect(info.supportsVision).toBe(false);
   });
+
+  it('tells a reported lack of tools apart from a failed /api/show', async () => {
+    const reported = backendWithCapabilities(['completion']);
+    await reported.getModelInfo();
+    expect(reported.toolSupportUnchecked('qwen3.5:2b-q4_K_M')).toBe(false);
+
+    const failed = new OllamaBackend('http://localhost:11434', silentLogger);
+    (failed as any)._api = {
+      list: vi.fn(async () => ({ models: [{ name: 'tiny:1b' }] })),
+      show: vi.fn(async () => {
+        throw new Error('fetch failed');
+      }),
+    };
+    const [info] = await failed.getModelInfo();
+    expect(info.supportsTools).toBe(false);
+    expect(failed.toolSupportUnchecked('tiny:1b')).toBe(true);
+  });
 });
 
 // getAvailableModels caches an empty listing for the full TTL; only a rejection gets the retry TTL.

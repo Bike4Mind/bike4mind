@@ -234,6 +234,54 @@ describe('OpenAICompatibleBackend against vLLM', () => {
     expect(notices).toHaveLength(1);
   });
 
+  it('fails with the restart hint, and sends nothing, when the context cannot hold the prompt even without tools', async () => {
+    const fake = await vllm({ maxModelLen: 4096 });
+    const { backend } = make(fake.baseUrl, 'vllm');
+    const failure = run(backend, 'qwen-small', [], 'x'.repeat(16_000));
+    await expect(failure).rejects.toThrow(
+      "gpu-box runs qwen-small with a 4096-token context, too small for the CLI's instructions even without tools (about 4000 tokens). Restart vLLM with --max-model-len 16384, then start a new b4m session."
+    );
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it('caps max_tokens by the room the prompt leaves in a fixed context', async () => {
+    const fake = await vllm({ maxModelLen: 4096 });
+    const { backend } = make(fake.baseUrl, 'vllm');
+    await backend.complete(
+      'qwen-small',
+      userMessage('x'.repeat(10_000)),
+      { stream: true, maxTokens: 2048 },
+      async () => undefined
+    );
+    expect((fake.requests[0] as { max_tokens?: number }).max_tokens).toBe(1596);
+    await backend.complete('qwen-small', userMessage('hi'), { stream: true, maxTokens: 512 }, async () => undefined);
+    expect((fake.requests[1] as { max_tokens?: number }).max_tokens).toBe(512);
+  });
+
+  it('leaves tools on and stops when the turn is aborted during the refusal probe', async () => {
+    const controller = new AbortController();
+    let chats = 0;
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (req, res) => {
+        if (!bodyOf(req).stream) return controller.abort();
+        if (chats++ === 0) return sendJson(res, { object: 'error', message: 'tools are not supported' }, 400);
+        sse(res, [{ content: 'ok' }]);
+      },
+    });
+    const { backend, notices } = make(server.baseUrl, 'vllm');
+    const tools = [weatherTool(async () => '')];
+    const failure = backend.complete(
+      'm',
+      userMessage('hi'),
+      { stream: true, tools, abortSignal: controller.signal },
+      async () => undefined
+    );
+    await expect(failure).rejects.toThrow('aborted');
+    expect(notices).toEqual([]);
+    expect((await run(backend, 'm', tools)).text).toBe('ok');
+    expect(server.requests.map(bodyOf).filter(body => body.stream)[1].tools).toHaveLength(1);
+  });
+
   it('lists aliases once and names an adapter with its base', async () => {
     const fake = await vllm({ maxModelLen: 32768 });
     const { backend } = make(fake.baseUrl, 'vllm');

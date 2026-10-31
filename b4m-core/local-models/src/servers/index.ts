@@ -51,6 +51,7 @@ export { answersWithoutCredentials, forbiddenMessage, probeServer, type ProbeOut
 export {
   contextTooSmallHint,
   isToolRefusal,
+  promptTooLargeHint,
   refusesTools,
   probeToolSupport,
   serverContextTokens,
