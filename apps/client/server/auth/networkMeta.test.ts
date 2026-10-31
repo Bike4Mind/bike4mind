@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 
 const updateOne = vi.fn();
 const record = vi.fn();
@@ -14,6 +15,7 @@ vi.mock('./signupNetworkAlerts', () => ({
 }));
 
 import { readNetworkMeta, recordLoginEvent, recordSignupNetwork, type NetworkRequest } from './networkMeta';
+import { requestRiskEvidenceRefresh } from './riskEvidence';
 
 const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -153,6 +155,7 @@ describe('recordSignupNetwork', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', type: 'signup', method: 'google', ip: '203.0.113.7' })
     );
+    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'signup', console);
   });
 
   it('still logs the signup event when the user write fails, and never throws', async () => {
@@ -182,11 +185,17 @@ describe('recordLoginEvent', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', type: 'login', method: 'otc', asn: 16509 })
     );
+    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'login', console);
   });
 
   it('never throws when the write fails', async () => {
     record.mockRejectedValueOnce(new Error('db down'));
     await expect(recordLoginEvent({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledWith('[auth] login event not recorded', 'db down');
+  });
+
+  it('still resolves when the risk evidence refresh rejects', async () => {
+    vi.mocked(requestRiskEvidenceRefresh).mockRejectedValueOnce(new Error('queue down'));
+    await expect(recordLoginEvent({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
   });
 });

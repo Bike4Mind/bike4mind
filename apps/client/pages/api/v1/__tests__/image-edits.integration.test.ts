@@ -225,6 +225,8 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     expect(ImageQuestSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke.mock.calls[0][0].adminRoleWithheld).toBe(true);
+    // Carried onto the queued job so its settled ledger row is attributed to the key.
+    expect(mockInvoke.mock.calls[0][0].apiKeyId).toBe('k1');
   });
 
   describe('referenceImageFabFileIds', () => {

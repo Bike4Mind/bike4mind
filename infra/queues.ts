@@ -72,6 +72,18 @@ const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
   },
 });
 
+// Account behavioral risk evidence. Fed by direct refresh sends (web/API function, the signupRiskSweep
+// cron) and by completion messages the app bus rule transforms from completion.completed events
+// (infra/eventBus.ts). Visibility timeout must exceed the 2-minute handler timeout below.
+const riskEvidenceQueueDLQ = new sst.aws.Queue('riskEvidenceQueueDLQ', {});
+const riskEvidenceQueue = new sst.aws.Queue('riskEvidenceQueue', {
+  visibilityTimeout: '3 minutes',
+  dlq: {
+    queue: riskEvidenceQueueDLQ.arn,
+    retry: 3,
+  },
+});
+
 // Model-driven lake inconsistency detection (#3057). Reads a lake's documents through an LLM to find
 // contradictions no pattern rule can see. Off the request path because the pass makes several
 // sequential LLM calls and cannot fit the frontend Lambda's 60s budget. retry: 2 like lake memory -
@@ -918,6 +930,28 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Risk evidence subscription. partialResponses: the handler reports per-record failures so one bad
+// message retries (and DLQs) alone. Links itself because it re-enqueues completion messages as debounced refresh requests.
+const riskEvidenceQueueSubscription = riskEvidenceQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/riskEvidence.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '2 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, riskEvidenceQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  { batch: { size: 10, partialResponses: true } }
+);
+
 // Model inconsistency detection subscription (#3057). 10 minutes, matching lake memory: the run makes
 // up to ceil(MODEL_INCONSISTENCY_MEMBER_SAMPLE / MODEL_INCONSISTENCY_BATCH_SIZE) sequential LLM calls,
 // each able to take the SmallLLMService timeout twice over, so its worst case is minutes rather than
@@ -1738,6 +1772,7 @@ export {
   dataLakeTaxonomyQueue,
   dataLakeResearchQueue,
   lakeMemoryQueue,
+  riskEvidenceQueue,
   lakeInconsistencyModelQueue,
   driveLakeIngestQueue,
   driveDisconnectPurgeQueue,
@@ -1775,6 +1810,7 @@ export {
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
@@ -1815,6 +1851,7 @@ export {
   dataLakeTaxonomyQueueSubscription,
   dataLakeResearchQueueSubscription,
   lakeMemoryQueueSubscription,
+  riskEvidenceQueueSubscription,
   lakeInconsistencyModelQueueSubscription,
   driveLakeIngestQueueSubscription,
   driveDisconnectPurgeQueueSubscription,
