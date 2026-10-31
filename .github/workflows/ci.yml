@@ -222,6 +222,40 @@ jobs:
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
 
+      # Blocking secret scan of the commits this change adds. The secrets-scan workflow only
+      # feeds a dashboard (--exit-code=0, manual dispatch), so this is the gate that a
+      # `--no-verify` commit cannot skip. Version stays in step with secrets-scan.yml.
+      - name: Install gitleaks CLI
+        env:
+          GITLEAKS_VERSION: 8.24.3
+        run: |
+          echo "Installing gitleaks ${GITLEAKS_VERSION}..."
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Verify gitleaks config actually detects
+        env:
+          GITLEAKS_REQUIRED: '1'
+        run: sh scripts/gitleaks-config-selftest.sh
+
+      # Scans base..HEAD with the same base the ASCII checks resolved. An empty or
+      # unreachable base falls back to a whole-checkout scan, mirroring their over-scan.
+      - name: Scan the commit range for secrets
+        env:
+          GITLEAKS_BASE: ${{ steps.ascii-base.outputs.base }}
+        run: |
+          set -euo pipefail
+          if [ -n "$GITLEAKS_BASE" ] && git cat-file -e "${GITLEAKS_BASE}^{commit}" 2>/dev/null; then
+            echo "Scanning commits ${GITLEAKS_BASE}..HEAD"
+            gitleaks detect --config .gitleaks.toml --redact --no-banner --exit-code 1 \
+              --log-opts="${GITLEAKS_BASE}..HEAD"
+          else
+            echo "Base unresolvable; scanning the whole checkout"
+            gitleaks detect --config .gitleaks.toml --redact --no-banner --exit-code 1 \
+              --no-git --source .
+          fi
+
       - name: Check workflows pass values through env, not run-body interpolation
         run: python3 scripts/check-no-run-interpolation.py
 
