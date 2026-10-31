@@ -693,6 +693,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '7c55bfdeaea409d972ba757cc5e3c8d50a5a0d1e8fd8629afab3473284bbbd6e'
   ),
   broker(
+    'queue:infra/apiProbeDetectorDeadLetter.ts:apiProbeDetectorDlq',
+    'f353ac779308cb585b976a6bd5e80854661ced29c7569618b666faf1fb7e6d61'
+  ),
+  broker(
     'queue:infra/spendMonitorDeadLetter.ts:spendMonitorDlq',
     '1cf26770977879e377a4c62a5d06cc22ad09892a0a144d012deb4070368f2223'
   ),
@@ -968,6 +972,19 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
       fingerprint: 'da6c5ac52b4df8ea3674b0f3c367e1e367ccc43dc282edea6730a2cca21d68de',
     },
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  hostedOnly(
+    'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
+    '07a04e757e16de7b51371002ed67b5e5e0ea2cfa3607433236e968b404cabc63',
+    'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
+    [
+      'bedrock:*',
+      'cloudwatch:GetMetricData',
+      'cloudwatch:ListMetrics',
+      'cloudwatch:PutMetricData',
+      'events:PutEvents',
+      'lambda:InvokeFunction',
+    ]
   ),
   hostedOnly(
     'schedule:infra/cron.ts:youngAccountSpendAlert',
