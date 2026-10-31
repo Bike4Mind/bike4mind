@@ -24,7 +24,7 @@ import {
 import {
   authorizeLakeConnectorAccess,
   authorizeLakeConnectorRead,
-} from '@server/dataLakes/authorizeLakeConnectorAccess';
+} from '@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
   isLakeIngestable,

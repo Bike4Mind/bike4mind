@@ -60,7 +60,7 @@ vi.mock('@bike4mind/services', () => ({
   },
   userService: { flagDisputePending: mocks.flagDisputePending },
 }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     updateByStripeSubscriptionIdReturningBefore: mocks.updateByStripeSubscriptionId,
     markPastDue: mocks.markPastDue,
@@ -71,7 +71,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   isDevelopment: () => false,
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
 vi.mock('@server/utils/eventBus', () => ({ StripeEvents: {} }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   CustomerType: {},
@@ -79,16 +79,16 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   isStripeConfigured: () => true,
   stripe: { webhooks: { constructEvent: mocks.constructEvent }, charges: { retrieve: mocks.retrieveCharge } },
 }));
-vi.mock('@server/integrations/stripe/dunning', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: mocks.voidOpenSubscriptionInvoices,
 }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 // The real event builders run; the post itself (stage gate, wording) is covered in subscriptionLifecycle.test.ts.
 vi.mock('@server/integrations/slack/subscriptionLifecycle', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/integrations/slack/subscriptionLifecycle')>()),
   postSubscriptionLifecycleToSlack: mocks.postSubscriptionLifecycleToSlack,
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
 vi.mock('@server/billing/grantCreditPurchase', () => ({ grantCreditPurchase: vi.fn() }));
 vi.mock('@server/credits/paymentUnlockForfeit', () => ({
   forfeitSignupUnlock: mocks.forfeitSignupUnlock,

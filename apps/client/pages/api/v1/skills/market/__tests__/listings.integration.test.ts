@@ -73,7 +73,7 @@ vi.mock('@server/auth/auth', async orig => ({
     next();
   },
 }));
-vi.mock('@server/skillMarket/market', async orig => ({
+vi.mock('@bike4mind/server-utils/skillMarket/market', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   memberOrgIdsFor: (...a: unknown[]) => h.memberOrgs(...a),
   findListing: (...a: unknown[]) => h.findListing(...a),
@@ -103,7 +103,7 @@ import {
   type ISkillListing,
   type ISkillListingVersion,
 } from '@bike4mind/common';
-import { serializeListing } from '@server/skillMarket/market';
+import { serializeListing } from '@bike4mind/server-utils/skillMarket/market';
 import { encodeCursor } from '@server/utils/cursorPagination';
 import listingsHandler from '../listings/index';
 import mineHandler from '../listings/mine';

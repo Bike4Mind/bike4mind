@@ -20,7 +20,11 @@ const notifications = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), er
 vi.mock('@client/app/utils/download', () => ({ downloadData }));
 vi.mock('sonner', () => ({ toast: notifications }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet } }));
-vi.mock('./useOpenSubscriptionRow', () => ({ useOpenSubscriptionRow: () => openRow }));
+const openOwner = vi.hoisted(() => vi.fn());
+vi.mock('./useOpenSubscriptionRow', () => ({
+  useOpenSubscriptionRow: () => openRow,
+  useOpenSubscriptionOwner: () => openOwner,
+}));
 
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
 import { NEWEST_PAID_SUBSCRIPTION_QUERY, useSubscriptionsLastSeen } from './subscriptionsLastSeen';
@@ -116,6 +120,7 @@ const lastListParams = () => listParams().at(-1);
 beforeEach(() => {
   apiGet.mockReset();
   openRow.mockReset();
+  openOwner.mockReset();
   downloadData.mockReset();
   notifications.warning.mockReset();
   notifications.error.mockReset();
@@ -336,10 +341,22 @@ describe('AdminSubscriptions', () => {
     await waitFor(() => expect(within(tiles).getByText('\u2014')).toBeTruthy());
   });
 
-  it('opens the owner when a row is activated', async () => {
+  it('opens the subscription when a row is activated', async () => {
     renderTab();
     fireEvent.click(await screen.findByTestId('admin-subscriptions-customer-s2'));
     expect(openRow).toHaveBeenCalledWith(compedRow);
+  });
+
+  it('opens the subscription or its customer from the row menu', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('admin-subscriptions-row-actions-s2'));
+    fireEvent.click(await screen.findByTestId('admin-subscriptions-row-open-s2'));
+    expect(openRow).toHaveBeenCalledWith(compedRow);
+    expect(openOwner).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('admin-subscriptions-row-actions-s2'));
+    fireEvent.click(await screen.findByTestId('admin-subscriptions-row-open-owner-s2'));
+    expect(openOwner).toHaveBeenCalledWith(compedRow);
   });
 
   describe('empty states', () => {

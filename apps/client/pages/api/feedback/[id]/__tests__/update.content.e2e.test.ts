@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 import '../update';
 

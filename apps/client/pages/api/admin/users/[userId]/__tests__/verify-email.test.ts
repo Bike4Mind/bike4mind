@@ -37,7 +37,7 @@ const mockEmitVerifiedFunnel = vi.hoisted(() => vi.fn());
 vi.mock('@server/analytics/funnel', () => ({
   emitEmailVerifiedFunnelEvents: (...a: unknown[]) => mockEmitVerifiedFunnel(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 // parseAdminActionReason stays real so the 400s are the route's own.
 vi.mock('@server/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),

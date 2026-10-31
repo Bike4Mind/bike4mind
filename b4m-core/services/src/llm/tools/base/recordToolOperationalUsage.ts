@@ -116,6 +116,7 @@ export async function recordToolOperationalUsage(
           : undefined,
         latencyMs: Date.now() - startTime,
         source: 'system',
+        apiKeyId: context.apiKeyId,
         finishReason: completionInfo?.stopReason,
       },
       {

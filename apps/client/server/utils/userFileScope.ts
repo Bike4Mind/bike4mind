@@ -1,6 +1,6 @@
 import { getDataLakeTags } from '@bike4mind/common';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
-import type { ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
+import type { ScopedRequest } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
 /**
  * The set of files this user can reach, for the surfaces that count them and the one that lists

@@ -37,7 +37,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 // Keep the real state options + auth primitive; stub only the network token exchange.
-vi.mock('@server/integrations/google/drive/common', async importOriginal => {
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', async importOriginal => {
   const actual = await (importOriginal as () => Promise<Record<string, unknown>>)();
   return {
     ...actual,
@@ -48,11 +48,11 @@ vi.mock('@server/integrations/google/drive/common', async importOriginal => {
 // Import after mocks are registered.
 import callbackHandler from '@pages/api/google-drive/callback';
 import errorHandler from '@server/middlewares/errorHandler';
-import { getTokens } from '@server/integrations/google/drive/common';
+import { getTokens } from '@bike4mind/server-utils/integrations/google/drive/common';
 import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { createStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { GOOGLE_DRIVE_STATE_OPTIONS } from '@server/integrations/google/drive/common';
+import { GOOGLE_DRIVE_STATE_OPTIONS } from '@bike4mind/server-utils/integrations/google/drive/common';
 
 /** Mint a genuine state token bound to a fresh nonce, returning both the state and the browser's cookie. */
 function mintStateWithCookie(userId = 'user-1'): { state: string; nonceCookie: string } {

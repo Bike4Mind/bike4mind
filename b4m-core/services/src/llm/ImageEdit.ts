@@ -109,6 +109,8 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   /** Minted per invoke(); see ImageGenerationBodySchema.generationId. */
   generationId: z.string().optional(),
   adminRoleWithheld: z.boolean().optional(),
+  /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
+  apiKeyId: z.string().optional(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
   // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
@@ -212,8 +214,10 @@ export class ImageEditService {
     body,
     userId,
     adminRoleWithheld,
+    apiKeyId,
   }: {
     adminRoleWithheld?: boolean;
+    apiKeyId?: string;
     body: z.infer<typeof EditImageRequestBodySchema>;
     userId: string;
   }) {
@@ -313,6 +317,7 @@ export class ImageEditService {
           organizationId,
           generationId: uuidv4(),
           adminRoleWithheld,
+          apiKeyId,
         })
       );
     } catch (error) {
@@ -456,6 +461,7 @@ export class ImageEditService {
       questId,
       userId,
       adminRoleWithheld,
+      apiKeyId,
       prompt,
       model: requestedModel,
       safety_tolerance,
@@ -903,7 +909,7 @@ export class ImageEditService {
         const creditsCharged = await this.creditHolds.settle(
           creditHold,
           settlement.credits,
-          { type: 'image_edit_usage', sessionId, questId, model },
+          { type: 'image_edit_usage', sessionId, questId, model, apiKeyId },
           { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger }
         );
         creditHold = undefined;

@@ -50,7 +50,7 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockSubCreate = vi.fn();
 const mockFindUserSub = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     create: (...a: unknown[]) => mockSubCreate(...a),
     findByPriceIdAndOwner: vi.fn().mockResolvedValue(null),
@@ -61,7 +61,7 @@ vi.mock('@server/models/Subscription', () => ({
 vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 3, maxSeats: 8, creditsPerSeat: 1000 })),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 // parseAdminActionReason and isSameUserId stay real; the denied helper records, then throws a 403.
 vi.mock('@server/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
@@ -83,7 +83,7 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoin
 
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import handler from '../grant-subscription';
 
 const REASON = 'Comped for the design partner pilot';
@@ -112,6 +112,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
     const { res, run } = call(5);
     await run();
     expect(mockOrgCreate).toHaveBeenCalled();
+    expect(mockSubCreate).toHaveBeenCalledWith(expect.objectContaining({ grantedReason: REASON }));
     expect(mockAddCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 5 * 1000 }), expect.anything());
     expect(res._getJSONData()).toMatchObject({ seats: 5, credits: 5 * 1000 });
   });
@@ -128,10 +129,24 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
         target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
         organizationId: 'org-1',
         reason: REASON,
-        details: expect.objectContaining({ subscriptionType: 'team', seats: 5, credits: 5 * 1000 }),
+        details: expect.objectContaining({
+          subscriptionType: 'team',
+          seats: 5,
+          credits: 5 * 1000,
+          subscriptionId: expect.stringMatching(/^admin_grant_/),
+        }),
         related: { creditTransactionId: 'tx-sub-grant' },
       })
     );
+  });
+
+  it('names the new row in the audit details and returns its record id', async () => {
+    const { res, run } = call(5);
+    await run();
+    const [, input] = vi.mocked(recordAdminActionFromRequest).mock.calls[0];
+    const grantedRowSubscriptionId = mockSubCreate.mock.calls[0][0].subscriptionId;
+    expect(input.details).toMatchObject({ subscriptionId: grantedRowSubscriptionId });
+    expect(res._getJSONData()).toMatchObject({ subscriptionRecordId: 'sub-1' });
   });
 
   it('fails the request without notifying when the strict audit write fails', async () => {
@@ -186,7 +201,13 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
     await run();
 
     expect(mockSubCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerId: 'user-1', priceId: plan.priceId, grantedBy: 'admin-1', quantity: 1 })
+      expect.objectContaining({
+        ownerId: 'user-1',
+        priceId: plan.priceId,
+        grantedBy: 'admin-1',
+        grantedReason: REASON,
+        quantity: 1,
+      })
     );
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: 'user-1', credits: plan.credits * 2 }),
@@ -199,9 +220,11 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
         action: 'user.subscription.granted',
         target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
         reason: REASON,
+        details: expect.objectContaining({ subscriptionId: expect.stringMatching(/^admin_grant_/) }),
         related: { creditTransactionId: 'tx-sub-grant' },
       })
     );
+    expect(res._getJSONData()).toMatchObject({ subscriptionRecordId: 'sub-1' });
   });
 
   it('records the audit inside the grant transaction', async () => {
@@ -260,6 +283,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - reason and self-gr
     mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme' });
     mockSubCreate.mockResolvedValue({ id: 'sub-1' });
     mockFindUserSub.mockResolvedValue(null);
+    mockAddCredits.mockResolvedValue({ creditHolder: { currentCredits: 0 }, creditTransactionId: 'tx-sub-grant' });
   });
 
   describe.each(bodies)('%s grant', (_type, body) => {
@@ -274,26 +298,33 @@ describe('POST /api/admin/users/[userId]/grant-subscription - reason and self-gr
       expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
     });
 
-    it('denies a self-grant with a 403 and a user.subscription.denied entry', async () => {
-      await expect(callWith({ ...body, reason: REASON }, 'admin-1')()).rejects.toMatchObject({ statusCode: 403 });
+    it('allows a self-grant through the ledger and flags it in the audit entry', async () => {
+      await callWith({ ...body, reason: REASON }, 'admin-1')();
+      expect(mockAddCredits).toHaveBeenCalled();
       expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.subscription.denied' })
+        expect.objectContaining({
+          action: 'user.subscription.granted',
+          details: expect.objectContaining({ selfGrant: true }),
+        })
       );
-      expect(mockSubCreate).not.toHaveBeenCalled();
-      expect(mockAddCredits).not.toHaveBeenCalled();
     });
 
-    it('denies an impersonating admin granting to the account they impersonate from', async () => {
+    it('flags a grant to the account an impersonating admin impersonates from', async () => {
       const user = { isAdmin: true, id: 'admin-2', email: 'b@example.com', impersonatedBy: 'admin-1' };
-      await expect(callWith({ ...body, reason: REASON }, 'admin-1', user)()).rejects.toMatchObject({
-        statusCode: 403,
-      });
+      await callWith({ ...body, reason: REASON }, 'admin-1', user)();
       expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.subscription.denied' })
+        expect.objectContaining({ details: expect.objectContaining({ selfGrant: true }) })
       );
-      expect(mockSubCreate).not.toHaveBeenCalled();
+    });
+
+    it('does not flag a grant to another account', async () => {
+      await callWith({ ...body, reason: REASON })();
+      expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ details: expect.objectContaining({ selfGrant: false }) })
+      );
     });
   });
 });

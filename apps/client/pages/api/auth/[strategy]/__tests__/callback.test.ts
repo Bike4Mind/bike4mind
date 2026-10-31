@@ -60,7 +60,7 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
   resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
   logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
@@ -80,6 +80,7 @@ vi.mock('@server/auth/networkMeta', () => ({
 }));
 
 const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 vi.mock('@server/auth/signupRiskScore', () => ({
   refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
 }));
@@ -95,7 +96,7 @@ vi.mock('@server/utils/auth/oauthSourceTag', () => ({
 }));
 
 // Import after mocks are registered.
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { logAuthAudit } from '@server/utils/authAudit';
 
@@ -398,6 +399,15 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     });
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
     expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
+  });
+
+  it("ties a new account's signup funnel to the visit it came from", async () => {
+    const visitId = 'd'.repeat(32);
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: `${touchCookie}; b4m_vid=${visitId}`,
+    });
+
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(expect.objectContaining({ visitId }));
   });
 
   it("persists a new account's acquisition with the provider as the signup method", async () => {

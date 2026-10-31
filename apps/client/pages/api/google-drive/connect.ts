@@ -1,6 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { getAuthUrl } from '@server/integrations/google/drive/common';
+import { getAuthUrl } from '@bike4mind/server-utils/integrations/google/drive/common';
 
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {

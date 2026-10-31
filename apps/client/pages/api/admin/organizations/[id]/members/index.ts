@@ -12,7 +12,7 @@ import {
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { parseAdminActionReason, recordAdminActionFromRequest, userAuditTarget } from '@server/utils/adminAudit';
 import { assertFullAdminForMembership } from '@server/organizations/adminMembership';
 

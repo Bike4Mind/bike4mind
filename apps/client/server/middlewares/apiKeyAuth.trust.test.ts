@@ -27,11 +27,11 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: settingsMap,
 }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findActiveUserSubscriptions: findSubscriptions },
 }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: vi.fn().mockResolvedValue(undefined) },
 }));

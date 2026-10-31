@@ -15,7 +15,7 @@
  * 3. Direct Lambda invocation with ContinuationSchema - resumes after permission response
  */
 
-import '@client/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import {
   connectDB,
   sessionRepository,
@@ -83,11 +83,11 @@ import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
-import { ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
-import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import {
   ReActAgent,
   type AgentCheckpoint,
@@ -255,7 +255,7 @@ import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConn
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIterationMementosPreamble';
-import { resolveExecutionMementoGates } from '@server/utils/resolveExecutionMementoGates';
+import { resolveExecutionMementoGates } from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { loadAgentMcpTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
@@ -1689,6 +1689,7 @@ async function processExecution(
             questId: execution.questId,
             model: visibleModelId(result.model),
             completionInfo: result.completionInfo,
+            apiKeyId: execution.apiKeyId,
             usage: subagentUsageMeta(models, result.model, result.completionInfo, logger),
           },
           logger
@@ -1732,6 +1733,7 @@ async function processExecution(
               questId: execution.questId,
               model: visibleModelId(partialResult.model),
               completionInfo: partialResult.completionInfo,
+              apiKeyId: execution.apiKeyId,
               usage: subagentUsageMeta(models, partialResult.model, partialResult.completionInfo, logger),
             },
             logger
@@ -2125,6 +2127,7 @@ async function processExecution(
               totalCacheReadTokens: meta?.cacheReadTokens,
               totalCacheWriteTokens: meta?.cacheWriteTokens,
             },
+            apiKeyId: execution.apiKeyId,
             usage: meta,
           },
           logger
@@ -2564,6 +2567,7 @@ async function processExecution(
                 model: execution.model,
                 inputTokens,
                 outputTokens,
+                apiKeyId: execution.apiKeyId,
               },
               {
                 db: {
@@ -3703,6 +3707,7 @@ async function chargeSubagentTokens(
       AgentResult['completionInfo'],
       'totalCredits' | 'totalInputTokens' | 'totalOutputTokens' | 'totalCacheReadTokens' | 'totalCacheWriteTokens'
     >;
+    apiKeyId?: string;
     /** Absent when the model can't be resolved; no event is fabricated from zeros then. */
     usage: SubagentUsageMeta | undefined;
     /** Resolves `model` when a restricted run's usage priced the substitute instead. */
@@ -3736,6 +3741,7 @@ async function chargeSubagentTokens(
           outputTokens: args.completionInfo.totalOutputTokens ?? 0,
           cacheReadTokens: args.usage?.cacheReadTokens || undefined,
           cacheWriteTokens: args.usage?.cacheWriteTokens || undefined,
+          apiKeyId: args.apiKeyId,
         },
         {
           db: {
@@ -4261,6 +4267,7 @@ async function processSubagentDispatch(
           questId: child.questId,
           model: model === runModel ? childModel : model,
           completionInfo,
+          apiKeyId: child.apiKeyId,
           usage,
         },
         logger
@@ -4571,6 +4578,7 @@ async function processSubagentDispatch(
               model: childModel,
               inputTokens: 0,
               outputTokens: 0,
+              apiKeyId: child.apiKeyId,
             },
             {
               db: {

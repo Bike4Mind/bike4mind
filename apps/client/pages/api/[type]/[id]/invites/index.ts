@@ -21,7 +21,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { resolveInviteType } from '@server/utils/inviteRouteType';
 import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
 import {

@@ -1,5 +1,6 @@
 export * from './AgentExecutionModel';
 export * from './CreditGrantIdentityClaimModel';
+export * from './creditHolderFundingSnapshot';
 export * from './CreditLotModel';
 export * from './CreditTransactionModel';
 export * from './FailedRefundModel';
@@ -11,4 +12,6 @@ export * from './UsageEventModel';
 export * from './ModelPriceModel';
 export * from './ProviderInvoiceModel';
 export * from './SpendReconciliationModel';
+export * from './RevenueSnapshotModel';
+export * from './SpendRollupModel';
 export * from './newAccountSpendCapAdapters';

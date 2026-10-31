@@ -1,5 +1,6 @@
 import { signupProtection } from '@server/auth/signupProtection';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 import { createMocks } from 'node-mocks-http';
 import {
   BadRequestError,
@@ -9,7 +10,7 @@ import {
   UnprocessableEntityError,
   TooManyRequestsError,
 } from '@bike4mind/common';
-import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
+import { signupCreditsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
@@ -35,7 +36,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
@@ -128,6 +129,8 @@ const mockClearPending = vi.fn();
 const mockAddTagsToUser = vi.fn();
 const mockReleasePending = vi.fn();
 const mockDomainEstablished = vi.fn(async (_domain: string, _verifiedBefore: Date) => false);
+// Default: this inbox has not claimed its free-credit grant anywhere else, so the domain grant pays.
+const mockClaimFreeCreditGrant = vi.fn(async (_userId: string) => true);
 const mockTryIncrement = vi.fn(async (_key: string, _limit: number, _ttlMs: number) => ({
   success: true,
   count: 1,
@@ -164,6 +167,9 @@ vi.mock('@bike4mind/database', () => ({
     clearPendingFreeCreditGrant: (...a: unknown[]) => mockClearPending(...a),
     addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a),
     existsVerifiedUserOnEmailDomain: (...a: unknown[]) => mockDomainEstablished(...a),
+    // The domain grant claims the one-grant-per-inbox entitlement before crediting; these tests
+    // are about the handler, so the inbox is always free here.
+    claimFreeCreditGrant: (...a: unknown[]) => mockClaimFreeCreditGrant(...a),
   },
   pendingOtcTokenRepository: {
     validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
@@ -196,7 +202,7 @@ vi.mock('@bike4mind/services', () => ({
 import { oauthClientRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
 
@@ -628,6 +634,20 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     await handler(req, res);
 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
+  });
+
+  it('ties every signup stage to the visit the code was entered in', async () => {
+    const visitId = 'c'.repeat(32);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `b4m_vid=${visitId}`;
+
+    await handler(req, res);
+
+    expect(mockEmitFunnelEvent.mock.calls.map(([c]) => [c.event, c.visitId])).toEqual([
+      ['email_verified', visitId],
+      ['credits_granted', visitId],
+      ['signup_completed', visitId],
+    ]);
   });
 
   it('reports credits_granted with zero when the signup seeded none', async () => {

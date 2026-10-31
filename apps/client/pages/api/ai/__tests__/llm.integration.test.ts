@@ -74,7 +74,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 vi.mock('@server/utils/userRateTier', () => ({
   resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -145,11 +145,11 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
 }));
 
-vi.mock('@server/utils/sessionSystemPromptResolver', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionSystemPromptResolver', () => ({
   sessionWillInjectAuthoredPrompt: (...a: unknown[]) => mockWillInjectAuthoredPrompt(...a),
 }));
 
-vi.mock('@server/utils/systemPrompts/loader', () => ({
+vi.mock('@bike4mind/server-utils/utils/systemPrompts/loader', () => ({
   loadBaseIdentitySystemPromptMessages: (...a: unknown[]) => mockLoadIdentityPrompts(...a),
 }));
 

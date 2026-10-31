@@ -66,7 +66,7 @@ type DisplayableSubscription = {
  * can be displayed as the current plan.
  *
  * Mirrors the precedence in `findCancelableUserSubscriptionByPriceId`
- * (`server/models/Subscription.ts`), and `findChangeableUserSubscription`
+ * (`packages/server-utils/src/models/Subscription.ts`), and `findChangeableUserSubscription`
  * delegates to it - the three must agree on which row is "the" plan.
  * That includes the Stripe-managed-first rule: an admin grant is not what Stripe is
  * billing or dunning, and a grant can sit beside the real delinquent Stripe row at

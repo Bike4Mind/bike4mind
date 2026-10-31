@@ -5,7 +5,7 @@ import { BadRequestError, ForbiddenError, InternalServerError, NotFoundError } f
 import { encryptAtRest, decryptAtRest } from '@bike4mind/utils/security';
 import { calculateNextRotationDate, toSafeSecretRotation } from '@client/lib/secretRotation/utils';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { SECRET_ROTATION_GRACE_MS } from '@server/auth/secretRotationGrace';
+import { SECRET_ROTATION_GRACE_MS } from '@bike4mind/server-utils/auth/secretRotationGrace';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 
@@ -27,7 +27,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   // Snapshot the secret this process is running with, rather than trusting a caller to hand over
   // the outgoing value. JWT_SECRET is the only row whose `previousKey` any verifier reads (see
-  // server/auth/secretRotationGrace.ts). Runbook: click Renew BEFORE deploying the replacement
+  // packages/server-utils/src/auth/secretRotationGrace.ts). Runbook: click Renew BEFORE deploying the replacement
   // secret; re-capturing the same value advances the grace window instead of extending a stale
   // key's life, which is why a capture that matches the last one is refused below.
   const currentFingerprint = createHash('sha256').update(Config.JWT_SECRET).digest('hex');

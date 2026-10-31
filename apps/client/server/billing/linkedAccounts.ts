@@ -11,7 +11,7 @@ import { userService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { hashSignupNetwork } from '@bike4mind/server-utils/auth/signupNetworkSignals';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { adminOwnerSlackRef } from '@server/integrations/slack/subscriptionLifecycle';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 

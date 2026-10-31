@@ -83,6 +83,7 @@ function stubLlm() {
 function buildDb() {
   const users = {
     incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 1_000_000 }),
+    decrementCreditsFloored: vi.fn(async (_id: string, credits: number) => credits),
     findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 1_000_000 }),
   };
   return {
@@ -340,7 +341,8 @@ describe('executeCompletion - Claude prompt caching', () => {
       const settled = Math.ceil((30_000 * perM(3) * 1.25 + maxTokens * perM(15)) * CREDITS_PER_USD);
       expect(settled).toBeGreaterThan(hold);
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -hold);
-      expect(users.incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - settled);
+      expect(users.incrementCredits).toHaveBeenCalledTimes(1);
+      expect(users.decrementCreditsFloored).toHaveBeenCalledWith('user1', settled - hold);
     });
 
     it('refunds a warm-cache turn, which reads at a tenth of what the hold priced', async () => {

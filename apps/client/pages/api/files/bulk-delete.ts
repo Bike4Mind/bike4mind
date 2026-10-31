@@ -18,7 +18,7 @@ import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMem
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { FileEvents, storageOwnerOf, sumStorageDeltaByOwner, type StorageOwner } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';

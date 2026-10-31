@@ -47,7 +47,9 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 vi.mock('@server/entitlements/assertOrganizationExists', () => ({ assertOrganizationExists: vi.fn() }));
 vi.mock('@server/organizations/notifySeatCeilingRaised', () => ({ auditSeatCeilingRaised: vi.fn() }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn(async () => undefined) }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
+  postMessageToSlack: vi.fn(async () => undefined),
+}));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import '@pages/api/admin/partner-signup-rules/backfill';

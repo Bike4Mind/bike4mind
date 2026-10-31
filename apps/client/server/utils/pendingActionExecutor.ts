@@ -6,7 +6,7 @@ import { SlackDevWorkspace, OrgSlackWorkspace } from '@bike4mind/database/infra'
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
 import { TOKEN_EXPIRATION_MS } from '@bike4mind/slack';

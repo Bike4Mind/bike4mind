@@ -1,6 +1,6 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
-import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
+import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import {
   CliCompletionRequestAction,
   buildCompletionStreamEvent,
@@ -29,13 +29,13 @@ import {
   ApiKeyInfo,
 } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { withWebSocketContext, sendToConnection } from '@server/websocket/utils';
+import { withWebSocketContext, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { cliCompletionErrorFields } from '@server/utils/errorSanitization';
 import { ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
-import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
+import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';

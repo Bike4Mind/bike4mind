@@ -8,7 +8,7 @@ const m = vi.hoisted(() => ({
   discardEnrolledMission: vi.fn(),
 }));
 
-vi.mock('@server/deepAgent/missions', () => ({
+vi.mock('@bike4mind/server-utils/deepAgent/missions', () => ({
   findAgentsByName: m.findAgentsByName,
   enrollMissionForAgent: m.enrollMissionForAgent,
   discardEnrolledMission: m.discardEnrolledMission,

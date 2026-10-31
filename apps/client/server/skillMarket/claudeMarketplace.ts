@@ -13,7 +13,7 @@ import {
   type ISkillListingVersion,
 } from '@bike4mind/common';
 import { toSkillMd } from '@bike4mind/common/utils/skillMd';
-import { marketVisibilityFilter } from './market';
+import { marketVisibilityFilter } from '@bike4mind/server-utils/skillMarket/market';
 
 /**
  * Claude Code plugin feed for an org's Skill Market listings and bundles, served by

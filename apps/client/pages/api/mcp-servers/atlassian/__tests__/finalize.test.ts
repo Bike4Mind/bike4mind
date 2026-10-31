@@ -44,7 +44,9 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (t: unknown) => t,
   encryptEnvVariables: mockEncrypt,
 }));
-vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: (...a: unknown[]) => mockInvoke(...a) }));
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({
+  invokeMcpHandler: (...a: unknown[]) => mockInvoke(...a),
+}));
 
 import handler from '../finalize';
 

@@ -28,7 +28,7 @@ import type { Logger } from '@bike4mind/observability';
 import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import type { ApiKeyInfo } from '@server/cli/auth';
 import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import {
   dispatchAgentExecution,

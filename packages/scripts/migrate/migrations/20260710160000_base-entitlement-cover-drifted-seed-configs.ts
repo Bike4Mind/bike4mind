@@ -39,7 +39,7 @@ import { type MigrationFile } from './index';
  * so there is no double-write.
  */
 
-const BASE_ENTITLEMENT_KEY = 'base'; // keep in sync with apps/client/lib/entitlements/registry.ts
+const BASE_ENTITLEMENT_KEY = 'base'; // keep in sync with packages/server-utils/src/lib/entitlements/registry.ts
 const BASELINE_TAG = 'customer'; // the historical "everyone" tag every default seed carried
 
 // Historical `getDefaultModelConfig` "audience" tag universe (lowercased). `analyst` is

@@ -77,7 +77,7 @@ export type OverwatchUserType = (typeof OVERWATCH_USERTYPE_VALUES)[number];
 
 // ---------------------------------------------------------------------------
 // Lane convention - a synthetic user's events carry metadata.lane: 'synthetic'
-// (a test account, see apps/client/server/analytics/lane.ts). The consumer copies
+// (a test account, see packages/server-utils/src/analytics/lane.ts). The consumer copies
 // the mark onto that user's per-user rows as a top-level `lane` and never clears
 // it. 'synthetic' is the only value ever written: an absent lane means
 // "unmarked", never a verified real user, so there is no 'real' value.

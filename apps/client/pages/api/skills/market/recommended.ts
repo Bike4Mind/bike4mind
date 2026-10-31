@@ -1,6 +1,6 @@
 // apps/client/pages/api/skills/market/recommended.ts
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { memberOrgIdsFor } from '@server/skillMarket/market';
+import { memberOrgIdsFor } from '@bike4mind/server-utils/skillMarket/market';
 import { recommendListings } from '@server/skillMarket/search';
 
 /** GET /api/skills/market/recommended - the "Recommended for you" rail, each item with a reason. */

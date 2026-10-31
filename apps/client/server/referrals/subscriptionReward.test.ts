@@ -63,7 +63,7 @@ vi.mock('@bike4mind/observability', () => {
 });
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({ getStripe: vi.fn() }));
 vi.mock('@client/lib/userSubscriptions/constants', () => ({ PROFESSIONAL_PRICE_ID: 'price_pro' }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
 vi.mock('./firstAnswerReward', async importActual => ({
   ...(await importActual<typeof import('./firstAnswerReward')>()),
   alertIfRewardsSpike: mockAlert,

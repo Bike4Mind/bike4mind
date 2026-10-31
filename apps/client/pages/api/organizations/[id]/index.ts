@@ -22,7 +22,7 @@ import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bik
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { Request } from 'express';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const updateOrgBodySchema = z.object({
