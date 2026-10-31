@@ -12,6 +12,7 @@ import type { ModelInfo, ThinkingVisibility } from '@bike4mind/common';
 import { ServerSubagentOrchestrator, spentResultOf } from '../../agents/ServerSubagentOrchestrator';
 import type { ModelAdmission } from '../../modelAdmission';
 import type {
+  ServerOrchestratorDeps,
   ServerSubagentTracker,
   SubagentHandoffSignal,
   SubagentToolPermissions,
@@ -178,6 +179,8 @@ export interface CoordinateTaskToolDeps {
 
   /** See `ServerOrchestratorDeps.checkInsufficientCredits`. */
   checkInsufficientCredits?: (model: string) => boolean | Promise<boolean>;
+  /** See `ServerOrchestratorDeps.substituteIdentity`. */
+  substituteIdentity?: ServerOrchestratorDeps['substituteIdentity'];
 
   /**
    * The parent run's tool-permission lists, forwarded to the coordinator's orchestrator;
@@ -257,6 +260,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         optInTools: deps.optInTools,
         checkMemberCreditCap: deps.checkMemberCreditCap,
         checkInsufficientCredits: deps.checkInsufficientCredits,
+        substituteIdentity: deps.substituteIdentity,
         toolPermissions: deps.toolPermissions,
         modelAdmission: deps.modelAdmission,
       });

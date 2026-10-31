@@ -41,6 +41,7 @@ const {
     icon?: ComponentType;
     requireEntitlement?: string;
     sidebar?: boolean;
+    useSidebarTag?: () => string | null;
   }>,
   entitlements: [] as string[],
   // The real useOptiAccess/useOptiVisible read this store, so the Opti row tests exercise both.
@@ -168,12 +169,33 @@ describe('SidenavNav Opti row', () => {
 describe('SidenavNav feature rows', () => {
   // SidenavNav reads no gear unlock state at all any more; only flags gate a row.
   it('shows every feature row with its flag on', () => {
-    useFeatureEnabledMock.mockReturnValue(true);
+    useFeatureEnabledMock.mockImplementation((flag: string) => flag !== 'enableQuestMasterV5');
     renderNav();
 
-    for (const key of ['files', 'projects', 'published', 'skill-market', 'agents']) {
+    for (const key of ['files', 'projects', 'published', 'skill-market', 'agents', 'quests']) {
       expect(screen.getByTestId(`sidenav-nav-${key}`)).toBeInTheDocument();
     }
+  });
+});
+
+describe('SidenavNav My Quests row', () => {
+  it('shows with the Quest Master flag and opens the quests page', () => {
+    useFeatureEnabledMock.mockImplementation((flag: string) => flag === 'enableQuestMaster');
+    renderNav();
+    const row = screen.getByTestId('sidenav-nav-quests');
+    expect(row).toHaveTextContent('My Quests');
+    fireEvent.click(row);
+    expect(navigate).toHaveBeenCalledWith({ to: '/quests' });
+  });
+
+  it('hides without the flag, and is not marked on the v5 page', () => {
+    renderNav();
+    expect(screen.queryByTestId('sidenav-nav-quests')).not.toBeInTheDocument();
+
+    useFeatureEnabledMock.mockReturnValue(true);
+    location.pathname = '/quests-v5';
+    renderNav();
+    expect(screen.getByTestId('sidenav-nav-quests')).not.toHaveAttribute('aria-current');
   });
 });
 
@@ -369,6 +391,18 @@ describe('SidenavNav Bob row', () => {
     renderNav();
     expect(bobRow()).toContainElement(screen.getByTestId('Diversity3OutlinedIcon'));
   });
+
+  it('shows the tag its nav item names, and none when the hook returns null', () => {
+    let tag: string | null = 'New';
+    navItems.push({ path: '/bob', label: 'Bob', useSidebarTag: () => tag });
+    renderNav();
+    expect(bobRow()).toContainElement(screen.getByTestId('sidenav-nav-bob-tag'));
+    expect(screen.getByTestId('sidenav-nav-bob-tag')).toHaveTextContent('New');
+
+    tag = null;
+    renderNav();
+    expect(screen.getAllByTestId('sidenav-nav-bob').at(-1)).toHaveTextContent(/^Bob$/);
+  });
 });
 
 describe('SidenavNav overlay-contributed sidebar rows', () => {
@@ -413,6 +447,12 @@ describe('SidenavNav overlay-contributed sidebar rows', () => {
     );
   });
 
+  it('shows the tag a contributed row names', () => {
+    navItems.push({ path: '/launch', label: 'Launch Pad', sidebar: true, useSidebarTag: () => 'New' });
+    renderNav();
+    expect(contributedRow()).toContainElement(screen.getByTestId('sidenav-nav-premium-launch-tag'));
+  });
+
   it('does not draw Bob twice when its nav item opts in too', () => {
     navItems.push({ path: '/bob', label: 'Bob', sidebar: true });
     renderNav();
@@ -452,6 +492,110 @@ describe('SidenavNav overlay-contributed sidebar rows', () => {
     const rows = screen.getAllByTestId('sidenav-nav-premium-a-b');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent('First');
+  });
+});
+
+describe('SidenavNav More overflow', () => {
+  const navRowIds = (container: HTMLElement) =>
+    within(container)
+      .getAllByRole('button')
+      .map(row => row.getAttribute('data-testid'))
+      .filter((id): id is string => !!id?.startsWith('sidenav-nav-'));
+  const openMore = () => {
+    fireEvent.click(screen.getByTestId('sidenav-nav-more'));
+    return screen.getByRole('menu');
+  };
+  const moreItemIds = (menu: HTMLElement) =>
+    within(menu)
+      .getAllByRole('menuitem')
+      .map(item => item.getAttribute('data-testid'));
+
+  // 14 rows: every flag, Opti, Bob, two overlay rows and Studio.
+  const seeEverything = () => {
+    useFeatureEnabledMock.mockReturnValue(true);
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    navItems.push(
+      { path: '/bob', label: 'Bob' },
+      { path: '/launch', label: 'Launch Pad', sidebar: true },
+      { path: '/forge', label: 'Forge', sidebar: true }
+    );
+    useVideoModelsMock.mockReturnValue({ data: [{ id: 'v' }] });
+  };
+
+  it('draws no More row for a user who sees only the baseline rows', () => {
+    renderNav();
+    expect(screen.queryByTestId('sidenav-nav-more')).not.toBeInTheDocument();
+  });
+
+  it('draws no More row at exactly the limit', () => {
+    useFeatureEnabledMock.mockImplementation((flag: string) => flag !== 'enableQuestMasterV5');
+    const { container } = renderNav();
+    expect(navRowIds(container)).toHaveLength(8);
+    expect(screen.queryByTestId('sidenav-nav-more')).not.toBeInTheDocument();
+  });
+
+  it('folds the lowest-priority rows into More, keeping eight rows in all', () => {
+    seeEverything();
+    const { container } = renderNav();
+
+    expect(navRowIds(container)).toEqual([
+      'sidenav-nav-new-chat',
+      'sidenav-nav-opti',
+      'sidenav-nav-bob',
+      'sidenav-nav-files',
+      'sidenav-nav-agents',
+      'sidenav-nav-quests',
+      'sidenav-nav-gears',
+      'sidenav-nav-more',
+    ]);
+    expect(moreItemIds(openMore())).toEqual([
+      'sidenav-more-premium-launch',
+      'sidenav-more-premium-forge',
+      'sidenav-more-projects',
+      'sidenav-more-studio',
+      'sidenav-more-published',
+      'sidenav-more-skill-market',
+      'sidenav-more-quests-v5',
+    ]);
+  });
+
+  it('never folds a single row: one over the limit moves two', () => {
+    useFeatureEnabledMock.mockImplementation((flag: string) => flag !== 'enableQuestMasterV5');
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    const { container } = renderNav();
+
+    expect(navRowIds(container)).toHaveLength(8);
+    expect(moreItemIds(openMore())).toEqual(['sidenav-more-projects', 'sidenav-more-skill-market']);
+  });
+
+  it('navigates from a More item', () => {
+    seeEverything();
+    renderNav();
+    fireEvent.click(within(openMore()).getByTestId('sidenav-more-skill-market'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/skills/market' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('marks More as the current page while a folded row is active', () => {
+    seeEverything();
+    location.pathname = '/skills/market';
+    renderNav();
+    expect(screen.getByTestId('sidenav-nav-more')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('leaves More unmarked while a visible row is active', () => {
+    seeEverything();
+    location.pathname = '/agents';
+    renderNav();
+    expect(screen.getByTestId('sidenav-nav-more')).not.toHaveAttribute('aria-current');
+  });
+
+  it('keeps the pinned rows out of the fold and puts More last in the scrolling section', () => {
+    seeEverything();
+    expect(navRowIds(renderNav('pinned').container)).toEqual(['sidenav-nav-new-chat', 'sidenav-nav-opti']);
+    expect(navRowIds(renderNav('scroll').container).at(-1)).toBe('sidenav-nav-more');
   });
 });
 

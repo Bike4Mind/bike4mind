@@ -23,6 +23,8 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.api_key.rate_limit_reset': 'Reset API key rate limits',
   'user.api_key_trust.approved': 'Approved API key trust',
   'user.api_key_trust.revoked': 'Revoked API key trust',
+  'user.new_account_spend_cap.lifted': 'Lifted the new-account spend cap',
+  'user.new_account_spend_cap.restored': 'Restored the new-account spend cap',
   'user.role.admin_granted': 'Granted the Super Admin role',
   'user.role.admin_revoked': 'Revoked the Super Admin role',
   'user.storage.recalculated': 'Recalculated storage',

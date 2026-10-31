@@ -53,6 +53,9 @@ export function toPublicVideoJobErrorCode(code: GenerationJobErrorCode): VideoJo
     case 'input_image_not_found':
     case 'cancelled':
       return code;
+    // Refused before submit, so the provider never ran and the hold is returned, as for a cancel.
+    case 'account_blocked':
+      return 'cancelled';
     default: {
       const unreachable: never = code;
       throw new Error(`Unmapped generation job error code: ${String(unreachable)}`);

@@ -5,7 +5,8 @@
  * Layout: a top-level header carries stage and level at a glance; the details sit in a
  * colour-barred attachment (red page / amber warn / blue info on production, grey on any other
  * stage, green when resolved). Mentions only ever apply to production alarms, at page level
- * unless the setting widens them to warn (see parseMentionSetting).
+ * unless the setting widens them to warn (see parseMentionSetting). Stages other than production
+ * post page-level alarms only; their warnings are dropped.
  */
 
 import { classifyStage } from '@bike4mind/common';
@@ -324,6 +325,26 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Read the young-account spend post in LiveOps for the top accounts, then check the signup activity and the WAF block list.',
     links: SIGNUP_LINKS,
   },
+  'llm-spend-young-accounts': {
+    title: 'Young-account LLM spend is spiking',
+    level: 'page',
+    unit: 'USD',
+    meaning:
+      'Accounts under 7 days old spent more estimated AI dollars in five minutes than the ceiling. New accounts rarely spend this fast on their own.',
+    action:
+      'Read the latest young-account spend post in LiveOps for the top accounts, open them on the admin users page, and suspend any that look like abuse.',
+    links: ['signup-activity'],
+  },
+  'completion-credit-overdraft': {
+    title: 'A completion cost more than its account could pay',
+    level: 'warn',
+    unit: 'completions',
+    meaning:
+      'A completion cost more credits than its account held, so the balance was charged down to zero and the rest went uncollected.',
+    action:
+      'Find the account in the ChatCompletion log line, check its credit ledger and recent purchases on the admin users page, and review how the reservation let it through.',
+    links: ['signup-activity'],
+  },
   'llm-spend-rate': {
     title: 'AI provider spend is spiking',
     level: 'warn',
@@ -333,6 +354,34 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     action:
       'Open the LLM spend dashboard for the provider and model, then check the agent executions and signup activity.',
     links: ['agent-executions', 'signup-activity'],
+  },
+  'llm-spend-hourly': {
+    title: 'AI provider spend is running hot',
+    level: 'page',
+    unit: 'USD',
+    meaning:
+      'Estimated spend at one provider over the last hour is at or above the ceiling. A sustained drain from a credit farm, a stolen card, or a runaway agent are the usual causes.',
+    action:
+      'Open the LLM spend dashboard for the provider and top models, check the young-account spend post in LiveOps, then review signup activity and the WAF block list.',
+    links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+  },
+  'provider-reported-spend-hourly': {
+    title: 'A provider reports unusual AI spend',
+    level: 'page',
+    unit: 'USD',
+    meaning:
+      "The provider's own usage report for the last hour, priced with our model rates, is at or above the ceiling. This counts every call billed to the organization, including ones that never reached our ledger.",
+    action:
+      'Open the LLM spend dashboard and the provider console usage page for the top models, then check the young-account spend post, signup activity and the WAF block list.',
+    links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+  },
+  'provider-usage-poll-errors': {
+    title: 'The provider usage poller is failing',
+    level: 'warn',
+    unit: 'failed runs',
+    meaning:
+      'The hourly job that reads Anthropic and OpenAI usage reports failed, so the provider-side spend alarms are blind until it recovers.',
+    action: 'Check the poller Lambda log for the error. A missing or rotated admin key is the usual cause.',
   },
   'mail-send-failures': {
     title: 'Emails are failing to send',
@@ -711,6 +760,8 @@ export function formatAlarmSlackMessage(
   if (alarm.NewStateValue !== 'ALARM' && alarm.NewStateValue !== 'OK') return null;
 
   const { entry, title, level } = resolveEntry(alarm, stage);
+  // Other stages run the production ceilings against QA traffic, so only their pages are worth a post.
+  if (!isProductionStage(stage) && level !== 'page') return null;
   const when = parseStateChangeTime(alarm.StateChangeTime);
   const url = consoleUrl(alarm);
   const link = url ? `<${url}|Open in CloudWatch>` : undefined;

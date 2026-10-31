@@ -14,6 +14,7 @@ import { useGetFriendRequests, useReturnToAdmin, useUserLogout } from '@client/a
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useAppVersion } from '@client/app/hooks/useAppVersion';
 import { useDesktopPromoEnabled } from '@client/app/hooks/useDesktopPromoEnabled';
+import { usePreferenceArenaEnabled } from '@client/app/hooks/usePreferenceArenaEnabled';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useIsTablet } from '@client/app/hooks/useIsMobile';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
@@ -46,6 +47,7 @@ import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
 import PowerOutlinedIcon from '@mui/icons-material/PowerOutlined';
 import DesktopMacOutlinedIcon from '@mui/icons-material/DesktopMacOutlined';
+import ThumbsUpDownOutlinedIcon from '@mui/icons-material/ThumbsUpDownOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
@@ -271,6 +273,7 @@ const ProfileMenu = () => {
   const visiblePremiumNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
   const isDesktopPromoEnabled = useDesktopPromoEnabled();
+  const isPreferenceArenaEnabled = usePreferenceArenaEnabled();
 
   const toggleReferralModal = useReferralModal(s => s.toggle);
   const openCookieSettings = useCookieSettings(s => s.open);
@@ -505,6 +508,16 @@ const ProfileMenu = () => {
               toggleReferralModal();
             }}
           />
+          {isPreferenceArenaEnabled && (
+            <MenuRow
+              testId="profile-menu-arena"
+              icon={<ThumbsUpDownOutlinedIcon sx={{ fontSize: '18px' }} />}
+              label={t('preferenceArena.menuLabel', 'Rate answers, earn credits')}
+              onClick={() => {
+                navigateFromMenu('/arena', () => navigate({ to: '/arena' }));
+              }}
+            />
+          )}
           {isDesktopPromoEnabled && (
             <MenuRow
               testId="profile-menu-desktop-app"

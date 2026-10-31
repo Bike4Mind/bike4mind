@@ -33,6 +33,11 @@ export interface AddCreditsAdapters {
   };
   creditHolderMethods: ICreditHolderMethods;
   /**
+   * Reference stamped on the grant's lot when the grant has no stripePaymentIntentId, so a later
+   * clawback can find the lot (clawbackCreditLotsByStripeRef). Ignored when a payment intent is set.
+   */
+  lotRef?: string;
+  /**
    * What a replayed `transactionId` does. 'return' (default) re-reads the holder with a net-zero
    * increment. 'throw' raises DuplicateCreditTransactionError before touching the session - what
    * an in-transaction caller needs, because the duplicate write has already aborted it and any
@@ -69,7 +74,7 @@ export type AddCreditsParameters = z.infer<typeof AddCreditsSchema>;
  */
 export async function addCreditsWithLedgerRow(
   parameters: AddCreditsParameters,
-  { db, creditHolderMethods, duplicateTransactionId = 'return' }: AddCreditsAdapters
+  { db, creditHolderMethods, duplicateTransactionId = 'return', lotRef }: AddCreditsAdapters
 ): Promise<CreditLedgerWrite> {
   const params = secureParameters(parameters, AddCreditsSchema);
   const { ownerId, ownerType, credits, type, description, metadata } = params;
@@ -157,7 +162,7 @@ export async function addCreditsWithLedgerRow(
         ownerType,
         amount: Math.abs(credits),
         grantType: type,
-        stripeRef: 'stripePaymentIntentId' in params ? params.stripePaymentIntentId : undefined,
+        stripeRef: ('stripePaymentIntentId' in params ? params.stripePaymentIntentId : undefined) ?? lotRef,
       },
       { db: { creditLots: db.creditLots } }
     );

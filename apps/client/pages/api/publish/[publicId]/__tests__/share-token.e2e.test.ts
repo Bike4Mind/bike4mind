@@ -27,6 +27,11 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * mocked. The rotation race delays collection writes at a barrier, then runs them against Mongo.
  */
 
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
+
 let tokenCounter = 0;
 
 vi.mock('@server/middlewares/baseApi', () => ({

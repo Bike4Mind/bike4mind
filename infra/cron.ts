@@ -507,6 +507,28 @@ const creditHoldSweepCron = runsScheduledJobs
     })
   : undefined;
 
+// Referral Reward Release - credits the inviter's held subscription rewards once the hold has ended.
+// Self-host twin: apps/workers/src/selfhost/referralRewardRelease.ts; keep the schedules in step.
+// Overlapping runs are safe: each reward's claim and grant commit in one transaction.
+const referralRewardReleaseCron = runsScheduledJobs
+  ? new sst.aws.Cron('referralRewardRelease', {
+      schedule: 'rate(1 hour)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/referralRewardRelease.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
 // Integration Health Check - runs every 5 minutes to probe external APIs
 // Probes: Slack, GitHub, Jira, Confluence
 const integrationHealthCheckCron = runsScheduledJobs
@@ -998,6 +1020,33 @@ const spendReconciliationCron = runsScheduledJobs
     })
   : undefined;
 
+// Provider Usage Poll - reads the previous complete hour from the Anthropic and OpenAI admin usage
+// reports, prices it with our model rates and publishes ProviderReportedUsd per provider; alarmed in
+// infra/providerSpend.ts. Minute 7 leaves room for the providers' ingestion lag. Enabled: production + dev.
+// No VPC, unlike its neighbours: it reaches only the provider APIs and CloudWatch, never Mongo.
+const providerUsagePollCron = runsScheduledJobs
+  ? new sst.aws.Cron('providerUsagePoll', {
+      schedule: 'cron(7 * * * ? *)',
+      function: {
+        handler: 'apps/workers/src/cron/providerUsagePoll.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        // A retry would republish the providers that succeeded and double their hourly Sum.
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
+      },
+    })
+  : undefined;
+
 // Credit Purchase Reconciliation -- alerts on Stripe credit purchases that
 // succeeded with no credit grant.
 const creditPurchaseReconciliationCron = runsScheduledJobs
@@ -1320,6 +1369,7 @@ export {
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,
+  referralRewardReleaseCron,
   sreStaleDispatchCron,
   attackSimulationFunction,
   attackSimulationCron,
@@ -1334,6 +1384,7 @@ export {
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
+  providerUsagePollCron,
   creditPurchaseReconciliationCron,
   storageReconciliationCron,
   driveLakeResyncPollCron,

@@ -111,4 +111,58 @@ describe('PaymentAttemptModel', () => {
       })
     ).toEqual({ userCards: 0, networkCards: 0 });
   });
+
+  it('keeps an attempt marked Radar-blocked once any outcome was blocked, and counts them', async () => {
+    const since = new Date(Date.now() - 60_000);
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_1', ...start });
+    await paymentAttemptRepository.recordOutcome({
+      ...outcome('pi_1', 'u1', 'fp_1'),
+      outcome: 'failed',
+      radarBlocked: true,
+    });
+    const { attempt } = await paymentAttemptRepository.recordOutcome(outcome('pi_1', 'u1', 'fp_2'));
+    expect(attempt.radarBlocked).toBe(true);
+
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_2', ...start, userId: 'u2' });
+    await paymentAttemptRepository.recordOutcome({
+      ...outcome('pi_2', 'u2', 'fp_3'),
+      outcome: 'failed',
+      radarBlocked: true,
+    });
+    await paymentAttemptRepository.recordOutcome({ ...outcome('pi_3', 'u1', 'fp_4'), outcome: 'failed' });
+
+    expect(await paymentAttemptRepository.countRadarBlocked({ userId: 'u1', ipHash: 'net_a', since })).toEqual({
+      account: 1,
+      network: 2,
+    });
+    expect(await paymentAttemptRepository.countRadarBlocked({ userId: 'u1', ipHash: null, since })).toEqual({
+      account: 1,
+      network: null,
+    });
+    expect(
+      await paymentAttemptRepository.countRadarBlocked({
+        userId: 'u1',
+        ipHash: 'net_a',
+        since: new Date(Date.now() + 1000),
+      })
+    ).toEqual({ account: 0, network: 0 });
+  });
+
+  it('links accounts by shared card and by shared payment network', async () => {
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_1', ...start });
+    await paymentAttemptRepository.recordOutcome(outcome('pi_1', 'u1', 'fp_1'));
+    await paymentAttemptRepository.recordOutcome(outcome('pi_2', 'u2', 'fp_1'));
+    await paymentAttemptRepository.recordStart({ paymentIntentId: 'pi_3', ...start, userId: 'u3' });
+    await paymentAttemptRepository.recordOutcome(outcome('pi_4', 'u4', 'fp_9'));
+
+    const keys = await paymentAttemptRepository.linkKeysForUser('u1');
+    expect(keys).toEqual({ cardFingerprints: ['fp_1'], ipHashes: ['net_a'] });
+
+    const linked = await paymentAttemptRepository.findLinkedUserIds({ userId: 'u1', ...keys, limit: 10 });
+    expect(linked.byCard).toEqual(['u2']);
+    expect(linked.byNetwork).toEqual(['u3']);
+    expect(
+      await paymentAttemptRepository.findLinkedUserIds({ userId: 'u1', cardFingerprints: [], ipHashes: [], limit: 10 })
+    ).toEqual({ byCard: [], byNetwork: [] });
+  });
 });
