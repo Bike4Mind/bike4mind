@@ -33,6 +33,12 @@ const MAX_PR_COMMITS = 250;
 const MAX_PR_FILES = 3000;
 // compare/{base}...{head} returns at most 300 files.
 const MAX_COMPARE_FILES = 300;
+// A rate-limited request is retried only while the wait fits well inside the
+// workflow's 10-minute timeout; a longer one (an exhausted hourly limit) fails now
+// and says so, instead of hanging until the runner kills the job. Times in ms.
+const MAX_RATE_LIMIT_RETRIES = 3;
+const MAX_RATE_LIMIT_WAIT_MS = 90_000;
+const MAX_RATE_LIMIT_TOTAL_WAIT_MS = 180_000;
 
 // Errors whose message this script wrote and knows to be safe to publish. Any
 // other error is reported by name only: a RegExp SyntaxError quotes the pattern
@@ -154,23 +160,64 @@ function contentLines(buffer) {
     .map(run => ({ text: run }));
 }
 
-function github(token, fetchImpl) {
+/**
+ * How long to wait before retrying a rate-limited response, or undefined when
+ * the response is not a rate limit and must fail now. GitHub answers both its
+ * primary (hourly) and secondary (burst) limits with 403 or 429; a 403 without
+ * a rate-limit signal is a real permission error.
+ * https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#rate-limit-errors
+ */
+async function rateLimitWaitMs(res, nowMs) {
+  if (res.status !== 403 && res.status !== 429) return undefined;
+  const retryAfter = Number(res.headers.get('retry-after'));
+  if (res.headers.get('retry-after') !== null && Number.isFinite(retryAfter)) return Math.max(retryAfter, 1) * 1000;
+  const reset = Number(res.headers.get('x-ratelimit-reset'));
+  if (res.headers.get('x-ratelimit-remaining') === '0' && Number.isFinite(reset)) {
+    return Math.max(reset * 1000 - nowMs, 0) + 1000;
+  }
+  if (res.status === 429) return 60_000;
+  // A secondary limit may carry no header at all, only its message.
+  const body = await res.text().catch(() => '');
+  return /rate limit/i.test(body) ? 60_000 : undefined;
+}
+
+function github(token, fetchImpl, { sleep, now }) {
   const headers = {
     Accept: 'application/vnd.github+json',
     Authorization: `Bearer ${token}`,
     'X-GitHub-Api-Version': '2022-11-28',
   };
 
+  let waitedMs = 0;
+
   async function request(url, accept) {
-    const res = await fetchImpl(url.startsWith('http') ? url : `${API}${url}`, {
-      headers: accept ? { ...headers, Accept: accept } : headers,
-    });
-    if (!res.ok) {
-      const err = new SafeError(`GitHub API ${res.status} for ${url.split('?')[0]}`);
-      err.status = res.status;
-      throw err;
+    const path = url.split('?')[0];
+    for (let attempt = 1; ; attempt++) {
+      const res = await fetchImpl(url.startsWith('http') ? url : `${API}${url}`, {
+        headers: accept ? { ...headers, Accept: accept } : headers,
+      });
+      if (res.ok) return res;
+
+      const waitMs = await rateLimitWaitMs(res, now());
+      if (waitMs === undefined) {
+        const err = new SafeError(`GitHub API ${res.status} for ${path}`);
+        err.status = res.status;
+        throw err;
+      }
+      if (
+        attempt > MAX_RATE_LIMIT_RETRIES ||
+        waitMs > MAX_RATE_LIMIT_WAIT_MS ||
+        waitedMs + waitMs > MAX_RATE_LIMIT_TOTAL_WAIT_MS
+      ) {
+        const err = new SafeError(
+          `GitHub API ${res.status} for ${path}: rate limit exceeded, retry in about ${Math.ceil(waitMs / 60_000)} min.`
+        );
+        err.status = res.status;
+        throw err;
+      }
+      waitedMs += waitMs;
+      await sleep(waitMs);
     }
-    return res;
   }
 
   return {
@@ -226,6 +273,23 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
 }
 
 /**
+ * Splits a complete `?recursive=1` listing of `rootSha` (entries carry full
+ * paths) into one name-keyed listing per directory, cached by tree sha in the
+ * same shape a non-recursive listing gives.
+ */
+function cacheRecursiveListing(trees, rootSha, entries) {
+  const shaOfDir = new Map([['', rootSha]]);
+  for (const entry of entries) if (entry.type === 'tree') shaOfDir.set(entry.path, entry.sha);
+  const listings = new Map([...shaOfDir.values()].map(sha => [sha, new Map()]));
+  for (const entry of entries) {
+    const slash = entry.path.lastIndexOf('/');
+    const name = entry.path.slice(slash + 1);
+    listings.get(shaOfDir.get(entry.path.slice(0, Math.max(slash, 0)))).set(name, { ...entry, path: name });
+  }
+  for (const [sha, listing] of listings) if (!trees.has(sha)) trees.set(sha, listing);
+}
+
+/**
  * Lists the blobs a merge commit changed relative to EVERY parent, as
  * `{ path, sha, parentShas }`, where `parentShas` are the parents' blobs at the
  * same path. A file or directory identical to one parent's holds nothing that
@@ -234,13 +298,23 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
  * the result is never capped by the size of the branches being merged.
  */
 async function mergeOnlyBlobs({ commit, gh, repo, incomplete, trees }) {
+  // One recursive listing caches every directory under a root, so a merge costs a
+  // request per root tree instead of one per directory the walk descends into
+  // (over a thousand on a long-lived branch, past the token's hourly budget).
   const entriesOf = async sha => {
     if (sha === undefined) return new Map();
     if (!trees.has(sha)) {
-      const tree = await gh.json(`/repos/${repo}/git/trees/${sha}`);
-      // The directory path is withheld: it may itself contain a term.
-      if (tree.truncated) incomplete(`merge ${commit.sha.slice(0, 12)} has a directory too large to list.`);
-      trees.set(sha, new Map((tree.tree ?? []).map(entry => [entry.path, entry])));
+      const listing = await gh.json(`/repos/${repo}/git/trees/${sha}?recursive=1`);
+      if (listing.truncated) {
+        // Too large for one response: list this directory alone and let the walk
+        // fetch the subdirectories it needs.
+        const tree = await gh.json(`/repos/${repo}/git/trees/${sha}`);
+        // The directory path is withheld: it may itself contain a term.
+        if (tree.truncated) incomplete(`merge ${commit.sha.slice(0, 12)} has a directory too large to list.`);
+        trees.set(sha, new Map((tree.tree ?? []).map(entry => [entry.path, entry])));
+      } else {
+        cacheRecursiveListing(trees, sha, listing.tree ?? []);
+      }
     }
     return trees.get(sha);
   };
@@ -387,6 +461,8 @@ export async function run({
   fetchImpl = fetch,
   log = console.log,
   readFile = fs.readFileSync,
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  now = Date.now,
 } = {}) {
   // Paths in a message come from the PR. Git allows a newline in a path, and an
   // unescaped one would start a line the runner parses as a workflow command.
@@ -414,7 +490,7 @@ export async function run({
 
   const eventName = env.GITHUB_EVENT_NAME;
   const event = JSON.parse(readFile(env.GITHUB_EVENT_PATH, 'utf8'));
-  const gh = github(env.GITHUB_TOKEN, fetchImpl);
+  const gh = github(env.GITHUB_TOKEN, fetchImpl, { sleep, now });
   const repo = env.GITHUB_REPOSITORY;
 
   const hits = [];

@@ -33,6 +33,7 @@ import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompl
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import { v4 as uuidv4 } from 'uuid';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 
 interface CreateFromContextRequest {
   agentName: string;
@@ -389,6 +390,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{}, CreateFromContextResponse, CreateFromContextRequest>
 >(
   withRequestCompletionQuota(async (req, res) => {
+    await assertOutboundActionAllowed(req.user, req);
     assertAiAccessAllowed(req.user);
     const { agentName, sessionId } = req.body;
     const authenticatedUserId = req.user!.id;

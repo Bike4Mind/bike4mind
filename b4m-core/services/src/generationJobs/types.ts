@@ -57,6 +57,11 @@ export type GenerationJobEngineDeps = {
   now(): Date;
   logger: Logger;
   leaseMs: number;
+  /**
+   * Why the requesting user may no longer spend credits, or null when they may. Read before each submit: a job
+   * outlives the request that admitted it, so an account blocked since then must not reach the provider.
+   */
+  aiAccessDenial?(userId: string): Promise<string | null>;
 };
 
 export type StepOutcome = 'skipped' | 'advanced' | 'terminal';

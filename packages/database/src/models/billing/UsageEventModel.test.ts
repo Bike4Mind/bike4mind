@@ -132,6 +132,31 @@ describe('UsageEventRepository', () => {
   });
 
   describe('userTokensSince', () => {
+    it.each(['chat', 'completion_api'] as const)(
+      'excludes unbilled %s timeout cache usage from quotas but retains its COGS',
+      async feature => {
+        await record({
+          feature,
+          status: 'timeout',
+          inputTokens: 0,
+          outputTokens: 0,
+          providerInputTokens: 1000,
+          providerOutputTokens: 100,
+          cachedInputTokens: 30_000,
+          cacheWriteTokens: 500,
+          creditsCharged: 0,
+          settledBasis: 'provider',
+        });
+
+        expect(await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000))).toEqual({
+          tokens: 0,
+        });
+        const cogs = await usageEventRepository.marginByModelDay();
+        expect(cogs).toHaveLength(1);
+        expect(cogs[0].cogsUsd).toBeCloseTo(baseEvent.costUsd, 12);
+      }
+    );
+
     it("counts a chat row's cache tokens once, as part of its inputTokens", async () => {
       await record({ feature: 'chat', inputTokens: 100, outputTokens: 50, cachedInputTokens: 20, cacheWriteTokens: 5 });
 
@@ -310,6 +335,28 @@ describe('UsageEventRepository', () => {
   });
 
   describe('settlementBreakdown', () => {
+    it('keeps timeout requests without treating quota sentinels as local token estimates', async () => {
+      await record({
+        settledBasis: 'provider',
+        status: 'timeout',
+        inputTokens: 0,
+        outputTokens: 0,
+        providerInputTokens: 1000,
+        providerOutputTokens: 700,
+        creditsCharged: 0,
+      });
+
+      expect(await usageEventRepository.settlementBreakdown()).toEqual([
+        expect.objectContaining({
+          requests: 1,
+          creditsCharged: 0,
+          deltaSampleSize: 0,
+          inputTokenDelta: 0,
+          outputTokenDelta: 0,
+        }),
+      ]);
+    });
+
     it('buckets by settledBasis and sums credits, write-offs, and token deltas', async () => {
       await record({
         settledBasis: 'provider',

@@ -116,6 +116,12 @@ export const UsageEvent = z.object({
   provider: z.string(),
   /** Exact model id string used for the call. */
   model: z.string(),
+  /**
+   * Admin-only: the provider/model that actually ran, set only when the restricted tier substituted it.
+   * provider/model above keep the requested ids; costUsd prices the executed model. Never return to users.
+   */
+  executedProvider: z.string().optional(),
+  executedModel: z.string().optional(),
 
   // Token quantities. inputTokens/outputTokens are ALWAYS the local tokenizer
   // estimate and providerInputTokens/providerOutputTokens ALWAYS the provider's

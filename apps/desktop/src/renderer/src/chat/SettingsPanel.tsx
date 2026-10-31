@@ -37,7 +37,9 @@ import {
   ShieldIcon,
   SlidersIcon,
   SparkIcon,
+  SubSessionsIcon,
 } from './icons';
+import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
@@ -124,6 +126,32 @@ function worktreeEntry(enabled: boolean, toggle: () => void): ConfigEntry {
           sx={{ alignSelf: 'flex-start' }}
           slotProps={{
             input: { 'aria-label': 'Worktree by default', 'data-testid': 'settings-worktree-default-switch' },
+          }}
+        />
+      </Stack>
+    ),
+  };
+}
+
+function nestedSessionsEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'nested-sessions',
+    icon: <SubSessionsIcon />,
+    label: 'Nest sub-sessions',
+    summary: nestedSessionsSummary(enabled),
+    control: (
+      <Stack spacing={1.25}>
+        <Typography level="body-xs" textColor="text.tertiary">
+          Draw sessions an agent spawns as a branch under the session that started it, folded or open. Off lists every
+          session on its own row.
+        </Typography>
+        <Switch
+          size="sm"
+          checked={enabled}
+          onChange={toggle}
+          sx={{ alignSelf: 'flex-start' }}
+          slotProps={{
+            input: { 'aria-label': 'Nest sub-sessions', 'data-testid': 'settings-nested-sessions-switch' },
           }}
         />
       </Stack>
@@ -336,6 +364,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
   const [permissions, setPermissions, permissionsError, retryPermissions] = usePermissions();
   const [claudeImport, setClaudeImport, importError, retryImport] = useClaudeImport();
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
+  const [nestedSessions, toggleNestedSessions] = useNestedSessions();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -345,6 +374,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
       curatedListEntry(
         curatedList.settings,

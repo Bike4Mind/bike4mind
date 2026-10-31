@@ -33,9 +33,17 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   private readonly sdk: B4mClient;
   public currentModel: string;
   private readonly completionsEndpoint: string;
+  private readonly getSessionId?: () => string | undefined;
 
-  constructor(options: { apiClient: ApiClient; model: string; sseCompletionsUrl?: string }) {
+  constructor(options: {
+    apiClient: ApiClient;
+    model: string;
+    sseCompletionsUrl?: string;
+    /** Read per request, so the id follows /clear and resume; tags the server ledger row. */
+    getSessionId?: () => string | undefined;
+  }) {
     this.apiClient = options.apiClient;
+    this.getSessionId = options.getSessionId;
     // The ApiClient's fetch carries its auth, refresh-on-401 and timeout, so the SDK stream inherits them.
     this.sdk = createClient({
       baseUrl: options.apiClient.baseURL,
@@ -332,9 +340,11 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   }
 
   private requestBody(req: CompletionRequest): JsonBody<'createCompletion'> {
+    const sessionId = this.getSessionId?.();
     const requestBody = {
       model: req.model,
       messages: req.messages,
+      ...(sessionId ? { sessionId } : {}),
       options: {
         temperature: req.options.temperature,
         maxTokens: req.options.maxTokens,

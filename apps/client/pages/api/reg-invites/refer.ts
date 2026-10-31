@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { RegInviteEvents, escapeSlackLine, escapeSlackText, inboxAliasKey, requireEnv } from '@bike4mind/common';
 import { IRegistrationInvite, RegInviteSource, RegInviteStatusType } from '@bike4mind/common';
 import { registrationInviteRepository, User, userRepository } from '@bike4mind/database';
@@ -30,6 +31,7 @@ const observeOperation = async (operation: Promise<unknown>): Promise<PromiseSet
 };
 
 const handler = baseApi().post(
+  outboundActionGate(),
   async (req: Request<unknown, unknown, z.infer<typeof CreateReferralRequestSchema>>, res) => {
     const newReferralData = CreateReferralRequestSchema.parse(req.body);
     const user = req.user;

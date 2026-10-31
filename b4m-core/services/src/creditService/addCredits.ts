@@ -34,6 +34,11 @@ export interface AddCreditsAdapters {
   };
   creditHolderMethods: ICreditHolderMethods;
   /**
+   * Reference stamped on the grant's lot when the grant has no stripePaymentIntentId, so a later
+   * clawback can find the lot (clawbackCreditLotsByStripeRef). Ignored when a payment intent is set.
+   */
+  lotRef?: string;
+  /**
    * What a replayed `transactionId` does. 'return' (default) re-reads the holder with a net-zero
    * increment. 'throw' raises DuplicateCreditTransactionError before touching the session - what
    * an in-transaction caller needs, because the duplicate write has already aborted it and any
@@ -48,12 +53,22 @@ export interface AddCreditsAdapters {
 }
 
 /**
+ * A `generic_add` row is otherwise indistinguishable from any other grant, so the writer must say
+ * what it is: `reason` is the machine label (e.g. `signup_tranche`, `referral_reward`) and
+ * `description` the human one shown in credit histories. `reason` stays optional only because an
+ * overlay refund caller does not pass one yet; every in-repo producer does.
+ */
+const GenericCreditAddParameters = GenericCreditAddTransaction.omit({ createdAt: true, updatedAt: true }).extend({
+  description: z.string().trim().min(1),
+});
+
+/**
  * Discriminated union for adding credits
  */
 export const AddCreditsSchema = z.discriminatedUnion('type', [
   PurchaseTransaction.omit({ createdAt: true, updatedAt: true }),
   SubscriptionCreditTransaction.omit({ createdAt: true, updatedAt: true }),
-  GenericCreditAddTransaction.omit({ createdAt: true, updatedAt: true }),
+  GenericCreditAddParameters,
   ReceivedCreditTransaction.omit({ createdAt: true, updatedAt: true }),
 ]);
 
@@ -65,7 +80,7 @@ export type AddCreditsParameters = z.infer<typeof AddCreditsSchema>;
  */
 export async function addCreditsWithLedgerRow(
   parameters: AddCreditsParameters,
-  { db, creditHolderMethods, duplicateTransactionId = 'return', lotFundingSource }: AddCreditsAdapters
+  { db, creditHolderMethods, duplicateTransactionId = 'return', lotRef, lotFundingSource }: AddCreditsAdapters
 ): Promise<CreditLedgerWrite> {
   const params = secureParameters(parameters, AddCreditsSchema);
   const { ownerId, ownerType, credits, type, description, metadata } = params;
@@ -114,7 +129,7 @@ export async function addCreditsWithLedgerRow(
       ownerId,
       ownerType,
       credits: Math.abs(credits),
-      description: description || 'Generic credit addition',
+      description,
       metadata,
       reason: params.reason,
       transactionId: params.transactionId,
@@ -153,7 +168,7 @@ export async function addCreditsWithLedgerRow(
         ownerType,
         amount: Math.abs(credits),
         grantType: type,
-        stripeRef: 'stripePaymentIntentId' in params ? params.stripePaymentIntentId : undefined,
+        stripeRef: ('stripePaymentIntentId' in params ? params.stripePaymentIntentId : undefined) ?? lotRef,
         fundingSource: lotFundingSource,
       },
       { db: { creditLots: db.creditLots } }

@@ -14,7 +14,8 @@ class ReleasePlatformsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             names = {'Bike4Mind-0.1.1-arm64.dmg', 'Bike4Mind-0.1.1-arm64.zip',
-                     'Bike4Mind-0.1.1-x64.AppImage', 'Bike4Mind-0.1.1-arm64.zip.blockmap', 'install.sh'}
+                     'Bike4Mind-0.1.1-x64.AppImage', 'Bike4Mind-0.1.1-arm64.zip.blockmap', 'install.sh',
+                     'Bike4Mind-0.1.1-setup.exe', 'Bike4Mind-0.1.1-setup.exe.blockmap'}
             names.discard(missing)
             if extra:
                 names.add(extra)
@@ -31,6 +32,11 @@ class ReleasePlatformsTest(unittest.TestCase):
 
     def test_missing_linux_installer_fails(self):
         self.assertNotEqual(self.validate(missing='Bike4Mind-0.1.1-x64.AppImage'), 0)
+
+    def test_missing_windows_installer_fails(self):
+        for mode in ('signed', 'adhoc'):
+            for name in ('Bike4Mind-0.1.1-setup.exe', 'Bike4Mind-0.1.1-setup.exe.blockmap'):
+                self.assertNotEqual(self.validate(missing=name, mode=mode), 0)
 
     def test_missing_install_script_fails(self):
         for mode in ('signed', 'adhoc'):
@@ -50,11 +56,12 @@ class ReleasePlatformsTest(unittest.TestCase):
     def test_unexpected_intel_installer_fails(self):
         self.assertNotEqual(self.validate(extra='Bike4Mind-0.1.1-x64.dmg'), 0)
 
-    def test_two_independent_platform_jobs(self):
+    def test_three_independent_platform_jobs(self):
         matrix = WORKFLOW.split('        include:\n', 1)[1].split('    runs-on:', 1)[0]
-        self.assertEqual(matrix.count('- os:'), 2)
+        self.assertEqual(matrix.count('- os:'), 3)
         self.assertIn('arch: arm64', matrix)
         self.assertIn('platform: linux', matrix)
+        self.assertIn('platform: win', matrix)
         self.assertNotIn('macos-15-intel', matrix)
         self.assertNotIn('max-parallel: 1', WORKFLOW)
 
@@ -71,6 +78,7 @@ class ReleasePlatformsTest(unittest.TestCase):
         matrix = WORKFLOW.split('        include:\n', 1)[1].split('    runs-on:', 1)[0]
         self.assertIn("- os: ${{ vars.OSX_RUNNER_LABEL || 'macos-26-runner' }}", matrix)
         self.assertIn('- os: ubuntu-24.04', matrix)
+        self.assertIn('- os: windows-2025', matrix)
         self.assertIn('runs-on: ${{ matrix.os }}', WORKFLOW)
 
 

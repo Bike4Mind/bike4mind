@@ -22,6 +22,7 @@ const { mocks } = vi.hoisted(() => ({
     hearthHasAnyChannel: vi.fn(),
     withTransaction: vi.fn(),
     userFindById: vi.fn(),
+    gearMinAgeSetting: vi.fn(),
   },
 }));
 
@@ -70,6 +71,7 @@ vi.mock('@bike4mind/database', () => ({
     stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a),
   },
   gearOverrideRepository: { byKey: (...a: unknown[]) => mocks.overridesByKey(...a) },
+  adminSettingsRepository: { getSettingsValue: (...a: unknown[]) => mocks.gearMinAgeSetting(...a) },
   hearthRepository: { hasAnyChannelForUser: (...a: unknown[]) => mocks.hearthHasAnyChannel(...a) },
   importHistoryJobRepository: { findOne: (...a: unknown[]) => mocks.importFindOne(...a) },
   rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
@@ -177,6 +179,8 @@ describe('POST /api/gears/claim', () => {
       credits: 1000,
       type: 'generic_add',
       transactionId: 'gear-unlock:u1:projects',
+      reason: 'gear unlock: projects',
+      description: 'Gear unlock reward: projects',
     });
   });
 
@@ -326,6 +330,40 @@ describe('POST /api/gears/claim', () => {
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
+  it('pays a 3-day-old account once gearRewardMinAccountAgeDays is lowered to 0', async () => {
+    unlockProjects();
+    mocks.gearMinAgeSetting.mockResolvedValue(0);
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), emailVerified: true }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ key: 'projects', creditsAwarded: 1000 });
+  });
+
+  it('holds an 8-day-old account once gearRewardMinAccountAgeDays is raised to 10', async () => {
+    unlockProjects();
+    mocks.gearMinAgeSetting.mockResolvedValue(10);
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'too_new' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('still requires a verified email when the age wait is 0', async () => {
+    unlockProjects();
+    mocks.gearMinAgeSetting.mockResolvedValue(0);
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(), emailVerified: false }),
+    });
+    const { res, promise } = claim({ key: 'projects' });
+    await promise;
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'unverified' });
+  });
+
   it('blocks payout as unverified when the user doc is missing', async () => {
     unlockProjects();
     mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve(null) });
@@ -388,13 +426,22 @@ describe('POST /api/gears/claim', () => {
     }
   );
 
-  it('pays a verified legacy account that has no createdAt', async () => {
+  it('pays a verified legacy account that has no createdAt but an old ObjectId', async () => {
+    unlockProjects();
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve({ emailVerified: true }) });
+    const { res, promise } = claim({ key: 'projects' }, { id: '507f1f77bcf86cd799439011' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
+  });
+
+  it('holds the payout for an account with neither createdAt nor an ObjectId id', async () => {
     unlockProjects();
     mocks.userFindById.mockReturnValue({ lean: () => Promise.resolve({ emailVerified: true }) });
     const { res, promise } = claim({ key: 'projects' });
     await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
+    expect(res._getStatusCode()).toBe(409);
+    expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
   it('pays a trusted account (email-verified and older than 7 days)', async () => {

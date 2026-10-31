@@ -649,6 +649,18 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     );
   });
 
+  it('treats a whitespace-only model as model-less and starts on the default', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockResolveDefaultChatModel.mockResolvedValueOnce({ model: 'admin-default' });
+    mockResolveCallerDefaultModel.mockResolvedValueOnce('admin-default');
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', model: '   ' } });
+    await handler(req, res);
+    expect(res.statusCode).toBeLessThan(300);
+    expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
+      'admin-default'
+    );
+  });
+
   it('returns 400 when the resolved default chat model is unusable (self-host, no key, no local model)', async () => {
     // Self-host resolver shape: apiKeys/models ARE present (unlike the hosted default),
     // so chat.ts runs its no-usable-model guard. An empty model list plus an unusable
@@ -1428,7 +1440,8 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
   });
 
   describe('output-budget exhaustion on wait: true', () => {
-    let requestLogger: Logger;
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
     // Models ChatCompletionProcess: the quest is settled as an error and the failure is left on
     // the instance rather than thrown.
     const processExhaustingBudget = () =>
@@ -1436,10 +1449,9 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
         mockTerminalError.value = new Error('output budget was exhausted');
       });
     beforeEach(() => {
-      // req.logger is the global instance (logging middleware), so spy there.
-      requestLogger = Logger.resetMetadata();
-      vi.spyOn(requestLogger, 'error').mockImplementation(() => {});
-      vi.spyOn(requestLogger, 'warn').mockImplementation(() => {});
+      // req.logger is built per request by the logging middleware, so spy on the class.
+      errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     });
     afterEach(() => {
       mockTerminalError.value = undefined;
@@ -1465,8 +1477,8 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       expect(body).toMatchObject({ quest_id: expect.any(String) });
       expect(body).not.toHaveProperty('errorCode');
       // The 502 is an expected, classified failure: logged at warn so it does not trip the error alert.
-      expect(requestLogger.error).not.toHaveBeenCalled();
-      expect(requestLogger.warn).toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
     });
   });
 

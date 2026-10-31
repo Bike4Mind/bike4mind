@@ -110,6 +110,8 @@ describe('GET /api/transforms/batch/:id settlement', () => {
         source: 'api',
         inputTokens: 110,
         outputTokens: 55,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       },
       expect.objectContaining({ featureLabel: 'batch transforms' })
     );
@@ -350,6 +352,12 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     await poll();
 
     expect(m.record).toHaveBeenCalledWith(expect.objectContaining({ cachedInputTokens: 500, cacheWriteTokens: 40 }));
+    expect(m.settle).toHaveBeenCalledWith(
+      hold,
+      expect.any(Number),
+      expect.objectContaining({ cacheReadTokens: 500, cacheWriteTokens: 40 }),
+      expect.anything()
+    );
   });
 
   it('settles both cache TTLs at their discounted rates on the whole prompt tier', async () => {

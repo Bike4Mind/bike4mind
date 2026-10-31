@@ -9,3 +9,4 @@ export { assignConsumptionFIFO, computeConsumption } from '@bike4mind/common';
 export type { AssignedCreditLot, CreditLotLike } from '@bike4mind/common';
 export * from './clawbackCreditLots';
 export * from './creditHold';
+export * from './newAccountSpendCap';

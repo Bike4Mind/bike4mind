@@ -10,10 +10,13 @@ const {
   mockCount,
   mockSessionEnded,
   mockRequireStepUp,
+  mockPropagateAccountRisk,
   mockRecord,
   mockDeny,
+  mockSetThrottleTier,
   txnState,
 } = vi.hoisted(() => ({
+  mockSetThrottleTier: vi.fn(),
   mockRecord: vi.fn(),
   mockDeny: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -22,6 +25,7 @@ const {
   mockCount: vi.fn(),
   mockSessionEnded: vi.fn(),
   mockRequireStepUp: vi.fn(),
+  mockPropagateAccountRisk: vi.fn(),
   // Records whether a findById read ran inside the change callback, so a test can pin the
   // session-end snapshot to the write's own transaction instead of a stale read before it.
   txnState: { changeRunning: false, snapshotReadInsideChange: undefined as boolean | undefined },
@@ -81,6 +85,7 @@ vi.mock('@bike4mind/services', async orig => ({
     // The real block-state rules, so a snapshot missing any block field is caught.
     entersBlockedState: (await orig<typeof import('@bike4mind/services')>()).userService.entersBlockedState,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
+    setThrottleTier: (...a: unknown[]) => mockSetThrottleTier(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
     // Both stand-ins are real allowlists (not passthrough) so the discarded-field
     // detection under test actually exercises Zod's strip-unknown-keys behavior.
@@ -101,6 +106,8 @@ vi.mock('@bike4mind/services', async orig => ({
       isModerated: z.boolean().optional(),
       statusChangeReason: z.string().optional(),
       moderationStatus: z.string().optional(),
+      throttleTier: z.enum(['none', 'shadow']).optional(),
+      throttleReason: z.string().optional(),
     }),
     updateUserSchema: z.object({
       name: z.string().optional(),
@@ -161,6 +168,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 
 // The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
+vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
 
 import { adminSettingsRepository } from '@bike4mind/database';
 import handler from '../update';
@@ -196,11 +204,13 @@ beforeEach(() => {
     throw new ForbiddenError('Admins cannot perform this action on their own account.');
   });
   mockUpdateUser.mockReset().mockResolvedValue(undefined);
+  mockSetThrottleTier.mockReset().mockResolvedValue({ changed: true, before: 'none', after: 'shadow' });
   mockCount.mockReset().mockResolvedValue(2);
   mockSessionEnded.mockReset().mockResolvedValue(undefined);
   txnState.changeRunning = false;
   txnState.snapshotReadInsideChange = undefined;
   mockRequireStepUp.mockReset().mockResolvedValue(undefined);
+  mockPropagateAccountRisk.mockReset().mockResolvedValue({ locked: [], review: [] });
 });
 
 describe('PUT /api/users/:id/update - changing your own password', () => {
@@ -764,6 +774,26 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     await promise;
 
     expect(txnState.snapshotReadInsideChange).toBe(true);
+  });
+
+  it('acts on accounts linked to one an admin bans, and not on other edits', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    await run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    }).promise;
+
+    expect(mockPropagateAccountRisk).toHaveBeenCalledTimes(1);
+    expect(mockPropagateAccountRisk).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceUserId: 'target', key: expect.stringMatching(/^admin-block:target:/) }),
+      expect.anything()
+    );
+
+    mockPropagateAccountRisk.mockClear();
+    adminEdit(BEFORE, { ...BEFORE, email: 'new@example.com' });
+    await run({ user: ADMIN, userId: 'target', body: { email: 'new@example.com' } }).promise;
+    expect(mockPropagateAccountRisk).not.toHaveBeenCalled();
   });
 
   it('ends sessions once, under the account-block reason, when one admin edit does several', async () => {
@@ -1337,5 +1367,91 @@ describe('PUT /api/users/:id/update - user.profile.updated audit', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(profileCalls()).toHaveLength(1);
+  });
+});
+
+describe('PUT /api/users/:id/update - restricted tier', () => {
+  const REASON = 'Signed up in bulk';
+  const body = (overrides: Record<string, unknown> = {}) => ({
+    throttleTier: 'shadow',
+    throttleReason: REASON,
+    ...overrides,
+  });
+
+  it('sets the tier through the service and records one throttle audit, no profile audit', async () => {
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: body() });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSetThrottleTier).toHaveBeenCalledWith(
+      'other-user',
+      'shadow',
+      { reason: REASON, source: 'admin', changedBy: 'admin1' },
+      expect.anything()
+    );
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.throttle_tier.changed',
+        target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
+        changes: [{ field: 'throttle.tier', before: 'none', after: 'shadow' }],
+        summary: expect.stringContaining(REASON),
+      })
+    );
+    expect(mockRecord.mock.calls[0][1].summary).toContain('admin');
+    expect(mockRecord.mock.calls.some(([, input]) => input.action === 'user.profile.updated')).toBe(false);
+  });
+
+  it('records the clear with before shadow and after none', async () => {
+    mockSetThrottleTier.mockResolvedValue({ changed: true, before: 'shadow', after: 'none' });
+    await run({ user: ADMIN, userId: 'other-user', body: body({ throttleTier: 'none' }) }).promise;
+
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.throttle_tier.changed',
+        changes: [{ field: 'throttle.tier', before: 'shadow', after: 'none' }],
+      })
+    );
+  });
+
+  it('writes no audit when the tier is unchanged', async () => {
+    mockSetThrottleTier.mockResolvedValue({ changed: false, before: 'shadow', after: 'shadow' });
+    await run({ user: ADMIN, userId: 'other-user', body: body() }).promise;
+
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('records inside the commitWithSessionEnd transaction', async () => {
+    let changeRunningAtRecord: boolean | undefined;
+    mockRecord.mockImplementation(async () => {
+      changeRunningAtRecord = txnState.changeRunning;
+      return null;
+    });
+    await run({ user: ADMIN, userId: 'other-user', body: body() }).promise;
+
+    expect(changeRunningAtRecord).toBe(true);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['blank', '   '],
+  ])('answers 400 and writes nothing when the reason is %s', async (_label, throttleReason) => {
+    const { promise } = run({ user: ADMIN, userId: 'other-user', body: body({ throttleReason }) });
+
+    await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the tier from a non-admin self update', async () => {
+    const { res, promise } = run({ user: { id: 'u1', isAdmin: false }, userId: 'u1', body: body() });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().ignoredFields).toContain('throttleTier');
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
   });
 });

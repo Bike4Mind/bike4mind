@@ -126,6 +126,32 @@ describe('GET /api/data-lakes/batches - reconciler wiring', () => {
     h.findTaxonomyAttentionByUserId.mockResolvedValue([]);
   });
 
+  it('strips server-only and undeclared fields from each listed batch', async () => {
+    h.findActiveTaxonomyByUserId.mockResolvedValue([]);
+    h.findTaxonomyAttentionByUserId.mockResolvedValue([
+      {
+        id: 'b1',
+        userId: 'u1',
+        dataLakeId: 'lake1',
+        status: 'completed',
+        taxonomyStatus: 'ready',
+        taxonomyBilling: { organizationId: 'org1', apiKeyId: 'key1' },
+        uploaderManageRung: 'owner',
+        uploadHistoryRecordedAt: new Date(),
+        _id: 'raw-object-id',
+        __v: 7,
+        notInSchema: 'secret',
+      },
+    ]);
+
+    const { res, json } = makeRes();
+    await run(res);
+
+    expect(json).toHaveBeenCalledWith({
+      data: [{ id: 'b1', userId: 'u1', dataLakeId: 'lake1', status: 'completed', taxonomyStatus: 'ready' }],
+    });
+  });
+
   it('forces a stale analyzing batch to failed even when it is outside the attention cap', async () => {
     // findTaxonomyAttentionByUserId (the capped/sorted list-response set) does NOT include this
     // batch - simulating exactly the scenario fdbfa17e fixed: a stale batch pushed out of the
@@ -362,6 +388,25 @@ describe('POST /api/data-lakes/batches - write serialization', () => {
 
     expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
     expect(h.touchIfStable).toHaveBeenCalledWith('lake-oid-1');
+  });
+
+  it('strips server-only and undeclared fields from the created batch', async () => {
+    h.batchCreate.mockResolvedValue({
+      id: 'b1',
+      userId: 'u1',
+      status: 'preparing',
+      taxonomyBilling: { organizationId: 'org1', apiKeyId: 'key1' },
+      uploaderManageRung: 'owner',
+      uploadHistoryRecordedAt: new Date(),
+      _id: 'raw-object-id',
+      __v: 7,
+      notInSchema: 'secret',
+    });
+    const { res, json } = makeRes();
+
+    await runPost(res);
+
+    expect(json).toHaveBeenCalledWith({ id: 'b1', userId: 'u1', status: 'preparing' });
   });
 
   it('neither creates nor touches when the gate throws', async () => {
