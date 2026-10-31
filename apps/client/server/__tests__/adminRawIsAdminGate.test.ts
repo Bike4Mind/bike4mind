@@ -66,6 +66,7 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'release-notes/config.ts',
   'release-notes/index.ts',
   'retrieval-rate.ts',
+  'revenue.ts',
   'saved-views/[id].ts',
   'saved-views/index.ts',
   'session-usage.ts',
@@ -77,6 +78,10 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'signup-timeseries.ts',
   'spend-reconciliation.ts',
   'spend.ts',
+  'subscriptions/[id]/admin-log.ts',
+  'subscriptions/[id]/comp.ts',
+  'subscriptions/[id]/index.ts',
+  'subscriptions/by-stripe/[stripeSubscriptionId].ts',
   'subscriptions/export.ts',
   'subscriptions/index.ts',
   'subscriptions/summary.ts',
@@ -85,6 +90,7 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'system-secrets/index.ts',
   'system-secrets/tier1-status.ts',
   'team-members.ts',
+  'transactions.ts',
   'upload-logo.ts',
   'usage-by-source.ts',
   'usage-margin.ts',
@@ -138,9 +144,10 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
 
 // Helpers that gate on the raw flag internally, so a route calling them is raw-gated even
 // though its own source never names isAdmin. Add any new helper that wraps isAdmin here.
-const RAW_GATE_HELPER = /\b(?:authorizeSupportRead|canAdministerReleaseNotes)\s*\(/;
-const RAW_GATE = /\b(?:req\.user|user)\s*[?!]*\s*\.\s*isAdmin\b|\bensureAdmin\s*\(/;
-const ADMIN_API_CALL = /\badminApi\s*\(/;
+const RAW_GATE_HELPER = /\b(?:authorizeSupportRead|canAdministerReleaseNotes|verifyOrgOwner)\s*\(/;
+const RAW_GATE =
+  /\b(?:req\.user|user)\s*[?!]*\s*\.\s*isAdmin\b|\bensureAdmin\s*\(|\{[^}]*\bisAdmin\b[^}]*\}\s*=\s*(?:req\.)?user\b/;
+const ADMIN_API_CALL = /\badminApi\s*(?:<[^>]*>)?\s*\(/;
 
 /** Strings and comments are blanked first, so a quoted mention or a zod `isAdmin:` field is not a gate. */
 export function usesRawIsAdminGate(source: string): boolean {
@@ -167,6 +174,7 @@ describe('usesRawIsAdminGate', () => {
     ['non-null req.user!.isAdmin', 'if (!req.user!.isAdmin) throw new Error();'],
     ['a local user binding', 'if (!user?.isAdmin) throw new Error();'],
     ['ensureAdmin(', 'ensureAdmin(req.user?.isAdmin);'],
+    ['a destructured isAdmin', 'const { id, isAdmin } = req.user; if (!isAdmin) throw new Error();'],
   ])('flags %s', (_label, code) => {
     expect(usesRawIsAdminGate(`const handler = baseApi().get(async (req) => { ${code} });`)).toBe(true);
   });
@@ -174,14 +182,16 @@ describe('usesRawIsAdminGate', () => {
   it.each([
     ['authorizeSupportRead(', 'const ctx = await authorizeSupportRead(req);'],
     ['canAdministerReleaseNotes(', 'if (!canAdministerReleaseNotes(req)) throw new Error();'],
+    ['verifyOrgOwner(', 'await verifyOrgOwner(req.user, organizationId);'],
   ])('flags a route gated through the raw-flag helper %s', (_label, code) => {
     expect(usesRawIsAdminGate(`const handler = baseApi().get(async (req) => { ${code} });`)).toBe(true);
   });
 
-  it('does not flag a route that is gated by adminApi', () => {
-    expect(usesRawIsAdminGate("adminApi({ adminPermissions: { GET: 'settings:manage' } }).get(async () => {})")).toBe(
-      false
-    );
+  it.each([
+    ['adminApi(', "adminApi({ adminPermissions: { GET: 'settings:manage' } })"],
+    ['a generic adminApi<Req, Res>(', "adminApi<Request, Response>({ adminPermissions: { GET: 'settings:manage' } })"],
+  ])('does not flag a route that is gated by %s', (_label, gate) => {
+    expect(usesRawIsAdminGate(`${gate}.get(async (req) => { if (req.user.isAdmin) log(); })`)).toBe(false);
   });
 
   it('ignores mentions in comments and strings', () => {
