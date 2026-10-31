@@ -1,10 +1,8 @@
 /** Context sizing and history fitting for local Ollama chat requests. */
 import { estimateFit, isCpuOnly, type FitInput, type HardwareProfile, type ModelArch } from '@bike4mind/common';
-import { holdsPrompt, OUTPUT_RESERVE_TOKENS, replyRoom } from '@bike4mind/local-models/servers';
+import { OUTPUT_RESERVE_TOKENS, replyRoom } from '@bike4mind/local-models/servers';
 import { estimateTextTokens } from '@shared/contextLimit';
 import { LOCAL_CONTEXT_SIZES, type LocalContextSetting } from '@shared/localContextSetting';
-
-export { holdsPrompt, replyRoom };
 
 export interface OllamaMessage {
   role: string;

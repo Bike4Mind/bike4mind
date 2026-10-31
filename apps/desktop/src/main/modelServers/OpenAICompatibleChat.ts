@@ -8,7 +8,7 @@ import {
 import {
   contextTooSmallHint as sharedContextTooSmallHint,
   holdsPrompt,
-  isToolRefusal,
+  refusesTools,
   probeToolSupport,
   serverContextTokens,
   toolsOffHint as sharedToolsOffHint,
@@ -291,7 +291,7 @@ export class OpenAICompatibleChat implements LocalChat {
       this.learnToolPrompt(measured !== undefined && !longMessage ? measured : undefined);
     }
     let response = await post(true);
-    if (!response.ok && tools.length > 0 && (await refusedTools(response))) {
+    if (!response.ok && tools.length > 0 && (await refusesTools(response))) {
       this.setRefused(model, true);
       response = await post(false);
     }
@@ -465,9 +465,4 @@ export class OpenAICompatibleChat implements LocalChat {
           : '';
     return new Error(`${this.server.label} returned HTTP ${response.status}${detail ? `: ${detail}` : '.'}`);
   }
-}
-
-async function refusedTools(response: Response): Promise<boolean> {
-  if (response.status !== 400 && response.status !== 500) return false;
-  return isToolRefusal(response.status, await response.clone().text());
 }

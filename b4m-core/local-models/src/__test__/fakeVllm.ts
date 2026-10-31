@@ -16,7 +16,7 @@ export interface FakeVllm {
   close(): Promise<void>;
 }
 
-export const FAKE_VLLM_SERVED = ['qwen-small', 'qwen'];
+export const FAKE_VLLM_SERVED: readonly string[] = ['qwen-small', 'qwen'];
 export const FAKE_VLLM_MAX_MODEL_LEN = 4096;
 const ROOT = '/models/Qwen2.5-0.5B-Instruct';
 const REFUSAL = '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set';

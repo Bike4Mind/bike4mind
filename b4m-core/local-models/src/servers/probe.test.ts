@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeVllm, type FakeVllm } from '../__test__/fakeVllm';
 import { answersWithoutCredentials, probeServer } from './probe';
+import { ServerTransportError } from './serverFetch';
 
 const fetchLike = (input: string, init?: RequestInit) => fetch(input, init);
 
@@ -55,6 +56,35 @@ describe('probeServer', () => {
       Promise.resolve(new Response(null, { status: input.endsWith('/v1/models') ? 401 : 403 }));
     expect(await probeServer(mixed, 'http://h', 'box', Date.now)).toMatchObject({ auth: true, forbidden: false });
   });
+
+  it('reports a transport refusal as written, and a server that is neither kind', async () => {
+    const blocked = () => Promise.reject(new ServerTransportError('Desktop only sends box requests over https.'));
+    expect(await probeServer(blocked, 'http://h', 'box', Date.now)).toMatchObject({
+      refused: true,
+      error: 'Desktop only sends box requests over https.',
+    });
+    const other = () => Promise.resolve(new Response('<html>', { status: 404 }));
+    expect((await probeServer(other, 'http://h', 'box', Date.now)).error).toBe(
+      'box answered HTTP 404, not as Ollama or an OpenAI-compatible server.'
+    );
+  });
+
+  it('identifies llama-server from owned_by and reads its build from /props', async () => {
+    const fake = (input: string) =>
+      Promise.resolve(
+        input.endsWith('/v1/models')
+          ? Response.json({ data: [{ id: 'm', owned_by: 'llamacpp' }] })
+          : input.endsWith('/props')
+            ? Response.json({ build_info: 'b5000-abc' })
+            : new Response(null, { status: 404 })
+      );
+    expect(await probeServer(fake, 'http://h', 'box', Date.now, 'openai-compatible')).toMatchObject({
+      kind: 'openai-compatible',
+      product: 'llama-server',
+      version: 'b5000-abc',
+      models: 1,
+    });
+  });
 });
 
 describe('answersWithoutCredentials', () => {
@@ -62,5 +92,7 @@ describe('answersWithoutCredentials', () => {
     vllm = await startFakeVllm();
     expect(await answersWithoutCredentials(fetchLike, vllm.baseUrl, 'openai-compatible')).toBe(true);
     expect(await answersWithoutCredentials(() => Promise.reject(new Error('x')), vllm.baseUrl, 'ollama')).toBe(false);
+    const denied = () => Promise.resolve(new Response(null, { status: 401 }));
+    expect(await answersWithoutCredentials(denied, 'http://h', 'openai-compatible')).toBe(false);
   });
 });

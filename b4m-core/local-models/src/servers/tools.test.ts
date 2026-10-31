@@ -3,6 +3,7 @@ import { startFakeVllm, type FakeVllm } from '../__test__/fakeVllm';
 import {
   contextTooSmallHint,
   isToolRefusal,
+  refusesTools,
   probeToolSupport,
   serverContextTokens,
   toolsOffHint,
@@ -62,6 +63,32 @@ describe('serverContextTokens', () => {
     expect(await serverContextTokens(fake, 'http://h', 'llama-server')).toBe(8192);
     expect(await serverContextTokens(fake, 'http://h', 'vllm')).toBeUndefined();
     expect(seen).toEqual(['http://h/props']);
+  });
+
+  it('falls back to a top-level n_ctx, and gives up on a bad answer', async () => {
+    const top = () => Promise.resolve(Response.json({ n_ctx: 4096 }));
+    expect(await serverContextTokens(top, 'http://h', 'llama-server')).toBe(4096);
+    const bad = () => Promise.resolve(Response.json({ n_ctx: 'big' }));
+    expect(await serverContextTokens(bad, 'http://h', 'llama-server')).toBeUndefined();
+    const down = () => Promise.resolve(new Response(null, { status: 503 }));
+    expect(await serverContextTokens(down, 'http://h', 'llama-server')).toBeUndefined();
+  });
+
+  it('stops when the caller aborts', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fake = (_input: string, init?: RequestInit) =>
+      init?.signal?.aborted ? Promise.reject(init.signal.reason) : Promise.resolve(Response.json({ n_ctx: 1 }));
+    expect(await serverContextTokens(fake, 'http://h', 'llama-server', controller.signal)).toBeUndefined();
+  });
+});
+
+describe('refusesTools', () => {
+  it('reads the body only for a 400 or a 500', async () => {
+    expect(await refusesTools(new Response('tools are not supported', { status: 400 }))).toBe(true);
+    const unavailable = new Response('tools are not supported', { status: 503 });
+    expect(await refusesTools(unavailable)).toBe(false);
+    expect(unavailable.bodyUsed).toBe(false);
   });
 });
 

@@ -55,7 +55,7 @@ export interface OllamaRuntimeOptions {
   apiKey?: string;
   /**
    * Scrubs credentials a proxy or daemon echoes into a streamed `/api/pull` line, given the response it came on.
-   * Defaults to removing `apiKey`, raw or JSON-escaped. Desktop passes its own (apps/desktop credentialRedactor).
+   * Defaults to removing `apiKey`, raw or JSON-escaped. Desktop passes its own (credentialRedactor in ./servers/redact).
    */
   redact?: (text: string, response: Response) => string;
   /** Deadline for ordinary API calls (ms). `pull` has none beyond its own signal. */
@@ -434,7 +434,7 @@ export class OllamaRuntime implements LocalRuntime {
 
 /**
  * Replaces `apiKey` in a raw JSON line, where an encoder may have written any character backslash-escaped (`\/`)
- * or as `\uXXXX` (Go escapes `&<>`). A lighter sibling of Desktop's credentialRedactor, for the bearer key alone.
+ * or as `\uXXXX` (Go escapes `&<>`). A lighter sibling of credentialRedactor (./servers/redact), for the bearer key alone.
  */
 function apiKeyRedactor(apiKey: string): (text: string) => string {
   let body = '';

@@ -24,6 +24,12 @@ export function isToolRefusal(status: number, body: string): boolean {
   return /\btools?\b/i.test(body);
 }
 
+/** isToolRefusal on a response, reading the body only for a status a refusal can have. */
+export async function refusesTools(response: Response): Promise<boolean> {
+  if (response.status !== 400 && response.status !== 500) return false;
+  return isToolRefusal(response.status, await response.clone().text());
+}
+
 /** Asks with a one-token request that declares a tool; null when the answer says nothing about tool support. */
 export async function probeToolSupport(
   fetch: FetchLike,
@@ -47,7 +53,7 @@ export async function probeToolSupport(
       await response.body?.cancel();
       return 'accepted';
     }
-    if (isToolRefusal(response.status, await response.clone().text())) return 'refused';
+    if (await refusesTools(response)) return 'refused';
     await response.body?.cancel();
     return null;
   } catch {
