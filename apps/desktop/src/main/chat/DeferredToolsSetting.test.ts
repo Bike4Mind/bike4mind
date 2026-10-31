@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { type Mock, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeferredToolsSetting, parseDeferredToolsOverride, readServerValue } from './DeferredToolsSetting';
 
 const row = (settingName: string, settingValue: unknown) => ({ settingName, settingValue });
@@ -50,8 +50,10 @@ describe('DeferredToolsSetting', () => {
   let now: number;
   let get: ReturnType<typeof vi.fn>;
   let signedIn: boolean;
+  let debug: Mock<(message: string) => void>;
 
   beforeEach(async () => {
+    debug = vi.fn();
     filePath = join(await mkdtemp(join(tmpdir(), 'b4m-deferred-setting-')), 'deferred-tools.json');
     environmentUrl = 'https://one.example';
     now = 1_000;
@@ -64,7 +66,7 @@ describe('DeferredToolsSetting', () => {
       filePath,
       getApiClient: () => (signedIn ? ({ get } as unknown as AuthenticatedApiClient) : null),
       getEnvironmentUrl: () => environmentUrl,
-      logger: { debug: vi.fn() },
+      logger: { debug },
       override,
       now: () => now,
     });
@@ -119,6 +121,18 @@ describe('DeferredToolsSetting', () => {
     const corrupt = setting();
     await corrupt.refresh();
     expect(corrupt.current()).toBeUndefined();
+  });
+
+  it('logs an answer that is not the settings rows and keeps the last known value', async () => {
+    const subject = setting();
+    await subject.refresh();
+    expect(debug).not.toHaveBeenCalled();
+
+    get.mockResolvedValue({ error: 'nope' });
+    now += 10 * 60_000;
+    await subject.refresh();
+    expect(subject.current()).toEqual({ startSetMaxTokens: 100_000 });
+    expect(debug).toHaveBeenCalledWith(expect.stringContaining('returned object rather than the settings rows'));
   });
 
   it('keeps one answer per server', async () => {

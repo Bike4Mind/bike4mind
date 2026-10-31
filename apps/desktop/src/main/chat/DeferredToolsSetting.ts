@@ -104,17 +104,24 @@ export class DeferredToolsSetting {
     if (!api) return;
     const environmentUrl = this.deps.getEnvironmentUrl();
     this.checkedAt.set(environmentUrl, this.now());
-    let value: ServerValue | undefined;
+    let rows: unknown;
     try {
-      value = readServerValue(await api.get<unknown>(SETTINGS_PATH));
+      rows = await api.get<unknown>(SETTINGS_PATH);
     } catch (err) {
       this.deps.logger.debug(
         `CHAT: deferred tools setting lookup failed, keeping the last known value: ${
           err instanceof Error ? err.message : 'unknown'
         }`
       );
+      return;
     }
-    if (!value) return;
+    const value = readServerValue(rows);
+    if (!value) {
+      this.deps.logger.debug(
+        `CHAT: deferred tools setting lookup returned ${rows === null ? 'null' : typeof rows} rather than the settings rows, keeping the last known value`
+      );
+      return;
+    }
     const previous = this.known[environmentUrl];
     if (previous?.enabled === value.enabled && previous.startSetMaxTokens === value.startSetMaxTokens) return;
     this.known = { ...this.known, [environmentUrl]: value };

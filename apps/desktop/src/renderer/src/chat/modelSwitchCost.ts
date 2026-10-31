@@ -19,7 +19,8 @@ export const CACHE_NOTICE_MIN_CREDITS = 500;
  * Credits the first turn on `model` spends just to read this conversation again: no cache is shared
  * across models, so the whole context is input again, and a cache write on direct Anthropic (the
  * only backend Desktop marks for caching, see main/chat/completions.ts) at the rate for `ttl`
- * (1.25x input for 5 minutes, 2x for an hour). Null when it is unpriced.
+ * (1.25x input for 5 minutes, 2x for an hour). An upper bound: a deferred-tools head shared with
+ * other chats, or a model switched away from within its TTL, may already be warm. Null when it is unpriced.
  */
 export function modelSwitchCredits(
   model: ChatModelOption,
