@@ -1,4 +1,4 @@
-import { OllamaBackend } from '@bike4mind/llm-adapters';
+import { OllamaBackend, OpenAICompatibleBackend } from '@bike4mind/llm-adapters';
 import { defaultLlmBackendDeps, type BuildLlmBackendDeps } from '../bootstrap/buildLlmBackend.js';
 import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
@@ -30,23 +30,25 @@ function renderDiagnostic(value: unknown): string {
   }
 }
 
-/** Ollama diagnostics must leave stdout available for the headless result protocol. */
+/** Local model diagnostics must leave stdout available for the headless result protocol. */
 export function createHeadlessLlmBackendDeps(
   verbose: boolean
-): Pick<BuildLlmBackendDeps, 'createOllamaBackend' | 'createMultiBackend'> {
+): Pick<BuildLlmBackendDeps, 'createOllamaBackend' | 'createOpenAICompatibleBackend' | 'createMultiBackend'> {
   const writeDiagnostic = (...args: unknown[]): void => {
     process.stderr.write(`${sanitizeTerminalText(args.map(arg => capped(renderDiagnostic(arg))).join(' '))}\n`);
   };
+  const logger = {
+    debug: (...args: unknown[]) => {
+      if (verbose) writeDiagnostic(...args);
+    },
+    info: writeDiagnostic,
+    warn: writeDiagnostic,
+    error: writeDiagnostic,
+  };
   return {
     createMultiBackend: defaultLlmBackendDeps.createMultiBackend,
-    createOllamaBackend: host =>
-      new OllamaBackend(host, {
-        debug: (...args: unknown[]) => {
-          if (verbose) writeDiagnostic(...args);
-        },
-        info: writeDiagnostic,
-        warn: writeDiagnostic,
-        error: writeDiagnostic,
-      }),
+    createOllamaBackend: (host, options) =>
+      new OllamaBackend(host, logger, { fetch: options?.fetch as typeof globalThis.fetch | undefined }),
+    createOpenAICompatibleBackend: options => new OpenAICompatibleBackend({ ...options, logger }),
   };
 }

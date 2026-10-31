@@ -90,6 +90,7 @@ ollama pull qwen3.5:27b    # higher quality (~17 GB RAM)
 
 ## See Also
 
+- [Chat with a model on a server](./model-commands.md#chat-with-a-model-on-a-server) - use models on the Ollama, vLLM and other servers saved in Desktop
 - [Features Guide](./features.md) - full B4M CLI capabilities
 - [Configuration](./configuration.md) - persistent settings
 - [Troubleshooting](./troubleshooting.md) - common issues

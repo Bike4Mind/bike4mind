@@ -31,9 +31,11 @@ import {
   answersWithoutCredentials,
   parseServerAddress,
   leastTrusted,
+  localModelId,
   probeServer,
   probeToolSupport,
   scopeOfIp,
+  serverRuntimeId,
   toolsOffHint,
   transportVerdict,
   type AddressScope,
@@ -785,6 +787,7 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
 
 export async function useModel(name: string, deps: ModelsDeps): Promise<number> {
   const target = await abortable(deps.resolveRuntime(), deps.signal);
+  if (target.server) return useServerModel(name, { ...target, server: target.server }, deps);
   const { runtime } = target;
   // The chat backend (OllamaBackend in @bike4mind/llm-adapters) only talks to Ollama.
   if (runtime.kind !== 'ollama')
@@ -798,6 +801,28 @@ export async function useModel(name: string, deps: ModelsDeps): Promise<number> 
     ...(deps.config.ollamaHost !== runtime.baseUrl && { ollamaHost: runtime.baseUrl }),
   });
   deps.log(`Default model: ${clean(model.name)} on Ollama at ${runtime.baseUrl}`);
+  deps.log('Start chatting with: b4m');
+  return 0;
+}
+
+/** Saves the server's id with the model, so chat goes to that server and never to a same-named model elsewhere. */
+async function useServerModel(
+  name: string,
+  target: RuntimeTarget & { server: NonNullable<RuntimeTarget['server']> },
+  deps: ModelsDeps
+): Promise<number> {
+  const server = clean(target.server.name);
+  const models = await abortable(target.runtime.list(), deps.signal);
+  const model = findInstalledModel(models, name) ?? models.find(listed => listed.aliases?.includes(name));
+  if (!model) {
+    throw new Error(`No model named ${clean(name)} on ${server}. See: b4m models ls --server ${server}`);
+  }
+  if (model.name !== name && model.aliases?.includes(name)) {
+    deps.log(`${clean(name)} is another name for ${clean(model.name)} on ${server}; saving ${clean(model.name)}.`);
+  }
+  const id = localModelId(serverRuntimeId(target.server.id), model.name);
+  await deps.config.save({ defaultModel: id, localDefaultModel: id });
+  deps.log(`Default model: ${clean(model.name)} on ${server}`);
   deps.log('Start chatting with: b4m');
   return 0;
 }
@@ -1003,11 +1028,6 @@ export async function logoutServer(name: string, deps: ModelsDeps): Promise<numb
 async function onServer(name: string, subcommand: string, deps: ModelsDeps): Promise<ModelsDeps> {
   const ctx = requireServers(deps);
   const server = await chosenServer(name, ctx, deps.signal);
-  if (subcommand === 'use') {
-    throw new Error(
-      `Chat with models on ${clean(server.name)} is coming in a later release, so it cannot be set as the default yet. Nothing was saved.`
-    );
-  }
   if (subcommand === 'pull' || subcommand === 'rm' || subcommand === 'remove') requireManageable(server);
   return {
     ...deps,

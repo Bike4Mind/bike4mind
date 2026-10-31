@@ -1,6 +1,6 @@
 ---
 title: Local Model Commands
-description: Find, download, run and remove local models on Ollama with b4m models, including the fit check, --force, resuming a pull, and the MCP models_pull tool
+description: Find, download, run and remove local models on Ollama with b4m models, chat with models on Desktop's saved model servers, the fit check, --force, resuming a pull, and the MCP models_pull tool
 sidebar_position: 13
 ---
 
@@ -14,7 +14,7 @@ sidebar_position: 13
 | `b4m models search <terms>` | Search Hugging Face for GGUF repos |
 | `b4m models show <owner/repo>` | List a repo's builds with size, fit and the ref to pull |
 | `b4m models pull <ref>` | Download a model after showing its size, license and fit |
-| `b4m models use <name>` | Make an installed model the CLI's default |
+| `b4m models use <name>` | Make an installed model, or a model on a saved server, the CLI's default |
 | `b4m models rm <name>` | Remove an installed model |
 | `b4m models servers` | List the model servers saved in Desktop, with status |
 | `b4m models servers login <name>` | Give the CLI its own credential for a server |
@@ -111,7 +111,7 @@ Default model: smollm2:135m on Ollama at http://127.0.0.1:11434
 Start chatting with: b4m
 ```
 
-`b4m`, `b4m -p` and the other CLI surfaces all use this one default model. `b4m models ls` marks it `default`.
+`b4m`, `b4m -p` and the other CLI surfaces all use this one default model. `b4m models ls` marks it `default`. To chat with a model on a server saved in Desktop, see [Chat with a model on a server](#chat-with-a-model-on-a-server).
 
 ## Remove a model
 
@@ -177,7 +177,40 @@ Add `--server <name>` to act on one of these servers:
 b4m models ls --server vllm
 ```
 
-On an OpenAI-compatible server such as vLLM, `ls` shows each model once with its context length, the other names it answers to, and a LoRA adapter's base model. Chatting with a model on one of these servers is not available in the CLI yet, so `use --server` refuses and saves nothing. `pull` and `rm` work only on an Ollama server that Desktop lets you manage. A server set to Chat only in Desktop, and servers such as vLLM that serve a fixed set of models, refuse them. A pull still shows the size and license and asks first.
+On an OpenAI-compatible server such as vLLM, `ls` shows each model once with its context length, the other names it answers to, and a LoRA adapter's base model. `pull` and `rm` work only on an Ollama server that Desktop lets you manage. A server set to Chat only in Desktop, and servers such as vLLM that serve a fixed set of models, refuse them. A pull still shows the size and license and asks first.
+
+### Chat with a model on a server
+
+`use --server` makes a model on one of these servers the CLI's default. A name the server also answers to is saved as the model's own name:
+
+```bash
+b4m models use qwen --server vllm
+```
+
+```text
+qwen is another name for qwen-small on vllm; saving qwen-small.
+Default model: qwen-small on vllm
+Start chatting with: b4m
+```
+
+The default remembers the server, so `b4m` and `b4m -p` send it there and never to a model with the same name somewhere else. In an interactive session, `/model` lists every server's models next to the hosted and Ollama models, named by server (`qwen-small on vllm`). The same model on two servers is two entries. A server that is down or needs credentials is skipped with a line at startup saying why.
+
+Tools are on whenever the server supports them. When it does not, the turn still answers without tools and the CLI says once why and what to change:
+
+```text
+vllm was started without tool calling, so its chats run without tools. Restart vLLM with --enable-auto-tool-choice and a --tool-call-parser for the model, then start a new b4m session.
+```
+
+A server started with a small fixed context, such as vLLM's `--max-model-len 4096`, cannot hold the CLI's instructions and tools; its chats run without tools and the notice names the context to restart with. An Ollama model without tool support also chats without tools, with a notice.
+
+When the default model's server cannot be used, the CLI stops and says why instead of switching to another model:
+
+```text
+Error: Cannot chat with qwen-small on vllm: vllm needs credentials. Run: b4m models servers login vllm
+The CLI does not switch to another model on its own. To pick one, run: b4m models use <name>
+```
+
+The same happens when the server is down or no longer serves the model. Start the server, log in, or pick another model with `b4m models use`.
 
 ## Manage models from an MCP client
 

@@ -22,7 +22,7 @@ import { McpManager } from '../utils/mcpAdapter';
 import { buildProjectAgentStore, loadProjectContext } from '../bootstrap/projectStores.js';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { createSseBackend } from '../bootstrap/sseTransport.js';
-import { attachOllama, resolveHeadlessModel } from '../bootstrap/buildLlmBackend.js';
+import { attachLocalModels, resolveHeadlessModel } from '../bootstrap/buildLlmBackend.js';
 import { createHeadlessLlmBackendDeps } from './headlessOllama.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
@@ -220,7 +220,15 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // modules are registered in a `-p` run.
     // `session` is declared below; the getter only runs once a completion is sent.
     const sse = await createSseBackend({ apiClient, model: config.defaultModel, getSessionId: () => session.id });
-    const attached = await attachOllama(sse.llm, config, {}, createHeadlessLlmBackendDeps(options.verbose));
+    const attached = await attachLocalModels(
+      sse.llm,
+      config,
+      {
+        servers: 'default',
+        onNotice: text => process.stderr.write(`Notice: ${sanitizeTerminalText(text)}\n`),
+      },
+      createHeadlessLlmBackendDeps(options.verbose)
+    );
     const { llm, models } = attached;
     for (const warning of attached.warnings) process.stderr.write(`${sanitizeTerminalText(warning)}\n`);
     const { modelInfo, warning } = resolveHeadlessModel(models, config, attached);

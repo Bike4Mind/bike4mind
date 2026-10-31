@@ -440,7 +440,7 @@ describe('--server routing', () => {
     expect(text.match(/^qwen-small/gm)?.length).toBe(1);
   });
 
-  it('use --server refuses and saves nothing, on vLLM and on Ollama', async () => {
+  it('use --server saves the server-scoped id, canonicalizing an alias, on vLLM and on Ollama', async () => {
     const vllm = await startFakeVllm();
     const ollama = await plainOllama();
     open.push(vllm, ollama);
@@ -454,12 +454,33 @@ describe('--server routing', () => {
       }),
       record({ id: 'aaa', name: 'shared', transport: { type: 'http', baseUrl: ollama.baseUrl } }),
     ]);
-    await expect(run('use', { server: 'vllm', name: 'qwen' })).rejects.toThrow(
-      'Chat with models on vllm is coming in a later release, so it cannot be set as the default yet. Nothing was saved.'
-    );
-    await expect(run('use', { server: 'shared', name: 'qwen2.5:0.5b' })).rejects.toThrow(/Nothing was saved\./);
-    expect(saved).toEqual([]);
+    expect(await run('use', { server: 'vllm', name: 'qwen' })).toBe(0);
+    expect(output()).toContain('qwen is another name for qwen-small on vllm; saving qwen-small.');
+    expect(output()).toContain('Default model: qwen-small on vllm');
+    expect(await run('use', { server: 'shared', name: 'qwen2.5:0.5b' })).toBe(0);
+    expect(saved).toEqual([
+      { defaultModel: 'local:srv-bbb:qwen-small', localDefaultModel: 'local:srv-bbb:qwen-small' },
+      { defaultModel: 'local:srv-aaa:qwen2.5:0.5b', localDefaultModel: 'local:srv-aaa:qwen2.5:0.5b' },
+    ]);
     expect(vllm.requests).toEqual([]);
+  });
+
+  it('use --server names the server and saves nothing when it does not serve the model', async () => {
+    const vllm = await startFakeVllm();
+    open.push(vllm);
+    await writeServers([
+      record({
+        id: 'bbb',
+        name: 'vllm',
+        kind: 'openai-compatible',
+        access: 'chat',
+        transport: { type: 'http', baseUrl: vllm.baseUrl },
+      }),
+    ]);
+    await expect(run('use', { server: 'vllm', name: 'llama3' })).rejects.toThrow(
+      'No model named llama3 on vllm. See: b4m models ls --server vllm'
+    );
+    expect(saved).toEqual([]);
   });
 
   it('an empty --server is an error, not the local runtime', async () => {

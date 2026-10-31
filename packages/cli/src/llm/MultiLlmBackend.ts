@@ -5,31 +5,37 @@ import type {
   CompletionInfo,
   IChoiceEndToolUse,
 } from '@bike4mind/llm-adapters';
-import type { OllamaBackend } from '@bike4mind/llm-adapters';
 
 type ServerBackend = ICompletionBackend; // ServerLlmBackend | WebSocketLlmBackend
 
+/** A local backend (Ollama, or one saved model server) and the models it serves. */
+export interface LlmRoute {
+  backend: ICompletionBackend;
+  models: ModelInfo[];
+}
+
 /**
- * Routes completions between B4M server and a local Ollama instance
- * based on the selected model's backend type.
+ * Routes completions between the B4M server and local backends by model id. A model no local
+ * backend lists goes to the B4M server; on an id clash the earlier route wins.
  */
 export class MultiLlmBackend implements ICompletionBackend {
   public currentModel: string;
-  private ollamaModelIds: Set<string>;
+  private readonly byModel = new Map<string, ICompletionBackend>();
 
   constructor(
     private serverBackend: ServerBackend,
-    private ollamaBackend: OllamaBackend,
     private serverModels: ModelInfo[],
-    private ollamaModels: ModelInfo[],
+    private routes: LlmRoute[],
     initialModel: string
   ) {
     this.currentModel = initialModel;
-    this.ollamaModelIds = new Set(ollamaModels.map(m => m.id));
+    for (const route of routes) {
+      for (const model of route.models) if (!this.byModel.has(model.id)) this.byModel.set(model.id, route.backend);
+    }
   }
 
-  private get activeBackend(): ICompletionBackend {
-    return this.ollamaModelIds.has(this.currentModel) ? this.ollamaBackend : this.serverBackend;
+  private backendFor(model: string): ICompletionBackend {
+    return this.byModel.get(model) ?? this.serverBackend;
   }
 
   async complete(
@@ -38,8 +44,7 @@ export class MultiLlmBackend implements ICompletionBackend {
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
   ): Promise<void> {
-    const backend = this.ollamaModelIds.has(model) ? this.ollamaBackend : this.serverBackend;
-    return backend.complete(model, messages, options, callback);
+    return this.backendFor(model).complete(model, messages, options, callback);
   }
 
   pushToolMessages(
@@ -48,10 +53,10 @@ export class MultiLlmBackend implements ICompletionBackend {
     result: string,
     thinkingBlocks?: unknown[]
   ): void {
-    this.activeBackend.pushToolMessages(messages, tool, result, thinkingBlocks);
+    this.backendFor(this.currentModel).pushToolMessages(messages, tool, result, thinkingBlocks);
   }
 
   async getModelInfo(): Promise<ModelInfo[]> {
-    return [...this.serverModels, ...this.ollamaModels];
+    return [...this.serverModels, ...this.routes.flatMap(route => route.models)];
   }
 }
