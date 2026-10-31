@@ -8,9 +8,17 @@ name: Restricted Terms (comments)
 # the PR (updated in place on later hits) that links the comment and asks its
 # author to edit it; nothing rescans old comments, so the nudge is the record.
 #
-# These events run in the base repository's context with the secret available
-# for fork PRs too. As in restricted-terms.yml the only checkout is the BASE
-# branch's copy of the script, and the comment body is read from the event
+# An issue_comment run belongs to the default branch's head commit, not the PR:
+# its failure shows on that commit and in the Actions tab, never in the PR's
+# checks. The nudge comment is how the author learns of a hit.
+#
+# issue_comment runs in the base repository's context with the secret
+# available for fork PRs too. The two review events do not: on a fork PR they
+# get no secrets and a read-only token, so the check could only fail closed on
+# every review. They are skipped for fork PRs; a reviewer's top-level PR
+# comments are still checked there. The checkout is pinned to the default
+# branch's copy of the script, since the review events would otherwise check
+# out the PR's merge commit, and the comment body is read from the event
 # payload as data. Never check out or run the PR head in this workflow.
 #
 # pull-requests: write is needed only to post the nudge comment.
@@ -35,15 +43,19 @@ jobs:
   check:
     name: Restricted terms (comments)
     # Public repo only, as in restricted-terms.yml. An issue_comment on a plain
-    # issue has nothing to check and takes no runner slot.
+    # issue has nothing to check and takes no runner slot; a review on a fork
+    # PR has no secret to check with (see the header).
     if: >-
       github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind') &&
-      (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+      ((github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
+       (github.event_name != 'issue_comment' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: scripts/check-restricted-terms.mjs
           sparse-checkout-cone-mode: false

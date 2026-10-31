@@ -519,8 +519,9 @@ function scanComment({ eventName, event, matcher, hit }) {
 /**
  * Posts the nudge for a hit comment on its PR, or rewrites the one already
  * there so the PR carries a single nudge pointing at the latest hit. The
- * check's own failure is only visible on the Checks tab, which the comment's
- * author may never open.
+ * check's own failure never reaches the PR's checks for an issue comment (that
+ * run belongs to the default branch's head commit), and the comment's author
+ * may never open the Checks tab for a review.
  */
 async function nudge({ gh, repo, comment }) {
   const body =
