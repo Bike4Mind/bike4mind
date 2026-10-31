@@ -354,6 +354,8 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG.SuccessfulSignups.level).toBe('page');
     expect(ALARM_CATALOG.NewAccountApiKeys.level).toBe('page');
     expect(ALARM_CATALOG['young-account-spend-rate'].level).toBe('page');
+    expect(ALARM_CATALOG['llm-spend-hourly'].level).toBe('page');
+    expect(ALARM_CATALOG['llm-spend-rate'].level).toBe('warn');
     expect(ALARM_CATALOG['provider-reported-spend-hourly'].level).toBe('page');
     expect(ALARM_CATALOG['provider-usage-poll-errors'].level).toBe('warn');
     expect(ALARM_CATALOG['llm-spend-young-accounts'].level).toBe('page');
@@ -469,6 +471,7 @@ describe('lookupCatalog', () => {
     expect(lookupCatalog('SuccessfulSignups')).toBe(ALARM_CATALOG.SuccessfulSignups);
     expect(lookupCatalog('NewAccountApiKeys')).toBe(ALARM_CATALOG.NewAccountApiKeys);
     expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
+    expect(lookupCatalog('llm-spend-hourly-anthropic')).toBe(ALARM_CATALOG['llm-spend-hourly']);
     expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
     expect(lookupCatalog('llm-spend-young-accounts')).toBe(ALARM_CATALOG['llm-spend-young-accounts']);
     expect(lookupCatalog('completion-credit-overdraft')).toBe(ALARM_CATALOG['completion-credit-overdraft']);

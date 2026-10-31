@@ -354,6 +354,16 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Open the LLM spend dashboard for the provider and model, then check the agent executions and signup activity.',
     links: ['agent-executions', 'signup-activity'],
   },
+  'llm-spend-hourly': {
+    title: 'AI provider spend is running hot',
+    level: 'page',
+    unit: 'USD',
+    meaning:
+      'Estimated spend at one provider over the last hour is at or above the ceiling. A sustained drain from a credit farm, a stolen card, or a runaway agent are the usual causes.',
+    action:
+      'Open the LLM spend dashboard for the provider and top models, check the young-account spend post in LiveOps, then review signup activity and the WAF block list.',
+    links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+  },
   'provider-reported-spend-hourly': {
     title: 'A provider reports unusual AI spend',
     level: 'page',
