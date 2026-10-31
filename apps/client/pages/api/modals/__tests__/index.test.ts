@@ -115,3 +115,19 @@ describe('GET /api/modals - delegated settings:manage', () => {
     expect(mockRefs.findFilter.enabled).toBe(true);
   });
 });
+
+describe('GET /api/modals - response audience', () => {
+  it.each([
+    ['a full admin', true, undefined, true],
+    ['a settings:manage delegate', false, ['settings:manage'], true],
+    ['a delegate holding only another permission', false, ['support:read'], false],
+  ])('classifies %s', async (_case, isAdmin, adminPermissions, expectedAdmin) => {
+    const { viewerClassifier } = await import('@bike4mind/services');
+    vi.mocked(viewerClassifier.classify).mockClear();
+    const { req, res } = mocks(isAdmin, {}, adminPermissions);
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(viewerClassifier.classify).toHaveBeenCalledWith({ isAdmin: expectedAdmin });
+  });
+});
