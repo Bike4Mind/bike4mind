@@ -37,7 +37,7 @@ const h = vi.hoisted(() => ({
   deleteInstallation: vi.fn(),
 }));
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));

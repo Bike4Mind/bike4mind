@@ -1,7 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
+import { getValidUserDriveAccessToken } from '@bike4mind/server-utils/integrations/google/drive/common';
 import {
   createDriveClient,
   listFolderChildren,

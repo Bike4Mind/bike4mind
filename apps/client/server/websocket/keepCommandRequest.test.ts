@@ -6,7 +6,7 @@ vi.mock('@server/cli/auth', () => ({
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -15,10 +15,10 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
-import { sendToClient, sendToConnection } from '@server/websocket/utils';
+import { sendToClient, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { func } from './keepCommandRequest';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 

@@ -21,7 +21,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
 }));
 
 const mockPostMessageToSlack = vi.fn();
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
 }));
 

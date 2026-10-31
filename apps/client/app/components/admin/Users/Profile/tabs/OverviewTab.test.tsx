@@ -10,7 +10,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUs
 vi.mock('@client/app/hooks/data/entitlements', () => ({
   useGetUserProductAccess: () => ({ data: undefined, isLoading: false }),
 }));
-vi.mock('../../Details/UserSubscriptionStatus', () => ({ default: () => null }));
+vi.mock('../../../Subscriptions/SubscriptionSummaryList', () => ({ SubscriptionSummaryList: () => null }));
 vi.mock('../RiskEvidenceCard', () => ({
   RiskEvidenceCard: ({ userId }: { userId: string }) => <div data-testid="risk-evidence-card-stub">{userId}</div>,
 }));

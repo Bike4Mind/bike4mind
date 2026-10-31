@@ -12,7 +12,7 @@ import {
   SubscriptionSource,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { UserFunnelStep } from '@client/app/utils/adminUsersFilter';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { currentStaffRegex, isCountedUser, type UserFlags } from './signupCohort';
 
 /**

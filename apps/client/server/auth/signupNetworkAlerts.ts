@@ -8,7 +8,7 @@ import {
   hashSignupNetwork,
   MAX_COUNTED_ROWS,
 } from '@bike4mind/server-utils/auth/signupNetworkSignals';
-import { postMessageToSlackWithOutcome } from '@server/integrations/slack/slack';
+import { postMessageToSlackWithOutcome } from '@bike4mind/server-utils/integrations/slack/slack';
 import { hostingNetworkOf } from './datacenterAsns';
 
 /**

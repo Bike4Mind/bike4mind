@@ -1,4 +1,4 @@
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository, slackExportJobRepository } from '@bike4mind/database';
 import { PutObjectCommand } from '@aws-sdk/client-s3';

@@ -72,7 +72,7 @@ const userApiKeyRepository = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 // The real gateEmbedBrandingWrite AND embedKeyOwnerHasEntitlement run; only the
 // leaf entitlement source (getUserEntitlements) and the owner-doc lookups are

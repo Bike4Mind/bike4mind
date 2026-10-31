@@ -79,6 +79,28 @@ export function isIntroducibleModelId(modelId: string): boolean {
   return !DATED_SNAPSHOT_ID.test(modelId);
 }
 
+/** "gpt-4.1" for "gpt-4.1-2025-04-14"; undefined for an id that is not a dated snapshot. */
+export const snapshotAliasOf = (modelId: string): string | undefined =>
+  DATED_SNAPSHOT_ID.test(modelId) ? modelId.replace(DATED_SNAPSHOT_ID, '') : undefined;
+
+/**
+ * The ids that are a dated snapshot's alias ("gpt-4.1" for a held "gpt-4.1-2025-04-14").
+ * Discovery must not introduce one: the read path matches rows to adapter literals by
+ * exact id, so the alias would list as a second "GPT-4.1" next to the snapshot. Aliases
+ * already in the catalog are retired through the queue instead (snapshotAliasSuggestions
+ * in lifecyclePlan.ts). The set is deliberately backend-blind: unlike that suggestion, which
+ * requires the alias and snapshot to share a backend, an introduction is refused whatever
+ * backend holds the snapshot.
+ */
+export function datedSnapshotAliases(heldModelIds: Iterable<string>): Set<string> {
+  const aliases = new Set<string>();
+  for (const id of heldModelIds) {
+    const alias = snapshotAliasOf(id);
+    if (alias) aliases.add(alias);
+  }
+  return aliases;
+}
+
 /** Provenance for a dispatch field the resolver derived rather than a feed reporting it. */
 export const DISPATCH_SEED_CONTRIBUTOR = 'seed';
 
@@ -123,6 +145,12 @@ export interface CatalogWriteInput {
    */
   providerSourceNames: ReadonlySet<string>;
   operatorOwnedModelIds: ReadonlySet<string>;
+  /**
+   * Every id the static adapter tables ship. A dated one makes its alias refused an
+   * introduction (datedSnapshotAliases), since the seed holds the snapshot and not the
+   * alias. An alias the tables ship themselves (gpt-5.4-mini) is curated and exempt.
+   */
+  staticModelIds?: ReadonlySet<string>;
   /** Models a seed row, operator row or adapter literal presents; discovery leaves those alone. */
   presentationOwnedElsewhere?: ReadonlySet<string>;
   credentials: DiscoveryCredentials;
@@ -175,6 +203,11 @@ export function planCatalogWrites(input: CatalogWriteInput): CatalogWritePlan {
   const diff: CatalogDiffEntry[] = [];
   const rows: IModelCatalogRowInput[] = [];
   const sightedModelIds = new Set<string>();
+  const aliasesOfHeldSnapshots = datedSnapshotAliases([
+    ...input.base.keys(),
+    ...input.operatorOwnedModelIds,
+    ...(input.staticModelIds ?? []),
+  ]);
 
   for (const candidate of candidates.values()) {
     // Only a provider listing is a sighting. litellm and models.dev keep retired
@@ -201,6 +234,15 @@ export function planCatalogWrites(input: CatalogWriteInput): CatalogWritePlan {
         source: candidate.sourceNames.join('+'),
         modelId: candidate.modelId,
         reason: 'id is a dated snapshot or a fine-tune, not a model to introduce',
+      });
+      continue;
+    }
+
+    if (!existing && aliasesOfHeldSnapshots.has(candidate.modelId) && !input.staticModelIds?.has(candidate.modelId)) {
+      dropped.push({
+        source: candidate.sourceNames.join('+'),
+        modelId: candidate.modelId,
+        reason: 'id is the alias of a dated snapshot the catalog already holds',
       });
       continue;
     }

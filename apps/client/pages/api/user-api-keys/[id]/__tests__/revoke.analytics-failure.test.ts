@@ -3,12 +3,12 @@ import { createMocks } from 'node-mocks-http';
 
 /**
  * The regression this family was written for: the key change commits, then the
- * analytics write fails. Deliberately does NOT mock @server/utils/analyticsLog -
+ * analytics write fails. Deliberately does NOT mock @bike4mind/server-utils/utils/analyticsLog -
  * the real logEventSafe runs, and the counter write underneath it is what throws,
  * so this exercises the guard through the route rather than around it.
  *
  * Revoke stands in for the family (they share the shape); the wrapper's own
- * contract is covered in server/utils/analyticsLog.test.ts.
+ * contract is covered in packages/server-utils/src/utils/analyticsLog.test.ts.
  */
 
 const mockRefs = vi.hoisted(() => ({ postHandler: null as null | ((req: any, res: any) => unknown) }));

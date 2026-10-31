@@ -5,7 +5,7 @@ import { findSubscriptionPlan } from '@client/lib/userSubscriptions/constants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';

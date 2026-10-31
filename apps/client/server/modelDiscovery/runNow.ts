@@ -59,7 +59,7 @@ export async function dispatchDiscoveryRunNow(logger: Logger): Promise<{ dispatc
       );
     }
 
-    const { runScheduledDiscovery } = await import('./scheduledRun');
+    const { runScheduledDiscovery } = await import('@bike4mind/server-utils/modelDiscovery/scheduledRun');
     void runScheduledDiscovery(logger, 'selfhost', { trigger: 'manual' }).catch((error: unknown) => {
       logger.error('[model-discovery] manual run failed', {
         error: error instanceof Error ? error.message : String(error),

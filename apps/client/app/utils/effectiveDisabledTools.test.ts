@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { effectiveDisabledTools } from './effectiveDisabledTools';
 
-vi.mock('@server/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
   premiumWorkspaceDeniedTools: { 'example-workspace': ['tool_a', 'tool_b'] },
 }));
 

@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('node:timers/promises', () => ({ setTimeout: h.sleep }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@bike4mind/database', () => ({ FabFile: { findById: h.findById, updateOne: h.updateOne } }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({

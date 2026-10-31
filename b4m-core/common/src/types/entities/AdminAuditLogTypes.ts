@@ -95,6 +95,14 @@ export interface IAdminAuditLogRepository {
     filters: AuditLogFilters,
     page: { limit: number; cursor?: AuditLogCursor }
   ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
+  /**
+   * Entries about one subscription, newest first. `subscriptionIds` must hold every id the entries may name:
+   * the Stripe-style `subscriptionId` and the Mongo `_id` string (org revoke writes the latter).
+   */
+  listForSubscription(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
   findById(id: string): Promise<AuditEntry | null>;
   summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>>;
   /** Oldest first: entries strictly after `after` (or from the start) up to and including `until`. */

@@ -122,7 +122,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: h.upload, getSignedUrl: vi.fn(async () => 'https://example.test/signed') }),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: h.recordSessionOperationalUsage,
 }));

@@ -164,6 +164,18 @@ export const adminCreditSummarySchema = z.object({
   byModel: z.array(adminSpendBucketSchema),
   /** Every source with spend in the last 90 days, largest 90-day spend first. */
   bySource: z.array(adminSpendBucketSchema),
+  /**
+   * Provider USD of system-sourced work the user triggered, charged or not: since UTC midnight (what
+   * the free-tier daily cap counts) and over rolling 7/30 days. dailyCapUsd 0 means the cap is off.
+   * capApplies is false when the gate would never refuse this user (enforcement off, admin, paid tier).
+   */
+  systemCost: z.object({
+    todayUsd: z.number(),
+    last7dUsd: z.number(),
+    last30dUsd: z.number(),
+    dailyCapUsd: z.number(),
+    capApplies: z.boolean(),
+  }),
 });
 export type AdminCreditSummary = z.infer<typeof adminCreditSummarySchema>;
 

@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
-import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import type { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import type { ModelAnswerCost } from '@client/app/utils/creditEstimate';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { PlansSection } from './PlansSection';

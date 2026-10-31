@@ -47,7 +47,7 @@ import {
   fabFileChunkRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
+import { releaseDriveConnectionForLake } from '@bike4mind/server-utils/integrations/google/drive/common';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
