@@ -199,6 +199,7 @@ describe('UsersBulkActionDialog', () => {
     fireEvent.click(screen.getByTestId('admin-users-bulk-contain-reason-input-preset-0'));
     fireEvent.click(screen.getByTestId('admin-users-bulk-contain-confirm-btn'));
 
+    expect(screen.getByText(/live Stripe subscriptions are canceled with no refund and stay canceled/)).toBeTruthy();
     expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('canceled 2 Stripe subscription(s)');
     expect(toastMock.warning).toHaveBeenCalledWith(expect.stringContaining('Cancel them in Stripe'));
     fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));

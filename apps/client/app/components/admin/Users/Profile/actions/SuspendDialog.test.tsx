@@ -36,6 +36,7 @@ describe('SuspendDialog', () => {
 
   it('sends only isBanned: true when credits are left alone', async () => {
     const { onClose } = setup();
+    expect(screen.getByTestId('suspend-dialog')).toHaveTextContent('stay canceled if you undo or reinstate');
     pickReason();
 
     fireEvent.click(confirmButton());
@@ -47,7 +48,9 @@ describe('SuspendDialog', () => {
       })
     );
     expect(onClose).toHaveBeenCalled();
-    expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('Account suspended');
+    expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent(
+      'Account suspended. Undo does not restore canceled subscriptions.'
+    );
   });
 
   it('also zeroes credits with the reason when the checkbox is ticked', async () => {
