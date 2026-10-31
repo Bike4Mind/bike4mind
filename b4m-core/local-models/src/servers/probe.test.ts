@@ -41,6 +41,20 @@ describe('probeServer', () => {
       'Could not reach box: connection refused'
     );
   });
+
+  it('reports a 403 as a refusal, not a credential demand', async () => {
+    const forbidden = () => Promise.resolve(new Response(null, { status: 403 }));
+    expect(await probeServer(forbidden, 'http://h', 'box', Date.now)).toMatchObject({
+      kind: null,
+      auth: false,
+      forbidden: true,
+      refused: true,
+      error: 'box answered 403 Forbidden: the server or a proxy in front of it refused the request.',
+    });
+    const mixed = (input: string) =>
+      Promise.resolve(new Response(null, { status: input.endsWith('/v1/models') ? 401 : 403 }));
+    expect(await probeServer(mixed, 'http://h', 'box', Date.now)).toMatchObject({ auth: true, forbidden: false });
+  });
 });
 
 describe('answersWithoutCredentials', () => {

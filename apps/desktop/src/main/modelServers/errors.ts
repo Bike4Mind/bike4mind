@@ -1,3 +1,5 @@
+import { forbiddenMessage } from '@bike4mind/local-models/servers';
+
 /** A saved server answered 401: the user has to enter new credentials, not retry. */
 export class ServerCredentialsError extends Error {
   constructor(
@@ -19,7 +21,7 @@ export class ServerCredentialsError extends Error {
  */
 export class ServerForbiddenError extends Error {
   constructor(readonly serverLabel: string) {
-    super(`${serverLabel} answered 403 Forbidden: the server or a proxy in front of it refused the request.`);
+    super(forbiddenMessage(serverLabel));
     this.name = 'ServerForbiddenError';
   }
 }

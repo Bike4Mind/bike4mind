@@ -45,7 +45,7 @@ export {
   type ServerFetchDeps,
 } from './serverFetch';
 export { describeFailure, DROP_CODES, errorCode } from './failure';
-export { answersWithoutCredentials, probeServer, type ProbeOutcome, type ServerKind } from './probe';
+export { answersWithoutCredentials, forbiddenMessage, probeServer, type ProbeOutcome } from './probe';
 export {
   contextTooSmallHint,
   isToolRefusal,
