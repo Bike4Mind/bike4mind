@@ -113,6 +113,10 @@ export type AdminUsersBulkResult = {
   undoExpiresAt: string;
   /** Domains this batch added to blockedEmailDomains; undo removes exactly these. */
   blockedDomains: string[];
+  /** Stripe subscriptions a suspend or contain canceled; undo cannot reinstate them. */
+  canceledSubscriptions: number;
+  /** Suspended users whose subscriptions Stripe would not cancel; they still need canceling by hand. */
+  subscriptionCancelFailures: { userId: string; error: string }[];
 };
 
 export const AdminUsersBulkUndoRequestSchema = z.object({ batchId: z.string().uuid() });
@@ -126,4 +130,6 @@ export type AdminUsersBulkUndoResult = {
   /** True when the undo stopped at its time budget; `remaining` users were not attempted. */
   partial: boolean;
   remaining: number;
+  /** Stripe subscription ids the batch canceled. Undo lifts the ban but cannot reinstate these. */
+  subscriptionsNotRestored: string[];
 };

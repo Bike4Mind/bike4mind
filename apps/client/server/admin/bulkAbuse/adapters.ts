@@ -12,6 +12,7 @@ import { userApiKeyRepository } from '@bike4mind/database/auth';
 import type { abuseService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { denySelfAdminAction, isSelfOrImpersonator, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
 
 type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
 type Actor = { id: string; email?: string | null; username?: string };
@@ -50,6 +51,19 @@ export function bulkAbuseExecuteAdapters(
         details,
         related,
       }),
+    cancelSubscriptions: async user => {
+      const result = await cancelAccountSubscriptions({ userId: user.id, reason: 'suspended' }, logger ?? console);
+      const entry = subscriptionCancellationAudit(result, 'suspended');
+      // Best-effort per the catalogue: the ban is committed, so a lost entry must not fail the user.
+      if (entry) {
+        await recordAdminActionFromRequest(req, {
+          ...entry,
+          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+          reason,
+        });
+      }
+      return result;
+    },
     logger,
   };
 }

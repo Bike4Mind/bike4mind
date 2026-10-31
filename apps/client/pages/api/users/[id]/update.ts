@@ -25,6 +25,7 @@ import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
 import { propagateAccountRisk } from '@server/billing/linkedAccounts';
+import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
 import {
   diffProfileFields,
   profileFieldsSent,
@@ -391,6 +392,16 @@ const handler = baseApi().put(
           { sourceUserId: userId, trigger: 'blocked by an admin', key: `admin-block:${userId}:${Date.now()}` },
           req.logger
         );
+        // A blocked account must not renew. Stripe failures are logged and audited, never undo the block.
+        const cancellation = await cancelAccountSubscriptions({ userId, reason: 'suspended' }, req.logger);
+        const cancellationEntry = subscriptionCancellationAudit(cancellation, 'suspended');
+        if (cancellationEntry) {
+          await recordAdminActionFromRequest(req, {
+            ...cancellationEntry,
+            target: auditTarget,
+            reason: statusChangeReason ?? parseAdminActionReason(body.statusChangeReason),
+          });
+        }
       }
 
       if (profileFields.length > 0) {

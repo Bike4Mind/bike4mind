@@ -11,6 +11,7 @@ const {
   mockSessionEnded,
   mockRequireStepUp,
   mockPropagateAccountRisk,
+  mockCancelAccountSubscriptions,
   mockRecord,
   mockDeny,
   mockSetThrottleTier,
@@ -26,6 +27,7 @@ const {
   mockSessionEnded: vi.fn(),
   mockRequireStepUp: vi.fn(),
   mockPropagateAccountRisk: vi.fn(),
+  mockCancelAccountSubscriptions: vi.fn(),
   // Records whether a findById read ran inside the change callback, so a test can pin the
   // session-end snapshot to the write's own transaction instead of a stale read before it.
   txnState: { changeRunning: false, snapshotReadInsideChange: undefined as boolean | undefined },
@@ -169,6 +171,11 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 // The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
 vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
+// The audit-entry builder stays real so the test pins what the admin log records.
+vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+  cancelAccountSubscriptions: mockCancelAccountSubscriptions,
+}));
 
 import { adminSettingsRepository } from '@bike4mind/database';
 import handler from '../update';
@@ -211,6 +218,7 @@ beforeEach(() => {
   txnState.snapshotReadInsideChange = undefined;
   mockRequireStepUp.mockReset().mockResolvedValue(undefined);
   mockPropagateAccountRisk.mockReset().mockResolvedValue({ locked: [], review: [] });
+  mockCancelAccountSubscriptions.mockReset().mockResolvedValue({ canceled: [], failed: [] });
 });
 
 describe('PUT /api/users/:id/update - changing your own password', () => {
@@ -794,6 +802,50 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     adminEdit(BEFORE, { ...BEFORE, email: 'new@example.com' });
     await run({ user: ADMIN, userId: 'target', body: { email: 'new@example.com' } }).promise;
     expect(mockPropagateAccountRisk).not.toHaveBeenCalled();
+  });
+
+  it('cancels the Stripe subscriptions of an account an admin bans, and audits what Stripe did', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    mockCancelAccountSubscriptions.mockResolvedValue({
+      canceled: ['sub_a'],
+      failed: [{ customerId: 'cus_org', subscriptionId: 'sub_b', reason: 'stripe down' }],
+    });
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    });
+    await promise;
+
+    expect(mockCancelAccountSubscriptions).toHaveBeenCalledTimes(1);
+    expect(mockCancelAccountSubscriptions).toHaveBeenCalledWith(
+      { userId: 'target', reason: 'suspended' },
+      expect.anything()
+    );
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.subscriptions.canceled',
+        reason: 'Repeated abuse reports',
+        details: {
+          canceledSubscriptions: ['sub_a'],
+          failedSubscriptions: [{ customerId: 'cus_org', subscriptionId: 'sub_b', reason: 'stripe down' }],
+        },
+      })
+    );
+    // The ban itself still succeeds.
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('cancels no subscriptions for an edit that does not block the account', async () => {
+    adminEdit(BEFORE, { ...BEFORE, email: 'new@example.com' });
+    await run({ user: ADMIN, userId: 'target', body: { email: 'new@example.com' } }).promise;
+
+    expect(mockCancelAccountSubscriptions).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'user.subscriptions.canceled' })
+    );
   });
 
   it('ends sessions once, under the account-block reason, when one admin edit does several', async () => {
