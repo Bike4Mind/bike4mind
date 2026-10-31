@@ -1,5 +1,11 @@
 # @bike4mind/resource
 
+## 3.1.0
+
+### Minor Changes
+
+- [#6222](https://github.com/Bike4Mind/bike4mind/pull/6222) [`fdb4208`](https://github.com/Bike4Mind/bike4mind/commit/fdb42085c50439ab35a52cbe965d67a5a8a5f6eb) Thanks [@onoya](https://github.com/onoya)! - build shadow-only behavioral evidence for account assessments
+
 ## 3.0.0
 
 ### Major Changes

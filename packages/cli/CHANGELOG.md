@@ -1,5 +1,39 @@
 # @bike4mind/cli
 
+## 4.2.0
+
+### Minor Changes
+
+- [#5951](https://github.com/Bike4Mind/bike4mind/pull/5951) [`630bf8f`](https://github.com/Bike4Mind/bike4mind/commit/630bf8f19d08321065c8c1d8f5f9b47c8d907540) Thanks [@maconard](https://github.com/maconard)! - add a Curated models tab with per-machine picks and fit badges
+
+- [#5985](https://github.com/Bike4Mind/bike4mind/pull/5985) [`35539ab`](https://github.com/Bike4Mind/bike4mind/commit/35539ab4f28537ddc2146789d676f6397ef33285) Thanks [@juicewaa](https://github.com/juicewaa)! - review pending signup risk scores with approve and suspend actions
+
+- [#6079](https://github.com/Bike4Mind/bike4mind/pull/6079) [`af19cd4`](https://github.com/Bike4Mind/bike4mind/commit/af19cd40f6fbb6fc1e22542a7ac2c6f4dcfbfbab) Thanks [@maconard](https://github.com/maconard)! - add mcp serve --local to serve the local model tools without a backend
+
+- [#6080](https://github.com/Bike4Mind/bike4mind/pull/6080) [`0d99c48`](https://github.com/Bike4Mind/bike4mind/commit/0d99c4879a345e8b97e7e2465a3f5e8f0c744dde) Thanks [@maconard](https://github.com/maconard)! - rate model fit for this machine in b4m models and MCP models_pull
+
+- [#6090](https://github.com/Bike4Mind/bike4mind/pull/6090) [`e582260`](https://github.com/Bike4Mind/bike4mind/commit/e582260cb28548d339c51fca82c168fe05391c5f) Thanks [@maconard](https://github.com/maconard)! - store a Hugging Face token for private and gated repos
+
+- [#6157](https://github.com/Bike4Mind/bike4mind/pull/6157) [`d1975be`](https://github.com/Bike4Mind/bike4mind/commit/d1975be5dad2165854d7918f1c45fc333653f566) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - add an admin held-grants tab with bulk release, undo and a next-day release cron
+
+- [#6289](https://github.com/Bike4Mind/bike4mind/pull/6289) [`3120c62`](https://github.com/Bike4Mind/bike4mind/commit/3120c626b6eba9ea9a98fb73a5481071de3bce12) Thanks [@maconard](https://github.com/maconard)! - read vLLM aliases, LoRA adapters and context, and chat without tools when they cannot fit
+
+- [#6304](https://github.com/Bike4Mind/bike4mind/pull/6304) [`80da24f`](https://github.com/Bike4Mind/bike4mind/commit/80da24fc8cc6ab639347bf5f70d8e155e3b0cb2f) Thanks [@maconard](https://github.com/maconard)! - read Desktop's saved model servers
+
+- [#6311](https://github.com/Bike4Mind/bike4mind/pull/6311) [`7584b87`](https://github.com/Bike4Mind/bike4mind/commit/7584b87589a6c9974658af8bd22deb5c6081ce32) Thanks [@maconard](https://github.com/maconard)! - chat with OpenAI-compatible model servers
+
+### Patch Changes
+
+- [#6151](https://github.com/Bike4Mind/bike4mind/pull/6151) [`b43218e`](https://github.com/Bike4Mind/bike4mind/commit/b43218e7637b5820bce4b5559321f4b04c9672e6) Thanks [@jebie](https://github.com/jebie)! - route Linux sandbox egress through the allowlisting proxy
+
+- [#6244](https://github.com/Bike4Mind/bike4mind/pull/6244) [`f131766`](https://github.com/Bike4Mind/bike4mind/commit/f131766e0742364e263664430ad8fb6f88271936) Thanks [@maconard](https://github.com/maconard)! - give CLI curated pulls Desktop's checks and redact credentials in pull streams
+
+- [#6264](https://github.com/Bike4Mind/bike4mind/pull/6264) [`cc86fba`](https://github.com/Bike4Mind/bike4mind/commit/cc86fba4df7e0a8b28349df75569deb953ef5850) Thanks [@onoya](https://github.com/onoya)! - map retired Anthropic Opus 4 ids and fail cleanly on unknown models
+
+- [#6275](https://github.com/Bike4Mind/bike4mind/pull/6275) [`70be4dc`](https://github.com/Bike4Mind/bike4mind/commit/70be4dce93edfdc12d9241678204b2ccc8ee103c) Thanks [@onoya](https://github.com/onoya)! - record cache tokens and session on completion usage rows
+
+- [#6305](https://github.com/Bike4Mind/bike4mind/pull/6305) [`6665433`](https://github.com/Bike4Mind/bike4mind/commit/666543307808ab0f5d23c76c8b433b90e6add94c) Thanks [@maconard](https://github.com/maconard)! - share model server transport, probing and tool hints
+
 ## 4.1.0
 
 ### Minor Changes
