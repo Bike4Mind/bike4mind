@@ -613,6 +613,14 @@ declare module "sst" {
       "type": "sst.aws.Queue"
       "url": string
     }
+    "riskEvidenceQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "riskEvidenceQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "lambdaFunctionNames": {
       "attackSimulation": string
       "type": "sst.sst.Linkable"

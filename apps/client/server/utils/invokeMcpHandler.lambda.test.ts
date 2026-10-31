@@ -85,7 +85,12 @@ vi.stubEnv('NODE_ENV', 'production');
 import { invokeMcpHandler } from './invokeMcpHandler';
 import { rateLimitSnapshotRepository } from '@bike4mind/database';
 
-const payload = { name: 'github', action: 'callTool', toolName: 'search' } as Parameters<typeof invokeMcpHandler>[0];
+// A github record whose server can start; one without a token is refused before any invoke.
+const GITHUB_ENV = [{ key: 'GITHUB_ACCESS_TOKEN', value: 'test-token' }];
+
+const payload = { name: 'github', envVariables: GITHUB_ENV, action: 'callTool', toolName: 'search' } as Parameters<
+  typeof invokeMcpHandler
+>[0];
 
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 
@@ -145,5 +150,14 @@ describe('invokeMcpHandler on the deployed Lambda path', () => {
       'MCP handler invocation failed: Unhandled: Runtime exited with error: signal: killed'
     );
     expect(mockLocalMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('refuses a server that cannot start before invoking, so the Lambda logs nothing', async () => {
+    await expect(invokeMcpHandler({ ...payload, envVariables: [] })).rejects.toMatchObject({
+      name: 'McpServerConfigError',
+      missingKeys: ['GITHUB_ACCESS_TOKEN'],
+    });
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockGetBreaker).not.toHaveBeenCalled();
   });
 });

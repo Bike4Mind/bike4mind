@@ -17,12 +17,15 @@ import {
   dataLakeResearchQueue,
   generationCallbackQueue,
   generationJobQueue,
+  riskEvidenceQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { appUrlForLambdaEnv } from './router';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { websocketApi } from './websocket';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
+import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import './businessMetricAlerts';
@@ -229,6 +232,45 @@ const secretRotationNotifierCron = runsScheduledJobs
     })
   : undefined;
 
+// Spend Monitor - maintains the 5-minute SpendRollup buckets that credit spend alerting reads.
+// Runs on every stage that runs scheduled jobs; the spendMonitorEnabled admin setting is the off switch.
+const spendMonitorMention = alarmSlackMentionFunctionArgs();
+const spendMonitor =
+  runsScheduledJobs && spendMonitorDeadLetter
+    ? new sst.aws.Cron('spendMonitor', {
+        schedule: 'rate(5 minutes)',
+        enabled: true,
+        function: {
+          vpc: lambdaVpc,
+          handler: 'apps/workers/src/cron/spendMonitor.handler',
+          runtime: 'nodejs24.x',
+          timeout: '2 minutes',
+          link: [...allSecrets],
+          environment: {
+            ...DEFAULT_LAMBDA_ENVIRONMENT,
+            ...spendMonitorMention.environment,
+          },
+          permissions: [spendMonitorDeadLetter.sendPermission, ...spendMonitorMention.permissions],
+          transform: spendMonitorDeadLetter.functionTarget,
+          logging: {
+            retention: '1 week',
+          },
+        },
+        transform: {
+          target: {
+            ...spendMonitorDeadLetter.ruleTarget.target,
+            // SST defaults to a literal {} input; omit it to retain EventBridge's scheduled time.
+            // The handler's bucket selection and DLQ replay depend on it.
+            input: undefined,
+          },
+        },
+      })
+    : undefined;
+
+if (spendMonitor && spendMonitorDeadLetter) {
+  spendMonitorDeadLetter.allowRules([$util.output(spendMonitor)]);
+}
+
 // [DELETION-FOOTPRINT] Team Metrics Refresh cron moved to @bike4mind/premium-pi
 // (contributeInfra in packages/premium/pi/src/infra.ts) during the Pi open-core carve.
 
@@ -352,6 +394,29 @@ const signupIpRetentionCron = runsScheduledJobs
         timeout: '10 minutes',
         link: [...allSecrets],
         environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
+// Signup risk sweep - requests a risk evidence refresh for every unsettled account in the window (the
+// per-user claim dedupes against in-flight refreshes), repairing dropped triggers. Sends to
+// riskEvidenceQueue, so it links the queue.
+const signupRiskSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('signupRiskSweep', {
+      schedule: 'cron(15 * * * ? *)', // Hourly at :15
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupRiskSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets, riskEvidenceQueue],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
       },
     })
   : undefined;
@@ -1387,6 +1452,7 @@ export {
   weeklyUserActivityReport,
   signupBaselineReport,
   youngAccountSpendAlert,
+  spendMonitor,
   secretRotationNotifierCron,
   scheduleTaskCron,
   apiKeyBaselineCalculation,
@@ -1401,6 +1467,7 @@ export {
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   signupIpRetentionCron,
+  signupRiskSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,

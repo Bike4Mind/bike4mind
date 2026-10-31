@@ -138,7 +138,7 @@ describe('LLM spend metric filters', () => {
     expect(resources.filter).toHaveBeenCalledTimes(5);
   });
 
-  it('counts completions that settled below zero credits', async () => {
+  it('counts completions charged down to zero', async () => {
     const { COMPLETION_CREDIT_OVERDRAFT_MESSAGE } = await load();
     expect(callFor(resources.filter, 'completionCreditOverdraftFilter')).toEqual({
       name: 'test-app-production-completion-credit-overdraft',

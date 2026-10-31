@@ -61,6 +61,10 @@ const NO_GRANT: SignupDomainGrantResult = {
  * when no core step failed. Signup is a one-time edge, so a skip is logged: only a re-verify (e.g. the
  * admin verify-email route) re-runs this function and reaches the hooks.
  *
+ * The credits are part of the one free-credit grant allowed per canonical inbox, so they are
+ * withheld when another account already claimed this user's inbox; everything else the
+ * domain confers - entitlements, membership, tags, subscription - still applies.
+ *
  * Never throws: each step logs and swallows its own failure so the caller's already-successful
  * verification or signup is never failed. The credit grant (stable `domain-grant-credits:${userId}`
  * transactionId), the membership write and the tag merge ($addToSet) are all idempotent, so a
@@ -112,24 +116,34 @@ export async function applySignupDomainGrant(params: {
 
   if (signupCredits > 0) {
     try {
-      const holder = await creditService.addCredits(
-        {
-          ownerId: userId,
-          ownerType: CreditHolderType.User,
-          credits: signupCredits,
-          type: 'generic_add',
-          transactionId: `domain-grant-credits:${userId}`,
-          reason: 'domain-grant signup credits',
-          description: 'Signup credits from an email-domain grant',
-        },
-        {
-          db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
-          creditHolderMethods: userRepository,
-        }
-      );
-      result.creditsGranted = signupCredits;
-      result.currentCredits = holder?.currentCredits ?? null;
-      logger.info(`Granted ${signupCredits} one-time domain-grant signup credits to user ${userId} (${trigger})`);
+      // Domain credits are not a second pot on top of the signup grant: one canonical inbox earns
+      // one free-credit grant, so an alias of an inbox that already earned one is withheld here.
+      // The claim is idempotent for the account that holds it, so a re-verify still grants once.
+      if (!(await userRepository.claimFreeCreditGrant(userId))) {
+        logger.info(
+          `Domain-grant signup credits withheld for user ${userId} (${trigger}): another account ` +
+            `already holds the free-credit claim for this inbox`
+        );
+      } else {
+        const holder = await creditService.addCredits(
+          {
+            ownerId: userId,
+            ownerType: CreditHolderType.User,
+            credits: signupCredits,
+            type: 'generic_add',
+            transactionId: `domain-grant-credits:${userId}`,
+            reason: 'domain-grant signup credits',
+            description: 'Signup credits from an email-domain grant',
+          },
+          {
+            db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
+            creditHolderMethods: userRepository,
+          }
+        );
+        result.creditsGranted = signupCredits;
+        result.currentCredits = holder?.currentCredits ?? null;
+        logger.info(`Granted ${signupCredits} one-time domain-grant signup credits to user ${userId} (${trigger})`);
+      }
     } catch (grantError) {
       logger.error(
         `Domain-grant signup-credit grant failed for user ${userId} (${trigger}); ` +

@@ -336,10 +336,11 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     links: ['signup-activity'],
   },
   'completion-credit-overdraft': {
-    title: 'A completion settled below zero credits',
+    title: 'A completion cost more than its account could pay',
     level: 'warn',
     unit: 'completions',
-    meaning: 'A completion cost more credits than its account held, so the balance is now negative.',
+    meaning:
+      'A completion cost more credits than its account held, so the balance was charged down to zero and the rest went uncollected.',
     action:
       'Find the account in the ChatCompletion log line, check its credit ledger and recent purchases on the admin users page, and review how the reservation let it through.',
     links: ['signup-activity'],

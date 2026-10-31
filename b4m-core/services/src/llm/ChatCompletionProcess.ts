@@ -90,6 +90,7 @@ import {
   processFabFilesServer,
   processUrlsFromPrompt,
   isOverloadedError,
+  isProviderSpendLimitError,
   shouldTriggerFallback,
   isSafetyRefusalError,
   stripAllToolBlocks,
@@ -346,6 +347,10 @@ const STREAMING_HEARTBEAT_ERROR_ESCALATION_THRESHOLD = 3;
 
 /** Final reply when the model stayed too slow through its retry and any fallback. Not "busy": the provider never said so. */
 export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
+// Shown when the provider account behind the model is out of budget and no other route could answer.
+// The fault is ours, not the user's credits, so it must not read like their balance ran out.
+export const PROVIDER_SPEND_LIMIT_REPLY =
+  'This model is temporarily unavailable on our side. Please choose a different model or try again later.';
 
 /** Final reply when every allowlisted model failed a substituted turn; the provider's own wording would name the substitute. */
 export const MODEL_UNAVAILABLE_ERROR_REPLY =
@@ -1231,6 +1236,8 @@ export class ChatCompletionProcess {
   private reservedCreditsOwnerId: string = '';
   private reservedCreditsOwnerType: CreditHolderType = CreditHolderType.User;
   private reservedCreditHolder: ICreditHolder | null = null;
+  // The UserApiKey that authenticated the current turn (parsedBody.apiKeyId), stamped on its ledger rows.
+  private turnApiKeyId: string | undefined;
   // What the reservation was priced on: a turn that ends on a thrown abort settles the tokens it
   // streamed against it (settleAbortedReservation) instead of refunding the whole hold.
   private reservationBasis: {
@@ -2043,6 +2050,7 @@ export class ChatCompletionProcess {
     // Started now so its reads overlap context assembly instead of delaying the first token.
     void this.resolveThinkingVisibility();
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
+    this.turnApiKeyId = initContext.parsedBody.apiKeyId;
     const {
       parsedBody,
       quest,
@@ -5296,6 +5304,9 @@ export class ChatCompletionProcess {
       // Models already tried this request, seeded with the primary. Passed to getLlmWithFallback
       // so no hop re-selects a model that just failed.
       const triedModelIds = new Set<string>([modelInfo.id]);
+      // Backends whose provider account hit its spend limit this request: every model on them
+      // fails identically, so no hop goes back to one.
+      const spendLimitedBackends = new Set<string>();
       // Why the REQUESTED model failed; later hops fail for their own reasons, which would misattribute.
       let primaryFailureReason: string | undefined;
       let overloadRetryCount = 0;
@@ -5769,6 +5780,16 @@ export class ChatCompletionProcess {
               isOutputBudgetExhaustedError(lastError)
             ) {
               logger.warn(lastError);
+            } else if (isProviderSpendLimitError(lastError)) {
+              // Operator action needed (raise the provider limit): one error line per backend per
+              // request, worded so the alert says so, instead of the raw dump plus a rethrow.
+              if (!spendLimitedBackends.has(currentModel.backend)) {
+                logger.error(
+                  `[Provider Spend Limit] ${currentModel.backend} account limit reached on ${currentModel.id}; ` +
+                    `falling back off this backend: ${lastError.message}`
+                );
+              }
+              spendLimitedBackends.add(currentModel.backend);
             } else {
               logger.error(lastError);
             }
@@ -6011,6 +6032,7 @@ export class ChatCompletionProcess {
                   forceSwitch: overloadRetriesExhausted || isSlowModelTimeout,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
+                  excludeBackends: spendLimitedBackends,
                   endUserId: this.user.id,
                   // the identity tool alone does not need a tool-capable fallback
                   requireTools: !!options.tools?.some(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME),
@@ -6890,6 +6912,7 @@ export class ChatCompletionProcess {
                   credits: toolCreditsUsed,
                   description: `Tool usage: ${toolNames}`,
                   source: 'web',
+                  apiKeyId: this.turnApiKeyId,
                 },
                 {
                   db: {
@@ -6916,6 +6939,7 @@ export class ChatCompletionProcess {
                 model: settledLedgerModel.id,
                 inputTokens,
                 outputTokens,
+                apiKeyId: this.turnApiKeyId,
                 cacheReadTokens: cacheReadInputTokens || undefined,
                 cacheWriteTokens: cacheCreationInputTokens || undefined,
               },
@@ -7512,6 +7536,14 @@ export class ChatCompletionProcess {
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
+      } else if (err instanceof Error && isProviderSpendLimitError(err)) {
+        // Already logged at error once in the attempt loop; warn here so one request is one alert.
+        logger.warn(`[Provider Spend Limit] Quest ${questId}: no fallback model could answer`);
+        setErrorReply(PROVIDER_SPEND_LIMIT_REPLY);
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
@@ -7724,6 +7756,7 @@ export class ChatCompletionProcess {
           model: usageLedgerModel.id,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
+          apiKeyId: this.turnApiKeyId,
           cacheReadTokens: usage.cacheReadInputTokens,
           cacheWriteTokens: usage.cacheCreationInputTokens,
         },
@@ -7752,6 +7785,7 @@ export class ChatCompletionProcess {
           credits: toolCredits,
           description: `Tool usage: ${Array.from(this.toolCreditsMap.keys()).join(', ')}`,
           source: 'web',
+          apiKeyId: this.turnApiKeyId,
         },
         {
           db: { creditTransactions: this.db.creditTransactions },

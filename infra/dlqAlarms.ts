@@ -43,6 +43,7 @@ import {
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
@@ -80,6 +81,7 @@ import {
 } from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 
@@ -352,6 +354,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: lakeMemoryQueueDLQ,
   },
   {
+    label: 'risk-evidence',
+    displayName: 'Account Risk Evidence',
+    application: 'Signup',
+    sourceQueue: 'riskEvidenceQueue',
+    queue: riskEvidenceQueueDLQ,
+  },
+  {
     label: 'lake-inconsistency-model',
     displayName: 'Lake Model Inconsistency Detection',
     application: 'DataLakeManagement',
@@ -564,6 +573,15 @@ if (isMonitoredStage) {
       displayName: 'Young Account Spend Alert',
       application: 'Signup',
       queue: youngAccountSpendAlertDeadLetter.queue,
+    });
+  }
+
+  if (spendMonitorDeadLetter) {
+    createDlqAlarms({
+      label: 'spend-monitor',
+      displayName: 'Spend Monitor',
+      application: 'Billing',
+      queue: spendMonitorDeadLetter.queue,
     });
   }
 

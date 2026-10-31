@@ -26,6 +26,7 @@ import { registerNotebookCurationQueue } from './notebookCurationQueue';
 import { registerQuestExportQueue } from './questExportQueue';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
+import { registerRiskEvidenceQueue } from './riskEvidenceQueue';
 import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 import { registerTelemetryCleanup } from './telemetryCleanup';
 import { registerSignupIpRetention } from './signupIpRetention';
@@ -221,6 +222,7 @@ async function main() {
   }
 
   registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
+  registerRiskEvidenceQueue(worker, Resource.riskEvidenceQueue?.url, bootLogger);
   registerDataLakeCleanupQueue(worker, Resource.dataLakeCleanupQueue?.url, bootLogger);
   await registerNotebookCurationQueue(worker, Resource.notebookCurationQueue?.url, bootLogger);
   await registerQuestExportQueue(worker, Resource.questExportQueue?.url, bootLogger);
