@@ -1,0 +1,55 @@
+name: Restricted Terms (comments)
+
+# Companion to restricted-terms.yml for the PR text that is not part of the PR:
+# issue comments on a PR, review summaries and review-thread comments, on
+# creation and on every edit. The same RESTRICTED_TERMS list and the same
+# script apply, and as there the log names only the location, never the term
+# or the matched text. On a hit the job fails and posts one nudge comment on
+# the PR (updated in place on later hits) that links the comment and asks its
+# author to edit it; nothing rescans old comments, so the nudge is the record.
+#
+# These events run in the base repository's context with the secret available
+# for fork PRs too. As in restricted-terms.yml the only checkout is the BASE
+# branch's copy of the script, and the comment body is read from the event
+# payload as data. Never check out or run the PR head in this workflow.
+#
+# pull-requests: write is needed only to post the nudge comment.
+
+on:
+  issue_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    name: Restricted terms (comments)
+    # Public repo only, as in restricted-terms.yml. An issue_comment on a plain
+    # issue has nothing to check and takes no runner slot.
+    if: >-
+      github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind') &&
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/check-restricted-terms.mjs
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Check the comment for restricted terms
+        env:
+          RESTRICTED_TERMS: ${{ secrets.RESTRICTED_TERMS }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/check-restricted-terms.mjs
