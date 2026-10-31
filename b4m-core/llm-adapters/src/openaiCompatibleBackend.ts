@@ -175,7 +175,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
    * `isToolRefusal` matches any 400/500 that mentions tools, including a bad tool history, so a sticky
    * tools-off waits for a one-token probe. An inconclusive probe keeps the refusal reading.
    */
-  private async refusesTools(name: string): Promise<boolean> {
+  private async probeConfirmsRefusal(name: string): Promise<boolean> {
     const verdict = await probeToolSupport(this.options.fetch, this.runtime.baseUrl, name);
     if (verdict === 'accepted') {
       this.logger.warn(`${this.options.label} rejected a request with tools but accepts tools, so they stay on.`);
@@ -274,7 +274,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     } catch (error) {
       if (sendTools && error instanceof OpenAI.APIError && error.status !== undefined) {
         const detail = typeof error.error === 'string' ? error.error : JSON.stringify(error.error ?? error.message);
-        if (isToolRefusal(error.status, `${error.message} ${detail}`) && (await this.refusesTools(name))) {
+        if (isToolRefusal(error.status, `${error.message} ${detail}`) && (await this.probeConfirmsRefusal(name))) {
           // Concurrent turns can all get here; only the first one to turn tools off gives the notice.
           if (!this.toolsOff) {
             this.toolsOff = true;
