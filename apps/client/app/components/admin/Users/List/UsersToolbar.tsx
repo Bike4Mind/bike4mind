@@ -5,11 +5,14 @@ import { PREDEFINED_USER_TAGS } from '@bike4mind/common';
 import { useGetUserTags } from '@client/app/hooks/data/user';
 import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
 import {
+  USER_FUNNEL_STEP_FILTERS,
   USER_PLAN_FILTERS,
   USER_RISK_FILTERS,
   USER_SIGNED_UP_FILTERS,
   USER_SIGNUP_METHOD_FILTERS,
   USER_STATUS_FILTERS,
+  USER_VERDICT_FILTERS,
+  type UserFunnelStep,
 } from '@client/app/utils/adminUsersFilter';
 import { AdminSearchInput } from '../../shared/FilterBar';
 import { FilterChip, type FilterChipOption } from '../../shared/FilterChip';
@@ -18,6 +21,7 @@ import { adminFocus, adminFocusScope } from '../../shared/adminStyles';
 import {
   CLEARED_FILTER_PARAMS,
   countActiveFilters,
+  USERS_SEARCH_PARSERS,
   type UsersFilterKey,
   type UsersListParams,
 } from '../usersTabSearch';
@@ -63,6 +67,23 @@ type ExtraFilter = Exclude<UsersFilterKey, 'emailDomain'> | 'organization' | 'ta
 /** The signup chart's window as chip text; the end is exclusive. */
 export const formatCreatedWindow = (from: string | undefined, to: string | undefined) =>
   `${from ? new Date(from).toLocaleString() : 'any time'} to ${to ? new Date(to).toLocaleString() : 'now'}`;
+
+/** The analytics drill-down's active window as chip text; both ends are inclusive UTC days. */
+export const formatActiveWindow = (from: string | undefined, to: string | undefined) =>
+  !from || !to || from === to ? `${from ?? to} UTC` : `${from} \u2013 ${to} UTC`;
+
+const VERDICT_OPTIONS: FilterChipOption[] = USER_VERDICT_FILTERS.map(value => ({ value, label: capitalize(value) }));
+
+const FUNNEL_STEP_LABELS: Record<UserFunnelStep, string> = {
+  signedUp: 'Signed up, no AI use',
+  firstAction: 'First AI use, did not return',
+  cameBack: 'Came back, not paid',
+  paid: 'Paid',
+};
+const FUNNEL_STEP_OPTIONS: FilterChipOption[] = USER_FUNNEL_STEP_FILTERS.map(value => ({
+  value,
+  label: FUNNEL_STEP_LABELS[value],
+}));
 
 export function UsersToolbar({
   params,
@@ -186,8 +207,40 @@ export function UsersToolbar({
             options={[{ value: 'window', label: formatCreatedWindow(params.createdFrom, params.createdTo) }]}
             value="window"
             onChange={value => {
-              if (value === undefined) update({ createdFrom: undefined, createdTo: undefined });
+              // Verdict and funnel step classify the created window, so they go with it.
+              if (value === undefined) {
+                update({ createdFrom: undefined, createdTo: undefined, verdict: undefined, funnelStep: undefined });
+              }
             }}
+          />
+        )}
+        {params.verdict && (
+          <FilterChip
+            id="verdict"
+            label="Verdict"
+            options={VERDICT_OPTIONS}
+            value={params.verdict}
+            onChange={value => update({ verdict: USERS_SEARCH_PARSERS.verdict(value) })}
+          />
+        )}
+        {(params.activeFrom || params.activeTo) && (
+          <FilterChip
+            id="activeWindow"
+            label="Active"
+            options={[{ value: 'window', label: formatActiveWindow(params.activeFrom, params.activeTo) }]}
+            value="window"
+            onChange={value => {
+              if (value === undefined) update({ activeFrom: undefined, activeTo: undefined });
+            }}
+          />
+        )}
+        {params.funnelStep && (
+          <FilterChip
+            id="funnelStep"
+            label="Funnel"
+            options={FUNNEL_STEP_OPTIONS}
+            value={params.funnelStep}
+            onChange={value => update({ funnelStep: USERS_SEARCH_PARSERS.funnelStep(value) })}
           />
         )}
         {hidden.length > 0 && (

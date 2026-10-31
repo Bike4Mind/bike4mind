@@ -42,6 +42,7 @@ import {
   userApiKeyRepository,
   usageEventRepository,
   organizationRepository,
+  cacheRepository,
 } from '@bike4mind/database';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
@@ -372,6 +373,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           usageEvents: usageEventRepository,
           // Required to reserve/settle against an org pool for org-billed API keys.
           organizations: organizationRepository,
+          cache: cacheRepository,
         },
         apiKeyInfo: apiKeyInfoForCompletion,
         scopeActor: actorScopeForKey(apiKeyInfo),
@@ -381,6 +383,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         // Correlation id for the usage-event dual write (synthesized downstream if absent).
         requestId,
         source,
+        sessionId: body.sessionId,
         logger,
         onReady,
         onChunk: async (text, info) => {

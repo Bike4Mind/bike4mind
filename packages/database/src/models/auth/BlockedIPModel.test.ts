@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { BlockedIP, blockedIPRepository, DEFAULT_BLOCK_DURATION_MS } from './BlockedIPModel';
+import { PERMANENT_IP_BLOCK_EXPIRES_AT } from '@bike4mind/common';
 import { setupMongoTest } from '../../__test__/utils';
 
 setupMongoTest();
@@ -92,5 +93,93 @@ describe('BlockedIPRepository', () => {
     ]);
     expect((await blockedIPRepository.findLatestBlock('3.3.3.3'))?.reason).toBe('new');
     expect(await blockedIPRepository.findLatestBlock('9.9.9.9')).toBeNull();
+  });
+
+  describe('scopes, ranges and expiry', () => {
+    const allBlock = (target: string, expiresAt = new Date(Date.now() + 3_600_000)) =>
+      blockedIPRepository.block(target, 'card testing', {
+        expiresAt,
+        scope: 'all',
+        blockedBy: { id: 'admin1', name: 'admin@example.com' },
+      });
+
+    it('stores a range canonically with its bounds, scope and blocker', async () => {
+      const { doc } = await allBlock('203.0.113.77/24');
+      expect(doc).toMatchObject({
+        ip: '203.0.113.0/24',
+        scope: 'all',
+        blockedById: 'admin1',
+        blockedByName: 'admin@example.com',
+      });
+      expect(doc.rangeStart).toBe('00000000000000000000ffffcb007100');
+      expect(doc.rangeEnd).toBe('00000000000000000000ffffcb0071ff');
+    });
+
+    it('matches any address inside a blocked IPv4 or IPv6 range', async () => {
+      await allBlock('203.0.113.0/24');
+      await allBlock('2001:db8:abcd::/48');
+      expect(await blockedIPRepository.isBlocked('203.0.113.200', 'app')).not.toBeNull();
+      expect(await blockedIPRepository.isBlocked('::ffff:203.0.113.5', 'app')).not.toBeNull();
+      expect(await blockedIPRepository.isBlocked('2001:db8:abcd:9::1', 'app')).not.toBeNull();
+      expect(await blockedIPRepository.isBlocked('203.0.114.1', 'app')).toBeNull();
+      expect(await blockedIPRepository.isBlocked('2001:db8:abce::1', 'app')).toBeNull();
+    });
+
+    it('applies a login block on login surfaces only, and an all block everywhere', async () => {
+      await blockedIPRepository.block('198.51.100.1', 'failed logins');
+      await allBlock('198.51.100.2');
+      expect(await blockedIPRepository.isBlocked('198.51.100.1', 'login')).not.toBeNull();
+      expect(await blockedIPRepository.isBlocked('198.51.100.1', 'app')).toBeNull();
+      expect(await blockedIPRepository.isBlocked('198.51.100.2', 'login')).not.toBeNull();
+      expect(await blockedIPRepository.isBlocked('198.51.100.2', 'app')).not.toBeNull();
+    });
+
+    it('treats a legacy row without scope or range as an exact-match login block', async () => {
+      await BlockedIP.collection.insertOne({
+        ip: '198.51.100.9',
+        active: true,
+        blockedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      expect(await blockedIPRepository.isBlocked('198.51.100.9')).not.toBeNull();
+      expect(await blockedIPRepository.isBlocked('198.51.100.9', 'app')).toBeNull();
+    });
+
+    it('stops matching once a block expires', async () => {
+      await allBlock('192.0.2.0/24', new Date(Date.now() - 1000));
+      expect(await blockedIPRepository.isBlocked('192.0.2.5', 'app')).toBeNull();
+      expect(await blockedIPRepository.listActiveAllScope()).toHaveLength(0);
+    });
+
+    it('keeps a permanent block active and lists it', async () => {
+      await allBlock('192.0.2.0/24', PERMANENT_IP_BLOCK_EXPIRES_AT);
+      expect(await blockedIPRepository.isBlocked('192.0.2.5', 'app')).not.toBeNull();
+      expect((await blockedIPRepository.listActiveAllScope()).map(block => block.ip)).toEqual(['192.0.2.0/24']);
+    });
+
+    it('gives an all block over a login lockout its own row instead of widening the lockout', async () => {
+      const { doc: lockout } = await blockedIPRepository.block('198.51.100.3', 'failed logins');
+      const { doc, created } = await allBlock('198.51.100.3');
+      expect(created).toBe(true);
+      expect(String(doc._id)).not.toBe(String(lockout._id));
+      expect((await BlockedIP.findById(lockout._id))?.scope).toBe('login');
+    });
+
+    it('reports an extension of an existing all block, and no change for a shorter one', async () => {
+      await allBlock('198.51.100.4');
+      const longer = await allBlock('198.51.100.4', new Date(Date.now() + 86_400_000));
+      expect(longer).toMatchObject({ created: false, extended: true });
+      const shorter = await allBlock('198.51.100.4', new Date(Date.now() + 60_000));
+      expect(shorter).toMatchObject({ created: false, extended: false });
+    });
+
+    it('unblocks one row by id and leaves the others', async () => {
+      const { doc: lockout } = await blockedIPRepository.block('198.51.100.5', 'failed logins');
+      const { doc } = await allBlock('198.51.100.5');
+      expect((await blockedIPRepository.unblockById(String(doc._id)))?.active).toBe(false);
+      expect(await blockedIPRepository.isBlocked('198.51.100.5', 'app')).toBeNull();
+      expect((await BlockedIP.findById(lockout._id))?.active).toBe(true);
+      expect(await blockedIPRepository.unblockById('not-an-id')).toBeNull();
+    });
   });
 });

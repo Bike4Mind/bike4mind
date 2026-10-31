@@ -26,7 +26,6 @@ vi.mock('@bike4mind/database', async () => ({
   FabFile: class FabFile {},
   Memento: class Memento {},
   Project: class Project {},
-  QuestMasterPlan: class QuestMasterPlan {},
 }));
 
 vi.mock('@bike4mind/database/infra', () => ({

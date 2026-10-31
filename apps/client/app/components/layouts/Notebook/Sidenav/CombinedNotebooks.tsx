@@ -18,7 +18,7 @@ import type { CombinedItem, CombinedSessionDocument } from './types';
 import { ISessionDocument, IProjectDocument } from '@bike4mind/common';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import TuneIcon from '@mui/icons-material/Tune';
-import { Box, Badge, Divider, CircularProgress, Typography, Tooltip, Stack, IconButton } from '@mui/joy';
+import { Box, Badge, CircularProgress, Typography, Tooltip, Stack, IconButton } from '@mui/joy';
 import debounce from 'lodash/debounce';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNotebookLayout } from '..';
@@ -27,6 +27,7 @@ import FavoriteIcon from '@mui/icons-material/Favorite';
 import { useTranslation } from 'react-i18next';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import SidenavNav from './SidenavNav';
+import { SIDENAV, SidenavPinned, SidenavSearchBar, SidenavSection, groupHeaderSx, listRowsSx } from './kit';
 import { useNavigate, useLocation } from '@tanstack/react-router';
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import ShareDocumentModal from '@client/app/components/common/ShareModal';
@@ -466,51 +467,17 @@ const CombinedNotebooks = () => {
       >
         {/* Pinned nav: New Chat + Files Manager stay put. A solid backdrop
             lets scrolling content pass under it without the labels merging into it. */}
-        <Box
-          ref={pinnedNavRef}
-          className="notebook-sidenav-pinned"
-          sx={theme => ({
-            position: 'sticky',
-            top: 0,
-            zIndex: 3,
-            px: '10px',
-            pt: '10px',
-            pb: 0,
-            backgroundColor: theme.palette.sidenav?.pinnedBackdrop,
-          })}
-        >
+        <SidenavPinned ref={pinnedNavRef} sx={{ px: SIDENAV.railPadX }}>
           <SidenavNav section="pinned" />
-        </Box>
-        <Stack
-          className="notebook-sidenav-container combined-notebooks-container"
-          sx={{ p: '0 10px 0', gap: 1.5, mb: 0, mt: '4px' }}
-        >
+        </SidenavPinned>
+        <SidenavSection className="combined-notebooks-container" sx={{ px: SIDENAV.railPadX }}>
           <SidenavNav section="scroll" />
-        </Stack>
+        </SidenavSection>
 
         {/* Search bar — sticks just under the pinned nav once you scroll past it.
             Must be a DIRECT child of the scroll region (not the short nav container),
             otherwise sticky has no room and scrolls away with its parent. */}
-        <Box
-          className="notebook-sidenav-search-container"
-          sx={theme => ({
-            display: 'flex',
-            flexDirection: 'column',
-            position: 'sticky',
-            // Abut the bottom of the pinned nav using its *measured* height (see pinnedNavHeight),
-            // so the divider below sits in this block's clear area and isn't occluded by the pinned nav.
-            top: `${pinnedNavHeight}px`,
-            zIndex: 2,
-            px: '10px',
-            pt: '6px',
-            pb: '10px',
-            backgroundColor: theme.palette.sidenav?.pinnedBackdrop,
-          })}
-        >
-          {/* Divider above the search — part of this sticky block, so it stays directly above the
-              search bar (never under the pinned nav) in both the default and scrolled states. */}
-          <Divider sx={{ mb: '10px' }} />
-
+        <SidenavSearchBar top={pinnedNavHeight} sx={{ px: SIDENAV.railPadX }}>
           {/* Search row */}
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
             <Box sx={{ flex: 1 }}>
@@ -591,6 +558,7 @@ const CombinedNotebooks = () => {
                   setShowMessageCounts={setShowMessageCounts}
                   onOpenBulkActions={openBulkActions}
                   onClose={() => setFiltersOpen(false)}
+                  anchorRef={filtersAnchorRef}
                 />
               )}
 
@@ -628,8 +596,12 @@ const CombinedNotebooks = () => {
               )}
             </Box>
           </Box>
-        </Box>
-        <Stack className="combined-notebooks-list" gap="10px" sx={{ p: '10px 5px 16px 10px' }}>
+        </SidenavSearchBar>
+        <Stack
+          className="combined-notebooks-list"
+          gap={SIDENAV.groupGap}
+          sx={{ p: `${SIDENAV.listTop} ${SIDENAV.listRight} ${SIDENAV.listBottom} ${SIDENAV.railPadX}` }}
+        >
           {/* Favorites section */}
           {filteredFavoriteSession.length > 0 && (
             <div>
@@ -637,8 +609,7 @@ const CombinedNotebooks = () => {
                 className="notebook-sidenav-favorites-title"
                 level="body-xs"
                 sx={{
-                  color: 'text.tertiary',
-                  marginBottom: '0.1em',
+                  ...groupHeaderSx,
                   display: 'flex',
                   alignItems: 'center',
                   gap: '4px',
@@ -647,7 +618,7 @@ const CombinedNotebooks = () => {
                 {t('llm.favorites_count', { count: filteredFavoriteSession.length })}
                 <FavoriteIcon sx={{ fontSize: '14px', color: 'primary.500' }} />
               </Typography>
-              <div>
+              <Box sx={listRowsSx}>
                 {filteredFavoriteSession.map(d => (
                   <Box
                     key={d.id}
@@ -695,7 +666,7 @@ const CombinedNotebooks = () => {
                     </Box>
                   </Box>
                 ))}
-              </div>
+              </Box>
             </div>
           )}
 

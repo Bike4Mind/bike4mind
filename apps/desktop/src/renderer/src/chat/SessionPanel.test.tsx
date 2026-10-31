@@ -211,7 +211,7 @@ afterEach(() => {
 describe('SessionPanel sections', () => {
   it('draws only Environment, with the chips in their panel layout, when nothing else has content', async () => {
     await show();
-    expect(sectionIds()).toEqual(['environment']);
+    expect(sectionIds()).toEqual(['environment', 'context']);
     expect(find('session-chips-panel')).not.toBeNull();
     expect(get('session-chip-branch-btn').textContent).toBe('main');
   });
@@ -267,21 +267,22 @@ describe('the Changes / Pull request section', () => {
 
   it('leaves the section out for a PR whose bar was dismissed, rather than offering another', async () => {
     await show({ changes: { workspace: CHANGES, hasPullRequest: true, pullRequest: null } });
-    expect(sectionIds()).toEqual(['environment']);
+    expect(sectionIds()).toEqual(['environment', 'context']);
   });
 });
 
 describe('the Context section', () => {
-  it('is left out until a request has been measured', async () => {
+  it('honestly states that the first request is not measured', async () => {
     await show({ context: { contextTokens: null, contextLimit: 200_000 } });
-    expect(sectionIds()).not.toContain('context');
+    expect(get('session-panel-context-body').textContent).toContain('Not measured yet');
+    expect(find('session-panel-context-bar')).toBeNull();
   });
 
   it('shows the share of the window with a bar, and folds to the percentage', async () => {
     await show({ context: { contextTokens: 50_000, contextLimit: 200_000 } });
     expect(sectionIds()).toEqual(['environment', 'context']);
     expect(get('session-panel-context-bar').getAttribute('aria-valuetext')).toBe('25%');
-    expect(get('session-panel-context-figure').textContent).toContain('(25%)');
+    expect(get('session-panel-context-figure').textContent).toContain('50k / 200k');
 
     await act(async () => get('session-panel-context-toggle-btn').click());
     expect(find('session-panel-context-bar')).toBeNull();
@@ -292,6 +293,42 @@ describe('the Context section', () => {
     await show({ context: { contextTokens: 50_000, contextLimit: null } });
     expect(find('session-panel-context-bar')).toBeNull();
     expect(get('session-panel-context-figure').textContent).toContain('reports no window size');
+  });
+
+  it('draws estimated categories, reserved/free space and expandable injected inventories', async () => {
+    await show({
+      context: {
+        contextTokens: 52_000,
+        contextLimit: 200_000,
+        contextSnapshot: {
+          model: 'test',
+          inputTokens: 50_000,
+          overhead: [
+            { id: 'mcp-tools', tokens: 2000, items: ['mcp__example__search'] },
+            { id: 'project', tokens: 3000, items: ['/project/CLAUDE.md'] },
+          ],
+        },
+      },
+    });
+    expect(get('context-row-messages').textContent).toContain('~45k');
+    expect(get('context-row-reserve').textContent).toContain('20k');
+    expect(get('context-row-free').textContent).toContain('130k');
+    expect(get('session-panel-context-body').textContent).not.toContain('Last measured request, not unsent messages');
+    expect(get('session-panel-context-body').textContent).toContain('Compacts automatically at 180k');
+    expect(get('session-panel-context-body').textContent).toContain('Buffer is reserved headroom, not injected');
+    const inventory = get('context-inventory-mcp-tools') as HTMLDetailsElement;
+    expect(inventory.open).toBe(false);
+    await act(async () => inventory.querySelector('summary')!.click());
+    expect(inventory.open).toBe(true);
+    expect(inventory.textContent).toContain('mcp__example__search');
+    expect(get('session-panel-context-body').textContent).toContain('Category shares (~) are estimates');
+  });
+
+  it('clamps the meter but retains the real over-limit figure', async () => {
+    await show({ context: { contextTokens: 220_000, contextLimit: 200_000 } });
+    expect(get('session-panel-context-bar').getAttribute('aria-valuenow')).toBe('200000');
+    expect(get('session-panel-context-bar').getAttribute('aria-valuetext')).toBe('110%');
+    expect(get('context-row-free').textContent).toContain('0');
   });
 });
 

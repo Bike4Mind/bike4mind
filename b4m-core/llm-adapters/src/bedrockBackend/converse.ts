@@ -263,7 +263,10 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
     // line too. Only tools actually sent can replace the reminder on this request.
     const systemText = shouldOmitIdentityReminder({ ...options, tools: sendTools ? options.tools : undefined })
       ? callerSystemText
-      : appendIdentityReminder(callerSystemText, buildIdentityReminder(model, options.modelDisplayName));
+      : appendIdentityReminder(
+          callerSystemText,
+          buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+        );
 
     const converseMessages = this.toConverseMessages(messages, {
       includeTools: sendTools,

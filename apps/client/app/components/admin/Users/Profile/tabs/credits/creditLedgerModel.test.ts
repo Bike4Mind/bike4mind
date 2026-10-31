@@ -52,6 +52,21 @@ describe('creditLedgerModel', () => {
     expect(ledgerRowDetail(row({}))).toBe('');
   });
 
+  it('counts cache tokens into the total and names them, then lists the tools called', () => {
+    expect(
+      ledgerRowDetail(
+        row({
+          kind: 'api',
+          inputTokens: 3,
+          outputTokens: 900,
+          cacheReadTokens: 180_000,
+          cacheWriteTokens: 12_000,
+          toolNames: ['read_file', 'bash'],
+        })
+      )
+    ).toBe('192,903 tokens (incl. 180,000 cache read, 12,000 cache write) \u00b7 tools: read_file, bash');
+  });
+
   it('slices the newest days of the series and formats UTC days', () => {
     const daily = Array.from({ length: 90 }, (_, index) => ({ date: `d${index}`, credits: index }));
     expect(spendWindow(daily, '7').map(point => point.credits)).toEqual([83, 84, 85, 86, 87, 88, 89]);

@@ -17,6 +17,7 @@ import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import type { ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 
 /**
@@ -137,6 +138,22 @@ export async function runLakeResearch(
       spentMicroUsd: 0,
       totals: claimed.totals,
       error: 'The data lake this run targets no longer exists',
+    });
+    return { claimed: true };
+  }
+
+  // Re-checked here because a queued or scheduled run outlives the start that admitted it: an owner
+  // blocked since then (ban, dispute, suspension) must not have research spent on their behalf.
+  const owner = await userRepository
+    .findById(lake.createdByUserId)
+    .catch(error => failAndRethrow(error, 0, claimed.totals));
+  if (owner && aiAccessDeniedMessage(owner)) {
+    await settle({
+      status: 'failed',
+      completedAt: new Date(),
+      spentMicroUsd: 0,
+      totals: claimed.totals,
+      error: "This data lake's owner account cannot run research",
     });
     return { claimed: true };
   }

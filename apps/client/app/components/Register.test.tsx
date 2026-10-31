@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   setAccessToken: vi.fn(),
   setVerifiedSession: vi.fn(),
   sendOTC: vi.fn(),
+  formToken: { data: 'form-tok-1' as string | undefined, refetch: vi.fn() },
   verifyOTC: vi.fn(),
   startOAuthSignIn: vi.fn(),
   mutateAsync: vi.fn(),
@@ -33,11 +34,21 @@ const mocks = vi.hoisted(() => ({
   mfa: { options: null as MfaHookOptions | null, begin: vi.fn() },
 }));
 
-vi.mock('@client/app/hooks/data/auth', () => ({
-  useSendOTC: () => ({ mutateAsync: mocks.sendOTC, isPending: false }),
-  useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
-  useStartOAuthSignIn: () => mocks.startOAuthSignIn,
-}));
+vi.mock('@client/app/hooks/data/auth', async () => {
+  const { useState } = await vi.importActual<typeof import('react')>('react');
+  return {
+    useSignupBotFields: () => {
+      const [honeypot, setHoneypot] = useState('');
+      return {
+        botFields: { formToken: mocks.formToken.data, formExtra: honeypot },
+        honeypotProps: { value: honeypot, onChange: setHoneypot },
+      };
+    },
+    useSendOTC: () => ({ mutateAsync: mocks.sendOTC, isPending: false }),
+    useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
+    useStartOAuthSignIn: () => mocks.startOAuthSignIn,
+  };
+});
 vi.mock('@client/app/hooks/useMfaChallenge', () => ({
   useMfaChallenge: (options: MfaHookOptions) => {
     mocks.mfa.options = options;
@@ -379,5 +390,36 @@ describe('Register - second-factor handoff', () => {
 
     expect(await screen.findByTestId('register-form')).toBeInTheDocument();
     expect(mocks.toast[toastKind]).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Register - signup bot checks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.formToken.data = 'form-tok-1';
+    mocks.sendOTC.mockResolvedValue({ pendingToken: 'ptok-1' });
+  });
+
+  const fillAndSubmit = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
+    await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
+    await user.click(screen.getByTestId('register-submit-btn'));
+    await screen.findByTestId('register-otc-input');
+  };
+
+  it('sends the form token and an empty honeypot value with the initial code request', async () => {
+    renderRegister();
+    await fillAndSubmit(userEvent.setup());
+    expect(mocks.sendOTC).toHaveBeenCalledWith({ email: 'new@test.com', formToken: 'form-tok-1', formExtra: '' });
+  });
+
+  it('submits immediately without a token when none is loaded', async () => {
+    mocks.formToken.data = undefined;
+    renderRegister();
+    await fillAndSubmit(userEvent.setup());
+    expect(mocks.formToken.refetch).not.toHaveBeenCalled();
+    expect(mocks.sendOTC).toHaveBeenCalledWith({ email: 'new@test.com', formToken: undefined, formExtra: '' });
   });
 });

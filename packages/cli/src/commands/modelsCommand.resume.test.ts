@@ -96,6 +96,7 @@ describe('b4m models pull after an interrupted pull', () => {
             throw new Error('an Ollama name needs no Hugging Face lookup');
           },
           ollamaRegistry: async () => ({ digest: LAYER, layers: [LAYER], sizeBytes: TOTAL, licenses: [] }),
+          libraryLayers: async () => null,
           resolveRuntime: async () => ({ runtime, source: 'config' }),
           config: { defaultModel: undefined, ollamaHost: server?.baseUrl, save: async () => {} },
           confirm: async () => false,
@@ -149,6 +150,7 @@ describe('b4m models pull after an interrupted pull', () => {
           throw new Error('an Ollama name needs no Hugging Face lookup');
         },
         ollamaRegistry: async () => ({ digest: LAYER, layers: [LAYER], sizeBytes: TOTAL, licenses: [] }),
+        libraryLayers: async () => null,
         resolveRuntime: async () => ({ runtime, source: 'config' }),
         config: { defaultModel: undefined, ollamaHost: server.baseUrl, save: async () => {} },
         confirm: async () => false,

@@ -721,6 +721,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.preference_arena',
+    section: 'admin',
+    label: 'Preference arena',
+    description:
+      'Import answer pairs for the rate-two-answers arena, toggle them, and review vote quality and model win rates',
+    navigationType: 'tab',
+    target: '71', // AdminTab.PreferenceArena
+    keywords: ['preference arena', 'arena', 'rate answers', 'pairwise votes', 'gold questions', 'model win rate'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.email_marketing',
     section: 'admin',
     label: 'Email marketing',

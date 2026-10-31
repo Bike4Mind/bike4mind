@@ -110,10 +110,9 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   // grant path, so it opts in to the version guard (`updateGuarded`). Because the write carries `__v`, a
   // racing write that ALSO goes through `updateGuarded` throws ConcurrencyConflictError (409,
   // surfaced by the shared errorHandler) instead of clobbering this revoke, and the route's
-  // `withTransaction` rolls back the `revokeFromProject` side effects above on that conflict. Note the
-  // guard only defends against other *guarded* writers: a plain `update` of the same doc (e.g. some
-  // accept.ts paths) is not conditioned on `__v` and can still resurrect access - guarding those is a
-  // follow-up. (Access *widening* via updateDocumentSharing is a targeted `$set` of
+  // `withTransaction` rolls back the `revokeFromProject` side effects above on that conflict. Grants
+  // and removals through `shareable.updateUserShares` bump `__v` when they change `users`, so they
+  // also make this write conflict rather than be overwritten. (Access *widening* via updateDocumentSharing is a targeted `$set` of
   // isGlobalRead/isGlobalWrite with no `__v`, so it stays on the unguarded path.)
   // `updateGuarded` is optional on IBaseRepository (additive for external implementers), but every
   // in-repo repo is a concrete BaseRepository that provides it.

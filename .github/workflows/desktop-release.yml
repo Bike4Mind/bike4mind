@@ -111,6 +111,9 @@ jobs:
           - os: ubuntu-24.04
             platform: linux
             arch: x64
+          - os: windows-2025
+            platform: win
+            arch: x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -135,8 +138,14 @@ jobs:
         run: pnpm turbo:core:build
       - name: Check desktop types
         run: pnpm --filter @bike4mind/desktop typecheck
+      # The desktop unit suite and the local tool layer it covers assume a POSIX shell and
+      # paths, so Windows runs only the packaging script tests until that layer is ported.
       - name: Test desktop
+        if: matrix.platform != 'win'
         run: pnpm --filter @bike4mind/desktop test
+      - name: Test desktop packaging script
+        if: matrix.platform == 'win'
+        run: pnpm --filter @bike4mind/desktop exec node --test scripts/test_package_local.cjs
       - name: Check updater transport with temporary profiles
         if: matrix.platform == 'linux'
         run: node apps/desktop/scripts/smoke-updater.cjs
@@ -171,6 +180,8 @@ jobs:
             app_dir=release/mac
             if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi
             codesign --verify --deep --strict "$app_dir/Bike4Mind.app"
+          elif [ "$PLATFORM" = win ]; then
+            pnpm exec electron-builder --win --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
           else
             pnpm exec electron-builder --linux --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
           fi
@@ -227,6 +238,22 @@ jobs:
           ditto "$mount_dir/Bike4Mind.app" "$install_dir/Bike4Mind.app"
           hdiutil detach "$mount_dir" -quiet
           node apps/desktop/scripts/smoke-packaged.mjs "$install_dir/Bike4Mind.app/Contents/MacOS/Bike4Mind"
+      - name: Install and launch packaged Windows installer
+        if: matrix.platform == 'win'
+        timeout-minutes: 5
+        shell: pwsh
+        env:
+          EXPECT_UPDATES_ENABLED: 'true'
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP 'bike4mind-install'
+          $installer = "apps/desktop/release/Bike4Mind-$env:DESKTOP_VERSION-setup.exe"
+          if (-not (Test-Path $installer)) { throw "Missing installer: $installer" }
+          $process = Start-Process -FilePath (Resolve-Path $installer) -ArgumentList '/S', "/D=$installDir" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)" }
+          $exe = Join-Path $installDir 'Bike4Mind.exe'
+          if (-not (Test-Path $exe)) { throw "Installer did not place $exe" }
+          node apps/desktop/scripts/smoke-packaged.mjs $exe
+          if ($LASTEXITCODE -ne 0) { throw "Packaged Windows startup check failed" }
       - name: Upload packaged startup evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -243,6 +270,7 @@ jobs:
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
             apps/desktop/release/*.AppImage
+            apps/desktop/release/*.exe
             apps/desktop/release/*.blockmap
 
   validate:
@@ -278,6 +306,7 @@ jobs:
           path: |
             installers/SHA256SUMS.txt
             installers/latest-*.yml
+            installers/latest.yml
             installers/install.sh
           if-no-files-found: error
           retention-days: 1
