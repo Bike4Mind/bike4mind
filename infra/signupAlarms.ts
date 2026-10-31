@@ -6,7 +6,7 @@
  */
 
 import { web } from './web';
-import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
+import { dlqAlarmTopic } from './dlqAlarms';
 import { messageFilterPattern } from './logMessageFilterPattern';
 import {
   API_KEY_CREATE_BURST_DEFAULT,
@@ -37,8 +37,8 @@ const reviewThreshold = parseAlarmThreshold(
 );
 
 if (isMonitoredStage) {
-  if (!dlqAlarmTopic || !oobAlarmTopic) {
-    throw new Error('alarm routing requires dlqAlarmTopic and oobAlarmTopic');
+  if (!dlqAlarmTopic) {
+    throw new Error('alarm routing requires dlqAlarmTopic');
   }
 
   if (!web.nodes.server) {
@@ -52,9 +52,9 @@ if (isMonitoredStage) {
       return logGroup.name;
     });
 
-  // Slack (dlqAlarmTopic) plus email (oobAlarmTopic). OK actions close each episode so the next
+  // Slack only (dlqAlarmTopic). OK actions close each episode so the next
   // breach is a fresh ALARM transition and notifies again.
-  const actions = [dlqAlarmTopic.arn, oobAlarmTopic.arn];
+  const actions = [dlqAlarmTopic.arn];
 
   for (const band of ['full', 'reduced', 'review'] as const) {
     new aws.cloudwatch.LogMetricFilter(`signupGrant${band}Filter`, {

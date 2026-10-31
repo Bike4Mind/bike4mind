@@ -101,10 +101,12 @@ export class UnsupportedImageFormatError extends Error {
 
 export class RekognitionImageModerationService implements ImageModerationService {
   private client: RekognitionClient;
-  private logger: Logger;
+  private readonly fixedLogger?: Logger;
 
-  constructor(logger: Logger, client?: RekognitionClient) {
-    this.logger = logger;
+  // Without a logger, resolve Logger.globalInstance per call so a long-lived instance logs with
+  // the current request's context instead of the one active at construction.
+  constructor(logger?: Logger, client?: RekognitionClient) {
+    this.fixedLogger = logger;
     // Same construction posture as S3Storage: region from env, ambient IAM creds.
     // maxAttempts: 1 - retries are owned by checkImage's own loop (see MAX_ATTEMPTS).
     this.client =
@@ -113,6 +115,10 @@ export class RekognitionImageModerationService implements ImageModerationService
         region: process.env.AWS_REGION || 'us-east-2',
         maxAttempts: 1,
       });
+  }
+
+  private get logger(): Logger {
+    return this.fixedLogger ?? Logger.globalInstance;
   }
 
   /**

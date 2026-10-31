@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash } from 'node:crypto';
@@ -104,6 +105,7 @@ function buildPrompt(html: string, annotations: OpenAnnotationLean[]): IMessage[
 }
 
 const handler = baseApi().post(
+  outboundActionGate(),
   withRequestCompletionQuota(async (req, res) => {
     assertAiAccessAllowed(req.user);
     if (!req.user?.id) return res.status(401).json({ error: 'Authentication required' });

@@ -21,6 +21,7 @@ import {
   ResetMfaDialog,
   RestrictDialog,
   SendMessageDialog,
+  ShadowTierDialog,
 } from './actions/accountDialogs';
 import type { ProfileAction, ProfileDialogProps } from './actions/profileActions';
 import { UserProfileHeader } from './UserProfileHeader';
@@ -60,6 +61,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ReinstateDialog {...props} />;
     case 'restrict':
       return <RestrictDialog {...props} />;
+    case 'shadowTier':
+      return <ShadowTierDialog {...props} />;
     case 'role':
       return <ChangeRoleDialog {...props} />;
     case 'productAccess':
@@ -147,7 +150,8 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
           </>
         ) : (
           <>
-            <strong>Restricted.</strong> They can sign in but cannot use AI features.
+            <strong>Restricted.</strong> They can sign in but cannot use AI features, send email or invites, use tools,
+            or publish.
           </>
         )}
       </Typography>

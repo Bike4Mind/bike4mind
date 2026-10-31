@@ -44,13 +44,14 @@ import {
   extractAndSaveEntitiesFromUserMessage,
   getConversationContextSystemMessage,
 } from '../../conversationContextService';
-import { buildSharedTools } from '../sharedToolBuilder';
+import { buildSharedTools, type ToolBuilderDeps } from '../sharedToolBuilder';
 import { UNATTRIBUTED_TOOL_CHARGE } from '../settleToolCredits';
 import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
 import { usageEventStatusForFinish } from '../earlyStopStamp';
 import type { ModelAdmission } from '../modelAdmission';
+import { executedModelFields } from '../shadowTier';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
@@ -59,6 +60,9 @@ export function buildToolUsageEvent(params: {
   organization?: Pick<IOrganizationDocument, 'id'> | null;
   provider: string;
   model: string;
+  /** The substitute that ran instead of `model` (executedModelFields); costUsd prices it. */
+  executedProvider?: string;
+  executedModel?: string;
   costUsd: number;
   creditsCharged: number;
   units?: number;
@@ -87,6 +91,7 @@ export function buildToolUsageEvent(params: {
     feature: params.feature ?? 'tool',
     provider: params.provider,
     model: params.model,
+    ...(params.executedModel ? { executedProvider: params.executedProvider, executedModel: params.executedModel } : {}),
     inputTokens: params.inputTokens ?? 0,
     outputTokens: params.outputTokens ?? 0,
     cachedInputTokens: params.cachedInputTokens ?? 0,
@@ -199,6 +204,8 @@ export interface ToolBuilderConfig {
   modelAdmission?: Pick<ModelAdmission, 'assert'>;
   /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
   decide?: ToolContext['decide'];
+  /** The model a delegation's charge is recorded under when `id` ran in place of it (restricted tier). */
+  toLedgerModel?: (id: string) => ModelInfo | undefined;
 }
 
 // Short spoken preambles for tools whose latency would otherwise leave the
@@ -458,6 +465,8 @@ export interface BuildToolsArgs {
   };
   /** See `ToolBuilderDeps.subagentModels`. */
   subagentModels?: ModelInfo[];
+  /** See `ToolBuilderDeps.substituteIdentity`. */
+  substituteIdentity?: ToolBuilderDeps['substituteIdentity'];
   agentOnlyMcpServers?: string[];
   apiKeyTable?: ApiKeyTable;
   getAbortSignal?: () => AbortSignal | undefined;
@@ -969,6 +978,7 @@ export class ToolBuilder {
     organization,
     precomputed,
     subagentModels,
+    substituteIdentity,
     agentOnlyMcpServers = [],
     apiKeyTable,
     getAbortSignal,
@@ -1001,6 +1011,7 @@ export class ToolBuilder {
         authOrigin: this.deps.authOrigin,
         apiKeyId: this.deps.apiKeyId,
         decide: this.deps.decide,
+        toLedgerModel: this.deps.toLedgerModel ? id => this.deps.toLedgerModel?.(id)?.id ?? id : undefined,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,
@@ -1010,6 +1021,7 @@ export class ToolBuilder {
         servingModel,
         precomputed,
         subagentModels,
+        substituteIdentity,
         apiKeyTable,
         thinking,
         thinkingVisibility,
@@ -1176,7 +1188,8 @@ export class ToolBuilder {
               }
             : undefined,
         onSubagentCredits: (credits, meta) => {
-          this.reserveToolCredits('delegate_to_agent', credits, meta?.model);
+          const ledger = meta && this.deps.toLedgerModel?.(meta.model);
+          this.reserveToolCredits('delegate_to_agent', credits, ledger?.id ?? meta?.model);
           // No meta == model unresolvable; skip rather than fabricate a zero-cost event.
           if (meta) {
             recordToolUsageEvent(
@@ -1187,8 +1200,12 @@ export class ToolBuilder {
                 quest,
                 user: this.deps.user,
                 organization,
-                provider: meta.provider,
-                model: meta.model,
+                provider: ledger?.backend ?? meta.provider,
+                model: ledger?.id ?? meta.model,
+                ...executedModelFields(ledger ?? { id: meta.model, backend: meta.provider }, {
+                  id: meta.model,
+                  backend: meta.provider,
+                }),
                 costUsd: meta.usdCost,
                 creditsCharged: credits,
                 inputTokens: meta.inputTokens,

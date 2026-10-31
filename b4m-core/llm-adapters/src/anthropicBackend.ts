@@ -1081,7 +1081,7 @@ export class AnthropicBackend implements ICompletionBackend {
     // then carries no system at all.
     const identityReminder = shouldOmitIdentityReminder(options)
       ? null
-      : buildIdentityReminder(model, options.modelDisplayName);
+      : buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName);
     let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system' && !isToolChangeMessage(m));
