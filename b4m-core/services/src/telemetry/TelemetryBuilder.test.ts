@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   ANOMALY_THRESHOLDS,
+  ModelBackend,
   type AnomaliesTelemetry,
   type SubagentTelemetry,
   type ToolTelemetry,
 } from '@bike4mind/common';
-import { categorizeToolError, TelemetryBuilder } from './TelemetryBuilder';
+import { categorizeToolError, mapBackendToProvider, TelemetryBuilder } from './TelemetryBuilder';
 import { performanceFromPromptMeta } from './performanceFromPromptMeta';
 
 const sessionId = { hash: 'test-hash', dateKey: '2026-01-01' };
@@ -322,5 +323,11 @@ describe('categorizeToolError', () => {
 
   it.each(cases)('classifies %j as %s', (message, expected) => {
     expect(categorizeToolError(message)).toBe(expected);
+  });
+});
+
+describe('mapBackendToProvider', () => {
+  it('reports self-hosted OpenAI-compatible servers as their own provider', () => {
+    expect(mapBackendToProvider(ModelBackend.OpenAICompatible)).toBe('openai-compatible');
   });
 });
