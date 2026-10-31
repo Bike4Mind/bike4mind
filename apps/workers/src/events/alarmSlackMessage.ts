@@ -364,6 +364,24 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Open the LLM spend dashboard for the provider and top models, check the young-account spend post in LiveOps, then review signup activity and the WAF block list.',
     links: ['agent-executions', 'signup-activity', 'waf-block-list'],
   },
+  'provider-reported-spend-hourly': {
+    title: 'A provider reports unusual AI spend',
+    level: 'page',
+    unit: 'USD',
+    meaning:
+      "The provider's own usage report for the last hour, priced with our model rates, is at or above the ceiling. This counts every call billed to the organization, including ones that never reached our ledger.",
+    action:
+      'Open the LLM spend dashboard and the provider console usage page for the top models, then check the young-account spend post, signup activity and the WAF block list.',
+    links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+  },
+  'provider-usage-poll-errors': {
+    title: 'The provider usage poller is failing',
+    level: 'warn',
+    unit: 'failed runs',
+    meaning:
+      'The hourly job that reads Anthropic and OpenAI usage reports failed, so the provider-side spend alarms are blind until it recovers.',
+    action: 'Check the poller Lambda log for the error. A missing or rotated admin key is the usual cause.',
+  },
   'mail-send-failures': {
     title: 'Emails are failing to send',
     level: 'page',

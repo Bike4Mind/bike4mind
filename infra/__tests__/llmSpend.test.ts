@@ -17,7 +17,6 @@ const resources = vi.hoisted(() => {
       { logConfiguration: { options: { 'awslogs-group': 'chat-completion-logs' } } },
     ]) as string,
     topic: { arn: 'alarm-topic' } as { arn: string } | undefined,
-    oobTopic: { arn: 'email-topic' } as { arn: string } | undefined,
   };
 });
 
@@ -33,9 +32,6 @@ vi.mock('../chatCompletion', () => ({
 vi.mock('../dlqAlarms', () => ({
   get dlqAlarmTopic() {
     return resources.topic;
-  },
-  get oobAlarmTopic() {
-    return resources.oobTopic;
   },
 }));
 vi.mock('@bike4mind/infra', () => import('../../b4m-core/infra/src/stageGating'));
@@ -82,7 +78,6 @@ beforeEach(() => {
     { logConfiguration: { options: { 'awslogs-group': 'chat-completion-logs' } } },
   ]);
   resources.topic = { arn: 'alarm-topic' };
-  resources.oobTopic = { arn: 'email-topic' };
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -185,7 +180,7 @@ describe('LLM spend metric filters', () => {
 });
 
 describe('LLM spend alarms', () => {
-  it.each(PROVIDERS)('alarms on 5-minute %s spend and routes ALARM and OK to Slack and email', async provider => {
+  it.each(PROVIDERS)('alarms on 5-minute %s spend and routes ALARM and OK to Slack', async provider => {
     await load();
     expect(resources.alarm).toHaveBeenCalledWith(`llmSpendRate-${provider}`, {
       name: `test-app-production-llm-spend-rate-${provider}`,
@@ -199,8 +194,8 @@ describe('LLM spend alarms', () => {
       statistic: 'Sum',
       threshold: 25,
       treatMissingData: 'notBreaching',
-      alarmActions: ['alarm-topic', 'email-topic'],
-      okActions: ['alarm-topic', 'email-topic'],
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
       tags: { Application: 'LLMSpend', Severity: 'High' },
     });
   });
@@ -242,8 +237,8 @@ describe('LLM spend alarms', () => {
       statistic: 'Sum',
       threshold: 2,
       treatMissingData: 'notBreaching',
-      alarmActions: ['alarm-topic', 'email-topic'],
-      okActions: ['alarm-topic', 'email-topic'],
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
       tags: { Application: 'LLMSpend', Severity: 'High' },
     });
   });
@@ -262,8 +257,8 @@ describe('LLM spend alarms', () => {
       statistic: 'Sum',
       threshold: 3,
       treatMissingData: 'notBreaching',
-      alarmActions: ['alarm-topic', 'email-topic'],
-      okActions: ['alarm-topic', 'email-topic'],
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
       tags: { Application: 'LLMSpend', Severity: 'High' },
     });
   });
@@ -328,8 +323,8 @@ describe('LLM spend alarms', () => {
   });
 
   it('fails loudly when alarm routing is missing', async () => {
-    resources.oobTopic = undefined;
-    await expect(load()).rejects.toThrow('alarm routing requires dlqAlarmTopic and oobAlarmTopic');
+    resources.topic = undefined;
+    await expect(load()).rejects.toThrow('alarm routing requires dlqAlarmTopic');
   });
 
   it('fails loudly when the ChatCompletion log group cannot be resolved', async () => {

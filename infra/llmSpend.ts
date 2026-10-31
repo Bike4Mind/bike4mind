@@ -8,7 +8,7 @@
  */
 
 import { chatCompletion } from './chatCompletion';
-import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
+import { dlqAlarmTopic } from './dlqAlarms';
 import { parseAlarmThreshold } from './signupAlarmThreshold';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 
@@ -70,8 +70,8 @@ const youngAccountSpendBurstThreshold = parseAlarmThreshold(
 let llmSpendDashboard: aws.cloudwatch.Dashboard | undefined;
 
 if (isMonitoredStage) {
-  if (!dlqAlarmTopic || !oobAlarmTopic) {
-    throw new Error('alarm routing requires dlqAlarmTopic and oobAlarmTopic');
+  if (!dlqAlarmTopic) {
+    throw new Error('alarm routing requires dlqAlarmTopic');
   }
 
   // Same resolution as logMonitor.ts: SST does not expose the container log group as a node.
@@ -86,7 +86,7 @@ if (isMonitoredStage) {
       return name;
     });
 
-  const actions = [dlqAlarmTopic.arn, oobAlarmTopic.arn];
+  const actions = [dlqAlarmTopic.arn];
   const spendAlarms: aws.cloudwatch.MetricAlarm[] = [];
   const prefix = `${$app.name}-${$app.stage}`;
   const LLM_SPEND_NAMESPACE = llmSpendNamespace();
