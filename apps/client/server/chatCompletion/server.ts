@@ -9,6 +9,7 @@ import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
 import { registerWsCompletionRoutes } from './external/wsRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
+import { requireOriginVerify } from './originVerify';
 
 /**
  * ChatCompletion - always-on HTTP worker (Fargate). Serves both internal quest
@@ -105,6 +106,11 @@ export function createApp() {
 
   // Internal quest-processing surface (frontend Lambda -> WebSocket streaming).
   registerInternalRoutes(app, track);
+
+  // Everything registered below is gated, so a new route is CloudFront-only by default. /health and
+  // /process are registered above because they are reached directly (ALB health check, frontend
+  // Lambda via NAT); keep any other direct-only route above this line too.
+  app.use(requireOriginVerify);
 
   // Every user-facing route below (completions, CLI WS completions, embed chat) refuses a caller
   // on an admin's `all` IP block; the internal route above is service-to-service and is not.
