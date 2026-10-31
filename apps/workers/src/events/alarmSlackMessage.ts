@@ -5,7 +5,8 @@
  * Layout: a top-level header carries stage and level at a glance; the details sit in a
  * colour-barred attachment (red page / amber warn / blue info on production, grey on any other
  * stage, green when resolved). Mentions only ever apply to production alarms, at page level
- * unless the setting widens them to warn (see parseMentionSetting).
+ * unless the setting widens them to warn (see parseMentionSetting). Stages other than production
+ * post page-level alarms only; their warnings are dropped.
  */
 
 import { classifyStage } from '@bike4mind/common';
@@ -323,6 +324,25 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     action:
       'Read the young-account spend post in LiveOps for the top accounts, then check the signup activity and the WAF block list.',
     links: SIGNUP_LINKS,
+  },
+  'llm-spend-young-accounts': {
+    title: 'Young-account LLM spend is spiking',
+    level: 'page',
+    unit: 'USD',
+    meaning:
+      'Accounts under 7 days old spent more estimated AI dollars in five minutes than the ceiling. New accounts rarely spend this fast on their own.',
+    action:
+      'Read the latest young-account spend post in LiveOps for the top accounts, open them on the admin users page, and suspend any that look like abuse.',
+    links: ['signup-activity'],
+  },
+  'completion-credit-overdraft': {
+    title: 'A completion settled below zero credits',
+    level: 'warn',
+    unit: 'completions',
+    meaning: 'A completion cost more credits than its account held, so the balance is now negative.',
+    action:
+      'Find the account in the ChatCompletion log line, check its credit ledger and recent purchases on the admin users page, and review how the reservation let it through.',
+    links: ['signup-activity'],
   },
   'llm-spend-rate': {
     title: 'AI provider spend is spiking',
@@ -721,6 +741,8 @@ export function formatAlarmSlackMessage(
   if (alarm.NewStateValue !== 'ALARM' && alarm.NewStateValue !== 'OK') return null;
 
   const { entry, title, level } = resolveEntry(alarm, stage);
+  // Other stages run the production ceilings against QA traffic, so only their pages are worth a post.
+  if (!isProductionStage(stage) && level !== 'page') return null;
   const when = parseStateChangeTime(alarm.StateChangeTime);
   const url = consoleUrl(alarm);
   const link = url ? `<${url}|Open in CloudWatch>` : undefined;

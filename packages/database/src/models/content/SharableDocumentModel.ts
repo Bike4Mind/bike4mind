@@ -1,5 +1,14 @@
 import mongoose, { Schema } from 'mongoose';
-import { IGroupShare, IShareableStaticMethods, IUserDocument, IUserShare, Permission } from '@bike4mind/common';
+import {
+  IGroupShare,
+  IShareableStaticMethods,
+  IUserDocument,
+  IUserShare,
+  Permission,
+  UserShareGrant,
+  UserShareMatch,
+  UserSharesChange,
+} from '@bike4mind/common';
 import { usableObjectIds } from '../../utils/mongo';
 
 export const GroupShareableSchema: Schema<IGroupShare> = new Schema<IGroupShare>({
@@ -90,6 +99,76 @@ export const readAccessArms = (user: Pick<IUserDocument, 'id' | 'groups'>): Reco
   { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },
   { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['read', 'write'] } } } },
 ];
+
+// Pipeline updates skip Mongoose casting, so values go in as `$literal` and stored ids compare via
+// `$toString` (a legacy ObjectId userId or projectId still matches).
+const sameTag = (path: string, value: string | undefined) => ({
+  $eq: [{ $toString: { $ifNull: [path, null] } }, { $literal: value ?? null }],
+});
+
+// Scratch field holding `users` as read, so the final stage can skip the version bump on a no-op.
+const USERS_BEFORE = '__usersBefore';
+
+const rowMatches = (match: UserShareMatch) => ({
+  $and: [
+    ...(match.userId !== undefined ? [{ $eq: [{ $toString: '$$row.userId' }, { $literal: match.userId }] }] : []),
+    ...(match.projectId !== undefined ? [sameTag('$$row.projectId', match.projectId)] : []),
+  ],
+});
+
+/** Pipeline twin of sharingService's pushShareable; keep the merge key and union rule in sync with it. */
+const mergeGrantStage = (grant: UserShareGrant) => {
+  const sameRow = {
+    $and: [
+      { $eq: [{ $toString: '$$row.userId' }, { $literal: grant.userId }] },
+      sameTag('$$row.projectId', grant.projectId),
+      sameTag('$$row.sessionId', grant.sessionId),
+    ],
+  };
+  const unionPermissions = {
+    $reduce: {
+      input: { $concatArrays: [{ $ifNull: ['$$row.permissions', []] }, { $literal: grant.permissions }] },
+      initialValue: [],
+      in: { $cond: [{ $in: ['$$this', '$$value'] }, '$$value', { $concatArrays: ['$$value', ['$$this']] }] },
+    },
+  };
+  const newRow = {
+    userId: grant.userId,
+    permissions: grant.permissions,
+    ...(grant.projectId !== undefined ? { projectId: grant.projectId } : {}),
+    ...(grant.sessionId !== undefined ? { sessionId: grant.sessionId } : {}),
+  };
+  return {
+    $set: {
+      users: {
+        $let: {
+          vars: { rows: { $ifNull: ['$users', []] } },
+          in: {
+            $cond: [
+              { $anyElementTrue: [{ $map: { input: '$$rows', as: 'row', in: sameRow } }] },
+              {
+                $map: {
+                  input: '$$rows',
+                  as: 'row',
+                  in: {
+                    $cond: [
+                      sameRow,
+                      {
+                        $mergeObjects: ['$$row', { userId: { $literal: grant.userId }, permissions: unionPermissions }],
+                      },
+                      '$$row',
+                    ],
+                  },
+                },
+              },
+              { $concatArrays: ['$$rows', [{ $literal: newRow }]] },
+            ],
+          },
+        },
+      },
+    },
+  };
+};
 
 export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T> {
   private model: mongoose.Model<T>;
@@ -190,6 +269,56 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
         { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['share'] } } } },
       ],
     });
+  }
+
+  async updateUserShares(id: string, changes: UserSharesChange): Promise<T | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const { remove, add = [] } = changes;
+    if (remove && remove.userId === undefined && remove.projectId === undefined) {
+      throw new Error('updateUserShares: remove needs a userId or projectId');
+    }
+
+    const stages: Record<string, unknown>[] = [];
+    if (remove) {
+      stages.push({
+        $set: {
+          users: {
+            $filter: { input: { $ifNull: ['$users', []] }, as: 'row', cond: { $not: [rowMatches(remove)] } },
+          },
+        },
+      });
+    }
+    for (const grant of add) {
+      stages.push(mergeGrantStage({ ...grant, permissions: Array.from(new Set(grant.permissions)) }));
+    }
+    if (stages.length === 0) return ((await this.model.findById(id))?.toJSON() ?? null) as T | null;
+
+    // The version is bumped only when `users` changed: a no-op (e.g. removing a project that has no
+    // rows here) must not make a concurrent version-guarded write of `users` fail with a spurious
+    // conflict. `updatedAt` still moves, since Mongoose's timestamps hook stamps it on every update.
+    const versionKey = this.model.schema.get('versionKey');
+    const changed = { $ne: ['$users', `$${USERS_BEFORE}`] };
+    stages.unshift({ $set: { [USERS_BEFORE]: { $ifNull: ['$users', []] } } });
+    stages.push(
+      {
+        $set: {
+          ...(this.model.schema.get('timestamps') ? { updatedAt: '$$NOW' } : {}),
+          ...(typeof versionKey === 'string'
+            ? {
+                [versionKey]: {
+                  $cond: [changed, { $add: [{ $ifNull: [`$${versionKey}`, 0] }, 1] }, `$${versionKey}`],
+                },
+              }
+            : {}),
+        },
+      },
+      { $unset: USERS_BEFORE }
+    );
+
+    const doc = await this.model.findOneAndUpdate({ _id: id }, stages as mongoose.UpdateWithAggregationPipeline, {
+      new: true,
+    });
+    return (doc?.toJSON() ?? null) as T | null;
   }
 }
 

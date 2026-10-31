@@ -2,7 +2,8 @@
  * Estimated upstream LLM spend from the ChatCompletion service's `llm-usage-settled` log line
  * (b4m-core/services/src/llm/llmUsageSettledLog.ts): metric filters, a dashboard, and a
  * 5-minute spend-rate alarm and an hourly spend alarm per provider (LLM_SPEND_ALARM_USD_PER_5MIN,
- * LLM_SPEND_ALARM_USD_PER_HOUR, LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC).
+ * LLM_SPEND_ALARM_USD_PER_HOUR, LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC) plus hourly and 5-minute
+ * ceilings on young-account spend, and a count of completions settled below zero credits.
  * See infra/signup-code-send-alarm.md.
  */
 
@@ -21,7 +22,11 @@ export const LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT = 25;
 export const LLM_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 20;
 export const LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT = 75;
 export const YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 2;
+export const LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN_DEFAULT = 3;
 const USAGE_MESSAGE = 'llm-usage-settled';
+/** Must stay in sync with the negative-balance log line in b4m-core/services/src/cliCompletions.ts. */
+export const COMPLETION_CREDIT_OVERDRAFT_MESSAGE =
+  '[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment';
 
 export function llmSpendFilterPattern(value: 'usd' | 'outputTokens', byModel = false): string {
   // CloudWatch only extracts fields selected by the pattern, including metric values/dimensions.
@@ -30,6 +35,7 @@ export function llmSpendFilterPattern(value: 'usd' | 'outputTokens', byModel = f
 }
 
 export const LLM_SPEND_YOUNG_ACCOUNT_FILTER_PATTERN = `{ $.message = "${USAGE_MESSAGE}" && $.isYoungAccount IS TRUE && $.usd >= 0 }`;
+export const COMPLETION_CREDIT_OVERDRAFT_FILTER_PATTERN = `{ $.message = "${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}" }`;
 
 const spendThreshold = parseAlarmThreshold(
   'LLM_SPEND_ALARM_USD_PER_5MIN',
@@ -53,6 +59,12 @@ const youngAccountSpendThreshold = parseAlarmThreshold(
   'YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR',
   process.env.YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR,
   YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT
+);
+
+const youngAccountSpendBurstThreshold = parseAlarmThreshold(
+  'LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN',
+  process.env.LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN,
+  LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN_DEFAULT
 );
 
 let llmSpendDashboard: aws.cloudwatch.Dashboard | undefined;
@@ -189,6 +201,51 @@ if (isMonitoredStage) {
     alarmActions: actions,
     okActions: actions,
     tags: { Application: 'LLMSpend', Severity: 'High' },
+  });
+
+  new aws.cloudwatch.MetricAlarm('llmSpendYoungAccounts', {
+    name: `${prefix}-llm-spend-young-accounts`,
+    alarmDescription:
+      'Estimated LLM spend per 5 minutes by accounts under 7 days old at or above the configured USD ceiling',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'EstimatedUsdYoungAccounts',
+    namespace: LLM_SPEND_NAMESPACE,
+    period: 300,
+    statistic: 'Sum',
+    threshold: youngAccountSpendBurstThreshold,
+    treatMissingData: 'notBreaching',
+    alarmActions: actions,
+    okActions: actions,
+    tags: { Application: 'LLMSpend', Severity: 'High' },
+  });
+
+  new aws.cloudwatch.LogMetricFilter('completionCreditOverdraftFilter', {
+    name: `${prefix}-completion-credit-overdraft`,
+    logGroupName,
+    pattern: COMPLETION_CREDIT_OVERDRAFT_FILTER_PATTERN,
+    metricTransformation: {
+      name: 'CompletionCreditOverdrafts',
+      namespace: LLM_SPEND_NAMESPACE,
+      value: '1',
+      unit: 'Count',
+    },
+  });
+
+  new aws.cloudwatch.MetricAlarm('completionCreditOverdraft', {
+    name: `${prefix}-completion-credit-overdraft`,
+    alarmDescription: 'A completion settled for more credits than its holder had, leaving the balance negative',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'CompletionCreditOverdrafts',
+    namespace: LLM_SPEND_NAMESPACE,
+    period: 300,
+    statistic: 'Sum',
+    threshold: 1,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    okActions: [dlqAlarmTopic.arn],
+    tags: { Application: 'LLMSpend', Severity: 'Medium' },
   });
 
   // Emitted by signupAlarms.ts (default region) and waf.ts (us-east-1, production with WAF only).

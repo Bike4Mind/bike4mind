@@ -203,7 +203,9 @@ export class ImageEditService {
     this.imageModerationService = options.imageModerationService;
     this.resolveLakeAccess = options.resolveLakeAccess;
     this.deleteFabFile = options.deleteFabFile;
-    this.tokenizer = new TiktokenTokenizer({ logger: Logger.globalInstance });
+    // The service is cached per container, so the tokenizer must not keep a request's logger;
+    // request-scoped calls go through withLogger(logger) instead.
+    this.tokenizer = new TiktokenTokenizer({ logger: new Logger({ metadata: { component: 'tokenizer' } }) });
   }
 
   public async invoke({
@@ -630,7 +632,8 @@ export class ImageEditService {
       }
 
       // Encode the prompt to tokens
-      const promptTokens = await this.tokenizer.encodeTokens(prompt, model);
+      const tokenizer = this.tokenizer.withLogger(logger);
+      const promptTokens = await tokenizer.encodeTokens(prompt, model);
 
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
@@ -659,7 +662,7 @@ export class ImageEditService {
         prompt,
         promptTokens,
         maxTokens: models.find(m => m.id === model)?.max_tokens,
-        tokenizer: this.tokenizer,
+        tokenizer,
         modelId: model,
         logger,
       });

@@ -140,6 +140,8 @@ export default $config({
       cluster,
       resolvedVpcId,
       PRODUCTION_STAGES,
+      wafReadPermissions,
+      wafWebAclArn,
     } = await import('./infra');
 
     // Contribute premium package infra (crons, alarms, Slack fan-out, EventBridge
@@ -160,6 +162,10 @@ export default $config({
       allSecrets,
       defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
       slackErrorWebhookUrl: secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
+      // The same WAF log read grant the web function gets, and the web ACL link (undefined on a
+      // stage without WAF), for overlay functions that read the WAF logs.
+      wafReadPermissions,
+      wafWebAclArn,
     });
 
     // Bob premium infra. Same generated-glue pattern as the overlays above: a no-op when the
