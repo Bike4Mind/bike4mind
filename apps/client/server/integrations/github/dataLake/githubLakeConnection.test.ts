@@ -4,7 +4,7 @@ import { createStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { Logger } from '@bike4mind/observability';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { GRANT_EXPIRED_MESSAGE } from './githubLakeAuthGrant';
+import { GRANT_EXPIRED_MESSAGE } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeAuthGrant';
 
 const h = vi.hoisted(() => ({
   claimTryAcquire: vi.fn(async () => ({ acquired: true })),
@@ -62,8 +62,9 @@ vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', as
   };
 });
 // The grant store has its own dedicated unit tests (githubLakeAuthGrant.test.ts).
-vi.mock('./githubLakeAuthGrant', async importOriginal => {
-  const actual = await importOriginal<typeof import('./githubLakeAuthGrant')>();
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeAuthGrant', async importOriginal => {
+  const actual =
+    await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/githubLakeAuthGrant')>();
   return {
     ...actual,
     requireGitHubLakeFlowNonce: h.requireGitHubLakeFlowNonce,
@@ -79,7 +80,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
   return { dataLakeService: { ...actual.dataLakeService, recordLakeConfigChange: h.recordLakeConfigChange } };
 });
 // The sweep itself is covered by purgeDataLakeConnectionFiles's unit tests and the GitHub ingest e2e.
-vi.mock('@server/dataLakes/purgeConnectionIngestedFiles', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/purgeConnectionIngestedFiles', () => ({
   purgeConnectionIngestedFiles: h.purgeConnectionIngestedFiles,
 }));
 vi.mock('@bike4mind/database', async importOriginal => {

@@ -49,7 +49,7 @@ vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: vi.fn() }));
-vi.mock('@server/services/githubService', () => ({ GitHubService: { forSystem: vi.fn() } }));
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({ GitHubService: { forSystem: vi.fn() } }));
 
 import handler from '../workflow-callback';
 

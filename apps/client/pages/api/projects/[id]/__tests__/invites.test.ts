@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
 import { ZodError } from 'zod';
 
@@ -51,7 +55,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve(mockRefs.accounts) }) }) },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 const sendInviteNotificationEmails = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
@@ -81,6 +85,7 @@ describe('POST /api/projects/:id/invites', () => {
   it('rate limits invite creation per user with a route-wide bucket', () => {
     expect(mockRefs.postMiddleware).toEqual([
       { rateLimitOptions: expect.objectContaining({ limit: 100, bucket: 'POST /api/projects/[id]/invites' }) },
+      expect.any(Function),
     ]);
   });
 

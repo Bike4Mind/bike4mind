@@ -1,0 +1,288 @@
+// @vitest-environment node
+import { describe, it, expect } from 'vitest';
+import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
+import {
+  USER_API_KEY_SCOPES,
+  GENERIC_MODAL_API_KEY_SCOPES,
+  DEDICATED_FLOW_SCOPES,
+  ADMIN_ONLY_API_KEY_SCOPES,
+  NON_MINTABLE_API_KEY_SCOPES,
+  GATED_API_KEY_SCOPES,
+  isApiKeyScopeOffered,
+  type ApiKeyScopeAccess,
+  genericApiKeyScopesFor,
+} from './apiKeyScopes';
+
+describe('apiKeyScopes catalog', () => {
+  const userValues = USER_API_KEY_SCOPES.map(s => s.value);
+  const genericValues = GENERIC_MODAL_API_KEY_SCOPES.map(s => s.value);
+
+  it('documents embed:chat in the user-selectable catalog', () => {
+    expect(userValues).toContain(ApiKeyScope.EMBED_CHAT);
+  });
+
+  it('excludes embed:chat from the generic New-Key modals (dedicated embed flow only)', () => {
+    expect(DEDICATED_FLOW_SCOPES.has(ApiKeyScope.EMBED_CHAT)).toBe(true);
+    expect(genericValues).not.toContain(ApiKeyScope.EMBED_CHAT);
+  });
+
+  it('generic catalog is exactly the user catalog minus the dedicated-flow scopes', () => {
+    expect(GENERIC_MODAL_API_KEY_SCOPES).toHaveLength(USER_API_KEY_SCOPES.length - DEDICATED_FLOW_SCOPES.size);
+    expect(genericValues).toEqual(userValues.filter(v => !DEDICATED_FLOW_SCOPES.has(v)));
+  });
+
+  /**
+   * The guard that makes "add an enum value, forget to register it" impossible:
+   * an unregistered scope is one no mint route can ever issue, so no key can ever
+   * hold it and every route requiring it is permanently 403 - how the `datalake:*`
+   * scopes once shipped dead. Registering a new scope means adding it to one of the
+   * three lists, and choosing which one is the decision this test forces.
+   */
+  it('accounts for every ApiKeyScope in exactly one catalog', () => {
+    const adminValues = ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value);
+    for (const scope of Object.values(ApiKeyScope)) {
+      const homes = [
+        userValues.includes(scope) && 'user-selectable',
+        adminValues.includes(scope) && 'admin-only',
+        NON_MINTABLE_API_KEY_SCOPES.has(scope) && 'non-mintable',
+      ].filter(Boolean);
+      expect(homes, `${scope} must be registered in exactly one catalog`).toHaveLength(1);
+    }
+  });
+
+  it('registers both halves of the OptiHashi pair as separately mintable', () => {
+    expect(genericValues).toContain(ApiKeyScope.OPTIHASHI_READ);
+    expect(genericValues).toContain(ApiKeyScope.OPTIHASHI_COMPUTE);
+  });
+
+  it('keeps every spend scope out of the read and read/write presets', () => {
+    // The presets are built from the `:read`/`:write` suffixes (UserApiKeysTab), so a scope that
+    // commissions billable work must not carry one - otherwise a "Read-only" or "Read & write" key
+    // silently gains the ability to spend. Table, not one-off asserts, so a future spend scope
+    // (the way `datalake:query` joined `optihashi:compute`) has to be added here to pass.
+    const spendScopes = [
+      ApiKeyScope.OPTIHASHI_COMPUTE,
+      ApiKeyScope.DATALAKE_QUERY,
+      ApiKeyScope.AI_DECIDE,
+      ApiKeyScope.BOB_RUN,
+    ];
+    for (const scope of spendScopes) {
+      expect(scope.endsWith(':read'), `${scope} must not end in :read`).toBe(false);
+      expect(scope.endsWith(':write'), `${scope} must not end in :write`).toBe(false);
+    }
+  });
+
+  it('makes overwatch:read user-mintable and lands it in the read-only preset', () => {
+    // The `:read` suffix is what puts a scope in the Read-only preset (UserApiKeysTab),
+    // which is the default selection for a new key - so every key minted through the
+    // profile UI will carry this one. The suffix is deliberate, not incidental: the
+    // surface behind it reads and nothing more, so it belongs in that preset, where
+    // `datalake:query` and `optihashi:compute` deliberately go unsuffixed to stay out.
+    // If a tool reachable through the Overwatch MCP route ever mutates or spends, this
+    // scope has to lose the suffix too - and the spend-scope table above will not catch
+    // that, because it only iterates the scopes already listed in it.
+    //
+    // Safe in that default preset because the scope authorizes without entitling. The
+    // check that makes that true (`requestHasOverwatchAccess`) lives in the Overwatch
+    // overlay package and has no implementation here, so this repo cannot test it and
+    // this test does not claim to: it asserts only the catalog placement it can see.
+    // Same bargain `hearth:read` and `optihashi:read` already take.
+    expect(genericValues).toContain(ApiKeyScope.OVERWATCH_READ);
+    expect(ApiKeyScope.OVERWATCH_READ.endsWith(':read')).toBe(true);
+  });
+
+  it('lists the v1 text-refinement endpoint under ai:generate, not the legacy route', () => {
+    // `endpoints` renders verbatim in the profile API-keys tab, so this is the user-facing
+    // pointer to the published route. The legacy route was dropped from the list deliberately.
+    const ai = USER_API_KEY_SCOPES.find(s => s.value === ApiKeyScope.AI_GENERATE)!;
+    expect(ai.endpoints).toContain('POST /api/v1/text-refinements');
+    expect(ai.endpoints).not.toContain('POST /api/ai/refineText');
+  });
+
+  it('pins the Bob scope strings the Bob routes and the CLI tools are built against', () => {
+    // Keys store the string, not the member name, and both consumers match on it.
+    expect(ApiKeyScope.BOB_READ).toBe('bob:read');
+    expect(ApiKeyScope.BOB_RUN).toBe('bob:run');
+  });
+
+  it('makes bob:read user-mintable and lands it in the read-only preset', () => {
+    // Deliberate, as for overwatch:read: every Bob read is scoped to the key's owner and
+    // starts nothing, so the default Read-only preset may carry it. If a Bob route behind
+    // this scope ever starts work or spends, the scope has to lose the suffix.
+    expect(genericValues).toContain(ApiKeyScope.BOB_READ);
+    expect(ApiKeyScope.BOB_READ.endsWith(':read')).toBe(true);
+  });
+
+  it('makes bob:run user-mintable but keeps it out of the read and read/write presets', () => {
+    // The spend half: it spends the owner's credits and publishes a report as them, so,
+    // like optihashi:compute, it carries no suffix a preset is built from (the spend-scope
+    // table above pins that too) and is only ever picked by hand or by Full access.
+    expect(genericValues).toContain(ApiKeyScope.BOB_RUN);
+    expect(ApiKeyScope.BOB_RUN.endsWith(':read')).toBe(false);
+    expect(ApiKeyScope.BOB_RUN.endsWith(':write')).toBe(false);
+  });
+
+  it('offers both Bob scopes to every account and confines neither', () => {
+    // Ungated: every signed-in account can use Bob, so no product flag hides them. Not
+    // confined: a confined scope must be a key's only scope, which would forbid the pair.
+    const offered = genericApiKeyScopesFor(NO_ACCESS).map(s => s.value);
+    for (const scope of [ApiKeyScope.BOB_READ, ApiKeyScope.BOB_RUN]) {
+      expect(offered).toContain(scope);
+      expect(GATED_API_KEY_SCOPES[scope]).toBeUndefined();
+      expect(CONFINED_API_KEY_SCOPES).not.toContain(scope);
+      expect(DEDICATED_FLOW_SCOPES.has(scope)).toBe(false);
+    }
+  });
+
+  it('lists qa:ingest as admin-only, never user-selectable', () => {
+    expect(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.QA_INGEST);
+    expect(userValues).not.toContain(ApiKeyScope.QA_INGEST);
+  });
+
+  it('lists release-notes:write as admin-only, never user-selectable', () => {
+    expect(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.RELEASE_NOTES_WRITE);
+    expect(userValues).not.toContain(ApiKeyScope.RELEASE_NOTES_WRITE);
+  });
+
+  it('keeps the Overwatch read scope distinct from the ingest write scope', () => {
+    // Not a read/write pair: the ingest scope is a per-product credential bound to one
+    // productId that can write that product's stats, and is admin-provisioned only.
+    // An explorer that could also report would be able to fabricate what it reports on.
+    expect(ApiKeyScope.OVERWATCH_READ).not.toBe(ApiKeyScope.OVERWATCH_INGEST_WRITE);
+    expect(genericValues).not.toContain(ApiKeyScope.OVERWATCH_INGEST_WRITE);
+    expect(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.OVERWATCH_INGEST_WRITE);
+  });
+});
+
+/**
+ * The client catalogs and the shared confined list (@bike4mind/common) are read by
+ * different halves of the system - these surfaces decide what a user may ask for, the
+ * shared constant decides what the mint service and the runtime gate will accept - so
+ * they can only stay honest if something asserts the overlap. DEDICATED_FLOW_SCOPES is
+ * now derived from it; these tests pin the invariants that derivation buys and the ones
+ * it cannot enforce on its own.
+ */
+describe('apiKeyScopes vs the shared CONFINED_API_KEY_SCOPES', () => {
+  const genericValues = GENERIC_MODAL_API_KEY_SCOPES.map(s => s.value);
+
+  it('never offers a confined scope in the generic New-Key modals', () => {
+    // The invariant that actually protects a user: `createUserApiKey` refuses a key that
+    // mixes a confined scope with any other, and the modals are multi-select - so a
+    // confined scope on that list is a selection the mint route rejects. The derivation
+    // makes this hold by construction today; the test is what notices if someone unpicks
+    // it - re-hand-lists DEDICATED_FLOW_SCOPES, or builds the modal list from some other
+    // filter.
+    for (const scope of CONFINED_API_KEY_SCOPES) {
+      expect(genericValues, `${scope} is confined and must not be offered in the generic modals`).not.toContain(scope);
+    }
+  });
+
+  it('derives DEDICATED_FLOW_SCOPES as exactly the confined scopes documented for users', () => {
+    const documentedConfined = USER_API_KEY_SCOPES.map(s => s.value).filter(v =>
+      CONFINED_API_KEY_SCOPES.includes(v as ApiKeyScope)
+    );
+    expect([...DEDICATED_FLOW_SCOPES].sort()).toEqual([...documentedConfined].sort());
+  });
+
+  it('gives every confined scope a home in exactly one client catalog', () => {
+    // Where the derivation stops: a confined scope kept out of the user catalog still has
+    // to be registered as admin-only or non-mintable by hand, or it is a scope no surface
+    // here can mint. Same failure mode the coverage test above guards, narrowed to the
+    // scopes whose handling the shared constant already has an opinion about.
+    const adminValues = ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value);
+    for (const scope of CONFINED_API_KEY_SCOPES) {
+      const homes = [
+        DEDICATED_FLOW_SCOPES.has(scope) && 'dedicated-flow',
+        adminValues.includes(scope) && 'admin-only',
+        NON_MINTABLE_API_KEY_SCOPES.has(scope) && 'non-mintable',
+      ].filter(Boolean);
+      expect(homes, `confined scope ${scope} must be registered in exactly one client catalog`).toHaveLength(1);
+    }
+  });
+
+  it('keeps admin:* out of the confined list and inside the non-mintable one', () => {
+    // The pair that shows confinement and mintability are different questions, and why
+    // NON_MINTABLE_API_KEY_SCOPES cannot simply be derived: `admin:*` is broad by design
+    // (never confined) yet may never be minted from any surface here.
+    expect(CONFINED_API_KEY_SCOPES).not.toContain(ApiKeyScope.ADMIN);
+    expect(NON_MINTABLE_API_KEY_SCOPES.has(ApiKeyScope.ADMIN)).toBe(true);
+  });
+});
+
+const ALL_ACCESS: ApiKeyScopeAccess = {
+  hasOptiAccess: true,
+  hasOverwatchAccess: true,
+  hearthEnabled: true,
+  bypass: true,
+  entitlements: new Set(),
+};
+const NO_ACCESS: ApiKeyScopeAccess = {
+  hasOptiAccess: false,
+  hasOverwatchAccess: false,
+  hearthEnabled: false,
+  bypass: false,
+  entitlements: new Set(),
+};
+const gatedBy = (flag: keyof ApiKeyScopeAccess) =>
+  (Object.entries(GATED_API_KEY_SCOPES) as [ApiKeyScope, keyof ApiKeyScopeAccess][])
+    .filter(([, gate]) => gate === flag)
+    .map(([scope]) => scope);
+
+describe('genericApiKeyScopesFor', () => {
+  it('returns every generic scope with every product', () => {
+    expect(genericApiKeyScopesFor(ALL_ACCESS)).toBe(GENERIC_MODAL_API_KEY_SCOPES);
+  });
+
+  it('returns the same filtered list on every call for the same access', () => {
+    // The New-Key modal re-seeds its selection on a reference change, so a fresh array per call would reset it on every render.
+    expect(genericApiKeyScopesFor({ ...NO_ACCESS })).toBe(genericApiKeyScopesFor({ ...NO_ACCESS }));
+  });
+
+  it('drops only the gated product scopes without any product', () => {
+    const values = genericApiKeyScopesFor(NO_ACCESS).map(s => s.value);
+    const gated = GENERIC_MODAL_API_KEY_SCOPES.filter(s => GATED_API_KEY_SCOPES[s.value as ApiKeyScope]);
+    for (const { value } of gated) expect(values).not.toContain(value);
+    expect(values).toHaveLength(GENERIC_MODAL_API_KEY_SCOPES.length - gated.length);
+    expect(values).toContain(ApiKeyScope.ME_READ);
+  });
+
+  it.each([
+    ['hasOptiAccess', [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE]],
+    [
+      'hasOverwatchAccess',
+      [ApiKeyScope.OVERWATCH_READ, ApiKeyScope.MARKETING_REPORTS_READ, ApiKeyScope.MARKETING_REPORTS_WRITE],
+    ],
+    ['hearthEnabled', [ApiKeyScope.HEARTH_READ, ApiKeyScope.HEARTH_WRITE]],
+  ] as const)('%s alone opens exactly its own scopes', (flag, scopes) => {
+    expect(gatedBy(flag).sort()).toEqual([...scopes].sort());
+    const values = genericApiKeyScopesFor({ ...NO_ACCESS, [flag]: true }).map(s => s.value);
+    for (const scope of scopes) expect(values).toContain(scope);
+    for (const scope of Object.keys(GATED_API_KEY_SCOPES) as ApiKeyScope[]) {
+      if (!(scopes as readonly ApiKeyScope[]).includes(scope)) expect(values).not.toContain(scope);
+    }
+  });
+
+  it('registers every optihashi:*, hearth:*, overwatch:* and marketing-reports:* catalog scope as gated', () => {
+    const productScopes = USER_API_KEY_SCOPES.map(s => s.value).filter(v =>
+      /^(optihashi|hearth|overwatch|marketing-reports):/.test(v)
+    );
+    expect(productScopes.length).toBeGreaterThan(0);
+    for (const scope of productScopes) expect(GATED_API_KEY_SCOPES[scope as ApiKeyScope]).toBeDefined();
+  });
+
+  it('names no premium route paths in the premium scope docs', () => {
+    for (const scope of USER_API_KEY_SCOPES.filter(
+      s => GATED_API_KEY_SCOPES[s.value as ApiKeyScope] === 'hasOptiAccess'
+    )) {
+      for (const endpoint of scope.endpoints) expect(endpoint).not.toMatch(/\/api\//);
+    }
+  });
+});
+
+describe('isApiKeyScopeOffered', () => {
+  it('offers an ungated scope to anyone and a gated one only with its product', () => {
+    expect(isApiKeyScopeOffered(ApiKeyScope.READ_FILES, NO_ACCESS)).toBe(true);
+    expect(isApiKeyScopeOffered(ApiKeyScope.HEARTH_READ, NO_ACCESS)).toBe(false);
+    expect(isApiKeyScopeOffered(ApiKeyScope.HEARTH_READ, { ...NO_ACCESS, hearthEnabled: true })).toBe(true);
+  });
+});

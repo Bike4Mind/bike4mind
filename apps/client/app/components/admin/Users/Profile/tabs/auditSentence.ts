@@ -18,6 +18,7 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.email.verification_resent': 'Resent the verification email',
   'user.subscription.granted': 'Granted a subscription',
   'user.subscription.removed': 'Removed the subscription',
+  'billing.comp.changed': 'Changed a comp',
   'user.api_key.generated': 'Generated an API key',
   'user.api_key.rate_limit_updated': 'Changed API key rate limits',
   'user.api_key.rate_limit_reset': 'Reset API key rate limits',

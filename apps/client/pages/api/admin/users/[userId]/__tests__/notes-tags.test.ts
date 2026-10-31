@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import { createMocks } from 'node-mocks-http';
 import { PENDING_FREE_CREDITS_TAG, RESERVED_PARTNER_RULE_TAGS, hasDeveloperUserTag } from '@bike4mind/common';
-import { allKnownEntitlementKeys, grantTagForEntitlement } from '@client/lib/entitlements/registry';
+import { allKnownEntitlementKeys, grantTagForEntitlement } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 const mocks = vi.hoisted(() => ({
   handlers: {} as Record<string, Record<string, (req: Request, res: Response) => Promise<unknown>>>,

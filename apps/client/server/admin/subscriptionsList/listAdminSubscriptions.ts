@@ -14,7 +14,7 @@ import type {
   AdminSubscriptionsListResponse,
   AdminSubscriptionsSummary,
 } from '@client/app/utils/adminSubscriptionsFilter';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import {
   adminSubscriptionsSort,
   buildAdminSubscriptionsMatch,
@@ -34,7 +34,7 @@ export const OWNER_SEARCH_LIMIT = 500;
 
 type Condition = Record<string, unknown>;
 
-type SubscriptionDoc = {
+export type SubscriptionDoc = {
   _id: mongoose.Types.ObjectId;
   subscriptionId: string;
   ownerType: AdminSubscriptionRow['ownerType'];
@@ -49,6 +49,8 @@ type SubscriptionDoc = {
   periodStartsAt?: Date | null;
   periodEndsAt?: Date | null;
   canceledAt?: Date | null;
+  cancelAt?: Date | null;
+  cancelAtPeriodEnd?: boolean;
   createdAt?: Date | null;
   unitAmount?: number | null;
   currency?: string | null;
@@ -207,6 +209,7 @@ export async function toAdminSubscriptionRows(
     periodStartsAt: isoOrNull(doc.periodStartsAt),
     periodEndsAt: isoOrNull(doc.periodEndsAt),
     canceledAt: isoOrNull(doc.canceledAt),
+    cancelAt: isoOrNull(doc.cancelAt ?? (doc.cancelAtPeriodEnd ? doc.periodEndsAt : null)),
     createdAt: isoOrNull(doc.createdAt),
   }));
 }

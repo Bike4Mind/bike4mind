@@ -23,7 +23,7 @@ import {
 } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { z } from 'zod';
 import {
   ChunkSchema,
@@ -55,7 +55,11 @@ import {
 } from '@server/dataLakes/dataLakeBatchProgress';
 import { notifySlackIndexingComplete } from '@workers/queueHandlers/notifySlackIndexingComplete';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
-import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
+import {
+  dispatchWithLogger,
+  MARK_PAUSED_MAX_ATTEMPTS,
+  MARK_PAUSED_RETRY_DELAY_MS,
+} from '@bike4mind/server-utils/queueHandlers/utils';
 import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
 import { makeDataLakeSpendNotifier } from '@workers/utils/dataLakeSpendNotifier';
 import { getSettingsByNames } from '@bike4mind/utils';

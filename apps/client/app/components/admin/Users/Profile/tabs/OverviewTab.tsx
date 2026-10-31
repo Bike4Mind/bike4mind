@@ -4,9 +4,10 @@ import { USER_TIMELINE_TYPES, resolveUserStorageLimit, storageLimitToBytes, type
 import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
-import UserSubscriptionStatus from '../../Details/UserSubscriptionStatus';
+import { SubscriptionSummaryList } from '../../../Subscriptions/SubscriptionSummaryList';
 import { Fact, SectionCard, StatusChip, formatUtc } from '../../../shared';
 import type { ProfileAction } from '../actions/profileActions';
+import { RiskEvidenceCard } from '../RiskEvidenceCard';
 import { UserNotesCard } from './UserNotesCard';
 import { OrganizationsCard } from './OrganizationsCard';
 import { HeaderAction, RowAction } from './cardActions';
@@ -217,6 +218,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
       <AccountCard user={user} onAction={onAction} />
       <OrganizationsCard user={user} onAudit={onAudit} />
       <AccessCard user={user} onAction={onAction} />
+      <RiskEvidenceCard userId={user.id} />
       <SectionCard
         title="Subscription"
         body="custom"
@@ -227,8 +229,8 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
         }
         data-testid="user-profile-subscription-card"
       >
-        <Box sx={{ p: 2 }}>
-          <UserSubscriptionStatus user={user} />
+        <Box sx={{ p: 0.5 }}>
+          <SubscriptionSummaryList userId={user.id} />
         </Box>
       </SectionCard>
     </Stack>

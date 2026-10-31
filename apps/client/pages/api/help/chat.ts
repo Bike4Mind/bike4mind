@@ -221,6 +221,7 @@ const handler = baseApi()
                 inputTokens,
                 costUsd: getEmbeddingModelCost(model, inputTokens),
                 forceCreditBilling: true,
+                apiKeyId: req.apiKeyInfo?.keyId,
               },
               {
                 db: {

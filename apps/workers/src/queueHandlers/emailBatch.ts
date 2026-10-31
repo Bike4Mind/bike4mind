@@ -13,7 +13,7 @@ import {
   IEmailSendAttemptDocument,
   requireEnv,
 } from '@bike4mind/common';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import mailer from '@server/utils/mailer';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { SQSBatchResponse } from 'aws-lambda';

@@ -10,7 +10,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
-import { enforceSubmitRateLimits, memberOrgIdsFor } from '@server/skillMarket/market';
+import { enforceSubmitRateLimits, memberOrgIdsFor } from '@bike4mind/server-utils/skillMarket/market';
 import { searchListings } from '@server/skillMarket/search';
 import { publishListing } from '@server/skillMarket/author';
 import { toPublicListing, toPublicVersion } from '@server/skillMarket/publicView';

@@ -1637,7 +1637,7 @@ if (isMonitoredStage) {
    * Slack-forwarding subscription rather than duplicating that wiring for a single alarm.
    *
    * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
-   * from server/integrations/slack/slack.ts's postFeedbackToSlack and
+   * from packages/server-utils/src/integrations/slack/slack.ts's postFeedbackToSlack and
    * pages/api/feedback/index.ts's email path.
    * Namespace: Lumina5/FeedbackDelivery / DeliveryFailed. Reads the coarse `{ Stage }`-only
    * rollup entry (see buildFeedbackDeliveryFailureMetrics), the same pattern

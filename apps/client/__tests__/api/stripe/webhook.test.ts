@@ -74,7 +74,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   },
 }));
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     updateByStripeSubscriptionIdReturningBefore: (...args: unknown[]) => mockUpdateByStripeSubscriptionId(...args),
     markPastDue: (...args: unknown[]) => mockMarkPastDue(...args),
@@ -87,7 +87,7 @@ vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyCanceledForNonPayment: vi.fn(),
 }));
 
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
 }));
 
@@ -97,7 +97,7 @@ vi.mock('@server/integrations/slack/subscriptionLifecycle', async importOriginal
   postSubscriptionLifecycleToSlack: (...args: unknown[]) => mockPostSubscriptionLifecycleToSlack(...args),
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: (...args: unknown[]) => mockSendToClient(...args),
 }));
 
@@ -112,12 +112,12 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
 }));
 
 const mockVoidOpenSubscriptionInvoices = vi.fn();
-vi.mock('@server/integrations/stripe/dunning', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: (...args: unknown[]) => mockVoidOpenSubscriptionInvoices(...args),
 }));
 
 const mockLogEventSafe = vi.fn();
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEventSafe: (...args: unknown[]) => mockLogEventSafe(...args),
 }));
 
@@ -157,7 +157,7 @@ vi.mock('@server/billing/linkedAccounts', () => ({
 // The real source-product emitter runs (signupEvents.ts); only the network edge is mocked, with an
 // ingest key for one made-up product.
 const mockEmitProductEvent = vi.fn();
-vi.mock('@server/analytics/emitActiveEvent', () => ({
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
   HOST_PRODUCT_ID: 'bike4mind',
   emitProductEvent: (...args: unknown[]) => mockEmitProductEvent(...args),
   ingestKeyFor: (p: string) => (p === 'widgets' ? 'key' : undefined),

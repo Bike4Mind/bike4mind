@@ -2,19 +2,23 @@ import {
   ResearchModeParamsSchema,
   ModelInfo,
   createReasoningWithholder,
+  estimateStreamedOutputTokens,
   reasoningChannelOf,
   withholdsReasoning,
   type ThinkingVisibility,
 } from '@bike4mind/common';
 import { type ICompletionOptions, getLlmByModel, resolveOutputMaxTokens } from '@bike4mind/llm-adapters';
+import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import { Logger } from '@bike4mind/observability';
 import { DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
 import { z } from 'zod';
 
 export interface ResearchModeResult {
   configurationId: string;
-  /** The configuration's model, which its usage is priced on. */
+  /** The configuration's requested model, which its ledger row names; the only model the client sees. */
   model: string;
+  /** The model that ran, when a restricted user's request was substituted; it prices the usage. */
+  runModel?: string;
   success: boolean;
   /** Characters streamed before the configuration finished or failed, to price an interrupted run. */
   streamedChars: number;
@@ -44,6 +48,43 @@ export function researchConfigMaxTokens(
   });
 }
 
+const CONFIG_TIMEOUT_BASE_MS = 120_000;
+const CONFIG_TIMEOUT_CAP_MS = 600_000;
+// Slowest sustained output rate a configuration is expected to manage (Opus-class), in tokens/s.
+const MIN_OUTPUT_TOKENS_PER_SECOND = 40;
+// How long a timed-out configuration's aborted stream may take to stop and report its usage.
+const TIMEOUT_DRAIN_MS = 10_000;
+
+/**
+ * How long a research configuration may run: a base for time-to-first-token and tool rounds, plus
+ * its output budget at the slowest expected rate, capped so a stuck provider still gives up.
+ */
+export function researchConfigTimeoutMs(maxTokens: number | undefined): number {
+  if (!maxTokens || maxTokens < 0) return CONFIG_TIMEOUT_BASE_MS;
+  return Math.min(
+    CONFIG_TIMEOUT_CAP_MS,
+    CONFIG_TIMEOUT_BASE_MS + Math.ceil((maxTokens / MIN_OUTPUT_TOKENS_PER_SECOND) * 1000)
+  );
+}
+
+// Usage counts only: a timed-out stream's last info can be a mid-stream chunk carrying thinking text.
+function reportedUsage(info: { inputTokens?: unknown; outputTokens?: unknown } | undefined) {
+  return typeof info?.inputTokens === 'number' && typeof info.outputTokens === 'number'
+    ? { inputTokens: info.inputTokens, outputTokens: info.outputTokens }
+    : undefined;
+}
+
+async function drainCompletion(completion: Promise<unknown>): Promise<void> {
+  let handle: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    completion.catch(() => undefined),
+    new Promise(resolve => {
+      handle = setTimeout(resolve, TIMEOUT_DRAIN_MS);
+    }),
+  ]);
+  clearTimeout(handle);
+}
+
 export class ResearchModeService {
   constructor(
     private apiKeyTable: any,
@@ -51,7 +92,9 @@ export class ResearchModeService {
     private logger: Logger,
     // Internal id of the end user this research run is on behalf of, forwarded
     // to direct providers for per-user abuse attribution. See toProviderEndUserId.
-    private endUserId?: string
+    private endUserId?: string,
+    // The model each configuration actually runs on; results keep reporting the configured id.
+    private runModelFor?: (requested: ModelInfo) => ModelInfo
   ) {}
 
   async processResearchMode(
@@ -112,15 +155,25 @@ export class ResearchModeService {
     let finalResponse = '';
     // Billed on what streamed, withheld reasoning included.
     let streamedChars = 0;
+    // Set once the run model is known, so a failure after that is still priced at the model that ran.
+    let runModelField: { runModel?: string } = {};
+    let completionInfo: any = undefined;
+    // Per configuration, so a timeout stops this provider stream without cancelling the quest or siblings.
+    const configAbort = new AbortController();
+    const onQuestAbort = () => configAbort.abort();
+    let timedOut = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       this.logger.info(`🔬 [Research Mode] Processing configuration: ${config.label || config.model} (${config.id})`);
 
       // Get model info for this configuration
-      const modelInfo = this.modelInfos.find(m => m.id === config.model);
-      if (!modelInfo) {
+      const requestedModelInfo = this.modelInfos.find(m => m.id === config.model);
+      if (!requestedModelInfo) {
         throw new Error(`Model ${config.model} not found`);
       }
-      const reasoningWithholder = withholdsReasoning(thinkingVisibility, config.model)
+      const modelInfo = this.runModelFor?.(requestedModelInfo) ?? requestedModelInfo;
+      if (modelInfo.id !== requestedModelInfo.id) runModelField = { runModel: modelInfo.id };
+      const reasoningWithholder = withholdsReasoning(thinkingVisibility, modelInfo.id)
         ? createReasoningWithholder(reasoningChannelOf(modelInfo))
         : null;
 
@@ -135,8 +188,7 @@ export class ResearchModeService {
         throw new Error(`Failed to get LLM instance for model ${config.model}`);
       }
 
-      // Prepare options with configuration-specific parameters. Only set abortSignal when the
-      // caller supplied one, so the uncancelled path sends exactly the options it did before.
+      // Prepare options with configuration-specific parameters
       const options: ICompletionOptions = {
         ...baseOptions,
         temperature: config.parameters?.temperature ?? baseOptions.temperature,
@@ -144,68 +196,71 @@ export class ResearchModeService {
         topP: config.parameters?.topP ?? baseOptions.topP,
         presencePenalty: config.parameters?.presencePenalty ?? baseOptions.presencePenalty,
         frequencyPenalty: config.parameters?.frequencyPenalty ?? baseOptions.frequencyPenalty,
-        ...(abortSignal ? { abortSignal } : {}),
+        abortSignal: configAbort.signal,
+        ...(modelInfo.id !== requestedModelInfo.id
+          ? { modelIdentityId: requestedModelInfo.id, modelDisplayName: requestedModelInfo.name }
+          : {}),
       };
 
-      let completionInfo: any = undefined;
-
-      // Create a timeout promise (120 seconds timeout)
-      const TIMEOUT_MS = 120000;
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(new Error(`Timeout after ${TIMEOUT_MS / 1000} seconds`)), TIMEOUT_MS);
+      // Sized on what the adapter really sends (raised for thinking), the same ceiling the credit hold uses.
+      const timeoutMs = researchConfigTimeoutMs(
+        options.maxTokens && sentMaxTokensFor(modelInfo, options.thinking, options.maxTokens)
+      );
+      // Settles the race promptly on a Stop or timeout even if the adapter ignores the signal. The
+      // race subscribes to it, so a rejection after the race has settled is handled, not unhandled.
+      const stopped = new Promise<never>((_, reject) => {
+        configAbort.signal.addEventListener(
+          'abort',
+          () => reject(new Error(timedOut ? `Timeout after ${Math.round(timeoutMs / 1000)} seconds` : 'Cancelled')),
+          { once: true }
+        );
       });
+      abortSignal?.addEventListener('abort', onQuestAbort, { once: true });
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        configAbort.abort();
+      }, timeoutMs);
 
-      // Reject promptly on abort too, so a Stop unblocks this configuration even if the
-      // adapter ignores the signal. The race subscribes to this promise, so a rejection
-      // after the race has already settled is handled and does not surface as unhandled.
-      let onAbort: (() => void) | undefined;
-      const abortPromise = new Promise<never>((_, reject) => {
-        if (!abortSignal) return;
-        onAbort = () => reject(new Error('Cancelled'));
-        if (abortSignal.aborted) {
-          onAbort();
-          return;
+      const completion = llm.complete(
+        modelInfo.id,
+        // Each configuration gets its own copy: backends append their tool rounds in place, in
+        // their own provider's shape, and the configurations run in parallel.
+        [...messages],
+        options,
+        async (rawTexts: (string | null | undefined)[], rawInfo?: any) => {
+          for (const text of rawTexts) streamedChars += text?.length ?? 0;
+          // The configuration already failed; the aborted stream is only drained for its usage.
+          if (timedOut) {
+            if (rawInfo) completionInfo = rawInfo;
+            return;
+          }
+          const streamedTexts = reasoningWithholder
+            ? rawTexts.map(text => (text ? reasoningWithholder.visible(text, rawInfo?.channel) : text))
+            : rawTexts;
+          // Research mode runs its own tool loop, so no thinking block needs to reach the client.
+          const info = reasoningWithholder && rawInfo?.thinking ? { ...rawInfo, thinking: undefined } : rawInfo;
+
+          // Forward streaming data with configuration ID
+          await onStream(config.id, streamedTexts, info);
+
+          // Accumulate response
+          if (streamedTexts.some(text => text != null)) {
+            finalResponse += streamedTexts.filter(text => text != null).join('');
+          }
+
+          if (info) {
+            completionInfo = info;
+          }
         }
-        abortSignal.addEventListener('abort', onAbort, { once: true });
-      });
+      );
 
       try {
-        // Race between the LLM completion, the timeout, and cancellation
-        await Promise.race([
-          llm.complete(
-            config.model,
-            // Each configuration gets its own copy: backends append their tool rounds in place, in
-            // their own provider's shape, and the configurations run in parallel.
-            [...messages],
-            options,
-            async (rawTexts: (string | null | undefined)[], rawInfo?: any) => {
-              for (const text of rawTexts) streamedChars += text?.length ?? 0;
-              const streamedTexts = reasoningWithholder
-                ? rawTexts.map(text => (text ? reasoningWithholder.visible(text, rawInfo?.channel) : text))
-                : rawTexts;
-              // Research mode runs its own tool loop, so no thinking block needs to reach the client.
-              const info = reasoningWithholder && rawInfo?.thinking ? { ...rawInfo, thinking: undefined } : rawInfo;
-
-              // Forward streaming data with configuration ID
-              await onStream(config.id, streamedTexts, info);
-
-              // Accumulate response
-              if (streamedTexts.some(text => text != null)) {
-                finalResponse += streamedTexts.filter(text => text != null).join('');
-              }
-
-              if (info) {
-                completionInfo = info;
-              }
-            }
-          ),
-          timeoutPromise,
-          abortPromise,
-        ]);
-      } finally {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
-        if (abortSignal && onAbort) abortSignal.removeEventListener('abort', onAbort);
+        await Promise.race([completion, stopped]);
+      } catch (error) {
+        // The provider keeps reporting until its aborted stream really stops, so wait (bounded) for
+        // that to bill what it consumed. A Stop is not drained, so it still returns at once.
+        if (timedOut) await drainCompletion(completion);
+        throw error;
       }
       const heldText = reasoningWithholder?.flush();
       if (heldText) {
@@ -218,21 +273,48 @@ export class ResearchModeService {
       return {
         configurationId: config.id,
         model: config.model,
+        ...runModelField,
         success: true,
         response: finalResponse,
         streamedChars,
         completionInfo,
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      if (timedOut) {
+        // A handled outcome, so warn rather than page the error alert path.
+        this.logger.warn(`\u{1F52C} [Research Mode] Configuration ${config.id} timed out: ${message}`);
+        const usage = reportedUsage(completionInfo);
+        return {
+          configurationId: config.id,
+          model: config.model,
+          ...runModelField,
+          success: false,
+          streamedChars,
+          error: message,
+          // Saved as billed: the last report can predate output streamed after it (researchModeUsages).
+          completionInfo: usage && {
+            ...usage,
+            outputTokens: Math.max(
+              usage.outputTokens,
+              estimateStreamedOutputTokens(streamedChars, runModelField.runModel ?? config.model)
+            ),
+          },
+        };
+      }
       this.logger.error(`🔬 [Research Mode] Configuration ${config.id} failed:`, error);
 
       return {
         configurationId: config.id,
         model: config.model,
+        ...runModelField,
         success: false,
         streamedChars,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: message,
       };
+    } finally {
+      clearTimeout(timeoutHandle);
+      abortSignal?.removeEventListener('abort', onQuestAbort);
     }
   }
 }

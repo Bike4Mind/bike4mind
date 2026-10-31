@@ -1,4 +1,4 @@
-import { withWebSocketContext, sendToClient } from '@server/websocket/utils';
+import { withWebSocketContext, sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { pickRealtimeVoiceTier } from '@server/voice/realtimeVoicePricing';
 import {

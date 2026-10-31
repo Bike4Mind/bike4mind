@@ -23,7 +23,7 @@ vi.mock('@bike4mind/server-utils/auth/signupNetworkSignals', () => ({
   hashSignupNetwork: (ip: string | null) => ({ ipHash: ip ? `hash:${ip}` : null, prefixHash: null }),
   MAX_COUNTED_ROWS: 5000,
 }));
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlackWithOutcome: mocks.postMessageToSlackWithOutcome,
 }));
 

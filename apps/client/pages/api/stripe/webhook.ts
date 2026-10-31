@@ -10,10 +10,10 @@ import {
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { CreditHolderType, CreditPurchaseEvents, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { StripeEvents } from '@server/utils/eventBus';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -22,16 +22,16 @@ import {
   isStripeConfigured,
   stripe,
 } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
+import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
 import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import {
   adminOwnerSlackRef,
   endedLifecycleEvent,
   paymentFailedLifecycleEvent,
   postSubscriptionLifecycleToSlack,
 } from '@server/integrations/slack/subscriptionLifecycle';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
@@ -47,6 +47,7 @@ import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billin
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import { emitBillingEvent, emitPurchaseEvents } from '@server/analytics/signupEvents';
+import { reverseSubscriptionRewardForRefund } from '@server/referrals/subscriptionReward';
 import {
   creditBuyerForEvents,
   planDetails,
@@ -464,6 +465,13 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       let user = null;
 
       if (paymentIntentId) {
+        await reverseSubscriptionRewardForRefund({
+          paymentIntentId,
+          amountRefunded: dispute.amount,
+          amountCaptured: dispute.amount,
+          reason: 'disputed',
+        });
+
         const originalTx = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
         if (originalTx) {
           user = await userRepository.findById(originalTx.ownerId);
@@ -608,6 +616,18 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
     case 'charge.refunded': {
       const charge = event.data.object;
+      const refundPaymentIntentId =
+        typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
+
+      // Runs before the refund-list guard: newer webhook API versions omit charge.refunds, and the reward only needs the cumulative amount.
+      if (refundPaymentIntentId) {
+        await reverseSubscriptionRewardForRefund({
+          paymentIntentId: refundPaymentIntentId,
+          amountRefunded: charge.amount_refunded,
+          amountCaptured: charge.amount_captured || charge.amount,
+        });
+      }
+
       const refunds = charge.refunds?.data ?? [];
       if (refunds.length === 0) {
         req.logger.debug(`charge.refunded has no refund objects, skipping`);
@@ -616,9 +636,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       // Before the purchase lookup: a refunded subscription charge has no credit purchase row.
       await forfeitHeldUnlockForRefund(charge, req.logger);
-
-      const refundPaymentIntentId =
-        typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
 
       if (!refundPaymentIntentId) {
         req.logger.debug(`charge.refunded has no payment_intent, skipping`);

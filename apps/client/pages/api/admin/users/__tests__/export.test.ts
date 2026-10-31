@@ -70,7 +70,12 @@ describe('GET /api/admin/users/export', () => {
   });
 
   it('rejects an invalid filter with 400', async () => {
-    expect((await call({ status: 'bogus' }))._getStatusCode()).toBe(400);
+    const res = await call({ status: 'bogus' });
+    expect(res._getStatusCode()).toBe(400);
+    const { error, issues } = res._getJSONData() as { error: string; issues: unknown[] };
+    expect(typeof error).toBe('string');
+    expect(error.length).toBeGreaterThan(0);
+    expect(Array.isArray(issues)).toBe(true);
     expect(mockExport).not.toHaveBeenCalled();
   });
 });

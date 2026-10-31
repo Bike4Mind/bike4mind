@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -65,7 +69,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 import '@pages/api/organizations/[id]/members/index';
 

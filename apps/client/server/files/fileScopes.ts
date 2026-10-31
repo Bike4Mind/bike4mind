@@ -1,5 +1,9 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
+import {
+  assertApiKeyScope,
+  holdsApiKeyScope,
+  type ScopedRequest,
+} from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**

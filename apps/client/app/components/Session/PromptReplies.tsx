@@ -73,7 +73,7 @@ import {
   parseArtifactsWithFallback,
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
-} from '@client/app/utils/artifactParser';
+} from '@bike4mind/server-utils/app/utils/artifactParser';
 import { groupReactArtifacts } from '@client/app/utils/reactArtifactGroup';
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';

@@ -20,7 +20,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   return { getFilesStorage: () => storage };
 });
 
-vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/github/github-repo-helper', () => ({
@@ -42,7 +42,7 @@ vi.mock('@bike4mind/slack', () => {
 import { fabFileRepository, Quest, Session } from '@bike4mind/database';
 import { SlackDevWorkspace, OrgSlackWorkspace } from '@bike4mind/database/infra';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';

@@ -1,5 +1,6 @@
 import { CREDITS_PER_USD_COST, CreditHolderType, getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 const m = vi.hoisted(() => ({
   deductCredits: vi.fn(),
@@ -13,6 +14,7 @@ const m = vi.hoisted(() => ({
   recordUsageEvent: vi.fn(),
   getSettingsMap: vi.fn(async (..._args: unknown[]) => ({})),
   enforceCredits: true,
+  tokenCounter: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', async () => ({
@@ -22,11 +24,16 @@ vi.mock('@bike4mind/database', async () => ({
   organizationRepository: { findById: m.orgFindById, incrementCredits: m.orgIncrement },
   userRepository: { findById: m.userFindById, incrementCredits: m.userIncrement },
   usageEventRepository: { record: m.recordUsageEvent },
+  cacheRepository: { tryAddWithinLimitFixedWindow: m.tokenCounter },
   // No samples and no settings rows: the spend cap reads defaults and never refuses here.
   newAccountSpendCapAdapters: {
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     personalSpendSince: async () => [],
   },
+}));
+vi.mock('@bike4mind/services/llm/shadowTier', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/llm/shadowTier')>()),
+  loadShadowTierSettings: vi.fn(async () => ({ allowlist: [], dailyTokenCap: 20000 })),
 }));
 vi.mock('@bike4mind/services', async () => {
   const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
@@ -296,6 +303,25 @@ describe('meterPlatformCompletion credits', () => {
     }
   );
 
+  it("stamps a queued turn's API key on the ledger row and usage event without changing the billing owner", async () => {
+    m.findBySettingName.mockResolvedValue(null);
+    const metered = await createRequestCompletionMeter(req(), 'queued chat', { apiKeyId: 'k-queued' })(
+      model,
+      [],
+      1000,
+      [model]
+    );
+
+    await metered.settle({ inputTokens: 1000, outputTokens: 500 });
+
+    expect(m.deductCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKeyId: 'k-queued', source: undefined }),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(m.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'k-queued' }));
+  });
+
   it('holds the ceiling once per provider turn and charges one turn when no usage is reported', async () => {
     m.findBySettingName.mockResolvedValue(null);
     const messages = [{ role: 'user' as const, content: 'x'.repeat(250) }];
@@ -304,6 +330,88 @@ describe('meterPlatformCompletion credits', () => {
     expect(1000 - balance).toBeGreaterThanOrEqual(3 * oneTurnCredits - 2);
     await metered.settle({});
     expect(1000 - balance).toBeLessThanOrEqual(oneTurnCredits + 1);
+  });
+});
+
+describe('meterPlatformCompletion for a restricted-tier caller', () => {
+  const restrictedReq = () => ({ user: user({ throttle: { tier: 'shadow' } }), logger, headers: {} }) as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.enforceCredits = true;
+    m.recordUsageEvent.mockResolvedValue(undefined);
+    m.userFindById.mockResolvedValue({ id: 'u1', isAdmin: false });
+    m.tokenCounter.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
+  });
+
+  it('does not reserve or record restricted tokens for a stored admin with a withheld role', async () => {
+    const owner = withholdAdminRole({ id: 'u1', isAdmin: true, tags: [], throttle: { tier: 'shadow' as const } });
+    const request = { user: owner, logger, headers: {} } as never;
+    m.userIncrement.mockResolvedValue({ currentCredits: 1000 });
+    m.tokenCounter.mockResolvedValue({ success: false, count: 20000, expiresAt: new Date() });
+    expect(owner.isAdmin).toBe(false);
+
+    const reservation = await reserveCompletionCredits(request, 0.01, 'completion');
+    await settleCompletion(reservation, request, {
+      model: 'sonnet',
+      provider: 'anthropic',
+      usd: 0.001,
+      inputTokens: 100,
+      outputTokens: 20,
+    });
+
+    expect(m.tokenCounter).not.toHaveBeenCalled();
+  });
+
+  it('over the daily token cap is refused with the same 422 an empty balance gets', async () => {
+    m.userIncrement.mockResolvedValue({ currentCredits: -5 });
+    const empty = await reserveCompletionCredits(req(), 0.01, 'Lattice chat').catch(err => err);
+    m.tokenCounter.mockResolvedValue({ success: false, count: 20000, expiresAt: new Date() });
+    const overCap = await reserveCompletionCredits(restrictedReq(), 0.01, 'Lattice chat').catch(err => err);
+
+    const shape = (err: { statusCode: number; additionalInfo: unknown; message: string }) => ({
+      statusCode: err.statusCode,
+      additionalInfo: err.additionalInfo,
+      message: err.message.replace(/\d+/g, 'N'),
+    });
+    expect(empty.additionalInfo).toEqual({ errorCode: 'insufficient_credits' });
+    expect(shape(overCap)).toEqual(shape(empty));
+  });
+
+  it('adds settled tokens to the daily counter and leaves other callers alone', async () => {
+    m.userIncrement.mockResolvedValue({ currentCredits: 1000 });
+    const reservation = await reserveCompletionCredits(restrictedReq(), 0.01, 'Lattice chat');
+    await settleCompletion(reservation, restrictedReq(), {
+      model: 'sonnet',
+      provider: 'anthropic',
+      usd: 0.001,
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadInputTokens: 5,
+    });
+    expect(m.tokenCounter).toHaveBeenCalledWith(
+      expect.stringMatching(/^shadow-tokens:u1:/),
+      1,
+      20000,
+      expect.any(Number)
+    );
+    expect(m.tokenCounter).toHaveBeenCalledWith(
+      expect.stringMatching(/^shadow-tokens:u1:/),
+      125,
+      Number.MAX_SAFE_INTEGER,
+      expect.any(Number)
+    );
+
+    m.tokenCounter.mockClear();
+    const other = await reserveCompletionCredits(req(), 0.01, 'Lattice chat');
+    await settleCompletion(other, req(), {
+      model: 'sonnet',
+      provider: 'anthropic',
+      usd: 0.001,
+      inputTokens: 1,
+      outputTokens: 1,
+    });
+    expect(m.tokenCounter).not.toHaveBeenCalled();
   });
 });
 

@@ -109,6 +109,7 @@ export const GenericDeductReasons = [
   'optihashi_cost_chargeup',
   'credit_expiry',
   'abuse_clawback',
+  'referral_reward_takeback',
 ] as const;
 
 /**
@@ -219,6 +220,7 @@ const CacheTokenFields = {
 // Usage transactions with service-specific details
 export const TextGenerationUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('text_generation_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   questId: z.string(),
   sessionId: z.string(),
@@ -229,6 +231,7 @@ export const TextGenerationUsageTransaction = BaseCreditTransaction.extend({
 
 export const ImageGenerationUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('image_generation_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   questId: z.string(),
   sessionId: z.string(),
@@ -236,6 +239,7 @@ export const ImageGenerationUsageTransaction = BaseCreditTransaction.extend({
 
 export const ImageEditUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('image_edit_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   questId: z.string(),
   sessionId: z.string(),
@@ -243,6 +247,7 @@ export const ImageEditUsageTransaction = BaseCreditTransaction.extend({
 
 export const VideoGenerationUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('video_generation_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   questId: z.string(),
   sessionId: z.string(),
@@ -250,6 +255,7 @@ export const VideoGenerationUsageTransaction = BaseCreditTransaction.extend({
 
 export const RealtimeVoiceUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('realtime_voice_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   sessionId: z.string(),
   /** Idempotency key for a per-response charge; the unique sparse index rejects a replay. */
@@ -258,6 +264,7 @@ export const RealtimeVoiceUsageTransaction = BaseCreditTransaction.extend({
 
 export const ToolUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('tool_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   /**
    * The model that actually incurred the tool cost (e.g. 'gpt-image-2'), NOT the chat
    * model of the quest that ran the tool. The row is one aggregate over every charging
@@ -294,24 +301,28 @@ export const DecisionUsageTransaction = BaseCreditTransaction.extend({
 
 export const SpeechToTextUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('speech_to_text_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   sessionId: z.string(),
 });
 
 export const TextToSpeechUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('text_to_speech_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   sessionId: z.string(),
 });
 
 export const SoundEffectsUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('sound_effects_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   sessionId: z.string(),
 });
 
 export const MusicGenerationUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('music_generation_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   sessionId: z.string(),
 });
@@ -492,8 +503,9 @@ export interface ILedgerPage {
 }
 
 /**
- * One API key's usage rolled up from the ledger (completion_api_usage and
- * decision_usage rows, which carry `apiKeyId`). Credits are the spend magnitude (positive). The
+ * One API key's usage rolled up from the ledger rows that carry `apiKeyId`. `requests` counts only
+ * completion_api_usage and decision_usage rows (one per request); credits and tokens sum every
+ * key-attributed row. Credits are the spend magnitude (positive). The
  * ledger has no COGS, so this cut carries tokens + credits only, not cogsUsd.
  */
 export interface IApiKeyUsage {

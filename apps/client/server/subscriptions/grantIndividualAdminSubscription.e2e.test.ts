@@ -8,7 +8,7 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { User } from '@bike4mind/database';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { grantIndividualAdminSubscription } from './grantIndividualAdminSubscription';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

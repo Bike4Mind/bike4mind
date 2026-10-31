@@ -270,7 +270,26 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
     filters: AuditLogFilters,
     page: { limit: number; cursor?: AuditLogCursor }
   ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }> {
-    const clauses = buildFilterClauses(filters);
+    return this.listPage(buildFilterClauses(filters), page);
+  }
+
+  async listForSubscription(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }> {
+    const { owner, subscriptionIds } = scope;
+    const ownerClause: FilterClause =
+      owner.kind === 'user'
+        ? { 'target.kind': 'user', 'target.id': owner.id }
+        : { $or: [{ organizationId: owner.id }, { 'target.kind': 'organization', 'target.id': owner.id }] };
+    return this.listPage([ownerClause, { 'details.subscriptionId': { $in: subscriptionIds } }], page);
+  }
+
+  private async listPage(
+    baseClauses: FilterClause[],
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }> {
+    const clauses = [...baseClauses];
     if (page.cursor) clauses.push(...buildCursorClauses(page.cursor));
 
     const records = await this.auditLogModel

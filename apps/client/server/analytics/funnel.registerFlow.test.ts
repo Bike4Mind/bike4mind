@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mockConsent, mockUserUpdate } = vi.hoisted(() => ({ mockConsent: vi.fn(), mockUserUpdate: vi.fn() }));
 vi.mock('@client/app/utils/consentRegion', () => ({ resolveConsent: mockConsent }));
-vi.mock('./emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: vi.fn() }));
 vi.mock('@server/referrals/firstAnswerReward', () => ({ rewardInviterForFirstAnswer: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 vi.mock('@bike4mind/database', () => ({

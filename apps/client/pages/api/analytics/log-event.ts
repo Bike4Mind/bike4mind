@@ -1,6 +1,6 @@
 import { CreditPurchaseEvents, FirstRunEvents } from '@bike4mind/common';
 import { AnalyticsEventPayloads } from '@bike4mind/server-utils/types/analytics/index';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';

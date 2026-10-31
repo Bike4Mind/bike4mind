@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FabFile } from '@bike4mind/database';
 import {
@@ -88,7 +89,7 @@ async function sourceFabFileBody(file: {
   return { ok: false, status: 422, error: 'File has no readable content to publish' };
 }
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }

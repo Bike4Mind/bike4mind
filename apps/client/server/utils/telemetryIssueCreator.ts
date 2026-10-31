@@ -18,7 +18,7 @@ import {
   type HistoricalBaselines,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import { cacheTelemetryAnalysisOnQuest } from '@server/utils/telemetryAnalysisCache';
 import {
   generateTelemetryFingerprint,
@@ -40,7 +40,7 @@ import {
   type LLMAnalysis,
   type SloConfig,
   type AnalysisSource,
-} from '@server/utils/telemetryAnalysis';
+} from '@bike4mind/server-utils/utils/telemetryAnalysis';
 
 // Types
 

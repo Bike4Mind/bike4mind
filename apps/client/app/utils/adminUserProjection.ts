@@ -43,6 +43,9 @@ export const ADMIN_USER_LIST_FIELDS = [
   // admin activity view reads them here. Intentional admin-only exposure, not serialize-everywhere.
   'loginRecords',
   'signupMeta',
+  // Restricted-tier state: admin-only like loginRecords, in USER_SECRET_FIELDS for every self view.
+  'throttle',
+  'riskSignals',
   'subscribedUntil',
   'numReferralsAvailable',
   'currentCredits',

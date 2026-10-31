@@ -27,7 +27,7 @@ const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() 
 
 const sendToClient = vi.hoisted(() => vi.fn());
 const getSettingsMap = vi.hoisted(() => vi.fn(async () => ({})));
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: (handler: (...args: unknown[]) => unknown) => (event: unknown) => handler(event, {}, logger),
   sendToClient,
 }));

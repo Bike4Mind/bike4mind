@@ -336,6 +336,43 @@ describe('reserveRequestCredits', () => {
     });
   });
 
+  describe('API-key attribution on the settled ledger row', () => {
+    const reserve = (apiKeyInfo?: unknown) =>
+      reserveRequestCredits({ req: userReq(apiKeyInfo), requiredCredits: 2, enforceCredits: true, featureLabel: 'x' });
+
+    it('records the authenticating key on the row', async () => {
+      const reservation = await reserve({ keyId: 'key-1', billingOwnerType: CreditHolderType.User });
+
+      await reservation.settle(1, ledger);
+
+      expect(deductCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKeyId: 'key-1' }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('keeps a key the entry already names', async () => {
+      const reservation = await reserve({ keyId: 'key-1', billingOwnerType: CreditHolderType.User });
+
+      await reservation.settle(1, { ...ledger, apiKeyId: 'key-explicit' });
+
+      expect(deductCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKeyId: 'key-explicit' }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('records no key for a JWT caller', async () => {
+      const reservation = await reserve();
+
+      await reservation.settle(1, ledger);
+
+      expect(deductCredits.mock.calls.at(-1)?.[0]).not.toHaveProperty('apiKeyId');
+    });
+  });
+
   it('bills the organization pool for an org-billed API key', async () => {
     orgFindById.mockResolvedValue({ id: 'o1', currentCredits: 50, userDetails: [], users: [{ userId: 'u1' }] });
     orgIncrement.mockResolvedValue({ currentCredits: 50 });

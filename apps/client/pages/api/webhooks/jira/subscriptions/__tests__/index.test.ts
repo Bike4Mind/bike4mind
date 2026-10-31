@@ -58,7 +58,7 @@ vi.mock('@bike4mind/database', () => ({
     findByUserId: vi.fn(async () => []),
   },
 }));
-vi.mock('@server/integrations/jira/atlassianTokenManager', () => ({
+vi.mock('@bike4mind/server-utils/integrations/jira/atlassianTokenManager', () => ({
   AtlassianTokenManager: { getValidTokens: mockGetValidTokens },
 }));
 vi.mock('@server/integrations/jira/types', () => ({ validateFilters: vi.fn(() => undefined) }));

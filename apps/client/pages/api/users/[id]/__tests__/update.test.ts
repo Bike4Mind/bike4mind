@@ -13,8 +13,10 @@ const {
   mockPropagateAccountRisk,
   mockRecord,
   mockDeny,
+  mockSetThrottleTier,
   txnState,
 } = vi.hoisted(() => ({
+  mockSetThrottleTier: vi.fn(),
   mockRecord: vi.fn(),
   mockDeny: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -83,6 +85,7 @@ vi.mock('@bike4mind/services', async orig => ({
     // The real block-state rules, so a snapshot missing any block field is caught.
     entersBlockedState: (await orig<typeof import('@bike4mind/services')>()).userService.entersBlockedState,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
+    setThrottleTier: (...a: unknown[]) => mockSetThrottleTier(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
     // Both stand-ins are real allowlists (not passthrough) so the discarded-field
     // detection under test actually exercises Zod's strip-unknown-keys behavior.
@@ -103,6 +106,8 @@ vi.mock('@bike4mind/services', async orig => ({
       isModerated: z.boolean().optional(),
       statusChangeReason: z.string().optional(),
       moderationStatus: z.string().optional(),
+      throttleTier: z.enum(['none', 'shadow']).optional(),
+      throttleReason: z.string().optional(),
     }),
     updateUserSchema: z.object({
       name: z.string().optional(),
@@ -199,6 +204,7 @@ beforeEach(() => {
     throw new ForbiddenError('Admins cannot perform this action on their own account.');
   });
   mockUpdateUser.mockReset().mockResolvedValue(undefined);
+  mockSetThrottleTier.mockReset().mockResolvedValue({ changed: true, before: 'none', after: 'shadow' });
   mockCount.mockReset().mockResolvedValue(2);
   mockSessionEnded.mockReset().mockResolvedValue(undefined);
   txnState.changeRunning = false;
@@ -1033,7 +1039,7 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
           action: 'user.credits.adjusted',
           target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
           reason: CREDIT_REASON,
-          details: { credits },
+          details: { credits, selfGrant: false },
           changes: [{ field: 'currentCredits', before: 100, after: 100 + credits }],
           related: { creditTransactionId: 'ctx-1' },
         })
@@ -1103,36 +1109,39 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       expect(mockAdminUpdateUser.mock.calls[1][1].currentCredits).toBeUndefined();
     });
 
-    it('denies a self credit change with a 403 and user.credits.denied', async () => {
+    it('allows a self credit change and flags it in the audit entry', async () => {
       mockUserFindById.mockReturnValue(target({ id: ADMIN.id }));
-      const { promise } = run({
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: ADMIN.id }), creditAdjustment: adjustment(50) });
+      const { res, promise } = run({
         user: ADMIN,
         userId: ADMIN.id,
         body: { creditDelta: 50, creditReason: CREDIT_REASON },
       });
+      await promise;
 
-      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
-      expect(mockDeny).toHaveBeenCalledWith(
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockDeny).not.toHaveBeenCalled();
+      expect(mockRecord).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.credits.denied', attempted: 'user.credits.adjusted' })
+        expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: 50, selfGrant: true } })
       );
-      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
     });
 
-    it('denies an impersonating admin changing the credits of the account they impersonate from', async () => {
+    it('flags a credit change to the account an impersonating admin impersonates from', async () => {
       mockUserFindById.mockReturnValue(target({ id: 'A' }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: 'A' }), creditAdjustment: adjustment(50) });
       const { promise } = run({
         user: { id: 'B', isAdmin: true, impersonatedBy: 'A' },
         userId: 'A',
         body: { creditDelta: 50, creditReason: CREDIT_REASON },
       });
+      await promise;
 
-      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
-      expect(mockDeny).toHaveBeenCalledWith(
+      expect(mockDeny).not.toHaveBeenCalled();
+      expect(mockRecord).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.credits.denied', attempted: 'user.credits.adjusted' })
+        expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: 50, selfGrant: true } })
       );
-      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
     });
 
     it('still lets an admin edit their own profile without a credit change', async () => {
@@ -1361,5 +1370,91 @@ describe('PUT /api/users/:id/update - user.profile.updated audit', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(profileCalls()).toHaveLength(1);
+  });
+});
+
+describe('PUT /api/users/:id/update - restricted tier', () => {
+  const REASON = 'Signed up in bulk';
+  const body = (overrides: Record<string, unknown> = {}) => ({
+    throttleTier: 'shadow',
+    throttleReason: REASON,
+    ...overrides,
+  });
+
+  it('sets the tier through the service and records one throttle audit, no profile audit', async () => {
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: body() });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSetThrottleTier).toHaveBeenCalledWith(
+      'other-user',
+      'shadow',
+      { reason: REASON, source: 'admin', changedBy: 'admin1' },
+      expect.anything()
+    );
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.throttle_tier.changed',
+        target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
+        changes: [{ field: 'throttle.tier', before: 'none', after: 'shadow' }],
+        summary: expect.stringContaining(REASON),
+      })
+    );
+    expect(mockRecord.mock.calls[0][1].summary).toContain('admin');
+    expect(mockRecord.mock.calls.some(([, input]) => input.action === 'user.profile.updated')).toBe(false);
+  });
+
+  it('records the clear with before shadow and after none', async () => {
+    mockSetThrottleTier.mockResolvedValue({ changed: true, before: 'shadow', after: 'none' });
+    await run({ user: ADMIN, userId: 'other-user', body: body({ throttleTier: 'none' }) }).promise;
+
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.throttle_tier.changed',
+        changes: [{ field: 'throttle.tier', before: 'shadow', after: 'none' }],
+      })
+    );
+  });
+
+  it('writes no audit when the tier is unchanged', async () => {
+    mockSetThrottleTier.mockResolvedValue({ changed: false, before: 'shadow', after: 'shadow' });
+    await run({ user: ADMIN, userId: 'other-user', body: body() }).promise;
+
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('records inside the commitWithSessionEnd transaction', async () => {
+    let changeRunningAtRecord: boolean | undefined;
+    mockRecord.mockImplementation(async () => {
+      changeRunningAtRecord = txnState.changeRunning;
+      return null;
+    });
+    await run({ user: ADMIN, userId: 'other-user', body: body() }).promise;
+
+    expect(changeRunningAtRecord).toBe(true);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['blank', '   '],
+  ])('answers 400 and writes nothing when the reason is %s', async (_label, throttleReason) => {
+    const { promise } = run({ user: ADMIN, userId: 'other-user', body: body({ throttleReason }) });
+
+    await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the tier from a non-admin self update', async () => {
+    const { res, promise } = run({ user: { id: 'u1', isAdmin: false }, userId: 'u1', body: body() });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().ignoredFields).toContain('throttleTier');
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
   });
 });
