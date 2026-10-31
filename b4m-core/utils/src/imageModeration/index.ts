@@ -158,12 +158,14 @@ const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(res
 
 export class RekognitionImageModerationService implements ImageModerationService {
   private client: RekognitionClient;
-  private logger: Logger;
+  private readonly fixedLogger?: Logger;
   private sleep: (ms: number) => Promise<void>;
   private deadlineMs: number;
 
-  constructor(logger: Logger, client?: RekognitionClient, options: RekognitionImageModerationOptions = {}) {
-    this.logger = logger;
+  // Without a logger, resolve Logger.globalInstance per call so a long-lived instance logs with
+  // the current request's context instead of the one active at construction.
+  constructor(logger?: Logger, client?: RekognitionClient, options: RekognitionImageModerationOptions = {}) {
+    this.fixedLogger = logger;
     this.sleep = options.sleep ?? defaultSleep;
     this.deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
     // Same construction posture as S3Storage: region from env, ambient IAM creds.
@@ -174,6 +176,10 @@ export class RekognitionImageModerationService implements ImageModerationService
         region: process.env.AWS_REGION || 'us-east-2',
         maxAttempts: 1,
       });
+  }
+
+  private get logger(): Logger {
+    return this.fixedLogger ?? Logger.globalInstance;
   }
 
   /**

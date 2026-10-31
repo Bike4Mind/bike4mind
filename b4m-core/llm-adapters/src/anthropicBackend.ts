@@ -1,4 +1,5 @@
 import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
+import { providerFetchOptions } from './providerDispatcher';
 import type {
   MessageCreateParamsBase,
   ContentBlock,
@@ -63,6 +64,7 @@ import {
 import {
   buildThinkingParams,
   effortForComplexity,
+  applyAnthropicOutputCeiling,
   isAdaptiveThinkingByDefault,
   planReasoningEffort,
   resolveAnthropicEffort,
@@ -287,6 +289,7 @@ export class AnthropicBackend implements ICompletionBackend {
         : { apiKey: federated ? undefined : apiKey }),
       maxRetries: 5,
       fetch: retryFetch,
+      fetchOptions: providerFetchOptions(),
     });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
@@ -1036,10 +1039,13 @@ export class AnthropicBackend implements ICompletionBackend {
       m => m.cache === true && m.role === 'system' && !isToolChangeMessage(m)
     );
     const anyMessageCacheControlled = anyUserOrAssistantCacheControlled || anySystemCacheControlled;
+    // A tool round reads the newest flagged message the first call wrote; older flags (a lookback
+    // breakpoint) are spent and would take the slot this round's end-of-array anchor needs.
+    const newestFlagged = toolCallCount > 0 ? messages.findLastIndex(m => m.cache === true && m.role !== 'system') : -1;
 
     const cacheStampedMessages: IMessage[] = anyUserOrAssistantCacheControlled
-      ? messages.map(m => {
-          if (m.cache !== true || m.role === 'system') return m;
+      ? messages.map((m, index) => {
+          if (m.cache !== true || m.role === 'system' || index < newestFlagged) return m;
           const content = m.content;
           if (typeof content === 'string') {
             return {
@@ -1075,7 +1081,7 @@ export class AnthropicBackend implements ICompletionBackend {
     // then carries no system at all.
     const identityReminder = shouldOmitIdentityReminder(options)
       ? null
-      : buildIdentityReminder(model, options.modelDisplayName);
+      : buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName);
     let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system' && !isToolChangeMessage(m));
@@ -1461,6 +1467,7 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking.budget_tokens = maxThinkingBudget;
       }
     }
+    applyAnthropicOutputCeiling(apiParams, options.outputTokenCeiling);
 
     // Setup the actual API call with API-specific options
     try {

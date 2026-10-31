@@ -151,6 +151,11 @@ vi.mock('@bike4mind/database', () => ({
     findById: (...a: unknown[]) => findById(...a),
     incrementCredits: (...a: unknown[]) => userIncrement(...a),
   },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 // Keep the real pure cap helper and the real membership predicate so org-billed tests exercise
 // the actual decisions the handler depends on; only the write (deductCreditsWithOrgSupport) is

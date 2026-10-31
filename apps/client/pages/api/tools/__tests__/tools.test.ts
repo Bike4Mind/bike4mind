@@ -9,18 +9,21 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const { mockValidate, mockUserFindById, mockKeyRateLimit, mockSearch, mockAuditCreate, counters } = vi.hoisted(() => ({
-  mockValidate: vi.fn(),
-  mockUserFindById: vi.fn(),
-  mockKeyRateLimit: vi.fn(),
-  mockSearch: vi.fn(),
-  mockAuditCreate: vi.fn(),
-  counters: new Map<string, number>(),
-}));
+const { mockResolveTrust, mockValidate, mockUserFindById, mockKeyRateLimit, mockSearch, mockAuditCreate, counters } =
+  vi.hoisted(() => ({
+    mockResolveTrust: vi.fn(),
+    mockValidate: vi.fn(),
+    mockUserFindById: vi.fn(),
+    mockKeyRateLimit: vi.fn(),
+    mockSearch: vi.fn(),
+    mockAuditCreate: vi.fn(),
+    counters: new Map<string, number>(),
+  }));
 
 const USER = { id: 'user-1', _id: 'user-1', username: 'jules', tokenVersion: 0, isBanned: false };
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
+  resolveApiKeyTrust: (...a: unknown[]) => mockResolveTrust(...a),
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,
@@ -126,6 +129,7 @@ describe('/api/tools/*', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     counters.clear();
+    mockResolveTrust.mockResolvedValue({ assessment: { status: 'trusted' }, settings: {} });
     mockUserFindById.mockResolvedValue(USER);
     mockKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: {} });
     mockSearch.mockResolvedValue({ formattedResults: 'results' });
@@ -196,5 +200,25 @@ describe('/api/tools/*', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockAuditCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('403s an untrusted account before the tool runs', async () => {
+    mockResolveTrust.mockResolvedValue({
+      assessment: { status: 'untrusted', reason: 'email_unverified' },
+      settings: {},
+    });
+    const res = await search();
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(JSON.stringify(res._getJSONData())).toContain('account_trust_required');
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it('403s a moderated account with a message that is not AI-specific', async () => {
+    const res = await search(undefined, { ...USER, isModerated: true } as typeof USER);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(JSON.stringify(res._getJSONData())).not.toMatch(/\bAI\b/);
+    expect(mockSearch).not.toHaveBeenCalled();
   });
 });

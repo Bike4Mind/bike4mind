@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE } from '@bike4mind/common';
+import { ForbiddenError } from '@bike4mind/utils';
 import { videoGenerationTool, isVideoToolConfig, type VideoToolConfig } from './index';
 
 const okJob = { ok: true as const, created: true, job: { id: 'job1' } };
@@ -12,7 +14,9 @@ const build = (
   const onStart = vi.fn();
   const onFinish = vi.fn();
   const config: VideoToolConfig = { usableModels: ['test-video'], createJob, deliveryNote };
+  const logger = { warn: vi.fn() };
   const context = {
+    logger,
     user: { id: 'u1', isAdmin: false },
     userId: 'u1',
     organizationId: null,
@@ -21,7 +25,7 @@ const build = (
     onStart,
     onFinish,
   } as never;
-  return { tool: videoGenerationTool.implementation(context, config), statusUpdate, onStart, onFinish };
+  return { tool: videoGenerationTool.implementation(context, config), statusUpdate, onStart, onFinish, logger };
 };
 
 describe('video_generation tool', () => {
@@ -154,5 +158,26 @@ describe('video_generation tool', () => {
     expect(isVideoToolConfig(undefined)).toBe(false);
     expect(isVideoToolConfig({ usableModels: [], createJob: vi.fn() })).toBe(false);
     expect(isVideoToolConfig({ usableModels: ['test-video'], createJob: vi.fn() })).toBe(true);
+  });
+});
+
+describe('video_generation model admission', () => {
+  it('returns a free-tier refusal from the job engine as the tool result, logged at warn', async () => {
+    const refusal = new ForbiddenError('Model "test-video" requires a paid plan.', {
+      errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+    });
+    const { tool, statusUpdate, logger } = build(vi.fn().mockRejectedValue(refusal));
+    await expect(tool.toolFn({ model: 'test-video', prompt: 'a cat' })).resolves.toBe(
+      'Error: Model "test-video" requires a paid plan.'
+    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[video_generation]'), { modelId: 'test-video' });
+    expect(statusUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still throws any other job-engine failure', async () => {
+    const failure = new ForbiddenError('Model "test-video" is not accessible and no fallback available');
+    const { tool, logger } = build(vi.fn().mockRejectedValue(failure));
+    await expect(tool.toolFn({ model: 'test-video', prompt: 'a cat' })).rejects.toBe(failure);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });

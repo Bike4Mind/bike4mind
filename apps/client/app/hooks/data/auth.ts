@@ -13,7 +13,7 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AxiosError } from 'axios';
 import { useRouter, useSearch } from '@tanstack/react-router';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
 import {
@@ -54,6 +54,8 @@ interface OTCRegisterResponse {
 
 interface SendOTCData {
   email: string;
+  formToken?: string;
+  formExtra?: string;
 }
 
 interface SendOTCResponse {
@@ -88,6 +90,25 @@ interface VerifyOTCData {
   };
 }
 
+function useSignupFormToken() {
+  return useQuery<string>({
+    queryKey: ['signupFormToken'],
+    queryFn: async () => (await api.get<{ formToken: string }>('/api/otc/form-token')).data.formToken,
+    staleTime: 50 * 60 * 1000,
+    retry: 2,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useSignupBotFields() {
+  const formToken = useSignupFormToken().data;
+  const [honeypot, setHoneypot] = useState('');
+  return {
+    botFields: { formToken, formExtra: honeypot },
+    honeypotProps: { value: honeypot, onChange: setHoneypot },
+  };
+}
+
 export function useSendOTC() {
   const queryClient = useQueryClient();
   return useMutation<SendOTCResponse, LoginError, SendOTCData>({
@@ -117,7 +138,7 @@ export function useSendOTC() {
 // when the stage does not enforce the challenge.
 type TurnstileAction = TurnstileClientFailure['action'];
 
-async function solveTurnstileIfRequired(
+export async function solveTurnstileIfRequired(
   queryClient: QueryClient,
   action: TurnstileAction
 ): Promise<string | undefined> {

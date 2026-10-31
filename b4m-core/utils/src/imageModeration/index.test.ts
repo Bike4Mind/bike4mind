@@ -444,3 +444,23 @@ describe('RekognitionImageModerationService.checkImage', () => {
     });
   });
 });
+
+describe('RekognitionImageModerationService without an injected logger', () => {
+  it('logs to the Logger.globalInstance active at call time, not at construction', async () => {
+    const svc = new RekognitionImageModerationService(
+      undefined,
+      fakeClient(async () => {
+        throw new Error('ServiceUnavailable');
+      })
+    );
+    const requestLogger = new Logger();
+    const warn = vi.spyOn(requestLogger, 'warn').mockImplementation(() => {});
+    Logger.setContextProvider(() => requestLogger);
+    try {
+      await expect(svc.checkImage(buf, 'image/png')).rejects.toThrow('ServiceUnavailable');
+    } finally {
+      Logger.setContextProvider(undefined);
+    }
+    expect(warn).toHaveBeenCalled();
+  });
+});
