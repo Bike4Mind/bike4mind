@@ -47,7 +47,17 @@ export const OperationSchema = z.object({
 export const ModelTelemetrySchema = z.object({
   /** gen_ai.request.model */
   modelId: z.string(),
-  provider: z.enum(['anthropic', 'openai', 'bedrock', 'google', 'xai', 'ollama', 'moonshot', 'deepseek']),
+  provider: z.enum([
+    'anthropic',
+    'openai',
+    'bedrock',
+    'google',
+    'xai',
+    'ollama',
+    'openai-compatible',
+    'moonshot',
+    'deepseek',
+  ]),
   fallbackUsed: z.boolean(),
   fallbackReason: z.string().optional(),
   originalModelId: z.string().optional(),

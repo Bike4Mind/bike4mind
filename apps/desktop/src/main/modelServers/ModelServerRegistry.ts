@@ -581,6 +581,7 @@ export class ModelServerRegistry {
     const endpoint: ServerEndpoint = {
       origin: parsed.origin,
       label: record.name,
+      app: 'Desktop',
       credentialHeaders: () => this.deps.store.headers(record),
     };
     const fetch = this.fetchFor(endpoint);

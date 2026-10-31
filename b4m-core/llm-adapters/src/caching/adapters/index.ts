@@ -32,6 +32,7 @@ const ADAPTERS: Record<ModelBackend, ICachingAdapter> = {
   [ModelBackend.Kimi]: new KimiCachingAdapter(),
   [ModelBackend.DeepSeek]: new DeepSeekCachingAdapter(),
   [ModelBackend.Ollama]: new NoOpCachingAdapter(),
+  [ModelBackend.OpenAICompatible]: new NoOpCachingAdapter(),
   [ModelBackend.BFL]: new NoOpCachingAdapter(),
   [ModelBackend.VoyageAI]: new NoOpCachingAdapter(),
   [ModelBackend.AWS]: new NoOpCachingAdapter(),

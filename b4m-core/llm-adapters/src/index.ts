@@ -628,6 +628,7 @@ export * from './kimiBackend';
 export * from './kimiParams';
 export * from './localImageBackend';
 export * from './ollamaBackend';
+export * from './openaiCompatibleBackend';
 export * from './openaiBackend';
 export * from './xaiBackend';
 

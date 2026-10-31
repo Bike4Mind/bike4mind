@@ -3586,6 +3586,7 @@
                     "anthropic",
                     "gemini",
                     "ollama",
+                    "openai-compatible",
                     "bfl",
                     "xai",
                     "kimi",
