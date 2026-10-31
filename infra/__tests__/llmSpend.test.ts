@@ -217,8 +217,8 @@ describe('LLM spend alarms', () => {
       statistic: 'Sum',
       threshold,
       treatMissingData: 'notBreaching',
-      alarmActions: ['alarm-topic', 'email-topic'],
-      okActions: ['alarm-topic', 'email-topic'],
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
       tags: { Application: 'LLMSpend', Severity: 'Critical' },
     });
   });

@@ -157,14 +157,14 @@ and WAF edge-signal counts from the alarms above.
 
 An hourly alarm on `EstimatedUsdYoungAccounts` fires when accounts under 7 days
 old sum to at least `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` (whole USD) and
-routes to the same two topics. It is not listed in the dashboard alarm-status widget.
+routes to the same Slack DLQ topic. It is not listed in the dashboard alarm-status widget.
 
 A second alarm per provider pages when `EstimatedUsd` sums to at least
 `LLM_SPEND_ALARM_USD_PER_HOUR` (whole USD, default 20) in one hour, or
 `LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` (default 75) for `anthropic`. It catches
-a sustained drain that stays under the 5-minute ceiling, routes to the same two
-topics, is listed in the alarm-status widget, and has its own "Estimated USD per
-hour by provider" widget with both ceilings drawn.
+a sustained drain that stays under the 5-minute ceiling, routes to the same Slack
+DLQ topic, is listed in the alarm-status widget, and has its own "Estimated USD
+per hour by provider" widget with both ceilings drawn.
 
 The figures are estimates from our price table, not provider invoices. Paths
 outside the ChatCompletion service are not counted: the legacy WebSocket CLI
