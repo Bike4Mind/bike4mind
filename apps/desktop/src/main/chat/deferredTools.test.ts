@@ -129,15 +129,29 @@ describe('toolStateRecords', () => {
     expect(toolStateRecords(history, state(['a']), name => name !== 'file_read')).toEqual([]);
   });
 
-  it('does not count a call to a tool an earlier record held', () => {
+  it('does not count a deferred turn call to a tool an earlier record held', () => {
     const history = [
       message('user', { toolState: state(['a', 'file_read']) }),
       message('assistant'),
       message('user', { toolState: state(['a']) }),
-      message('assistant', { toolCalls: [call('file_read')] }),
+      message('assistant', { toolCalls: [call('file_read')], deferred: true }),
       message('user'),
     ];
     expect(toolStateRecords(history, state(['a']), all)).toEqual([]);
+  });
+
+  it('counts a call from a turn that was not deferred to a tool a record removed as active again', () => {
+    const history = [
+      message('user', { toolState: state(['a', 'file_read']) }),
+      message('assistant'),
+      message('user', { toolState: state(['a']) }),
+      message('assistant'),
+      message('user'),
+      message('assistant', { toolCalls: [call('file_read')] }),
+      message('user'),
+    ];
+    expect(toolStateRecords(history, state(['a', 'file_read']), all)).toEqual([]);
+    expect(toolStateRecords(history, state(['a']), all)).toEqual([{ messageId: history[6].id, state: state(['a']) }]);
   });
 });
 
@@ -216,26 +230,58 @@ describe('insertToolChanges', () => {
     ]);
   });
 
-  it('replays a call to a removed tool without adding it back', () => {
-    const messages: CompletionMessage[] = [
-      { role: 'user', content: 'one' },
-      { role: 'assistant', content: 'a' },
-      { role: 'user', content: 'two' },
-      { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'file_read', input: {} }] },
-      { role: 'user', content: [{ type: 'tool_result' }] },
+  describe('a call to a removed tool', () => {
+    const marks = [
+      { index: 0, tools: ['file_read'] },
+      { index: 2, tools: [] },
     ];
-    const { wire: out } = insertToolChanges(
-      messages,
-      [
-        { index: 0, tools: ['file_read'] },
-        { index: 2, tools: [] },
-      ],
-      all
-    );
-    expect(out.filter(entry => entry.role === 'system').map(entry => entry.content)).toEqual([
-      [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'file_read' } }],
-      [{ type: 'tool_removal', tool: { type: 'tool_reference', name: 'file_read' } }],
-    ]);
+    const addition = { type: 'tool_addition', tool: { type: 'tool_reference', name: 'file_read' } };
+    const removal = { type: 'tool_removal', tool: { type: 'tool_reference', name: 'file_read' } };
+    const use: CompletionMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'x', name: 'file_read', input: {} }],
+    };
+    const result: CompletionMessage = { role: 'user', content: [{ type: 'tool_result' }] };
+
+    it('replays as sent from a deferred turn, without adding it back', () => {
+      const messages: CompletionMessage[] = [
+        { role: 'user', content: 'one' },
+        { role: 'assistant', content: 'a' },
+        { role: 'user', content: 'two' },
+        use,
+        result,
+      ];
+      const { wire: out } = insertToolChanges(messages, marks, all, [], new Set([3]));
+      expect(out.filter(entry => entry.role === 'system').map(entry => entry.content)).toEqual([[addition], [removal]]);
+    });
+
+    it('is added back before the call from a later turn that was not deferred', () => {
+      const messages: CompletionMessage[] = [
+        { role: 'user', content: 'one' },
+        { role: 'assistant', content: 'a' },
+        { role: 'user', content: 'two' },
+        { role: 'assistant', content: 'b' },
+        { role: 'user', content: 'three' },
+        use,
+        result,
+        { role: 'assistant', content: 'done' },
+      ];
+      const { wire: out, referenced } = insertToolChanges(messages, marks, all);
+      expect(out.map(entry => (entry.role === 'system' ? entry.content : entry.role))).toEqual([
+        'user',
+        [addition],
+        'assistant',
+        'user',
+        [removal],
+        'assistant',
+        'user',
+        [addition],
+        'assistant',
+        'user',
+        'assistant',
+      ]);
+      expect(referenced).toEqual(['file_read']);
+    });
   });
 
   it('drops names with no schema left', () => {

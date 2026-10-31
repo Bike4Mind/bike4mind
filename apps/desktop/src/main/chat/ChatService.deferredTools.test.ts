@@ -179,7 +179,67 @@ describe('ChatService deferred tools', () => {
     }
   }
 
+  /** Every replayed tool_use names a tool that is active at that point: loaded, or added and not removed since. */
+  function expectActiveAtUse(request: Body): void {
+    const active = new Set(
+      request.options.tools.filter(tool => !tool.toolSchema.defer_loading).map(tool => tool.toolSchema.name)
+    );
+    for (const message of request.messages) {
+      if (message.role === 'system') {
+        blockNames(message, 'tool_addition').forEach(name => active.add(name!));
+        blockNames(message, 'tool_removal').forEach(name => active.delete(name!));
+      }
+      for (const name of blockNames(message, 'tool_use'))
+        expect(active.has(name!), `${name} active at its call`).toBe(true);
+    }
+  }
+
   const unmarked = ({ cache: _cache, ...rest }: WireMessage) => rest;
+
+  describe('a tool removed, then called on a turn that was not deferred', () => {
+    it('is added back before the replayed call', async () => {
+      deferredTools = { startSetMaxTokens: 0 };
+      const { id } = await service.createSession();
+      await turn(id, 'hello');
+      roots = [];
+      await turn(id, 'folder gone');
+      roots = [root];
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      await readingTurn(id, 'read my file', 'call_1');
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_5_OPUS);
+      const fourth = await turn(id, 'back on Opus');
+      const fifth = await turn(id, 'and again');
+
+      for (const request of [fourth, fifth]) {
+        expectChangesDeclared(request);
+        expectActiveAtUse(request);
+        const use = positions(request, 'file_read').use;
+        const readdition = request.messages.findLastIndex(
+          (message, index) =>
+            index < use && message.role === 'system' && blockNames(message, 'tool_addition').includes('file_read')
+        );
+        expect(readdition).toBeGreaterThan(0);
+        expect(request.messages[readdition - 1]).toMatchObject({ role: 'user', content: 'read my file' });
+      }
+      expect(fifth.messages.slice(0, fourth.messages.length).map(unmarked)).toEqual(fourth.messages.map(unmarked));
+    });
+
+    it('still replays a deferred turn call to a withdrawn tool as it was sent', async () => {
+      deferredTools = { startSetMaxTokens: 0 };
+      const { id } = await service.createSession();
+      await turn(id, 'hello');
+      roots = [];
+      const before = post.mock.calls.length;
+      await readingTurn(id, 'read it anyway', 'call_1');
+      const lastRound = body(before + 1);
+      const next = await turn(id, 'thanks');
+
+      expect(next.messages.slice(0, lastRound.messages.length).map(unmarked)).toEqual(lastRound.messages.map(unmarked));
+      expectChangesDeclared(next);
+      const stored = await store.get(id);
+      expect(stored?.messages.find(message => message.toolCalls?.length)?.deferred).toBe(true);
+    });
+  });
 
   describe('a tool called on a turn that was not deferred', () => {
     async function switchAwayAndBack(away: 'model' | 'flag', shareOnReturn: boolean) {

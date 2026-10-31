@@ -137,13 +137,25 @@ export function toolStateRecords(
   if (latestIndex === lastIndex) {
     return sameToolState(latest, atLast) ? [] : [{ messageId: history[lastIndex].id, state: atLast }];
   }
-  // A tool no record holds that a later turn called anyway (a turn that was not deferred) was
-  // added where it was called (insertToolChanges), so it is active until a record drops it.
+  // A tool a later turn called while it was not active was added where it was called
+  // (insertToolChanges), so it is active until a record drops it. Must stay in step with the
+  // lifting rule there: a deferred turn's call only lifts a tool no record ever held.
   const recorded = new Set(userIndexes.flatMap(index => history[index].toolState?.tools ?? []));
   const active: ChatToolState | undefined = latest && {
     tools: sortedUnion(
       latest.tools,
-      calledAfter(history, latestIndex, declarable).filter(name => !recorded.has(name))
+      history
+        .slice(latestIndex + 1)
+        .flatMap(message =>
+          (message.toolCalls ?? [])
+            .map(call => call.name)
+            .filter(
+              name =>
+                !CORE_TOOL_NAMES.has(name) &&
+                declarable(name) &&
+                !(message.deferred ? recorded.has(name) : latest.tools.includes(name))
+            )
+        )
     ),
     text: latest.text,
   };
@@ -165,15 +177,17 @@ export interface ToolStateMark {
  * by a change (a user turn answered by another user turn) moves to the next place that can, and a
  * later record at the same place supersedes it. Names with no schema left are dropped, which
  * re-writes history from their first addition. The changes start from the loaded `start` set.
- * A replayed tool_use of a tool never added before it (one a turn that was not deferred called)
- * gets its addition at the last place before that call, so nothing earlier moves.
+ * A replayed tool_use from a turn that was not deferred gets an addition at the last place before
+ * it when its tool is not active there, so nothing earlier moves. One from a deferred turn
+ * (`deferredReplies`, wire indexes) went out after that turn's changes and replays as it was sent.
  * Returns the names the changes reference, which the request must declare.
  */
 export function insertToolChanges(
   wire: readonly CompletionMessage[],
   marks: readonly ToolStateMark[],
   declarable: (name: string) => boolean,
-  start: readonly string[] = []
+  start: readonly string[] = [],
+  deferredReplies: ReadonlySet<number> = new Set()
 ): { wire: CompletionMessage[]; referenced: string[] } {
   const placed = new Map<number, readonly string[]>();
   for (const mark of marks) {
@@ -185,14 +199,19 @@ export function insertToolChanges(
   const inserts = new Map<number, CompletionMessage>();
   const referenced = new Set<string>();
   let active: readonly string[] = start.filter(declarable);
-  // A removed tool stays surfaced: a call to it replays as is and is refused when run.
+  // On a deferred turn a removed tool stays surfaced: a call to it replays as is and is refused when run.
   const surfaced = new Set(active);
   for (const [slot, at] of slots.entries()) {
     const target = placed.get(at) ?? active;
     target.forEach(name => surfaced.add(name));
-    const lifted = calledIn(wire.slice(at + 1, slots[slot + 1])).filter(
-      name => !CORE_TOOL_NAMES.has(name) && !surfaced.has(name) && declarable(name)
-    );
+    const lifted = wire
+      .slice(at + 1, slots[slot + 1])
+      .flatMap((message, offset) =>
+        calledIn(message).filter(name =>
+          deferredReplies.has(at + 1 + offset) ? !surfaced.has(name) : !target.includes(name)
+        )
+      )
+      .filter(name => !CORE_TOOL_NAMES.has(name) && declarable(name));
     lifted.forEach(name => surfaced.add(name));
     const tools = sortedUnion(target, lifted);
     const { added, removed } = diffToolNames(active, tools);
@@ -211,15 +230,13 @@ export function insertToolChanges(
   };
 }
 
-function calledIn(messages: readonly CompletionMessage[]): string[] {
-  return messages.flatMap(message =>
-    message.role === 'assistant' && Array.isArray(message.content)
-      ? message.content.flatMap(block => {
-          const { type, name } = (block ?? {}) as { type?: unknown; name?: unknown };
-          return type === 'tool_use' && typeof name === 'string' ? [name] : [];
-        })
-      : []
-  );
+function calledIn(message: CompletionMessage): string[] {
+  return message.role === 'assistant' && Array.isArray(message.content)
+    ? message.content.flatMap(block => {
+        const { type, name } = (block ?? {}) as { type?: unknown; name?: unknown };
+        return type === 'tool_use' && typeof name === 'string' ? [name] : [];
+      })
+    : [];
 }
 
 /**

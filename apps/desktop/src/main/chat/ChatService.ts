@@ -2633,6 +2633,8 @@ export class ChatService {
     let toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
     let thinking: unknown[] | undefined;
     let segmentSettled = false;
+    // Outside the try so a failed reply is stamped too; see ChatMessage.deferred.
+    let deferredTurn = false;
     let previousRound: string | null = null;
     let stalled = 0;
     let roundsSincePlanUpdate = 0;
@@ -2799,6 +2801,7 @@ export class ChatService {
         toolsSupported &&
         supportsDeferredTools(modelOption) &&
         offersCoreTools(tools);
+      deferredTurn = deferred;
       const toolState = (): ChatToolState => ({
         tools: optionalToolNames(toolsFor(roots)),
         text: buildToolStateText({
@@ -2854,11 +2857,13 @@ export class ChatService {
         const startTokens = estimateToolTokens(start.flatMap(name => schemaFor(name) ?? []));
         if (startTokens > (deferredSetting?.startSetMaxTokens ?? 0)) start = [];
         const marks: ToolStateMark[] = [];
+        const deferredReplies = new Set<number>();
         const replayed = insertToolChanges(
-          await toCompletionMessages(session, readAttachment, marks),
+          await toCompletionMessages(session, readAttachment, marks, deferredReplies),
           marks,
           declarable,
-          start
+          start,
+          deferredReplies
         );
         wire = replayed.wire;
         pin(start);
@@ -2960,6 +2965,7 @@ export class ChatService {
           ...(usage ? { usage } : {}),
           ...(promptCache ? { promptCache } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
+          ...(deferred ? { deferred } : {}),
         };
         await this.settleReply(sessionId, !!resume, historyScope, message);
         this.emit({
@@ -3437,6 +3443,7 @@ export class ChatService {
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
         ...(contextSnapshot ? { contextSnapshot } : {}),
+        ...(deferredTurn ? { deferred: true } : {}),
       });
       this.emit({
         type: 'error',
@@ -3525,6 +3532,8 @@ export class ChatService {
       usage: message.usage,
       promptCache: message.promptCache,
       contextSnapshot: message.contextSnapshot,
+      // Never cleared: rounds a deferred run already sent keep replaying as they were sent.
+      ...(message.deferred ? { deferred: true } : {}),
     });
     if (updated) this.captureSessionHistory(updated, historyScope);
   }
@@ -6997,7 +7006,9 @@ async function toCompletionMessages(
   session: ChatSession,
   readAttachment: ReadAttachment,
   /** Deferred-tools turns only: tool-state reminders are rendered and each one's position is pushed here. */
-  toolStateMarks?: ToolStateMark[]
+  toolStateMarks?: ToolStateMark[],
+  /** Deferred-tools turns only: the wire index of every assistant message a deferred turn sent. */
+  deferredReplies?: Set<number>
 ): Promise<CompletionMessage[]> {
   const wire: CompletionMessage[] = [];
 
@@ -7041,20 +7052,26 @@ async function toCompletionMessages(
       continue;
     }
 
+    const from = wire.length;
     const asSent = sentRounds(message);
     if (asSent) {
       wire.push(...asSent);
-      continue;
+    } else {
+      wire.push({
+        role: 'assistant',
+        content: [
+          ...(message.thinking ?? []),
+          ...(text ? [{ type: 'text', text }] : []),
+          ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
+        ],
+      });
+      wire.push({ role: 'user', content: calls.map(call => toolResultBlock(call)) });
     }
-    wire.push({
-      role: 'assistant',
-      content: [
-        ...(message.thinking ?? []),
-        ...(text ? [{ type: 'text', text }] : []),
-        ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
-      ],
-    });
-    wire.push({ role: 'user', content: calls.map(call => toolResultBlock(call)) });
+    if (message.deferred) {
+      for (let index = from; index < wire.length; index++) {
+        if (wire[index].role === 'assistant') deferredReplies?.add(index);
+      }
+    }
   }
 
   return wire;

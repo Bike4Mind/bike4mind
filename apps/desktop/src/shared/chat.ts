@@ -748,6 +748,12 @@ export interface ChatMessage {
    * chat/deferredTools.ts for how a request replays it.
    */
   toolState?: ChatToolState;
+  /**
+   * On an assistant reply from a deferred-tools turn. Its calls were sent after that turn's tool
+   * changes, so a replay keeps them as they were; a call from any other turn gets an addition
+   * before it when its tool is not active there (chat/deferredTools.ts insertToolChanges).
+   */
+  deferred?: boolean;
 }
 
 export interface ChatToolState {
