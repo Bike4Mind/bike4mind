@@ -105,5 +105,6 @@ export function machineView(hardware: HardwareProfile): MachineView {
     totalMemoryBytes: hardware.totalMemoryBytes,
     gpuMemoryBytes: hardware.gpuMemoryBytes,
     gpuName: hardware.gpuName,
+    confidence: hardware.confidence,
   };
 }
