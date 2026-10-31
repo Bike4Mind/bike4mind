@@ -299,7 +299,30 @@ const argv = await yargs(hideBin(process.argv))
   })
   .command('models', 'Find, download and use local models (Ollama, Hugging Face GGUF)', (yargs) => {
     return yargs
+      .option('server', {
+        type: 'string',
+        description: "Run ls, use, pull or rm against one of Desktop's saved model servers (see: b4m models servers)",
+      })
       .command(['ls', 'list'], 'List models installed on the local runtime', {}, async () => {
+        // Handled by external command handler
+      })
+      .command('servers [action] [name]', "List Desktop's saved model servers, or log in or out of one", (yargs) => {
+        return yargs
+          .positional('action', { type: 'string', choices: ['login', 'logout'], describe: 'Keep or remove the CLI\'s credential for a server' })
+          .positional('name', { type: 'string', describe: 'Server name, as `b4m models servers` shows it' })
+          .option('check-tools', {
+            type: 'boolean',
+            description: 'servers: send each OpenAI-compatible server a one-token request to see whether it accepts tool calls',
+            default: false,
+          })
+          .option('token-stdin', {
+            type: 'boolean',
+            description: 'login: read the credential from stdin instead of prompting',
+            default: false,
+          })
+          .example('b4m models servers', 'List the servers with their status')
+          .example('b4m models servers login gpu-box', 'Enter the CLI\'s credential for gpu-box (hidden)');
+      }, async () => {
         // Handled by external command handler
       })
       .command('search <query..>', 'Search Hugging Face for GGUF models', (yargs) => {
@@ -364,7 +387,7 @@ const argv = await yargs(hideBin(process.argv))
         // Handled by external command handler
       })
       .example('b4m models ls --ollama-host http://127.0.0.1:11434', 'Use and remember an Ollama host')
-      .demandCommand(1, 'You must provide a subcommand (ls, search, show, curated, pull, rm, use)');
+      .demandCommand(1, 'You must provide a subcommand (ls, search, show, curated, servers, pull, rm, use)');
   })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')

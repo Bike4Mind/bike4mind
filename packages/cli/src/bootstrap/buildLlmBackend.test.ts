@@ -52,6 +52,16 @@ describe('resolveModelInfo', () => {
   });
 });
 
+describe('buildLlmBackend, a saved `local:` default', () => {
+  it('fails instead of starting on a hosted model when the default is not listed', async () => {
+    const { deps } = makeDeps();
+    const config = createMockConfig({ defaultModel: 'local:srv-abc:qwen-small' });
+    await expect(buildLlmBackend(makeInput({ config }), deps)).rejects.toThrow(
+      /Model "local:srv-abc:qwen-small" is on a local model server/
+    );
+  });
+});
+
 describe('buildLlmBackend — SSE-only completions', () => {
   it('always uses SSE and opens no socket when no WS-consuming feature is enabled', async () => {
     const { deps, serverBackend } = makeDeps();
@@ -289,6 +299,15 @@ describe('resolveHeadlessModel', () => {
       modelInfo: model('a'),
       warning: 'Model "retired-hosted" is not available; using "a".',
     });
+  });
+
+  it('never falls back from a `local:` default, even without an Ollama host', () => {
+    const none = { ollamaHost: null, ollamaListingFailed: false };
+    const config = { defaultModel: 'local:srv-abc:qwen-small' };
+    expect(() => resolveHeadlessModel([model('hosted')], config, none)).toThrow(
+      /Model "local:srv-abc:qwen-small" is on a local model server/
+    );
+    expect(() => resolveHeadlessModel([model('hosted')], config, listed)).toThrow(/local:srv-abc:qwen-small/);
   });
 
   it('falls back silently, as before, without an Ollama host', () => {

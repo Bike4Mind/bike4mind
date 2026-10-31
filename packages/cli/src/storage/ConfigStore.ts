@@ -322,6 +322,7 @@ const CliConfigSchema = z.object({
   fallbackModels: z.array(z.string()).optional(),
   ollamaHost: z.string().optional(),
   localDefaultModel: z.string().optional(),
+  modelServerCredentials: z.record(z.string(), z.object({ secret: z.string() })).optional(),
 });
 
 /**
@@ -1350,13 +1351,54 @@ export class ConfigStore {
       changed(key) || (disk[key] !== undefined && typeof disk[key] !== 'string')
         ? next[key]
         : (disk[key] as string | undefined);
+    const credentials = CliConfigSchema.shape.modelServerCredentials.safeParse(disk.modelServerCredentials);
     return {
       ...next,
       defaultModel:
         changed('defaultModel') || typeof disk.defaultModel !== 'string' ? next.defaultModel : disk.defaultModel,
       ollamaHost: optional('ollamaHost'),
       localDefaultModel: optional('localDefaultModel'),
+      modelServerCredentials:
+        patch !== undefined &&
+        Object.prototype.hasOwnProperty.call(patch, 'modelServerCredentials') &&
+        (!wholeConfig || patch.modelServerCredentials !== snapshot.modelServerCredentials)
+          ? next.modelServerCredentials
+          : credentials.success
+            ? credentials.data
+            : next.modelServerCredentials,
     };
+  }
+
+  /** The saved credentials as the file has them now, not as this store loaded them. */
+  async readModelServerCredentials(): Promise<Record<string, { secret: string }>> {
+    try {
+      const raw: unknown = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
+      const parsed = z.object({ modelServerCredentials: CliConfigSchema.shape.modelServerCredentials }).safeParse(raw);
+      return (parsed.success && parsed.data.modelServerCredentials) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** Reloads from the file so the write below carries what other processes saved (a refreshed sign-in token). */
+  private async reloadFromDisk(): Promise<void> {
+    this.config = null;
+    this.globalConfig = null;
+    await this.load();
+  }
+
+  /** Read-modify-write against the file, so a login in another terminal is not undone. */
+  async setModelServerCredential(serverId: string, secret: string): Promise<void> {
+    await this.reloadFromDisk();
+    const current = await this.readModelServerCredentials();
+    await this.save({ modelServerCredentials: { ...current, [serverId]: { secret } } });
+  }
+
+  async clearModelServerCredential(serverId: string): Promise<void> {
+    await this.reloadFromDisk();
+    const { [serverId]: removed, ...rest } = await this.readModelServerCredentials();
+    void removed;
+    await this.save({ modelServerCredentials: rest });
   }
 
   /**
