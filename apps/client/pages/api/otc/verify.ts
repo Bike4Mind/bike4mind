@@ -59,6 +59,7 @@ import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitEmailVerifiedFunnelEvents, emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
+import { readVisitId } from '@server/analytics/visitSession';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import * as z from 'zod';
@@ -633,13 +634,16 @@ const handler = baseApi({ auth: false })
       });
     }
     const funnelUser = { id: newUser.id, ...signupFunnel };
-    await emitFunnelEvent({ user: funnelUser, event: 'email_verified', metadata: { method: 'otc' } });
+    // The visit the code was entered in: the signup joins the visit it came from.
+    const visitId = readVisitId(req.headers.cookie);
+    await emitFunnelEvent({ user: funnelUser, event: 'email_verified', metadata: { method: 'otc' }, visitId });
     await emitFunnelEvent({
       user: funnelUser,
       event: 'credits_granted',
       metadata: { amount: newUser.currentCredits ?? 0, source: 'signup', method: 'otc' },
+      visitId,
     });
-    await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' } });
+    await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' }, visitId });
 
     const registrationSession = await authSessionService.issueSession(
       newUser.id,

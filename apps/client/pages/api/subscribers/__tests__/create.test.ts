@@ -45,7 +45,9 @@ const cache = vi.hoisted(() => {
   const counts = new Map<string, number>();
   return {
     counts,
+    failKeys: new Set<string>(),
     tryIncrement: vi.fn(async (key: string, limit: number) => {
+      if (cache.failKeys.has(key)) throw new Error('cache unavailable');
       const count = counts.get(key) ?? 0;
       const expiresAt = new Date(Date.now() + 60_000);
       if (count + 1 > limit) return { success: false, count, expiresAt };
@@ -58,12 +60,24 @@ const mocks = vi.hoisted(() => ({
   findOne: vi.fn(),
   create: vi.fn(),
   postMessageToSlack: vi.fn(),
+  adminSettings: [] as { settingName: string; settingValue: string }[],
 }));
 vi.mock('@bike4mind/database', () => ({
   Subscriber: { findOne: mocks.findOne, create: mocks.create },
   cacheRepository: { tryIncrementWithinLimitFixedWindow: cache.tryIncrement },
-  adminSettingsRepository: { findAll: async () => [], findBySettingNames: async () => [] },
+  adminSettingsRepository: {
+    findAll: async () => mocks.adminSettings,
+    findBySettingNames: async () => mocks.adminSettings,
+  },
 }));
+// otcLimitOf reads the admin settings through a 5-minute per-process cache; drop it between tests.
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return {
+    ...actual,
+    getSettingsMap: (db: Parameters<typeof actual.getSettingsMap>[0]) => actual.getSettingsMap(db, { skipCache: true }),
+  };
+});
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 
 import handler from '@pages/api/subscribers/create';
@@ -99,6 +113,8 @@ const person = { firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com
 beforeEach(() => {
   vi.clearAllMocks();
   cache.counts.clear();
+  cache.failKeys.clear();
+  mocks.adminSettings.length = 0;
   policy.active = false;
   verify.mockImplementation(async ({ token }: { token: unknown }) =>
     token === 'solved' ? { ok: true } : { ok: false, reason: 'invalid', errorCodes: ['invalid-input-response'] }
@@ -149,20 +165,20 @@ describe('/api/subscribers/create - bot challenge', () => {
 });
 
 describe('/api/subscribers/create - per-IP counters', () => {
-  it('refuses the eleventh signup from one address within the hour, and keeps other addresses open', async () => {
-    for (let i = 0; i < 10; i++) {
+  it('refuses the sixth signup from one address within 15 minutes, and keeps other addresses open', async () => {
+    for (let i = 0; i < 5; i++) {
       expect((await submit({ ...person, email: `ada${i}@example.com` }))._getStatusCode()).toBe(201);
     }
 
-    const refused = submit({ ...person, email: 'ada10@example.com' });
+    const refused = submit({ ...person, email: 'ada5@example.com' });
     await expect(refused).rejects.toBeInstanceOf(TooManyRequestsError);
-    expect(mocks.create).toHaveBeenCalledTimes(10);
+    expect(mocks.create).toHaveBeenCalledTimes(5);
 
     expect((await submit({ ...person, email: 'bob@example.com' }, '203.0.113.7'))._getStatusCode()).toBe(201);
   });
 
   it('sets Retry-After on a refusal', async () => {
-    cache.counts.set('rate-limit:81.2.69.160:subscribers-create-hourly', 10);
+    cache.counts.set('rate-limit:81.2.69.160:subscribers-create-short', 5);
     const { req, res } = createMocks({ method: 'POST', body: person, headers: { 'x-real-ip': '81.2.69.160' } });
     Object.assign(req, { logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
 
@@ -171,14 +187,14 @@ describe('/api/subscribers/create - per-IP counters', () => {
   });
 
   it('counts a day-long ceiling as well, so a slow drip is bounded too', async () => {
-    cache.counts.set('rate-limit:81.2.69.160:subscribers-create-daily', 30);
+    cache.counts.set('rate-limit:81.2.69.160:subscribers-create-daily', 10);
 
     await expect(submit(person)).rejects.toBeInstanceOf(TooManyRequestsError);
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('buckets IPv6 sources by /64 so one holder cannot rotate addresses for a fresh budget', async () => {
-    cache.counts.set('rate-limit:2a02:c7f:1234:5678::/64:subscribers-create-hourly', 10);
+    cache.counts.set('rate-limit:2a02:c7f:1234:5678::/64:subscribers-create-short', 5);
 
     await expect(submit(person, '2a02:c7f:1234:5678:aaaa:bbbb:cccc:dddd')).rejects.toBeInstanceOf(TooManyRequestsError);
   });
@@ -188,8 +204,76 @@ describe('/api/subscribers/create - per-IP counters', () => {
     const res = await submit(person);
 
     expect(res._getStatusCode()).toBe(201);
-    expect(cache.counts.get('rate-limit:81.2.69.160:subscribers-create-hourly')).toBe(1);
+    expect(cache.counts.get('rate-limit:81.2.69.160:subscribers-create-short')).toBe(1);
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin lower the short cap but never raise it', async () => {
+    mocks.adminSettings.push({ settingName: 'subscriberLimitPerIp', settingValue: '2' });
+    expect((await submit({ ...person, email: 'ada0@example.com' }))._getStatusCode()).toBe(201);
+    expect((await submit({ ...person, email: 'ada1@example.com' }))._getStatusCode()).toBe(201);
+    await expect(submit({ ...person, email: 'ada2@example.com' })).rejects.toBeInstanceOf(TooManyRequestsError);
+
+    mocks.adminSettings.splice(0, 1, { settingName: 'subscriberLimitPerIp', settingValue: '50' });
+    cache.counts.clear();
+    for (let i = 0; i < 5; i++) {
+      expect((await submit({ ...person, email: `bob${i}@example.com` }))._getStatusCode()).toBe(201);
+    }
+    await expect(submit({ ...person, email: 'bob5@example.com' })).rejects.toBeInstanceOf(TooManyRequestsError);
+  });
+});
+
+describe('/api/subscribers/create - stored row', () => {
+  it('trims the names and lower-cases the email before the duplicate check and the insert', async () => {
+    await submit({ firstName: '  Ada ', lastName: ' Lovelace  ', email: '  Ada@Example.COM ' });
+
+    expect(mocks.findOne).toHaveBeenCalledWith({ email: 'ada@example.com', deletedAt: null });
+    expect(mocks.create).toHaveBeenCalledWith({ ...person, source: 'subscribe_page' });
+  });
+
+  it('answers the same ack when the insert hits the unique email index', async () => {
+    mocks.create.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+    const res = await submit(person);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(res._getJSONData()).toEqual({ message: 'Thanks -- you are on the list.' });
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('still surfaces any other insert failure', async () => {
+    mocks.create.mockRejectedValue(new Error('connection lost'));
+
+    await expect(submit(person)).rejects.toThrow('connection lost');
+  });
+});
+
+describe('/api/subscribers/create - Slack alert cap', () => {
+  const signupFrom = (i: number) => submit({ ...person, email: `person${i}@example.com` }, `93.184.216.${i}`);
+
+  it('posts the first ten alerts in an hour, one pause notice on the eleventh, then nothing', async () => {
+    for (let i = 0; i < 10; i++) {
+      expect((await signupFrom(i))._getStatusCode()).toBe(201);
+    }
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(10);
+    expect(mocks.postMessageToSlack.mock.calls[9][0]).toContain('New Subscriber Alert');
+
+    expect((await signupFrom(10))._getStatusCode()).toBe(201);
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(11);
+    expect(mocks.postMessageToSlack.mock.calls[10][0]).toContain('alerts are paused until');
+
+    expect((await signupFrom(11))._getStatusCode()).toBe(201);
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(11);
+    expect(mocks.create).toHaveBeenCalledTimes(12);
+  });
+
+  it('keeps the signup when reserving an alert slot fails', async () => {
+    cache.failKeys.add('subscriber-limit:slack-alerts');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const res = await submit(person);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(mocks.create).toHaveBeenCalledTimes(1);
   });
 });
 

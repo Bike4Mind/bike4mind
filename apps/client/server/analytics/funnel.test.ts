@@ -11,7 +11,10 @@ const { mockEmit, mockGetSetting, mockLogEventSafe, mockUserUpdate, mockUpdateOn
     mockRewardInviter: vi.fn(),
   })
 );
-vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: mockEmit }));
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
+  HOST_PRODUCT_ID: 'bike4mind',
+  emitProductEvent: mockEmit,
+}));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
 vi.mock('@server/referrals/firstAnswerReward', () => ({ rewardInviterForFirstAnswer: mockRewardInviter }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
@@ -202,6 +205,14 @@ describe('emitFunnelEvent', () => {
     expect(mockEmit.mock.calls[1][0].metadata).toEqual({ method: 'otc' });
   });
 
+  it('names the visit the stage happened in, and no session when there is none', async () => {
+    await emitFunnelEvent({ user: { id: 'u1' }, event: 'signup_completed', visitId: 'a'.repeat(32) });
+    await emitFunnelEvent({ user: { id: 'u2' }, event: 'signup_completed' });
+
+    expect(mockEmit.mock.calls[0][0].sessionId).toBe('a'.repeat(32));
+    expect(mockEmit.mock.calls[1][0]).not.toHaveProperty('sessionId');
+  });
+
   it('never throws when the emitter rejects', async () => {
     mockEmit.mockRejectedValue(new Error('network'));
     await expect(emitFunnelEvent({ user: { id: 'u1' }, event: 'email_verified' })).resolves.toBe(true);
@@ -231,6 +242,23 @@ describe('emitSignupFunnelEvents', () => {
     expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
       ['credits_granted', { amount: 50, source: 'signup', method: 'github' }],
       ['signup_completed', { method: 'github' }],
+    ]);
+  });
+
+  it('ties every stage of the signup to the visit it came from', async () => {
+    const visitId = 'b'.repeat(32);
+    await emitSignupFunnelEvents({
+      user: { id: 'u1' },
+      method: 'github',
+      emailVerified: true,
+      creditsGranted: 5,
+      visitId,
+    });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.sessionId])).toEqual([
+      ['email_verified', visitId],
+      ['credits_granted', visitId],
+      ['signup_completed', visitId],
     ]);
   });
 

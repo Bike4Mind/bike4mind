@@ -121,11 +121,17 @@ export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value' |
  * persona's signup was indistinguishable from no signup at all; marked, it can be counted apart
  * from real signups and a persona run can still be checked. The lane is spread last so caller
  * metadata cannot unmark a synthetic user.
+ *
+ * `visitId` is the visit the stage happened in (readVisitId on the request), when the stage
+ * is the user's own request: it ties the signup to the visit it came from, so the visit's
+ * source and its conversion are one session downstream. Omitted, the stage names no visit, as
+ * an admin-created account or a background job does.
  */
 export async function emitFunnelEvent(opts: {
   user: FunnelUser;
   event: FunnelEvent;
   metadata?: Record<string, string | number | boolean>;
+  visitId?: string;
 }): Promise<boolean> {
   const utm = opts.user.acquisition?.firstTouch;
   const metadata = { ...opts.metadata, ...laneMetadata(opts.user) };
@@ -134,6 +140,7 @@ export async function emitFunnelEvent(opts: {
     event: opts.event,
     eventId: stableEventId(opts.event, HOST_PRODUCT_ID, pseudonymizeUserId(opts.user.id)),
     userId: opts.user.id,
+    ...(opts.visitId !== undefined && { sessionId: opts.visitId }),
     ...(utm && { utm }),
     ...(Object.keys(metadata).length > 0 && { metadata }),
   }).catch(() => {});
@@ -161,17 +168,21 @@ export async function emitSignupFunnelEvents(opts: {
   method: string;
   emailVerified: boolean;
   creditsGranted: number;
+  /** The signup request's visit; see emitFunnelEvent. Never an admin's own. */
+  visitId?: string;
 }): Promise<void> {
   const metadata = funnelMethodMetadata(opts.method);
+  const { visitId } = opts;
   await Promise.all([
-    opts.emailVerified && emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
+    opts.emailVerified && emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata, visitId }),
     (opts.emailVerified || opts.creditsGranted > 0) &&
       emitFunnelEvent({
         user: opts.user,
         event: 'credits_granted',
         metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
+        visitId,
       }),
-    emitFunnelEvent({ user: opts.user, event: 'signup_completed', metadata }),
+    emitFunnelEvent({ user: opts.user, event: 'signup_completed', metadata, visitId }),
   ]);
 }
 
