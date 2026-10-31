@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,12 +9,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 // synthetic: it exists only to have the SHAPE the guard looks for.
 const script = fileURLToPath(new URL('../check-no-leak-shapes.sh', import.meta.url));
 const ALLOWLIST = 'scripts/leak-shapes-allowlist.txt';
+const REPO_ALLOWLIST = readFileSync(fileURLToPath(new URL('../leak-shapes-allowlist.txt', import.meta.url)), 'utf8');
 // Synthetic values are assembled at runtime so none of the shapes this guard looks for
 // appears as a literal in this file, which the Restricted Terms check and GitHub push
 // protection would otherwise reject.
 const ARN_LINE = 'role: ' + ['arn', 'aws', 'iam', '', '2109' + '87654321', 'role/Deploy'].join(':') + '\n';
 const PUBLIC_IP_LINE = '{ "ip": "51.20.33.44" }\n';
-const WEBHOOK_LINE = ['https://hooks.slack.com/services', 'T0ABCDEFG', 'B0HIJKLMN', 'abcdefghij' + 'klmnopqrstuvwx'].join('/') + '\n';
+const WEBHOOK_LINE =
+  ['https://hooks.slack.com/services', 'T0ABCDEFG', 'B0HIJKLMN', 'abcdefghij' + 'klmnopqrstuvwx'].join('/') + '\n';
 let directory;
 
 function write(file, source) {
@@ -27,9 +29,15 @@ function git(...args) {
   return execFileSync(
     'git',
     [
-      '-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false',
+      '-c',
+      'user.email=t@example.com',
+      '-c',
+      'user.name=t',
+      '-c',
+      'commit.gpgsign=false',
       // The developer's global excludes must not decide what the temp repo may stage.
-      '-c', 'core.excludesFile=/dev/null',
+      '-c',
+      'core.excludesFile=/dev/null',
       ...args,
     ],
     { cwd: directory, encoding: 'utf8' }
@@ -127,15 +135,66 @@ describe('check-no-leak-shapes: added lines', () => {
   });
 
   it('flags a bare 12-digit id but not the placeholders', () => {
-    write('deploy.yml', 'account: "2109' + '87654321"\nexample: 123456789012\nother: 111122223333\nzero: 000000000000\nuuid: 87654321-4321-4321-4321-876543210987\n');
+    write(
+      'deploy.yml',
+      'account: "2109' +
+        '87654321"\nexample: 123456789012\nother: 111122223333\nzero: 000000000000\nuuid: 87654321-4321-4321-4321-876543210987\n'
+    );
     git('add', 'deploy.yml');
     const result = run('--staged');
     expect(result.status).toBe(1);
     expect(result.stdout.match(/deploy\.yml:\d+:/g)).toEqual(['deploy.yml:1:']);
   });
 
+  it('flags a literal S3 bucket ARN but not an empty-account policy resource of another service', () => {
+    const s3 = ['arn', 'aws', 's3', '', '', 'acme-' + 'uploads/key'].join(':');
+    const route53 = ['arn', 'aws', 'route53', '', '', 'hostedzone/*'].join(':');
+    const cloudfront = ['arn', 'aws', 'cloudfront', '', '', 'distribution/*'].join(':');
+    write('policy.json', `"${route53}"\n"${cloudfront}"\n"${s3}"\n`);
+    git('add', 'policy.json');
+    const result = run('--staged');
+    expect(result.status).toBe(1);
+    expect(result.stdout.match(/policy\.json:\d+:[^\n]*/g)).toEqual(['policy.json:3: AWS ARN']);
+  });
+
+  it('flags an address in a URL but not a product/version token', () => {
+    write('ua.ts', "const ua = 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36';\nconst url = 'http://51.20.33.44/x';\n");
+    git('add', 'ua.ts');
+    const result = run('--staged');
+    expect(result.status).toBe(1);
+    expect(result.stdout.match(/ua\.ts:\d+:[^\n]*/g)).toEqual(['ua.ts:2: public IPv4 address']);
+  });
+
+  it('accepts a 12-digit constant written with numeric separators and says how', () => {
+    write('limits.ts', 'export const QUOTA_BYTES = 107_374_182_400;\n');
+    git('add', 'limits.ts');
+    expectClean(run('--staged'));
+
+    write('limits.ts', 'export const QUOTA_BYTES = 107374182400;\n');
+    git('add', 'limits.ts');
+    const result = run('--staged');
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('limits.ts:1: 12-digit account id');
+    expect(result.stdout).toContain('100_000_000_000');
+  });
+
+  it("reports a path containing a space without git's trailing TAB", () => {
+    write(ALLOWLIST, '^[^:]*\\.test\\.ts:\n');
+    write('a b.test.ts', PUBLIC_IP_LINE);
+    write('with space.md', PUBLIC_IP_LINE);
+    git('add', '.');
+    const result = run('--staged');
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('with space.md:1: public IPv4 address');
+    expect(result.stdout).not.toContain('\t');
+    expect(result.stdout).not.toContain('a b.test.ts');
+  });
+
   it('flags a fully formed Slack webhook URL but not the host or a placeholder', () => {
-    write('hooks.txt', `hosts: hooks.slack.com\nexample: https://hooks.slack.com/services/T00000000/B00000000/your-webhook-token\n${WEBHOOK_LINE}`);
+    write(
+      'hooks.txt',
+      `hosts: hooks.slack.com\nexample: https://hooks.slack.com/services/T00000000/B00000000/your-webhook-token\n${WEBHOOK_LINE}`
+    );
     git('add', 'hooks.txt');
     const result = run('--staged');
     expect(result.status).toBe(1);
@@ -187,6 +246,29 @@ describe('check-no-leak-shapes: allowlist', () => {
     expectClean(run('--staged'));
   });
 
+  it('scans the allowlist itself for identifiers and never allowlists it', () => {
+    write(ALLOWLIST, `^.\n^deploy\\.yml:.*${'2109' + '87654321'}\n^x\\.json:51.20.33.44\n`);
+    git('add', ALLOWLIST);
+    const result = run('--staged');
+    expect(result.status).toBe(1);
+    expect(result.stdout.match(/scripts\/leak-shapes-allowlist\.txt:\d+:[^\n]*/g)).toEqual([
+      `${ALLOWLIST}:2: 12-digit account id`,
+    ]);
+  });
+
+  it('keeps the repo allowlist fixture entries from excusing a path hit', () => {
+    write(ALLOWLIST, REPO_ALLOWLIST);
+    git('add', ALLOWLIST);
+    git('commit', '--quiet', '-m', 'allowlist', '--no-verify');
+    write('docs/superpowers/fixtures/x.md', 'plain\n');
+    write('.codex/__tests__/a.json', '{}\n');
+    git('add', '-f', '.');
+    const result = run('--staged');
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('docs/superpowers/fixtures/x.md: local planning artifact');
+    expect(result.stdout).toContain('.codex/__tests__/a.json: local agent artifact');
+  });
+
   it('never drops a restricted-term hit', () => {
     write(ALLOWLIST, '^notes\\.md:\n');
     write('.restricted-terms.local', 'zorblax\n');
@@ -230,6 +312,16 @@ describe('check-no-leak-shapes: restricted terms', () => {
     expect(result.stdout).toContain('<path withheld>: restricted term in path');
     expect(result.stdout).not.toContain('zorblax');
     expect(result.stdout).not.toContain('docs/superpowers');
+  });
+
+  it('withholds the path of a content hit when the path matches a term', () => {
+    write('.restricted-terms.local', 'zorblax\n');
+    write('src/zorblax-dir/a.md', ARN_LINE);
+    git('add', 'src/zorblax-dir/a.md');
+    const result = run('--staged');
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('<path withheld>:1: AWS ARN, 12-digit account id');
+    expect(result.stdout).not.toContain('zorblax');
   });
 
   it('folds the subject the way the CI checker does', () => {

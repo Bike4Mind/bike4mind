@@ -224,10 +224,14 @@ if ! content_hits=$(
     # or an S3 ARN whose bucket name is a literal rather than a template/glob placeholder.
     # A literal bucket name ends at a quote, a slash, whitespace, a comma or a bracket; anything
     # else after the name (a glob `*`, a `[region]` or `${var}` placeholder) is not a literal.
-    my $ARN = qr{\barn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:(?:([0-9]{12}):|:[a-z0-9][a-z0-9.-]*(?=[/"\x27\x60,)\]\s]|\z))};
+    # Only S3 takes the empty-account branch: IAM, Route 53 and CloudFront policy resources
+    # (a hosted-zone or distribution wildcard) leave region and account empty by design.
+    my $ARN = qr{\barn:aws[a-z-]*:(?:[a-z0-9-]*:[a-z0-9-]*:([0-9]{12}):|s3:::[a-z0-9][a-z0-9.-]*(?=[/"\x27\x60,)\]\s]|\z))};
     # Bounded so a UUID segment, a hyphenated or dotted number and a hex run do not count.
     my $ACCOUNT = qr{(?<![0-9A-Za-z_-])(?<![0-9]\.)([0-9]{12})(?![0-9A-Za-z_-])(?!\.[0-9])};
-    my $IPV4 = qr{(?<![0-9A-Za-z_.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?![0-9A-Za-z_.])};
+    # Not after "<letter>/": that is a product/version token (Chrome/120.0.0.0) in a user-agent
+    # string. A URL host follows "//", so http://<address> is still scanned.
+    my $IPV4 = qr{(?<![0-9A-Za-z_.])(?<![A-Za-z]/)((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?![0-9A-Za-z_.])};
     # A fully formed incoming-webhook URL (workspace, channel and token segments), not the host
     # or a placeholder: settings copy and egress allowlists name the host.
     my $SLACK = qr{hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]{16,}};
@@ -271,7 +275,8 @@ if ! content_hits=$(
     while (my $line = <STDIN>) {
       if ($line =~ /^diff --git /) { ($path, $lineno, $in_hunk) = (undef, undef, 0); next; }
       if (!$in_hunk && $line =~ m{^\+\+\+ (.*)$}) {
-        my $p = $1; $p =~ s/\r?\n\z//; $p =~ s{^b/}{};
+        # git appends a TAB to the header of a name containing a space.
+        my $p = $1; $p =~ s/\r?\n\z//; $p =~ s/\t\z//; $p =~ s{^b/}{};
         $path = $p eq "/dev/null" ? undef : $p;
         next;
       }
@@ -280,9 +285,11 @@ if ! content_hits=$(
       next unless $line =~ s/^\+//;
       next unless defined $path;
       my $at = defined $lineno ? $lineno++ : 0;
-      # The allowlist is made of patterns describing these very shapes; it is reviewed as a
-      # file, not scanned as content.
-      next if $path eq $allowlist_path;
+      # The allowlist is made of patterns describing these very shapes, so the address rule
+      # (which a pattern like 10\.0\. would trip) is skipped there. The identifier and term
+      # rules still run and are never allowlisted for it: silencing a value by pasting it into
+      # the allowlist would publish that value.
+      my $in_allowlist = $path eq $allowlist_path;
       # A NUL marks binary content (fonts, images) forced through --text; the identifier rules
       # are meaningless on it.
       next if index($line, "\0") >= 0;
@@ -290,15 +297,16 @@ if ! content_hits=$(
       my @why;
       push @why, "AWS ARN"           if sensitive_arn($line);
       push @why, "12-digit account id" if grep { sensitive_account($_) } ($line =~ /$ACCOUNT/g);
-      push @why, "public IPv4 address" if grep { public_ipv4($_) } ($line =~ /$IPV4/g);
+      push @why, "public IPv4 address" if !$in_allowlist && grep { public_ipv4($_) } ($line =~ /$IPV4/g);
       push @why, "Slack webhook URL"   if $line =~ $SLACK;
       my $term = has_term($line);
       # The allowlist covers the built-in shapes only; a restricted term is never allowlisted,
       # exactly as in CI.
-      @why = () if @why && allowed("$path:$line");
+      @why = () if @why && !$in_allowlist && allowed("$path:$line");
       push @why, "restricted term" if $term;
       next unless @why;
-      print "$path:$at: ", join(", ", @why), "\n";
+      my $shown = has_term($path) ? "<path withheld>" : $path;
+      print "$shown:$at: ", join(", ", @why), "\n";
     }
   '
 ); then
@@ -328,7 +336,9 @@ if [ -n "$path_hits" ] || [ -n "$content_hits" ]; then
     echo
   fi
   echo "Resolve cloud identifiers at runtime (env, SSM, SST links) instead of committing them,"
-  echo "keep local planning artifacts and audit pages out of the index, and if a match is a"
-  echo "fixture or documentation example, add a commented pattern to $ALLOWLIST."
+  echo "and keep local planning artifacts and audit pages out of the index. Write a large numeric"
+  echo "constant with separators (100_000_000_000) so it does not read as an account id. If a"
+  echo "match is a fixture or documentation example, add a commented pattern to $ALLOWLIST,"
+  echo "matching the path, never the value."
   exit 1
 fi

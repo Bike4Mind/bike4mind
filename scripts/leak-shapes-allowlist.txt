@@ -4,13 +4,14 @@
 #
 # Every entry carries a comment saying why the match is legitimate. Prefer the narrowest
 # pattern that covers the case: a path for a fixture file, "path:" plus a fragment for one
-# line in a source file.
+# line in a source file. Never write the matched value itself into a pattern: this file is
+# public, and the identifier and restricted-term rules still scan it.
 
 # Test and fixture files hold synthetic addresses, ARNs and account ids by design (SSRF
 # guards, IP blocklists, Slack integrations). LIMITATION: a real value pasted into a test file
 # is not caught here; review is the backstop, as it is for check-no-account-ids.sh.
 ^[^:]*\.(test|spec)\.[cm]?[jt]sx?:
-^[^:]*/(__tests__|__test__|__fixtures__|fixtures)/
+^[^:]*/(__tests__|__test__|__fixtures__|fixtures)/[^:]*:
 
 # Vendored browser bundles: minified code tripping the number and address shapes.
 ^apps/client/public/(scalar|static/lib)/

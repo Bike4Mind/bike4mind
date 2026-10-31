@@ -219,15 +219,6 @@ jobs:
         env:
           SMART_PUNCTUATION_BASE: ${{ steps.ascii-base.outputs.base }}
 
-      # Every changed path, any extension: blocked paths, cloud identifiers in added lines.
-      # Mirrors the husky pre-commit guard; same base resolution as above. The restricted-term
-      # list is not available here (it is a git-ignored local file), so that rule is skipped
-      # and the Restricted Terms workflow remains the authority for it.
-      - name: Check for leak shapes in changed paths and added lines
-        run: bash scripts/check-no-leak-shapes.sh --changed "$LEAK_SHAPES_BASE"
-        env:
-          LEAK_SHAPES_BASE: ${{ steps.ascii-base.outputs.base }}
-
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
 
@@ -259,6 +250,52 @@ jobs:
           else
             echo "check-export-ignore.sh absent (post-cut snapshot) — skipping"
           fi
+
+  # Every changed path, any extension: blocked paths, cloud identifiers in added lines. Mirrors
+  # the husky pre-commit guard so a `--no-verify` bypass is still caught. Its own job, with no
+  # `deployable` gate like repo-guards': a docs-only change is non-deployable, and docs/** and
+  # docs-site/** are exactly where planning artifacts and pasted identifiers land. The
+  # restricted-term list is not available here (it is a git-ignored local file), so that rule is
+  # skipped and the Restricted Terms workflow remains the authority for it.
+  leak-shapes:
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: Leak Shapes
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Same base resolution as repo-guards' "Resolve base for the ASCII checks"; see the
+      # comment there for why the merge base, not `pull_request.base.sha`. Values arrive as env.
+      - name: Resolve base for the leak-shapes check
+        id: leak-base
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          resolved="$EVENT_BASE"
+          if [ -n "$BASE_REF" ]; then
+            if git fetch --no-tags --quiet origin "$BASE_REF" 2>/dev/null; then
+              if merge_base=$(git merge-base FETCH_HEAD HEAD 2>/dev/null); then
+                resolved="$merge_base"
+              fi
+            fi
+          fi
+          echo "base=$resolved" >> "$GITHUB_OUTPUT"
+          echo "Leak-shapes check diffs against ${resolved:-<whole tree>} (event base was ${EVENT_BASE:-<none>})"
+
+      - name: Check for leak shapes in changed paths and added lines
+        run: bash scripts/check-no-leak-shapes.sh --changed "$LEAK_SHAPES_BASE"
+        env:
+          LEAK_SHAPES_BASE: ${{ steps.leak-base.outputs.base }}
 
   typecheck:
     needs: core-build
@@ -1186,6 +1223,7 @@ jobs:
       - changes
       - core-build
       - repo-guards
+      - leak-shapes
       - typecheck
       - lint
       - openapi
@@ -1205,6 +1243,7 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           CORE_BUILD: ${{ needs.core-build.result }}
           REPO_GUARDS: ${{ needs.repo-guards.result }}
+          LEAK_SHAPES: ${{ needs.leak-shapes.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
           LINT: ${{ needs.lint.result }}
           OPENAPI: ${{ needs.openapi.result }}
@@ -1216,7 +1255,7 @@ jobs:
           DOCS_SCAN: ${{ needs.docs-scan-gate.result }}
           PUBLISHED_DTS: ${{ needs.published-dts.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test-shards=$TEST_SHARDS cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS leak-shapes=$LEAK_SHAPES typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test-shards=$TEST_SHARDS cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
           # Same rule as the `test` aggregator: on a deployable run every shard must succeed.
           if [ "$DEPLOYABLE" = "true" ] && [ "$TEST_SHARDS" != "success" ]; then
             echo "::error::Test shards did not all pass; failing the required check."
@@ -1224,7 +1263,7 @@ jobs:
           fi
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$TYPECHECK" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$LEAK_SHAPES" "$TYPECHECK" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1
