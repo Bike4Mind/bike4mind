@@ -75,10 +75,12 @@ def assemble(folder, version, repository, source, mac_mode='signed'):
     dmg = f'Bike4Mind-{version}-arm64.dmg'
     zip_name = f'Bike4Mind-{version}-arm64.zip'
     image = f'Bike4Mind-{version}-x64.AppImage'
-    # The mac updater downloads the zip; the dmg blockmap is never read and the AppImage embeds its own.
-    required = {dmg, image, 'install.sh'} | (set() if mac_mode == 'adhoc' else {zip_name, zip_name + '.blockmap'})
+    exe = f'Bike4Mind-{version}-setup.exe'
+    # The mac and Windows updaters download the zip and exe blockmaps; the dmg blockmap is never read and the AppImage embeds its own.
+    required = ({dmg, image, exe, exe + '.blockmap', 'install.sh'}
+                | (set() if mac_mode == 'adhoc' else {zip_name, zip_name + '.blockmap'}))
     unpublished = {zip_name, zip_name + '.blockmap', dmg + '.blockmap', image + '.blockmap'} - required
-    manifests = {'latest-mac.yml', 'latest-linux.yml', 'SHA256SUMS.txt'}
+    manifests = {'latest-mac.yml', 'latest-linux.yml', 'latest.yml', 'SHA256SUMS.txt'}
     actual = {p.name for p in folder.iterdir()}
     if not required <= actual or actual - required - unpublished - manifests:
         raise ValueError(f'Incomplete or unexpected distribution assets: {sorted(actual)}')
@@ -90,7 +92,8 @@ def assemble(folder, version, repository, source, mac_mode='signed'):
         raise ValueError('Empty or invalid distribution asset')
     # Pin payloads to this tag so a later Latest switch cannot invalidate an offered update.
     base = f'https://github.com/{repository}/releases/download/desktop-v{version}/'
-    for manifest, names in [('latest-mac.yml', [zip_name, dmg]), ('latest-linux.yml', [image])]:
+    # electron-updater reads latest.yml on Windows, with no platform suffix.
+    for manifest, names in [('latest-mac.yml', [zip_name, dmg]), ('latest-linux.yml', [image]), ('latest.yml', [exe])]:
         if manifest == 'latest-mac.yml' and mac_mode == 'adhoc':
             (folder / manifest).unlink(missing_ok=True)
             continue
@@ -103,7 +106,7 @@ def assemble(folder, version, repository, source, mac_mode='signed'):
                 files[-1]['blockMapSize'] = embedded_blockmap_size(payload)
         document = {'version': version, 'files': files, 'path': files[0]['url'], 'sha512': files[0]['sha512']}
         (folder / manifest).write_text(yaml.safe_dump(document, sort_keys=False))
-    checksummed = sorted(assets + ['latest-linux.yml'] + (['latest-mac.yml'] if mac_mode == 'signed' else []))
+    checksummed = sorted(assets + ['latest-linux.yml', 'latest.yml'] + (['latest-mac.yml'] if mac_mode == 'signed' else []))
     (folder / 'SHA256SUMS.txt').write_text(''.join(
         f'{hashlib.sha256((folder / name).read_bytes()).hexdigest()}  {name}\n' for name in checksummed))
 

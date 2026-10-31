@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { FormControl, FormLabel, Input, Textarea, Typography } from '@mui/joy';
+import { FormControl, FormLabel, Input, Stack, Textarea, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
+import { isThrottleExempt } from '@bike4mind/common';
 import { useDeleteUser, useLoginAsUser } from '@client/app/hooks/data/user';
 import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useSendSystemMessage } from '@client/app/hooks/data/inbox';
@@ -35,7 +36,7 @@ const useAdminUserPost = (userId: string, failure: string) => {
   };
 };
 
-/** Restrict blocks AI features but keeps sign-in; lifting it is the same dialog in reverse. */
+/** Restrict blocks AI features and outbound actions but keeps sign-in; lifting it is the same dialog in reverse. */
 export const RestrictDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
   const update = useAdminUserUpdate(user.id);
   const showUndo = useUndoToast();
@@ -60,8 +61,8 @@ export const RestrictDialog: React.FC<ProfileDialogProps> = ({ user, onClose, on
       title={restricting ? `Restrict ${displayName(user)}?` : `Lift the restriction on ${displayName(user)}?`}
       description={
         restricting
-          ? 'They can still sign in and see their data, but cannot use AI features until the restriction is lifted.'
-          : 'AI features work again right away.'
+          ? 'They can still sign in and see their data, but cannot use AI features, send email or invites, use tools, or publish until the restriction is lifted.'
+          : 'AI features and outbound actions work again right away.'
       }
       reasonPresets={restricting ? ADMIN_REASON_PRESETS.restriction : ADMIN_REASON_PRESETS.reinstatement}
       confirmLabel={restricting ? 'Restrict account' : 'Lift restriction'}
@@ -70,6 +71,70 @@ export const RestrictDialog: React.FC<ProfileDialogProps> = ({ user, onClose, on
       data-testid="restrict-dialog"
     >
       <ChangePreview before={before.label} after={after.label} data-testid="restrict-dialog-preview" />
+    </ActionDialog>
+  );
+};
+
+const dateOnly = (value?: Date | string | null): string => {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : '-';
+};
+
+/** Sets or clears the silent limited tier; limits are admin settings (shadowTier*). */
+export const ShadowTierDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
+  const update = useAdminUserUpdate(user.id);
+  const showUndo = useUndoToast();
+  const restricting = user.throttle?.tier !== 'shadow';
+  const signals = user.riskSignals ?? [];
+
+  const handleConfirm = async (reason: string) => {
+    await update({ throttleTier: restricting ? 'shadow' : 'none', throttleReason: reason });
+    onClose();
+    showUndo({
+      message: restricting ? 'Moved to limited tier' : 'Limited tier removed',
+      onUndo: () =>
+        update({ throttleTier: restricting ? 'none' : 'shadow', throttleReason: `Undo: ${reason}`.slice(0, 500) }),
+      onViewAudit: onAudit,
+    });
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title={
+        restricting
+          ? `Move ${displayName(user)} to the limited tier?`
+          : `Remove ${displayName(user)} from the limited tier?`
+      }
+      description={
+        restricting
+          ? 'Limits them to cheap models, a low request rate and a daily token cap. They are not told.'
+          : 'Their models, request rate and token cap return to normal right away.'
+      }
+      reasonPresets={restricting ? ADMIN_REASON_PRESETS.limitedTier : ADMIN_REASON_PRESETS.limitedTierLift}
+      confirmLabel={restricting ? 'Move to limited tier' : 'Remove limited tier'}
+      tone={restricting ? 'danger' : 'neutral'}
+      onConfirm={handleConfirm}
+      data-testid="profile-shadow-tier-dialog"
+    >
+      <Stack gap={0.5} data-testid="profile-shadow-tier-state">
+        <Typography level="body-sm" data-testid="profile-shadow-tier-current">
+          {user.throttle
+            ? `Tier ${user.throttle.tier === 'shadow' ? 'limited' : 'standard'}, source ${user.throttle.source ?? '-'}, changed ${dateOnly(user.throttle.changedAt)}.`
+            : 'Tier standard. Never changed.'}
+        </Typography>
+        <Typography level="body-sm" data-testid="profile-shadow-tier-signals">
+          {signals.length
+            ? `Signals: ${signals.map(signal => `${signal.type} (${dateOnly(signal.at)})`).join(', ')}`
+            : 'No signals'}
+        </Typography>
+        {isThrottleExempt(user) && (
+          <Typography level="body-sm" color="warning" data-testid="profile-shadow-tier-exempt">
+            Not in effect: admins and Developer-tagged users are never limited.
+          </Typography>
+        )}
+      </Stack>
     </ActionDialog>
   );
 };
@@ -149,6 +214,47 @@ export const ApiKeyTrustDialog: React.FC<ProfileDialogProps> = ({ user, onClose,
         before={label(!!user.apiKeyTrustApproved)}
         after={label(approving)}
         data-testid="api-key-trust-dialog-preview"
+      />
+    </ActionDialog>
+  );
+};
+
+/** Exempts a young account from the hourly and daily new-account spend caps; it ages out of them anyway. */
+export const NewAccountSpendCapDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
+  const post = useAdminUserPost(user.id, 'The spend cap was not changed.');
+  const showUndo = useUndoToast();
+  const lifting = !user.newAccountSpendCapLifted;
+  const label = (lifted: boolean) => (lifted ? 'Lifted' : 'Applies while new');
+
+  const handleConfirm = async (reason: string) => {
+    await post('new-account-spend-cap', { lifted: lifting, reason });
+    onClose();
+    showUndo({
+      message: lifting ? 'New-account spend cap lifted' : 'New-account spend cap restored',
+      onUndo: () => post('new-account-spend-cap', { lifted: !lifting, reason: undoAdminReason(reason) }),
+      onViewAudit: onAudit,
+    });
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title={lifting ? 'Lift the new-account spend cap' : 'Restore the new-account spend cap'}
+      description={
+        lifting
+          ? 'They can spend their own credits as fast as they like, without the hourly and daily limits for new accounts.'
+          : 'While the account is new, their spend is held to the hourly and daily limits again.'
+      }
+      reasonPresets={ADMIN_REASON_PRESETS.newAccountSpendCap}
+      confirmLabel={lifting ? 'Lift cap' : 'Restore cap'}
+      onConfirm={handleConfirm}
+      data-testid="new-account-spend-cap-dialog"
+    >
+      <ChangePreview
+        before={label(!!user.newAccountSpendCapLifted)}
+        after={label(lifting)}
+        data-testid="new-account-spend-cap-dialog-preview"
       />
     </ActionDialog>
   );

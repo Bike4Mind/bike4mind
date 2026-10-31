@@ -467,10 +467,19 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     const reply = latestReply(conversation.messages, turnOpen);
     // The figure ChatService.autoCompact decides on, so red means the same thing on both sides.
     const local = !!conversation.session?.model && isLocalModel(conversation.session.model);
+    const snapshot =
+      reply?.contextSnapshot && reply.contextSnapshot.model === conversation.session?.model
+        ? reply.contextSnapshot
+        : null;
+    const modelWindow = (local ? snapshot?.modelWindow : modelOption?.contextWindow) ?? null;
     return {
-      contextTokens: occupiedTokens(conversation.messages, turnOpen, local),
-      contextLimit: effectiveContextLimit(modelOption?.contextWindow),
-      modelWindow: modelOption?.contextWindow ?? null,
+      contextTokens:
+        reply?.contextSnapshot && reply.contextSnapshot.model !== conversation.session?.model
+          ? null
+          : occupiedTokens(conversation.messages, turnOpen, local),
+      contextSnapshot: snapshot,
+      contextLimit: modelWindow ? effectiveContextLimit(modelWindow) : null,
+      modelWindow,
       credits: credits.balance,
       monthlyAllowance: credits.monthlyAllowance,
       ...(credits.error ? { creditsError: credits.error } : {}),

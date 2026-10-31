@@ -24,7 +24,7 @@ import {
   type LocalModelFootprint,
   type OllamaMessage,
 } from './localContext';
-import { ServerCredentialsError } from '../modelServers/errors';
+import { ServerCredentialsError, ServerForbiddenError } from '../modelServers/errors';
 import type { CompletionStreamEvent } from './streamEvents';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 
@@ -68,8 +68,8 @@ export class LocalModelRemovedError extends Error {
 }
 
 async function ollamaError(response: Response, server?: RemoteOllama): Promise<Error> {
-  if (server && (response.status === 401 || response.status === 403))
-    return new ServerCredentialsError(server.label, server.hasCredentials());
+  if (server && response.status === 401) return new ServerCredentialsError(server.label, server.hasCredentials());
+  if (server && response.status === 403) return new ServerForbiddenError(server.label);
   const message = await httpError(response, server?.label ?? 'Ollama');
   // Ollama answers "model '...' not found" once the model is deleted, e.g. from the Models screen.
   if (response.status === 404 && /model .* not found/i.test(message)) return new LocalModelRemovedError();

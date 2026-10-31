@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
 
 // Middleware is stripped so the handler body runs directly (same pattern as
 // pages/api/email/__tests__/verify.test.ts).
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: any = { use: () => chain, post: (fn: any) => fn };
+    const chain: any = { use: () => chain, post: (...fns: any[]) => fns[fns.length - 1] };
     return chain;
   },
 }));

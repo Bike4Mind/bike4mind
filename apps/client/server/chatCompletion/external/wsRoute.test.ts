@@ -41,6 +41,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: {},
   organizationRepository: {},
+  cacheRepository: {},
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue(null) },
 }));
 
@@ -219,6 +220,7 @@ describe('a completion that fails after the 202', () => {
       requestId: BODY.requestId,
       error: 'Model does not support tool search.',
       errorCode: 'tool_search_unsupported',
+      status: 400,
     });
     expect(emitMetrics).not.toHaveBeenCalled();
   });

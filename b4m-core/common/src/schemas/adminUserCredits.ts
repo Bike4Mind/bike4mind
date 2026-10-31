@@ -115,6 +115,13 @@ export const adminLedgerRowSchema = z.object({
   questId: z.string().optional(),
   inputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
+  /** Prompt-cache tokens, disjoint from inputTokens and priced on their own. */
+  cacheReadTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
+  /** The client conversation a completion API row belongs to, when the client sent one. */
+  sessionId: z.string().optional(),
+  /** Distinct tools the model called on a completion API row. */
+  toolNames: z.array(z.string()).optional(),
   description: z.string().optional(),
   /** Machine reason on generic_* rows, e.g. admin_adjustment or credit_expiry. */
   reason: z.string().optional(),

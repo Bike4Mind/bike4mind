@@ -1,4 +1,10 @@
-import { Permission, IUserDocument, IOrganizationRepository, IUserRepository } from '@bike4mind/common';
+import {
+  Permission,
+  IUserDocument,
+  IOrganizationRepository,
+  IUserRepository,
+  organizationSeatUsage,
+} from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -53,7 +59,7 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
   // Owner-inclusive team size: the owner is not a `users[]` row (see organizationService/create.ts)
   // but still occupies a seat, so full means owner + members >= seats (#1423). This matches the
   // canonical accounting in sharingService/accept.ts and validateSeatChange.
-  if (!force && organization.users.length + 1 >= organization.seats) {
+  if (!force && organizationSeatUsage(organization).full) {
     throw new UnprocessableEntityError('Organization is at full capacity');
   }
 

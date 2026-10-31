@@ -218,6 +218,11 @@ describe('ChatService usage reporting', () => {
     const id = await runTwoRoundTurn();
     const reply = (await store.get(id))?.messages.at(-1);
 
+    expect(reply?.contextSnapshot).toMatchObject({ model: 'test-model', inputTokens: 4950 });
+    expect(reply?.contextSnapshot?.overhead.some(slice => slice.id === 'system-tools')).toBe(true);
+    const done = events.find(event => event.type === 'done');
+    expect(done && 'contextSnapshot' in done ? done.contextSnapshot : null).toEqual(reply?.contextSnapshot);
+
     expect(reply?.rounds?.map(round => round.usage)).toEqual([
       { inputTokens: 900, cacheCreationInputTokens: 4000, outputTokens: 100, creditsUsed: 5, usdCost: 0.05 },
       { inputTokens: 50, cacheReadInputTokens: 4900, outputTokens: 40, creditsUsed: 2, usdCost: 0.02 },
@@ -234,7 +239,7 @@ describe('ChatService usage reporting', () => {
     await service.send(id, 'and again?');
     await vi.waitUntil(() => post.mock.calls.length === 3, { timeout: 3000, interval: 5 });
     expect(JSON.stringify(wireOf(2).messages.slice(1))).not.toMatch(
-      /"(usage|usdCost|creditsUsed|cacheRead\w*|cacheCreation\w*)"/
+      /"(usage|contextSnapshot|usdCost|creditsUsed|cacheRead\w*|cacheCreation\w*)"/
     );
   });
 
@@ -262,5 +267,25 @@ describe('ChatService usage reporting', () => {
 
     const call = (await store.get(id))?.messages.at(-1)?.toolCalls?.[0];
     expect(call?.detail?.usage).toEqual({ inputTokens: 300, cacheReadInputTokens: 10 });
+  });
+
+  it('keeps the last measured snapshot when a later tool round fails', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'read files');
+    await vi.waitUntil(() => streams.length === 1);
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'call_1', name: 'glob_files', arguments: '{"pattern":"*"}' }],
+        usage: { inputTokens: 50, cacheReadInputTokens: 4900 },
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 2);
+    streams[1].destroy(new Error('connection lost'));
+    const failed = await vi.waitUntil(() => events.find(event => event.type === 'error'));
+    const reply = (await store.get(id))?.messages.at(-1);
+    expect(reply?.contextSnapshot?.inputTokens).toBe(4950);
+    expect(failed?.type === 'error' && failed.contextSnapshot).toEqual(reply?.contextSnapshot);
   });
 });

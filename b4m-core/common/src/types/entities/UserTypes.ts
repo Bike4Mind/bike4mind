@@ -284,6 +284,34 @@ export interface IUserModeration {
   appealText?: string | null;
 }
 
+export const THROTTLE_TIERS = ['none', 'shadow'] as const;
+export type ThrottleTier = (typeof THROTTLE_TIERS)[number];
+export const THROTTLE_SOURCES = ['admin', 'signup_honeypot', 'signup_timing'] as const;
+export type ThrottleSource = (typeof THROTTLE_SOURCES)[number];
+export const USER_RISK_SIGNAL_TYPES = [
+  'signup_honeypot',
+  'signup_too_fast',
+  'signup_token_missing',
+  'signup_token_invalid',
+  'signup_token_expired',
+] as const;
+export type UserRiskSignalType = (typeof USER_RISK_SIGNAL_TYPES)[number];
+
+/** Per-user restricted tier. Absent is equivalent to tier 'none'. Written only by userService.setThrottleTier. */
+export interface IUserThrottle {
+  tier: ThrottleTier;
+  reason: string;
+  source: ThrottleSource;
+  changedAt: Date;
+  /** Admin user id; absent when set by the system. */
+  changedBy?: string;
+}
+
+export interface IUserRiskSignal {
+  type: UserRiskSignalType;
+  at: Date;
+}
+
 export interface IUser extends ICreditHolder {
   id: string;
   username: string;
@@ -336,12 +364,18 @@ export interface IUser extends ICreditHolder {
   isModerated: boolean;
   /** Admin override that trusts the account for personal API keys (userApiKeyService/trust.ts). Absent on legacy docs. */
   apiKeyTrustApproved?: boolean;
+  /** Admin override that exempts a young account from the new-account spend cap (creditService/newAccountSpendCap.ts). */
+  newAccountSpendCapLifted?: boolean;
   /**
    * Per-user moderation tracking + auto-throttle/suspend state.
    * Absent until the user's first moderation hit. Independent of `isModerated`, the admin's
    * AI-only block.
    */
   moderation?: IUserModeration;
+  /** Restricted-tier state; admin-only (see ADMIN_ONLY_USER_FIELDS). Distinct from `moderation.status`. */
+  throttle?: IUserThrottle;
+  /** Append-only signals recorded at signup; admin-only. */
+  riskSignals?: IUserRiskSignal[];
   /**
    * Set to true when a Stripe dispute (chargeback) is opened against this user.
    * Blocks chat completions and API key access until resolved by an admin.
