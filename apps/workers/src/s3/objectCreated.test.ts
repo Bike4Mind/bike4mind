@@ -162,7 +162,7 @@ describe('objectCreated - overwrite of a judged object', () => {
 
     await run('uploads/report.pdf', undefined, 'etag-b');
 
-    expect(h.recordLandedObject).toHaveBeenCalledWith('ff1', 'uploads/report.pdf');
+    expect(h.recordLandedObject).toHaveBeenCalledWith('ff1', 'uploads/report.pdf', logger);
     expect(h.recordLandedObject.mock.invocationCallOrder[0]).toBeLessThan(
       h.findOneAndUpdate.mock.invocationCallOrder[0]
     );

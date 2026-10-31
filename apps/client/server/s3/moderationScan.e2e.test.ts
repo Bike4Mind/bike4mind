@@ -11,6 +11,7 @@ import { claimModerationScan, recordLandedObject, writeModerationVerdict } from 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const h = vi.hoisted(() => ({ getMetadata: vi.fn() }));
+const logger = { warn: vi.fn() };
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getMetadata: h.getMetadata }),
 }));
@@ -40,7 +41,7 @@ describe('recordLandedObject', () => {
     const doc = await seed({ moderationStatus: 'clean', moderationETag: 'etag-a' });
 
     h.getMetadata.mockResolvedValue({ etag: 'etag-b' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
 
     const row = await FabFile.findById(doc._id).lean();
     expect(row).toMatchObject({ moderationStatus: 'pending', moderationETag: 'etag-b' });
@@ -51,7 +52,7 @@ describe('recordLandedObject', () => {
     const doc = await seed({ moderationStatus: 'blocked', blockReason: 'explicit', moderationETag: 'etag-a' });
 
     h.getMetadata.mockResolvedValue({ etag: 'etag-b' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
 
     const row = await FabFile.findById(doc._id).lean();
     expect(row?.moderationStatus).toBe('pending');
@@ -62,7 +63,7 @@ describe('recordLandedObject', () => {
     const doc = await seed({ moderationStatus: 'clean' });
 
     h.getMetadata.mockResolvedValue({ etag: 'etag-a' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
 
     expect((await FabFile.findById(doc._id).lean())?.moderationStatus).toBe('pending');
   });
@@ -71,7 +72,7 @@ describe('recordLandedObject', () => {
     const doc = await seed({ moderationStatus: 'clean', moderationETag: 'etag-a-3' });
 
     h.getMetadata.mockResolvedValue({ etag: 'etag-a-3' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
 
     expect((await FabFile.findById(doc._id).lean())?.moderationStatus).toBe('clean');
   });
@@ -80,7 +81,7 @@ describe('recordLandedObject', () => {
     const doc = await seed({ moderationStatus: 'pending' });
 
     h.getMetadata.mockResolvedValue({ etag: 'etag-a' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
 
     expect(await FabFile.findById(doc._id).lean()).toMatchObject({
       moderationStatus: 'pending',
@@ -92,11 +93,11 @@ describe('recordLandedObject', () => {
     const doc = await seed({ moderationStatus: 'pending' });
     const claimedAt = new Date();
     h.getMetadata.mockResolvedValue({ etag: 'etag-a' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
     await claimModerationScan(doc._id, claimedAt);
 
     h.getMetadata.mockResolvedValue({ etag: 'etag-b' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
 
     expect(await writeModerationVerdict(doc._id, claimedAt, { moderationStatus: 'clean' })).toBe(false);
     const row = await FabFile.findById(doc._id).lean();
@@ -108,11 +109,11 @@ describe('recordLandedObject', () => {
     const doc = await seed({ moderationStatus: 'pending' });
     const claimedAt = new Date();
     h.getMetadata.mockResolvedValue({ etag: 'etag-a' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
     await claimModerationScan(doc._id, claimedAt);
 
     h.getMetadata.mockResolvedValue({ etag: 'etag-a' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
 
     expect(await writeModerationVerdict(doc._id, claimedAt, { moderationStatus: 'clean' })).toBe(true);
   });
@@ -123,7 +124,7 @@ describe('current-version reconciliation safety', () => {
     const doc = await seed({ moderationStatus: 'blocked', blockReason: 'explicit', moderationETag: 'etag-b' });
     h.getMetadata.mockResolvedValue({ etag: '"etag-b"' });
 
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
 
     expect(await claimModerationScan(doc._id, new Date())).toBeNull();
     expect(await FabFile.findById(doc._id).lean()).toMatchObject({
@@ -137,14 +138,14 @@ describe('current-version reconciliation safety', () => {
     const doc = await seed({ moderationStatus: 'blocked', moderationETag: 'etag-b' });
     h.getMetadata.mockRejectedValueOnce(new Error('storage unavailable'));
 
-    await expect(recordLandedObject(doc._id, 'uploads/f.png')).rejects.toThrow('storage unavailable');
+    await expect(recordLandedObject(doc._id, 'uploads/f.png', logger)).rejects.toThrow('storage unavailable');
     expect((await FabFile.findById(doc._id).lean())?.moderationStatus).toBe('blocked');
   });
 
   it.each([
-    { delayedTag: 'etag-a', requiresRetry: false },
-    { delayedTag: 'etag-c', requiresRetry: true },
-  ])('preserves the newer block when a held HEAD resolves $delayedTag', async ({ delayedTag, requiresRetry }) => {
+    { delayedTag: 'etag-a', lostRaces: 0 },
+    { delayedTag: 'etag-c', lostRaces: 1 },
+  ])('preserves the newer block when a held HEAD resolves $delayedTag', async ({ delayedTag, lostRaces }) => {
     const doc = await seed({ moderationStatus: 'clean', moderationETag: 'etag-a' });
     let releaseHead: ((head: { etag: string }) => void) | undefined;
     h.getMetadata.mockImplementationOnce(
@@ -153,24 +154,25 @@ describe('current-version reconciliation safety', () => {
           releaseHead = resolve;
         })
     );
-    const delayed = recordLandedObject(doc._id, 'uploads/f.png');
+    const delayed = recordLandedObject(doc._id, 'uploads/f.png', logger);
     await vi.waitFor(() => expect(h.getMetadata).toHaveBeenCalledTimes(1), { timeout: MONGO_TEST_TIMEOUT_MS });
 
     h.getMetadata.mockResolvedValue({ etag: 'etag-b' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
     const claimedAt = new Date();
     expect(await claimModerationScan(doc._id, claimedAt)).not.toBeNull();
     expect(
       await writeModerationVerdict(doc._id, claimedAt, { moderationStatus: 'blocked', blockReason: 'explicit' })
     ).toBe(true);
 
-    // Same-tag HEAD is a safe no-op; a different stale HEAD must lose its guarded update.
-    const completion = requiresRetry
-      ? expect(delayed).rejects.toThrow('retry the landing')
-      : expect(delayed).resolves.toBeUndefined();
+    // Same-tag HEAD is a safe no-op; a different stale HEAD loses its guarded update and the
+    // re-read against current storage settles without touching the newer verdict.
+    logger.warn.mockClear();
+    const completion = expect(delayed).resolves.toBeUndefined();
     if (!releaseHead) throw new Error('HEAD did not start');
     releaseHead({ etag: delayedTag });
     await completion;
+    expect(logger.warn).toHaveBeenCalledTimes(lostRaces);
     expect(await FabFile.findById(doc._id).lean()).toMatchObject({
       moderationStatus: 'blocked',
       moderationETag: 'etag-b',
@@ -189,27 +191,27 @@ describe('moderation version ABA protection', () => {
           releaseHead = resolve;
         })
     );
-    const delayed = recordLandedObject(doc._id, 'uploads/f.png');
+    const delayed = recordLandedObject(doc._id, 'uploads/f.png', logger);
     await vi.waitFor(() => expect(h.getMetadata).toHaveBeenCalledTimes(1), { timeout: MONGO_TEST_TIMEOUT_MS });
 
     h.getMetadata.mockResolvedValue({ etag: 'etag-b' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
     const firstClaim = new Date('2026-10-20T00:00:00Z');
     expect(await claimModerationScan(doc._id, firstClaim)).not.toBeNull();
     expect(await writeModerationVerdict(doc._id, firstClaim, { moderationStatus: 'blocked' })).toBe(true);
 
     h.getMetadata.mockResolvedValue({ etag: 'etag-a' });
-    await recordLandedObject(doc._id, 'uploads/f.png');
+    await recordLandedObject(doc._id, 'uploads/f.png', logger);
     const secondClaim = new Date('2026-10-20T00:00:01Z');
     expect(await claimModerationScan(doc._id, secondClaim)).not.toBeNull();
     expect(
       await writeModerationVerdict(doc._id, secondClaim, { moderationStatus: 'blocked', blockReason: 'explicit' })
     ).toBe(true);
 
-    const rejected = expect(delayed).rejects.toThrow('retry the landing');
+    const settled = expect(delayed).resolves.toBeUndefined();
     if (!releaseHead) throw new Error('HEAD did not start');
     releaseHead({ etag: 'etag-b' });
-    await rejected;
+    await settled;
     expect(await FabFile.findById(doc._id).lean()).toMatchObject({
       moderationStatus: 'blocked',
       moderationETag: 'etag-a',

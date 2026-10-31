@@ -86,7 +86,7 @@ export const func = withContext(async (event, context, logger) => {
 
     // An overwrite of an already-judged object (a re-PUT of a still valid presigned URL) sends its
     // verdict back to 'pending', so the claim below rescans the new bytes.
-    await recordLandedObject(metadata._id, objectKey);
+    await recordLandedObject(metadata._id, objectKey, logger);
 
     // Atomically claim the right to scan this file BEFORE the transaction
     // below touches it. `metadata` above was read outside a transaction with retry/backoff
