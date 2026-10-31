@@ -14,7 +14,6 @@ import {
   isToolRefusal,
   OpenAICompatibleRuntime,
   probeToolSupport,
-  redactServerResponse,
   serverContextTokens,
   toolsOffHint,
   type FetchLike,
@@ -59,6 +58,12 @@ export interface OpenAICompatibleBackendOptions {
   product: OpenAICompatibleProduct | null;
   /** Adds the server's credentials; the backend sends none of its own. */
   fetch: FetchLike;
+  /**
+   * Scrubs those credentials from server text that reaches an error, such as an error event inside a 200
+   * stream, which `createServerFetch` does not scrub. Pass `credentialRedactor(credentials)?.redact` for the
+   * credentials `fetch` adds.
+   */
+  redact?: (text: string) => string;
   logger?: ILogger;
   /** Called once per cause (tools refused, context too small) with a line that says how to fix it. */
   onNotice?: (text: string) => void;
@@ -103,7 +108,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     });
   }
 
-  /** Drops the SDK's own `authorization` and scrubs credentials out of error bodies before the SDK reads them. */
+  /** Drops the SDK's own `authorization`, and runs `redact` over error bodies before the SDK reads them. */
   private guardedFetch(): FetchLike {
     return async (input, init) => {
       const headers = new Headers(init?.headers);
@@ -115,7 +120,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       if (response.ok) return response;
       const responseHeaders = new Headers(response.headers);
       responseHeaders.delete('content-length');
-      return new Response(withErrorKey(redactServerResponse(await response.text(), response)), {
+      return new Response(withErrorKey(this.redact(await response.text())), {
         status: response.status,
         statusText: response.statusText,
         headers: responseHeaders,
@@ -486,20 +491,27 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     if (!inheritedGuard && guard) await guard.flush();
   }
 
-  /** Credentials never reach a message: 401/403 carry no body, and other bodies were scrubbed by `guardedFetch`. */
+  private redact(text: string): string {
+    return this.options.redact?.(text) ?? text;
+  }
+
+  /**
+   * Credentials never reach a message: 401/403 drop the body, `guardedFetch` scrubs other error bodies, and an
+   * error event inside a 200 stream (an `APIError` without a status) is scrubbed here.
+   */
   private describeError(error: unknown): unknown {
     const { label } = this.options;
+    // Both subclass APIError and carry no status.
     if (error instanceof OpenAI.APIUserAbortError) return error;
-    if (error instanceof OpenAI.APIError && error.status !== undefined) {
-      if (error.status === 401 || error.status === 403) return new Error(`${label} needs credentials.`);
-      const body = typeof error.error === 'object' && error.error ? (error.error as { message?: unknown }) : undefined;
-      const detail = typeof body?.message === 'string' ? body.message : error.message;
-      return new Error(`${label} returned HTTP ${error.status}: ${detail}`);
-    }
     if (error instanceof OpenAI.APIConnectionError) {
       return new Error(`${label} could not be reached: ${describeFailure(error.cause ?? error)}`);
     }
-    return error;
+    if (!(error instanceof OpenAI.APIError)) return error;
+    if (error.status === undefined) return new Error(`${label}: ${this.redact(error.message)}`);
+    if (error.status === 401 || error.status === 403) return new Error(`${label} needs credentials.`);
+    const body = typeof error.error === 'object' && error.error ? (error.error as { message?: unknown }) : undefined;
+    const detail = typeof body?.message === 'string' ? body.message : error.message;
+    return new Error(`${label} returned HTTP ${error.status}: ${detail}`);
   }
 
   private formatMessages(

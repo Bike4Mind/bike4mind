@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ModelBackend, type IMessage } from '@bike4mind/common';
-import { createServerFetch, type FetchLike } from '@bike4mind/local-models/servers';
+import { createServerFetch, credentialRedactor, type FetchLike } from '@bike4mind/local-models/servers';
 import {
   json,
   sendJson,
@@ -47,7 +47,8 @@ async function fakeServer(routes: Parameters<typeof startFakeServer>[0]): Promis
 function make(
   baseUrl: string,
   product: 'vllm' | 'llama-server' | 'lmstudio' | null,
-  fetch: FetchLike = globalThis.fetch
+  fetch: FetchLike = globalThis.fetch,
+  redact?: (text: string) => string
 ) {
   const notices: string[] = [];
   const backend = new OpenAICompatibleBackend({
@@ -55,6 +56,7 @@ function make(
     label: 'gpu-box',
     product,
     fetch,
+    redact,
     logger: silentLogger,
     onNotice: text => notices.push(text),
   });
@@ -255,6 +257,26 @@ describe('OpenAICompatibleBackend against vLLM', () => {
     expect((error as Error).message).toMatch(/^gpu-box returned HTTP 400: bad request, saw /);
     expect((error as Error).message).not.toContain('s3cret-token');
     expect(server.requests[0].headers.authorization).toBe('Bearer s3cret-token');
+  });
+
+  it('keeps the credential out of an error event inside a 200 stream', async () => {
+    const credentials = { authorization: 'Bearer s3cret-token' };
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        const message = `upstream rejected ${String(req.headers.authorization)}`;
+        res.end(`data: ${JSON.stringify({ error: { message } })}\n\n`);
+      },
+    });
+    const fetch = createServerFetch({
+      origin: server.baseUrl,
+      label: 'gpu-box',
+      app: 'the CLI',
+      credentialHeaders: () => credentials,
+    });
+    const { backend } = make(server.baseUrl, null, fetch, credentialRedactor(credentials)?.redact);
+    const error = (await run(backend, 'm').catch((e: unknown) => e)) as Error;
+    expect(error.message).toBe('gpu-box: upstream rejected [redacted]');
   });
 
   it('streams reasoning_content and reasoning as think text', async () => {
