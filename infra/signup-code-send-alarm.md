@@ -10,7 +10,7 @@ are operational signals, not the credit ledger.
 Set `SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN` privately to a positive integer to alert
 when zero-credit review decisions reach that count in five minutes. Unset disables
 this alarm. Monitored stages route both ALARM and OK transitions through the same
-Slack and out-of-band email topics as the other signup alarms. No policy weights,
+Slack topic as the other signup alarms. No policy weights,
 network data, account identifiers or email addresses are included in band messages.
 
 All thresholds are read from the deployer's environment, are listed in
@@ -54,8 +54,9 @@ the same account do not combine their counts. Each alarm compares its `Sum` with
 the configured threshold using `GreaterThanOrEqualToThreshold`; missing data is
 not breaching.
 
-ALARM and OK transitions go to the DLQ alarm topic (Slack; its handler drops OK)
-and to the out-of-band topic (`OPS_ALERT_EMAIL`). Each alarm notifies on an ALARM transition. A non-breaching evaluation returns it
+ALARM and OK transitions go to the DLQ alarm topic (Slack; its handler drops OK).
+The out-of-band email topic (`OPS_ALERT_EMAIL`) is reserved for the alarms that
+report the Slack relay itself failing. Each alarm notifies on an ALARM transition. A non-breaching evaluation returns it
 to OK, allowing a later burst to notify again; a continuous breach remains one
 alarm episode.
 
@@ -66,8 +67,8 @@ A metric filter on the WAF log group (us-east-1) counts requests whose
 anonymous-IP hosting-provider label or any bot-control `signal:` label. Labels are
 logged whether the managed rule blocks or counts. The metric is
 `OtcEdgeSignalRequests` in `<app-name>/<stage>/Signup` in us-east-1. Alarm actions
-must share the alarm's region, so this alarm routes to the us-east-1 WAF topics:
-`wafAiRateLimitAlarmTopic` (Slack) and `wafOobAlarmTopic` (`OPS_ALERT_EMAIL`).
+must share the alarm's region, so this alarm routes to the us-east-1 WAF Slack
+topic `wafAiRateLimitAlarmTopic`.
 
 ## Young-account spend (`apps/workers/src/cron/youngAccountSpendAlert.ts`)
 
@@ -147,7 +148,7 @@ namespace:
 
 One alarm per provider fires when `EstimatedUsd` sums to at least
 `LLM_SPEND_ALARM_USD_PER_5MIN` (whole USD) in 5 minutes, sending ALARM and OK to
-the Slack DLQ topic and the out-of-band email topic. The
+the Slack DLQ topic. The
 `<app>-<stage>-llm-spend` dashboard shows spend per 5 minutes and across the selected dashboard range,
 output tokens, spend by model, the young-account share of spend, and the signup
 and WAF edge-signal counts from the alarms above.
