@@ -51,7 +51,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 // The real resolver reads the session collection to prove ownership; the deep-link tests below
 // only care that whatever it resolved reaches both channels, so it is stubbed to a fixed answer.
@@ -63,7 +63,7 @@ vi.mock('@server/utils/feedbackContext', () => ({
 }));
 
 const mockPostFeedbackToSlack = vi.fn();
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
 

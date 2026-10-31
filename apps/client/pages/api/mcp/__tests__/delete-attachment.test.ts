@@ -12,7 +12,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
-vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@server/utils/parseMcpResult', () => ({ parseMcpResult: vi.fn(() => ({})) }));
 vi.mock('@server/integrations/atlassian/confluenceAttachmentCleanup', () => ({
   cleanupConfluencePageContent: vi.fn(),
@@ -31,7 +31,7 @@ vi.mock('@bike4mind/slack', () => {
 });
 
 import { Quest, Session } from '@bike4mind/database';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { parseMcpResult } from '@server/utils/parseMcpResult';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
 import handler from '../delete-attachment';

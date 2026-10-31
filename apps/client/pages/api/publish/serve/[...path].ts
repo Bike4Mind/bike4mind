@@ -102,7 +102,7 @@ import {
   parseArtifactsWithFallback,
   type ParsedArtifact,
   type ArtifactParseResult,
-} from '@client/app/utils/artifactParser';
+} from '@bike4mind/server-utils/app/utils/artifactParser';
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';

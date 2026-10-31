@@ -39,8 +39,11 @@ export interface RecordOperationalUsageParams {
   feature: OperationalUsageFeature;
   /** Provider/backend, e.g. 'openai', 'voyageai'. */
   provider: string;
-  /** Exact model id used for the call. */
+  /** Exact model id used for the call (the requested id on a restricted-tier substitution). */
   model: string;
+  /** The substitute that ran instead of `model` (shadowTier executedModelFields); costUsd prices it. */
+  executedProvider?: string;
+  executedModel?: string;
   inputTokens: number;
   outputTokens?: number;
   cachedInputTokens?: number;
@@ -54,6 +57,8 @@ export interface RecordOperationalUsageParams {
   priceStamp?: UsagePriceStamp;
   latencyMs?: number;
   source?: CompletionSource;
+  /** The UserApiKey that authenticated the triggering request, recorded on the debit's ledger row. */
+  apiKeyId?: string;
   /** Provider stop reason of the underlying completion, e.g. `CompletionInfo.stopReason`. */
   finishReason?: string;
   /**
@@ -181,6 +186,7 @@ export async function recordOperationalUsage(
             inputTokens: params.inputTokens,
             outputTokens,
             source: params.source ?? 'system',
+            apiKeyId: params.apiKeyId,
           },
           {
             db: {
@@ -207,6 +213,7 @@ export async function recordOperationalUsage(
     feature,
     provider: params.provider,
     model: params.model,
+    ...(params.executedModel ? { executedProvider: params.executedProvider, executedModel: params.executedModel } : {}),
     inputTokens: params.inputTokens,
     outputTokens,
     cachedInputTokens: params.cachedInputTokens ?? 0,

@@ -26,14 +26,13 @@ vi.mock('@bike4mind/database', async () => ({
   FabFile: class FabFile {},
   Memento: class Memento {},
   Project: class Project {},
-  QuestMasterPlan: class QuestMasterPlan {},
 }));
 
 vi.mock('@bike4mind/database/infra', () => ({
   SecretRotation: class SecretRotation {},
 }));
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   Subscription: class Subscription {},
 }));
 

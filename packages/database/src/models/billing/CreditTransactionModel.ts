@@ -86,6 +86,9 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
     sessionId: { type: String, required: false },
     inputTokens: { type: Number, required: false },
     outputTokens: { type: Number, required: false },
+    // Prompt-cache tokens, disjoint from inputTokens (see CacheTokenFields in CreditTransactionTypes.ts).
+    cacheReadTokens: { type: Number, required: false },
+    cacheWriteTokens: { type: Number, required: false },
     apiKeyId: { type: String, required: false }, // For completion_api_usage (optional - present for API key auth, undefined for JWT)
 
     // Transfer and received credit fields
@@ -192,6 +195,8 @@ export type AiSpendSummary = {
   /** Largest 90-day spend first; a null key collects rows that recorded no source. */
   bySource: AiSpendBucket[];
 };
+
+export const API_KEY_REQUEST_TRANSACTION_TYPES = ['completion_api_usage', 'decision_usage'];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const AI_SPEND_DAILY_WINDOW_DAYS = 90;
@@ -426,6 +431,36 @@ export class CreditTransactionRepository
     return row?.total ?? 0;
   }
 
+  /**
+   * The owner's AI spend since `since` in one-minute buckets, oldest first. Served by the
+   * ownerId_ownerType_createdAt_id index. Feeds the new-account spend cap (newAccountSpendCap.ts).
+   */
+  async aiSpendByMinuteSince(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    since: Date
+  ): Promise<Array<{ at: Date; credits: number }>> {
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      {
+        $match: {
+          ownerId,
+          ownerType,
+          createdAt: { $gte: since },
+          type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+        },
+      },
+      {
+        $group: {
+          // $dateToString rather than $dateTrunc, which DocumentDB lacks (see FeedbackReportQueries.ts).
+          _id: { $dateToString: { format: '%Y-%m-%dT%H:%M:00.000Z', date: '$createdAt', timezone: 'UTC' } },
+          credits: { $sum: { $abs: '$credits' } },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+    return rows.map(row => ({ at: new Date(row._id), credits: row.credits }));
+  }
+
   /** AI spend (magnitudes) over rolling 24h/7d/30d windows, the 30-day top model and per-UTC-day sums. */
   async summarizeAiSpend(ownerId: string, ownerType: CreditHolderType, now: Date): Promise<AiSpendSummary> {
     const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -534,7 +569,9 @@ export class CreditTransactionRepository
       {
         $group: {
           _id: '$apiKeyId',
-          requests: { $sum: 1 },
+          // Chat, tool, media and agent rows also carry the key (for per-key spend), but one request
+          // can write several of them; only these types are one row per API request.
+          requests: { $sum: { $cond: [{ $in: ['$type', API_KEY_REQUEST_TRANSACTION_TYPES] }, 1, 0] } },
           // Usage is stored negative; report the spend magnitude.
           creditsSpent: { $sum: { $abs: '$credits' } },
           inputTokens: { $sum: { $ifNull: ['$inputTokens', 0] } },

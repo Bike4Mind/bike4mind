@@ -2,13 +2,19 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { withTransaction, dataLakeFindingRepository, dataLakeRepository } from '@bike4mind/database';
-import { LAKE_FINDING_RESOLUTION_MAX_CHARS, type LakeFindingTerminalStatus } from '@bike4mind/common';
+import {
+  LAKE_FINDING_RESOLUTION_MAX_CHARS,
+  lakeFindingAssignResponseSchema,
+  lakeFindingRulingResponseSchema,
+  type LakeFindingTerminalStatus,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { loadFindingForLake } from '@server/dataLakes/loadFindingForLake';
 import { recordFindingResolutionBelief } from '@server/dataLakes/recordFindingResolutionBelief';
+import { respond } from '@server/utils/respond';
 
 /**
  * The two state changes a curator can make, as a discriminated union rather than a partial patch:
@@ -124,7 +130,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       return { kind: 'ruled' as const, lake, resolved, status };
     });
 
-    if (outcome.kind === 'assigned') return res.json({ data: outcome.assigned });
+    if (outcome.kind === 'assigned') {
+      return respond(res, lakeFindingAssignResponseSchema, { data: outcome.assigned });
+    }
     const { lake, resolved, status } = outcome;
 
     // The ruling is committed; this projects it into lake memory so the next session inherits it.
@@ -159,7 +167,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // belief outcome IS the payload. Same information, different subject - folding them into one
     // shape would make one of the two routes lie about what it returns.
     const beliefReason = belief && !belief.recorded ? { beliefSkipReason: belief.reason } : {};
-    return res.json({ data: resolved, beliefRecorded: belief?.recorded ?? false, ...beliefReason });
+    return respond(res, lakeFindingRulingResponseSchema, {
+      data: resolved,
+      beliefRecorded: belief?.recorded ?? false,
+      ...beliefReason,
+    });
   });
 
 export const config = { api: { externalResolver: true } };

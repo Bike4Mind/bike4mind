@@ -69,6 +69,11 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   creditTransactionRepository: {},
   usageEventRepository: { record: mockUsageRecord },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<typeof import('@bike4mind/services')>();
@@ -294,6 +299,20 @@ describe('transcribeUpload credit hold', () => {
     expect(await result).toEqual({ text: 'finished' });
     expect(hold.settle).toHaveBeenCalledTimes(1);
     expect(hold.release).not.toHaveBeenCalled();
+  });
+
+  it('records the authenticating API key on the settled charge', async () => {
+    mockOpenAI.mockResolvedValue({ text: 'hello' });
+
+    await transcribeUpload({
+      user: { id: 'u1' } as never,
+      fileKey: 'transcribe-uploads/u1/a.mp3',
+      receivedAt: new Date(),
+      logger,
+      apiKeyId: 'key-1',
+    });
+
+    expect(hold.settle).toHaveBeenCalledWith(expect.any(Number), expect.objectContaining({ apiKeyId: 'key-1' }));
   });
 
   it('holds the size-based cost before the provider runs, then settles that hold', async () => {

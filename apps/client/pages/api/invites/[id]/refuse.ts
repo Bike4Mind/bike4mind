@@ -4,7 +4,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { sharingService } from '@bike4mind/services';
 import {
   inviteRepository,

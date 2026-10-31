@@ -269,6 +269,32 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
     });
 
+    it.each(['text_generation_usage', 'completion_api_usage'] as const)(
+      'forwards cache read and write tokens for %s',
+      async type => {
+        const params = {
+          type,
+          user: mockUser,
+          organization: null,
+          credits: 15,
+          sessionId: 'session1',
+          questId: 'quest1',
+          model: 'claude-opus-5-5',
+          inputTokens: 5,
+          outputTokens: 250,
+          cacheReadTokens: 40_000,
+          cacheWriteTokens: 2_000,
+        } satisfies DeductCreditsParams;
+
+        await deductCreditsWithOrgSupport(params, mockAdapters);
+
+        expect(mockSubtractCredits).toHaveBeenCalledWith(
+          expect.objectContaining({ type, inputTokens: 5, cacheReadTokens: 40_000, cacheWriteTokens: 2_000 }),
+          expect.any(Object)
+        );
+      }
+    );
+
     it('should handle image_generation_usage type', async () => {
       const params: DeductCreditsParams = {
         type: 'image_generation_usage',
@@ -484,6 +510,33 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
         apiKeyId: 'apikey-123',
       });
       expect('questId' in calledWith).toBe(false);
+    });
+  });
+
+  describe('apiKeyId attribution', () => {
+    it.each([
+      { type: 'image_generation_usage', questId: 'quest1' },
+      { type: 'text_generation_usage', questId: 'quest1', inputTokens: 1, outputTokens: 1 },
+      { type: 'music_generation_usage' },
+      { type: 'text_to_speech_usage' },
+      { type: 'speech_to_text_usage' },
+      { type: 'sound_effects_usage' },
+      { type: 'completion_api_usage', inputTokens: 1, outputTokens: 1 },
+    ] as const)('forwards apiKeyId for $type', async variant => {
+      const params = {
+        ...variant,
+        user: mockUser,
+        organization: null,
+        credits: 2,
+        sessionId: 'session1',
+        model: 'model-x',
+        apiKeyId: 'apikey-123',
+      } as DeductCreditsParams;
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({ type: variant.type, apiKeyId: 'apikey-123' });
     });
   });
 

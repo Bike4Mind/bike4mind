@@ -103,6 +103,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockUserFindById },
   usageEventRepository: { record: vi.fn() },
   organizationRepository: { findById: mockOrgFindById },
+  cacheRepository: {},
   agentRepository: { findById: mockAgentFindById },
   userApiKeyRepository: mockUserApiKeyRepository,
   projectRepository: { findById: mockProjectFindById },
@@ -150,7 +151,7 @@ vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProc
 
 import { registerEmbedRoutes } from './embedRoute';
 import { spendCapExceededError } from '@bike4mind/common';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const VALID_INFO = {

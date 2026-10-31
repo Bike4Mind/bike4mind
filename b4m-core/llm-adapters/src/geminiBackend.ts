@@ -671,7 +671,10 @@ export class GeminiBackend implements ICompletionBackend {
     // Empty text plus no reminder still leaves `systemInstruction: undefined` below.
     const systemInstruction = shouldOmitIdentityReminder(options)
       ? callerSystemText
-      : appendIdentityReminder(callerSystemText, buildIdentityReminder(modelName, options.modelDisplayName));
+      : appendIdentityReminder(
+          callerSystemText,
+          buildIdentityReminder(options.modelIdentityId ?? modelName, options.modelDisplayName)
+        );
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
     const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
@@ -1648,6 +1651,18 @@ export class GeminiBackend implements ICompletionBackend {
   }
 
   private getGenerationConfig(
+    model: ModelInfo,
+    options: Partial<ICompletionOptions>
+  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {
+    const config = this.getUncappedGenerationConfig(model, options);
+    // The thinking reserve sits on top of the caller's cap; a billing ceiling bounds the sum.
+    const ceiling = options.outputTokenCeiling;
+    return ceiling !== undefined && (config.maxOutputTokens ?? Infinity) > ceiling
+      ? { ...config, maxOutputTokens: ceiling }
+      : config;
+  }
+
+  private getUncappedGenerationConfig(
     model: ModelInfo,
     options: Partial<ICompletionOptions>
   ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {

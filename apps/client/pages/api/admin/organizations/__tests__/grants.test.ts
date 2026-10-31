@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 
 const mockLean = vi.hoisted(() => vi.fn());
 const mockFind = vi.hoisted(() => vi.fn());
-vi.mock('@server/models/Subscription', () => ({ Subscription: { find: mockFind } }));
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ Subscription: { find: mockFind } }));
 
 import handler from '../grants';
 

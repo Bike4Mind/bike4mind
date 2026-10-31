@@ -34,6 +34,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Analysts]: 'analysts',
   [AdminTab.Waitlist]: 'waitlist',
   [AdminTab.Subscriptions]: ADMIN_SUBSCRIPTIONS_TAB_SLUG,
+  [AdminTab.Revenue]: 'revenue',
   [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
   [AdminTab.CreditAnalytics]: 'credit-analytics',
   [AdminTab.SecretsRotation]: 'secrets-rotation',
@@ -86,6 +87,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.ReleaseNotes]: 'release-notes',
   [AdminTab.OAuthClients]: 'oauth-clients',
   [AdminTab.GrowthPricing]: 'growth-pricing',
+  [AdminTab.PreferenceArena]: 'preference-arena',
   [AdminTab.IntegrationDemand]: ADMIN_INTEGRATION_DEMAND_TAB_SLUG,
   [AdminTab.AuditLog]: ADMIN_AUDIT_LOG_TAB_SLUG,
 };

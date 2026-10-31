@@ -40,7 +40,7 @@ import {
  * Consumes the built dist, so `pnpm turbo:core:build` must be current.
  */
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
@@ -89,7 +89,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   // "embeddingModel discriminator stamp" describe block in fabFileVectorize.test.ts.
   getAtlasIndexForModel: vi.fn(() => null),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 // Resolves to {} so every spend lever reads as absent -> coded defaults -> the spend gate
 // grants, keeping these tests about retry gating rather than cost governance.
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn(async () => ({})) }));

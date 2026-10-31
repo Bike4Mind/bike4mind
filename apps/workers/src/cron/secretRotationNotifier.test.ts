@@ -20,7 +20,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   resolveSlackWebhookUrl: vi.fn().mockReturnValue(''),
 }));
 

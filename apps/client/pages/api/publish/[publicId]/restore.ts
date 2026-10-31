@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash } from 'node:crypto';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -50,7 +51,7 @@ interface RestoreArtifactLean {
   versions?: Array<{ sha256Index: string; indexBytes?: number }>;
 }
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   if (!req.user?.id) return res.status(401).json({ error: 'Authentication required' });
 
   const publicId = String((req.query as { publicId?: string }).publicId ?? '');

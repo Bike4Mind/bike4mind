@@ -6,7 +6,7 @@ import {
   type IGenerationJobDocumentOf,
   type MusicJobPublicErrorCode,
 } from '@bike4mind/common';
-import { OUTPUT_URL_TTL_SECONDS } from '@server/generations/signedOutput';
+import { OUTPUT_URL_TTL_SECONDS } from '@bike4mind/server-utils/generations/signedOutput';
 import { toPublicMusicGeneration } from './toPublicMusicGeneration';
 
 // Pinned here so a swapped entry in the mapper's own table cannot pass the round-trip below.

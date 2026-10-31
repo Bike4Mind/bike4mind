@@ -89,7 +89,7 @@ import {
   type ISkillListing,
   type ISkillListingVersion,
 } from '@bike4mind/common';
-import { canReviewListing, type MarketActor } from '@server/skillMarket/market';
+import { canReviewListing, type MarketActor } from '@bike4mind/server-utils/skillMarket/market';
 import { encodeTimeIdCursor } from '@server/utils/cursorPagination';
 import queueHandler from '../review-queue';
 import reviewHandler from '../versions/[vid]/review';

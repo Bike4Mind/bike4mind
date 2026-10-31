@@ -1,7 +1,7 @@
 // apps/client/pages/api/skills/market/me.ts
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { memberOrgIdsFor } from '@server/skillMarket/market';
+import { memberOrgIdsFor } from '@bike4mind/server-utils/skillMarket/market';
 
 /**
  * GET /api/skills/market/me - what the market UI needs about the caller: the organizations they

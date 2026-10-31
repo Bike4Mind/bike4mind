@@ -18,11 +18,14 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.email.verification_resent': 'Resent the verification email',
   'user.subscription.granted': 'Granted a subscription',
   'user.subscription.removed': 'Removed the subscription',
+  'billing.comp.changed': 'Changed a comp',
   'user.api_key.generated': 'Generated an API key',
   'user.api_key.rate_limit_updated': 'Changed API key rate limits',
   'user.api_key.rate_limit_reset': 'Reset API key rate limits',
   'user.api_key_trust.approved': 'Approved API key trust',
   'user.api_key_trust.revoked': 'Revoked API key trust',
+  'user.new_account_spend_cap.lifted': 'Lifted the new-account spend cap',
+  'user.new_account_spend_cap.restored': 'Restored the new-account spend cap',
   'user.role.admin_granted': 'Granted the Super Admin role',
   'user.role.admin_revoked': 'Revoked the Super Admin role',
   'user.storage.recalculated': 'Recalculated storage',
@@ -41,6 +44,7 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   email: 'Email',
   username: 'Username',
   level: 'Level',
+  role: 'Organization role',
 };
 
 const humanizeField = (field: string): string => {
@@ -105,9 +109,31 @@ const changeSentence = ({ field, before, after }: AuditChange): string => {
 
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
+// The org membership entries target the user and carry the org's name in their details.
+const orgMembershipSentence = (entry: AuditEntry): string | null => {
+  const name = entry.details?.organizationName;
+  const org = typeof name === 'string' && name ? name : 'an organization';
+  switch (entry.action) {
+    case 'org.member.added':
+      return `Added to ${org}`;
+    case 'org.member.removed':
+      return `Removed from ${org}`;
+    case 'org.member.role_changed': {
+      const after = entry.changes?.find(change => change.field === 'role')?.after;
+      if (after === 'manager') return `Made a manager of ${org}`;
+      if (after === 'member') return `Made a member of ${org}`;
+      return `Changed role in ${org}`;
+    }
+    default:
+      return null;
+  }
+};
+
 /** One line naming what the admin did, e.g. "Suspended account" or "Credits +2,000 (5,410 to 7,410)". */
 export const describeAuditEntry = (entry: AuditEntry): string => {
   if (entry.action.endsWith('.denied')) return `Blocked: ${entry.summary}`;
+  const membership = orgMembershipSentence(entry);
+  if (membership) return membership;
   const known = ACTION_SENTENCES[entry.action];
   if (known) return known;
   if (entry.changes && entry.changes.length > 0) return entry.changes.map(changeSentence).join('; ');

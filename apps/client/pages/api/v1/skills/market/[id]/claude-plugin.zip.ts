@@ -5,7 +5,7 @@
 import { getClaudePluginZipContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { NotFoundError } from '@server/utils/errors';
-import { canSeeListing, findListing, memberOrgIdsFor } from '@server/skillMarket/market';
+import { canSeeListing, findListing, memberOrgIdsFor } from '@bike4mind/server-utils/skillMarket/market';
 import { pluginZipFor } from '@server/skillMarket/claudeMarketplace';
 
 const handler = nextRouteForContract(getClaudePluginZipContract).get(async (req, res) => {

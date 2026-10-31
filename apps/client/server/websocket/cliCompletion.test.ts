@@ -32,6 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn().mockResolvedValue(null) },
   userApiKeyRepository: { findById: vi.fn() },
   organizationRepository: {},
+  cacheRepository: {},
 }));
 
 vi.mock('@server/cli/auth', () => ({
@@ -45,7 +46,7 @@ vi.mock('@server/utils/logCompletionAnalytics', () => ({
   logCompletionAnalytics: (...args: unknown[]) => mockLogCompletionAnalytics(...args),
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -54,8 +55,8 @@ vi.mock('@server/websocket/utils', () => ({
 
 import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
 import { ForbiddenError, TooManyRequestsError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { sendToConnection } from '@server/websocket/utils';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { func } from './cliCompletion';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
@@ -256,6 +257,7 @@ describe('cliCompletion websocket handler', () => {
       requestId: '7f0c3f0e-5b1a-4c58-9a57-2f1e8f6f3a11',
       error: 'Model does not support tool search.',
       errorCode: 'tool_search_unsupported',
+      status: 400,
     });
   });
 

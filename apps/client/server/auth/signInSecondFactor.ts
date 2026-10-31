@@ -7,7 +7,7 @@ import { readEnforceMfa } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 // Re-exported so existing importers (mfa/status, mfa/disable) keep one import site.

@@ -85,8 +85,8 @@ export interface CompletionRequest {
   /** Lowers or raises how long a reasoning model thinks before its first token. Absent sends nothing. */
   reasoningEffort?: ReasoningEffort;
   /**
-   * Which conversation this request belongs to, for the developer log only. NOT sent on the
-   * wire - the body below is built field by field - and absent for the requests that are not a
+   * Which conversation this request belongs to. Sent so the server's credit ledger can tie the
+   * spend to it, and tags the developer log. Absent for the requests that are not a
    * conversation's turn, such as naming a session.
    */
   sessionId?: string;
@@ -121,6 +121,7 @@ export async function streamCompletion(
         model: request.model,
         messages: request.messages.map(({ continuesTurn: _continuesTurn, ...message }) => message),
         ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+        ...(request.sessionId ? { sessionId: request.sessionId } : {}),
         // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
         // this client executes it locally, then sends the result back as another turn.
         options: {

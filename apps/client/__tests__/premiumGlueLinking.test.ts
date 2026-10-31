@@ -9,8 +9,10 @@ import { join } from 'node:path';
  *
  * A hydrated overlay whose package is NOT linked into node_modules must get the
  * ABSENT form for all bare-specifier glue (emitting real imports would fail every
- * typecheck/build with cannot-find-module errors), while infra glue keeps the
- * PRESENT form (it imports overlay source relatively and needs no link).
+ * typecheck/build with cannot-find-module errors) and for the shared glue in
+ * packages/server-utils (the server loads it at runtime, and the overlay source it names can't
+ * resolve its own imports until pnpm installs the overlay). The build-time relative-import glue
+ * (infra, migrations) keeps the PRESENT form: it imports overlay source by path and needs no link.
  *
  * Runs the real script inside a sandbox tree, since its paths derive from its own
  * location: sandbox/apps/client/scripts/ next to sandbox/packages/premium/.
@@ -18,6 +20,20 @@ import { join } from 'node:path';
 
 const REAL_SCRIPT = join(__dirname, '../scripts/generate-premium-glue.mjs');
 const PKG_NAME = '@bike4mind/premium-fakeoverlay';
+const SHARED_GLUE = 'packages/server-utils/src/premium-generated';
+// Overlay source as the shared glue imports it, relative to SHARED_GLUE.
+const OVERLAY_SRC = '../../../premium/fakeoverlay/src';
+// Generated into SHARED_GLUE, and generated under apps/client before that.
+const SHARED_GLUE_FORMER_PATHS = [
+  'server/premium-generated/premiumLlmTools.generated.ts',
+  'server/premium-generated/premiumSystemPrompts.generated.ts',
+  'server/premium-generated/premiumAgentExtensions.generated.ts',
+  'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts',
+  'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts',
+  'app/premium-generated/premiumAdminSettings.generated.ts',
+  'app/premium-generated/premiumEntitlementGrants.generated.ts',
+  'app/premium-generated/premiumApiKeyScopes.generated.ts',
+];
 
 let sandbox: string;
 let script: string;
@@ -45,6 +61,39 @@ function unlinkOverlay() {
   rmSync(join(clientRoot, 'node_modules'), { recursive: true, force: true });
 }
 
+function readSharedGlue(name: string) {
+  return readFileSync(join(sandbox, SHARED_GLUE, `${name}.generated.ts`), 'utf8');
+}
+
+// The five shared-glue modules that import a linked overlay name its source by relative path: no
+// overlay is linked into packages/server-utils, so a bare specifier would not resolve there.
+function expectSharedGlueImportsOverlaySource() {
+  const tools = readSharedGlue('premiumLlmTools');
+  expect(tools).toContain(`import { llmTools as tools0 } from '${OVERLAY_SRC}/tools';`);
+
+  const prompts = readSharedGlue('premiumSystemPrompts');
+  expect(prompts).toContain(`import type { DefaultSystemPrompt } from '../utils/systemPrompts/defaults';`);
+  expect(prompts).toContain(`import { systemPrompts as prompts0 } from '${OVERLAY_SRC}/prompts';`);
+
+  const agentExtensions = readSharedGlue('premiumAgentExtensions');
+  expect(agentExtensions).toContain(
+    `import { agentExtensions as extensions0 } from '${OVERLAY_SRC}/agent-extensions';`
+  );
+
+  const adminSettings = readSharedGlue('premiumAdminSettings');
+  expect(adminSettings).toContain(`import { adminSettings as settings0 } from '${OVERLAY_SRC}/admin-settings';`);
+
+  const sessionSettings = readSharedGlue('premiumWorkspaceSessionSettings');
+  expect(sessionSettings).toContain(
+    `import { workspaceSessionSettings as settings0 } from '${OVERLAY_SRC}/session-settings';`
+  );
+  expect(sessionSettings).toContain('"opti": settings0,');
+
+  for (const glue of [tools, prompts, agentExtensions, adminSettings, sessionSettings]) {
+    expect(glue).not.toContain(PKG_NAME);
+  }
+}
+
 beforeAll(() => {
   sandbox = mkdtempSync(join(tmpdir(), 'b4m-glue-test-'));
   clientRoot = join(sandbox, 'apps/client');
@@ -62,6 +111,11 @@ beforeAll(() => {
       name: PKG_NAME,
       exports: {
         './server/migrations': './src/server/migrations.ts',
+        './tools': './src/tools.ts',
+        './prompts': './src/prompts.ts',
+        './agent-extensions': './src/agent-extensions.ts',
+        './admin-settings': './src/admin-settings.ts',
+        './session-settings': './src/session-settings.ts',
       },
       b4mContributions: {
         spaRoutesExport: `${PKG_NAME}/routes`,
@@ -73,6 +127,7 @@ beforeAll(() => {
         systemPromptsExport: `${PKG_NAME}/prompts`,
         partnerSignupHooksExport: `${PKG_NAME}/signup-hooks`,
         agentExtensionsExport: `${PKG_NAME}/agent-extensions`,
+        adminSettingsExport: `${PKG_NAME}/admin-settings`,
         workspaceSessionSettingsExport: { opti: `${PKG_NAME}/session-settings` },
         migrationsExport: `${PKG_NAME}/server/migrations`,
         apiRouteStubs: [{ generatedPath: 'pages/api/premium-fakeoverlay/ping.ts', exportFrom: `${PKG_NAME}/api/ping` }],
@@ -87,6 +142,12 @@ beforeAll(() => {
   writeFileSync(join(overlayDir, 'src/infra.ts'), 'export function contributeInfra() {}\n');
   mkdirSync(join(overlayDir, 'src/server'), { recursive: true });
   writeFileSync(join(overlayDir, 'src/server/migrations.ts'), 'export const migrations = [];\n');
+
+  // Left behind by codegen from before the shared glue moved into packages/server-utils.
+  for (const former of SHARED_GLUE_FORMER_PATHS) {
+    mkdirSync(join(clientRoot, former, '..'), { recursive: true });
+    writeFileSync(join(clientRoot, former), 'export {};\n');
+  }
 
   writeFileSync(
     join(sandbox, 'sst.config.ts'),
@@ -112,36 +173,12 @@ describe('hydrated but UNLINKED overlay', () => {
     expect(routes).not.toContain(PKG_NAME);
     expect(routes).toContain('premiumRoutes: PremiumRouteDescriptor[] = []');
 
-    const tools = readFileSync(join(clientRoot, 'server/premium-generated/premiumLlmTools.generated.ts'), 'utf8');
-    expect(tools).not.toContain(PKG_NAME);
-
-    const prompts = readFileSync(
-      join(clientRoot, 'server/premium-generated/premiumSystemPrompts.generated.ts'),
-      'utf8'
-    );
-    expect(prompts).not.toContain(PKG_NAME);
-    expect(prompts).toContain('premiumSystemPrompts: DefaultSystemPrompt[] = []');
-
     const signupHooks = readFileSync(
       join(clientRoot, 'server/premium-generated/premiumPartnerSignupHooks.generated.ts'),
       'utf8'
     );
     expect(signupHooks).not.toContain(PKG_NAME);
     expect(signupHooks).toContain('premiumPartnerSignupHooks: PartnerSignupHook[] = []');
-
-    const agentExtensions = readFileSync(
-      join(clientRoot, 'server/premium-generated/premiumAgentExtensions.generated.ts'),
-      'utf8'
-    );
-    expect(agentExtensions).not.toContain(PKG_NAME);
-    expect(agentExtensions).toContain('premiumAgentExtensions: AgentExtensionContribution[] = []');
-
-    const sessionSettings = readFileSync(
-      join(clientRoot, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts'),
-      'utf8'
-    );
-    expect(sessionSettings).not.toContain(PKG_NAME);
-    expect(sessionSettings).toContain('premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {}');
 
     const nav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNavItems.generated.ts'), 'utf8');
     expect(nav).not.toContain(PKG_NAME);
@@ -172,7 +209,26 @@ describe('hydrated but UNLINKED overlay', () => {
     expect(existsSync(join(clientRoot, 'server/premium-generated/fakeoverlay.ts'))).toBe(false);
   });
 
-  it('still emits the PRESENT no-import + relative-import glue (they need no link)', () => {
+  it('emits the absent form for the shared glue the server loads at runtime', () => {
+    runCodegen();
+
+    const absentForms: Record<string, string> = {
+      premiumLlmTools: 'export const premiumLlmTools: Record<string, ToolDefinition> = {};',
+      premiumSystemPrompts: 'export const premiumSystemPrompts: DefaultSystemPrompt[] = [];',
+      premiumAgentExtensions: 'export const premiumAgentExtensions: AgentExtensionContribution[] = [];',
+      premiumAdminSettings: 'export const premiumAdminSettings: SettingDefinition<string>[] = [];',
+      premiumWorkspaceSessionSettings:
+        'export const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {};',
+    };
+    for (const [name, absent] of Object.entries(absentForms)) {
+      const glue = readSharedGlue(name);
+      expect(glue, name).toContain(absent);
+      expect(glue, name).not.toContain('premium/fakeoverlay');
+      expect(glue, name).not.toContain(PKG_NAME);
+    }
+  });
+
+  it('still emits the PRESENT no-import + build-time relative-import glue (they need no link)', () => {
     runCodegen();
 
     // Pure data lifted from package.json - it must never be demoted into the
@@ -186,6 +242,14 @@ describe('hydrated but UNLINKED overlay', () => {
     const migrations = readFileSync(join(sandbox, 'packages/scripts/migrate/migrations/premium.generated.ts'), 'utf8');
     expect(migrations).toContain('premium/fakeoverlay/src/server/migrations');
     expect(migrations).not.toContain(PKG_NAME);
+  });
+
+  it('removes the shared glue from its former apps/client paths', () => {
+    runCodegen();
+
+    for (const former of SHARED_GLUE_FORMER_PATHS) {
+      expect(existsSync(join(clientRoot, former)), former).toBe(false);
+    }
   });
 
   it('refuses the hydrated-but-unlinked state outright when CI=true', () => {
@@ -225,14 +289,7 @@ describe('hydrated AND linked overlay', () => {
     const indexing = readFileSync(join(clientRoot, 'app/premium-generated/premiumRouteIndexing.generated.ts'), 'utf8');
     expect(indexing).toContain(`import { routeIndexing as indexing0 } from '${PKG_NAME}/seo'`);
 
-    const tools = readFileSync(join(clientRoot, 'server/premium-generated/premiumLlmTools.generated.ts'), 'utf8');
-    expect(tools).toContain(`import { llmTools as tools0 } from '${PKG_NAME}/tools'`);
-
-    const prompts = readFileSync(
-      join(clientRoot, 'server/premium-generated/premiumSystemPrompts.generated.ts'),
-      'utf8'
-    );
-    expect(prompts).toContain(`import { systemPrompts as prompts0 } from '${PKG_NAME}/prompts'`);
+    expectSharedGlueImportsOverlaySource();
 
     const signupHooks = readFileSync(
       join(clientRoot, 'server/premium-generated/premiumPartnerSignupHooks.generated.ts'),
@@ -240,24 +297,103 @@ describe('hydrated AND linked overlay', () => {
     );
     expect(signupHooks).toContain(`import { partnerSignupHooks as hooks0 } from '${PKG_NAME}/signup-hooks'`);
 
-    const agentExtensions = readFileSync(
-      join(clientRoot, 'server/premium-generated/premiumAgentExtensions.generated.ts'),
-      'utf8'
-    );
-    expect(agentExtensions).toContain(`import { agentExtensions as extensions0 } from '${PKG_NAME}/agent-extensions'`);
-
-    const sessionSettings = readFileSync(
-      join(clientRoot, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts'),
-      'utf8'
-    );
-    expect(sessionSettings).toContain(
-      `import { workspaceSessionSettings as settings0 } from '${PKG_NAME}/session-settings'`
-    );
-    expect(sessionSettings).toContain('"opti": settings0,');
-
     const stub = readFileSync(join(clientRoot, 'pages/api/premium-fakeoverlay/ping.ts'), 'utf8');
     expect(stub).toContain(`export { default } from '${PKG_NAME}/api/ping'`);
 
     expect(existsSync(join(clientRoot, 'server/premium-generated/fakeoverlay.ts'))).toBe(true);
+  });
+});
+
+describe('a contributed export the overlay does not declare', () => {
+  const overlayPackageJson = () => join(sandbox, 'packages/premium/fakeoverlay/package.json');
+  let packageJson: string;
+
+  beforeAll(() => {
+    linkOverlay();
+    packageJson = readFileSync(overlayPackageJson(), 'utf8');
+  });
+
+  afterAll(() => {
+    writeFileSync(overlayPackageJson(), packageJson);
+  });
+
+  it.each([
+    ['llmToolsExport', './tools'],
+    ['systemPromptsExport', './prompts'],
+    ['agentExtensionsExport', './agent-extensions'],
+    ['adminSettingsExport', './admin-settings'],
+    ['workspaceSessionSettingsExport', './session-settings'],
+  ])('fails codegen instead of dropping the %s import', (field, subpath) => {
+    const pkg = JSON.parse(packageJson);
+    delete pkg.exports[subpath];
+    writeFileSync(overlayPackageJson(), JSON.stringify(pkg));
+
+    const result = spawnSync(process.execPath, [script], { encoding: 'utf8', env: { ...process.env, CI: '' } });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`cannot resolve ${field} "${PKG_NAME}${subpath.slice(1)}"`);
+  });
+});
+
+// The shared glue resolves the overlay's declared export itself, so it must follow the exports
+// shapes Node accepts, not only an exact plain-string key.
+describe('exports shapes the shared glue resolves', () => {
+  const overlayPackageJson = () => join(sandbox, 'packages/premium/fakeoverlay/package.json');
+  let packageJson: string;
+
+  beforeAll(() => {
+    linkOverlay();
+    packageJson = readFileSync(overlayPackageJson(), 'utf8');
+  });
+
+  afterAll(() => {
+    writeFileSync(overlayPackageJson(), packageJson);
+  });
+
+  function codegenWithToolsExport(llmToolsExport: string, exportsField: unknown, extra: Record<string, unknown> = {}) {
+    const pkg = JSON.parse(packageJson);
+    pkg.b4mContributions.llmToolsExport = llmToolsExport;
+    pkg.exports = exportsField;
+    Object.assign(pkg, extra);
+    // Only the tools glue is under test; keep the other relative generators resolvable or absent.
+    for (const field of ['systemPromptsExport', 'agentExtensionsExport', 'adminSettingsExport']) {
+      delete pkg.b4mContributions[field];
+    }
+    delete pkg.b4mContributions.workspaceSessionSettingsExport;
+    delete pkg.b4mContributions.migrationsExport;
+    writeFileSync(overlayPackageJson(), JSON.stringify(pkg));
+    runCodegen();
+    return readSharedGlue('premiumLlmTools');
+  }
+
+  it('takes the import condition of a conditional entry, never types', () => {
+    const tools = codegenWithToolsExport(`${PKG_NAME}/tools`, {
+      './tools': { types: './dist/tools.d.ts', import: './src/tools-esm.ts', default: './src/tools.ts' },
+    });
+    expect(tools).toContain(`from '${OVERLAY_SRC}/tools-esm';`);
+  });
+
+  it('falls back to the default condition', () => {
+    const tools = codegenWithToolsExport(`${PKG_NAME}/tools`, {
+      './tools': { types: './dist/tools.d.ts', default: './src/tools.ts' },
+    });
+    expect(tools).toContain(`from '${OVERLAY_SRC}/tools';`);
+  });
+
+  it('expands the longest matching wildcard pattern', () => {
+    const tools = codegenWithToolsExport(`${PKG_NAME}/server/llm/tools`, {
+      './*': './src/other/*.ts',
+      './server/*': './src/server/*.ts',
+    });
+    expect(tools).toContain(`from '${OVERLAY_SRC}/server/llm/tools';`);
+  });
+
+  it('reads a string exports field as the package root', () => {
+    const tools = codegenWithToolsExport(PKG_NAME, './src/index.ts');
+    expect(tools).toContain(`from '${OVERLAY_SRC}/index';`);
+  });
+
+  it('falls back to main for the package root when there is no exports field', () => {
+    const tools = codegenWithToolsExport(PKG_NAME, undefined, { main: './src/main.ts' });
+    expect(tools).toContain(`from '${OVERLAY_SRC}/main';`);
   });
 });

@@ -10,7 +10,7 @@ import { creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -104,6 +104,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           {
             db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
             creditHolderMethods: organizationRepository,
+            lotFundingSource: 'granted',
             // A refund dedupes on transactionId, which createTransaction swallows. Inside the
             // transaction the duplicate write has already aborted the session, so the duplicate
             // must be raised here rather than re-read: any further operation on the dead session

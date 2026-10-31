@@ -58,3 +58,23 @@ describe('fabFileUtils / unpdf lazy load', () => {
     expect(result).toBe('plain text content');
   });
 });
+
+describe('fabFileUtils / caller-supplied content cap', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Fresh module so the 60s settings cache from earlier tests cannot hide a fetch.
+    vi.resetModules();
+  });
+
+  // The server export passes the cap it read from the DB; the settings fetch goes through the
+  // browser API client and throws Invalid URL in Node.
+  it('truncates to the given cap without fetching settings', async () => {
+    const { extractTextFromFile } = await import('./fabFileUtils');
+
+    const buffer = new TextEncoder().encode('abcdefghij').buffer;
+    const result = await extractTextFromFile(SupportedFabFileMimeTypes.TXT_PLAIN, buffer, 4);
+
+    expect(result).toBe('abcd...');
+    expect(apiGet).not.toHaveBeenCalled();
+  });
+});

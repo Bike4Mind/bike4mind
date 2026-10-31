@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '@bike4mind/local-models';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
-import { ServerCredentialsError } from './errors';
+import { ServerCredentialsError, ServerForbiddenError } from './errors';
 import { OpenAICompatibleChat, toOpenAIMessages } from './OpenAICompatibleChat';
 
 const BASE = 'http://127.0.0.1:18080';
@@ -93,6 +93,13 @@ describe('OpenAICompatibleChat', () => {
     await expect(
       collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] })
     ).rejects.toBeInstanceOf(ServerCredentialsError);
+  });
+
+  it('reports a 403 as a refusal, not as rejected credentials', async () => {
+    const fetch: FetchLike = async () => new Response('', { status: 403 });
+    await expect(
+      collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] })
+    ).rejects.toBeInstanceOf(ServerForbiddenError);
   });
 
   it('retries without tools when the server refuses them, and remembers', async () => {
