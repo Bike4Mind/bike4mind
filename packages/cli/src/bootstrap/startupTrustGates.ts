@@ -60,6 +60,21 @@ export function decideFolderTrustGate(input: FolderTrustGateInput): FolderTrustG
   return input.hostLaunch ? 'inert' : 'prompt';
 }
 
+export type EndpointPickerGateInput = {
+  endpointSource: 'custom' | 'baked-default' | 'dev-default' | 'unconfigured';
+  endpointChosen: boolean;
+  hasAuthTokens: boolean;
+};
+
+/**
+ * Whether to show the first-run backend picker: always when no endpoint resolves, and on a
+ * fresh install of a build with a baked default (nothing chosen yet, nothing signed in).
+ */
+export function shouldShowEndpointPicker(input: EndpointPickerGateInput): boolean {
+  if (input.endpointSource === 'unconfigured') return true;
+  return input.endpointSource === 'baked-default' && !input.endpointChosen && !input.hasAuthTokens;
+}
+
 export type McpApprovalGateInput = {
   alreadyResolved: boolean;
   pendingCount: number;

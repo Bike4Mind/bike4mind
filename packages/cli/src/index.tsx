@@ -199,6 +199,7 @@ import {
   hostInertNotice,
   isHostLaunchWithQueuedPrompt,
   shouldPromptMcpApproval,
+  shouldShowEndpointPicker,
 } from './bootstrap/startupTrustGates.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
@@ -265,7 +266,7 @@ interface CliState {
   rewindSelector: RewindSelectorState | null;
   sessionSelector: SessionSelectorState | null;
   showLoginFlow?: boolean;
-  showEnvironmentPicker?: boolean; // First-run backend picker when no endpoint is configured
+  showEnvironmentPicker?: boolean; // Backend picker on a fresh install or when no endpoint is configured
   showModelPicker?: boolean; // Interactive model picker opened by /model with no argument
   config?: CliConfig; // Cached config for synchronous access
   availableModels?: ModelInfo[]; // Models fetched from API at startup
@@ -627,13 +628,21 @@ function CliApp() {
       const authTokens = await state.configStore.getAuthTokens();
       const tokenExpired = authTokens ? new Date(authTokens.expiresAt) <= new Date() : false;
 
+      // A signed-in install predating the marker has already chosen a backend.
+      if (authTokens && !config.apiConfig?.endpointChosen) await state.configStore.markEndpointChosen();
+
       if (!authTokens || tokenExpired) {
-        // Both paths lead to the device-authorization login flow, which needs a
-        // configured endpoint. When there isn't one (a published, unbranded fork
-        // with no baked default), let the user pick a backend interactively
-        // rather than dead-ending the OAuth flow on an empty URL.
+        // The login flow needs an endpoint: let the user pick one on a fresh install or when
+        // none resolves (an unbranded fork), instead of dead-ending on an empty URL.
         const endpoint = resolveApiEndpoint(config.apiConfig);
-        if (endpoint.status === 'unconfigured') {
+        if (
+          endpoint.status === 'unconfigured' ||
+          shouldShowEndpointPicker({
+            endpointSource: endpoint.source,
+            endpointChosen: !!config.apiConfig?.endpointChosen,
+            hasAuthTokens: !!authTokens,
+          })
+        ) {
           setState(prev => ({ ...prev, showEnvironmentPicker: true, config }));
           return;
         }
@@ -4056,16 +4065,15 @@ function CliApp() {
     );
   }
 
-  // Show the first-run backend picker when no endpoint is configured (checked
-  // before the login flow, since a backend must be chosen before authenticating).
+  // Backend picker, checked before the login flow since a backend must be chosen first.
   if (state.showEnvironmentPicker) {
     return (
       <EnvironmentPicker
         onSelect={(choice: EnvChoice) => {
           void (async () => {
+            setState(prev => ({ ...prev, showEnvironmentPicker: false }));
             try {
               const result = await state.configStore.switchApiEnvironment(choice.target);
-              setState(prev => ({ ...prev, showEnvironmentPicker: false }));
               console.log(`\n✅ Connecting to ${result.envName} (${result.url})\n`);
               // Re-run init now that an endpoint is configured; it will proceed
               // into the login flow.

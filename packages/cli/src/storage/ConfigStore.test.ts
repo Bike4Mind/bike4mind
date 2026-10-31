@@ -128,7 +128,8 @@ describe('ConfigStore.switchApiEnvironment', () => {
       const config = await store.get();
       expect(config.auth).toEqual(prodTokens);
       expect(config.authByEnv?.[LOCAL_DEV_URL]).toEqual(devTokens);
-      expect(config.apiConfig).toBeUndefined();
+      expect(config.apiConfig?.customUrl).toBeUndefined();
+      expect(config.apiConfig?.endpointChosen).toBe(true);
     });
 
     it('reports authenticated:false when the restored token is expired', async () => {
