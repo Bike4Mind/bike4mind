@@ -15,6 +15,7 @@ const ZIP_BYTES = Buffer.from('PK\x03\x04ZIPDATA');
 const h = vi.hoisted(() => ({
   baseApiOptions: undefined as unknown,
   getSignedUrl: vi.fn(async (p: string) => `https://signed.example/${p}`),
+  getSettingsMap: vi.fn(async (): Promise<Record<string, string>> => ({})),
 }));
 
 // baseApi wraps the handler; mock it as a thin pass-through so the test
@@ -37,6 +38,7 @@ vi.mock('@bike4mind/database', async () => ({
     )
   ).applySharedShareableRules,
   AdminSettings: class AdminSettings {},
+  adminSettingsRepository: {},
   CounterLog: class CounterLog {},
   Session: class Session {
     static find() {
@@ -66,15 +68,22 @@ vi.mock('@server/models/Subscription', () => ({
   Subscription: class Subscription {},
 }));
 
+// The admin settings map comes from the DB; the rest of @bike4mind/utils stays real.
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: h.getSettingsMap,
+}));
+
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: h.getSignedUrl }),
 }));
 
 // Mirrors the real extractor's contract: a missing URL or a fetch failure only surfaces when the
 // caller asks for strict; otherwise it resolves to '' and the route would zip a 0-byte entry.
+// No getMaxContentLength here on purpose: it fetches settings through the browser API client, which
+// throws Invalid URL in Node. Vitest fails on the missing export if the route imports it again.
 vi.mock('@client/app/utils/fabFileUtils', () => ({
-  // The real default, so the truncation cases can be exercised without a settings round-trip.
-  getMaxContentLength: vi.fn(async () => 50000),
+  MAX_CONTENT_LENGTH: 50000,
   getContentFromFabfile: vi.fn(async ({ fileUrl, strict }: { fileUrl?: string; strict?: boolean }) => {
     if (!fileUrl || fileUrl.includes('/unreadable/')) {
       if (strict) throw new Error('Failed to fetch file content');
@@ -362,6 +371,7 @@ describe('GET /api/files/download', () => {
       fileUrl: 'https://signed.example/uploads/u1/a.txt',
       mimeType: 'text/plain',
       strict: true,
+      maxContentLength: 50000,
     });
     expect(createTempFile).toHaveBeenCalledTimes(1);
     expect(tempFiles.length).toBe(1);
@@ -388,6 +398,7 @@ describe('GET /api/files/download', () => {
       fileUrl: 'https://signed.example/uploads/u1/a.txt',
       mimeType: 'text/plain',
       strict: true,
+      maxContentLength: 50000,
     });
     expect(tempFiles.length).toBe(1);
   });
@@ -411,6 +422,7 @@ describe('GET /api/files/download', () => {
       fileUrl: 'https://signed.example/ok/b.txt',
       mimeType: 'text/plain',
       strict: true,
+      maxContentLength: 50000,
     });
     expect(tempFiles.map(f => path.basename(f))).toEqual(['0_b.txt', '1_README.txt']);
     expect(createTempFile).toHaveBeenLastCalledWith(
@@ -485,6 +497,22 @@ describe('GET /api/files/download', () => {
     expect(createTempFile).toHaveBeenLastCalledWith(
       '1_README.txt',
       expect.stringContaining('data.json: shortened to the first 50000 characters.'),
+      expect.any(String)
+    );
+  });
+
+  it('caps extraction at the admin MaxContentLength read on the server', async () => {
+    h.getSettingsMap.mockResolvedValueOnce({ MaxContentLength: '100' });
+    (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue(oneFile);
+    (getContentFromFabfile as ReturnType<typeof vi.fn>).mockResolvedValueOnce('x'.repeat(100));
+
+    const { res } = makeRes();
+    await handler(reqWithAbility(), res);
+
+    expect(getContentFromFabfile).toHaveBeenCalledWith(expect.objectContaining({ maxContentLength: 100 }));
+    expect(createTempFile).toHaveBeenLastCalledWith(
+      '1_README.txt',
+      expect.stringContaining('a.txt: shortened to the first 100 characters.'),
       expect.any(String)
     );
   });
