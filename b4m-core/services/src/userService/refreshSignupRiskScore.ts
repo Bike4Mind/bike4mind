@@ -26,7 +26,8 @@ export interface RefreshSignupRiskScoreAdapters {
 
 /**
  * Gathers what is known about a user, scores it (scoreSignupRisk) and stores the result. Run on
- * email verification, on API key creation, and by the signupRiskSweep worker for young accounts.
+ * email verification and on API key creation. Never scheduled: it can move none to pending, which
+ * holds AI access (signupRiskSweep refreshes the shadow-only risk evidence instead).
  * Never throws: none of those callers should fail because scoring did, so a failure logs at warn.
  */
 export async function refreshSignupRiskScore(

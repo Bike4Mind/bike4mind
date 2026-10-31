@@ -206,7 +206,7 @@ function SaveStatus({ artifact }: { artifact: ChatArtifactView }) {
   return (
     <Typography
       level="body-xs"
-      textColor={save.status === 'saved' ? 'text.tertiary' : 'warning.plainColor'}
+      textColor={save.status === 'failed' ? 'warning.plainColor' : 'text.tertiary'}
       data-testid={`chat-artifact-save-${save.status}`}
     >
       {text}

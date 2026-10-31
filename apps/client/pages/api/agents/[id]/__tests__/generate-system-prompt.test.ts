@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
@@ -9,6 +13,7 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
   update: vi.fn(),
   complete: vi.fn(),
+  assertAllowed: vi.fn(),
 }));
 
 vi.mock('@client/server/middlewares/baseApi', () => ({
@@ -38,14 +43,19 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getLlmByModel: () => ({ complete: h.complete }),
 }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) } }));
-vi.mock('@client/server/agents/systemPromptRateLimit', () => ({ assertSystemPromptGenerationAllowed: vi.fn() }));
+vi.mock('@client/server/agents/systemPromptRateLimit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/server/agents/systemPromptRateLimit')>()),
+  assertSystemPromptGenerationAllowed: h.assertAllowed,
+}));
 
+const { SystemPromptRateLimitError } = await import('@client/server/agents/systemPromptRateLimit');
 await import('../generate-system-prompt');
 
 describe('POST /api/agents/[id]/generate-system-prompt', () => {
   beforeEach(() => {
     h.update.mockReset();
     h.complete.mockReset();
+    h.assertAllowed.mockReset();
   });
 
   it('writes exactly the trimmed prompt and generation timestamp', async () => {
@@ -70,5 +80,24 @@ describe('POST /api/agents/[id]/generate-system-prompt', () => {
       lastSystemPromptGeneratedAt: expect.any(Date),
     });
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ success: true, systemPrompt: 'prompt' }));
+  });
+
+  it('returns a rate-limit refusal as a 400 with its message and logs it at warn', async () => {
+    h.findById.mockResolvedValue({ id: 'agent-1', userId: 'user-1', name: 'A' });
+    const message = 'Rate limit exceeded. Please wait 26 seconds before generating another system prompt.';
+    h.assertAllowed.mockImplementation(() => {
+      throw new SystemPromptRateLimitError(message);
+    });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const json = vi.fn();
+    const status = vi.fn().mockReturnValue({ json });
+
+    await h.handler!({ query: { id: 'agent-1' }, user: { id: 'user-1' }, logger }, { json, status });
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ success: false, systemPrompt: '', message });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(h.complete).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,7 @@ import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
 import type { SignupRiskSignal } from '../../schemas/settings';
+import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } from '../../schemas/riskEvidence';
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 import type { AdminPermissionId } from '../../adminPermissions';
 
@@ -70,6 +71,14 @@ export interface ISignupMeta extends INetworkMeta {
  */
 export const SIGNUP_RISK_REVIEW_STATES = ['none', 'pending', 'approved', 'banned'] as const;
 export type SignupRiskReviewState = (typeof SIGNUP_RISK_REVIEW_STATES)[number];
+
+export interface RiskEvidenceCoverage {
+  accounts: number;
+  withSignupMeta: number;
+  withJa4: number;
+  /** WAF label forwarding was on: both WAF fields are booleans, not null. */
+  withWafSignals: number;
+}
 
 export interface ISignupRiskScore {
   /** 0-100, from scoreSignupRisk (b4m-core/services/src/userService/signupRiskScore.ts). */
@@ -284,6 +293,34 @@ export interface IUserModeration {
   appealText?: string | null;
 }
 
+export const THROTTLE_TIERS = ['none', 'shadow'] as const;
+export type ThrottleTier = (typeof THROTTLE_TIERS)[number];
+export const THROTTLE_SOURCES = ['admin', 'signup_honeypot', 'signup_timing'] as const;
+export type ThrottleSource = (typeof THROTTLE_SOURCES)[number];
+export const USER_RISK_SIGNAL_TYPES = [
+  'signup_honeypot',
+  'signup_too_fast',
+  'signup_token_missing',
+  'signup_token_invalid',
+  'signup_token_expired',
+] as const;
+export type UserRiskSignalType = (typeof USER_RISK_SIGNAL_TYPES)[number];
+
+/** Per-user restricted tier. Absent is equivalent to tier 'none'. Written only by userService.setThrottleTier. */
+export interface IUserThrottle {
+  tier: ThrottleTier;
+  reason: string;
+  source: ThrottleSource;
+  changedAt: Date;
+  /** Admin user id; absent when set by the system. */
+  changedBy?: string;
+}
+
+export interface IUserRiskSignal {
+  type: UserRiskSignalType;
+  at: Date;
+}
+
 export interface IUser extends ICreditHolder {
   id: string;
   username: string;
@@ -336,12 +373,18 @@ export interface IUser extends ICreditHolder {
   isModerated: boolean;
   /** Admin override that trusts the account for personal API keys (userApiKeyService/trust.ts). Absent on legacy docs. */
   apiKeyTrustApproved?: boolean;
+  /** Admin override that exempts a young account from the new-account spend cap (creditService/newAccountSpendCap.ts). */
+  newAccountSpendCapLifted?: boolean;
   /**
    * Per-user moderation tracking + auto-throttle/suspend state.
    * Absent until the user's first moderation hit. Independent of `isModerated`, the admin's
    * AI-only block.
    */
   moderation?: IUserModeration;
+  /** Restricted-tier state; admin-only (see ADMIN_ONLY_USER_FIELDS). Distinct from `moderation.status`. */
+  throttle?: IUserThrottle;
+  /** Append-only signals recorded at signup; admin-only. */
+  riskSignals?: IUserRiskSignal[];
   /**
    * Set to true when a Stripe dispute (chargeback) is opened against this user.
    * Blocks chat completions and API key access until resolved by an admin.
@@ -720,6 +763,12 @@ export interface IUser extends ICreditHolder {
   riskScore?: ISignupRiskScore | null;
 
   /**
+   * Behavioral evidence and its refresh state (b4m-core/common/src/schemas/riskEvidence.ts).
+   * Shadow-only: never feeds riskScore.reviewState. Admin-only, like riskScore.
+   */
+  riskEvidence?: RiskEvidenceRecord | null;
+
+  /**
    * A test persona or test-domain account, decided at signup. Funnel analytics skip or tag these so
    * synthetic traffic never reaches conversion metrics.
    */
@@ -922,6 +971,25 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * (already decided or no score). Used for admin approve and its undo.
    */
   setRiskReviewState: (userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState) => Promise<boolean>;
+  /**
+   * Mark an evidence refresh queued, only if none is pending or the pending one is older than
+   * `staleBefore` (its message was lost). True when this call claimed it and should enqueue.
+   */
+  claimRiskEvidenceRefresh: (
+    userId: string,
+    options: { now: Date; staleBefore: Date; trigger: RiskEvidenceTrigger }
+  ) => Promise<boolean>;
+  /** Clear the pending marker as a refresh starts, so activity during the refresh queues another. */
+  releaseRiskEvidenceRefresh: (userId: string, claimedAt: Date) => Promise<void>;
+  /**
+   * Store a summary unless a newer one (by computedAt) is already stored; false when it lost that
+   * race. Clears lastFailure. Touches nothing outside riskEvidence.
+   */
+  setRiskEvidenceSummary: (userId: string, summary: RiskEvidenceSummary) => Promise<boolean>;
+  /** Record why a refresh failed, for the admin view. */
+  recordRiskEvidenceFailure: (userId: string, failure: { at: Date; error: string }) => Promise<void>;
+  /** Signup metadata coverage of accounts created at or after `since`, for the evidence baseline. */
+  riskEvidenceCoverage: (since: Date) => Promise<RiskEvidenceCoverage>;
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores
    * the appeal text for admin review. Returns the updated user.

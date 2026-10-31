@@ -1,4 +1,5 @@
 import React from 'react';
+import { isThrottleExempt } from '@bike4mind/common';
 import { Avatar, Button, Dropdown, ListDivider, Menu, MenuButton, MenuItem } from '@mui/joy';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { EntityHeader, StatusChip } from '../../shared';
@@ -12,8 +13,7 @@ import {
   type AdminUserProfile,
 } from './userProfileModel';
 
-// `editProfile` and `compliance` open page-level modals rather than a profile action dialog.
-type MenuEntry = { action: ProfileAction | 'editProfile' | 'compliance'; label: string; danger?: boolean } | 'divider';
+type MenuEntry = { action: ProfileAction | 'compliance'; label: string; danger?: boolean } | 'divider';
 
 const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
   { action: 'editProfile', label: 'Edit profile' },
@@ -24,7 +24,8 @@ const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
   { action: 'productAccess', label: 'Manage product access' },
   'divider',
   { action: 'compliance', label: 'Compliance record' },
-  { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict AI features' },
+  { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
+  { action: 'shadowTier', label: user.throttle?.tier === 'shadow' ? 'Remove limited tier' : 'Move to limited tier' },
   { action: 'delete', label: 'Delete user', danger: true },
 ];
 
@@ -44,17 +45,11 @@ const joinedPrefix = (user: AdminUserProfile): string => {
 type UserProfileHeaderProps = {
   user: AdminUserProfile;
   onAction: (action: ProfileAction) => void;
-  onEditProfile: () => void;
   onCompliance: () => void;
 };
 
 /** Identity, status and the page's actions: Adjust credits and Suspend up front, the rest under More. */
-export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
-  user,
-  onAction,
-  onEditProfile,
-  onCompliance,
-}) => {
+export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAction, onCompliance }) => {
   const name = displayName(user);
   const status = accountStatus(user);
   const org = organizationName(user);
@@ -84,6 +79,13 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
       status={
         <>
           <StatusChip tone={status.tone} label={status.label} dot data-testid="user-profile-status-chip" />
+          {user.throttle?.tier === 'shadow' && (
+            <StatusChip
+              tone="neutral"
+              label={isThrottleExempt(user) ? 'Limited tier (not in effect)' : 'Limited tier'}
+              data-testid="user-profile-shadow-tier-chip"
+            />
+          )}
           {level && <StatusChip tone="info" label={level} data-testid="user-profile-level-chip" />}
           {org && <StatusChip tone="neutral" label={org} data-testid="user-profile-org-chip" />}
         </>
@@ -129,13 +131,7 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
                   <MenuItem
                     key={entry.action}
                     color={entry.danger ? 'danger' : 'neutral'}
-                    onClick={() =>
-                      entry.action === 'editProfile'
-                        ? onEditProfile()
-                        : entry.action === 'compliance'
-                          ? onCompliance()
-                          : onAction(entry.action)
-                    }
+                    onClick={() => (entry.action === 'compliance' ? onCompliance() : onAction(entry.action))}
                     data-testid={`user-profile-menu-${entry.action}-item`}
                   >
                     {entry.label}

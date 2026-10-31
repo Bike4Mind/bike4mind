@@ -1,17 +1,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
-    chain.post = (fn: unknown) => fn;
+    chain.post = (...fns: unknown[]) => fns[fns.length - 1];
     return chain;
   },
 }));
 
 const mockFindFile = vi.fn();
 const mockFindSession = vi.fn();
+const counters = new Map<string, { count: number; expiresAt: Date }>();
+const mockTryAdd = vi.fn(async (key: string, amount: number, limit: number, ttlMs: number) => {
+  const now = Date.now();
+  const cur = counters.get(key);
+  const live = cur && cur.expiresAt.getTime() > now ? cur : { count: 0, expiresAt: new Date(now + ttlMs) };
+  if (live.count + amount > limit) return { success: false, count: live.count, expiresAt: live.expiresAt };
+  live.count += amount;
+  counters.set(key, live);
+  return { success: true, count: live.count, expiresAt: live.expiresAt };
+});
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: { tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a) },
   sessionRepository: { findById: (...a: unknown[]) => mockFindSession(...a) },
   fabFileRepository: { findById: (...a: unknown[]) => mockFindFile(...a) },
 }));
@@ -27,10 +42,10 @@ vi.mock('@server/utils/mailer/emailAttachments', () => ({
 import handler from '../send';
 import { MAX_EMAIL_MESSAGE_LENGTH, MAX_EMAIL_RECIPIENTS } from '../../../../types/api';
 
-const run = async (body: Record<string, unknown>, name = 'Pat') => {
+const run = async (body: Record<string, unknown>, name = 'Pat', userExtra: Record<string, unknown> = {}, id = 'u1') => {
   const { req, res } = createMocks({ method: 'POST', body });
   Object.assign(req, {
-    user: { id: 'u1', name, email: 'pat@example.com' },
+    user: { id, name, email: 'pat@example.com', ...userExtra },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   });
   await (handler as unknown as (q: unknown, s: unknown) => Promise<void>)(req, res);
@@ -40,6 +55,7 @@ const run = async (body: Record<string, unknown>, name = 'Pat') => {
 describe('email send', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    counters.clear();
     mockFindFile.mockResolvedValue({
       userId: 'u1',
       fileName: 'a.txt',
@@ -138,5 +154,73 @@ describe('email send', () => {
     const res = await run({ type: 'files', fileIds: ['f1'], recipients });
     expect(res._getStatusCode()).toBe(400);
     expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  describe('limits', () => {
+    const one = { type: 'files', fileIds: ['f1'], recipients: ['a@example.com'] };
+    const five = { ...one, recipients: Array.from({ length: 5 }, (_, i) => `u${i}@example.com`) };
+
+    it('caps the recipient list at 5', () => {
+      expect(MAX_EMAIL_RECIPIENTS).toBe(5);
+    });
+
+    it('answers 429 with Retry-After once the hourly budget is spent', async () => {
+      for (let i = 0; i < 15; i++) expect((await run(one)).statusCode).toBe(200);
+      mockSend.mockClear();
+      const res = await run(one);
+      expect(res.statusCode).toBe(429);
+      const retryAfter = Number(res.getHeader('Retry-After'));
+      expect(retryAfter).toBeGreaterThan(0);
+      expect(retryAfter).toBeLessThanOrEqual(3600);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('charges more for wider sends', async () => {
+      for (let i = 0; i < 5; i++) expect((await run(five)).statusCode).toBe(200);
+      expect((await run(five)).statusCode).toBe(429);
+    });
+
+    it('answers 429 on the daily budget after the hourly window rolls over', async () => {
+      vi.useFakeTimers();
+      try {
+        for (let h = 0; h < 4; h++) {
+          for (let i = 0; i < 15; i++) await run(one);
+          vi.advanceTimersByTime(3600 * 1000 + 1);
+        }
+        const res = await run(one);
+        expect(res.statusCode).toBe(429);
+        expect(Number(res.getHeader('Retry-After'))).toBeGreaterThan(3600);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('counts each user separately', async () => {
+      for (let i = 0; i < 15; i++) await run(one);
+      expect((await run(one)).statusCode).toBe(429);
+      mockFindFile.mockResolvedValue({
+        userId: 'u2',
+        fileName: 'a.txt',
+        filePath: 'p',
+        mimeType: 'text/plain',
+        moderationStatus: 'clean',
+      });
+      expect((await run(one, 'Pat', {}, 'u2')).statusCode).toBe(200);
+    });
+
+    it('does not spend budget on an invalid body', async () => {
+      await run({ ...one, recipients: [] });
+      expect(mockTryAdd).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['moderated', { isModerated: true }],
+      ['banned', { isBanned: true }],
+    ])('refuses a %s account without sending', async (_label, extra) => {
+      const res = await run(one, 'Pat', extra);
+      expect(res.statusCode).toBe(403);
+      expect(mockSend).not.toHaveBeenCalled();
+      expect(mockTryAdd).not.toHaveBeenCalled();
+    });
   });
 });

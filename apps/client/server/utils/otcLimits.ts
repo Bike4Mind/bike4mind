@@ -6,8 +6,10 @@ import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import type { RequestHandler } from 'express';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { ipBucket as otcIpBucket } from '@bike4mind/server-utils/utils/ipBucket';
 import { deliveryMailbox } from './deliveryMailbox';
-import { ipv6Slash64 } from './ipv6Slash64';
+
+export { otcIpBucket };
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -67,10 +69,14 @@ export const OTC_LIMITS = {
     perDomainHourly: { limit: 5, windowMs: HOUR_MS, setting: 'otcLimitRegisterPerDomainHourly' },
     perDomainDaily: { limit: 20, windowMs: DAY_MS, setting: 'otcLimitRegisterPerDomainDaily' },
   },
+  formToken: {
+    perIp: { limit: 600, windowMs: HOUR_MS, setting: 'otcLimitFormTokenPerIp' },
+  },
 } as const satisfies {
   send: Record<string, OtcWindow | number>;
   verify: Record<string, OtcWindow>;
   register: Record<string, OtcWindow>;
+  formToken: Record<string, OtcWindow>;
 };
 
 /** The window's limit as an admin has lowered it, else the built-in. A setting can never raise it. */
@@ -126,19 +132,6 @@ export const otcCounterLimit =
   };
 
 export const ipSubject = (req: Parameters<RequestHandler>[0]): string => otcIpBucket(getClientIp(req));
-
-/**
- * The per-IP limit subject. IPv6 is bucketed by /64, the smallest prefix a single subscriber is
- * usually assigned, so one holder cannot rotate through addresses for a fresh budget. IPv4 and
- * IPv4-mapped IPv6 are keyed on the full address. Anything unparseable is returned unchanged.
- */
-export function otcIpBucket(ip: string): string {
-  if (!ip.includes(':')) return ip;
-  const address = ip.split('%')[0];
-  const mappedV4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
-  if (mappedV4) return mappedV4[1];
-  return ipv6Slash64(address) ?? ip;
-}
 
 interface OtcEmailBudget {
   bucket: string;

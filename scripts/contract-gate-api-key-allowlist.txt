@@ -583,6 +583,7 @@ apps/client/pages/api/organizations/stats.ts
 apps/client/pages/api/organizations/subscriptions/subscribe.ts
 apps/client/pages/api/organizations/subscriptions/update-seats.ts
 apps/client/pages/api/organizations/users.ts
+apps/client/pages/api/otc/form-token.ts  # deliberately unauthenticated (auth: false): signed-out sign-in/register forms fetch it, like otc/send
 apps/client/pages/api/otc/send.ts
 apps/client/pages/api/otc/verify.ts
 apps/client/pages/api/overwatch/v1/events.ts

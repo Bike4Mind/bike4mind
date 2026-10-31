@@ -23,6 +23,8 @@ export {
   type IntentPromptContext,
 } from './intentClassifier.prompt';
 export * from './sharedToolBuilder';
+export { buildToolUsageEvent, recordToolUsageEvent } from './tools/ToolBuilder';
+export { buildSubagentUsageMeta, type SubagentUsageMeta } from './tools/implementation/delegateToAgent';
 export * from './systemPromptDisclosure';
 export * from './toolAvailability';
 export * from './decisionProviders';

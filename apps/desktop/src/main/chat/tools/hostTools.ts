@@ -339,7 +339,7 @@ export const sessionSend: ToolDefinition = {
       'that message as a turn. Ids come from session_list. Use it to answer a session that has ' +
       'asked you something, to correct one you started, or to give a running one more detail - ' +
       'anything where starting a fresh conversation would throw away what that one has already ' +
-      'worked out. If it is mid-reply your message runs as its next turn instead. It does NOT ' +
+      'worked out. If it is mid-reply it reads your message once its current step finishes. It does NOT ' +
       'reply to you in this turn: finish your answer without waiting for it, and use ' +
       'session_read on its id later if you need what it said. It spends the user credits in ' +
       'that conversation and one turn may only send a couple of messages, so send one message ' +
@@ -386,7 +386,7 @@ export const sessionSend: ToolDefinition = {
     return [
       `Delivered your message to ${outcome.sessionId} ("${outcome.title}").`,
       outcome.queued
-        ? 'It is mid-reply, so your message runs as its next turn once that reply finishes.'
+        ? 'It is mid-reply, so it reads your message once its current step finishes, or as its next turn.'
         : 'It is running your message now.',
       'It does NOT answer into this turn. Carry on without it, and use session_read on that id',
       'later if you need what it said. Do not send the same thing again because no reply came.',

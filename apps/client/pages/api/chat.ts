@@ -15,7 +15,7 @@ import {
 import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
+import { adminRoleWithheldFor, requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import {
@@ -133,7 +133,7 @@ async function handleChat(
   // An explicit request model wins. Otherwise fall back to the admin default, which on a
   // local-only self-host box may itself need a fallback (see resolveDefaultChatModel), so
   // only probe when no explicit model was sent.
-  let model = simplifiedRequest.model;
+  let model = simplifiedRequest.model?.trim();
   if (!model) {
     const resolved = await resolveDefaultChatModel({
       configuredModel: getSettingsValue('DefaultAPIModel', settings),
@@ -244,7 +244,12 @@ async function handleChat(
     }: {
       organizationId: string | null;
       featureLabel: string;
-    }) => createCompletionMeter(req.user!, req.logger, featureLabel, { sessionId, organizationId }),
+    }) =>
+      createCompletionMeter(req.user!, req.logger, featureLabel, {
+        sessionId,
+        organizationId,
+        apiKeyId: req.apiKeyInfo?.keyId,
+      }),
     invokeLambda: async (params: any) => {
       if (simplifiedRequest.wait) {
         // wait=true: the quest is processed inline below (ChatCompletionProcess). Do NOT
@@ -254,6 +259,12 @@ async function handleChat(
       // wait=false: hand off to the always-on ChatCompletion (HTTP, 202 ACK).
       await dispatchQuest(params, req.logger);
     },
+  };
+  // wait=true runs tools inline: one that re-reads the owner by id must see the same role as req.user.
+  // Kept out of the literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.test.ts).
+  chatCompletionOptions.db = {
+    ...chatCompletionOptions.db,
+    users: requesterScopedUsers(req, chatCompletionOptions.db.users),
   };
 
   // Create the quest (this is immediate)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chatSupportsDeferredToolAddition,
   completionsSupportsToolChanges,
   completionsSupportsToolSearch,
   supportsAssistantPrefill,
@@ -106,6 +107,49 @@ describe('supportsToolSearch / supportsToolChanges', () => {
     expect(flags(ChatModels.GPT4o, ModelBackend.OpenAI)).toEqual([false, false]);
     expect(flags(ChatModels.GEMINI_2_5_PRO, ModelBackend.Gemini)).toEqual([false, false]);
     expect(flags(ChatModels.DEEPSEEK_R1_BEDROCK, ModelBackend.Bedrock)).toEqual([false, false]);
+  });
+});
+
+describe('chatSupportsDeferredToolAddition', () => {
+  it.each([
+    [ChatModels.CLAUDE_5_5_OPUS, ModelBackend.Anthropic, true],
+    [ChatModels.CLAUDE_4_8_OPUS, ModelBackend.Anthropic, true],
+    ['claude-sonnet-5-5', ModelBackend.Anthropic, true],
+    [ChatModels.CLAUDE_5_5_HAIKU, ModelBackend.Anthropic, true],
+    [ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic, false],
+    [ChatModels.CLAUDE_4_7_OPUS, ModelBackend.Anthropic, false],
+    [ChatModels.CLAUDE_5_5_OPUS_BEDROCK, ModelBackend.Bedrock, true],
+    [ChatModels.CLAUDE_FABLE_5_1_BEDROCK, ModelBackend.Bedrock, true],
+    [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, ModelBackend.Bedrock, false],
+    [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, ModelBackend.Bedrock, false],
+    [ChatModels.CLAUDE_5_5_OPUS, ModelBackend.OpenAI, false],
+    [ChatModels.GPT4o, ModelBackend.OpenAI, false],
+  ])('classifies %s on %s', (id, backend, expected) => {
+    expect(chatSupportsDeferredToolAddition({ id, backend })).toBe(expected);
+  });
+
+  it('only admits models that also support tool changes', () => {
+    for (const id of CHAT_MODELS.filter(isClaudeModelId)) {
+      for (const backend of [ModelBackend.Anthropic, ModelBackend.Bedrock]) {
+        if (chatSupportsDeferredToolAddition({ id, backend })) {
+          expect(supportsToolChanges({ id, backend }), `${id} on ${backend}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('follows the adapter family of a catalog row over its backend', () => {
+    const id = ChatModels.CLAUDE_5_5_OPUS;
+    expect(
+      chatSupportsDeferredToolAddition({ id, backend: ModelBackend.Bedrock, adapterFamily: 'anthropic-messages' })
+    ).toBe(true);
+    expect(
+      chatSupportsDeferredToolAddition({
+        id: 'claude-sonnet-5-5',
+        backend: ModelBackend.Anthropic,
+        adapterFamily: 'bedrock-anthropic',
+      })
+    ).toBe(false);
   });
 });
 

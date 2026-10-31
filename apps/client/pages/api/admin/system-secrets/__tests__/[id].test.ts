@@ -30,7 +30,7 @@ vi.mock('@server/managers/systemSecretsManager', () => ({
   clearSecretCache: h.clearSecretCache,
   resolveSecret: vi.fn(),
 }));
-vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.fn() } }));
+vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../[id]';

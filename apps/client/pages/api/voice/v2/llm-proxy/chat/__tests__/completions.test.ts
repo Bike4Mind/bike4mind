@@ -23,6 +23,7 @@ const {
   mockProcess,
   mockWriteStaticCompletion,
   mockInvokeOptions,
+  mockOptionsFindUser,
   mockSseChunk,
   processState,
 } = vi.hoisted(() => ({
@@ -34,8 +35,9 @@ const {
   mockProcess: vi.fn(),
   mockWriteStaticCompletion: vi.fn(),
   mockInvokeOptions: vi.fn(),
+  mockOptionsFindUser: vi.fn(),
   mockSseChunk: vi.fn(),
-  processState: { terminalError: undefined as Error | undefined },
+  processState: { terminalError: undefined as Error | undefined, options: undefined as unknown },
 }));
 
 // Bypass baseApi's whole middleware chain (connectDB, passport, api-key auth) - this
@@ -71,7 +73,7 @@ vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => (
 }));
 
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
-  getDefaultChatCompletionOptions: () => ({}),
+  getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
 }));
 
@@ -109,6 +111,9 @@ vi.mock('@bike4mind/services/llm', () => ({
     invoke = (...args: unknown[]) => mockInvoke(...args);
   },
   ChatCompletionProcess: class {
+    constructor(options: unknown) {
+      processState.options = options;
+    }
     terminalError = processState.terminalError;
     process = (...args: unknown[]) => mockProcess(...args);
   },
@@ -246,6 +251,32 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     );
   });
 
+  it("hands the token's key to the QuestMaster completion meter", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    const { createCompletionMeter: createMeter } = processState.options as {
+      createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
+    };
+    createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
+    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    expect(createCompletionMeter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'QuestMaster planning',
+      expect.objectContaining({ apiKeyId: 'key-1' })
+    );
+  });
+
   it('forwards a session origin and no key id for a token minted by a signed-in session', async () => {
     await handler(makeReq() as never, makeRes() as never);
 
@@ -281,6 +312,17 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - owner admin role', () 
 
   it('keeps the admin role when the token carries no such claim', async () => {
     expect((await turnWith(undefined)).isAdmin).toBe(true);
+  });
+
+  it.each([
+    ['withholds', true, false],
+    ['keeps', undefined, true],
+  ])('%s the admin role from a tool that re-reads the owner by id', async (_, adminRoleWithheld, expected) => {
+    await turnWith(adminRoleWithheld);
+    const { users } = (mockInvokeOptions.mock.calls[0][0] as { db: { users: { findById: (id: string) => unknown } } })
+      .db;
+    mockOptionsFindUser.mockResolvedValueOnce({ id: 'user-1', isAdmin: true });
+    expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(expected);
   });
 });
 

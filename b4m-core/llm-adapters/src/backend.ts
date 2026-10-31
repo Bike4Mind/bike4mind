@@ -168,6 +168,13 @@ export interface TurnTelemetrySink {
 
 export interface ICompletionOptions {
   maxTokens?: number;
+  /**
+   * Hard ceiling on the output budget sent to the provider, applied after any backend-side
+   * sizing that can raise maxTokens (the adaptive-thinking floor, a legacy thinking budget,
+   * Gemini's thinking reserve). Billing sets it so a round never costs more than the holder
+   * can pay; see completionCreditBudget in @bike4mind/services.
+   */
+  outputTokenCeiling?: number;
   temperature?: number;
   topP?: number;
   topK?: number;
@@ -211,6 +218,8 @@ export interface ICompletionOptions {
    * reminder. Set per hop so a fallback names the fallback model; unset keeps the raw-id wording.
    */
   modelDisplayName?: string;
+  /** Model id the identity reminder names in place of the serving model's, with modelDisplayName to match. */
+  modelIdentityId?: string;
   /**
    * Controls which tool the model should use.
    * - 'auto': Model decides whether to call a tool (default)

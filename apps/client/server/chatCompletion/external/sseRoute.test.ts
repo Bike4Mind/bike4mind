@@ -199,6 +199,7 @@ const UPSTREAM_OPERATOR_ERRORS = [
   [404, 'The model `gpt-x` does not exist or you do not have access to it.'],
   [404, 'Claude Fable 5 is not available. Please use Opus 4.8'],
   [400, 'Your credit balance is too low to access the Anthropic API.'],
+  [400, 'You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.'],
   [404, 'The model claude-3-5-haiku-20241022 does not exist'],
   [400, 'The provided model identifier is invalid'],
   [404, 'Model not available'],
@@ -285,6 +286,16 @@ describe('JWT rate limiting', () => {
     expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(200);
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop', userId: 'u1' }));
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
+  });
+
+  it("passes the client's session id through to the completion, for its ledger row", async () => {
+    expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' }, { ...COMPLETION, sessionId: 's-1' })).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's-1' }));
+  });
+
+  it('rejects an oversized session id instead of storing it', async () => {
+    expect((await postAs({}, { ...COMPLETION, sessionId: 'x'.repeat(129) })).status).toBe(422);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
   it('resolves thinking visibility for the caller', async () => {

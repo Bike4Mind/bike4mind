@@ -12,7 +12,6 @@ const openProfile = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet } }));
 vi.mock('@client/app/hooks/data/user', () => ({ useGetUserTags: () => ({ data: [] }) }));
 vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganizations: () => ({ data: [] }) }));
-vi.mock('../AdminProfileModal', () => ({ default: () => null }));
 vi.mock('./ComplianceModal', () => ({ default: () => null }));
 vi.mock('./CreateUserModal', () => ({ default: () => null, useCreateUserModal: () => ({ setOpen: vi.fn() }) }));
 vi.mock('./List/UsersBulkActionDialog', async importOriginal => ({
@@ -194,5 +193,64 @@ describe('UsersTab', () => {
     fireEvent.click(await screen.findByTestId('admin-filter-clear-createdWindow-btn'));
     await waitFor(() => expect(fakeAdminRouter.search.createdFrom).toBeUndefined());
     expect(screen.queryByTestId('admin-filter-createdWindow')).toBeNull();
+  });
+
+  it('shows an analytics drill-down URL as chips, asks the server for it, and removes each chip with its partners', async () => {
+    const drillDown = {
+      createdFrom: '2026-10-01T00:00:00.000Z',
+      createdTo: '2026-11-01T00:00:00.000Z',
+      verdict: 'legit',
+      funnelStep: 'firstAction',
+      activeFrom: '2026-10-01',
+      activeTo: '2026-10-07',
+    };
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, ...drillDown }));
+    renderTab();
+    await screen.findByTestId('admin-users-row-u1');
+
+    expect(screen.getByTestId('admin-filter-verdict').textContent).toBe('Verdict:\u00a0Legit');
+    expect(screen.getByTestId('admin-filter-funnelStep').textContent).toBe('Funnel:\u00a0First AI use, did not return');
+    expect(screen.getByTestId('admin-filter-activeWindow').textContent).toBe(
+      'Active:\u00a02026-10-01 \u2013 2026-10-07 UTC'
+    );
+    expect(apiGet).toHaveBeenCalledWith(
+      '/api/admin/users',
+      expect.objectContaining({ params: expect.objectContaining(drillDown) })
+    );
+
+    fireEvent.click(screen.getByTestId('admin-filter-clear-activeWindow-btn'));
+    await waitFor(() => expect(fakeAdminRouter.search.activeFrom).toBeUndefined());
+    expect(fakeAdminRouter.search.activeTo).toBeUndefined();
+    expect(fakeAdminRouter.search.verdict).toBe('legit');
+
+    // Verdict and funnel step classify the created window, so they leave with it.
+    fireEvent.click(screen.getByTestId('admin-filter-clear-createdWindow-btn'));
+    await waitFor(() => expect(fakeAdminRouter.search.createdFrom).toBeUndefined());
+    expect(fakeAdminRouter.search).not.toHaveProperty('verdict');
+    expect(fakeAdminRouter.search).not.toHaveProperty('funnelStep');
+    expect(screen.queryByTestId('admin-filter-verdict')).toBeNull();
+  });
+
+  it('reads a single active day as one UTC day', async () => {
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, activeFrom: '2026-10-03', activeTo: '2026-10-03' }));
+    renderTab();
+    expect((await screen.findByTestId('admin-filter-activeWindow')).textContent).toBe('Active:\u00a02026-10-03 UTC');
+  });
+
+  it("shows the server's reason when a drill-down cannot be resolved", async () => {
+    apiGet.mockImplementation(async (url: string) => {
+      if (url === '/api/admin/users') {
+        throw Object.assign(new Error('Request failed'), {
+          isAxiosError: true,
+          response: {
+            status: 422,
+            data: { error: 'Too many signups in this window to classify. Narrow the created range.' },
+          },
+        });
+      }
+      return { data: respond(url) };
+    });
+    renderTab();
+    expect(await screen.findByText(/Narrow the created range/)).toBeTruthy();
   });
 });

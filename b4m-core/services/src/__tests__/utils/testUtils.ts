@@ -49,6 +49,7 @@ export const createMockShareableRepository = <T>(): IShareableStaticMethods<T> =
   findUpdateAccessById: vi.fn(),
   findAllUpdateAccessByIds: vi.fn(),
   findShareAccessById: vi.fn(),
+  updateUserShares: vi.fn(),
 });
 
 export const createMockProjectRepository = (): IProjectRepository => ({
@@ -274,6 +275,11 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     findRiskScoringCandidateIds: vi.fn().mockResolvedValue([]),
     findPendingRiskReviews: vi.fn().mockResolvedValue([]),
     setRiskReviewState: vi.fn(),
+    claimRiskEvidenceRefresh: vi.fn().mockResolvedValue(true),
+    releaseRiskEvidenceRefresh: vi.fn(),
+    setRiskEvidenceSummary: vi.fn().mockResolvedValue(true),
+    recordRiskEvidenceFailure: vi.fn(),
+    riskEvidenceCoverage: vi.fn(),
     removeGroupsFromAllUsers: vi.fn(),
     clearOrganizationPointer: vi.fn(),
     addGroupToUser: vi.fn(),

@@ -6,6 +6,7 @@ import {
   IMongoDocument,
   ILakeUsageSummary,
   IModelDayMargin,
+  IUserUsageActivity,
   IOwnerSpendDay,
   IOwnerSpendFeature,
   IOwnerSpendMember,
@@ -61,6 +62,8 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     feature: { type: String, required: true, enum: [...USAGE_EVENT_FEATURES] },
     provider: { type: String, required: true },
     model: { type: String, required: true },
+    executedProvider: { type: String, required: false },
+    executedModel: { type: String, required: false },
 
     inputTokens: { type: Number, required: true, default: 0 },
     outputTokens: { type: Number, required: true, default: 0 },
@@ -166,11 +169,12 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
    * `since`, and when the oldest of those calls landed. Input plus output, plus the cache buckets
    * where they are separate: a 'chat' row's inputTokens is the estimate of the whole prompt, so its
    * cache read and write tokens are already in it; every other feature records them disjointly
-   * (see `rates` in UsageEventTypes.ts). Served by the { userId, createdAt } index.
+   * (see `rates` in UsageEventTypes.ts). Timeout attempts are absorbed provider cost and do not
+   * consume the user's quota. Served by the { userId, createdAt } index.
    */
   async userTokensSince(userId: string, since: Date): Promise<{ tokens: number; oldestAt?: Date }> {
     const [row] = await this.model.aggregate<{ tokens: number; oldestAt: Date }>([
-      { $match: { userId, ownerType: CreditHolderType.User, createdAt: { $gte: since } } },
+      { $match: { userId, ownerType: CreditHolderType.User, createdAt: { $gte: since }, status: { $ne: 'timeout' } } },
       {
         $group: {
           _id: null,
@@ -203,6 +207,34 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       },
     ]);
     return row?.credits ?? 0;
+  }
+
+  async activitySummaryByUser(userId: string, from: Date, to: Date, limit: number): Promise<IUserUsageActivity> {
+    const [row] = await this.model.aggregate<IUserUsageActivity>([
+      { $match: { userId, createdAt: { $gte: from, $lt: to } } },
+      { $sort: { createdAt: -1 } },
+      { $limit: limit },
+      {
+        $group: {
+          _id: null,
+          events: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $eq: ['$status', 'ok'] }, 1, 0] } },
+          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+          latestAt: { $max: '$createdAt' },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          events: 1,
+          completed: 1,
+          failed: { $subtract: ['$events', '$completed'] },
+          credits: 1,
+          latestAt: 1,
+        },
+      },
+    ]);
+    return row ?? { events: 0, completed: 0, failed: 0, credits: 0, latestAt: null };
   }
 
   async creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>> {
@@ -438,8 +470,10 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     // Both provider counts must be real positive counts to compare against the
     // local estimate. A row settled 'local' can still carry a partial provider
     // report (one axis zero); gating on > 0 keeps those out of the delta.
+    // Timeout rows use zero quota sentinels rather than measured local estimates.
     const hasProviderCounts = {
       $and: [
+        { $ne: ['$status', 'timeout'] },
         { $gt: [{ $ifNull: ['$providerInputTokens', 0] }, 0] },
         { $gt: [{ $ifNull: ['$providerOutputTokens', 0] }, 0] },
       ],

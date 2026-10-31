@@ -600,6 +600,9 @@ export function resolveHistoryWindowStart(
   return Math.ceil((priorQuestCount - limit) / effectiveStep) * effectiveStep;
 }
 
+/** One replayed turn's prompt message and the tools that turn offered (absent on older quests) and called. */
+export type HistoryToolTurn = { prompt: IMessage; offeredTools?: string[]; calledTools: string[] };
+
 /**
  * Return the previous messages from the database, and the total number of previous messages.
  *
@@ -685,6 +688,12 @@ export async function fetchAndProcessPreviousMessages(
        * already in hand.
        */
       priorToolNames?: string[];
+      /**
+       * Per replayed turn: its prompt message (the same object as in the returned messages) with the
+       * tools that turn offered and called. Lets deferred tool loading re-add tools where they first
+       * appeared instead of re-writing the history.
+       */
+      toolTurns?: HistoryToolTurn[];
     },
   ]
 > {
@@ -719,6 +728,7 @@ export async function fetchAndProcessPreviousMessages(
 
   // Keep the current prompt if it is the only item, so a session's first prompt stays in history -
   // unless the caller needs history to hold no part of the current turn (see excludeCurrentPrompt).
+  const keptCurrentPrompt = chatHistoryItems.length === 1 && !excludeCurrentPrompt ? chatHistoryItems[0] : undefined;
   if (chatHistoryItems.length > 1 || excludeCurrentPrompt) {
     chatHistoryItems.pop();
   }
@@ -814,9 +824,24 @@ export async function fetchAndProcessPreviousMessages(
   const oldestIncludedQuestId = chatHistoryItems[0]?.id ?? null;
 
   // Convert to IMessage format with tool pairing reconstruction.
+  const toolTurns: HistoryToolTurn[] = [];
   const convertedMessages = chatHistoryItems.reduce((acc, cur) => {
     if (isStoppedBeforeReply(cur)) return acc;
-    if (cur.prompt) acc.push({ role: 'user', content: cur.prompt });
+    if (cur.prompt) {
+      const prompt: IMessage = { role: 'user', content: cur.prompt };
+      acc.push(prompt);
+      // The kept current prompt is this turn, not a replayed one: its offeredTools is still the
+      // schema's empty default, which would read as a first turn that offered no tools.
+      if (cur !== keptCurrentPrompt) {
+        toolTurns.push({
+          prompt,
+          offeredTools: cur.promptMeta?.offeredTools,
+          calledTools: (cur.promptMeta?.functionCalls ?? [])
+            .map(fc => fc.name)
+            .filter((name): name is string => Boolean(name)),
+        });
+      }
+    }
 
     const toolCalls = replayableToolCalls(cur.promptMeta?.functionCalls);
 
@@ -938,6 +963,7 @@ export async function fetchAndProcessPreviousMessages(
       excludedOlderQuestCount,
       recentGeneratedImages,
       priorToolNames,
+      toolTurns,
     },
   ];
 }

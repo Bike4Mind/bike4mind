@@ -44,8 +44,10 @@ import {
   mcpServerRepository,
   scopedSettingsRepository,
   cacheRepository,
+  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   registerLambdaErrorHandlers,
   getSettingsByNames,
@@ -60,6 +62,7 @@ import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from '@bike4mind/fab-pipeline';
 import {
   applyWorkspaceSessionSettings,
+  workspaceAnswersTurns,
   defaultEmbeddingModelForEnv,
   isSupportedEmbeddingModel,
   libraryFlagForScope,
@@ -80,7 +83,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -108,6 +111,10 @@ import {
   type ChildExecutionStatus,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
+  buildSubagentUsageMeta,
+  buildToolUsageEvent,
+  recordToolUsageEvent,
+  type SubagentUsageMeta,
 } from '@bike4mind/services/llm';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd, sessionService } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services/llm';
@@ -200,6 +207,7 @@ import {
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
+  stopBlockedAccountIteration,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
@@ -231,6 +239,12 @@ import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import { admitAgentDefinitions } from './agentExecutor.modelAdmission';
+import {
+  executedModelFields,
+  recordShadowTokenUsage,
+  reserveShadowTokenBudget,
+  resolveShadowRouting,
+} from '@bike4mind/services/llm/shadowTier';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -744,6 +758,12 @@ async function readPayerBalance(payer: { organizationId?: string | null; userId:
   return loadPayerBalance(payer, { organizations: organizationRepository, users: userRepository });
 }
 
+/** A fresh read of the run's user, so the per-iteration account gate never decides on the invocation's snapshot. */
+async function readUserAccessDenial(userId: string): Promise<string | null> {
+  const user = await userRepository.findById(userId);
+  return user ? aiAccessDeniedMessage(user) : 'User not found';
+}
+
 /**
  * Flat token allowance set aside for instructions before the attachment share is computed.
  * Matches SYSTEM_PROMPT_RESERVE in ChatCompletionProcess so an agent turn and a chat turn size the
@@ -1026,6 +1046,21 @@ async function processExecution(
       await sendWs('failed', { executionId, reason: 'unauthorized' });
       return;
     }
+    // Such a session's replies are scripted, so an agent model must not improvise one. A resumed run
+    // passed this check when it started, so a failed lookup on resume lets it finish.
+    if (
+      await workspaceAnswersTurns(
+        { user, logger, session: loadedSession },
+        premiumWorkspaceSessionSettings,
+        isNewExecution
+      )
+    ) {
+      await agentExecutionRepository.markFailed(executionId, {
+        message: 'This session answers its own turns, so agent runs are not available in it',
+      });
+      await sendWs('failed', { executionId, reason: 'workspace_answers_turns' });
+      return;
+    }
     const session = await applyWorkspaceSessionSettings(
       loadedSession,
       { user, logger },
@@ -1143,9 +1178,35 @@ async function processExecution(
       await sendWs('failed', { executionId, reason: 'model_unavailable' });
       return;
     }
-    const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: execution.userId });
-    if (!llm) throw new Error(`Failed to create LLM backend for model "${execution.model}"`);
-    llm.currentModel = resolvedModelId;
+    // Substitute only the executing model; see resolveShadowModelInfo.
+    const { settings: shadowSettings, modelInfo: shadowModelInfo } = await resolveShadowRouting({
+      user,
+      requested: modelInfo,
+      models,
+      adminSettings: adminSettingsRepository,
+      logger,
+    });
+    const runModelInfo = shadowModelInfo ?? modelInfo;
+    const agentModel = shadowModelInfo ? shadowModelInfo.id : execution.model;
+    // Subagents fall back to the parent backend, so their reported model is the substitute too.
+    const visibleModelId = (id: string) => (shadowModelInfo && id === shadowModelInfo.id ? execution.model : id);
+    const llm = getLlmByModel(apiKeyTable as ApiKeyTable, {
+      modelInfo: runModelInfo,
+      logger,
+      endUserId: execution.userId,
+    });
+    // No backend means the model id is unknown to the catalog: a retired snapshot with no successor in
+    // resolveDeprecatedModel.ts, or a backend this deployment has no key for. That is a stale agent
+    // setting, not a platform fault, so fail the run with a reason the user can act on.
+    if (!llm) {
+      logger.warn('[AgentExecutor] No LLM backend for model; refusing execution', { model: resolvedModelId });
+      await agentExecutionRepository.markFailed(executionId, {
+        message: `Model "${resolvedModelId}" is no longer available. Choose a different model for this agent.`,
+      });
+      await sendWs('failed', { executionId, reason: 'model_unavailable' });
+      return;
+    }
+    llm.currentModel = shadowModelInfo ? shadowModelInfo.id : resolvedModelId;
 
     // Same admission rule as chat (b4m-core/services/src/llm/modelAdmission.ts), after the remap so the
     // model that actually runs is the one checked. Admission only: billing stays per-iteration.
@@ -1186,10 +1247,24 @@ async function processExecution(
     const orgCredits = organization?.currentCredits ?? 0;
     const availableCredits = organization ? orgCredits : userCredits;
     const gateIterations = enforceCredits && Boolean(modelInfo);
+    // Gated at the requested model's price even on substituted runs: refusing early beats a credit cost that reveals the substitute.
+    // Per-iteration billing below still charges the model that ran, so the gate can be stricter than the bill.
     const requiredCredits =
       gateIterations && modelInfo && !isAggregationOnlyWake ? nextIterationCredits(modelInfo, lastInputTokens) : 0;
     if (availableCredits <= 0 || availableCredits < requiredCredits) {
       logger.warn('[Credits] Insufficient credits to start execution', { availableCredits, requiredCredits });
+      await agentExecutionRepository.markFailed(executionId, {
+        message: 'Insufficient credits to run agent execution',
+      });
+      await sendWs('failed', { executionId, reason: 'insufficient_credits' });
+      return;
+    }
+
+    if (
+      shadowSettings &&
+      !isAggregationOnlyWake &&
+      !(await reserveShadowTokenBudget(user, shadowSettings.dailyTokenCap, { cache: cacheRepository }))
+    ) {
       await agentExecutionRepository.markFailed(executionId, {
         message: 'Insufficient credits to run agent execution',
       });
@@ -1476,7 +1551,7 @@ async function processExecution(
           ...(execution.scopeDeniedTools?.length && { scopeDeniedTools: execution.scopeDeniedTools }),
           ...(execution.adminRoleWithheld && { adminRoleWithheld: true }),
           query: info.task,
-          model: info.model,
+          model: visibleModelId(info.model),
           // Snapshot of the parent's lists: a Lambda-dispatched child rebuilds its tool gate
           // from its own row (`processSubagentDispatch`).
           approvedTools: [...approvedTools],
@@ -1564,7 +1639,7 @@ async function processExecution(
           parentExecutionId: info.parentExecutionId ?? executionId,
           childExecutionId: child.id,
           agentName: info.agentName,
-          model: info.model,
+          model: visibleModelId(info.model),
           thoroughness: info.thoroughness,
           maxIterations: info.maxIterations,
           isBackground: info.isBackground,
@@ -1607,12 +1682,15 @@ async function processExecution(
         // failed write must not skip the charge.
         await chargeSubagentTokens(
           {
+            models,
             user: user as IUserDocument,
             organization,
             sessionId: execution.sessionId,
             questId: execution.questId,
-            model: result.model,
+            model: visibleModelId(result.model),
             completionInfo: result.completionInfo,
+            apiKeyId: execution.apiKeyId,
+            usage: subagentUsageMeta(models, result.model, result.completionInfo, logger),
           },
           logger
         );
@@ -1648,12 +1726,15 @@ async function processExecution(
         if (partialResult) {
           await chargeSubagentTokens(
             {
+              models,
               user: user as IUserDocument,
               organization,
               sessionId: execution.sessionId,
               questId: execution.questId,
-              model: partialResult.model,
+              model: visibleModelId(partialResult.model),
               completionInfo: partialResult.completionInfo,
+              apiKeyId: execution.apiKeyId,
+              usage: subagentUsageMeta(models, partialResult.model, partialResult.completionInfo, logger),
             },
             logger
           );
@@ -1837,7 +1918,8 @@ async function processExecution(
         adminSettings: adminSettingsRepository,
         fabfiles: fabFileRepository,
         fabfilechunks: fabFileChunkRepository,
-        users: userRepository,
+        // A tool that re-reads the owner by id must see the role withheld above, not the stored one.
+        users: execution.adminRoleWithheld ? ownerWithheldUsers(execution.userId, userRepository) : userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -1874,12 +1956,19 @@ async function processExecution(
       imageGenerateStorage: getGeneratedImageStorage(),
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       llm,
-      model: execution.model,
+      model: agentModel,
+      // current_model_details reports the requested model, never the substitute, as on the chat path.
+      servingModel: modelInfo ? { current: modelInfo } : undefined,
+      // Tools that run on `model` (blog_draft, jupyter_notebook) record the requested id, as on the chat path.
+      toLedgerModel: visibleModelId,
       precomputed: {
         adminSettingsEnforceCredits: false, // Agent executor handles billing per-iteration, not per-tool
         models,
       },
-      subagentModels: runnableModels,
+      subagentModels: shadowSettings && runModelInfo ? [runModelInfo] : runnableModels,
+      substituteIdentity: shadowModelInfo
+        ? { substituteId: shadowModelInfo.id, identityId: execution.model, displayName: modelInfo?.name }
+        : undefined,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // The delegation tools are injected as OBJECTS keyed on these two deps, never on
       // `enabledTools` names (issue #1829), so a profile that denies them - the optimizer
@@ -2025,16 +2114,21 @@ async function processExecution(
       onSubagentCredits: async (credits, meta) => {
         await chargeSubagentTokens(
           {
+            models,
             user: user as IUserDocument,
             organization,
             sessionId: execution.sessionId,
             questId: execution.questId,
-            model: meta?.model ?? resolvedModelId,
+            model: meta?.model ? visibleModelId(meta.model) : resolvedModelId,
             completionInfo: {
               totalCredits: credits,
               totalInputTokens: meta?.inputTokens ?? 0,
               totalOutputTokens: meta?.outputTokens ?? 0,
+              totalCacheReadTokens: meta?.cacheReadTokens,
+              totalCacheWriteTokens: meta?.cacheWriteTokens,
             },
+            apiKeyId: execution.apiKeyId,
+            usage: meta,
           },
           logger
         );
@@ -2089,8 +2183,9 @@ async function processExecution(
     });
 
     const subagentToolConfig = buildSubagentToolConfig({
-      model: execution.model,
-      apiKeyTable: apiKeyTable as ApiKeyTable,
+      model: agentModel,
+      // An OpenAI key swaps the analysis model; restricted users keep their own.
+      apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
       videoConfig: await buildAgentVideoToolConfig(
@@ -2250,7 +2345,8 @@ async function processExecution(
       userId: execution.userId,
       logger,
       llm,
-      model: execution.model,
+      model: agentModel,
+      ...(shadowModelInfo ? { modelIdentityId: execution.model, modelDisplayName: modelInfo?.name } : {}),
       tools,
       // Persona injection. Prepended to the ReAct prompt
       // so an Agent-mode run speaks in the configured agent's personality.
@@ -2382,7 +2478,7 @@ async function processExecution(
     // (you pass `counters`, the helper mutates its fields). Five loose
     // `let` variables would have the same semantics but the contract
     // would be invisible to a reader.
-    const counters = reseedCounters(isNewExecution ? [] : execution.iterationBilling, modelInfo);
+    const counters = reseedCounters(isNewExecution ? [] : execution.iterationBilling, runModelInfo);
 
     // Bill the iteration that just ran. Centralised so all code paths
     // downstream of `runIteration` see a consistent "iteration N has been
@@ -2400,11 +2496,14 @@ async function processExecution(
       checkpoint: BillingCheckpoint,
       counters: BillingCounters
     ) => {
-      if (!modelInfo) return;
+      if (!modelInfo || !runModelInfo) return;
       // Capture the narrowed value so the effect closures below carry a
       // non-undefined `ModelInfo` type (control-flow narrowing of the outer
       // `const` doesn't always survive into nested closures).
-      const resolvedModelInfo = modelInfo;
+      const resolvedModelInfo = runModelInfo;
+      const requestedBackend = modelInfo.backend;
+      // Summed from the usage events billIteration emits, then added to the daily counter once it returns.
+      let iterationTokens = 0;
       // Snapshot-and-clear the tool-internal LLM spend accrued this iteration (#630) so a
       // repeat call can't double-count it. The agent cost delta and this are both >= 0, so
       // any iteration carrying tool spend is always billable; `billIteration` folds the USD
@@ -2468,6 +2567,7 @@ async function processExecution(
                 model: execution.model,
                 inputTokens,
                 outputTokens,
+                apiKeyId: execution.apiKeyId,
               },
               {
                 db: {
@@ -2487,11 +2587,14 @@ async function processExecution(
                 ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
                 sessionId: execution.sessionId,
                 feature: 'agent_execution',
-                provider: resolvedModelInfo.backend,
+                provider: requestedBackend,
                 model: execution.model,
+                ...executedModelFields({ id: execution.model, backend: requestedBackend }, shadowModelInfo),
                 ...event,
               })
               .catch(err => logger.warn('Failed to record usage event', { err }));
+            iterationTokens +=
+              event.inputTokens + event.outputTokens + event.cachedInputTokens + event.cacheWriteTokens;
           },
           addIterationBilling: billing => agentExecutionRepository.addIterationBilling(executionId, billing),
           sendProgress: async (creditsUsed, iterIndex) => {
@@ -2506,6 +2609,7 @@ async function processExecution(
           },
         },
       });
+      await recordShadowTokenUsage(user as IUserDocument, iterationTokens, { cache: cacheRepository });
     };
 
     // --- Resume after subagent handoff ---
@@ -2832,6 +2936,26 @@ async function processExecution(
         return;
       }
 
+      // A run outlives the message that admitted it, so an account blocked mid-run stops at the next iteration.
+      const blocked = await stopBlockedAccountIteration(
+        {
+          executionId,
+          readAccessDenial: () => readUserAccessDenial((user as IUserDocument).id),
+          snapshot: () => {
+            const checkpoint = agent.toCheckpoint();
+            return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
+          },
+        },
+        {
+          markFailed: (id, error) => agentExecutionRepository.markFailed(id, error),
+          sendWs,
+          persistRunAsQuest: (id, message) =>
+            persistRunAsQuest(id, message, logger, generatedImages, undefined, allSideEffects, retrievalSummary),
+          logger,
+        }
+      );
+      if (blocked) return;
+
       // Each iteration settles with an unconditional debit, so stop before one the payer's live
       // balance cannot cover rather than letting the run carry the balance below zero. The one
       // aggregation-only wake extension is exempt for its first iteration only.
@@ -2850,6 +2974,16 @@ async function processExecution(
             lastInputTokens,
             readBalance: () =>
               readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id }),
+            checkSpendCap: requiredCredits =>
+              creditService.checkNewAccountSpendCap(
+                {
+                  user: user as IUserDocument,
+                  requestedCredits: requiredCredits,
+                  billedToOrganization: Boolean(organization),
+                  logger,
+                },
+                newAccountSpendCapAdapters
+              ),
             snapshot: () => {
               const checkpoint = agent.toCheckpoint();
               return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
@@ -3540,10 +3674,27 @@ async function loadRunnableModels(
   return { ok: true, models: filterRunnableModels(models, configurations, user.tags ?? [], isAdmin, entitlementKeys) };
 }
 
+function subagentUsageMeta(
+  models: ModelInfo[],
+  model: string,
+  completionInfo: AgentResult['completionInfo'],
+  logger: Logger
+): SubagentUsageMeta | undefined {
+  const modelInfo = models.find(m => m.id === model);
+  if (!modelInfo) return undefined;
+  try {
+    return buildSubagentUsageMeta(modelInfo, model, completionInfo);
+  } catch (err) {
+    logger.warn('[AgentExecutor] failed to price subagent usage; usage event skipped', { model, err });
+    return undefined;
+  }
+}
+
 /**
  * Debits a subagent's own LLM spend from the run's payer (the org pool when org-billed),
- * the same wallet the parent's iterations settle against. Logged rather than thrown, so a
- * billing failure never replaces the subagent's terminal status.
+ * the same wallet the parent's iterations settle against, and records the usage event the
+ * in-chat delegation path records (ToolBuilder's onSubagentCredits). Logged rather than
+ * thrown, so a billing failure never replaces the subagent's terminal status.
  */
 async function chargeSubagentTokens(
   args: {
@@ -3552,40 +3703,95 @@ async function chargeSubagentTokens(
     sessionId: string;
     questId: string;
     model: string;
-    completionInfo: Pick<AgentResult['completionInfo'], 'totalCredits' | 'totalInputTokens' | 'totalOutputTokens'>;
+    completionInfo: Pick<
+      AgentResult['completionInfo'],
+      'totalCredits' | 'totalInputTokens' | 'totalOutputTokens' | 'totalCacheReadTokens' | 'totalCacheWriteTokens'
+    >;
+    apiKeyId?: string;
+    /** Absent when the model can't be resolved; no event is fabricated from zeros then. */
+    usage: SubagentUsageMeta | undefined;
+    /** Resolves `model` when a restricted run's usage priced the substitute instead. */
+    models: ModelInfo[];
   },
   logger: Logger
 ): Promise<void> {
+  const { completionInfo } = args;
+  // Same basis as the chat and iteration counters: input, cache reads and writes, and output.
+  await recordShadowTokenUsage(
+    args.user,
+    (completionInfo.totalInputTokens ?? 0) +
+      (completionInfo.totalCacheReadTokens ?? 0) +
+      (completionInfo.totalCacheWriteTokens ?? 0) +
+      (completionInfo.totalOutputTokens ?? 0),
+    { cache: cacheRepository }
+  );
   const credits = args.completionInfo.totalCredits ?? 0;
-  if (credits <= 0) return;
-  await creditService
-    .deductCreditsWithOrgSupport(
-      {
-        type: 'text_generation_usage',
+  if (credits > 0) {
+    await creditService
+      .deductCreditsWithOrgSupport(
+        {
+          type: 'text_generation_usage',
+          user: args.user,
+          organization: args.organization,
+          credits,
+          sessionId: args.sessionId,
+          questId: args.questId,
+          model: args.model,
+          inputTokens: args.completionInfo.totalInputTokens ?? 0,
+          outputTokens: args.completionInfo.totalOutputTokens ?? 0,
+          cacheReadTokens: args.usage?.cacheReadTokens || undefined,
+          cacheWriteTokens: args.usage?.cacheWriteTokens || undefined,
+          apiKeyId: args.apiKeyId,
+        },
+        {
+          db: {
+            creditTransactions: creditTransactionRepository,
+            users: userRepository,
+            organizations: organizationRepository,
+          },
+        }
+      )
+      .catch(err =>
+        logger.error('[AgentExecutor] failed to charge subagent usage', {
+          credits,
+          model: args.model,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+  }
+  const { usage } = args;
+  // A run that stopped before its first model call reports no tokens; there is nothing to record.
+  const reportedTokens = usage
+    ? usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
+    : 0;
+  if (usage && reportedTokens > 0) {
+    // The row names the model the user asked for; executedModel keeps the substitute for cost.
+    const recorded = (usage.model !== args.model && args.models.find(m => m.id === args.model)) || {
+      id: usage.model,
+      backend: usage.provider,
+    };
+    await recordToolUsageEvent(
+      { usageEvents: usageEventRepository },
+      logger,
+      'delegate_to_agent',
+      buildToolUsageEvent({
+        quest: { id: args.questId, sessionId: args.sessionId },
         user: args.user,
         organization: args.organization,
-        credits,
-        sessionId: args.sessionId,
-        questId: args.questId,
-        model: args.model,
-        inputTokens: args.completionInfo.totalInputTokens ?? 0,
-        outputTokens: args.completionInfo.totalOutputTokens ?? 0,
-      },
-      {
-        db: {
-          creditTransactions: creditTransactionRepository,
-          users: userRepository,
-          organizations: organizationRepository,
-        },
-      }
-    )
-    .catch(err =>
-      logger.error('[AgentExecutor] failed to charge subagent usage', {
-        credits,
-        model: args.model,
-        error: err instanceof Error ? err.message : String(err),
+        provider: recorded.backend,
+        model: recorded.id,
+        ...executedModelFields(recorded, { id: usage.model, backend: usage.provider }),
+        costUsd: usage.usdCost,
+        creditsCharged: credits,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cachedInputTokens: usage.cacheReadTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        finishReason: usage.finishReason,
+        priceStamp: usage.priceStamp,
       })
     );
+  }
 }
 
 /**
@@ -3792,6 +3998,18 @@ async function processSubagentDispatch(
     ]);
     const childModel = resolveDeprecatedModelId(child.model, 'agentExecutorChild');
     const modelInfo = models.find((m: { id: string }) => m.id === childModel);
+    // Substitute only the executing model; see resolveShadowModelInfo.
+    const { settings: shadowSettings, modelInfo: shadowModelInfo } = await resolveShadowRouting({
+      user,
+      requested: modelInfo,
+      models,
+      adminSettings: adminSettingsRepository,
+      logger,
+    });
+    const runModel = shadowModelInfo ? shadowModelInfo.id : childModel;
+    const overTokenCap = shadowSettings
+      ? !(await reserveShadowTokenBudget(user, shadowSettings.dailyTokenCap, { cache: cacheRepository }))
+      : false;
 
     // The parent's admission rules, applied to this child's own model and balance: the model
     // must be runnable by this user, and with enforcement on the balance must cover the first
@@ -3804,19 +4022,16 @@ async function processSubagentDispatch(
       ? { message: 'Unable to load model configuration. Please retry.', error: modelAccess.reason }
       : modelInfo && !runnableModels.includes(modelInfo)
         ? { message: `Model "${childModel}" is not available to this user`, error: 'model_unavailable' }
-        : enforceCredits && modelInfo && uncoveredIterationCredits(availableCredits, modelInfo, 0) !== undefined
+        : overTokenCap ||
+            (enforceCredits && modelInfo && uncoveredIterationCredits(availableCredits, modelInfo, 0) !== undefined)
           ? { message: 'Insufficient credits to run subagent', error: 'insufficient_credits' }
           : null;
-    if (refusal) {
-      logger.warn('[SubagentDispatch] Refusing to start subagent', { model: childModel, reason: refusal.error });
-      await agentExecutionRepository.markFailed(childExecutionId, { message: refusal.message });
-      await sendWs('subagent_failed', {
-        executionId: parentId,
-        childExecutionId,
-        agentName,
-        error: refusal.error,
-        isTimeout: false,
-      });
+    // Every pre-start refusal fails the child the same way: mark it failed, tell the parent, and
+    // terminate its DAG node so the parent's wake is not left waiting on it.
+    const refuseSubagent = async ({ message, error }: { message: string; error: string }) => {
+      logger.warn('[SubagentDispatch] Refusing to start subagent', { model: childModel, reason: error });
+      await agentExecutionRepository.markFailed(childExecutionId, { message });
+      await sendWs('subagent_failed', { executionId: parentId, childExecutionId, agentName, error, isTimeout: false });
       await fireDagNodeTerminalOnRefusal({
         dagNodeId,
         parentExecutionId: dagParentExecutionId,
@@ -3825,12 +4040,26 @@ async function processSubagentDispatch(
         logger,
         sendWs,
       });
+    };
+    if (refusal) {
+      await refuseSubagent(refusal);
       return;
     }
 
-    const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
-    if (!llm) throw new Error(`Failed to create LLM backend for model "${childModel}"`);
-    llm.currentModel = childModel;
+    const llm = getLlmByModel(apiKeyTable as ApiKeyTable, {
+      modelInfo: shadowModelInfo ?? modelInfo,
+      logger,
+      endUserId: child.userId,
+    });
+    // Same as the parent run: an id the catalog no longer carries fails this child cleanly.
+    if (!llm) {
+      await refuseSubagent({ message: `Model "${childModel}" is no longer available`, error: 'model_unavailable' });
+      return;
+    }
+    llm.currentModel = runModel;
+    const childRunnableModels = shadowSettings
+      ? [shadowModelInfo ?? modelInfo].filter((m): m is NonNullable<typeof m> => !!m)
+      : runnableModels;
 
     const modelAdmission = await createModelAdmission(user as IUserDocument, models);
     const admissionRefusal = await modelAdmission.assert(childModel).then(
@@ -3838,22 +4067,7 @@ async function processSubagentDispatch(
       (err: Error) => err
     );
     if (admissionRefusal) {
-      await agentExecutionRepository.markFailed(childExecutionId, { message: admissionRefusal.message });
-      await sendWs('subagent_failed', {
-        executionId: parentId,
-        childExecutionId,
-        agentName,
-        error: 'model_not_admitted',
-        isTimeout: false,
-      });
-      await fireDagNodeTerminalOnRefusal({
-        dagNodeId,
-        parentExecutionId: dagParentExecutionId,
-        childExecutionId,
-        connectionId,
-        logger,
-        sendWs,
-      });
+      await refuseSubagent({ message: admissionRefusal.message, error: 'model_not_admitted' });
       return;
     }
 
@@ -3966,7 +4180,8 @@ async function processSubagentDispatch(
         adminSettings: adminSettingsRepository,
         fabfiles: fabFileRepository,
         fabfilechunks: fabFileChunkRepository,
-        users: userRepository,
+        // A tool that re-reads the owner by id must see the role withheld above, not the stored one.
+        users: child.adminRoleWithheld ? ownerWithheldUsers(child.userId, userRepository) : userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -4001,9 +4216,12 @@ async function processSubagentDispatch(
       imageGenerateStorage: getGeneratedImageStorage(),
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       llm,
-      model: childModel,
+      model: runModel,
       precomputed: { adminSettingsEnforceCredits: false, models },
-      subagentModels: runnableModels,
+      subagentModels: childRunnableModels,
+      substituteIdentity: shadowModelInfo
+        ? { substituteId: shadowModelInfo.id, identityId: childModel, displayName: modelInfo?.name }
+        : undefined,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // Same dependency gate as the top-level path: the delegate tool is injected as an
       // object keyed on this dep, so a CHILD whose own record denies delegate_to_agent
@@ -4037,16 +4255,20 @@ async function processSubagentDispatch(
     const grandchildCharges: Promise<void>[] = [];
     const settleTokenCost = async (
       model: string,
-      completionInfo: Parameters<typeof chargeSubagentTokens>[0]['completionInfo']
+      completionInfo: Parameters<typeof chargeSubagentTokens>[0]['completionInfo'],
+      usage: SubagentUsageMeta | undefined
     ): Promise<void> => {
       await chargeSubagentTokens(
         {
+          models,
           user: user as IUserDocument,
           organization,
           sessionId: child.sessionId,
           questId: child.questId,
-          model,
+          model: model === runModel ? childModel : model,
           completionInfo,
+          apiKeyId: child.apiKeyId,
+          usage,
         },
         logger
       );
@@ -4121,18 +4343,22 @@ async function processSubagentDispatch(
       // This subagent's own in-process delegations (no tracker is wired here, so the
       // orchestrator never dispatches them and this is their only charge).
       onSubagentCredits: async (credits, meta) => {
-        const charge = settleTokenCost(meta?.model ?? childModel, {
-          totalCredits: credits,
-          totalInputTokens: meta?.inputTokens ?? 0,
-          totalOutputTokens: meta?.outputTokens ?? 0,
-        });
+        const charge = settleTokenCost(
+          meta?.model ?? runModel,
+          {
+            totalCredits: credits,
+            totalInputTokens: meta?.inputTokens ?? 0,
+            totalOutputTokens: meta?.outputTokens ?? 0,
+          },
+          meta
+        );
         grandchildCharges.push(charge);
         await charge;
       },
     };
     const subagentToolConfig = buildSubagentToolConfig({
-      model: childModel,
-      apiKeyTable: apiKeyTable as ApiKeyTable,
+      model: runModel,
+      apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
       // No videoConfig or musicConfig: this path offers no native tools (see the buildSharedTools call
@@ -4300,13 +4526,16 @@ async function processSubagentDispatch(
       // Granted to this dispatched subagent only when its `allowedTools` names
       // `lattice_*`; the orchestrator dedupes against `parentTools`.
       optInTools: subagentLatticeTools,
-      availableModels: runnableModels,
+      availableModels: childRunnableModels,
+      substituteIdentity: shadowModelInfo
+        ? { substituteId: shadowModelInfo.id, identityId: childModel, displayName: modelInfo?.name }
+        : undefined,
       // Mirrors the delegate_to_agent / coordinate_task wiring. Without it the
       // orchestrator cannot test whether a grandchild's model is serviceable and
       // falls back to pairing this child's backend with the grandchild's model id
       // - the 404 that the pairing fix exists to prevent, one level down.
       resolveBackend: (modelId: string) => {
-        const info = runnableModels.find((m: { id: string }) => m.id === modelId);
+        const info = childRunnableModels.find((m: { id: string }) => m.id === modelId);
         return info
           ? getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo: info, logger, endUserId: child.userId })
           : null;
@@ -4349,6 +4578,7 @@ async function processSubagentDispatch(
               model: childModel,
               inputTokens: 0,
               outputTokens: 0,
+              apiKeyId: child.apiKeyId,
             },
             {
               db: {
@@ -4400,7 +4630,11 @@ async function processSubagentDispatch(
       await Promise.all(grandchildCharges);
       const credits = result.completionInfo.totalCredits ?? 0;
       // Every exit with a result (completed, aborted, timed out) spent these tokens.
-      await settleTokenCost(result.model, result.completionInfo);
+      await settleTokenCost(
+        result.model,
+        result.completionInfo,
+        subagentUsageMeta(models, result.model, result.completionInfo, logger)
+      );
 
       // If the abort signal fired during the run, treat the result as terminal.
       // The orchestrator's timeout-handling path returns partial results on
@@ -4497,7 +4731,11 @@ async function processSubagentDispatch(
       await Promise.all(grandchildCharges);
       const spent = spentResultOf(err);
       if (spent) {
-        await settleTokenCost(spent.model, spent.completionInfo);
+        await settleTokenCost(
+          spent.model,
+          spent.completionInfo,
+          subagentUsageMeta(models, spent.model, spent.completionInfo, logger)
+        );
       }
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:
