@@ -249,6 +249,12 @@ export const generateMcpTools = async (
       // Return empty array - the real-time subscription will show toast to user
       return [];
     }
+    // From @bike4mind/mcp, matched by name as above: the server lacks a credential it needs to
+    // start, so this turn goes without its tools rather than failing.
+    if (errorName === 'McpServerConfigError') {
+      Logger.globalInstance.warn(`MCP server ${mcpData.serverName} is not configured: ${(error as Error).message}`);
+      return [];
+    }
     throw error;
   }
   const toolList = Array.isArray(tools) ? tools : (tools as any)?.tools || [];
