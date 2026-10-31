@@ -25,6 +25,7 @@ import {
   userRepository,
   userApiKeyRepository,
   organizationRepository,
+  cacheRepository,
 } from '@bike4mind/database';
 import { Connection } from '@bike4mind/database/social';
 import {
@@ -287,6 +288,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               users: userRepository,
               usageEvents: usageEventRepository,
               organizations: organizationRepository,
+              cache: cacheRepository,
             },
             apiKeyInfo: apiKeyInfoForCompletion,
             scopeActor: actorScopeForKey(apiKeyInfo),

@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -47,44 +48,47 @@ const handler = baseApi()
 
     return respond(res, safeUsersResponseSchema, toSafeUsers(users, 'same-org'));
   })
-  .post(async (req: Request<{}, {}, { name: string; email: string; level: string }, { id?: string }>, res) => {
-    const { id: userId } = req.user;
-    const { id: organizationId } = req.query;
+  .post(
+    outboundActionGate(),
+    async (req: Request<{}, {}, { name: string; email: string; level: string }, { id?: string }>, res) => {
+      const { id: userId } = req.user;
+      const { id: organizationId } = req.query;
 
-    if (!organizationId) {
-      throw new BadRequestError('Organization ID is required');
-    }
+      if (!organizationId) {
+        throw new BadRequestError('Organization ID is required');
+      }
 
-    const body = addMemberBodySchema.parse(req.body);
-    const { user: newMember } = await withTransaction(async () =>
-      organizationService.addMember(
-        req.user,
-        { organizationId, ...body },
+      const body = addMemberBodySchema.parse(req.body);
+      const { user: newMember } = await withTransaction(async () =>
+        organizationService.addMember(
+          req.user,
+          { organizationId, ...body },
+          {
+            db: {
+              organizations: organizationRepository,
+              users: userRepository,
+            },
+            logger: req.logger,
+          }
+        )
+      );
+
+      await logEvent(
         {
-          db: {
-            organizations: organizationRepository,
-            users: userRepository,
+          userId,
+          type: OrganizationEvents.ADD_ORG_MEMBER,
+          metadata: {
+            organizationId,
+            memberEmail: newMember.email || '',
+            memberLevel: newMember.level,
           },
-          logger: req.logger,
-        }
-      )
-    );
-
-    await logEvent(
-      {
-        userId,
-        type: OrganizationEvents.ADD_ORG_MEMBER,
-        metadata: {
-          organizationId,
-          memberEmail: newMember.email || '',
-          memberLevel: newMember.level,
         },
-      },
-      { ability: req.ability }
-    );
+        { ability: req.ability }
+      );
 
-    return respond(res, safeUserResponseSchema, toSafeUser(newMember, 'same-org'));
-  })
+      return respond(res, safeUserResponseSchema, toSafeUser(newMember, 'same-org'));
+    }
+  )
   .delete(async (req, res) => {
     // In-handler rather than on `baseApi()`, so GET and POST above keep their current scope
     // behaviour: only this method changes who can reach a data lake. Leaving an org expires the

@@ -10,6 +10,7 @@ import { unlockSignupGrantFromSubscription } from '@server/credits/subscriptionU
 import { emitProductEvent } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { stableEventId } from '@server/analytics/signupEvents';
 import { userRepository } from '@bike4mind/database';
+import { recordSubscriptionPaymentReward } from '@server/referrals/subscriptionReward';
 import { postNewPaidSubscriptionToSlack } from '@server/integrations/slack/subscriptionLifecycle';
 
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
@@ -63,6 +64,8 @@ vi.mock('@server/credits/subscriptionUnlock', () => ({
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn().mockResolvedValue(null) },
 }));
+
+vi.mock('@server/referrals/subscriptionReward', () => ({ recordSubscriptionPaymentReward: vi.fn() }));
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
@@ -263,6 +266,47 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
 
     vi.mocked(userRepository.findById).mockRejectedValue(new Error('db down'));
     await expect(run()).resolves.toBeUndefined();
+  });
+});
+
+describe('invoicePaymentSucceeded - inviter reward', () => {
+  const paidInvoice = { id: 'in_1', billing_reason: 'subscription_create', amount_paid: 3000, currency: 'usd' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(userRepository.findById).mockResolvedValue(null);
+    vi.mocked(stripe.invoices.retrieve).mockResolvedValue(paidInvoice as never);
+  });
+
+  const givenSubscription = (metadata: Record<string, string>) =>
+    vi
+      .mocked(stripe.subscriptions.retrieve)
+      .mockResolvedValue(buildSub(metadata) as Awaited<ReturnType<typeof stripe.subscriptions.retrieve>>);
+
+  it('records the reward for a personal subscription payer', async () => {
+    givenSubscription({ userId: 'u1', stage: 'test', ownerType: 'User' });
+    await run();
+    expect(recordSubscriptionPaymentReward).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ invoice: paidInvoice, payerId: 'u1' })
+    );
+  });
+
+  it('records the reward for a legacy subscription with no owner type', async () => {
+    givenSubscription({ userId: 'u1', stage: 'test' });
+    await run();
+    expect(recordSubscriptionPaymentReward).toHaveBeenCalledOnce();
+  });
+
+  it('never records a reward for an organization subscription', async () => {
+    givenSubscription({ userId: 'u1', stage: 'test', ownerType: 'Organization', organizationId: 'org1' });
+    await run();
+    expect(recordSubscriptionPaymentReward).not.toHaveBeenCalled();
+  });
+
+  it('never records a reward for a skipped foreign-stage invoice', async () => {
+    givenSubscription({ userId: 'u1', stage: 'production', ownerType: 'User' });
+    await run();
+    expect(recordSubscriptionPaymentReward).not.toHaveBeenCalled();
   });
 });
 

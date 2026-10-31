@@ -15,8 +15,10 @@ import { z } from 'zod';
 
 export interface ResearchModeResult {
   configurationId: string;
-  /** The configuration's model, which its usage is priced on. */
+  /** The configuration's requested model, which its ledger row names; the only model the client sees. */
   model: string;
+  /** The model that ran, when a restricted user's request was substituted; it prices the usage. */
+  runModel?: string;
   success: boolean;
   /** Characters streamed before the configuration finished or failed, to price an interrupted run. */
   streamedChars: number;
@@ -90,7 +92,9 @@ export class ResearchModeService {
     private logger: Logger,
     // Internal id of the end user this research run is on behalf of, forwarded
     // to direct providers for per-user abuse attribution. See toProviderEndUserId.
-    private endUserId?: string
+    private endUserId?: string,
+    // The model each configuration actually runs on; results keep reporting the configured id.
+    private runModelFor?: (requested: ModelInfo) => ModelInfo
   ) {}
 
   async processResearchMode(
@@ -151,6 +155,8 @@ export class ResearchModeService {
     let finalResponse = '';
     // Billed on what streamed, withheld reasoning included.
     let streamedChars = 0;
+    // Set once the run model is known, so a failure after that is still priced at the model that ran.
+    let runModelField: { runModel?: string } = {};
     let completionInfo: any = undefined;
     // Per configuration, so a timeout stops this provider stream without cancelling the quest or siblings.
     const configAbort = new AbortController();
@@ -161,11 +167,13 @@ export class ResearchModeService {
       this.logger.info(`🔬 [Research Mode] Processing configuration: ${config.label || config.model} (${config.id})`);
 
       // Get model info for this configuration
-      const modelInfo = this.modelInfos.find(m => m.id === config.model);
-      if (!modelInfo) {
+      const requestedModelInfo = this.modelInfos.find(m => m.id === config.model);
+      if (!requestedModelInfo) {
         throw new Error(`Model ${config.model} not found`);
       }
-      const reasoningWithholder = withholdsReasoning(thinkingVisibility, config.model)
+      const modelInfo = this.runModelFor?.(requestedModelInfo) ?? requestedModelInfo;
+      if (modelInfo.id !== requestedModelInfo.id) runModelField = { runModel: modelInfo.id };
+      const reasoningWithholder = withholdsReasoning(thinkingVisibility, modelInfo.id)
         ? createReasoningWithholder(reasoningChannelOf(modelInfo))
         : null;
 
@@ -189,6 +197,9 @@ export class ResearchModeService {
         presencePenalty: config.parameters?.presencePenalty ?? baseOptions.presencePenalty,
         frequencyPenalty: config.parameters?.frequencyPenalty ?? baseOptions.frequencyPenalty,
         abortSignal: configAbort.signal,
+        ...(modelInfo.id !== requestedModelInfo.id
+          ? { modelIdentityId: requestedModelInfo.id, modelDisplayName: requestedModelInfo.name }
+          : {}),
       };
 
       // Sized on what the adapter really sends (raised for thinking), the same ceiling the credit hold uses.
@@ -211,7 +222,7 @@ export class ResearchModeService {
       }, timeoutMs);
 
       const completion = llm.complete(
-        config.model,
+        modelInfo.id,
         // Each configuration gets its own copy: backends append their tool rounds in place, in
         // their own provider's shape, and the configurations run in parallel.
         [...messages],
@@ -262,6 +273,7 @@ export class ResearchModeService {
       return {
         configurationId: config.id,
         model: config.model,
+        ...runModelField,
         success: true,
         response: finalResponse,
         streamedChars,
@@ -276,13 +288,17 @@ export class ResearchModeService {
         return {
           configurationId: config.id,
           model: config.model,
+          ...runModelField,
           success: false,
           streamedChars,
           error: message,
           // Saved as billed: the last report can predate output streamed after it (researchModeUsages).
           completionInfo: usage && {
             ...usage,
-            outputTokens: Math.max(usage.outputTokens, estimateStreamedOutputTokens(streamedChars, config.model)),
+            outputTokens: Math.max(
+              usage.outputTokens,
+              estimateStreamedOutputTokens(streamedChars, runModelField.runModel ?? config.model)
+            ),
           },
         };
       }
@@ -291,6 +307,7 @@ export class ResearchModeService {
       return {
         configurationId: config.id,
         model: config.model,
+        ...runModelField,
         success: false,
         streamedChars,
         error: message,

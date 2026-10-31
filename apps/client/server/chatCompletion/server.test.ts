@@ -58,6 +58,7 @@ vi.mock('@bike4mind/database', () => ({
   // Pulled in by the completions route for org-billed API keys; unused by these
   // personal/JWT cases but must exist or the mocked-module export getter throws.
   organizationRepository: { findById: vi.fn().mockResolvedValue(null) },
+  cacheRepository: {},
 }));
 
 // executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk

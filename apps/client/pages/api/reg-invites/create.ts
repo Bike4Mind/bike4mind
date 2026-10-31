@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { referService } from '@bike4mind/services';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -15,6 +16,7 @@ const createRegInviteSchema = z.object({
 });
 
 const handler = baseApi().post(
+  outboundActionGate(),
   asyncHandler<unknown, unknown, z.infer<typeof createRegInviteSchema>>(async (req, res) => {
     const {
       multiple,

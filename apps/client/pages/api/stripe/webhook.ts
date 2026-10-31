@@ -47,6 +47,7 @@ import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billin
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import { emitBillingEvent, emitPurchaseEvents } from '@server/analytics/signupEvents';
+import { reverseSubscriptionRewardForRefund } from '@server/referrals/subscriptionReward';
 import {
   creditBuyerForEvents,
   planDetails,
@@ -464,6 +465,13 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       let user = null;
 
       if (paymentIntentId) {
+        await reverseSubscriptionRewardForRefund({
+          paymentIntentId,
+          amountRefunded: dispute.amount,
+          amountCaptured: dispute.amount,
+          reason: 'disputed',
+        });
+
         const originalTx = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
         if (originalTx) {
           user = await userRepository.findById(originalTx.ownerId);
@@ -608,6 +616,18 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
     case 'charge.refunded': {
       const charge = event.data.object;
+      const refundPaymentIntentId =
+        typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
+
+      // Runs before the refund-list guard: newer webhook API versions omit charge.refunds, and the reward only needs the cumulative amount.
+      if (refundPaymentIntentId) {
+        await reverseSubscriptionRewardForRefund({
+          paymentIntentId: refundPaymentIntentId,
+          amountRefunded: charge.amount_refunded,
+          amountCaptured: charge.amount_captured || charge.amount,
+        });
+      }
+
       const refunds = charge.refunds?.data ?? [];
       if (refunds.length === 0) {
         req.logger.debug(`charge.refunded has no refund objects, skipping`);
@@ -616,9 +636,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       // Before the purchase lookup: a refunded subscription charge has no credit purchase row.
       await forfeitHeldUnlockForRefund(charge, req.logger);
-
-      const refundPaymentIntentId =
-        typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
 
       if (!refundPaymentIntentId) {
         req.logger.debug(`charge.refunded has no payment_intent, skipping`);

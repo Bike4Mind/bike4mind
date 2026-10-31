@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { InviteEvents, InviteType, Permission } from '@bike4mind/common';
 import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -111,6 +112,7 @@ const handler = baseApi()
    * - Creates a new invitation.  If one or more email addresses given, will also send email(s) to the given addresses.
    */
   .post(
+    outboundActionGate(),
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>, IParams>(async (req, res) => {
       const { type: urlPathType, id } = req.query;
       if (!urlPathType || !id) {

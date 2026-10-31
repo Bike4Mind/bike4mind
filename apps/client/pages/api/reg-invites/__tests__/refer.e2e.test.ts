@@ -11,7 +11,12 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 
-vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (handler: unknown) => handler }) }));
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => ({ post: (...handlers: unknown[]) => handlers[handlers.length - 1] }),
+}));
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
   getLogoUrl: () => '',

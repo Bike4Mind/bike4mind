@@ -103,6 +103,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockUserFindById },
   usageEventRepository: { record: vi.fn() },
   organizationRepository: { findById: mockOrgFindById },
+  cacheRepository: {},
   agentRepository: { findById: mockAgentFindById },
   userApiKeyRepository: mockUserApiKeyRepository,
   projectRepository: { findById: mockProjectFindById },

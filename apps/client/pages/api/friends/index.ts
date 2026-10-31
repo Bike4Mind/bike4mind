@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { activityRepository, Friendship, friendshipRepository, User, userRepository } from '@bike4mind/database';
 import { friendshipService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -11,7 +12,7 @@ const CreateFriendRequestSchema = z.object({
   message: z.string().optional(),
 });
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   const { email, message } = CreateFriendRequestSchema.parse(req.body);
   const userId = req.user.id;
 

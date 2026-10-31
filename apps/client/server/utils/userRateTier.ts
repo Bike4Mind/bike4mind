@@ -1,4 +1,4 @@
-import { hasDeveloperUserTag, type SettingKey } from '@bike4mind/common';
+import { hasDeveloperUserTag, isShadowTier, type IUser, type SettingKey } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -21,14 +21,16 @@ import { isDevelopment } from '@bike4mind/server-utils/utils/config';
  * `pro` / `basic` - highest tier among the user's active subscriptions,
  *   including org seats (`getActiveSubscriptionsForUser`; a Team plan is Pro).
  * `free` - authenticated user with no active paid, ladder-tiered subscription.
+ * `shadow` - admin-restricted users (see `isShadowTier`); checked before subscriptions.
  */
-export type UserRateTier = 'bypass' | 'pro' | 'basic' | 'free';
+export type UserRateTier = 'bypass' | 'pro' | 'basic' | 'free' | 'shadow';
 
 /** The minimal user shape the tier resolver needs (a subset of `Express.User`). */
 export interface RateTierUser {
   id: string;
   isAdmin?: boolean;
   tags?: string[] | null;
+  throttle?: Pick<NonNullable<IUser['throttle']>, 'tier'> | null;
 }
 
 /**
@@ -44,6 +46,7 @@ const TIER_SETTING_KEY = {
   free: 'apiRateLimitFreePerMin',
   basic: 'apiRateLimitBasicPerMin',
   pro: 'apiRateLimitProPerMin',
+  shadow: 'shadowTierRequestsPerMin',
 } as const satisfies Record<Exclude<UserRateTier, 'bypass'>, SettingKey>;
 
 /**
@@ -58,6 +61,7 @@ export async function resolveUserRateTier(
   options?: { strict?: boolean }
 ): Promise<UserRateTier> {
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return 'bypass';
+  if (isShadowTier(user)) return 'shadow';
 
   const activeSubscriptions =
     req?.user?.id === user.id

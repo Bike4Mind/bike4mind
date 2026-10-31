@@ -1,5 +1,5 @@
 import { useUser } from '@client/app/contexts/UserContext';
-import { useSendOTC, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
+import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
@@ -27,6 +27,7 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import OktaIcon from './svgs/flags/OktaIcon';
 import GoogleColorIcon from './svgs/flags/GoogleColorIcon';
 import ErrorAlert from './common/ErrorAlert';
+import SignupHoneypot from './SignupHoneypot';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -75,6 +76,7 @@ const Register: React.FC = () => {
   const { mutate: logEvent } = useLogEvent();
 
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
+  const { botFields, honeypotProps } = useSignupBotFields();
   const rateLimit = useOtcRateLimit();
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
 
@@ -207,7 +209,7 @@ const Register: React.FC = () => {
     setServerEmailError(null);
 
     try {
-      const result = await sendOTC({ email: data.email });
+      const result = await sendOTC({ email: data.email, ...botFields });
 
       // Store pending data for after OTC verification
       setSubmittedData(data);
@@ -225,7 +227,7 @@ const Register: React.FC = () => {
     if (resendingRef.current || resendCooldown > 0 || rateLimit.secondsLeft > 0 || !submittedData) return;
     resendingRef.current = true;
     try {
-      const result = await sendOTC({ email: submittedData.email });
+      const result = await sendOTC({ email: submittedData.email, ...botFields });
       setPendingToken(result.pendingToken);
       toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
@@ -781,6 +783,7 @@ const Register: React.FC = () => {
                       </Typography>
                     </Box>
                   </Box>
+                  <SignupHoneypot {...honeypotProps} />
                 </form>
               </Stack>
             </>

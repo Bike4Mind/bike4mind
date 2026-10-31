@@ -34,6 +34,7 @@ import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerCreditLotSweep } from './creditLotSweep';
 import { registerVoiceHoldSweep } from './voiceHoldSweep';
 import { registerCreditHoldSweep } from './creditHoldSweep';
+import { registerReferralRewardRelease } from './referralRewardRelease';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
@@ -132,6 +133,7 @@ async function main() {
   registerCreditLotSweep(worker);
   registerVoiceHoldSweep(worker);
   registerCreditHoldSweep(worker);
+  registerReferralRewardRelease(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,

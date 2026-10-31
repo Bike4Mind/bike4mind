@@ -45,6 +45,7 @@ import {
   type ReasoningWithholder,
   providerSummarizesReasoning,
   withholdsReasoning,
+  type ICacheRepository,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -55,6 +56,7 @@ import {
   getSettingsByNames,
   DEFAULT_OUTPUT_MAX_TOKENS,
   isSafetyRefusalError,
+  TooManyRequestsError,
 } from '@bike4mind/utils';
 import {
   buildApiKeyTable,
@@ -79,6 +81,12 @@ import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
 import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './llm/modelAdmission';
+import {
+  executedModelFields,
+  recordShadowTokenUsage,
+  reserveShadowTokenBudget,
+  resolveShadowRouting,
+} from './llm/shadowTier';
 import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
 import {
@@ -164,6 +172,8 @@ export interface CompletionParams {
      * accumulated on the key via incrementSpend for spend-cap enforcement.
      */
     userApiKeys?: IUserApiKeyRepository;
+    /** Required: backs the daily token cap and per-minute limit, which are skipped when absent. */
+    cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'tryIncrementWithinLimitFixedWindow'>;
   };
   /**
    * Applied to the reloaded caller before model admission, e.g. to withhold an admin role the
@@ -569,12 +579,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   let failedListings: readonly ModelBackend[] = [];
   const models = await getAvailableModels(apiKeys, { onFailedListings: failed => (failedListings = failed) });
-  const modelInfo = models.find(m => m.id === (model as ChatModels));
+  const requestedModelInfo = models.find(m => m.id === (model as ChatModels));
   const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
   // Catalogued but never runnable; unlike provider_not_configured, retrying cannot help.
-  if (modelInfo?.disabled) {
-    const reason = modelInfo.disabledReason ? `: ${modelInfo.disabledReason}` : '';
+  if (requestedModelInfo?.disabled) {
+    const reason = requestedModelInfo.disabledReason ? `: ${requestedModelInfo.disabledReason}` : '';
     throw new BadRequestError(
       `Model '${params.model}' is currently unavailable${reason}. List the models you can call with GET /api/v1/models.`,
       { errorCode: UNKNOWN_MODEL_ERROR_CODE }
@@ -583,9 +593,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   // Modality is a property of the model, not its backend: an image/video model routed
   // through a chat backend cannot be served by this text endpoint.
-  if (modelInfo && modelInfo.type !== 'text') {
+  if (requestedModelInfo && requestedModelInfo.type !== 'text') {
     throw new BadRequestError(
-      `Model '${params.model}' (type: ${modelInfo.type}) cannot be used for text completions.`,
+      `Model '${params.model}' (type: ${requestedModelInfo.type}) cannot be used for text completions.`,
       { errorCode: UNKNOWN_MODEL_ERROR_CODE }
     );
   }
@@ -610,17 +620,41 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     enforceCredits: Boolean(enforceCredits),
     freeTierAllowedModels,
   }).assert(model);
-  const withholdReasoning = withholdsReasoning(await resolveCallerThinkingVisibility(params, actor, logger), model);
-  const reasoningChannel = reasoningChannelOf(modelInfo ?? { id: model });
-  // Reasoning the caller may not see is not requested at all when the provider would return it raw.
-  const suppressThinking = withholdReasoning && reasoningChannel !== 'never' && !providerSummarizesReasoning(model);
 
-  if (modelInfo && !supportsAssistantPrefill(modelInfo) && hasAssistantPrefill(messages)) {
+  if (requestedModelInfo && !supportsAssistantPrefill(requestedModelInfo) && hasAssistantPrefill(messages)) {
     throw new BadRequestError(
       `Model '${params.model}' does not support assistant message prefill. End the conversation with a user message.`,
       { errorCode: ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE }
     );
   }
+
+  // Restricted tier: backend, sizing and pricing use the substitute; caller-visible ids stay requested.
+  // The stored user, not the scoped actor: a key scope that withholds admin must not shadow an admin.
+  const { settings: shadowSettings, modelInfo: shadowModelInfo } = await resolveShadowRouting({
+    user: storedActor,
+    requested: requestedModelInfo,
+    models,
+    adminSettings: db.adminSettings,
+    logger,
+  });
+  // External completion routes skip the per-user rpm middleware, so the restricted-tier rpm is enforced here.
+  if (shadowSettings && db.cache && shadowSettings.requestsPerMin > 0) {
+    const { success, expiresAt } = await db.cache.tryIncrementWithinLimitFixedWindow(
+      `rate-limit:${userId}:external-completions`,
+      shadowSettings.requestsPerMin,
+      60_000
+    );
+    if (!success) {
+      const retryAfter = Math.max(1, Math.ceil(Math.max(0, expiresAt.getTime() - Date.now()) / 1000));
+      throw new TooManyRequestsError(`Rate limit exceeded. Try again in ${retryAfter} seconds.`, { retryAfter });
+    }
+  }
+  const modelInfo = shadowModelInfo ?? requestedModelInfo;
+  const runModel = shadowModelInfo ? shadowModelInfo.id : model;
+  const withholdReasoning = withholdsReasoning(await resolveCallerThinkingVisibility(params, actor, logger), runModel);
+  const reasoningChannel = reasoningChannelOf(modelInfo ?? { id: runModel });
+  // Reasoning the caller may not see is not requested at all when the provider would return it raw.
+  const suppressThinking = withholdReasoning && reasoningChannel !== 'never' && !providerSummarizesReasoning(runModel);
 
   const llm = getLlmByModel(apiKeys, {
     modelInfo,
@@ -655,7 +689,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     throw unknownModel;
   }
 
-  llm.currentModel = model;
+  llm.currentModel = runModel;
 
   // Default-on with env-var kill switch. Set B4M_FEATURE_RESPONSE_FORMAT=false
   // to disable in an emergency without a redeploy.
@@ -735,7 +769,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const reasoningEffort = suppressThinking
     ? undefined
     : (options?.reasoningEffort ??
-      (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(model, modelInfo)
+      (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(runModel, modelInfo)
         ? 'medium'
         : undefined));
 
@@ -754,12 +788,34 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
     ...(thinking ? { thinking } : {}),
+    ...(shadowModelInfo ? { modelIdentityId: model, modelDisplayName: requestedModelInfo?.name } : {}),
   };
 
   if (options?.response_format) {
     logger?.info?.(
       `[CLI_COMPLETIONS] response_format gate: enabled=${responseFormatEnabled}, type=${options.response_format.type}, hasTools=${(options?.tools?.length ?? 0) > 0}`
     );
+  }
+
+  const outOfCreditsError = (available: number, required: number) =>
+    new InsufficientCreditsError(
+      billToOrg
+        ? `Your organization does not have enough credits. It has ${available} credits, but this request requires approximately ${required}. Please contact your organization administrator to add more credits.`
+        : `Insufficient credits. You have ${available} credits, but this request requires approximately ${required} credits. ` +
+            `Try using a smaller model or reducing the prompt size.`,
+      'insufficient_credits'
+    );
+
+  // Restricted-tier daily token cap; refused like an empty balance.
+  if (
+    shadowSettings &&
+    db.cache &&
+    !(await reserveShadowTokenBudget(storedActor!, shadowSettings.dailyTokenCap, { cache: db.cache }))
+  ) {
+    const required = modelInfo
+      ? usdToCredits(getTextModelCost(modelInfo, estimateInputTokens(messages), maxTokens)) || 1
+      : 1;
+    throw outOfCreditsError(0, required);
   }
 
   // Credit enforcement: Fail-fast if model info is missing
@@ -853,13 +909,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         // Rollback the reservation immediately
         await holderMethods.incrementCredits(holderId, reservedCredits);
         const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + reservedCredits;
-        throw new InsufficientCreditsError(
-          billToOrg
-            ? `Your organization does not have enough credits. It has ${actualBalance} credits, but this request requires approximately ${reservedCredits}. Please contact your organization administrator to add more credits.`
-            : `Insufficient credits. You have ${actualBalance} credits, but this request requires approximately ${reservedCredits} credits. ` +
-                `Try using a smaller model or reducing the prompt size.`,
-          'insufficient_credits'
-        );
+        throw outOfCreditsError(actualBalance, reservedCredits);
       }
 
       logger?.debug?.(
@@ -1011,7 +1061,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // the one the ledger charged. A provisional round-up here (usdToCredits, minimum 1) used to
     // precede a stochastic settlement of 0 on cheap calls, which read as a double charge.
     if (reasoningWithholder) {
-      const withheld = withholdReasoningFromFrame(reasoningWithholder, text, info, model);
+      const withheld = withholdReasoningFromFrame(reasoningWithholder, text, info, runModel);
       await onChunk(withheld.text, withheld.info);
       return;
     }
@@ -1072,7 +1122,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       : llm;
   try {
     await params.onReady?.();
-    await completionLlm.complete(model, messages, completionOptions, wrappedOnChunk);
+    await completionLlm.complete(runModel, messages, completionOptions, wrappedOnChunk);
     if (stoppedForCredits) finalStopReason = 'max_tokens';
     const heldText = reasoningWithholder?.flush();
     if (heldText) await onChunk([heldText]);
@@ -1126,8 +1176,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             feature: 'completion_api',
             source,
             apiKeyId: apiKeyInfo?.keyId,
-            provider: modelInfo.backend,
+            provider: requestedModelInfo!.backend,
             model,
+            ...executedModelFields(requestedModelInfo!, shadowModelInfo),
             inputTokens: finalInputTokens,
             outputTokens: finalOutputTokens,
             cachedInputTokens: finalCacheReadTokens,
@@ -1159,7 +1210,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     streamedOutputChars > 0 &&
     (params.abortSignal?.aborted || finalStopReason === DEGENERATE_FINISH_REASON)
   ) {
-    finalOutputTokens = estimateStreamedOutputTokens(streamedOutputChars, model);
+    finalOutputTokens = estimateStreamedOutputTokens(streamedOutputChars, runModel);
     if (finalTurnUsage?.length) {
       finalTurnUsage = [...finalTurnUsage.slice(0, -1), { ...finalTurnUsage.at(-1)!, outputTokens: finalOutputTokens }];
     }
@@ -1174,6 +1225,14 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // event and the ledger adjustment below so display always equals charge.
   let finalUsdCost = 0;
   let finalCredits = 0;
+
+  if (shadowSettings && db.cache) {
+    await recordShadowTokenUsage(
+      storedActor!,
+      finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens + finalOutputTokens,
+      { cache: db.cache }
+    );
+  }
 
   if (modelInfo) {
     finalUsdCost = settledUsdCost(modelInfo);
@@ -1227,8 +1286,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         ownerId: holderId,
         ownerType: holderType,
         feature: 'completion_api',
-        provider: modelInfo!.backend,
+        provider: requestedModelInfo!.backend,
         model,
+        ...executedModelFields(requestedModelInfo!, shadowModelInfo),
         // Denormalized origin, kept in lockstep with this call's ledger write
         // (subtractCredits above). apiKeyId is present for API-key auth, undefined for JWT.
         source,
