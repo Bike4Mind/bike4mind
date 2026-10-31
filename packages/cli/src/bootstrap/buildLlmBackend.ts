@@ -154,6 +154,15 @@ export function resolveModelInfo(models: ModelInfo[], defaultModel: string): Mod
   return models.find(m => m.id === defaultModel) || models[0];
 }
 
+/** A saved `local:` default that is not listed is never swapped for another model, hosted or not. */
+export function requireLocalDefaultListed(models: ModelInfo[], defaultModel: string): void {
+  if (!defaultModel.startsWith('local:') || models.some(m => m.id === defaultModel)) return;
+  throw new Error(
+    `Model "${defaultModel}" is on a local model server the CLI cannot chat with yet, so it was not replaced by another model. ` +
+      'Pick another model with: b4m models use <name>'
+  );
+}
+
 /**
  * Model choice for headless (`-p`) runs, which have no banner to show a fallback in. A missing default that is
  * plausibly local (Ollama did not list its models, or `b4m models use` chose it) is an error rather than a silent
@@ -165,6 +174,7 @@ export function resolveHeadlessModel(
   ollama: Pick<OllamaAttachment, 'ollamaHost' | 'ollamaListingFailed'>
 ): { modelInfo: ModelInfo; warning: string | null } {
   const { defaultModel } = config;
+  requireLocalDefaultListed(models, defaultModel);
   const modelInfo = resolveModelInfo(models, defaultModel);
   if (modelInfo.id === defaultModel || !ollama.ollamaHost) return { modelInfo, warning: null };
   if (ollama.ollamaListingFailed || defaultModel === config.localDefaultModel) {
@@ -301,7 +311,7 @@ export async function buildLlmBackend(
 
   logger.debug(`📋 Available models: ${models.map(m => m.id).join(', ')}`);
 
-  // Get LLM for default model
+  requireLocalDefaultListed(models, config.defaultModel);
   const modelInfo = resolveModelInfo(models, config.defaultModel);
 
   // Log model selection

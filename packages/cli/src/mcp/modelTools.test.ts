@@ -1,6 +1,9 @@
 import { readFileSync } from 'fs';
+import { mkdtemp, rm } from 'fs/promises';
+import { tmpdir } from 'os';
 import { join } from 'path';
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { json, startFakeServer, startFakeVllm } from '@bike4mind/local-models/testing';
 import {
   curatedSource,
   loadCuratedManifest,
@@ -17,7 +20,8 @@ import { ElicitRequestSchema, type ElicitRequest, type ElicitResult } from '@mod
 import type { OllamaManifestInfo } from '../commands/ollamaRegistry';
 import type { HubClient, RuntimeTarget } from '../models/localModels';
 import { reviewable, reviewedInspection, reviewedLayers } from '../test-utils/curatedReviewed';
-import { MODEL_TOOL_NAMES, registerModelTools, type ModelToolsDeps } from './modelTools';
+import { ConfigStore } from '../storage/ConfigStore';
+import { MODEL_TOOL_NAMES, localModelToolsDeps, registerModelTools, type ModelToolsDeps } from './modelTools';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const ENDPOINT = 'https://huggingface.co';
@@ -143,6 +147,7 @@ async function setup(
     defaultModel?: string;
     machine?: ModelToolsDeps['machine'];
     curated?: ModelToolsDeps['curated'];
+    servers?: ModelToolsDeps['servers'];
   } = {}
 ) {
   const runtime = fakeRuntime();
@@ -155,6 +160,7 @@ async function setup(
     defaultModel: async () => options.defaultModel ?? 'qwen2.5:0.5b',
     machine: options.machine ?? (async () => ({ hardware: CPU_64 })),
     curated: options.curated,
+    servers: options.servers,
   };
   const server = new McpServer({ name: 'test', version: '0.0.0' });
   registerModelTools(server, deps);
@@ -188,10 +194,10 @@ describe('model tools', () => {
     const { tools } = await client.listTools();
     expect(tools.map(tool => tool.name)).toEqual([...MODEL_TOOL_NAMES]);
     const pull = tools.find(tool => tool.name === 'models_pull')!;
-    expect(Object.keys(pull.inputSchema.properties ?? {})).toEqual(['ref', 'force']);
+    expect(Object.keys(pull.inputSchema.properties ?? {})).toEqual(['server', 'ref', 'force']);
     expect(pull.description).toContain('No argument of this tool approves a download');
     const remove = tools.find(tool => tool.name === 'models_remove')!;
-    expect(Object.keys(remove.inputSchema.properties ?? {})).toEqual(['name']);
+    expect(Object.keys(remove.inputSchema.properties ?? {})).toEqual(['server', 'name']);
     expect(remove.annotations?.destructiveHint).toBe(true);
   });
 
@@ -755,5 +761,178 @@ describe('model tools', () => {
       expect(result.isError).toBe(true);
       expect(result.text).toContain('No model named nope:1b');
     });
+  });
+
+  describe('server argument', () => {
+    const SECRET = 'mcp-secret-token-0123456789';
+    const open: { close(): Promise<void> }[] = [];
+    afterEach(async () => {
+      await Promise.all(open.splice(0).map(server => server.close()));
+    });
+
+    const saved = (over: Record<string, unknown>) => ({
+      id: 'bbb',
+      name: 'vllm',
+      kind: 'openai-compatible' as const,
+      transport: { type: 'http' as const, baseUrl: 'http://127.0.0.1:1' },
+      access: 'manage' as const,
+      auth: { type: 'none' as const },
+      models: [],
+      addedAt: '',
+      specs: null,
+      source: 'desktop' as const,
+      ...over,
+    });
+    const serversDeps = (records: ReturnType<typeof saved>[]): ModelToolsDeps['servers'] => ({
+      load: async () => ({ servers: records, problem: null }),
+      secret: async () => id => (id === 'ccc' ? SECRET : undefined),
+    });
+
+    it('lists the models of a saved server without touching the default runtime', async () => {
+      const vllm = await startFakeVllm();
+      open.push(vllm);
+      const { call, runtime } = await setup({
+        servers: serversDeps([saved({ transport: { type: 'http', baseUrl: vllm.baseUrl } })]),
+      });
+      const { data } = await call('models_list', { server: 'vllm' });
+      expect(data.runtime).toMatchObject({ kind: 'openai-compatible', source: 'server', server: 'vllm' });
+      expect(data.models).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: 'qwen-small', aliases: ['qwen'] })])
+      );
+      expect(runtime.list).not.toHaveBeenCalled();
+    });
+
+    it('sends the saved credential and says to log in when it is missing', async () => {
+      const seen: (string | undefined)[] = [];
+      const ollama = await startFakeServer({
+        'GET /api/version': (request, response) => {
+          seen.push(request.headers.authorization);
+          if (request.headers.authorization !== `Bearer ${SECRET}`) return json({}, 401)(request, response);
+          return json({ version: '0.12.0' })(request, response);
+        },
+        'GET /api/tags': json({ models: [] }),
+        'GET /api/ps': json({ models: [] }),
+      });
+      open.push(ollama);
+      const record = saved({
+        id: 'ccc',
+        name: 'locked',
+        kind: 'ollama',
+        auth: { type: 'bearer' },
+        transport: { type: 'http', baseUrl: ollama.baseUrl },
+      });
+      const { call } = await setup({ servers: serversDeps([record, { ...record, id: 'ddd', name: 'other' }]) });
+      expect((await call('models_list', { server: 'locked' })).isError).toBe(false);
+      expect(seen).toEqual([`Bearer ${SECRET}`]);
+      const missing = await call('models_list', { server: 'other' });
+      expect(missing.isError).toBe(true);
+      expect(missing.text).toContain('needs credentials. Run: b4m models servers login other');
+      expect(missing.text).not.toContain(SECRET);
+    });
+
+    it('refuses pull and remove where Desktop does not allow management', async () => {
+      const { call, runtime } = await setup({
+        elicit: accept,
+        servers: serversDeps([
+          saved({ name: 'chatty', kind: 'ollama', access: 'chat' }),
+          saved({ id: 'eee', name: 'vllm' }),
+        ]),
+      });
+      const chatOnly = await call('models_pull', { server: 'chatty', ref: 'smollm2:135m' });
+      expect(chatOnly.isError).toBe(true);
+      expect(chatOnly.text).toContain('chatty is set to Chat only in Desktop.');
+      const fixed = await call('models_remove', { server: 'vllm', name: 'qwen-small' });
+      expect(fixed.isError).toBe(true);
+      expect(fixed.text).toContain('no pull or remove');
+      expect(runtime.pull).not.toHaveBeenCalled();
+      expect(runtime.remove).not.toHaveBeenCalled();
+    });
+
+    it('names the server in the terminal command and rejects an unknown name', async () => {
+      const ollama = await startFakeServer({
+        'GET /api/version': json({ version: '0.12.0' }),
+        'GET /api/tags': json({
+          models: [
+            {
+              name: 'smollm2:135m',
+              model: 'smollm2:135m',
+              size: 1,
+              digest: 'a'.repeat(64),
+              modified_at: '2026-01-01T00:00:00Z',
+              details: {},
+            },
+          ],
+        }),
+        'GET /api/ps': json({ models: [] }),
+      });
+      open.push(ollama);
+      const { call } = await setup({
+        servers: serversDeps([
+          saved({ name: 'gpu box', kind: 'ollama', transport: { type: 'http', baseUrl: ollama.baseUrl } }),
+        ]),
+      });
+      const removal = await call('models_remove', { server: 'gpu box', name: 'smollm2:135m' });
+      expect(removal.data.command).toBe("b4m models rm smollm2:135m --server 'gpu box'");
+      const unknown = await call('models_list', { server: 'nope' });
+      expect(unknown.isError).toBe(true);
+      expect(unknown.text).toContain('No model server named nope');
+    });
+
+    it('scrubs a token the server echoes into pull progress and the result', async () => {
+      const ollama = await startFakeServer({
+        'GET /api/version': json({ version: '0.12.0' }),
+        'GET /api/tags': json({ models: [] }),
+        'GET /api/ps': json({ models: [] }),
+        'POST /api/pull': (request, response) => {
+          response.writeHead(200, { 'content-type': 'application/x-ndjson' });
+          response.write(`${JSON.stringify({ status: `pulling, saw ${request.headers.authorization}` })}\n`);
+          response.end(`${JSON.stringify({ status: 'success' })}\n`);
+        },
+      });
+      open.push(ollama);
+      const { client } = await setup({
+        elicit: accept,
+        servers: serversDeps([
+          saved({
+            id: 'ccc',
+            name: 'locked',
+            kind: 'ollama',
+            auth: { type: 'bearer' },
+            transport: { type: 'http', baseUrl: ollama.baseUrl },
+          }),
+        ]),
+      });
+      const messages: string[] = [];
+      const result = await client.callTool(
+        { name: 'models_pull', arguments: { server: 'locked', ref: 'smollm2:135m' } },
+        undefined,
+        { onprogress: progress => messages.push(String(progress.message ?? '')) }
+      );
+      expect(ollama.requests.some(request => request.path === '/api/pull')).toBe(true);
+      expect(messages.join('\n')).toContain('pulling, saw');
+      expect([...messages, JSON.stringify(result)].join('\n')).not.toContain(SECRET);
+    });
+
+    it('reads credentials from disk on each call, so a login after startup is seen', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'b4m-mcp-creds-'));
+      try {
+        const file = join(dir, 'config.json');
+        const running = new ConfigStore(file);
+        const deps = localModelToolsDeps(running);
+        expect((await deps.servers!.secret())('abc')).toBeUndefined();
+        await new ConfigStore(file).setModelServerCredential('abc', SECRET);
+        expect((await deps.servers!.secret())('abc')).toBe(SECRET);
+        await new ConfigStore(file).clearModelServerCredential('abc');
+        expect((await deps.servers!.secret())('abc')).toBeUndefined();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it('models_list reads from the network, so it is open-world', async () => {
+    const { client } = await setup();
+    const { tools } = await client.listTools();
+    expect(tools.find(tool => tool.name === 'models_list')?.annotations?.openWorldHint).toBe(true);
   });
 });

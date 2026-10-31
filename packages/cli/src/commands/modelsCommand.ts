@@ -1,10 +1,12 @@
 /**
- * External models command (b4m models ls|search|show|curated|pull|rm|use).
- * Finds, downloads and selects local models on the configured Ollama runtime, with Hugging Face GGUF
+ * External models command (b4m models ls|search|show|curated|servers|pull|rm|use).
+ * Finds, downloads and selects local models on the configured Ollama runtime or a server saved in Desktop, with Hugging Face GGUF
  * repos resolved through @bike4mind/local-models. Runs outside the interactive CLI session.
  */
 
 import { createInterface } from 'readline';
+import { lookup } from 'dns/promises';
+import { Writable } from 'stream';
 import type { CuratedSlot, HubBuild, HubEntry, HubManifest, HubTier } from '@bike4mind/common';
 import {
   HUGGING_FACE_SSH_KEYS_URL,
@@ -20,11 +22,40 @@ import {
   loadCuratedManifest,
   ollamaLibraryLayers,
   probeHardware,
+  RuntimeHttpError,
   type HardwareProfile,
   type HubGated,
   type HubGgufBuild,
 } from '@bike4mind/local-models';
+import {
+  answersWithoutCredentials,
+  parseServerAddress,
+  leastTrusted,
+  probeServer,
+  probeToolSupport,
+  scopeOfIp,
+  toolsOffHint,
+  transportVerdict,
+  type AddressScope,
+} from '@bike4mind/local-models/servers';
 import { ConfigStore } from '../storage/ConfigStore.js';
+import {
+  defaultOn,
+  findModelServer,
+  loadModelServers,
+  loginHint,
+  needsCredential,
+  noSuchServer,
+  productLabel,
+  requireManageable,
+  resolveServerTarget,
+  serverFetch,
+  serverRedactor,
+  validateSecret,
+  type CliModelServer,
+  type LoadedModelServers,
+  type SecretFor,
+} from '../models/modelServers.js';
 import {
   CancelledError,
   NOT_RECOMMENDED_LABEL,
@@ -87,7 +118,25 @@ interface ModelsCommandArgs {
   'accept-license'?: boolean;
   'ollama-host'?: string;
   'output-format'?: string;
+  server?: string;
+  action?: string;
+  'token-stdin'?: boolean;
   [key: string]: unknown;
+}
+
+/** Desktop's saved servers and the CLI's copy of their credentials. */
+export interface ModelServersDeps {
+  load: () => Promise<LoadedModelServers>;
+  secret: SecretFor;
+  saveSecret: (serverId: string, secret: string) => Promise<void>;
+  clearSecret: (serverId: string) => Promise<void>;
+  /** Reads one line with the terminal not echoing it. */
+  readSecret: (prompt: string) => Promise<string>;
+  readStdin: () => Promise<string>;
+  /** Whether stdin is a terminal; only the hidden prompt needs one. Defaults to `isTTY`. */
+  stdinIsTTY?: boolean;
+  /** Addresses a host resolves to; defaults to the system resolver. */
+  resolveHost?: (host: string) => Promise<string[]>;
 }
 
 export interface ModelsConfig {
@@ -110,6 +159,7 @@ export interface ModelsDeps extends ModelSourceDeps {
   curated: () => HubManifest;
   /** This computer's memory, which picks its tier of the Curated list. */
   hardware: () => Promise<HardwareProfile>;
+  servers?: ModelServersDeps;
 }
 
 export interface ModelsOptions {
@@ -119,6 +169,8 @@ export interface ModelsOptions {
   force: boolean;
   acceptLicense: boolean;
   includeAbliterated: boolean;
+  /** `servers`: also ask each OpenAI-compatible server whether it accepts tool calls. */
+  checkTools?: boolean;
 }
 
 export type PullResult = 'pulled' | 'declined' | 'cancelled';
@@ -155,12 +207,20 @@ function table(rows: string[][]): string[] {
 export async function listModels(deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
   const target = await abortable(deps.resolveRuntime(), deps.signal);
   const { runtime } = target;
-  const rows = await listInstalled(runtime, deps.config.defaultModel, deps.signal);
+  const rows = await listInstalled(runtime, defaultOn(target, deps.config.defaultModel), deps.signal);
 
   if (opts.json) {
     deps.log(
       JSON.stringify(
-        { runtime: { kind: runtime.kind, baseUrl: runtime.baseUrl, source: target.source }, models: rows },
+        {
+          runtime: {
+            kind: runtime.kind,
+            baseUrl: runtime.baseUrl,
+            source: target.source,
+            ...(target.server && { server: target.server.name }),
+          },
+          models: rows,
+        },
         null,
         2
       )
@@ -169,7 +229,29 @@ export async function listModels(deps: ModelsDeps, opts: ModelsOptions): Promise
   }
   deps.log(runtimeLabel(target));
   if (rows.length === 0) {
-    deps.log('No models installed. Find one with: b4m models search <query>');
+    deps.log(
+      target.server
+        ? `No models are served by ${clean(target.server.name)}.`
+        : 'No models installed. Find one with: b4m models search <query>'
+    );
+    return 0;
+  }
+  if (target.server && runtime.kind === 'openai-compatible') {
+    const lines = table([
+      ['NAME', 'CONTEXT', 'NOTE'],
+      ...rows.map(model => [
+        clean(model.name),
+        model.contextLength ? String(model.contextLength) : '-',
+        [
+          model.baseModel && `LoRA on ${clean(model.baseModel)}`,
+          model.aliases && model.aliases.length > 0 && `also: ${model.aliases.map(clean).join(', ')}`,
+          model.default && 'default',
+        ]
+          .filter(Boolean)
+          .join('; '),
+      ]),
+    ]);
+    for (const line of lines) deps.log(line);
     return 0;
   }
   const lines = table([
@@ -526,7 +608,7 @@ async function pullWithProgress(
             deps.log(`Already downloaded: ${formatBytes(completedBytes)}; pulling the rest.`);
           }
         }
-        const text = clean(status);
+        const text = clean(target.redact ? target.redact(status) : status);
         if (!deps.isTTY) {
           if (text !== lastStatus) deps.log(text);
           lastStatus = text;
@@ -694,7 +776,8 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
   const installed = findInstalledModel(await abortable(target.runtime.list(), deps.signal), name);
   await removeInstalled(target, installed?.name ?? name, deps.signal);
   deps.log(`Removed ${clean(name)}.`);
-  if (deps.config.defaultModel && sameModelName(deps.config.defaultModel, name)) {
+  const currentDefault = defaultOn(target, deps.config.defaultModel);
+  if (currentDefault && sameModelName(currentDefault, name)) {
     deps.log('It was your default model; pick another with: b4m models use <name>');
   }
   return 0;
@@ -719,6 +802,219 @@ export async function useModel(name: string, deps: ModelsDeps): Promise<number> 
   return 0;
 }
 
+function requireServers(deps: ModelsDeps): ModelServersDeps {
+  if (!deps.servers) throw new Error('Model servers are not available here.');
+  return deps.servers;
+}
+
+async function scopeOfHost(host: string, resolve?: ModelServersDeps['resolveHost']): Promise<AddressScope | null> {
+  const literal = scopeOfIp(host);
+  if (literal) return literal;
+  try {
+    const answer = await Promise.race([
+      resolve ? resolve(host) : lookup(host, { all: true }).then(found => found.map(entry => entry.address)),
+      new Promise<null>(done => setTimeout(() => done(null), 1_500).unref()),
+    ]);
+    const scopes = (answer ?? []).flatMap(address => scopeOfIp(address) ?? []);
+    return scopes.length > 0 ? leastTrusted(scopes) : null;
+  } catch {
+    return null;
+  }
+}
+
+const SERVER_APP = { name: 'the CLI', recheck: 'then check again with: b4m models servers --check-tools' } as const;
+
+interface ServerRow {
+  server: CliModelServer;
+  product: string;
+  credentials: 'none' | 'set' | 'needed';
+  status: { state: 'online' | 'credentials' | 'refused' | 'offline'; latencyMs: number | null; text: string };
+  notes: string[];
+}
+
+async function describeServer(server: CliModelServer, ctx: ModelServersDeps, checkTools: boolean): Promise<ServerRow> {
+  const secret = ctx.secret(server.id);
+  const credentials = server.auth.type === 'none' ? 'none' : needsCredential(server, secret) ? 'needed' : 'set';
+  const base = { server, credentials } as const;
+  const parsed = parseServerAddress(server.transport.baseUrl);
+  if (!parsed) {
+    return {
+      ...base,
+      product: productLabel(server.kind, null),
+      status: { state: 'offline', latencyMs: null, text: 'unusable address' },
+      notes: [],
+    };
+  }
+  const redactor = serverRedactor(server, secret);
+  const fetch = serverFetch(server, secret);
+  const outcome = await probeServer(fetch, parsed.baseUrl, server.name, () => performance.now(), server.kind);
+  const scope = await scopeOfHost(parsed.host, ctx.resolveHost);
+  const notes: string[] = [];
+  if (scope) {
+    const verdict = transportVerdict(parsed.protocol, scope, credentials === 'set');
+    if (!verdict.ok) notes.push(verdict.reason);
+    else if (verdict.unencrypted) notes.push('Unencrypted');
+  }
+  if (outcome.kind && scope === 'public') {
+    const open = await answersWithoutCredentials(serverFetch(server, undefined), parsed.baseUrl, outcome.kind);
+    if (open) notes.push('Open to anyone');
+  }
+  const model = server.models[0];
+  if (checkTools && outcome.kind === 'openai-compatible' && model) {
+    if ((await probeToolSupport(fetch, parsed.baseUrl, model)) === 'refused') {
+      notes.push(toolsOffHint(server.name, outcome.product, SERVER_APP));
+    }
+  }
+  const text = (value: string) => clean(redactor ? redactor.redact(value) : value);
+  let status: ServerRow['status'];
+  if (outcome.kind) {
+    status = { state: 'online', latencyMs: outcome.latencyMs, text: `online (${outcome.latencyMs ?? '?'} ms)` };
+  } else if (outcome.auth) {
+    status = {
+      state: 'credentials',
+      latencyMs: null,
+      text: credentials === 'set' ? 'refused the saved credentials' : 'needs credentials',
+    };
+  } else {
+    status = {
+      state: outcome.refused || outcome.forbidden ? 'refused' : 'offline',
+      latencyMs: null,
+      text: text(outcome.error ?? 'offline'),
+    };
+  }
+  return { ...base, product: productLabel(outcome.kind ?? server.kind, outcome.product), status, notes };
+}
+
+export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
+  const ctx = requireServers(deps);
+  const loaded = await abortable(ctx.load(), deps.signal);
+  const rows = await abortable(
+    Promise.all(loaded.servers.map(server => describeServer(server, ctx, Boolean(opts.checkTools)))),
+    deps.signal
+  );
+  if (opts.json) {
+    deps.log(
+      JSON.stringify(
+        {
+          problem: loaded.problem,
+          toolsChecked: Boolean(opts.checkTools),
+          servers: rows.map(({ server, product, credentials, status, notes }) => ({
+            id: server.id,
+            name: server.name,
+            kind: server.kind,
+            product,
+            address: server.transport.baseUrl,
+            access: server.access,
+            source: server.source,
+            credentials,
+            status,
+            notes,
+          })),
+        },
+        null,
+        2
+      )
+    );
+    return 0;
+  }
+  if (rows.length === 0) {
+    deps.log(loaded.problem ?? 'No model servers are saved in Desktop. Add one in Desktop under Settings.');
+    return 0;
+  }
+  if (loaded.problem) deps.log(loaded.problem);
+  const lines = table([
+    ['NAME', 'KIND', 'ADDRESS', 'ACCESS', 'CREDENTIALS', 'STATUS', 'NOTE'],
+    ...rows.map(({ server, product, credentials, status, notes }) => [
+      clean(server.name),
+      product,
+      clean(server.transport.baseUrl),
+      server.access === 'manage' ? 'Manage' : 'Chat only',
+      credentials === 'needed' ? `needed: ${loginHint(server)}` : credentials,
+      status.text,
+      notes.map(clean).join(' '),
+    ]),
+  ]);
+  for (const line of lines) deps.log(line);
+  if (!opts.checkTools && rows.some(row => row.server.kind === 'openai-compatible' && row.status.state === 'online')) {
+    deps.log('');
+    deps.log('Tool support: not checked. Add --check-tools to send each OpenAI-compatible server a one-token request.');
+  }
+  return 0;
+}
+
+async function chosenServer(name: string, ctx: ModelServersDeps, signal: AbortSignal) {
+  const loaded = await abortable(ctx.load(), signal);
+  const server = findModelServer(loaded.servers, name);
+  if (!server) throw noSuchServer(loaded, name);
+  return server;
+}
+
+export async function loginServer(name: string, deps: ModelsDeps, opts: { tokenStdin: boolean }): Promise<number> {
+  const ctx = requireServers(deps);
+  const server = await chosenServer(name, ctx, deps.signal);
+  const label = clean(server.name);
+  if (server.auth.type === 'none') throw new Error(`${label} does not use credentials.`);
+  let entered: string;
+  if (opts.tokenStdin) {
+    entered = await abortable(ctx.readStdin(), deps.signal);
+  } else if (ctx.stdinIsTTY ?? deps.isTTY) {
+    const what = server.auth.type === 'bearer' ? 'Token' : `Value for the ${clean(server.auth.name)} header`;
+    entered = await ctx.readSecret(`${what} for ${label}: `);
+  } else {
+    throw new Error('Re-run with --token-stdin to give the credential without a prompt.');
+  }
+  const secret = validateSecret(server, entered);
+  const refused = () => new Error(`${label} refused these credentials. Nothing was saved.`);
+  const target = await resolveServerTarget(server, secret).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/refused the saved credentials|needs credentials/.test(message)) throw refused();
+    throw error;
+  });
+  // A server can leave its version endpoint open, so only an authenticated listing proves the credential.
+  try {
+    await abortable(target.runtime.list(), deps.signal);
+  } catch (error) {
+    if (error instanceof RuntimeHttpError && (error.status === 401 || error.status === 403)) throw refused();
+    throw error;
+  }
+  await ctx.saveSecret(server.id, secret);
+  deps.log(`Saved the credentials for ${label}; ${runtimeLabel(target)} answered.`);
+  return 0;
+}
+
+export async function logoutServer(name: string, deps: ModelsDeps): Promise<number> {
+  const ctx = requireServers(deps);
+  const loaded = await abortable(ctx.load(), deps.signal);
+  const known = findModelServer(loaded.servers, name);
+  // A server removed in Desktop leaves its credential behind under the old id; that id removes it.
+  const id = known?.id ?? (ctx.secret(name) !== undefined ? name : null);
+  if (id === null) throw noSuchServer(loaded, name);
+  const label = clean(known?.name ?? name);
+  if (ctx.secret(id) === undefined) {
+    deps.log(`The CLI has no saved credentials for ${label}.`);
+    return 0;
+  }
+  await ctx.clearSecret(id);
+  deps.log(`Removed the CLI's saved credentials for ${label}. Desktop's copy is untouched.`);
+  return 0;
+}
+
+/** `--server`: the same command, run against one of Desktop's saved servers. */
+async function onServer(name: string, subcommand: string, deps: ModelsDeps): Promise<ModelsDeps> {
+  const ctx = requireServers(deps);
+  const server = await chosenServer(name, ctx, deps.signal);
+  if (subcommand === 'use') {
+    throw new Error(
+      `Chat with models on ${clean(server.name)} is coming in a later release, so it cannot be set as the default yet. Nothing was saved.`
+    );
+  }
+  if (subcommand === 'pull' || subcommand === 'rm' || subcommand === 'remove') requireManageable(server);
+  return {
+    ...deps,
+    resolveRuntime: () => abortable(resolveServerTarget(server, ctx.secret(server.id)), deps.signal),
+  };
+}
+
 function positional(value: string | string[] | undefined, usage: string): string {
   const text = (Array.isArray(value) ? value.join(' ') : (value ?? '')).trim();
   if (!text) throw new Error(`Usage: ${usage}`);
@@ -736,9 +1032,26 @@ export async function runModelsCommand(
     force: Boolean(argv.force),
     acceptLicense: Boolean(argv['accept-license']),
     includeAbliterated: Boolean(argv['include-abliterated']),
+    checkTools: Boolean(argv['check-tools']),
   };
   try {
+    if (argv.server !== undefined) {
+      const serverName = String(argv.server).trim();
+      if (!serverName) throw new Error('--server needs a server name (see: b4m models servers)');
+      if (!['ls', 'list', 'use', 'pull', 'rm', 'remove'].includes(subcommand ?? '')) {
+        throw new Error('--server works with ls, use, pull and rm.');
+      }
+      deps = await onServer(serverName, subcommand ?? '', deps);
+    }
     switch (subcommand) {
+      case 'servers': {
+        const name = () => positional(argv.name, `b4m models servers ${argv.action} <name>`);
+        if (argv.action === undefined) return await listServers(deps, opts);
+        if (argv.action === 'login')
+          return await loginServer(name(), deps, { tokenStdin: Boolean(argv['token-stdin']) });
+        if (argv.action === 'logout') return await logoutServer(name(), deps);
+        throw new Error(`Unknown servers action: ${clean(String(argv.action))}. Use login or logout.`);
+      }
       case 'ls':
       case 'list':
         return await listModels(deps, opts);
@@ -804,9 +1117,55 @@ export function confirmOnTerminal(
   });
 }
 
+/** Reads one line without echoing it; the prompt goes to stderr so a piped stdout stays clean. */
+export function readSecretOnTerminal(
+  prompt: string,
+  signal: AbortSignal,
+  streams: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream } = {
+    input: process.stdin,
+    output: process.stderr,
+  }
+): Promise<string> {
+  if (signal.aborted) return Promise.reject(new CancelledError());
+  let echo = true;
+  const muted = new Writable({
+    write(chunk, encoding, done) {
+      if (echo) streams.output.write(chunk, encoding);
+      done();
+    },
+  });
+  const rl = createInterface({ input: streams.input, output: muted, terminal: true });
+  return new Promise<string>((resolve, reject) => {
+    const cancel = () => {
+      streams.output.write('\n');
+      rl.close();
+      reject(new CancelledError());
+    };
+    rl.on('SIGINT', () => {
+      signal.removeEventListener('abort', cancel);
+      cancel();
+    });
+    signal.addEventListener('abort', cancel, { once: true });
+    rl.question(prompt, answer => {
+      signal.removeEventListener('abort', cancel);
+      rl.close();
+      streams.output.write('\n');
+      resolve(answer);
+    });
+    echo = false;
+  });
+}
+
+async function readAllStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 export async function handleModelsCommand(subcommand: string | undefined, argv: ModelsCommandArgs): Promise<number> {
   const configStore = new ConfigStore();
   const config = await configStore.load();
+  let credentials = { ...config.modelServerCredentials };
   const models: ModelsConfig = {
     defaultModel: config.defaultModel,
     ollamaHost: config.ollamaHost,
@@ -863,6 +1222,23 @@ export async function handleModelsCommand(subcommand: string | undefined, argv: 
       },
       curated: () => loadCuratedManifest(message => console.error(message)),
       hardware: () => probeHardware(),
+      servers: {
+        load: () => loadModelServers(),
+        secret: id => credentials[id]?.secret,
+        saveSecret: async (id, secret) => {
+          await configStore.setModelServerCredential(id, secret);
+          credentials = { ...credentials, [id]: { secret } };
+        },
+        clearSecret: async id => {
+          await configStore.clearModelServerCredential(id);
+          const { [id]: removed, ...rest } = credentials;
+          void removed;
+          credentials = rest;
+        },
+        readSecret: prompt => readSecretOnTerminal(prompt, controller.signal),
+        readStdin: readAllStdin,
+        stdinIsTTY: Boolean(process.stdin.isTTY),
+      },
       signal: controller.signal,
     });
   } finally {
