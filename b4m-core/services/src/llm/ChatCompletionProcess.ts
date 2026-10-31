@@ -5235,6 +5235,7 @@ export class ChatCompletionProcess {
               outputTokens: usage.outputTokens,
               usd: getTextModelCost(usage.modelInfo, usage.inputTokens, usage.outputTokens),
               source: 'chat',
+              userId: this.user.id,
               accountCreatedAt: this.user.createdAt,
             });
           }
@@ -6625,6 +6626,7 @@ export class ChatCompletionProcess {
           cacheWriteTokens: cacheCreationInputTokens,
           usd: estimatedCost,
           source: 'chat',
+          userId: this.user.id,
           accountCreatedAt: this.user.createdAt,
         });
 
@@ -7684,6 +7686,7 @@ export class ChatCompletionProcess {
         cacheWriteTokens: usage.cacheCreationInputTokens,
         usd: usage.costUsd,
         source: 'chat',
+        userId: this.user.id,
         accountCreatedAt: this.user.createdAt,
       });
       const usageLedgerModel = usage.ledgerModelInfo ?? this.ledgerModel(usage.modelInfo);

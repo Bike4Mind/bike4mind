@@ -7,7 +7,7 @@
  * See infra/signup-code-send-alarm.md.
  */
 
-import { chatCompletion } from './chatCompletion';
+import { chatCompletionLogGroupName } from './chatCompletionLogGroup';
 import { dlqAlarmTopic } from './dlqAlarms';
 import { parseAlarmThreshold } from './signupAlarmThreshold';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
@@ -74,17 +74,7 @@ if (isMonitoredStage) {
     throw new Error('alarm routing requires dlqAlarmTopic');
   }
 
-  // Same resolution as logMonitor.ts: SST does not expose the container log group as a node.
-  const logGroupName = chatCompletion.nodes.taskDefinition
-    .apply(taskDefinition => taskDefinition.containerDefinitions)
-    .apply(json => {
-      const containerDefinitions = JSON.parse(json) as Array<{
-        logConfiguration?: { options?: Record<string, string> };
-      }>;
-      const name = containerDefinitions[0]?.logConfiguration?.options?.['awslogs-group'];
-      if (!name) throw new Error('Could not resolve the ChatCompletion container log group from its task definition');
-      return name;
-    });
+  const logGroupName = chatCompletionLogGroupName;
 
   const actions = [dlqAlarmTopic.arn];
   const spendAlarms: aws.cloudwatch.MetricAlarm[] = [];

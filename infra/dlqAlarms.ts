@@ -20,6 +20,7 @@
 
 import { secrets } from './secrets';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
+import { chatCompletionLogGroupName } from './chatCompletionLogGroup';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
@@ -126,12 +127,27 @@ if (isMonitoredStage) {
   });
 
   const mentionArgs = alarmSlackMentionFunctionArgs();
+  // The young-account spend alarms list the accounts behind a breach by querying the ChatCompletion
+  // log group their metric is filtered from (apps/workers/src/events/youngAccountSpendDetail.ts).
+  const spendLogGroupArn = $interpolate`arn:aws:logs:${aws.getRegionOutput().name}:${
+    aws.getCallerIdentityOutput({}).accountId
+  }:log-group:${chatCompletionLogGroupName}`;
   dlqAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
-      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...mentionArgs.environment },
-      permissions: mentionArgs.permissions,
+      // Room for the Logs Insights query (25 s budget) ahead of the Slack post.
+      timeout: '60 seconds',
+      environment: {
+        ...DEFAULT_LAMBDA_ENVIRONMENT,
+        ...mentionArgs.environment,
+        LLM_SPEND_LOG_GROUP: chatCompletionLogGroupName,
+      },
+      permissions: [
+        ...mentionArgs.permissions,
+        { actions: ['logs:StartQuery'], resources: [spendLogGroupArn, $interpolate`${spendLogGroupArn}:*`] },
+        { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
+      ],
     },
     {
       transform: {
