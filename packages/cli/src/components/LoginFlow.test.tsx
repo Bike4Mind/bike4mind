@@ -8,8 +8,10 @@ import type { ConfigStore } from '../storage/ConfigStore';
 
 const oauth = vi.hoisted(() => ({ initiateDeviceFlow: vi.fn(), waitForAuthorization: vi.fn() }));
 const identify = vi.hoisted(() => vi.fn());
+const copy = vi.hoisted(() => vi.fn());
 
 vi.mock('open', () => ({ default: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../utils/copyToClipboard', () => ({ copyToClipboard: copy }));
 vi.mock('../auth/OAuthClient', () => ({
   OAuthClient: class {
     initiateDeviceFlow = oauth.initiateDeviceFlow;
@@ -134,6 +136,83 @@ describe('LoginFlow', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it('falls back to URL and code for a foreign origin, without showing or copying the link', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://evil.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Not opening browser'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain('The server asked you to visit:');
+    expect(frame).toContain('https://evil.example.com/activate');
+    expect(frame).not.toContain('activate?code=');
+    expect(frame).not.toContain('Press c');
+    stdin.write('c');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(copy).not.toHaveBeenCalled();
+  });
+
+  it('drops a foreign-origin link when only verification_uri is trusted, and copies the code', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue({
+      ...deviceFlowFor('https://app.example.com'),
+      verification_uri_complete: 'https://evil.example.com/activate?code=ABCD-1234',
+    });
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    copy.mockResolvedValue('clipboard');
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the code'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain('verification URL origin https://evil.example.com does not match');
+    expect(frame).toContain('Please visit:');
+    expect(frame).toContain('https://app.example.com/activate');
+    expect(frame).not.toContain('activate?code=');
+    stdin.write('c');
+    await vi.waitFor(() => expect(lastFrame()).toContain('Code copied to clipboard'));
+    expect(copy).toHaveBeenCalledWith('ABCD-1234');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('ignores Ctrl+C and Alt+C', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    copy.mockResolvedValue('clipboard');
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the link'));
+    stdin.write('\x03');
+    stdin.write('\x1bc');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(copy).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain('Press c to copy the link');
+  });
+
+  it('ignores c while a copy is still running', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    let finish!: (r: 'clipboard') => void;
+    copy.mockReturnValueOnce(new Promise(resolve => (finish = resolve))).mockResolvedValue('clipboard');
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the link'));
+    stdin.write('c');
+    stdin.write('c');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(copy).toHaveBeenCalledTimes(1);
+    finish('clipboard');
+    await vi.waitFor(() => expect(lastFrame()).toContain('Link copied to clipboard'));
+    stdin.write('c');
+    await vi.waitFor(() => expect(copy).toHaveBeenCalledTimes(2));
+  });
+
   it('names the scheme, not an origin mismatch, for a same-origin plain-http URL', async () => {
     oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('http://b4m.internal'));
     oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
@@ -149,8 +228,30 @@ describe('LoginFlow', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it('does not open when the server omits verification_uri_complete', async () => {
+  it('falls back to URL and code, without building or opening a link, when verification_uri_complete is omitted', async () => {
     const { verification_uri_complete: _omitted, ...partial } = deviceFlowFor('https://app.example.com');
+    oauth.initiateDeviceFlow.mockResolvedValue(partial);
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('ABCD-1234'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain('Please visit:');
+    expect(frame).toContain('https://app.example.com/activate');
+    expect(frame).not.toContain('activate?code=');
+    expect(frame).not.toContain('Not opening browser');
+    expect(frame).toContain('Press c to copy the code');
+    copy.mockResolvedValue('clipboard');
+    stdin.write('c');
+    await vi.waitFor(() => expect(lastFrame()).toContain('Code copied to clipboard'));
+    expect(copy).toHaveBeenCalledWith('ABCD-1234');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('names a link without a verification_uri accurately and does not open it', async () => {
+    const { verification_uri: _omitted, ...partial } = deviceFlowFor('https://app.example.com');
     oauth.initiateDeviceFlow.mockResolvedValue(partial);
     oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
     const { lastFrame } = render(
@@ -158,9 +259,82 @@ describe('LoginFlow', () => {
     );
 
     await vi.waitFor(() => expect(lastFrame()).toContain('Not opening browser'));
-    expect((lastFrame() ?? '').replace(/\s+/g, ' ')).toContain('the server did not return a verification URL');
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain('the server sent a sign-in link but no verification URL');
+    expect(frame).not.toContain('did not return a verification URL');
+    expect(frame).toContain('https://app.example.com/activate?code=ABCD-1234');
+    expect(frame).not.toContain('Or open');
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it('warns when the server returns neither URI', async () => {
+    const {
+      verification_uri: _uri,
+      verification_uri_complete: _link,
+      ...partial
+    } = deviceFlowFor('https://app.example.com');
+    oauth.initiateDeviceFlow.mockResolvedValue(partial);
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Not opening browser'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain('the server did not return a verification URL');
+    expect(frame).not.toContain('Press c');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('shows the one-click link first and the URL plus code as the fallback', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the link'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    const linkAt = frame.indexOf('https://app.example.com/activate?code=ABCD-1234');
+    const fallbackAt = frame.indexOf('Or open https://app.example.com/activate and enter this code:');
+    expect(linkAt).toBeGreaterThan(-1);
+    expect(fallbackAt).toBeGreaterThan(linkAt);
+    expect(frame.indexOf('ABCD-1234', fallbackAt)).toBeGreaterThan(fallbackAt);
+  });
+
+  it.each([
+    ['clipboard', 'Link copied to clipboard'],
+    ['terminal', 'Sent the link to your terminal clipboard'],
+    ['failed', 'Copy failed, select the link above'],
+  ] as const)('copies the full link on c and reports %s', async (result, message) => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    copy.mockResolvedValue(result);
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the link'));
+    stdin.write('x');
+    stdin.write('c');
+    await vi.waitFor(() => expect((lastFrame() ?? '').replace(/\s+/g, ' ')).toContain(message));
+    expect(copy).toHaveBeenCalledTimes(1);
+    expect(copy).toHaveBeenCalledWith('https://app.example.com/activate?code=ABCD-1234');
+  });
+
+  it('reports a copy failure when the clipboard helper throws', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    copy.mockRejectedValue(new Error('boom'));
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the link'));
+    stdin.write('c');
+    await vi.waitFor(() => expect(lastFrame()).toContain('Copy failed, select the link above'));
   });
 
   it('strips terminal control characters from server-supplied display strings', async () => {

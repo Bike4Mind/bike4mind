@@ -59,35 +59,33 @@ Initiate OAuth authentication flow with Bike4Mind.
 ```
 
 **What happens:**
-1. Displays device authorization screen
-2. **Automatically opens browser** with activation URL
+1. Displays device authorization screen with a sign-in link that has the code filled in
+2. **Automatically opens browser** with that link
 3. Code is **prepopulated** in the browser
 4. You verify the code and click "Approve"
 5. CLI detects authorization and stores tokens
 
+Press `c` on the authorization screen to copy the sign-in link. If the browser is on another machine, paste the link there, or open the activation URL and type the code.
+
 **Example:**
-```bash
+```text
 > /login
 
-╭────────────────────────────────────────────────────────╮
-│                                                        │
-│ 🔐 Device Authorization                                │
-│                                                        │
-│ Opening browser automatically...                       │
-│ If it doesn't open, please visit:                     │
-│                                                        │
-│   https://app.bike4mind.com/activate                  │
-│                                                        │
-│ And enter this code when prompted:                    │
-│                                                        │
-│   L2JQ-CRZ9                                           │
-│                                                        │
-│                                                        │
-│ ⠏ Waiting for user authorization...                   │
-│                                                        │
-│ Expires in 10 minutes                                 │
-│                                                        │
-╰────────────────────────────────────────────────────────╯
+Device Authorization
+
+Opening browser automatically... If it doesn't open, visit this link:
+
+  https://app.bike4mind.com/activate?code=L2JQ-CRZ9
+
+Or open https://app.bike4mind.com/activate and enter this code:
+
+  L2JQ-CRZ9
+
+Press c to copy the link
+
+Waiting for user authorization...
+
+Expires in 10 minutes
 
 ✓ Authentication successful!
 Logged in as: john@example.com

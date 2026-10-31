@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Box, Text } from 'ink';
+import React, { useState, useEffect, useRef } from 'react';
+import { Box, Text, useInput, useStdin } from 'ink';
 import Spinner from 'ink-spinner';
 import jwt from 'jsonwebtoken';
 import open from 'open';
@@ -7,6 +7,7 @@ import axios from 'axios';
 import { OAuthClient, type DeviceFlowResponse } from '../auth/OAuthClient';
 import { ApiClient } from '../auth/ApiClient';
 import type { ConfigStore } from '../storage/ConfigStore';
+import { copyToClipboard, type CopyResult } from '../utils/copyToClipboard';
 
 interface JwtPayload {
   id: string;
@@ -110,6 +111,7 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
   const [statusMessage, setStatusMessage] = useState('Initiating device authorization...');
   const [error, setError] = useState<string | null>(null);
   const [account, setAccount] = useState<{ userId: string; email?: string; username?: string } | null>(null);
+  const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
 
   useEffect(() => {
     const runLoginFlow = async () => {
@@ -181,24 +183,55 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
     runLoginFlow();
   }, [apiUrl, configStore, onSuccess, onError]);
 
-  // Both URIs are checked: the CLI opens _complete, but the screen tells the user to visit verification_uri.
-  // `every`, not `find() === undefined`: a server that omits a URI would otherwise read as trusted.
-  const uris = deviceFlow ? [deviceFlow.verification_uri, deviceFlow.verification_uri_complete] : [];
+  // verification_uri_complete is optional in RFC 8628 and the CLI never builds one itself. Only a link on
+  // the API origin is shown or copied; anything else falls back to URL + code.
+  const uri = deviceFlow?.verification_uri || undefined;
+  const rawLink = deviceFlow?.verification_uri_complete || undefined;
   const isTrustedUri = (u: string) => isBrowserOpenableUrl(u) && isOnApiOrigin(u, apiUrl);
-  const untrustedUri = uris.find(u => !isTrustedUri(u));
-  const trusted = uris.length > 0 && uris.every(isTrustedUri);
+  const uriTrusted = uri !== undefined && isTrustedUri(uri);
+  const link = rawLink && isTrustedUri(rawLink) && (uri === undefined || uriTrusted) ? rawLink : undefined;
+  const untrustedUri = [uri, rawLink].find(u => u && !isTrustedUri(u));
+  const trusted = Boolean(deviceFlow) && uriTrusted && !untrustedUri;
+  const warning = !deviceFlow
+    ? undefined
+    : uri === undefined
+      ? link
+        ? 'Not opening browser: the server sent a sign-in link but no verification URL.'
+        : 'Not opening browser: the server did not return a verification URL.'
+      : !untrustedUri
+        ? undefined
+        : isOnApiOrigin(untrustedUri, apiUrl)
+          ? `Not opening browser: verification URL ${originOf(untrustedUri)} is not https (plain http is only auto-opened on localhost). Only continue if you trust it.`
+          : `Not opening browser: verification URL origin ${originOf(untrustedUri)} does not match the configured server ${originOf(apiUrl)}. Only continue if you trust it.`;
 
   // Auto-open browser when device flow is initiated
   useEffect(() => {
-    // Use verification_uri_complete which includes the user code pre-filled.
     // An untrusted URL is never handed to the OS opener; the waiting screen shows the warning.
-    if (deviceFlow && status === 'waiting' && trusted) {
-      open(deviceFlow.verification_uri_complete).catch(err => {
+    if (link && status === 'waiting' && trusted) {
+      open(link).catch(err => {
         // Silent fail - user can still manually visit the URL
         console.error('Failed to auto-open browser:', err);
       });
     }
-  }, [deviceFlow, status, trusted]);
+  }, [link, status, trusted]);
+
+  const { isRawModeSupported } = useStdin();
+  const copyTarget = link ?? (uriTrusted ? deviceFlow?.user_code : undefined);
+  const copying = useRef(false);
+  useInput(
+    (input, key) => {
+      // Ink reports Ctrl+C and Alt+C as 'c' plus a modifier flag.
+      if (key.ctrl || key.meta || input.toLowerCase() !== 'c' || !copyTarget || copying.current) return;
+      copying.current = true;
+      copyToClipboard(copyTarget)
+        .then(setCopyResult)
+        .catch(() => setCopyResult('failed'))
+        .finally(() => {
+          copying.current = false;
+        });
+    },
+    { isActive: status === 'waiting' && isRawModeSupported }
+  );
 
   if (status === 'initiating') {
     return (
@@ -253,42 +286,79 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
         </Text>
       </Box>
 
-      {trusted ? (
+      {warning && (
         <Box marginBottom={1}>
-          <Text>Opening browser automatically... If it doesn't open, please visit:</Text>
+          <Text color="red" bold>
+            {warning}
+          </Text>
         </Box>
-      ) : (
+      )}
+
+      {link ? (
         <>
           <Box marginBottom={1}>
-            <Text color="red" bold>
-              {!untrustedUri
-                ? 'Not opening browser: the server did not return a verification URL.'
-                : isOnApiOrigin(untrustedUri, apiUrl)
-                  ? `Not opening browser: verification URL ${originOf(untrustedUri)} is not https (plain http is only auto-opened on localhost). Only continue if you trust it.`
-                  : `Not opening browser: verification URL origin ${originOf(untrustedUri)} does not match the configured server ${originOf(apiUrl)}. Only continue if you trust it.`}
+            <Text>
+              {trusted
+                ? "Opening browser automatically... If it doesn't open, visit this link:"
+                : 'To sign in, visit this link:'}
+            </Text>
+          </Box>
+          <Box marginBottom={1} paddingLeft={2}>
+            <Text color="blue" bold>
+              {link}
             </Text>
           </Box>
           <Box marginBottom={1}>
-            <Text>Please visit:</Text>
+            {uri ? (
+              <Text>
+                Or open <Text color="blue">{uri}</Text> and enter this code:
+              </Text>
+            ) : (
+              <Text>Check that the page shows this code:</Text>
+            )}
+          </Box>
+        </>
+      ) : (
+        <>
+          {uri && (
+            <>
+              <Box marginBottom={1}>
+                <Text>{uriTrusted ? 'Please visit:' : 'The server asked you to visit:'}</Text>
+              </Box>
+              <Box marginBottom={1} paddingLeft={2}>
+                <Text color="blue" bold>
+                  {uri}
+                </Text>
+              </Box>
+            </>
+          )}
+          <Box marginBottom={1}>
+            <Text>And enter this code when prompted:</Text>
           </Box>
         </>
       )}
-
-      <Box marginBottom={1} paddingLeft={2}>
-        <Text color="blue" bold>
-          {deviceFlow?.verification_uri}
-        </Text>
-      </Box>
-
-      <Box marginBottom={1}>
-        <Text>And enter this code when prompted:</Text>
-      </Box>
 
       <Box marginBottom={1} paddingLeft={2}>
         <Text color="yellow" bold>
           {deviceFlow?.user_code}
         </Text>
       </Box>
+
+      {copyTarget && isRawModeSupported && (
+        <Box>
+          {copyResult === null ? (
+            <Text dimColor>Press c to copy the {link ? 'link' : 'code'}</Text>
+          ) : copyResult === 'failed' ? (
+            <Text color="yellow">Copy failed, select the {link ? 'link' : 'code'} above</Text>
+          ) : copyResult === 'terminal' ? (
+            <Text color="green">
+              Sent the {link ? 'link' : 'code'} to your terminal clipboard (if it does not paste, select it above)
+            </Text>
+          ) : (
+            <Text color="green">{link ? 'Link' : 'Code'} copied to clipboard</Text>
+          )}
+        </Box>
+      )}
 
       <Box marginTop={1}>
         <Text color="cyan">

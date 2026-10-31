@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
  * The live-pending cap must hold no matter what IP headers the caller sends: the origin can be
@@ -70,6 +70,10 @@ describe('POST /api/oauth/device/initiate live-pending cap', () => {
     repo.countPendingAndUnexpired.mockReset();
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('creates an authorization when the atomic counter grants a slot', async () => {
     incrementCounterConditional.mockResolvedValue({ success: true, count: 1 });
     const { req, res } = request();
@@ -77,6 +81,18 @@ describe('POST /api/oauth/device/initiate live-pending cap', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toHaveProperty('device_code');
     expect(repo.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns verification_uri_complete with the user code filled in on the activate page', async () => {
+    incrementCounterConditional.mockResolvedValue({ success: true, count: 1 });
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+    const { req, res } = request();
+    await mockRefs.handler!(req, res);
+    const { user_code, verification_uri, verification_uri_complete } = res.body;
+    expect(user_code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    expect(verification_uri).toBe('https://app.example.com/activate');
+    expect(verification_uri_complete).toBe(`https://app.example.com/activate?code=${user_code}`);
+    expect(new URL(verification_uri_complete).searchParams.get('code')).toBe(user_code);
   });
 
   it('rejects with 503 temporarily_unavailable when the counter is at the cap and creates nothing', async () => {
