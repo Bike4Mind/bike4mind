@@ -18,12 +18,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import {
-  denySelfAdminAction,
-  isSelfOrImpersonator,
-  parseAdminActionReason,
-  recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+import { isSelfOrImpersonator, parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -65,13 +60,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');
     }
-    if (isSelfOrImpersonator(req.user, userId)) {
-      await denySelfAdminAction(req, {
-        action: 'user.subscription.denied',
-        attempted: 'user.subscription.granted',
-        target: { kind: 'user', id: userId, displayName: req.user.email ?? req.user.username },
-      });
-    }
+    // Self-grants are allowed for now, pending scoped admin permissions; they still write the
+    // ledger and a strict audit entry, flagged so they can be found.
+    const selfGrant = isSelfOrImpersonator(req.user, userId);
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     if (seats < teamPlan.minSeats) {
@@ -106,7 +97,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
             summary: `granted individual subscription for ${durationMonths} month(s)`,
             reason,
-            details: { subscriptionType: 'individual', priceId, credits, durationMonths },
+            details: { subscriptionType: 'individual', priceId, credits, durationMonths, selfGrant },
             related: creditTransactionId ? { creditTransactionId } : undefined,
           });
         },
@@ -262,6 +253,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             credits: creditsToAdd,
             durationMonths,
             organizationOwnerId: targetOrganization.userId,
+            selfGrant,
           },
           related: creditTransactionId ? { creditTransactionId } : undefined,
         });
