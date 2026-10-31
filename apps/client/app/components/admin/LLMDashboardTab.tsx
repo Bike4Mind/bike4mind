@@ -78,6 +78,21 @@ const getModelVendor = (model: LLMModelConfig): string => {
 
 const SEARCH_DEBOUNCE_MS = 250;
 
+// Joy's Table uses `table-layout: fixed`, so every column needs a pixel width for the
+// table to widen (and scroll) instead of letting the per-key "Allowed" cells overflow it.
+const ALLOWED_KEY_WIDTH_PX = 60;
+const ALLOWED_KEY_GAP_PX = 2;
+// The Allowed cells set their own 8px side padding (not Joy's theme default), plus a 12px inner indent.
+const ALLOWED_CELL_CHROME_PX = 28;
+// Room for the wrapped header label and the "none configured" placeholder.
+const ALLOWED_CELL_MIN_PX = 140;
+
+const allowedColumnWidth = (keyCount: number): number =>
+  Math.max(
+    ALLOWED_CELL_MIN_PX,
+    ALLOWED_CELL_CHROME_PX + keyCount * ALLOWED_KEY_WIDTH_PX + Math.max(keyCount - 1, 0) * ALLOWED_KEY_GAP_PX
+  );
+
 // `query` must already be lowercased and trimmed.
 const matchesSearch = (model: LLMModelConfig, query: string): boolean =>
   [model.id, model.name, model.backend, getModelVendor(model)].some(field => field.toLowerCase().includes(query));
@@ -663,8 +678,8 @@ const LLMDashboardTab: React.FC = () => {
       </Box>
 
       {/* Models Table */}
-      <Sheet sx={{ flex: 1, minHeight: 0, overflow: 'auto', overflowX: { xs: 'auto', sm: 'visible' } }}>
-        <Table aria-label="LLM Models table" stickyHeader hoverRow sx={{ minWidth: { xs: '800px', sm: 'auto' } }}>
+      <Sheet sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        <Table aria-label="LLM Models table" stickyHeader hoverRow>
           <thead style={{ backgroundColor: theme.palette.background.level1 }}>
             {/* Headers */}
             <tr>
@@ -690,7 +705,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '15%',
+                  width: '180px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -714,7 +729,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '7.5%',
+                  width: '100px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -738,7 +753,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '7.5%',
+                  width: '110px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -762,7 +777,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '7.5%',
+                  width: '130px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -786,7 +801,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '5%',
+                  width: '90px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -812,7 +827,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '12%',
+                  width: '180px',
                   verticalAlign: 'top',
                   position: 'sticky',
                   top: 0,
@@ -823,7 +838,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '10%',
+                  width: '110px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -847,7 +862,7 @@ const LLMDashboardTab: React.FC = () => {
               </th>
               <th
                 style={{
-                  width: '10%',
+                  width: '110px',
                   verticalAlign: 'top',
                   cursor: 'pointer',
                   position: 'sticky',
@@ -872,11 +887,12 @@ const LLMDashboardTab: React.FC = () => {
               <th
                 style={{
                   verticalAlign: 'top',
-                  width: 'auto',
+                  width: allowedColumnWidth(allUsedTags.length),
                   position: 'sticky',
                   top: 0,
                   zIndex: 1001,
                   paddingLeft: '8px',
+                  paddingRight: '8px',
                 }}
               >
                 <Box
@@ -894,7 +910,7 @@ const LLMDashboardTab: React.FC = () => {
                       display: 'flex',
                       alignItems: 'center',
                       flexDirection: 'row',
-                      gap: 0.3,
+                      gap: `${ALLOWED_KEY_GAP_PX}px`,
                       justifyContent: 'flex-start',
                     }}
                   >
@@ -905,7 +921,8 @@ const LLMDashboardTab: React.FC = () => {
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'center',
-                          minWidth: '60px',
+                          width: ALLOWED_KEY_WIDTH_PX,
+                          flexShrink: 0,
                           textAlign: 'center',
                         }}
                       >
@@ -932,11 +949,12 @@ const LLMDashboardTab: React.FC = () => {
               <th
                 style={{
                   verticalAlign: 'top',
-                  width: 'auto',
+                  width: allowedColumnWidth(allEntitlementKeys.length),
                   position: 'sticky',
                   top: 0,
                   zIndex: 1001,
                   paddingLeft: '8px',
+                  paddingRight: '8px',
                 }}
               >
                 <Box sx={{ display: 'flex', flexDirection: 'column', paddingLeft: '12px' }}>
@@ -948,7 +966,7 @@ const LLMDashboardTab: React.FC = () => {
                       display: 'flex',
                       alignItems: 'center',
                       flexDirection: 'row',
-                      gap: 0.3,
+                      gap: `${ALLOWED_KEY_GAP_PX}px`,
                       justifyContent: 'flex-start',
                     }}
                   >
@@ -964,7 +982,8 @@ const LLMDashboardTab: React.FC = () => {
                             display: 'flex',
                             flexDirection: 'column',
                             alignItems: 'center',
-                            minWidth: '60px',
+                            width: ALLOWED_KEY_WIDTH_PX,
+                            flexShrink: 0,
                             textAlign: 'center',
                           }}
                         >
@@ -1096,19 +1115,22 @@ const LLMDashboardTab: React.FC = () => {
                       : '-'}
                   </Typography>
                 </td>
-                <td style={{ paddingLeft: '8px' }}>
+                <td style={{ paddingLeft: '8px', paddingRight: '8px' }}>
                   <Box
                     sx={{
                       display: 'flex',
                       alignItems: 'center',
                       flexDirection: 'row',
-                      gap: 0.3,
+                      gap: `${ALLOWED_KEY_GAP_PX}px`,
                       justifyContent: 'flex-start',
                       paddingLeft: '12px',
                     }}
                   >
                     {allUsedTags.map(tag => (
-                      <Box key={tag.value} sx={{ display: 'flex', justifyContent: 'center', minWidth: '60px' }}>
+                      <Box
+                        key={tag.value}
+                        sx={{ display: 'flex', justifyContent: 'center', width: ALLOWED_KEY_WIDTH_PX, flexShrink: 0 }}
+                      >
                         <Tooltip title={`${tag.label} users can access this model`}>
                           <Checkbox
                             checked={model.allowedUserTags.includes(tag.value)}
@@ -1130,13 +1152,13 @@ const LLMDashboardTab: React.FC = () => {
                     ))}
                   </Box>
                 </td>
-                <td style={{ paddingLeft: '8px' }}>
+                <td style={{ paddingLeft: '8px', paddingRight: '8px' }}>
                   <Box
                     sx={{
                       display: 'flex',
                       alignItems: 'center',
                       flexDirection: 'row',
-                      gap: 0.3,
+                      gap: `${ALLOWED_KEY_GAP_PX}px`,
                       justifyContent: 'flex-start',
                       paddingLeft: '12px',
                     }}
@@ -1147,7 +1169,10 @@ const LLMDashboardTab: React.FC = () => {
                       // whitespace-padded value matches its (canonical) column key -
                       // toggling never leaves a near-duplicate behind.
                       return (
-                        <Box key={key} sx={{ display: 'flex', justifyContent: 'center', minWidth: '60px' }}>
+                        <Box
+                          key={key}
+                          sx={{ display: 'flex', justifyContent: 'center', width: ALLOWED_KEY_WIDTH_PX, flexShrink: 0 }}
+                        >
                           <Tooltip title={`Users entitled to "${key}" can access this model`}>
                             <Checkbox
                               checked={current.some(k => normalizeEntitlementKey(k) === key)}
