@@ -12,6 +12,7 @@ import {
 } from '@bike4mind/local-models/testing';
 import type { ServerResponse } from 'node:http';
 import type { CompletionInfo, ICompletionOptionTools } from './backend';
+import { OutputBudgetExhaustedError } from './llmEmptyTurnErrors';
 import { OpenAICompatibleBackend } from './openaiCompatibleBackend';
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} } as never;
@@ -81,11 +82,16 @@ async function run(
 const bodyOf = (request: RecordedRequest) =>
   JSON.parse(request.body || '{}') as { stream?: boolean; tools?: unknown[]; messages?: { role: string }[] };
 
-function sse(response: ServerResponse, deltas: object[], usage = { prompt_tokens: 3, completion_tokens: 2 }) {
+function sse(
+  response: ServerResponse,
+  deltas: object[],
+  usage = { prompt_tokens: 3, completion_tokens: 2 },
+  finish = 'stop'
+) {
   response.writeHead(200, { 'content-type': 'text/event-stream' });
   deltas.forEach((delta, i) =>
     response.write(
-      `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', model: 'm', choices: [{ index: 0, delta, finish_reason: i === deltas.length - 1 ? 'stop' : null }] })}\n\n`
+      `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', model: 'm', choices: [{ index: 0, delta, finish_reason: i === deltas.length - 1 ? finish : null }] })}\n\n`
     )
   );
   response.write(
@@ -143,6 +149,15 @@ describe('OpenAICompatibleBackend against vLLM', () => {
     expect(notices).toHaveLength(1);
     const [info] = await backend.getModelInfo();
     expect(info.supportsTools).toBe(false);
+  });
+
+  it('gives one notice when concurrent turns are refused', async () => {
+    const fake = await vllm({ toolFlags: false, maxModelLen: 32768 });
+    const { backend, notices } = make(fake.baseUrl, 'vllm');
+    const tools = [weatherTool(async () => '')];
+    const turns = await Promise.all([run(backend, 'qwen-small', tools), run(backend, 'qwen-small', tools)]);
+    expect(turns.map(turn => turn.text)).toEqual(['Hello.', 'Hello.']);
+    expect(notices).toHaveLength(1);
   });
 
   it('reads a refusal from a flat error body', async () => {
@@ -239,6 +254,60 @@ describe('OpenAICompatibleBackend against vLLM', () => {
     });
     const { backend } = make(server.baseUrl, null);
     await expect(run(backend, 'm')).rejects.toThrow(/^gpu-box needs credentials\.$/);
+  });
+
+  it('reports a 403 as needing credentials', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': json({ error: { message: 'forbidden' } }, 403),
+    });
+    const { backend } = make(server.baseUrl, null);
+    await expect(run(backend, 'm')).rejects.toThrow(/^gpu-box needs credentials\.$/);
+  });
+
+  it('sends no authorization when the server has no credentials', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (_req, res) => sse(res, [{ content: 'hi' }]),
+    });
+    const fetch = createServerFetch({
+      origin: server.baseUrl,
+      label: 'gpu-box',
+      app: 'the CLI',
+      credentialHeaders: () => null,
+    });
+    const { backend } = make(server.baseUrl, null, fetch);
+    expect((await run(backend, 'm')).text).toBe('hi');
+    expect(server.requests[0].headers).not.toHaveProperty('authorization');
+  });
+
+  it('throws OutputBudgetExhaustedError when the budget ends the reply before any text', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (_req, res) => sse(res, [{ content: '' }], undefined, 'length'),
+    });
+    const { backend } = make(server.baseUrl, null);
+    await expect(run(backend, 'm')).rejects.toBeInstanceOf(OutputBudgetExhaustedError);
+  });
+
+  it('drops text that follows tool-call deltas in the same stream', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (req, res) =>
+        bodyOf(req).messages?.at(-1)?.role === 'tool'
+          ? sse(res, [{ content: 'Done.' }])
+          : sse(res, [
+              { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'get_weather', arguments: '{}' } }] },
+              { content: 'stray' },
+            ]),
+    });
+    const { backend } = make(server.baseUrl, null);
+    const { text } = await run(backend, 'm', [weatherTool(async () => '21C')]);
+    expect(text).toBe('Done.');
+  });
+
+  it('streams reasoning and text that arrive in the same delta', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (_req, res) => sse(res, [{ reasoning_content: 'hmm', content: 'Answer.' }]),
+    });
+    const { backend } = make(server.baseUrl, null);
+    expect((await run(backend, 'm')).text).toBe('<think>hmm</think>Answer.');
   });
 
   it('keeps the credential out of other HTTP errors and drops the SDK authorization', async () => {

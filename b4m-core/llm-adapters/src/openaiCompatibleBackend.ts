@@ -85,7 +85,6 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
   private readonly logger: ILogger;
   private readonly app: HintApp;
   private toolsOff = false;
-  private toolsOffNoticed = false;
   private readonly smallNoticed = new Set<string>();
   private readonly canonical = new Map<string, string>();
   private readonly contexts = new Map<string, number>();
@@ -185,12 +184,6 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     return true;
   }
 
-  private notifyToolsOff() {
-    if (this.toolsOffNoticed) return;
-    this.toolsOffNoticed = true;
-    this.options.onNotice?.(toolsOffHint(this.options.label, this.options.product, this.app));
-  }
-
   /** Whether this turn's tools fit a context the server fixes; unknown contexts are assumed to fit. */
   private async toolsFit(
     name: string,
@@ -281,8 +274,11 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       if (sendTools && error instanceof OpenAI.APIError && error.status !== undefined) {
         const detail = typeof error.error === 'string' ? error.error : JSON.stringify(error.error ?? error.message);
         if (isToolRefusal(error.status, `${error.message} ${detail}`) && (await this.refusesTools(name))) {
-          this.toolsOff = true;
-          this.notifyToolsOff();
+          // Concurrent turns can all get here; only the first one to turn tools off gives the notice.
+          if (!this.toolsOff) {
+            this.toolsOff = true;
+            this.options.onNotice?.(toolsOffHint(this.options.label, this.options.product, this.app));
+          }
           await this.complete(
             model,
             stripToolDependentMessages(messages),
