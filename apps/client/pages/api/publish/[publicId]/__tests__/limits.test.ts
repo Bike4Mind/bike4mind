@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createHash } from 'node:crypto';
 import { PUBLISH_QUOTAS, TooManyRequestsError } from '@bike4mind/common';
 
@@ -31,7 +35,7 @@ const m = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
-    Object.assign(chain, { use: () => chain, post: (fn: unknown) => fn });
+    Object.assign(chain, { use: () => chain, post: (...fns: unknown[]) => fns[fns.length - 1] });
     return chain;
   },
 }));

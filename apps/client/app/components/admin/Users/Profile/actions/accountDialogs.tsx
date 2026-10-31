@@ -36,7 +36,7 @@ const useAdminUserPost = (userId: string, failure: string) => {
   };
 };
 
-/** Restrict blocks AI features but keeps sign-in; lifting it is the same dialog in reverse. */
+/** Restrict blocks AI features and outbound actions but keeps sign-in; lifting it is the same dialog in reverse. */
 export const RestrictDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
   const update = useAdminUserUpdate(user.id);
   const showUndo = useUndoToast();
@@ -61,8 +61,8 @@ export const RestrictDialog: React.FC<ProfileDialogProps> = ({ user, onClose, on
       title={restricting ? `Restrict ${displayName(user)}?` : `Lift the restriction on ${displayName(user)}?`}
       description={
         restricting
-          ? 'They can still sign in and see their data, but cannot use AI features until the restriction is lifted.'
-          : 'AI features work again right away.'
+          ? 'They can still sign in and see their data, but cannot use AI features, send email or invites, use tools, or publish until the restriction is lifted.'
+          : 'AI features and outbound actions work again right away.'
       }
       reasonPresets={restricting ? ADMIN_REASON_PRESETS.restriction : ADMIN_REASON_PRESETS.reinstatement}
       confirmLabel={restricting ? 'Restrict account' : 'Lift restriction'}

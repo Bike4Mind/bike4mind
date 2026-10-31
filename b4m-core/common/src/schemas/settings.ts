@@ -3554,7 +3554,7 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description:
-      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Payments made while both payment rewards are 0 are not counted.",
     category: 'Referrals',
   }),
   ReferralSecondPaymentCredits: makeNumberSetting({
@@ -3565,7 +3565,7 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description:
-      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Payments made while both payment rewards are 0 are not counted.",
     category: 'Referrals',
   }),
   ReferralHoldDays: makeNumberSetting({
@@ -3576,7 +3576,7 @@ export const settingsMap = {
     min: 0,
     max: 365,
     description:
-      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward. Not active yet: takes effect once inviter rewards ship.',
+      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward.',
     category: 'Referrals',
   }),
   ReferralInvitesPerUser: makeNumberSetting({
@@ -3969,15 +3969,15 @@ export const settingsMap = {
       'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the Default Free Credits grant is then applied after they verify their email (anti-spam — see Default Free Credits). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
     category: 'Users',
   }),
-  // Personal API key trust gate. A trusted account has a verified email AND one of: a
-  // purchase or active plan, an account older than apiKeyMinAccountAgeDays, or admin
-  // approval (user.apiKeyTrustApproved). See userApiKeyService/trust.ts.
+  // New-account trust gate for API keys and outbound actions (see assertOutboundActionAllowed). A trusted
+  // account has a verified email AND one of: a purchase or active plan, an account older than
+  // apiKeyMinAccountAgeDays, or admin approval (user.apiKeyTrustApproved). See userApiKeyService/trust.ts.
   apiKeyTrustGateEnabled: makeBooleanSetting({
     key: 'apiKeyTrustGateEnabled',
     name: 'API Key Trust Gate',
     defaultValue: true,
     description:
-      'Restricts personal API key creation for untrusted accounts: an unverified email cannot mint keys, and a verified account that has not purchased, is younger than the minimum age and is not admin-approved is limited to the untrusted key cap. Off restores unrestricted minting and lifts the untrusted rate limit. Changes reach running servers within about 5 minutes (settings cache).',
+      'Restricts personal API key creation for untrusted accounts: an unverified email cannot mint keys, and a verified account that has not purchased, is younger than the minimum age and is not admin-approved is limited to the untrusted key cap. The same trust check blocks untrusted accounts from outbound actions (email send, invites, tools, agent helpers, publishing). Off restores unrestricted minting and lifts the untrusted rate limit and outbound block (moderated accounts stay blocked). Changes reach running servers within about 5 minutes (settings cache).',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 1,
@@ -3989,7 +3989,8 @@ export const settingsMap = {
     min: 0,
     max: 365,
     int: true,
-    description: 'Account age, in days, after which a verified account is trusted for API keys without a purchase.',
+    description:
+      'Account age, in days, after which a verified account is trusted for API keys and outbound actions without a purchase.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 2,
