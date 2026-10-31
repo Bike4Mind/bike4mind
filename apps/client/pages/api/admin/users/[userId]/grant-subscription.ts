@@ -240,6 +240,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
               creditLots: creditLotRepository,
             },
             creditHolderMethods: organizationRepository,
+            lotFundingSource: 'granted',
           }
         );
 

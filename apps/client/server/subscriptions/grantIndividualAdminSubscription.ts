@@ -107,6 +107,7 @@ export async function grantIndividualAdminSubscription(params: {
             creditLots: creditLotRepository,
           },
           creditHolderMethods: userRepository,
+          lotFundingSource: 'granted',
         }
       );
       currentCredits = holder?.currentCredits ?? null;
