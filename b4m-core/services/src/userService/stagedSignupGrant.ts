@@ -5,6 +5,7 @@ import {
   PENDING_FREE_CREDITS_TAG,
   settingsMap,
   signupGrantRemaining,
+  SignupRiskScoringSchema,
   type IUserDocument,
   type PaymentUnlockReason,
   type SignupGrant,
@@ -79,6 +80,20 @@ function isReleaseEligible(
   if (expected === 'pending_email') return user.signupGrant.stage === expected;
   // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or subscription unlock.
   return user.signupGrant.stage !== 'pending_email';
+}
+
+/** Whether the stored risk score alone keeps the account in review (refreshSignupRiskScore's needsReview). */
+async function scoreNeedsReview(score: number, adminSettings: GrantAdapters['db']['adminSettings']) {
+  const setting = await adminSettings.findBySettingName('signupRiskScoring');
+  let value: unknown = setting?.settingValue ?? {};
+  try {
+    if (typeof value === 'string') value = JSON.parse(value);
+  } catch {
+    value = undefined;
+  }
+  const parsed = SignupRiskScoringSchema.safeParse(value);
+  // An unreadable setting keeps the account queued rather than releasing it unreviewed.
+  return !parsed.success || score >= parsed.data.reviewThreshold;
 }
 
 async function releaseStage(
@@ -257,6 +272,14 @@ async function releaseStage(
         !!assessedBand &&
         isSignupGrantHeldForReview({ signupGrant: nextGrant, signupGrantAssessment: assessment }) &&
         (user.riskScore?.reviewState ?? 'none') === 'none';
+      // An unlock that pays the held tranche (card, subscription, ...) ends the hold, so an account queued
+      // only for it leaves the queue. An admin release is approved by its caller (admin/signup-risk-reviews).
+      const leaveRiskReview =
+        reason !== 'admin' &&
+        user.riskScore?.reviewState === 'pending' &&
+        isSignupGrantHeldForReview(user) &&
+        !isSignupGrantHeldForReview({ signupGrant: nextGrant, signupGrantAssessment: assessment }) &&
+        !(await scoreNeedsReview(user.riskScore.score, db.adminSettings));
       const updated = await db.users.update({
         id: userId,
         ...(assessment ? { signupGrantAssessment: assessment } : {}),
@@ -271,6 +294,9 @@ async function releaseStage(
                 reviewState: 'pending' as const,
               },
             }
+          : {}),
+        ...(leaveRiskReview && user.riskScore
+          ? { riskScore: { ...user.riskScore, reviewState: 'none' as const } }
           : {}),
         signupGrant: nextGrant,
       });

@@ -12,7 +12,7 @@ import { signupProtection } from '@server/auth/signupProtection';
  * account in the risk review queue (admin/signup-risk-reviews). Pays up to the full tranche, not the
  * unlock remainder, which the account still earns the usual way. Returns the credits paid; 0 when
  * nothing was held. The validator re-checks the hold inside the payout transaction, so a concurrent
- * release cannot pay twice.
+ * release cannot pay twice. Throws when the tranche stays held, so the caller does not approve.
  */
 export async function releaseRiskReviewedSignupGrant(
   userId: string,
@@ -39,5 +39,11 @@ export async function releaseRiskReviewedSignupGrant(
     },
     audit,
   });
-  return result.creditsGranted;
+  if (result.creditsGranted > 0) return result.creditsGranted;
+  // A domain or burst hold can withhold even an admin payout; approving then would drop the account
+  // from the queue with the tranche still held, so fail it and leave it pending for a retry.
+  const after = await userRepository.findById(userId);
+  if (after && userService.isSignupGrantHeldForReview(after))
+    throw new Error('Signup grant is still withheld; release its signup hold before approving');
+  return 0;
 }
