@@ -13,6 +13,7 @@ const { mockFindUserById, mockFindOrgById, mockBillingEnabled, mockCreditsEnforc
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   organizationRepository: { findById: mockFindOrgById },
+  usageEventRepository: {},
   userRepository: { findById: mockFindUserById },
 }));
 // The pair semantics of the two toggles are this helper's own contract, covered by
@@ -26,6 +27,11 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 // service resolves system API keys and builds the whole model catalog.
 const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
 vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
+const mockDailyCap = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@server/billing/freeTierDailyCapGate', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/billing/freeTierDailyCapGate')>()),
+  checkFreeTierDailySpendCap: mockDailyCap,
+}));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
 }));
@@ -35,7 +41,7 @@ import {
   assertSessionOperationalCredits,
   filterSessionIdsByOperationalCredits,
 } from './sessionOperationalCreditPreflight';
-import { getQuestErrorCode } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, getQuestErrorCode, TooManyRequestsError } from '@bike4mind/common';
 
 const USER_ID = 'user-1';
 const ORG_ID = 'org-1';
@@ -215,6 +221,13 @@ describe('checkSessionOperationalCredits', () => {
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error));
   });
 
+  it('treats a holder with no recorded balance as holding 0 credits', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID });
+
+    await expect(preflight()).resolves.toMatchObject({ allowed: false, reason: expect.stringContaining('0 credits') });
+  });
+
   it('allows when the owner no longer exists', async () => {
     billingOn();
     mockFindUserById.mockResolvedValue(null);
@@ -227,6 +240,46 @@ describe('checkSessionOperationalCredits', () => {
 
     await expect(preflight({ operationCount: 0 })).resolves.toEqual({ allowed: true });
     expect(mockBillingEnabled).not.toHaveBeenCalled();
+  });
+
+  it('checks the free-tier daily caps for the paying holder once billing applies', async () => {
+    billingOn();
+    const user = { id: USER_ID, currentCredits: 1000, organizationId: ORG_ID };
+    mockFindUserById.mockResolvedValue(user);
+    mockFindOrgById.mockResolvedValue({ id: ORG_ID, currentCredits: 1000, userDetails: [] });
+
+    await expect(preflight()).resolves.toEqual({ allowed: true });
+    expect(mockDailyCap).toHaveBeenCalledWith(
+      expect.objectContaining({ user, billingOrganizationId: ORG_ID, logger: expect.anything() })
+    );
+  });
+
+  it('refuses a funded holder who reached a free-tier daily cap', async () => {
+    billingOn();
+    const capError = new TooManyRequestsError('Daily free-tier usage limit reached. Try again tomorrow.', {
+      errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+    });
+    mockDailyCap.mockRejectedValueOnce(capError);
+
+    await expect(preflight()).resolves.toEqual({
+      allowed: false,
+      reason: 'Daily free-tier usage limit reached. Try again tomorrow.',
+      dailyCapError: capError,
+    });
+    expect(mockGetOperationsModel).not.toHaveBeenCalled();
+  });
+
+  it('rethrows an error from the daily cap check that is not a cap refusal', async () => {
+    billingOn();
+    const failure = new Error('unexpected');
+    mockDailyCap.mockRejectedValueOnce(failure);
+
+    await expect(preflight({ logger: { warn: vi.fn(), error: vi.fn() } as never })).rejects.toBe(failure);
+  });
+
+  it('skips the daily cap check when operational billing does not apply', async () => {
+    await preflight();
+    expect(mockDailyCap).not.toHaveBeenCalled();
   });
 
   // A half-resolved pair would skip the cap and bill the member personally for org usage.
@@ -299,6 +352,19 @@ describe('checkSessionOperationalCredits', () => {
           id: 'llama3-cache-priced',
           freeToRun: true,
           pricing: { 128000: { input: 0, output: 0, cache_read: 0.01, cache_write: 0.1 } },
+        },
+      });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    it('keeps the refusal when a freeToRun model carries only a cache-write rate', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: {
+          id: 'llama3-cache-write',
+          freeToRun: true,
+          pricing: { 128000: { input: 0, output: 0, cache_write: 0.1 } },
         },
       });
 
@@ -400,6 +466,20 @@ describe('assertSessionOperationalCredits', () => {
 
     expect(getQuestErrorCode(error)).toBe('insufficient_credits');
     expect((error as { statusCode?: number }).statusCode).toBe(422);
+  });
+
+  it('rethrows the free-tier daily cap 429 rather than recasting it as insufficient credits', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 10 });
+    const capError = new TooManyRequestsError('Daily free-tier usage limit reached. Try again tomorrow.', {
+      errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+      retryAfter: 60,
+    });
+    mockDailyCap.mockRejectedValueOnce(capError);
+
+    await expect(
+      assertSessionOperationalCredits({ userId: USER_ID, operationCount: 1, operation: 'session tagging' })
+    ).rejects.toBe(capError);
   });
 });
 

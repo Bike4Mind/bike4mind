@@ -68,7 +68,7 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
 }));
 
 // Keep fire-and-forget analytics writes from touching the DB / polluting output.
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 // The real apiKeyRateLimit middleware runs; only its Mongo-backed counter check
 // is stubbed (otherwise the query buffers forever against the stubbed connectDB).

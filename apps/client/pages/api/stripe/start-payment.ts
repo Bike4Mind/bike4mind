@@ -9,7 +9,7 @@ import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { recordPaymentStart } from '@server/billing/paymentRisk';
 import { readNetworkMeta } from '@server/auth/networkMeta';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';

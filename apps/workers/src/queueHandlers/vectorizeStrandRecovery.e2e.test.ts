@@ -38,7 +38,7 @@ import {
  * Consumes the built dist, so `pnpm turbo:core:build` must be current.
  */
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
   MARK_PAUSED_MAX_ATTEMPTS: 3,
   MARK_PAUSED_RETRY_DELAY_MS: 0,
@@ -89,7 +89,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   effectiveChunkTokenLimit: vi.fn(() => 512),
   FabFileChunkSearchIndex: { deleteByFabFileId: vi.fn() },
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })),
 }));

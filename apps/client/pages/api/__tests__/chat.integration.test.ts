@@ -117,7 +117,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 }));
 
 // Keep fire-and-forget analytics writes from touching the DB.
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 // The per-user tier rate-limit middleware resolves the caller's limit from their
 // active subscriptions (a Mongo read via subscriptionRepository). This test stubs

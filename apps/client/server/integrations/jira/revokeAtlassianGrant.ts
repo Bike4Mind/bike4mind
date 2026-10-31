@@ -12,7 +12,7 @@ export type AtlassianRevokeOutcome = 'revoked' | 'no_credential' | 'not_configur
  *
  * Never throws: callers revoke on the way to dropping their own copy of the credential (disconnect,
  * account deletion), and an Atlassian outage must not block that local teardown. Mirrors
- * revokeDriveGrant in server/integrations/google/drive/common.ts; keep the two contracts in sync.
+ * revokeDriveGrant in packages/server-utils/src/integrations/google/drive/common.ts; keep the two contracts in sync.
  */
 export async function revokeAtlassianGrant(
   encryptedToken: string | null | undefined,

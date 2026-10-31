@@ -4,7 +4,7 @@ import { requireEnv } from '@bike4mind/common';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { EmailEvents } from '@server/utils/eventBus';
 import {

@@ -21,7 +21,7 @@ import {
 } from '@server/utils/apiKeyAccessGate';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { resolveUntrustedKeyLimits } from '@server/utils/apiKeyTrust';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';

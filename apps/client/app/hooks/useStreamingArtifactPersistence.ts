@@ -6,7 +6,7 @@ import {
   checkHasDefaultExport,
   generateCompleteArtifactId,
   getArtifactTimestamp,
-} from '../utils/artifactParser';
+} from '@bike4mind/server-utils/app/utils/artifactParser';
 import { persistArtifacts } from '../utils/artifactPersistence';
 import { useLLM } from '@client/app/contexts/LLMContext';
 

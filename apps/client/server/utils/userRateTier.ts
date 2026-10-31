@@ -9,7 +9,7 @@ import {
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
 import { getEntitlingPlanByPriceId, getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
-import { UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
+import { UserSubscriptionTier } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 
 /**

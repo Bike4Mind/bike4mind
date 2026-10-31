@@ -43,8 +43,8 @@ import {
   reserveShadowTokenBudget,
 } from '@bike4mind/services/llm/shadowTier';
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
-import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
-import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
+import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
+import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import {

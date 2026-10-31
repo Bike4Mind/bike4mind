@@ -12,14 +12,14 @@ import { creditService } from '@bike4mind/services';
 import type { CreditLedgerEntry } from '@bike4mind/services/creditService';
 import type { ILogger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
 import { attributeToRequestApiKey } from '@server/billing/attributeToRequestApiKey';
 
-import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { checkFreeTierDailySpendCap } from './freeTierDailyCapGate';
 
-export { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
+export { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 export type { CreditLedgerEntry };
 
 /**

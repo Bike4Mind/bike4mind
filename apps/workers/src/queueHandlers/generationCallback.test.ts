@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import type { SQSEvent } from 'aws-lambda';
 import { ApiKeyStatus, GENERATION_CALLBACK_EVENT_TYPE } from '@bike4mind/common';
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
@@ -93,7 +93,7 @@ function makeQuest(overrides: Record<string, unknown> = {}) {
     attachmentNotices: [],
     attachmentDelivery: undefined,
     ...overrides,
-  } as unknown as Parameters<typeof import('@server/utils/questPollBody').toQuestPollBody>[0];
+  } as unknown as Parameters<typeof import('@bike4mind/server-utils/utils/questPollBody').toQuestPollBody>[0];
 }
 
 type FetchMock = ReturnType<typeof vi.fn>;

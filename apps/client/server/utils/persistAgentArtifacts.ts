@@ -35,7 +35,7 @@ import {
   extractReactDependencies,
   generateCompleteArtifactId,
   parseArtifactsWithFallback,
-} from '@client/app/utils/artifactParser';
+} from '@bike4mind/server-utils/app/utils/artifactParser';
 // The gate gets `resolveArtifactsEnabled` from the services leaf entry point. The persistence
 // dependencies below stay lazy and injectable for tests.
 import { resolveAgentArtifactGate } from '@bike4mind/server-utils/utils/artifactGate';

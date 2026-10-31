@@ -9,7 +9,12 @@ import {
   SkillListingReport,
 } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/common';
-import { canSeeListing, findListing, loadMarketSettings, memberOrgIdsFor } from '@server/skillMarket/market';
+import {
+  canSeeListing,
+  findListing,
+  loadMarketSettings,
+  memberOrgIdsFor,
+} from '@bike4mind/server-utils/skillMarket/market';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 
 const DAY_MS = 24 * 60 * 60 * 1000;

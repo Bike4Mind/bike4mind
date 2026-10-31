@@ -6,7 +6,7 @@ import { checkApiKeyRateLimit, type RateLimitCounter } from '@server/utils/apiKe
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { ApiKeyScope, API_KEY_RATE_LIMIT_HEADER_NAMES, isShadowTier } from '@bike4mind/common';
-import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
+import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 
 export interface ApiKeyRateLimitOptions {

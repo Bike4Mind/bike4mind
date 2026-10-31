@@ -2,7 +2,7 @@ import { canAdministerOrganization } from '@bike4mind/common';
 import { SkillListing, SkillListingVersion, User, type ISkillListingVersionDocument } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { Logger } from '@bike4mind/observability';
-import { loadMarketSettings, notifyUser } from './market';
+import { loadMarketSettings, notifyUser } from '@bike4mind/server-utils/skillMarket/market';
 
 const logger = new Logger({ metadata: { service: 'skillMarketReviewSla' } });
 

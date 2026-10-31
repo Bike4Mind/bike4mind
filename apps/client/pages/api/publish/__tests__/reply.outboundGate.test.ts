@@ -22,7 +22,7 @@ vi.mock('@server/utils/apiKeyTrust', () => ({
     ownerUntrusted: false,
   }),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/database', async orig => {
   const actual = await orig<Record<string, unknown>>();

@@ -68,16 +68,17 @@ export function subscriptionMrr(row: MrrFields): AdminSubscriptionMrr | null {
 export const MRR_MATCH: Condition = { source: SubscriptionSource.Stripe, status: { $in: [...MRR_STATUSES] } };
 
 /**
- * Facet stages that sum the billed amount per (currency, interval, priced) group, narrowed further by
- * `within` when given. Normalizing happens in `mrrTotal`, which keeps the pipeline to $group and $sum.
+ * Facet stages that sum the billed amount of the rows matching `match` per (currency, interval, priced)
+ * group plus `by` keys. Normalizing happens in `mrrTotal`, which keeps the pipeline to $group and $sum.
  */
-export function mrrGroupStages(within?: Condition): Condition[] {
+export function billedGroupStages(match: Condition, by: Record<string, string> = {}): Condition[] {
   return [
-    { $match: within ? { $and: [MRR_MATCH, within] } : MRR_MATCH },
+    { $match: match },
     {
       $group: {
         // $ifNull folds a missing mirror field into null, so rows written before the mirror group as unpriced.
         _id: {
+          ...Object.fromEntries(Object.entries(by).map(([key, field]) => [key, { $ifNull: [field, null] }])),
           currency: { $ifNull: ['$currency', null] },
           interval: { $ifNull: ['$interval', null] },
           intervalCount: { $ifNull: ['$intervalCount', null] },
@@ -90,15 +91,21 @@ export function mrrGroupStages(within?: Condition): Condition[] {
   ];
 }
 
-export type MrrGroup = {
-  _id: { currency: string | null; interval: string | null; intervalCount: number | null; priced: boolean };
+export function mrrGroupStages(within?: Condition, by?: Record<string, string>): Condition[] {
+  return billedGroupStages(within ? { $and: [MRR_MATCH, within] } : MRR_MATCH, by);
+}
+
+export type MrrGroup<Key extends Record<string, unknown> = Record<never, never>> = {
+  _id: Key & { currency: string | null; interval: string | null; intervalCount: number | null; priced: boolean };
   /** unitAmount x quantity summed over the group: minor units per billing period. */
   billed: number;
   count: number;
 };
 
 /** Totals `mrrGroupStages` output in MRR_CURRENCY; other currencies and unpriced rows are counted instead. */
-export function mrrTotal(groups: readonly MrrGroup[]): AdminSubscriptionsMrrTotal {
+export function mrrTotal<Key extends Record<string, unknown>>(
+  groups: readonly MrrGroup<Key>[]
+): AdminSubscriptionsMrrTotal {
   let amount = 0;
   let unpriced = 0;
   let otherCurrency = 0;
@@ -115,4 +122,23 @@ export function mrrTotal(groups: readonly MrrGroup[]): AdminSubscriptionsMrrTota
     amount += billed / months;
   }
   return { currency: MRR_CURRENCY, amount: Math.round(amount), unpriced, otherCurrency };
+}
+
+/** `mrrTotal` per value of one `by` key, with its row count; a missing value is keyed `null`. */
+export function mrrTotalsBy<Key extends string>(
+  groups: readonly MrrGroup<Record<Key, unknown>>[],
+  key: Key
+): Map<string | null, { count: number; mrr: AdminSubscriptionsMrrTotal }> {
+  const byValue = new Map<string | null, MrrGroup<Record<Key, unknown>>[]>();
+  for (const group of groups) {
+    const value = group._id[key];
+    const id = value === null || value === undefined ? null : String(value);
+    byValue.set(id, [...(byValue.get(id) ?? []), group]);
+  }
+  return new Map(
+    [...byValue].map(([value, members]) => [
+      value,
+      { count: members.reduce((sum, group) => sum + group.count, 0), mrr: mrrTotal(members) },
+    ])
+  );
 }

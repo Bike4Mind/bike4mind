@@ -4,7 +4,7 @@ vi.mock('@bike4mind/database', () => ({
   partnerSignupRuleRepository: { findActiveRules: vi.fn() },
 }));
 
-vi.mock('@client/app/premium-generated/premiumEntitlementGrants.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumEntitlementGrants.generated', () => ({
   premiumEntitlementGrants: {
     tagGrants: [{ tag: 'example-pro', entitlements: ['example:pro'] }],
     impliedEntitlements: [{ ifHeld: 'example:pro', alsoGrant: ['example:addon'] }],

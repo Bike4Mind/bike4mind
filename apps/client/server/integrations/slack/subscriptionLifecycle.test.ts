@@ -9,8 +9,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mocks.config }));
-vi.mock('./slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findByStripeSubscriptionId: mocks.findByStripeSubscriptionId },
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));

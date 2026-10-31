@@ -16,10 +16,10 @@ const resolveExecutionMementoGatesMock = vi.fn();
 const recallMementosV2Mock = vi.fn();
 const getRelevantMementosMock = vi.fn();
 
-vi.mock('@server/utils/resolveExecutionMementoGates', () => ({
+vi.mock('@bike4mind/server-utils/utils/resolveExecutionMementoGates', () => ({
   resolveExecutionMementoGates: (...args: unknown[]) => resolveExecutionMementoGatesMock(...args),
 }));
-vi.mock('@server/memory/recallMementosV2', () => ({
+vi.mock('@bike4mind/server-utils/memory/recallMementosV2', () => ({
   recallMementosV2: (...args: unknown[]) => recallMementosV2Mock(...args),
 }));
 vi.mock('@bike4mind/services', () => ({

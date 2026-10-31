@@ -10,7 +10,7 @@ import {
   UnprocessableEntityError,
   TooManyRequestsError,
 } from '@bike4mind/common';
-import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
+import { signupCreditsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
@@ -36,7 +36,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
@@ -202,7 +202,7 @@ vi.mock('@bike4mind/services', () => ({
 import { oauthClientRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
 
@@ -634,6 +634,20 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     await handler(req, res);
 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
+  });
+
+  it('ties every signup stage to the visit the code was entered in', async () => {
+    const visitId = 'c'.repeat(32);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `b4m_vid=${visitId}`;
+
+    await handler(req, res);
+
+    expect(mockEmitFunnelEvent.mock.calls.map(([c]) => [c.event, c.visitId])).toEqual([
+      ['email_verified', visitId],
+      ['credits_granted', visitId],
+      ['signup_completed', visitId],
+    ]);
   });
 
   it('reports credits_granted with zero when the signup seeded none', async () => {

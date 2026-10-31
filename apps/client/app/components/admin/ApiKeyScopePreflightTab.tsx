@@ -19,7 +19,7 @@ import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { isAxiosError } from 'axios';
-import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
+import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import type { IApiKeyScopePreflightRow } from '@bike4mind/common';
 import { useApiKeyScopePreflight, type ScopePreflightParams } from '@client/app/hooks/data/apiKeyScopePreflight';
 import { AdminPageHeader, DataTable, EmptyState, ErrorState, FilterBar } from './shared';

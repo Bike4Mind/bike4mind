@@ -19,7 +19,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
-import { requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
+import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {

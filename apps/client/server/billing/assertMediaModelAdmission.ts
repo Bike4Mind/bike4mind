@@ -1,4 +1,4 @@
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import type { IUserDocument } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/utils';

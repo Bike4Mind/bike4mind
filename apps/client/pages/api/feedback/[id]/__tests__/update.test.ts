@@ -35,7 +35,7 @@ const feedbackText = vi.hoisted(() => ({
   find: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
 }));
 vi.mock('@bike4mind/database', () => ({ FeedbackModel: model, FeedbackTextModel: feedbackText }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 import '@pages/api/feedback/[id]/update';
 

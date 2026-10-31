@@ -11,7 +11,7 @@ vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/services', () => ({ userService: { refreshRiskEvidence } }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics }));
 vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh, riskEvidenceDb: () => ({}) }));
-vi.mock('@server/queueHandlers/utils', () => ({ dispatchWithLogger: (fn: unknown) => fn }));
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({ dispatchWithLogger: (fn: unknown) => fn }));
 
 import { dispatch, processRiskEvidenceRecord as processRecord, RiskEvidenceMetrics } from './riskEvidence';
 
