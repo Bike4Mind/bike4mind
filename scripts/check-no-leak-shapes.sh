@@ -144,7 +144,19 @@ export LS_MODE="$mode"
 # fails the run instead of silently allowing nothing or everything) and defines the matchers.
 PERL_COMMON='
   use strict; use warnings;
+  use Unicode::Normalize qw(NFD NFKC);
   our (@ALLOW, @TERMS, $WORD_EDGE);
+  # The same fold as check-restricted-terms.mjs, applied to every term and every subject, so a
+  # fullwidth letter, a zero-width joiner or an accent cannot hide a term from this guard
+  # when CI would still see it. Compatibility mapping can leave a combining mark behind, so
+  # the strip runs twice.
+  sub fold {
+    my $s = NFD(shift);
+    $s =~ s/[\p{Cf}\p{Mn}]//g;
+    $s = NFKC($s);
+    $s =~ s/[\p{Cf}\p{Mn}]//g;
+    return $s;
+  }
   sub compile_list {
     my ($raw, $what, $bounded) = @_;
     my @out;
@@ -153,6 +165,7 @@ PERL_COMMON='
       next if $line eq "" || $line =~ /^#/;
       my $src = $line;
       utf8::decode($src);
+      $src = fold($src) if $bounded;
       my $re = eval {
         $bounded ? qr/$WORD_EDGE(?:$src)$WORD_EDGE/iu : qr/$src/u
       };
@@ -170,7 +183,7 @@ PERL_COMMON='
   @TERMS = compile_list($ENV{LS_TERMS}, "restricted-term", 1);
   sub decoded { my $s = shift; my $c = $s; utf8::decode($c) or return $s; return $c; }
   sub allowed { my $subject = decoded(shift); for my $re (@ALLOW) { return 1 if $subject =~ $re } return 0; }
-  sub has_term { my $s = decoded(shift); for my $re (@TERMS) { return 1 if $s =~ $re } return 0; }
+  sub has_term { my $s = fold(decoded(shift)); for my $re (@TERMS) { return 1 if $s =~ $re } return 0; }
 '
 
 # --- Path scan ------------------------------------------------------------------------------
@@ -182,17 +195,17 @@ if ! path_hits=$(
     while (my $p = <STDIN>) {
       $p =~ s/\0\z//;
       next if $p eq "";
+      # Checked first, before any rule that would echo the path: a path that is itself the
+      # problem is withheld whatever else it matches, and it is never allowlisted.
+      if (has_term($p)) { print "<path withheld>: restricted term in path\n"; next; }
       my $why;
       if    ($p =~ m{^docs/superpowers/})  { $why = "local planning artifact (docs/superpowers/)" }
       elsif ($p =~ m{^\.codex/})           { $why = "local agent artifact (.codex/)" }
       elsif ($p =~ m{^[^/]+\.html\z}i)     { $why = "root-level HTML page" }
       elsif ($p eq $terms_file)            { $why = "the local restricted-term file" }
-      elsif (has_term($p))                 { $why = "restricted term in path" }
       next unless defined $why;
-      next if $why !~ /^restricted term/ && allowed($p);
-      # A path that is itself the problem is not echoed when a term matched it.
-      my $shown = $why =~ /^restricted term/ ? "<path withheld>" : $p;
-      print "$shown: $why\n";
+      next if allowed($p);
+      print "$p: $why\n";
     }
   '
 ); then
@@ -215,7 +228,6 @@ if ! content_hits=$(
     # Bounded so a UUID segment, a hyphenated or dotted number and a hex run do not count.
     my $ACCOUNT = qr{(?<![0-9A-Za-z_-])(?<![0-9]\.)([0-9]{12})(?![0-9A-Za-z_-])(?!\.[0-9])};
     my $IPV4 = qr{(?<![0-9A-Za-z_.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?![0-9A-Za-z_.])};
-    # The webhook path, not the bare host: settings copy and egress allowlists name the host.
     # A fully formed incoming-webhook URL (workspace, channel and token segments), not the host
     # or a placeholder: settings copy and egress allowlists name the host.
     my $SLACK = qr{hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]{16,}};

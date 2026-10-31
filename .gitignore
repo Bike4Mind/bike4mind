@@ -20,7 +20,7 @@ cdk.context.json
 .env*.local
 
 # Local copy of the restricted-term list for scripts/check-no-leak-shapes.sh (one regex per line)
-.restricted-terms.local
+/.restricted-terms.local
 
 /data
 

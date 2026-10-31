@@ -221,6 +221,29 @@ describe('check-no-leak-shapes: restricted terms', () => {
     expect(result.stdout).not.toContain('zorblax');
   });
 
+  it('withholds a path that matches a term even when a path rule also fires', () => {
+    write('.restricted-terms.local', 'zorblax\n');
+    write('docs/superpowers/zorblax-plan.md', 'plain\n');
+    git('add', 'docs/superpowers/zorblax-plan.md');
+    const result = run('--staged');
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('<path withheld>: restricted term in path');
+    expect(result.stdout).not.toContain('zorblax');
+    expect(result.stdout).not.toContain('docs/superpowers');
+  });
+
+  it('folds the subject the way the CI checker does', () => {
+    write('.restricted-terms.local', 'zorblax\n');
+    // Fullwidth letters, a zero-width joiner and a combining accent over the same term.
+    write('a.md', 'see \uFF5A\uFF4F\uFF52\uFF42\uFF4C\uFF41\uFF58 here\n');
+    write('b.md', 'see zor\u200Dblax here\n');
+    write('c.md', 'see zorbla\u0301x here\n');
+    git('add', 'a.md', 'b.md', 'c.md');
+    const result = run('--staged');
+    expect(result.status).toBe(1);
+    expect(result.stdout.match(/^[abc]\.md:1: restricted term$/gm)).toHaveLength(3);
+  });
+
   it('tells the committer how to create the term file when it is absent', () => {
     write('x.md', 'x\n');
     git('add', 'x.md');
