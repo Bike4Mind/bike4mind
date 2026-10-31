@@ -330,6 +330,14 @@ describe('formatAlarmSlackMessage on other stages', () => {
     expect(attachment(message).color).toBe('#2EB67D');
     expect(bodyOf(message)[0].text?.text).toContain('staging  |  back to normal at 12:39 UTC');
   });
+
+  it('drops warn-level alarms and their resolutions on stages other than production', () => {
+    const devWarn = { ...sample, AlarmName: 'bike4mind-dev-signup-code-send-rate' };
+    expect(formatAlarmSlackMessage(devWarn, 'dev')).toBeNull();
+    expect(formatAlarmSlackMessage({ ...devWarn, NewStateValue: 'OK' }, 'dev')).toBeNull();
+    expect(formatAlarmSlackMessage({ ...devWarn, AlarmName: 'bike4mind-pr-123-unknown' }, 'pr-123')).toBeNull();
+    expect(formatAlarmSlackMessage(sample, 'production')).not.toBeNull();
+  });
 });
 
 describe('ALARM_CATALOG', () => {
@@ -346,6 +354,12 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG.SuccessfulSignups.level).toBe('page');
     expect(ALARM_CATALOG.NewAccountApiKeys.level).toBe('page');
     expect(ALARM_CATALOG['young-account-spend-rate'].level).toBe('page');
+    expect(ALARM_CATALOG['llm-spend-hourly'].level).toBe('page');
+    expect(ALARM_CATALOG['llm-spend-rate'].level).toBe('warn');
+    expect(ALARM_CATALOG['provider-reported-spend-hourly'].level).toBe('page');
+    expect(ALARM_CATALOG['provider-usage-poll-errors'].level).toBe('warn');
+    expect(ALARM_CATALOG['llm-spend-young-accounts'].level).toBe('page');
+    expect(ALARM_CATALOG['completion-credit-overdraft'].level).toBe('warn');
   });
 });
 
@@ -457,8 +471,23 @@ describe('lookupCatalog', () => {
     expect(lookupCatalog('SuccessfulSignups')).toBe(ALARM_CATALOG.SuccessfulSignups);
     expect(lookupCatalog('NewAccountApiKeys')).toBe(ALARM_CATALOG.NewAccountApiKeys);
     expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
+    expect(lookupCatalog('llm-spend-hourly-anthropic')).toBe(ALARM_CATALOG['llm-spend-hourly']);
     expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
+    expect(lookupCatalog('llm-spend-young-accounts')).toBe(ALARM_CATALOG['llm-spend-young-accounts']);
+    expect(lookupCatalog('completion-credit-overdraft')).toBe(ALARM_CATALOG['completion-credit-overdraft']);
     expect(lookupCatalog('account-creation-metrics-missing')).toBe(ALARM_CATALOG['account-creation-metrics-missing']);
+  });
+
+  it('covers the provider-reported spend alarms by provider prefix and the poller alarm by name', () => {
+    for (const provider of ['anthropic', 'openai']) {
+      expect(lookupCatalog(`provider-reported-spend-hourly-${provider}`)).toBe(
+        ALARM_CATALOG['provider-reported-spend-hourly']
+      );
+    }
+    expect(lookupCatalog('provider-usage-poll-errors')).toBe(ALARM_CATALOG['provider-usage-poll-errors']);
+    expect(alarmSuffix('bike4mind-production-provider-reported-spend-hourly-anthropic', 'production')).toBe(
+      'provider-reported-spend-hourly-anthropic'
+    );
   });
 
   it('renders a dead-letter queue alarm with the queue name and the replay button', () => {

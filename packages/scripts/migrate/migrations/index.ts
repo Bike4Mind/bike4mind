@@ -261,7 +261,8 @@ import EnsurePaymentAttemptIndexes from './20260921236600_ensure-payment-attempt
 import EnsurePaymentRiskLinkIndexes from './20260921236700_ensure-payment-risk-link-indexes';
 import EnsureUserHeldUnlockIndex from './20260921236800_ensure-user-held-unlock-index';
 import EnsurePendingCreditHoldUserIndex from './20260921236900_ensure-pending-credit-hold-user-index';
-import EnsureRevenueSnapshotIndex from './20260921237000_ensure-revenue-snapshot-index';
+import EnsureReferralSubscriptionRewardIndexes from './20260921237000_ensure-referral-subscription-reward-indexes';
+import EnsureRevenueSnapshotIndex from './20260921237100_ensure-revenue-snapshot-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -457,6 +458,7 @@ const coreMigrations: MigrationFile[] = [
   EnsurePaymentRiskLinkIndexes,
   EnsureUserHeldUnlockIndex,
   EnsurePendingCreditHoldUserIndex,
+  EnsureReferralSubscriptionRewardIndexes,
   EnsureRevenueSnapshotIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,

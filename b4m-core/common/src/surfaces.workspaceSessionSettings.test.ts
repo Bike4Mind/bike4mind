@@ -204,11 +204,45 @@ describe('respondFromWorkspace', () => {
     [WORKSPACE]: { ownedFields: ['temperature'], resolve: async () => ({}), respond },
   });
 
-  it('reports which sessions answer their own turns', () => {
+  it('reports which sessions answer their own turns', async () => {
     const respond = async () => null;
-    expect(workspaceAnswersTurns(session(), tableWith(respond))).toBe(true);
-    expect(workspaceAnswersTurns(session(), tableWith())).toBe(false);
-    expect(workspaceAnswersTurns(session({ surface: 'other' }), tableWith(respond))).toBe(false);
+    const ctx = (over: Parameters<typeof session>[0] = {}) => ({ user: null, session: session(over) });
+    await expect(workspaceAnswersTurns(ctx(), tableWith(respond))).resolves.toBe(true);
+    await expect(workspaceAnswersTurns(ctx(), tableWith())).resolves.toBe(false);
+    await expect(workspaceAnswersTurns(ctx({ surface: 'other' }), tableWith(respond))).resolves.toBe(false);
+  });
+
+  it('asks the workspace per session when it scripts only some of them', async () => {
+    const answersTurns = vi.fn(async ({ session: s }: { session: { name?: string } }) => s.name === 'scripted');
+    const table: WorkspaceSessionSettingsTable = {
+      [WORKSPACE]: { ownedFields: [], resolve: async () => ({}), respond: async () => null, answersTurns },
+    };
+
+    await expect(
+      workspaceAnswersTurns({ user: null, session: { ...session(), name: 'scripted' } as never }, table)
+    ).resolves.toBe(true);
+    await expect(workspaceAnswersTurns({ user: null, session: session() }, table)).resolves.toBe(false);
+  });
+
+  it('counts a session as scripted when the predicate throws', async () => {
+    const cause = new Error('lookup failed');
+    const warn = vi.fn();
+    const table: WorkspaceSessionSettingsTable = {
+      [WORKSPACE]: {
+        ownedFields: [],
+        resolve: async () => ({}),
+        respond: async () => null,
+        answersTurns: async () => Promise.reject(cause),
+      },
+    };
+
+    await expect(workspaceAnswersTurns({ user: null, session: session(), logger: { warn } }, table)).resolves.toBe(
+      true
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(WORKSPACE), cause);
+    await expect(
+      workspaceAnswersTurns({ user: null, session: session(), logger: { warn } }, table, false)
+    ).resolves.toBe(false);
   });
 
   it('returns the workspace reply for a session on it', async () => {
@@ -301,6 +335,8 @@ describe('defineWorkspaceSessionSettingsTable', () => {
     ['a missing resolve', { ownedFields: ['temperature'] }],
     ['a non-function resolve', { ownedFields: ['temperature'], resolve: {} }],
     ['a non-function respond', { ownedFields: ['temperature'], resolve, respond: 'reply' }],
+    ['a non-function answersTurns', { ownedFields: [], resolve, respond: resolve, answersTurns: true }],
+    ['an answersTurns without respond', { ownedFields: [], resolve, answersTurns: async () => true }],
     ['an undefined entry', undefined],
   ])('throws at load for %s', (_label, entry) => {
     expect(() => defineWorkspaceSessionSettingsTable({ [WORKSPACE]: entry })).toThrow(`"${WORKSPACE}"`);

@@ -79,7 +79,10 @@ export async function checkFreeTierDailySpendCap({
     const { resolveUserRateTier } = await import('@server/utils/userRateTier');
     // A degraded org-seat lookup cannot establish that the caller is free. Let the error
     // reach the fail-open handler instead of denying a paid seat's personal turn.
-    const tier = await resolveUserRateTier(user, req, { strict: true });
+    // Without `throttle`: a restricted user keeps the cap of their subscription tier.
+    const tier = await resolveUserRateTier({ id: user.id, isAdmin: user.isAdmin, tags: user.tags }, req, {
+      strict: true,
+    });
     if (tier !== 'free') return;
 
     const now = new Date();
