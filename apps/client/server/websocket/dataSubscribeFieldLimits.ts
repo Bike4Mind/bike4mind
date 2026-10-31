@@ -79,6 +79,8 @@ export function resolveFieldLimits(
       signupGrantAssessment: false,
       riskScore: false,
       riskEvidence: false,
+      throttle: false,
+      riskSignals: false,
     };
   }
   if (collectionName === questCollectionName) {

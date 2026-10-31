@@ -218,6 +218,8 @@ export interface ICompletionOptions {
    * reminder. Set per hop so a fallback names the fallback model; unset keeps the raw-id wording.
    */
   modelDisplayName?: string;
+  /** Model id the identity reminder names in place of the serving model's, with modelDisplayName to match. */
+  modelIdentityId?: string;
   /**
    * Controls which tool the model should use.
    * - 'auto': Model decides whether to call a tool (default)

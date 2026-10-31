@@ -62,6 +62,8 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     feature: { type: String, required: true, enum: [...USAGE_EVENT_FEATURES] },
     provider: { type: String, required: true },
     model: { type: String, required: true },
+    executedProvider: { type: String, required: false },
+    executedModel: { type: String, required: false },
 
     inputTokens: { type: Number, required: true, default: 0 },
     outputTokens: { type: Number, required: true, default: 0 },

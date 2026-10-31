@@ -441,6 +441,8 @@ export interface ToolContext {
    * write. Keep implementations pure arithmetic (see agentExecutor's addToolUsage).
    */
   onToolLlmUsage?: (usage: ToolLlmUsage) => void;
+  /** Maps a restricted-tier substitute id to the id recorded in usage events; absent on normal turns. */
+  toLedgerModel?: (id: string) => string;
   /** Turn-scoped memo of the operational billing decision, set alongside `db.operationalBilling`. */
   operationalBillingCheck?: OperationalBillingCheck;
   /**

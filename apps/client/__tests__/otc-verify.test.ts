@@ -179,7 +179,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockJwtSign.mockReturnValue('reissued-token');
-    mockValidateAndRotateNonce.mockResolvedValue('$2a$hash');
+    mockValidateAndRotateNonce.mockResolvedValue({ otcHash: '$2a$hash', riskSignals: [] });
     mockUserHasMFA.mockReturnValue(false);
     mockCountPasskeys.mockResolvedValue(0);
     sentCookies = [];
@@ -258,7 +258,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
 
   it('verify checks the code against the server-side record', async () => {
     mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash' }));
-    mockValidateAndRotateNonce.mockResolvedValue('server-hash');
+    mockValidateAndRotateNonce.mockResolvedValue({ otcHash: 'server-hash', riskSignals: [] });
     mockVerifyPendingOTC.mockResolvedValue(false);
 
     await handler(makeReq({ email: 'user@example.com', code: '00000000', pendingToken: 'tok' }), mockRes);
@@ -402,7 +402,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
 
     it('signs in with a 6-digit code that matches a live token', async () => {
       mockJwtVerify.mockReturnValue(validToken());
-      mockValidateAndRotateNonce.mockResolvedValue(await bcrypt.hash('012345', 4));
+      mockValidateAndRotateNonce.mockResolvedValue({ otcHash: await bcrypt.hash('012345', 4), riskSignals: [] });
 
       await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
 
@@ -412,7 +412,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
 
     it('rejects a 6-digit code against an 8-digit token as a wrong guess', async () => {
       mockJwtVerify.mockReturnValue(validToken());
-      mockValidateAndRotateNonce.mockResolvedValue(await bcrypt.hash('01234567', 4));
+      mockValidateAndRotateNonce.mockResolvedValue({ otcHash: await bcrypt.hash('01234567', 4), riskSignals: [] });
 
       await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
 

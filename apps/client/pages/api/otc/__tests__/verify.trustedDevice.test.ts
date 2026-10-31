@@ -126,7 +126,7 @@ describe('/api/otc/verify - trusted device', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     for (const key of Object.keys(settingsValues)) delete settingsValues[key];
-    mockValidateNonce.mockResolvedValue('hash');
+    mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
     mockFindByEmail.mockResolvedValue({ id: 'user-1', tokenVersion: 3, emailVerified: true });
     mockConsumeTrustedDevice.mockResolvedValue(null);
     mockUserHasMFA.mockReturnValue(true);

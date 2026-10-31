@@ -13,7 +13,13 @@ import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 
 const store = new Map<string, { count: number; expiresAt: Date }>();
 
+const { loadShadowTierSettingsMock } = vi.hoisted(() => ({
+  loadShadowTierSettingsMock: vi.fn(async () => ({ requestsPerMin: 3 })),
+}));
+vi.mock('@bike4mind/services/llm/shadowTier', () => ({ loadShadowTierSettings: loadShadowTierSettingsMock }));
+
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(async (key: string, limit: number, ttlMs: number) => {
       const existing = store.get(key);
@@ -41,7 +47,9 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn().mockResolvedValue(undefined) }));
 
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import { apiKeyRateLimit } from './apiKeyRateLimit';
+import { rateLimit as rateLimitMiddleware } from './rateLimit';
 import { buildRateLimitKeys } from '@server/utils/apiKeyRateLimitCheck';
 
 const KEY_ID = 'key-1';
@@ -187,5 +195,81 @@ describe('apiKeyRateLimit overwatch RateLimitHit metric', () => {
       { productId: 'prod-1' },
       expect.anything()
     );
+  });
+});
+
+describe('apiKeyRateLimit restricted-tier owner', () => {
+  beforeEach(() => {
+    store.clear();
+    vi.clearAllMocks();
+  });
+
+  const withOwner = (user: Record<string, unknown>) => {
+    const { req, res } = patchRequest();
+    return { req: { ...req, user: { id: 'u1', ...user } }, res };
+  };
+
+  it('advertises the key limits, not the restricted-tier rpm', async () => {
+    const { req, res } = withOwner({ throttle: { tier: 'shadow' } });
+
+    await run(apiKeyRateLimit(), req, res);
+
+    expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit-Minute', rateLimit.requestsPerMinute);
+    expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit-Day', rateLimit.requestsPerDay);
+  });
+
+  it('exempts a stored admin whose API key withholds the admin role', async () => {
+    const { req, res } = withOwner({ isAdmin: true, throttle: { tier: 'shadow' } });
+    const owner = req.user as typeof req.user & { isAdmin: boolean };
+    withholdAdminRole(owner);
+    expect(owner.isAdmin).toBe(false);
+
+    expect(await run(apiKeyRateLimit(), req, res)).toBeUndefined();
+
+    expect(loadShadowTierSettingsMock).not.toHaveBeenCalled();
+    expect(vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow)).toHaveBeenCalledTimes(2);
+  });
+
+  it('makes no extra cache call for other owners', async () => {
+    const { req, res } = withOwner({ throttle: { tier: 'none' } });
+
+    await run(apiKeyRateLimit(), req, res);
+
+    expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit-Minute', rateLimit.requestsPerMinute);
+    expect(loadShadowTierSettingsMock).not.toHaveBeenCalled();
+    expect(vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow)).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns the owner's per-user tier 429 once over the restricted rpm, keeping the key's headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const shadow = withOwner({ throttle: { tier: 'shadow' } });
+      shadow.req.apiKeyInfo = { keyId: 'key-a', rateLimit: { ...rateLimit, requestsPerDay: 1000 } };
+      let shadowErr: unknown;
+      // Shadow rpm mock is 3; the key allows 60.
+      for (let i = 0; i < 4; i++) {
+        shadow.res.setHeader.mockClear();
+        shadowErr = await run(apiKeyRateLimit(), shadow.req, shadow.res);
+      }
+
+      const normal = withOwner({ id: 'u2' });
+      const tierLimit = rateLimitMiddleware({ limit: 3, windowMs: 60_000, bucket: 'route' });
+      let normalErr: unknown;
+      for (let i = 0; i < 4; i++) {
+        normal.res.setHeader.mockClear();
+        normalErr = await run(tierLimit, normal.req, normal.res);
+      }
+
+      expect(shadowErr).toBeInstanceOf(TooManyRequestsError);
+      expect((shadowErr as TooManyRequestsError).statusCode).toBe((normalErr as TooManyRequestsError).statusCode);
+      expect((shadowErr as TooManyRequestsError).message).toBe((normalErr as TooManyRequestsError).message);
+      const header = (res: typeof shadow.res, name: string) => res.setHeader.mock.calls.find(c => c[0] === name)?.[1];
+      expect(header(shadow.res, 'Retry-After')).toBe(header(normal.res, 'Retry-After'));
+      expect(shadow.res.setHeader.mock.calls.filter(c => c[0] === 'X-RateLimit-Remaining-Minute')).toEqual([
+        ['X-RateLimit-Remaining-Minute', rateLimit.requestsPerMinute - 4],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,4 +1,10 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
+import {
+  THROTTLE_SOURCES,
+  THROTTLE_TIERS,
+  USER_RISK_SIGNAL_TYPES,
+  VERIFIED_SLACK_IDENTITY_FILTER,
+  canonicalizeEmail,
+} from '@bike4mind/common';
 import {
   ADMIN_PERMISSIONS,
   AuthStrategy,
@@ -267,6 +273,29 @@ const UserModerationSchema = new Schema(
     throttledUntil: { type: Date, default: null },
     appealedAt: { type: Date, default: null },
     appealText: { type: String, default: null },
+  },
+  { _id: false }
+);
+
+const UserThrottleSchema = new Schema(
+  {
+    tier: { type: String, enum: [...THROTTLE_TIERS], required: true },
+    reason: { type: String, required: true },
+    source: { type: String, enum: [...THROTTLE_SOURCES], required: true },
+    changedAt: { type: Date, required: true },
+    changedBy: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const UserRiskSignalSchema = new Schema(
+  {
+    type: {
+      type: String,
+      enum: [...USER_RISK_SIGNAL_TYPES],
+      required: true,
+    },
+    at: { type: Date, required: true },
   },
   { _id: false }
 );
@@ -1247,6 +1276,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Per-user moderation tracking + auto-throttle/suspend state.
     // Lazily populated - undefined until the user's first moderation hit.
     moderation: { type: UserModerationSchema, required: false, default: undefined },
+    throttle: { type: UserThrottleSchema, required: false, default: undefined },
+    riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.

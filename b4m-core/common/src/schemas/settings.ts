@@ -466,6 +466,9 @@ export const SettingKeySchema = z.enum([
   'signupBurstThreshold',
   'signupBurstWindowHours',
   'signupBurstAutoHold',
+  'otcLimitFormTokenPerIp',
+  'signupMinSubmitMs',
+  'signupBotChecksEnabled',
   'enableDomainIntelligence',
   'holdSignupsFromDomainsYoungerThanDays',
   'domainIntelligenceTimeoutMs',
@@ -692,6 +695,9 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitProPerMin',
   'apiRateLimitCreditsPerMin',
   'apiKeyAccess',
+  'shadowTierModelAllowlist',
+  'shadowTierRequestsPerMin',
+  'shadowTierDailyTokenCap',
 
   // FREE-TIER MODEL ALLOWLIST
   'freeTierModelGateEnabled',
@@ -2273,6 +2279,11 @@ export const API_SERVICE_GROUPS = {
       { key: 'paymentRiskCheckoutMaxBlockedAttempts', order: 47 },
       { key: 'paymentRiskCheckoutBlockedWindowMinutes', order: 48 },
       { key: 'paymentRiskLinkedAccountActions', order: 49 },
+      { key: 'signupMinSubmitMs', order: 50 },
+      { key: 'signupBotChecksEnabled', order: 51 },
+      { key: 'shadowTierModelAllowlist', order: 52 },
+      { key: 'shadowTierRequestsPerMin', order: 53 },
+      { key: 'shadowTierDailyTokenCap', order: 54 },
     ],
   },
   KNOWLEDGE: {
@@ -2432,6 +2443,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'otcLimitSendPerIpDaily', order: 8 },
       { key: 'otcLimitVerifyPerEmailPerIp', order: 9 },
       { key: 'otcLimitVerifyPerIp', order: 10 },
+      { key: 'otcLimitFormTokenPerIp', order: 11 },
     ],
   },
   AUTH_ABUSE: {
@@ -4266,6 +4278,19 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
     order: 10,
   }),
+  otcLimitFormTokenPerIp: makeNumberSetting({
+    key: 'otcLimitFormTokenPerIp',
+    name: 'Sign-in Codes: Form Token: Per IP (per hour)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 600,
+    int: true,
+    description: 'Sign-in form tokens one IP may fetch in an hour. Built-in: 600. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 11,
+  }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',
     name: 'Block Disposable Emails',
@@ -5085,6 +5110,56 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'When an account is locked, banned, suspended, disputed or fraud-warned, lock other accounts that paid with the same card and alert on accounts sharing only its network. Also refuses checkout to an account linked to a blocked one.',
+  }),
+  signupMinSubmitMs: makeNumberSetting({
+    key: 'signupMinSubmitMs',
+    name: 'Signup Minimum Submit Time (ms)',
+    defaultValue: 1500,
+    min: 0,
+    max: 60000,
+    description:
+      'A signup form submitted faster than this after the page fetched its form token is recorded as a risk signal on the new account. The submission itself is never rejected.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupBotChecksEnabled: makeBooleanSetting({
+    key: 'signupBotChecksEnabled',
+    name: 'Signup Bot Checks',
+    defaultValue: true,
+    description:
+      'Records risk signals (hidden field filled, missing or invalid form token, too-fast submit) at signup and places flagged new accounts in the restricted tier. Turn OFF to stop recording signals.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  shadowTierModelAllowlist: makeObjectSetting<string[]>({
+    key: 'shadowTierModelAllowlist',
+    name: 'Restricted Tier Model Allowlist',
+    defaultValue: ['gpt-5.4-nano', 'gemini-3.1-flash-lite'],
+    description:
+      'Models available to users in the restricted tier. A request for any other model runs on the first entry that is available to the caller; if none is available on this deployment, the requested model runs (the daily cap still applies). Must contain at least one model id.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    schema: z.array(z.string()).min(1),
+  }),
+  shadowTierRequestsPerMin: makeNumberSetting({
+    key: 'shadowTierRequestsPerMin',
+    name: 'Restricted Tier Rate Limit (requests/min)',
+    defaultValue: 3,
+    min: 1,
+    max: 1000,
+    description: 'Max requests per minute, per endpoint, for users in the restricted tier, on sessions and API keys.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+  }),
+  shadowTierDailyTokenCap: makeNumberSetting({
+    key: 'shadowTierDailyTokenCap',
+    name: 'Restricted Tier Daily Token Cap',
+    defaultValue: 20000,
+    min: 1000,
+    max: 10_000_000,
+    description: 'Max input plus output tokens per UTC day for users in the restricted tier.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',

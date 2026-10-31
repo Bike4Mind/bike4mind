@@ -55,7 +55,7 @@ describe('resolveFieldLimits', () => {
     expect(resolveFieldLimits('quests', opts())).toMatchObject(serverOnly);
   });
 
-  it('excludes password/stripeCustomerId/resetPasswordToken for the users collection', () => {
+  it('excludes password/stripeCustomerId/resetPasswordToken/throttle/riskSignals for the users collection', () => {
     const limits = resolveFieldLimits('users', opts());
     expect(limits).toEqual({
       password: false,
@@ -64,7 +64,15 @@ describe('resolveFieldLimits', () => {
       signupGrantAssessment: false,
       riskScore: false,
       riskEvidence: false,
+      throttle: false,
+      riskSignals: false,
     });
+  });
+
+  it('refuses a users subscription filter that probes throttle or riskSignals', () => {
+    const limits = resolveFieldLimits('users', opts());
+    expect(findWithheldFilterPaths({ 'throttle.tier': 'shadow' }, limits)).toEqual(['throttle.tier']);
+    expect(findWithheldFilterPaths({ $or: [{ riskSignals: { $exists: true } }] }, limits)).toEqual(['riskSignals']);
   });
 
   it('returns undefined for a collection with no configured limits', () => {
