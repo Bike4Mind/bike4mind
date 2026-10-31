@@ -349,7 +349,7 @@ Now that you're set up, explore what B4M CLI can do:
 ### Keyboard Shortcuts
 
 - `Ctrl+C` - Cancel current operation or exit CLI
-- `↑` / `↓` - Navigate command history (in future versions)
+- `Up` / `Down` - Navigate input history, including earlier sessions
 - `Tab` - Autocomplete (in future versions)
 
 ### Tool Permissions

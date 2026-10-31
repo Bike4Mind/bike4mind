@@ -386,6 +386,8 @@ function CliApp() {
     }
     killRunningBangCommands();
 
+    cleanupTasks.push(state.commandHistoryStore.whenIdle());
+
     // Save session
     const session = useCliStore.getState().session;
     if (session) {
@@ -453,6 +455,7 @@ function CliApp() {
     // session is read fresh from the store (useCliStore.getState()), so it is
     // intentionally not a dependency here.
     state.sessionStore,
+    state.commandHistoryStore,
     state.mcpManager,
     state.agent,
     state.imageStore,
@@ -1639,7 +1642,6 @@ function CliApp() {
       agent: state.agent,
       sessionStore: state.sessionStore,
       configStore: state.configStore,
-      commandHistoryStore: state.commandHistoryStore,
       customCommandStore: state.customCommandStore,
       messageBuilder: state.messageBuilder,
       config: state.config,
@@ -1659,7 +1661,6 @@ function CliApp() {
         blockerStore: blockerStoreRef.current,
         reviewGateStore: reviewGateStoreRef.current,
       },
-      setCommandHistory,
       setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
     });
   handleMessageRef.current = handleMessage;
@@ -4145,6 +4146,7 @@ function CliApp() {
       onBashCommand={handleBashCommand}
       onImageDetected={handleImageDetected}
       commandHistory={commandHistory}
+      onHistoryEntry={entry => setCommandHistory(state.commandHistoryStore.add(entry))}
       commands={allCommands}
       config={state.config}
       availableModels={state.availableModels}

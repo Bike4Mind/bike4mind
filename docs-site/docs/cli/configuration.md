@@ -367,6 +367,22 @@ See [MCP Integration →](/cli/mcp-integration) for complete documentation.
 
 ---
 
+## Input History
+
+Everything you submit at the prompt (messages, slash commands, `!` shell commands) is saved to `~/.bike4mind/history.jsonl`, so `Up` and `Down` recall it in later sessions too. History is per user and shared by every project and every open CLI session.
+
+- The file holds one JSON object per line and is readable only by you (mode `0600`).
+- `Up` recalls the newest 500 distinct entries. Re-running an older command moves it to the top instead of listing it twice.
+- Sessions only append to the file. Once it passes 600 lines, the CLI rewrites it on startup with the newest 500 entries.
+- Empty input is not saved, and neither is an entry larger than 16 KiB.
+- Input that looks like it carries a credential is not written to the file: a key, token, secret or password name followed by `=` or `:` (including quoted JSON and YAML keys), a flag such as `--api-key`, `--token` or `--db-password` with a value, a URL with a password in it, an `Authorization:`, `x-api-key:` or `Bearer` header, a private key block, a JWT, a value with a well-known key prefix, `mysql -p<password>`, `curl -u user:password` and `docker login -p`. You can still recall such input with `Up` in the session where you typed it.
+- If the file holds lines the CLI would not save now (for example from an older version), they are removed the next time it starts.
+- Delete the file to clear your history.
+
+To stop saving history, set `B4M_NO_HISTORY=1`. `Up` then recalls only the current session.
+
+---
+
 ## Debug Logging
 
 ### Automatic Debug Logs

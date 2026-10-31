@@ -15,7 +15,7 @@ import { ReActAgent } from '@bike4mind/agents';
 import { isEarlyStop } from '@bike4mind/common';
 import type { ModelInfo } from '@bike4mind/common';
 import { PENDING_ASSISTANT_CONTENT } from '../storage';
-import type { SessionStore, ConfigStore, CommandHistoryStore, Session, Message, CliConfig } from '../storage';
+import type { SessionStore, ConfigStore, Session, Message, CliConfig } from '../storage';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { MessageBuilder } from '../utils/messageBuilder.js';
 import type { AgentStore } from '../agents/AgentStore.js';
@@ -52,7 +52,6 @@ export interface TurnContext {
   agent: ReActAgent | null;
   sessionStore: SessionStore;
   configStore: ConfigStore;
-  commandHistoryStore: CommandHistoryStore;
   customCommandStore: CustomCommandStore;
   messageBuilder: MessageBuilder | null;
   config: CliConfig | undefined;
@@ -84,8 +83,6 @@ export interface TurnContext {
    * stale `metadata.workflow` snapshot is copied into the compacted session.
    */
   workflowStores: WorkflowStores;
-  /** Mirror the persisted command history into the input's up-arrow recall. */
-  setCommandHistory: (history: string[]) => void;
   /** Publish the turn's abort controller so the ESC handler / tavern can cancel it. */
   setAbortController: (controller: AbortController | null) => void;
 }
@@ -135,26 +132,11 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
   }
 }
 
-/** Not awaited by the steer drain, so a failed history write is logged rather than left as an unhandled rejection. */
-async function recordSteerHistory(
-  steers: string[],
-  commandHistoryStore: CommandHistoryStore,
-  setCommandHistory: TurnContext['setCommandHistory']
-): Promise<void> {
-  try {
-    for (const text of steers) await commandHistoryStore.add(text);
-    setCommandHistory(await commandHistoryStore.list());
-  } catch (error) {
-    logger.debug(`[STEER] History write failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
 async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
   const {
     agent,
     sessionStore,
     configStore,
-    commandHistoryStore,
     customCommandStore,
     messageBuilder,
     config,
@@ -170,7 +152,6 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
     blockerStore,
     postEditDiagnostics,
     workflowStores,
-    setCommandHistory,
     setAbortController,
   } = ctx;
 
@@ -195,11 +176,6 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
   // bridge is a no-op if cc-bridge isn't running.
   void bridgePresence.emitEvent({ type: 'message', role: 'user', text: message.slice(0, 4000) });
   void bridgePresence.emitEvent({ type: 'status', status: 'running', text: message.slice(0, 240) });
-
-  // Add to command history
-  await commandHistoryStore.add(message);
-  const updatedHistory = await commandHistoryStore.list();
-  setCommandHistory(updatedHistory);
 
   // Check for auto-compact before processing
   let activeSession = storeSession;
@@ -387,7 +363,6 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
             for (const text of steered.steers) {
               void bridgePresence.emitEvent({ type: 'message', role: 'user', text: text.slice(0, 4000) });
             }
-            void recordSteerHistory(steered.steers, commandHistoryStore, setCommandHistory);
           }
           return [steered?.feedback, diagnosticsFeedback].filter(Boolean).join('\n\n') || null;
         },
