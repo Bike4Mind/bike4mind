@@ -92,6 +92,38 @@ function withoutMarker(block: unknown): unknown {
 }
 
 /**
+ * Gives every marker in `messages`, a caller's own content-block markers included, the request's
+ * `cacheControl`. For a backend that reports cache writes without a 5m/1h split (Bedrock), settlement
+ * prices every write at the request TTL (withRequestTtlWrites in @bike4mind/common), so a caller
+ * marker left at 5m would bill at the 1-hour rate. Returns `params` itself when it holds no messages.
+ */
+export function withRequestTtlMarkers(
+  params: Record<string, unknown>,
+  cacheControl: Record<string, unknown>
+): Record<string, unknown> {
+  if (!Array.isArray(params.messages)) return params;
+  const stamp = (block: unknown): unknown =>
+    hasMarker(block) ? { ...(block as Record<string, unknown>), cache_control: cacheControl } : block;
+  return {
+    ...params,
+    messages: params.messages.map(message => {
+      const record = message as Record<string, unknown> | null;
+      if (!record || !Array.isArray(record.content)) return message;
+      return {
+        ...record,
+        content: record.content.map(block => {
+          const stamped = stamp(block);
+          const inner = (block as Record<string, unknown> | null)?.content;
+          return Array.isArray(inner)
+            ? { ...(stamped as Record<string, unknown>), content: inner.map(stamp) }
+            : stamped;
+        }),
+      };
+    }),
+  };
+}
+
+/**
  * Request-level chokepoint for the 4-marker ceiling, run on the final body right before send by
  * both `anthropicBackend.ts` and `bedrockBackend/anthropic.ts`. Markers are attached from several
  * independent places (per-message `cache` flags, `cache: true` system messages, applyCaching above,

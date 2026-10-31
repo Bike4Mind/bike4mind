@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { ModelSwitchCostNotice } from './ModelSwitchCostNotice';
+import { CacheExpiryNotice, ModelSwitchCostNotice } from './ModelSwitchCostNotice';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -29,5 +29,24 @@ describe('ModelSwitchCostNotice', () => {
 
     rerender(<ModelSwitchCostNotice credits={800} />);
     expect(screen.getByTestId('chat-model-switch-cost-notice')).not.toBeNull();
+  });
+});
+
+describe('CacheExpiryNotice', () => {
+  it('states that the cache expired and what the next message costs', () => {
+    render(<CacheExpiryNotice credits={2400} expiresAt={1} />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('chat-cache-expiry-notice-text').textContent).toBe(
+      "This chat's cache has expired: about 2,400 credits for the next message."
+    );
+  });
+
+  it('stays dismissed for that expiry, even as the figure moves, and returns for the next one', () => {
+    const { rerender } = render(<CacheExpiryNotice credits={2400} expiresAt={1} />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('chat-cache-expiry-notice-dismiss'));
+    rerender(<CacheExpiryNotice credits={2500} expiresAt={1} />);
+    expect(screen.queryByTestId('chat-cache-expiry-notice')).toBeNull();
+
+    rerender(<CacheExpiryNotice credits={2500} expiresAt={2} />);
+    expect(screen.getByTestId('chat-cache-expiry-notice')).not.toBeNull();
   });
 });

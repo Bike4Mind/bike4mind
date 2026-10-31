@@ -18,6 +18,7 @@ export * from './modelIdJoin';
 export * from './claudeModelId';
 export * from './claudeToolCapabilities';
 export * from './deferredTools';
+export * from './promptCache';
 export * from './successorCostDelta';
 export * from './pricing';
 export * from './realtimeVoicePricing';

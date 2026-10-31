@@ -119,6 +119,12 @@ describe('applyReplyDone', () => {
     expect(applyReplyDone(message, done({ content: 'x' })).usage?.inputTokens).toBe(900);
   });
 
+  it('takes the prompt cache stamp, which only the settled reply carries', () => {
+    const stamp = { cachedAt: 1_000, ttl: '1h' as const, model: 'claude-opus-5-5' };
+    const message = streaming([{ text: 'x', toolCallIds: [] }]);
+    expect(applyReplyDone(message, done({ content: 'x', promptCache: stamp })).promptCache).toEqual(stamp);
+  });
+
   it('leaves the text a reply with no artifact in it streamed', () => {
     const message = streaming([{ text: 'Plain answer.', toolCallIds: [] }]);
     const settled = applyReplyDone(message, done({ content: 'Plain answer.' }));

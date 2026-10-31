@@ -382,6 +382,8 @@ export const PromptMetaSchema: Schema<PromptMeta> = new Schema<PromptMeta>(
       // expensive component of a cold turn. Must stay declared alongside the Zod field or
       // strict mode strips it and the write rate becomes unmeasurable again.
       cacheCreationInputTokens: { type: Number, required: false },
+      cacheWrite1hInputTokens: { type: Number, required: false },
+      promptCacheTtl: { type: String, enum: ['5m', '1h'], required: false },
       estimatedCost: { type: Number, required: false },
       creditsUsed: { type: Number, required: false },
       settledBasis: { type: String, enum: ['provider', 'local'], required: false },

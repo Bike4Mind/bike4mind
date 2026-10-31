@@ -54,6 +54,8 @@ export const UsageEventRates = z.object({
   output: z.number(),
   cacheRead: z.number().optional(),
   cacheWrite: z.number().optional(),
+  /** Stamped only on a row that wrote with the 1-hour TTL. */
+  cacheWrite1h: z.number().optional(),
 });
 
 export type IUsageEventRates = z.infer<typeof UsageEventRates>;
@@ -64,6 +66,7 @@ export const UsageEventTurn = z.object({
   outputTokens: z.number(),
   cacheReadTokens: z.number().optional(),
   cacheWriteTokens: z.number().optional(),
+  cacheWrite1hTokens: z.number().optional(),
   tierKey: z.number(),
 });
 
@@ -195,6 +198,8 @@ export const UsageEvent = z.object({
   turnUsage: z.array(UsageEventTurn).optional(),
   /** True when turnUsage was capped: its last entry is the sum of every turn from there on. */
   turnUsageTruncated: z.boolean().optional(),
+  /** The part of cacheWriteTokens written with the 1-hour TTL, priced at rates.cacheWrite1h. Absent when none. */
+  cacheWrite1hTokens: z.number().optional(),
 
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -210,7 +215,7 @@ export type IUsageEventInput = Omit<IUsageEvent, 'id' | 'createdAt' | 'updatedAt
 /** The price-stamp fields of a UsageEvent, as built by buildUsagePriceStamp. */
 export type UsagePriceStamp = Pick<
   IUsageEventInput,
-  'priceSource' | 'priceRowId' | 'rates' | 'turnUsage' | 'turnUsageTruncated'
+  'priceSource' | 'priceRowId' | 'rates' | 'turnUsage' | 'turnUsageTruncated' | 'cacheWrite1hTokens'
 >;
 
 /** One aggregation bucket of v_margin_by_model_day (schema-doc naming). */

@@ -795,6 +795,8 @@ export interface ISession {
    * pre-existing behavior; resolve it through effectiveIncludeLibraryFiles, never read it raw.
    */
   includeLibraryFiles?: boolean;
+  /** Prompt-cache lifetime chosen for this chat; unset follows the user's default. */
+  promptCacheTtl?: '5m' | '1h';
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
    * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its

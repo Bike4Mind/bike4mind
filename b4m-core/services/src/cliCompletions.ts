@@ -9,6 +9,12 @@ import {
   getTurnsCost,
   buildUsagePriceStamp,
   type TurnUsage,
+  DEFAULT_PROMPT_CACHE_TTL,
+  type PromptCacheTtl,
+  resolvePromptCacheTtl,
+  sumOneHourCacheWrites,
+  withRequestTtlWrites,
+  oneHourWritesOf,
   pricingTierForTokens,
   publishesCacheReadRate,
   PUBLISHED_CACHE_READ_BACKENDS,
@@ -134,6 +140,8 @@ export interface CompletionParams {
     reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
     /** See the `thinking` field of CompletionRequestSchema. */
     thinking?: { enabled: boolean; budget_tokens?: number };
+    /** See the `cacheTtl` field of CompletionRequestSchema. */
+    cacheTtl?: import('@bike4mind/common').PromptCacheTtl;
   };
   /**
    * Server-side executable tools (each carries a live toolFn). When present, the backend
@@ -292,7 +300,7 @@ const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
 
 /**
  * Claude prompt caching, set here so no CLI or Desktop release is needed. Mirrors the strategy web
- * chat builds in ChatCompletionProcess (system prompt, tools, history, 5m TTL); the Anthropic
+ * chat builds in ChatCompletionProcess (system prompt, tools, history, one TTL for all); the Anthropic
  * caching adapter places the breakpoints and budgets them around any client-sent `cache: true`
  * flags. Other backends cache server-side without a flag or ignore the strategy.
  *
@@ -304,7 +312,8 @@ function buildClaudeCacheStrategy(
   modelInfo: ModelInfo | undefined,
   messages: IMessage[],
   hasTools: boolean,
-  source: CompletionSource
+  source: CompletionSource,
+  cacheTtl: PromptCacheTtl
 ): ICacheStrategy | undefined {
   const isClaude =
     modelInfo?.backend === ModelBackend.Anthropic ||
@@ -325,7 +334,7 @@ function buildClaudeCacheStrategy(
     cacheTools: hasTools,
     cacheConversationHistory: reusablePrefix,
     ...(endsWithReminder ? { historyCacheExcludeTrailingCount: 1 } : {}),
-    cacheTTL: '5m',
+    cacheTTL: cacheTtl,
   };
 }
 
@@ -362,7 +371,8 @@ function estimateReservationUsd(
   messages: IMessage[],
   estimatedInputTokens: number,
   estimatedOutputTokens: number,
-  estimatedToolTokens: number
+  estimatedToolTokens: number,
+  cacheTtl: PromptCacheTtl = DEFAULT_PROMPT_CACHE_TTL
 ): number {
   const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
   if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
@@ -413,7 +423,15 @@ function estimateReservationUsd(
 
   const tieredModel =
     tier === null ? modelInfo : ({ ...modelInfo, pricing: { [tier]: modelInfo.pricing[tier] } } as ModelInfo);
-  const cachedInputUsd = getTextModelCost(tieredModel, plainTokens, 0, readTokens, writeTokens);
+  const cachedInputUsd = getTextModelCost(
+    tieredModel,
+    plainTokens,
+    0,
+    readTokens,
+    writeTokens,
+    undefined,
+    oneHourWritesOf(writeTokens, undefined, cacheTtl)
+  );
   const uncachedInputUsd = getTextModelCost(tieredModel, estimatedInputTokens, 0);
   const outputUsd = getTextModelCost(tieredModel, 0, estimatedOutputTokens);
   return Math.max(cachedInputUsd, CACHED_INPUT_RESERVATION_FLOOR * uncachedInputUsd) + outputUsd;
@@ -762,7 +780,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   }
 
   const requestTools = useServerTools ? params.serverTools! : (promotedTools ?? []);
-  const cacheStrategy = buildClaudeCacheStrategy(modelInfo, messages, requestTools.length > 0, source);
+  const cacheTtl = resolvePromptCacheTtl({ model: modelInfo, chatTtl: options?.cacheTtl });
+  const cacheStrategy = buildClaudeCacheStrategy(modelInfo, messages, requestTools.length > 0, source, cacheTtl);
 
   // This path has no complexity classifier and clients rarely send an effort, so an adaptive Claude
   // that thinks unasked would run every request at the provider default (high on Opus 5). Any
@@ -871,7 +890,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       messages,
       estimatedInputTokens,
       estimatedOutputTokens,
-      estimatedToolTokens
+      estimatedToolTokens,
+      cacheTtl
     );
     reservedCredits = usdToCredits(estimatedUsdCost);
 
@@ -987,6 +1007,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Same assign-not-add contract as input/output tokens.
   let finalCacheReadTokens = 0;
   let finalCacheCreationTokens = 0;
+  // Undefined until an adapter reports the 1-hour split; then every write was at the request's TTL.
+  let reportedCacheWrite1hTokens: number | undefined;
+  const finalCacheWrite1hTokens = (): number =>
+    finalTurnUsage?.length
+      ? sumOneHourCacheWrites(finalTurnUsage)
+      : oneHourWritesOf(finalCacheCreationTokens, reportedCacheWrite1hTokens, cacheTtl);
   // Per-request breakdown of the same totals, from adapters that report it; prices each request on
   // its own long-context tier. Same assign-not-add contract.
   let finalTurnUsage: TurnUsage[] | undefined;
@@ -1011,7 +1037,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           finalOutputTokens,
           finalCacheReadTokens,
           finalCacheCreationTokens,
-          finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens
+          finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens,
+          finalCacheWrite1hTokens()
         );
 
   // Provenance of the rates settledUsdCost applied: the same turns, else the same tier basis.
@@ -1019,6 +1046,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     buildUsagePriceStamp(pricedModel, {
       turns: finalTurnUsage,
       tierBasisTokens: finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens,
+      cacheWrite1hTokens: finalCacheWrite1hTokens(),
     });
 
   const reasoningWithholder = withholdReasoning ? createReasoningWithholder(reasoningChannel) : null;
@@ -1026,8 +1054,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
     if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
-    if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
-    if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+    if (info?.cacheCreationInputTokens) {
+      finalCacheCreationTokens = info.cacheCreationInputTokens;
+      if (info.cacheWrite1hInputTokens !== undefined) reportedCacheWrite1hTokens = info.cacheWrite1hInputTokens;
+    }
+    if (info?.turnUsage?.length) finalTurnUsage = withRequestTtlWrites(info.turnUsage, cacheTtl);
     // Latched only alongside outputTokens so the pair always comes from the same frame.
     // Compared against undefined (not truthiness) so a reported outputTokens: 0 - an empty or
     // fully-filtered reply - still latches its count instead of dropping it.
@@ -1267,6 +1298,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         ...(finalReasoningTokens !== undefined ? { reasoningTokens: finalReasoningTokens } : {}),
         cacheReadInputTokens: finalCacheReadTokens || undefined,
         cacheCreationInputTokens: finalCacheCreationTokens || undefined,
+        cacheWrite1hInputTokens: finalCacheWrite1hTokens() || undefined,
         creditsUsed: finalCredits,
         usdCost: finalUsdCost,
         stopReason: finalStopReason,

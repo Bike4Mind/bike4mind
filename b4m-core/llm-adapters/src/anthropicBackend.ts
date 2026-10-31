@@ -185,6 +185,7 @@ type AnthropicUsage =
       output_tokens?: number;
       cache_read_input_tokens?: number;
       cache_creation_input_tokens?: number;
+      cache_creation?: { ephemeral_5m_input_tokens?: number | null; ephemeral_1h_input_tokens?: number | null } | null;
     }
   | undefined;
 
@@ -192,15 +193,26 @@ type AnthropicUsage =
  * `prior` plus one API call's usage (see CompletionInfo.turnUsage). Anthropic's input_tokens
  * already exclude cache reads/writes, so the fields map across without a split.
  */
-const appendAnthropicTurn = (prior: readonly TurnUsage[] | undefined, usage: AnthropicUsage): TurnUsage[] => [
-  ...(prior ?? []),
-  {
-    inputTokens: usage?.input_tokens || 0,
-    outputTokens: usage?.output_tokens || 0,
-    ...(usage?.cache_read_input_tokens ? { cacheReadInputTokens: usage.cache_read_input_tokens } : {}),
-    ...(usage?.cache_creation_input_tokens ? { cacheCreationInputTokens: usage.cache_creation_input_tokens } : {}),
-  },
-];
+export const appendAnthropicTurn = (prior: readonly TurnUsage[] | undefined, usage: AnthropicUsage): TurnUsage[] => {
+  const oneHourWrites = usage?.cache_creation?.ephemeral_1h_input_tokens;
+  return [
+    ...(prior ?? []),
+    {
+      inputTokens: usage?.input_tokens || 0,
+      outputTokens: usage?.output_tokens || 0,
+      ...(usage?.cache_read_input_tokens ? { cacheReadInputTokens: usage.cache_read_input_tokens } : {}),
+      ...(usage?.cache_creation_input_tokens ? { cacheCreationInputTokens: usage.cache_creation_input_tokens } : {}),
+      // Kept even at 0 when reported, so a 5-minute-only turn is not later read as unsplit.
+      ...(usage?.cache_creation_input_tokens && typeof oneHourWrites === 'number'
+        ? { cacheWrite1hInputTokens: Math.min(oneHourWrites, usage.cache_creation_input_tokens) }
+        : {}),
+    },
+  ];
+};
+
+/** The cache_control every breakpoint on a request carries; the 1h TTL is spelled out, 5m is the default. */
+export const ephemeralCacheControl = (ttl: '5m' | '1h' | undefined): { type: 'ephemeral'; ttl?: '1h' } =>
+  ttl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' };
 
 /**
  * Associates a failed tool call's elapsed time with the thrown error object, so it survives
@@ -1039,6 +1051,7 @@ export class AnthropicBackend implements ICompletionBackend {
       m => m.cache === true && m.role === 'system' && !isToolChangeMessage(m)
     );
     const anyMessageCacheControlled = anyUserOrAssistantCacheControlled || anySystemCacheControlled;
+    const flagCacheControl = ephemeralCacheControl(options.cacheStrategy?.cacheTTL);
     // A tool round reads the newest flagged message the first call wrote; older flags (a lookback
     // breakpoint) are spent and would take the slot this round's end-of-array anchor needs.
     const newestFlagged = toolCallCount > 0 ? messages.findLastIndex(m => m.cache === true && m.role !== 'system') : -1;
@@ -1051,7 +1064,7 @@ export class AnthropicBackend implements ICompletionBackend {
             return {
               ...m,
               content: [
-                { type: 'text', text: content, cache_control: { type: 'ephemeral' } },
+                { type: 'text', text: content, cache_control: flagCacheControl },
               ] as unknown as IMessage['content'],
             };
           }
@@ -1060,7 +1073,7 @@ export class AnthropicBackend implements ICompletionBackend {
               i === content.length - 1
                 ? ({
                     ...(b as unknown as Record<string, unknown>),
-                    cache_control: { type: 'ephemeral' },
+                    cache_control: flagCacheControl,
                   } as unknown as typeof b)
                 : b
             );
@@ -1082,10 +1095,11 @@ export class AnthropicBackend implements ICompletionBackend {
     const identityReminder = shouldOmitIdentityReminder(options)
       ? null
       : buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName);
-    let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
+    type SystemBlock = { type: 'text'; text: string; cache_control?: ReturnType<typeof ephemeralCacheControl> };
+    let system: string | SystemBlock[] | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system' && !isToolChangeMessage(m));
-      const blocks: Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> = [];
+      const blocks: SystemBlock[] = [];
       for (const sm of systemMessages) {
         const text = systemContentToText(sm.content);
         // Anthropic rejects a text block with no non-whitespace content, and the public
@@ -1093,7 +1107,7 @@ export class AnthropicBackend implements ICompletionBackend {
         // (CompletionMessageSchema), so an empty one is reachable rather than theoretical.
         if (text.trim() === '') continue;
         if (sm.cache === true) {
-          blocks.push({ type: 'text', text, cache_control: { type: 'ephemeral' } });
+          blocks.push({ type: 'text', text, cache_control: flagCacheControl });
         } else {
           blocks.push({ type: 'text', text });
         }
@@ -1497,6 +1511,7 @@ export class AnthropicBackend implements ICompletionBackend {
             output_tokens?: number;
             cache_read_input_tokens?: number;
             cache_creation_input_tokens?: number;
+            cache_creation?: NonNullable<AnthropicUsage>['cache_creation'];
           }
         | undefined;
       // Chars this call streamed (text, thinking, tool arguments), read from the catch block too.
@@ -1972,6 +1987,7 @@ export class AnthropicBackend implements ICompletionBackend {
                         input_tokens: startUsage.input_tokens,
                         cache_read_input_tokens: startUsage.cache_read_input_tokens ?? undefined,
                         cache_creation_input_tokens: startUsage.cache_creation_input_tokens ?? undefined,
+                        cache_creation: startUsage.cache_creation ?? undefined,
                       };
                       streamingTurnUsage = usageInfo as typeof streamingTurnUsage;
                     }

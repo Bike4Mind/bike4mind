@@ -3335,6 +3335,8 @@ export const settingsMap = {
       'On supported Claude models, send the optional chat tools a turn offers with defer_loading and add them, with their guidance, through a mid-conversation tool_addition message, so the cached tools-and-system head is the same for every user whatever tools they have on. Unsupported models and fallback hops keep the current request shape. Off by default until the live cache check passes.',
     category: 'AI',
     order: 14,
+    // The Desktop app builds its own requests and follows this setting (apps/desktop DeferredToolsSetting).
+    userReadable: true,
   }),
   DeferredToolStartSetMaxTokens: makeNumberSetting({
     key: 'DeferredToolStartSetMaxTokens',
@@ -3345,6 +3347,7 @@ export const settingsMap = {
     category: 'AI',
     order: 15,
     dependsOn: 'EnableDeferredToolLoading',
+    userReadable: true,
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',

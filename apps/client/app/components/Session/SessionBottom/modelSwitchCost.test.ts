@@ -6,6 +6,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import {
+  getCacheExpiryCostNotice,
   getModelSwitchCostNotice,
   MODEL_SWITCH_NOTICE_MIN_CREDITS,
   modelSwitchCacheCredits,
@@ -131,5 +132,43 @@ describe('getModelSwitchCostNotice', () => {
 
   it('hides below the threshold', () => {
     expect(getModelSwitchCostNotice({ ...base, selectedModel: SONNET, previousInputTokens: 2_000 })).toBeNull();
+  });
+
+  it('prices the switch at the 1-hour write rate when the chat uses it', () => {
+    const credits = getModelSwitchCostNotice({ ...base, selectedModel: SONNET, cacheTtl: '1h' });
+    expect(credits).toBe(roundNoticeCredits(modelSwitchCacheCredits(SONNET, 150_000, OPUS.id, '1h')!));
+  });
+});
+
+describe('modelSwitchCacheCredits at the 1-hour TTL', () => {
+  it('prices the write at 2x input instead of 1.25x', () => {
+    const fiveMinute = modelSwitchCacheCredits(SONNET, 100_000, SONNET.id)!;
+    const oneHour = modelSwitchCacheCredits(SONNET, 100_000, SONNET.id, '1h')!;
+    expect(oneHour / fiveMinute).toBeCloseTo(2 / CACHE_WRITE_MULTIPLIER, 2);
+  });
+});
+
+describe('getCacheExpiryCostNotice', () => {
+  const base = {
+    selectedModel: OPUS,
+    answeredModelId: OPUS.id,
+    previousInputTokens: 150_000,
+    previousInputModelId: OPUS.id,
+  };
+
+  it('shows the re-write cost once the cache has expired on the same model', () => {
+    expect(getCacheExpiryCostNotice({ ...base, expired: true })).toBe(
+      roundNoticeCredits(modelSwitchCacheCredits(OPUS, 150_000, OPUS.id)!)
+    );
+    expect(getCacheExpiryCostNotice({ ...base, expired: true, cacheTtl: '1h' })).toBe(
+      roundNoticeCredits(modelSwitchCacheCredits(OPUS, 150_000, OPUS.id, '1h')!)
+    );
+  });
+
+  it('hides while warm, after a model switch, for a new chat and below the threshold', () => {
+    expect(getCacheExpiryCostNotice({ ...base, expired: false })).toBeNull();
+    expect(getCacheExpiryCostNotice({ ...base, expired: true, selectedModel: SONNET })).toBeNull();
+    expect(getCacheExpiryCostNotice({ ...base, expired: true, answeredModelId: undefined })).toBeNull();
+    expect(getCacheExpiryCostNotice({ ...base, expired: true, previousInputTokens: 2_000 })).toBeNull();
   });
 });

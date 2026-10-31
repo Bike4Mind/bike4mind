@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { PromptMeta } from '@bike4mind/common';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
+import { promptCacheExpiresAt } from '@client/app/utils/promptCacheExpiry';
 
 type ContextWindowUsage = NonNullable<NonNullable<PromptMeta['context']>['contextWindowUsage']>;
 
@@ -50,6 +51,8 @@ export interface SessionContextUsage {
    * summary) instead of re-sending verbatim. > 0 means compaction just ran.
    */
   compactedTurns: number;
+  /** When the prompt cache the last turn left expires (epoch ms); see promptCacheExpiresAt. */
+  cacheExpiresAt: number | null;
 }
 
 function bandFor(pct: number, overflow: boolean): ContextUsageBand {
@@ -90,6 +93,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
     let latestId = '';
     let latest: ContextWindowUsage | null = null;
     let latestCacheReadTokens = 0;
+    let latestCacheExpiresAt: number | null = null;
     let latestInputModelId: string | undefined;
     let latestAnsweredModelId: string | undefined;
     let latestProviderInputTokens: number | undefined;
@@ -104,6 +108,12 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
           latestInputModelId = quest.fallbackInfo?.primaryModel ?? quest.promptMeta?.model?.name;
           latestAnsweredModelId = quest.promptMeta?.model?.name;
           latestCacheReadTokens = quest.promptMeta?.tokenUsage?.cacheReadInputTokens ?? 0;
+          const tokenUsage = quest.promptMeta?.tokenUsage;
+          // A turn that neither read nor wrote the cache left nothing to expire.
+          latestCacheExpiresAt =
+            tokenUsage?.cacheReadInputTokens || tokenUsage?.cacheCreationInputTokens
+              ? promptCacheExpiresAt(quest)
+              : null;
           latestProviderInputTokens = providerPromptTokens(quest.promptMeta);
         }
       }
@@ -127,6 +137,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
       overflowDetected,
       cachingIneffective: latest.actualInputTokens >= CACHE_NOTE_MIN_INPUT_TOKENS && latestCacheReadTokens === 0,
       compactedTurns: latest.verbatimTurnsExcluded ?? 0,
+      cacheExpiresAt: latestCacheExpiresAt,
     };
   }, [data?.pages]);
 }

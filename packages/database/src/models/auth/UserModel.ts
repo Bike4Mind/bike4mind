@@ -178,6 +178,7 @@ const UserPreferencesSchema = new Schema(
     showFunTools: { type: Boolean },
     showSplashCards: { type: Boolean },
     desktopPromoDismissed: { type: Boolean },
+    promptCacheTtl: { type: String, enum: ['5m', '1h'] },
   },
   { _id: false }
 );

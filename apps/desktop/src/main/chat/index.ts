@@ -15,7 +15,7 @@ import {
   shell,
   type WebContents,
 } from 'electron';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, isPromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
@@ -59,6 +59,7 @@ import type { McpMutationResult, McpServerInput, McpServersState } from '@shared
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
+import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
 import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware } from './localContextSizing';
@@ -74,7 +75,8 @@ import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
-import { ChatService, type ChatServiceDeps } from './ChatService';
+import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
+import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
@@ -172,6 +174,12 @@ const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
  * SessionStore - so this only reaches a conversation that has never been given one.
  */
 const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
+
+/** Local overrides of the server's deferred tool loading setting; see parseDeferredToolsOverride. */
+const DEFERRED_TOOLS_OVERRIDE = parseDeferredToolsOverride(
+  process.env.B4M_DESKTOP_DEFERRED_TOOLS,
+  process.env.B4M_DESKTOP_DEFERRED_START_MAX_TOKENS
+);
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
@@ -381,6 +389,15 @@ export function registerChat(
   // a scope folder on first use, and this records how the user likes to work rather than
   // anything belonging to one conversation or one account.
   const approvalModes = new ApprovalModePreference(join(userData, 'approval-mode.json'));
+  const deferredTools = new DeferredToolsSetting({
+    filePath: join(userData, 'deferred-tools.json'),
+    getApiClient: () => auth.getApiClient(),
+    getEnvironmentUrl: () => auth.getState().environment.url,
+    logger,
+    override: DEFERRED_TOOLS_OVERRIDE,
+  });
+  // Asked at launch so the first turn already has the server's answer.
+  void deferredTools.refresh();
   // Scoped to the backend and the account, not just to this machine: one install reaches
   // production and a local server, and can be signed in as a different person on each. The
   // provider is read per operation, so a switch takes effect on the next list with nothing
@@ -391,7 +408,8 @@ export function registerChat(
     randomUUID(),
     () => sessionScopeForChat(auth.getState()),
     approvalModes,
-    REASONING_EFFORT
+    REASONING_EFFORT,
+    new PromptCacheTtlPreference(join(userData, 'prompt-cache-ttl.json'))
   );
   keepSessionWritesIn(store);
   const access = new AccessStore(join(userData, 'tool-access.json'));
@@ -637,6 +655,9 @@ export function registerChat(
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
     protectedPaths: [userData],
+    get deferredTools() {
+      return deferredTools.current();
+    },
     getApiClient: () => auth.getApiClient(),
     isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
     getEnvironmentUrl: () => auth.getState().environment.url,
@@ -728,6 +749,9 @@ export function registerChat(
     const setting = storedReasoningEffortSetting(effort);
     return setting ? service.setSessionReasoningEffort(sessionId, setting) : null;
   });
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionPromptCacheTtl, (_event, sessionId: string, ttl: unknown) =>
+    isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
+  );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );
@@ -910,7 +934,9 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
     service.removeContextDirectory(sessionId, directory)
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetSession, (_event, sessionId: string) => service.getSession(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string) =>
+    sessionForRenderer(await service.getSession(sessionId))
+  );
   // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
   // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
   // and a repository git cannot read already says so on the branch chip beside it.

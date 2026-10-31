@@ -1,4 +1,5 @@
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
+import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -159,6 +160,7 @@ export const IPC_CHANNELS = {
   chatHistoryState: 'chat:history-state',
   chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
+  chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
@@ -695,6 +697,8 @@ export interface DesktopApi {
     onHistoryChanged(listener: () => void): () => void;
     /** How hard this conversation's model should think. Null when the session is gone. */
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
+    /** How long this conversation's prompt cache lives. Null when the session is gone. */
+    setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
     /**

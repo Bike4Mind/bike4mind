@@ -9,7 +9,7 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
-import type { GenerationJobState, ValidationViolation } from '@bike4mind/common';
+import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ChatImportOrigin } from './claudeImport';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
@@ -665,6 +665,8 @@ export interface ChatMessage {
   rounds?: ChatReplyRound[];
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
+  /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
+  promptCache?: ChatPromptCacheStamp;
   contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
   /**
    * Provider-shaped reasoning blocks (Anthropic extended thinking). Opaque: they are replayed
@@ -740,6 +742,25 @@ export interface ChatMessage {
    * per request so the replayed history stays byte-identical and the prompt cache holds.
    */
   notes?: string[];
+  /**
+   * On a user turn of a deferred-tools conversation: the optional tools offered from this turn on
+   * and the guidance that goes with them. Stored for the same reason as `notes`; see
+   * chat/deferredTools.ts for how a request replays it.
+   */
+  toolState?: ChatToolState;
+  /**
+   * On an assistant reply from a deferred-tools turn. Its calls were sent after that turn's tool
+   * changes, so a replay keeps them as they were; a call from any other turn gets an addition
+   * before it when its tool is not active there (chat/deferredTools.ts insertToolChanges).
+   */
+  deferred?: boolean;
+}
+
+export interface ChatToolState {
+  /** Optional tool names, sorted. The core tools are always loaded and never listed. */
+  tools: string[];
+  /** The tool and access guidance, read by the model as a reminder on this turn. */
+  text: string;
 }
 
 /**
@@ -915,6 +936,8 @@ export interface ChatModelOption {
    * absent flag here only means the model was not in a list that had loaded.
    */
   supportsReasoningEffort?: boolean;
+  /** A direct-Anthropic model the server will cache for an hour on request (supportsOneHourPromptCache). */
+  supportsOneHourCache?: boolean;
   /**
    * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
    * so the effort picker becomes that switch, stored as `default` (on) and
@@ -935,6 +958,8 @@ export interface ChatModelOption {
   aliasIds?: string[];
   /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
   unavailable?: string;
+  /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */
+  pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
 }
 
 /** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
@@ -1142,6 +1167,12 @@ interface ChatSessionMeta {
    */
   reasoningEffort: ReasoningEffortSetting;
   /**
+   * How long the server's prompt cache for this conversation lives between requests. Absent on
+   * conversations from before the choice existed, which run at '5m'. Sent only to a model that
+   * takes the 1-hour TTL; see `ChatModelOption.supportsOneHourCache`.
+   */
+  promptCacheTtl?: PromptCacheTtl;
+  /**
    * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
    * on a Code session nobody has chosen a folder for yet - which is a usable state, not a
    * broken one, and the only thing it cannot do is run a turn.
@@ -1288,6 +1319,7 @@ export type ChatStreamEvent =
       rounds?: ChatReplyRound[];
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
+      promptCache?: ChatPromptCacheStamp;
     }
   | {
       type: 'error';
@@ -1735,6 +1767,18 @@ export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion 
 export type RelayRefusal = 'hops' | 'fan-out' | 'no-target' | 'archived' | 'self' | 'empty-message' | 'unavailable';
 
 /**
+ * The server-side prompt cache a reply left behind. `cachedAt` is the last request's first
+ * token (or its end when nothing streamed), which is after the cache was written, so an
+ * expiry read off it is late by at most the prompt's processing time, never early.
+ */
+export interface ChatPromptCacheStamp {
+  cachedAt: number;
+  ttl: PromptCacheTtl;
+  /** The cache is per model, so a conversation switched since holds none on its new one. */
+  model: string;
+}
+
+/**
  * One tool round of a reply: what the model said, and then what it went on to run.
  *
  * Holds call IDS rather than the calls, so a call has exactly one home - the message's
@@ -1764,6 +1808,20 @@ export interface ChatReplyRound {
    * `thinking`, never this.
    */
   reasoning?: string;
+  /**
+   * Main only: what this round put on the wire, so later requests replay the turn byte for byte and
+   * read the cache entry its last round wrote (see toCompletionMessages). The exception is a round
+   * that attached tool images, whose images turn is not replayed (see sentRounds in ChatService). Absent on older rounds.
+   * Persisted with the session, but stripped before the renderer sees it (sessionForRenderer).
+   */
+  sent?: ChatSentRound;
+}
+
+/** A round's assistant message as sent, plus any app text appended to its last tool result. */
+export interface ChatSentRound {
+  thinking?: unknown[];
+  text: string;
+  resultNote?: string;
 }
 
 /**

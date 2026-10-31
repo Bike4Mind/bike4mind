@@ -105,6 +105,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
           output: { type: Number, required: true },
           cacheRead: { type: Number, required: false },
           cacheWrite: { type: Number, required: false },
+          cacheWrite1h: { type: Number, required: false },
         },
         { _id: false }
       ),
@@ -118,6 +119,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
             outputTokens: { type: Number, required: true },
             cacheReadTokens: { type: Number, required: false },
             cacheWriteTokens: { type: Number, required: false },
+            cacheWrite1hTokens: { type: Number, required: false },
             tierKey: { type: Number, required: true },
           },
           { _id: false }
@@ -127,6 +129,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
       default: undefined,
     },
     turnUsageTruncated: { type: Boolean, required: false },
+    cacheWrite1hTokens: { type: Number, required: false },
     fundingBreakdown: {
       type: new Schema(
         {
