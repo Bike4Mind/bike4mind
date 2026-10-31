@@ -449,6 +449,10 @@ describe('ChatCompletion origin verification', () => {
     expect(res.status).not.toBe(403);
   });
 
+  it('gates a path registered after the gate that is not one of the known routes', async () => {
+    expect((await call('/api/ai/v1/not-a-route')).status).toBe(403);
+  });
+
   it('leaves /health and /process to their own checks', async () => {
     expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
     expect((await post(VALID_BODY, { authorization: AUTH })).status).toBe(202);

@@ -107,9 +107,10 @@ export function createApp() {
   // Internal quest-processing surface (frontend Lambda -> WebSocket streaming).
   registerInternalRoutes(app, track);
 
-  // Only the CloudFront-routed paths are gated; /health and /process are reached directly (ALB
-  // health check, frontend Lambda via NAT).
-  app.use(['/api/ai/v1/completions', '/api/ai/v1/ws-completions', '/api/embed/chat'], requireOriginVerify);
+  // Everything registered below is gated, so a new route is CloudFront-only by default. /health and
+  // /process are registered above because they are reached directly (ALB health check, frontend
+  // Lambda via NAT); keep any other direct-only route above this line too.
+  app.use(requireOriginVerify);
 
   // Every user-facing route below (completions, CLI WS completions, embed chat) refuses a caller
   // on an admin's `all` IP block; the internal route above is service-to-service and is not.
