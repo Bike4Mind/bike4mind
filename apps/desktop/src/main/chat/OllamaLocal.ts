@@ -637,7 +637,7 @@ function blockText(content: unknown): string {
  * Maps the Anthropic-style blocks `ChatService` builds onto Ollama's chat format: tool calls on the
  * assistant message, one `role: 'tool'` message per result, screenshots in `images`.
  */
-function toMessages(messages: CompletionMessage[]): OllamaMessage[] {
+export function toMessages(messages: CompletionMessage[]): OllamaMessage[] {
   const toolNames = new Map<string, string>();
   return messages.flatMap(message => {
     const continues = message.continuesTurn ? { continuesTurn: true } : {};

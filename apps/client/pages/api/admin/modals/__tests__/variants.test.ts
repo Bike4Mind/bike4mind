@@ -10,26 +10,34 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    type Fn = (req: unknown, res: unknown, next: () => void) => unknown;
+    const routes: Record<string, Fn> = {};
+    const middlewares: Fn[] = [];
     const chain: Record<string, unknown> = Object.assign(
-      (req: { method?: string }, res: unknown) => routes[req.method ?? 'GET']?.(req, res),
+      async (req: { method?: string }, res: unknown) => {
+        for (const mw of middlewares) {
+          let proceeded = false;
+          await mw(req, res, () => {
+            proceeded = true;
+          });
+          if (!proceeded) return;
+        }
+        return routes[req.method ?? 'GET']?.(req, res, () => undefined);
+      },
       {
-        use: () => chain,
-        get: (fn: (req: unknown, res: unknown) => unknown) => ((routes.GET = fn), chain),
-        put: (fn: (req: unknown, res: unknown) => unknown) => ((routes.PUT = fn), chain),
-        delete: (fn: (req: unknown, res: unknown) => unknown) => ((routes.DELETE = fn), chain),
+        use: (fn: Fn) => (middlewares.push(fn), chain),
+        get: (fn: Fn) => ((routes.GET = fn), chain),
+        put: (fn: Fn) => ((routes.PUT = fn), chain),
+        delete: (fn: Fn) => ((routes.DELETE = fn), chain),
       }
     );
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  ensureAdmin: (isAdmin?: boolean) => {
-    if (!isAdmin) throw new Error('forbidden');
-  },
   NotFoundError: class NotFoundError extends Error {},
   BadRequestError: class BadRequestError extends Error {},
   isZodError: () => false,
@@ -48,9 +56,12 @@ vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.aud
 
 import handler from '../variants';
 
-const run = async (method: 'PUT' | 'DELETE', body: Record<string, unknown>) => {
-  const { req, res } = createMocks({ method, body });
-  (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+type TestUser = { id: string; isAdmin?: boolean; adminPermissions?: string[] };
+const FULL_ADMIN: TestUser = { id: 'admin-1', isAdmin: true };
+
+const run = async (method: 'GET' | 'PUT' | 'DELETE', body: Record<string, unknown>, user: TestUser = FULL_ADMIN) => {
+  const { req, res } = createMocks({ method, body, query: method === 'GET' ? body : {} });
+  (req as unknown as Record<string, unknown>).user = user;
   await (handler as unknown as (rq: unknown, rs: unknown) => Promise<void>)(req, res);
   return { req, res };
 };
@@ -113,5 +124,39 @@ describe('DELETE /api/admin/modals/variants admin audit', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(h.audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/admin/modals/variants permission gate', () => {
+  const delegate: TestUser = { id: 'd-1', isAdmin: false, adminPermissions: ['settings:manage'] };
+  const wrongPermission: TestUser = { id: 'd-2', isAdmin: false, adminPermissions: ['support:read'] };
+  const nobody: TestUser = { id: 'u-1', isAdmin: false };
+  const emptyGrant: TestUser = { id: 'u-2', isAdmin: false, adminPermissions: [] };
+  const body = { modalId: 'modal-1', variants: { customer: { title: 'Welcome' } } };
+
+  it.each([
+    ['delegate with settings:manage', delegate],
+    ['full admin', FULL_ADMIN],
+  ])('allows %s to read, write and clear variants', async (_label, user) => {
+    h.findById.mockResolvedValue({ _id: 'modal-1', title: 'Welcome', variants: { customer: { title: 'Welcome' } } });
+    h.findByIdAndUpdate.mockResolvedValue({ _id: 'modal-1', title: 'Welcome' });
+
+    expect((await run('GET', { modalId: 'modal-1' }, user)).res._getStatusCode()).toBe(200);
+    expect((await run('PUT', body, user)).res._getStatusCode()).toBe(200);
+    expect((await run('DELETE', { modalId: 'modal-1' }, user)).res._getStatusCode()).toBe(200);
+  });
+
+  it.each([
+    ['a delegate holding a different permission', wrongPermission],
+    ['a user with no admin access', nobody],
+    ['a user with an empty grant list', emptyGrant],
+  ])('rejects %s on every method without touching the modal', async (_label, user) => {
+    for (const method of ['GET', 'PUT', 'DELETE'] as const) {
+      await expect(run(method, method === 'PUT' ? body : { modalId: 'modal-1' }, user)).rejects.toThrow(
+        'Missing permission: settings:manage'
+      );
+    }
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.findByIdAndUpdate).not.toHaveBeenCalled();
   });
 });

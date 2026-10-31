@@ -19,6 +19,13 @@
 //                        had). Fails on any hit.
 //   push                 the same for the pushed commits. Main is already
 //                        updated by then, so this only reports.
+//   issue_comment, pull_request_review, pull_request_review_comment
+//                        the body of the one comment or review the event
+//                        carries. On a hit, one nudge comment is posted on the
+//                        PR (updated in place on later hits, found by a hidden
+//                        marker) naming the author and linking the comment, so
+//                        they can edit it. Nothing scans comments later, so the
+//                        nudge is the only record of the hit besides this log.
 //
 // Fails closed: a missing or invalid list, or a PR too large to check
 // completely, is a failure rather than a silent pass.
@@ -39,6 +46,10 @@ const MAX_COMPARE_FILES = 300;
 const MAX_RATE_LIMIT_RETRIES = 3;
 const MAX_RATE_LIMIT_WAIT_MS = 90_000;
 const MAX_RATE_LIMIT_TOTAL_WAIT_MS = 180_000;
+// Marks the nudge comment so a later hit on the same PR updates it instead of
+// adding another.
+const NUDGE_MARKER = '<!-- restricted-terms-nudge -->';
+const NUDGE_AUTHOR = 'github-actions[bot]';
 
 // Errors whose message this script wrote and knows to be safe to publish. Any
 // other error is reported by name only: a RegExp SyntaxError quotes the pattern
@@ -190,11 +201,17 @@ function github(token, fetchImpl, { sleep, now }) {
 
   let waitedMs = 0;
 
-  async function request(url, accept) {
+  async function request(url, { accept, method = 'GET', body } = {}) {
     const path = url.split('?')[0];
     for (let attempt = 1; ; attempt++) {
       const res = await fetchImpl(url.startsWith('http') ? url : `${API}${url}`, {
-        headers: accept ? { ...headers, Accept: accept } : headers,
+        method,
+        headers: {
+          ...headers,
+          ...(accept ? { Accept: accept } : {}),
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       if (res.ok) return res;
 
@@ -222,7 +239,8 @@ function github(token, fetchImpl, { sleep, now }) {
 
   return {
     json: async url => (await request(url)).json(),
-    raw: async url => Buffer.from(await (await request(url, 'application/vnd.github.raw')).arrayBuffer()),
+    raw: async url => Buffer.from(await (await request(url, { accept: 'application/vnd.github.raw' })).arrayBuffer()),
+    send: async (method, url, body) => (await request(url, { method, body })).json(),
     // `pick` extracts the page's items, for endpoints that wrap them in an object.
     async paginate(url, pick = body => body) {
       const items = [];
@@ -455,6 +473,70 @@ async function scanPush({ event, matcher, gh, repo, hit, incomplete }) {
   return `push to ${event.ref}: ${commits.length} commit(s), ${files.length} file(s)`;
 }
 
+/**
+ * The comment or review a comment event carries, or `{ skip }` with the reason
+ * there is nothing to check. A review submitted with inline comments only has
+ * an empty body (its state is `commented`); the inline comments arrive as
+ * their own events.
+ */
+function commentOf(eventName, event) {
+  if (eventName === 'issue_comment') {
+    if (!event.issue?.pull_request) return { skip: 'the comment is on an issue, not a pull request' };
+    const { comment, issue } = event;
+    return {
+      kind: 'comment',
+      body: comment.body,
+      url: comment.html_url,
+      login: comment.user?.login,
+      number: issue.number,
+    };
+  }
+  if (eventName === 'pull_request_review') {
+    const { review, pull_request: pr } = event;
+    if (!review.body) return { skip: 'the review has no text' };
+    return { kind: 'review', body: review.body, url: review.html_url, login: review.user?.login, number: pr.number };
+  }
+  const { comment, pull_request: pr } = event;
+  return {
+    kind: 'review comment',
+    body: comment.body,
+    url: comment.html_url,
+    login: comment.user?.login,
+    number: pr.number,
+  };
+}
+
+function scanComment({ eventName, event, matcher, hit }) {
+  const comment = commentOf(eventName, event);
+  if (comment.skip) return { comment, summary: null };
+  // A login could itself be a term; the link still says whose comment it is.
+  comment.who = comment.login && !matches(matcher, comment.login) ? ` by @${comment.login}` : '';
+  const where = `${comment.kind}${comment.who} (${comment.url})`;
+  if (matches(matcher, comment.body ?? '')) hit(where);
+  return { comment, summary: `PR #${comment.number}: ${where}` };
+}
+
+/**
+ * Posts the nudge for a hit comment on its PR, or rewrites the one already
+ * there so the PR carries a single nudge pointing at the latest hit. The
+ * check's own failure never reaches the PR's checks for an issue comment (that
+ * run belongs to the default branch's head commit), and the comment's author
+ * may never open the Checks tab for a review.
+ */
+async function nudge({ gh, repo, comment }) {
+  const body =
+    `${NUDGE_MARKER}\nThe Restricted Terms check found a restricted term in a [${comment.kind}](${comment.url})` +
+    `${comment.who}. Please edit it to remove the term (the matched text is deliberately not shown; ` +
+    'the list is maintained by the repository maintainers). The check runs again on the edit.';
+  const comments = await gh.paginate(`/repos/${repo}/issues/${comment.number}/comments`);
+  const existing = comments.find(c => c.user?.login === NUDGE_AUTHOR && c.body?.includes(NUDGE_MARKER));
+  if (existing) {
+    await gh.send('PATCH', `/repos/${repo}/issues/comments/${existing.id}`, { body });
+  } else {
+    await gh.send('POST', `/repos/${repo}/issues/${comment.number}/comments`, { body });
+  }
+}
+
 /** Runs the check and returns its exit code; every line it logs is safe to publish. */
 export async function run({
   env = process.env,
@@ -497,12 +579,20 @@ export async function run({
   const gaps = [];
   const ctx = { event, matcher, gh, repo, hit: where => hits.push(where), incomplete: why => gaps.push(why) };
 
+  const isCommentEvent = ['issue_comment', 'pull_request_review', 'pull_request_review_comment'].includes(eventName);
   let summary;
+  let comment;
   try {
     if (eventName === 'pull_request_target' || eventName === 'pull_request') {
       summary = await scanPullRequest(ctx);
     } else if (eventName === 'push') {
       summary = await scanPush(ctx);
+    } else if (isCommentEvent) {
+      ({ comment, summary } = scanComment({ eventName, ...ctx }));
+      if (!summary) {
+        log(`Nothing to check: ${comment.skip}.`);
+        return 0;
+      }
     } else {
       log(`Nothing to check for ${eventName} events.`);
       return 0;
@@ -521,8 +611,18 @@ export async function run({
       `${hits.length} restricted-term hit(s). The matched text is deliberately not shown. ` +
         (isPush
           ? 'This push is already on the branch: a maintainer must follow up.'
-          : 'Remove it from the locations above (rewrite commit messages if needed) and push again.')
+          : isCommentEvent
+            ? 'The author must edit the comment to remove it.'
+            : 'Remove it from the locations above (rewrite commit messages if needed) and push again.')
     );
+    if (isCommentEvent) {
+      try {
+        await nudge({ gh, repo, comment });
+        log('Posted a nudge comment on the PR.');
+      } catch (err) {
+        annotate('warning', `Could not post the nudge comment on the PR: ${safeMessage(err)}`);
+      }
+    }
     return 1;
   }
   // A push already landed, but a partial check must still go red, or a large

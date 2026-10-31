@@ -19,11 +19,11 @@ function response(body, { status = 200, link, headers = {} } = {}) {
 
 // Routes are matched on the URL path with the query string removed.
 function fakeFetch(routes) {
-  return async url => {
+  return async (url, init) => {
     const path = new URL(url).pathname;
     const route = routes[path];
     if (!route) return response({ message: 'Not Found' }, { status: 404 });
-    return typeof route === 'function' ? route(url) : route;
+    return typeof route === 'function' ? route(url, init) : route;
   };
 }
 
@@ -915,6 +915,140 @@ describe('run', () => {
     const { code, output } = await check({ eventName: 'push', event, routes });
     expect(code).toBe(1);
     expect(output).toContain('Incomplete check: the new ref history was not listed');
+  });
+});
+
+describe('comment events', () => {
+  const COMMENT_URL = 'https://github.com/acme/widgets/pull/7#issuecomment-11';
+  const issueComment = (body, { onPullRequest = true, login = 'reviewer' } = {}) => ({
+    action: 'created',
+    issue: { number: 7, ...(onPullRequest ? { pull_request: { url: 'https://api.github.com/x' } } : {}) },
+    comment: { id: 11, body, html_url: COMMENT_URL, user: { login } },
+  });
+  const review = (body, state = 'commented', login = 'reviewer') => ({
+    action: 'submitted',
+    pull_request: { number: 7 },
+    review: {
+      id: 12,
+      body,
+      state,
+      html_url: 'https://github.com/acme/widgets/pull/7#pullrequestreview-12',
+      user: { login },
+    },
+  });
+  const reviewComment = body => ({
+    action: 'created',
+    pull_request: { number: 7 },
+    comment: {
+      id: 13,
+      body,
+      html_url: 'https://github.com/acme/widgets/pull/7#discussion_r13',
+      user: { login: 'reviewer' },
+    },
+  });
+
+  // Records the nudge requests; `existing` seeds the PR's comment list.
+  function nudgeRoutes(existing = []) {
+    const sent = [];
+    const record = (url, init) => {
+      sent.push({ method: init?.method, path: new URL(url).pathname, body: JSON.parse(init.body) });
+      return response({ id: 99 });
+    };
+    const routes = {
+      '/repos/acme/widgets/issues/7/comments': (url, init) =>
+        init?.method === 'POST' ? record(url, init) : response(existing),
+    };
+    for (const c of existing) routes[`/repos/acme/widgets/issues/comments/${c.id}`] = record;
+    return { routes, sent };
+  }
+
+  it('fails on a PR comment that contains a term and posts one nudge without echoing the text', async () => {
+    const { routes, sent } = nudgeRoutes();
+    const { code, output } = await check({
+      eventName: 'issue_comment',
+      event: issueComment('this leaks zorblax, see glorp42'),
+      routes,
+    });
+    expect(code).toBe(1);
+    expect(output).toContain(`Restricted term found in comment by @reviewer (${COMMENT_URL}).`);
+    expect(output).toContain('Posted a nudge comment on the PR.');
+    expect(output.toLowerCase()).not.toMatch(/zorblax|glorp/);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ method: 'POST', path: '/repos/acme/widgets/issues/7/comments' });
+    expect(sent[0].body.body).toContain('<!-- restricted-terms-nudge -->');
+    expect(sent[0].body.body).toContain(`[comment](${COMMENT_URL}) by @reviewer`);
+    expect(sent[0].body.body.toLowerCase()).not.toMatch(/zorblax|glorp/);
+  });
+
+  it('updates the existing nudge instead of posting a second one', async () => {
+    const { routes, sent } = nudgeRoutes([
+      { id: 5, user: { login: 'someone' }, body: '<!-- restricted-terms-nudge --> pasted by a human' },
+      { id: 6, user: { login: 'github-actions[bot]' }, body: '<!-- restricted-terms-nudge -->\nold nudge' },
+    ]);
+    const { code } = await check({
+      eventName: 'pull_request_review_comment',
+      event: reviewComment('flim-flam'),
+      routes,
+    });
+    expect(code).toBe(1);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ method: 'PATCH', path: '/repos/acme/widgets/issues/comments/6' });
+    expect(sent[0].body.body).toContain('[review comment](https://github.com/acme/widgets/pull/7#discussion_r13)');
+  });
+
+  it('passes a clean comment and posts nothing', async () => {
+    const { routes, sent } = nudgeRoutes();
+    const { code, output } = await check({ eventName: 'issue_comment', event: issueComment('looks good'), routes });
+    expect(code).toBe(0);
+    expect(output).toContain('No restricted terms found.');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('checks a review summary and withholds a login that is itself a term', async () => {
+    const { routes, sent } = nudgeRoutes();
+    const { code, output } = await check({
+      eventName: 'pull_request_review',
+      event: review('please drop the zorblax bit', 'changes_requested', 'zorblax'),
+      routes,
+    });
+    expect(code).toBe(1);
+    expect(output).toContain(
+      'Restricted term found in review (https://github.com/acme/widgets/pull/7#pullrequestreview-12).'
+    );
+    expect(output.toLowerCase()).not.toMatch(/zorblax/);
+    expect(sent[0].body.body.toLowerCase()).not.toMatch(/zorblax/);
+  });
+
+  it('skips a comment on an issue that is not a pull request', async () => {
+    const { routes, sent } = nudgeRoutes();
+    const { code, output } = await check({
+      eventName: 'issue_comment',
+      event: issueComment('zorblax', { onPullRequest: false }),
+      routes,
+    });
+    expect(code).toBe(0);
+    expect(output).toContain('Nothing to check: the comment is on an issue, not a pull request.');
+    expect(output.toLowerCase()).not.toMatch(/zorblax/);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('skips a review submitted with inline comments only, whose body is empty', async () => {
+    const { routes, sent } = nudgeRoutes();
+    const { code, output } = await check({ eventName: 'pull_request_review', event: review('', 'commented'), routes });
+    expect(code).toBe(0);
+    expect(output).toContain('Nothing to check: the review has no text.');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('still fails, with a warning, when the nudge cannot be posted', async () => {
+    const { code, output } = await check({
+      eventName: 'issue_comment',
+      event: issueComment('zorblax'),
+      routes: { '/repos/acme/widgets/issues/7/comments': response({ message: 'Forbidden' }, { status: 403 }) },
+    });
+    expect(code).toBe(1);
+    expect(output).toContain('::warning::Could not post the nudge comment on the PR: GitHub API 403');
+    expect(output.toLowerCase()).not.toMatch(/zorblax/);
   });
 });
 

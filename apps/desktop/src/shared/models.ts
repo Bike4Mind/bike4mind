@@ -72,9 +72,11 @@ export interface ModelFit {
 export interface MachineView {
   memoryKind: 'unified' | 'discrete' | 'cpu';
   totalMemoryBytes: number;
-  /** Null on unified memory and when no GPU could be measured. */
+  /** What ROCm can allocate on AMD unified memory; null on other unified memory and when no GPU could be measured. */
   gpuMemoryBytes: number | null;
   gpuName: string | null;
+  /** 'low' when the GPU's memory could not be measured or confirmed. */
+  confidence: 'high' | 'low';
 }
 
 export interface LocalModelEntry {
@@ -87,6 +89,12 @@ export interface LocalModelEntry {
   capabilities: LocalModelCapabilities;
   loaded: boolean;
   fit: ModelFit | null;
+  /** The context the server runs it with, when the server says (vLLM's --max-model-len). */
+  contextLength?: number;
+  /** Other names the server answers to for this same model. */
+  aliases?: string[];
+  /** A LoRA adapter's base model. */
+  baseModel?: string;
 }
 
 export type InstalledModelsResult = { ok: true; models: LocalModelEntry[] } | { ok: false; error: ModelHubError };

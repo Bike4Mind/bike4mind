@@ -86,7 +86,42 @@ describe('llmUsageSettledFields', () => {
       usd: 0.012346,
       source: 'api',
       isYoungAccount: true,
+      accountCreatedAt: hoursAgo(2).toISOString(),
     });
+  });
+  it('names the account only when the caller passes one', () => {
+    const base = {
+      backend: 'openai',
+      model: 'gpt-4.1',
+      inputTokens: 1,
+      outputTokens: 1,
+      usd: 0.1,
+      source: 'api' as const,
+    };
+    expect(llmUsageSettledFields(base, now)).not.toHaveProperty('userId');
+    expect(llmUsageSettledFields(base, now)).not.toHaveProperty('accountCreatedAt');
+    expect(
+      llmUsageSettledFields({ ...base, userId: '507f1f77bcf86cd799439011', accountCreatedAt: null }, now)
+    ).toMatchObject({
+      userId: '507f1f77bcf86cd799439011',
+    });
+  });
+  it('still writes the line, without the creation date, when that date is invalid', () => {
+    const fields = llmUsageSettledFields(
+      {
+        backend: 'openai',
+        model: 'gpt-4.1',
+        inputTokens: 1,
+        outputTokens: 1,
+        usd: 0.1,
+        source: 'api',
+        userId: 'u1',
+        accountCreatedAt: new Date('not a date'),
+      },
+      now
+    );
+    expect(fields).toMatchObject({ userId: 'u1', isYoungAccount: false, usd: 0.1 });
+    expect(fields).not.toHaveProperty('accountCreatedAt');
   });
   it('never emits a non-finite usd', () => {
     const fields = llmUsageSettledFields({
@@ -102,7 +137,7 @@ describe('llmUsageSettledFields', () => {
 });
 
 describe('logLlmUsageSettled', () => {
-  it('writes one JSON line the metric filters can read, with no user or prompt fields', () => {
+  it('writes one JSON line the metric filters can read, with the account id and no prompt fields', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     logLlmUsageSettled({
       backend: 'anthropic',
@@ -113,6 +148,7 @@ describe('logLlmUsageSettled', () => {
       cacheWriteTokens: 0,
       usd: 0.01234,
       source: 'chat',
+      userId: '507f1f77bcf86cd799439011',
       accountCreatedAt: new Date(Date.now() - 60_000),
     });
     expect(info).toHaveBeenCalledTimes(1);
@@ -129,11 +165,13 @@ describe('logLlmUsageSettled', () => {
       usd: 0.01234,
       source: 'chat',
       isYoungAccount: true,
+      userId: '507f1f77bcf86cd799439011',
     });
     expect(typeof line.usd).toBe('number');
     expect(typeof line.outputTokens).toBe('number');
     expect(Object.keys(line).sort()).toEqual(
       [
+        'accountCreatedAt',
         'backend',
         'cacheReadTokens',
         'cacheWriteTokens',
@@ -147,6 +185,7 @@ describe('logLlmUsageSettled', () => {
         'severity',
         'source',
         'usd',
+        'userId',
       ].sort()
     );
   });

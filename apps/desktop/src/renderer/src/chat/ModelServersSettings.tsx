@@ -201,10 +201,11 @@ export function probedSummary(machine: MachineView): string {
   const memory = formatMemory(machine.totalMemoryBytes);
   const gpu = machine.gpuMemoryBytes ? formatMemory(machine.gpuMemoryBytes) : null;
   const name = machine.gpuName ? ` (${machine.gpuName})` : '';
-  if (machine.memoryKind === 'unified')
-    return gpu
-      ? `${memory} of memory shared with the GPU${name}, which can use ${gpu}`
-      : `${memory} of memory shared with the GPU${name}`;
+  // Worded like machineText in CuratedTab: only AMD unified memory reports a GPU budget, which may be a firmware
+  // carve-out outside the RAM the OS sees rather than memory shared with it.
+  if (machine.memoryKind === 'unified' && gpu)
+    return `${memory} of RAM, and the GPU${name} can use ${machine.confidence === 'low' ? 'at least ' : ''}${gpu} of memory`;
+  if (machine.memoryKind === 'unified') return `${memory} of memory shared with the GPU${name}`;
   if (machine.memoryKind === 'discrete' && gpu) return `${memory} of RAM and ${gpu} of GPU memory${name}`;
   return `${memory} of RAM and no GPU memory`;
 }
@@ -377,6 +378,11 @@ function ServerRow({
               Unencrypted
             </Chip>
           )}
+          {server.toolsHint && (
+            <Chip size="sm" variant="soft" color="warning" data-testid="model-servers-tools-off-chip">
+              Tools off
+            </Chip>
+          )}
           {!server.local && server.auth.type !== 'none' && !server.credentialsPersisted && (
             <Chip size="sm" variant="soft" color="neutral" data-testid="model-servers-session-only-chip">
               Credentials kept until Desktop quits
@@ -402,6 +408,11 @@ function ServerRow({
           <Typography level="body-xs" textColor="text.tertiary">
             Plain http on a private network: anyone on that network can read the conversation. Credentials are not sent
             over it.
+          </Typography>
+        )}
+        {server.toolsHint && (
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-tools-hint">
+            {server.toolsHint}
           </Typography>
         )}
         {!server.local && (
