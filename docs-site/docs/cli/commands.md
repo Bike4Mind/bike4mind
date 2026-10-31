@@ -946,13 +946,7 @@ For detailed sandbox command documentation, see [Sandbox Commands →](/cli/sand
 
 ### Command History
 
-Future feature: Navigate previous commands with `↑` and `↓` arrow keys.
-
-```bash
-# Coming soon
-↑  # Previous command
-↓  # Next command
-```
+Press `Up` for your previous input and `Down` to move forward again. History survives restarts and is saved in `~/.bike4mind/history.jsonl`; see [Input History](./configuration.md#input-history) for what is stored and how to turn it off.
 
 ### Command Chaining
 
