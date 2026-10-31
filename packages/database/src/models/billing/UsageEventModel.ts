@@ -6,6 +6,7 @@ import {
   IMongoDocument,
   ILakeUsageSummary,
   IModelDayMargin,
+  IUserUsageActivity,
   IOwnerSpendDay,
   IOwnerSpendFeature,
   IOwnerSpendMember,
@@ -61,6 +62,8 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     feature: { type: String, required: true, enum: [...USAGE_EVENT_FEATURES] },
     provider: { type: String, required: true },
     model: { type: String, required: true },
+    executedProvider: { type: String, required: false },
+    executedModel: { type: String, required: false },
 
     inputTokens: { type: Number, required: true, default: 0 },
     outputTokens: { type: Number, required: true, default: 0 },
@@ -204,6 +207,34 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       },
     ]);
     return row?.credits ?? 0;
+  }
+
+  async activitySummaryByUser(userId: string, from: Date, to: Date, limit: number): Promise<IUserUsageActivity> {
+    const [row] = await this.model.aggregate<IUserUsageActivity>([
+      { $match: { userId, createdAt: { $gte: from, $lt: to } } },
+      { $sort: { createdAt: -1 } },
+      { $limit: limit },
+      {
+        $group: {
+          _id: null,
+          events: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $eq: ['$status', 'ok'] }, 1, 0] } },
+          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+          latestAt: { $max: '$createdAt' },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          events: 1,
+          completed: 1,
+          failed: { $subtract: ['$events', '$completed'] },
+          credits: 1,
+          latestAt: 1,
+        },
+      },
+    ]);
+    return row ?? { events: 0, completed: 0, failed: 0, credits: 0, latestAt: null };
   }
 
   async creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>> {

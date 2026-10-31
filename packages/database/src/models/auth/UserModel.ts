@@ -1,4 +1,10 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
+import {
+  THROTTLE_SOURCES,
+  THROTTLE_TIERS,
+  USER_RISK_SIGNAL_TYPES,
+  VERIFIED_SLACK_IDENTITY_FILTER,
+  canonicalizeEmail,
+} from '@bike4mind/common';
 import {
   ADMIN_PERMISSIONS,
   AuthStrategy,
@@ -11,6 +17,10 @@ import {
   IUserNote,
   IModerationHit,
   ISignupRiskScore,
+  RISK_EVIDENCE_TRIGGERS,
+  type RiskEvidenceCoverage,
+  type RiskEvidenceSummary,
+  type RiskEvidenceTrigger,
   SIGNUP_RISK_REVIEW_STATES,
   SIGNUP_RISK_SIGNALS,
   type SignupRiskReviewState,
@@ -263,6 +273,29 @@ const UserModerationSchema = new Schema(
     throttledUntil: { type: Date, default: null },
     appealedAt: { type: Date, default: null },
     appealText: { type: String, default: null },
+  },
+  { _id: false }
+);
+
+const UserThrottleSchema = new Schema(
+  {
+    tier: { type: String, enum: [...THROTTLE_TIERS], required: true },
+    reason: { type: String, required: true },
+    source: { type: String, enum: [...THROTTLE_SOURCES], required: true },
+    changedAt: { type: Date, required: true },
+    changedBy: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const UserRiskSignalSchema = new Schema(
+  {
+    type: {
+      type: String,
+      enum: [...USER_RISK_SIGNAL_TYPES],
+      required: true,
+    },
+    at: { type: Date, required: true },
   },
   { _id: false }
 );
@@ -975,6 +1008,92 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  async claimRiskEvidenceRefresh(
+    userId: string,
+    { now, staleBefore, trigger }: { now: Date; staleBefore: Date; trigger: RiskEvidenceTrigger }
+  ): Promise<boolean> {
+    const result = await this.model
+      .updateOne(
+        {
+          _id: userId,
+          $or: [
+            { 'riskEvidence.refresh.pendingSince': null },
+            { 'riskEvidence.refresh.pendingSince': { $lt: staleBefore } },
+          ],
+        },
+        { $set: { 'riskEvidence.refresh.pendingSince': now, 'riskEvidence.refresh.lastTrigger': trigger } }
+      )
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
+  async releaseRiskEvidenceRefresh(userId: string, claimedAt: Date): Promise<void> {
+    // Matching on claimedAt so a stale refresh cannot drop a newer request's claim.
+    await this.model
+      .updateOne(
+        { _id: userId, 'riskEvidence.refresh.pendingSince': claimedAt },
+        { $set: { 'riskEvidence.refresh.pendingSince': null } }
+      )
+      .exec();
+  }
+
+  async setRiskEvidenceSummary(userId: string, summary: RiskEvidenceSummary): Promise<boolean> {
+    const result = await this.model
+      .updateOne(
+        {
+          _id: userId,
+          $or: [
+            { 'riskEvidence.summary.computedAt': null },
+            { 'riskEvidence.summary.computedAt': { $lt: summary.computedAt } },
+          ],
+        },
+        {
+          $set: {
+            'riskEvidence.summary': summary,
+            'riskEvidence.refresh.lastFailureAt': null,
+            'riskEvidence.refresh.lastFailure': null,
+          },
+        }
+      )
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
+  async recordRiskEvidenceFailure(userId: string, failure: { at: Date; error: string }): Promise<void> {
+    await this.model
+      .updateOne(
+        { _id: userId },
+        {
+          $set: {
+            'riskEvidence.refresh.lastFailureAt': failure.at,
+            'riskEvidence.refresh.lastFailure': failure.error.slice(0, 200),
+          },
+        }
+      )
+      .exec();
+  }
+
+  async riskEvidenceCoverage(since: Date): Promise<RiskEvidenceCoverage> {
+    const isType = (path: string, type: string) => ({ $eq: [{ $type: path }, type] });
+    const countIf = (condition: unknown) => ({ $sum: { $cond: [condition, 1, 0] } });
+    const [row] = await this.model.aggregate<RiskEvidenceCoverage>([
+      { $match: { createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          accounts: { $sum: 1 },
+          withSignupMeta: countIf(isType('$signupMeta', 'object')),
+          withJa4: countIf(isType('$signupMeta.ja4', 'string')),
+          withWafSignals: countIf({
+            $and: [isType('$signupMeta.wafAnonIp', 'bool'), isType('$signupMeta.wafBotSignal', 'bool')],
+          }),
+        },
+      },
+      { $project: { _id: 0 } },
+    ]);
+    return row ?? { accounts: 0, withSignupMeta: 0, withJa4: 0, withWafSignals: 0 };
+  }
+
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores the
    * appeal text so admins can review it alongside the user's escalation state. Returns the
@@ -1046,6 +1165,28 @@ const RiskScoreSchema = new Schema(
     ],
     computedAt: { type: Date, required: true },
     reviewState: { type: String, required: true, enum: [...SIGNUP_RISK_REVIEW_STATES] },
+  },
+  { _id: false }
+);
+
+const RiskEvidenceSchema = new Schema(
+  {
+    // Shape owned by riskEvidenceSummarySchema (Zod): validated on write and on read, versioned, so
+    // an old summary is never misread after the shape changes.
+    summary: { type: Schema.Types.Mixed, required: false, default: undefined },
+    refresh: {
+      type: new Schema(
+        {
+          pendingSince: { type: Date, default: null },
+          lastTrigger: { type: String, enum: [...RISK_EVIDENCE_TRIGGERS], default: null },
+          lastFailureAt: { type: Date, default: null },
+          lastFailure: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+    },
   },
   { _id: false }
 );
@@ -1135,6 +1276,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Per-user moderation tracking + auto-throttle/suspend state.
     // Lazily populated - undefined until the user's first moderation hit.
     moderation: { type: UserModerationSchema, required: false, default: undefined },
+    throttle: { type: UserThrottleSchema, required: false, default: undefined },
+    riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
@@ -1372,6 +1515,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
     // Recomputed by userService.refreshSignupRiskScore - see IUser.riskScore.
     riskScore: { type: RiskScoreSchema, required: false, default: undefined },
+    // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
+    riskEvidence: { type: RiskEvidenceSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },

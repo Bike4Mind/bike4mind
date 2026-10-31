@@ -7,6 +7,10 @@
  * covered through the legacy routes. Same harness shape as ../../__tests__/scopes.integration.test.ts.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 

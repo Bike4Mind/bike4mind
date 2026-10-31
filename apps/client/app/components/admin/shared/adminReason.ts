@@ -14,6 +14,8 @@ export const ADMIN_REASON_PRESETS = {
   suspension: ['Abuse / automated signups', 'Payment fraud', 'Terms violation', 'Customer request'],
   reinstatement: ['Suspended in error', 'Appeal accepted', 'Issue resolved'],
   restriction: ['Abuse / automated signups', 'Suspicious usage', 'Terms violation', 'Under investigation'],
+  limitedTier: ['Abuse / automated signups', 'Suspicious usage', 'Under investigation'],
+  limitedTierLift: ['Reviewed, not abusive', 'Appeal accepted', 'Applied in error'],
   emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
   profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],

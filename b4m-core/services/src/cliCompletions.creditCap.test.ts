@@ -58,15 +58,29 @@ const hold = usdToCredits(getTextModelCost(MODEL_INFO, INPUT_TOKENS, reservation
 const perOutputTokenCredits = (25 / 1_000_000) * CREDITS_PER_USD_COST;
 const inputCredits = getTextModelCost(MODEL_INFO, INPUT_TOKENS, 0) * CREDITS_PER_USD_COST;
 
-/** A user whose balance moves with every increment, so the test sees what settlement leaves behind. */
+/**
+ * A user whose balance moves with every increment, so the test sees what settlement leaves behind.
+ * `spendAfterNextRead` lands a concurrent completion's spend right after the next balance read.
+ */
 function buildDb(startingBalance: number) {
   let balance = startingBalance;
+  let pendingSpend = 0;
   const users = {
     incrementCredits: vi.fn(async (_id: string, delta: number) => {
       balance += delta;
       return { id: 'user1', currentCredits: balance };
     }),
-    findById: vi.fn(async () => ({ id: 'user1', currentCredits: balance })),
+    decrementCreditsFloored: vi.fn(async (_id: string, credits: number) => {
+      const debited = Math.min(credits, Math.max(balance, 0));
+      balance -= debited;
+      return debited;
+    }),
+    findById: vi.fn(async () => {
+      const read = { id: 'user1', currentCredits: balance };
+      balance -= pendingSpend;
+      pendingSpend = 0;
+      return read;
+    }),
   };
   return {
     db: {
@@ -78,6 +92,9 @@ function buildDb(startingBalance: number) {
     },
     users,
     balance: () => balance,
+    spendAfterNextRead: (credits: number) => {
+      pendingSpend = credits;
+    },
   };
 }
 
@@ -146,6 +163,27 @@ describe('executeCompletion - output capped at what the balance can pay for', ()
     expect(subtractCredits).toHaveBeenCalledWith(
       expect.objectContaining({ credits: startingBalance }),
       expect.anything()
+    );
+  });
+
+  it('holds the floor against a concurrent spend landing between the balance read and settlement', async () => {
+    const startingBalance = hold + 500;
+    const { db, balance, spendAfterNextRead } = buildDb(startingBalance);
+    const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
+    llm.complete.mockImplementation(async (_model, _messages, _options, cb) => {
+      await cb([''], { inputTokens: 200_000, outputTokens: 100_000 });
+      // The settlement read sees the whole balance, then another completion spends 300 of it.
+      spendAfterNextRead(300);
+    });
+
+    await executeCompletion({ ...baseParams, db, logger: logger as any });
+
+    expect(balance()).toBe(0);
+    // The hold plus the 200 the racing spend left, not the 500 the read promised.
+    expect(subtractCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: hold + 200 }), expect.anything());
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('charged down to zero'),
+      expect.objectContaining({ charged: hold + 200 })
     );
   });
 });

@@ -14,7 +14,7 @@ describe('projectService - removeSessions (narrowed writes)', () => {
   let db: {
     users: { findById: Mock };
     projects: { shareable: { findAccessibleById: Mock }; update: Mock };
-    sessions: { shareable: { findAllAccessibleByIds: Mock }; update: Mock };
+    sessions: { shareable: { findAllAccessibleByIds: Mock; updateUserShares: Mock }; update: Mock };
   };
   let project: { id: string; userId: string; sessionIds: string[] };
   let sessions: { id: string; userId: string; users: Grant[] }[];
@@ -47,7 +47,7 @@ describe('projectService - removeSessions (narrowed writes)', () => {
         update: vi.fn(async () => project),
       },
       sessions: {
-        shareable: { findAllAccessibleByIds: vi.fn(async () => sessions) },
+        shareable: { findAllAccessibleByIds: vi.fn(async () => sessions), updateUserShares: vi.fn() },
         update: vi.fn(async () => undefined),
       },
     };
@@ -66,10 +66,10 @@ describe('projectService - removeSessions (narrowed writes)', () => {
         db,
       } as unknown as Parameters<typeof removeSessions>[2])
     ).rejects.toBeInstanceOf(ForbiddenError);
-    expect(db.sessions.update).not.toHaveBeenCalled();
+    expect(db.sessions.shareable.updateUserShares).not.toHaveBeenCalled();
   });
 
-  it('writes narrowed per-session and project partials', async () => {
+  it('drops the project grants from each session and writes a narrowed project partial', async () => {
     await removeSessions(
       OWNER_ID,
       { projectId: PROJECT_ID, sessionIds: [SESSION_A, SESSION_B] },
@@ -77,12 +77,11 @@ describe('projectService - removeSessions (narrowed writes)', () => {
       { db } as unknown as Parameters<typeof removeSessions>[2]
     );
 
-    expect(db.sessions.update).toHaveBeenCalledTimes(2);
-    expect(db.sessions.update.mock.calls[0][0]).toStrictEqual({
-      id: SESSION_A,
-      users: [{ userId: 'member-2', permissions: [Permission.read], projectId: 'other-project' }],
-    });
-    expect(db.sessions.update.mock.calls[1][0]).toStrictEqual({ id: SESSION_B, users: [] });
+    expect(db.sessions.update).not.toHaveBeenCalled();
+    expect(db.sessions.shareable.updateUserShares.mock.calls).toStrictEqual([
+      [SESSION_A, { remove: { projectId: PROJECT_ID } }],
+      [SESSION_B, { remove: { projectId: PROJECT_ID } }],
+    ]);
 
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({

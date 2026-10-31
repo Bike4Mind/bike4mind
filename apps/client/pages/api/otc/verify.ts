@@ -7,6 +7,8 @@ import {
   UnprocessableEntityError,
   isOAuthClientIdShape,
   redactUserSecretsForSelf,
+  throttleSourceForSignal,
+  type UserRiskSignalType,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -20,6 +22,7 @@ import {
   oauthClientRepository,
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { withTransaction } from '@bike4mind/db-core';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
 import { isPartnerDomainSignupAllowed } from '@server/utils/auth/partnerSignupBypass';
@@ -62,6 +65,7 @@ import { randomUUID } from 'crypto';
 import * as z from 'zod';
 import { selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
+import { recordAdminActionForActor, systemAuditActor } from '@server/utils/adminAudit';
 
 interface PendingTokenPayload {
   email: string;
@@ -81,6 +85,21 @@ function parseSourceClientId(value: unknown): string | undefined {
 // Existing-user login spreads the self-view user at the top level next to the access token.
 const otcLoginResponseSchema = selfUserResponseSchema.extend({ accessToken: z.string() });
 const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, accessToken: z.string() });
+
+// Re-read at verify so turning the kill switch off also stops codes issued before the change. A failed
+// read keeps applying, matching what send stored.
+async function isSignupBotChecksEnabled(logger: { warn: (...args: unknown[]) => void }): Promise<boolean> {
+  try {
+    const settings = await getSettingsMap(
+      { adminSettings: adminSettingsRepository },
+      { names: ['signupBotChecksEnabled'] }
+    );
+    return getSettingsValue('signupBotChecksEnabled', settings, true);
+  } catch (err) {
+    logger.warn('signup bot-check setting read failed; applying stored signals', err);
+    return true;
+  }
+}
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -147,13 +166,17 @@ const handler = baseApi({ auth: false })
     // below to retry). A stale/replayed token, or one whose record holds no code hash,
     // fails this check -> generic invalid. The code hash is only ever read from here.
     const newNonce = randomUUID();
-    const otcHash = await pendingOtcTokenRepository.validateAndRotateNonce(normalizedEmail, tokenPayload.jti, newNonce);
-    if (!otcHash) {
+    const pendingCode = await pendingOtcTokenRepository.validateAndRotateNonce(
+      normalizedEmail,
+      tokenPayload.jti,
+      newNonce
+    );
+    if (!pendingCode) {
       await budget.refund();
       throw new UnprocessableEntityError('Invalid code.');
     }
 
-    const isValid = await userService.verifyPendingOTC(code, otcHash);
+    const isValid = await userService.verifyPendingOTC(code, pendingCode.otcHash);
     if (!isValid) {
       // Re-issue the token with an incremented attempt count + the rotated nonce so
       // the user can retry. Identical response for existing and non-existent accounts
@@ -525,6 +548,45 @@ const handler = baseApi({ auth: false })
       const promoted = await userRepository.update({ id: newUser.id, isAdmin: true });
       if (promoted) newUser = promoted;
       req.logger.info('Self-host bootstrap: first registered user promoted to admin', { userId: newUser.id });
+    }
+
+    // Best-effort: a failure here must neither fail the signup nor change the response.
+    // Signals are written by otc/send only, from the closed UserRiskSignalType set.
+    const signals = (pendingCode.riskSignals ?? []) as UserRiskSignalType[];
+    const botChecksEnabled = signals.length > 0 && (await isSignupBotChecksEnabled(req.logger));
+    if (signals.length && botChecksEnabled && newUser?.id) {
+      const signalLog = { userId: newUser.id, signals };
+      let step = 'record risk signals';
+      try {
+        await userRepository.update({
+          id: newUser.id,
+          riskSignals: signals.map(type => ({ type, at: new Date() })),
+        });
+        // Missing or expired form tokens are record-only: the token fetch can be in flight, fail, be rate-limited, or the tab left open.
+        // Too-fast alone is record-only too (autofill + Enter can beat the timer); it rides along with a stronger signal.
+        const recordOnly: UserRiskSignalType[] = ['signup_token_missing', 'signup_token_expired', 'signup_too_fast'];
+        const actionable = signals.filter(s => !recordOnly.includes(s));
+        if (actionable.length) {
+          step = 'set throttle tier';
+          const tierChange = await userService.setThrottleTier(
+            newUser.id,
+            'shadow',
+            { reason: `signup checks: ${signals.join(',')}`, source: throttleSourceForSignal(actionable[0]) },
+            { db: { users: userRepository } }
+          );
+          if (tierChange.changed) {
+            step = 'record audit entry';
+            await recordAdminActionForActor(req, systemAuditActor('signup-checks'), {
+              action: 'user.throttle_tier.changed',
+              target: { kind: 'user', id: newUser.id, displayName: normalizedEmail },
+              summary: `set the restricted tier to ${tierChange.after} (source: signup checks, signals: ${signals.join(',')})`,
+              changes: [{ field: 'throttle.tier', before: tierChange.before, after: tierChange.after }],
+            });
+          }
+        }
+      } catch (err) {
+        req.logger.error(`OTC signup signal application failed: ${step}`, { ...signalLog, err });
+      }
     }
 
     // registerViaOTC set emailVerified=true, so the now-verified domain may confer its signup

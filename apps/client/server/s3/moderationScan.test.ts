@@ -29,6 +29,7 @@ vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUplo
 
 import {
   claimModerationScan,
+  ModerationVersionRaceError,
   normalizeETag,
   recordLandedObject,
   releaseModerationClaim,
@@ -49,7 +50,7 @@ describe('recordLandedObject', () => {
   });
 
   it('uses current storage truth for a delayed event and preserves the current terminal verdict', async () => {
-    await recordLandedObject('ff1', 'uploads/f.png');
+    await recordLandedObject('ff1', 'uploads/f.png', logger);
     expect(h.getMetadata).toHaveBeenCalledWith('uploads/f.png');
     expect(h.updateOne).not.toHaveBeenCalled();
     expect(h.findById.mock.invocationCallOrder[0]).toBeLessThan(h.getMetadata.mock.invocationCallOrder[0]);
@@ -57,7 +58,7 @@ describe('recordLandedObject', () => {
 
   it('compares-and-sets the observed row before resetting a genuine overwrite', async () => {
     h.getMetadata.mockResolvedValue({ etag: '"etag-c"' });
-    await recordLandedObject('ff1', 'uploads/f.png');
+    await recordLandedObject('ff1', 'uploads/f.png', logger);
     expect(h.updateOne).toHaveBeenCalledWith(
       { _id: 'ff1', moderationETag: 'etag-b', moderationRevision: null },
       expect.any(Array)
@@ -67,27 +68,46 @@ describe('recordLandedObject', () => {
 
   it('retries a failed HEAD without changing the verdict', async () => {
     h.getMetadata.mockRejectedValueOnce(new Error('head unavailable'));
-    await expect(recordLandedObject('ff1', 'uploads/f.png')).rejects.toThrow('head unavailable');
+    await expect(recordLandedObject('ff1', 'uploads/f.png', logger)).rejects.toThrow('head unavailable');
     expect(h.updateOne).not.toHaveBeenCalled();
   });
 
   it.each([undefined, null, ''])('retries a missing ETag %j without changing the verdict', async etag => {
     h.getMetadata.mockResolvedValue({ etag });
-    await expect(recordLandedObject('ff1', 'uploads/f.png')).rejects.toThrow('No ETag');
+    await expect(recordLandedObject('ff1', 'uploads/f.png', logger)).rejects.toThrow('No ETag');
     expect(h.updateOne).not.toHaveBeenCalled();
   });
 
-  it('retries when another reconciliation changed the observed version during HEAD', async () => {
-    h.getMetadata.mockResolvedValue({ etag: 'etag-a' });
-    h.updateOne.mockResolvedValue({ matchedCount: 0 });
+  it('re-reads and settles inline when a concurrent reconciliation wins the first race', async () => {
+    h.getMetadata.mockResolvedValue({ etag: 'etag-c' });
+    h.updateOne.mockResolvedValueOnce({ matchedCount: 0 });
     h.findById
+      .mockReturnValueOnce({ select: () => ({ lean: async () => ({ moderationETag: 'etag-a' }) }) })
       .mockReturnValueOnce({ select: () => ({ lean: async () => ({ moderationETag: 'etag-b' }) }) })
-      .mockReturnValueOnce({ select: () => ({ lean: async () => ({ moderationETag: 'etag-c' }) }) });
-    await expect(recordLandedObject('ff1', 'uploads/f.png')).rejects.toThrow('retry the landing');
-    expect(h.updateOne).toHaveBeenCalledWith(
-      { _id: 'ff1', moderationETag: 'etag-b', moderationRevision: null },
+      .mockReturnValueOnce({
+        select: () => ({ lean: async () => ({ moderationETag: 'etag-b', moderationRevision: 1 }) }),
+      });
+    await expect(recordLandedObject('ff1', 'uploads/f.png', logger)).resolves.toBeUndefined();
+    expect(h.updateOne).toHaveBeenLastCalledWith(
+      { _id: 'ff1', moderationETag: 'etag-b', moderationRevision: 1 },
       expect.any(Array)
     );
+    expect((logger as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledTimes(1);
+    expect((logger as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
+  });
+
+  it('throws a typed race error once every attempt loses, so the landing retries', async () => {
+    h.getMetadata.mockResolvedValue({ etag: 'etag-a' });
+    h.updateOne.mockResolvedValue({ matchedCount: 0 });
+    let revision = 0;
+    h.findById.mockImplementation(() => ({
+      select: () => ({ lean: async () => ({ moderationETag: `etag-${++revision}` }) }),
+    }));
+    const landing = recordLandedObject('ff1', 'uploads/f.png', logger);
+    await expect(landing).rejects.toBeInstanceOf(ModerationVersionRaceError);
+    await expect(landing).rejects.toThrow('retry the landing');
+    expect(h.updateOne).toHaveBeenCalledTimes(3);
+    expect((logger as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledTimes(2);
   });
 
   it('resolves when the racing writer already recorded the same version', async () => {
@@ -96,7 +116,7 @@ describe('recordLandedObject', () => {
     h.findById
       .mockReturnValueOnce({ select: () => ({ lean: async () => ({ moderationETag: 'etag-b' }) }) })
       .mockReturnValueOnce({ select: () => ({ lean: async () => ({ moderationETag: 'etag-a' }) }) });
-    await expect(recordLandedObject('ff1', 'uploads/f.png')).resolves.toBeUndefined();
+    await expect(recordLandedObject('ff1', 'uploads/f.png', logger)).resolves.toBeUndefined();
   });
 });
 

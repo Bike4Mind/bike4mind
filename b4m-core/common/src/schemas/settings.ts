@@ -466,6 +466,9 @@ export const SettingKeySchema = z.enum([
   'signupBurstThreshold',
   'signupBurstWindowHours',
   'signupBurstAutoHold',
+  'otcLimitFormTokenPerIp',
+  'signupMinSubmitMs',
+  'signupBotChecksEnabled',
   'enableDomainIntelligence',
   'holdSignupsFromDomainsYoungerThanDays',
   'domainIntelligenceTimeoutMs',
@@ -492,6 +495,15 @@ export const SettingKeySchema = z.enum([
   'newAccountSpendCapDays',
   'newAccountHourlySpendCapCredits',
   'newAccountDailySpendCapCredits',
+  'spendMonitorEnabled',
+  'spendMonitorSlackEnabled',
+  'spendMonitorPlatformSpikeRatio',
+  'spendMonitorPlatformCriticalRatio',
+  'spendMonitorPlatformSpikeFloorCredits',
+  'spendMonitorPlatformCostFloorUsd',
+  'spendMonitorAccountSpikeRatio',
+  'spendMonitorAccountSpikeFloorCredits',
+  'spendMonitorAccountCeilingCredits',
   'stagedSignupGrantEnabled',
   'signupGrantCredits',
   'verifiedUnlockCredits',
@@ -692,6 +704,9 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitProPerMin',
   'apiRateLimitCreditsPerMin',
   'apiKeyAccess',
+  'shadowTierModelAllowlist',
+  'shadowTierRequestsPerMin',
+  'shadowTierDailyTokenCap',
 
   // FREE-TIER MODEL ALLOWLIST
   'freeTierModelGateEnabled',
@@ -2243,6 +2258,15 @@ export const API_SERVICE_GROUPS = {
       { key: 'newAccountSpendCapDays', order: 19.1 },
       { key: 'newAccountHourlySpendCapCredits', order: 19.2 },
       { key: 'newAccountDailySpendCapCredits', order: 19.3 },
+      { key: 'spendMonitorEnabled', order: 19.41 },
+      { key: 'spendMonitorSlackEnabled', order: 19.42 },
+      { key: 'spendMonitorPlatformSpikeRatio', order: 19.43 },
+      { key: 'spendMonitorPlatformCriticalRatio', order: 19.44 },
+      { key: 'spendMonitorPlatformSpikeFloorCredits', order: 19.45 },
+      { key: 'spendMonitorPlatformCostFloorUsd', order: 19.46 },
+      { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
+      { key: 'spendMonitorAccountSpikeFloorCredits', order: 19.48 },
+      { key: 'spendMonitorAccountCeilingCredits', order: 19.49 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
       { key: 'turnstileFailClosed', order: 22 },
@@ -2273,6 +2297,11 @@ export const API_SERVICE_GROUPS = {
       { key: 'paymentRiskCheckoutMaxBlockedAttempts', order: 47 },
       { key: 'paymentRiskCheckoutBlockedWindowMinutes', order: 48 },
       { key: 'paymentRiskLinkedAccountActions', order: 49 },
+      { key: 'signupMinSubmitMs', order: 50 },
+      { key: 'signupBotChecksEnabled', order: 51 },
+      { key: 'shadowTierModelAllowlist', order: 52 },
+      { key: 'shadowTierRequestsPerMin', order: 53 },
+      { key: 'shadowTierDailyTokenCap', order: 54 },
     ],
   },
   KNOWLEDGE: {
@@ -2432,6 +2461,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'otcLimitSendPerIpDaily', order: 8 },
       { key: 'otcLimitVerifyPerEmailPerIp', order: 9 },
       { key: 'otcLimitVerifyPerIp', order: 10 },
+      { key: 'otcLimitFormTokenPerIp', order: 11 },
     ],
   },
   AUTH_ABUSE: {
@@ -3542,7 +3572,7 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description:
-      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Payments made while both payment rewards are 0 are not counted.",
     category: 'Referrals',
   }),
   ReferralSecondPaymentCredits: makeNumberSetting({
@@ -3553,7 +3583,7 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description:
-      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Payments made while both payment rewards are 0 are not counted.",
     category: 'Referrals',
   }),
   ReferralHoldDays: makeNumberSetting({
@@ -3564,7 +3594,7 @@ export const settingsMap = {
     min: 0,
     max: 365,
     description:
-      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward. Not active yet: takes effect once inviter rewards ship.',
+      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward.',
     category: 'Referrals',
   }),
   ReferralInvitesPerUser: makeNumberSetting({
@@ -3957,15 +3987,15 @@ export const settingsMap = {
       'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the Default Free Credits grant is then applied after they verify their email (anti-spam — see Default Free Credits). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
     category: 'Users',
   }),
-  // Personal API key trust gate. A trusted account has a verified email AND one of: a
-  // purchase or active plan, an account older than apiKeyMinAccountAgeDays, or admin
-  // approval (user.apiKeyTrustApproved). See userApiKeyService/trust.ts.
+  // New-account trust gate for API keys and outbound actions (see assertOutboundActionAllowed). A trusted
+  // account has a verified email AND one of: a purchase or active plan, an account older than
+  // apiKeyMinAccountAgeDays, or admin approval (user.apiKeyTrustApproved). See userApiKeyService/trust.ts.
   apiKeyTrustGateEnabled: makeBooleanSetting({
     key: 'apiKeyTrustGateEnabled',
     name: 'API Key Trust Gate',
     defaultValue: true,
     description:
-      'Restricts personal API key creation for untrusted accounts: an unverified email cannot mint keys, and a verified account that has not purchased, is younger than the minimum age and is not admin-approved is limited to the untrusted key cap. Off restores unrestricted minting and lifts the untrusted rate limit. Changes reach running servers within about 5 minutes (settings cache).',
+      'Restricts personal API key creation for untrusted accounts: an unverified email cannot mint keys, and a verified account that has not purchased, is younger than the minimum age and is not admin-approved is limited to the untrusted key cap. The same trust check blocks untrusted accounts from outbound actions (email send, invites, tools, agent helpers, publishing). Off restores unrestricted minting and lifts the untrusted rate limit and outbound block (moderated accounts stay blocked). Changes reach running servers within about 5 minutes (settings cache).',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 1,
@@ -3977,7 +4007,8 @@ export const settingsMap = {
     min: 0,
     max: 365,
     int: true,
-    description: 'Account age, in days, after which a verified account is trusted for API keys without a purchase.',
+    description:
+      'Account age, in days, after which a verified account is trusted for API keys and outbound actions without a purchase.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 2,
@@ -4264,6 +4295,19 @@ export const settingsMap = {
     category: 'SecOps',
     group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
     order: 10,
+  }),
+  otcLimitFormTokenPerIp: makeNumberSetting({
+    key: 'otcLimitFormTokenPerIp',
+    name: 'Sign-in Codes: Form Token: Per IP (per hour)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 600,
+    int: true,
+    description: 'Sign-in form tokens one IP may fetch in an hour. Built-in: 600. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 11,
   }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',
@@ -4703,6 +4747,101 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
+  spendMonitorEnabled: makeBooleanSetting({
+    key: 'spendMonitorEnabled',
+    name: 'Spend Monitor: Enabled',
+    defaultValue: true,
+    description:
+      'Run the 5-minute credit spend detector. OFF stops detection and alerting; rollups are no longer written either.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorSlackEnabled: makeBooleanSetting({
+    key: 'spendMonitorSlackEnabled',
+    name: 'Spend Monitor: Post Alerts to Slack',
+    defaultValue: false,
+    description:
+      'Post spend alerts to the alarms channel. OFF (default) records alerts silently so a new deployment can be watched before anyone is paged.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorPlatformSpikeRatio: makeNumberSetting({
+    key: 'spendMonitorPlatformSpikeRatio',
+    name: 'Spend Monitor: Platform Spike Ratio',
+    defaultValue: 3,
+    int: false,
+    min: 1,
+    description:
+      'Ratio. Raises a platform spike alert when platform-wide credit spend in the last 15-minute window is at least this multiple of the baseline for the same window. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorPlatformCriticalRatio: makeNumberSetting({
+    key: 'spendMonitorPlatformCriticalRatio',
+    name: 'Spend Monitor: Platform Critical Ratio',
+    defaultValue: 6,
+    int: false,
+    min: 1,
+    description:
+      'Ratio. Escalates a platform spike to critical when platform-wide credit spend in the last 15-minute window is at least this multiple of the baseline. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorPlatformSpikeFloorCredits: makeNumberSetting({
+    key: 'spendMonitorPlatformSpikeFloorCredits',
+    name: 'Spend Monitor: Platform Spike Floor',
+    defaultValue: 5000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. A platform spike alert needs at least this much spend in the window, so a high ratio on a tiny baseline stays quiet. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorPlatformCostFloorUsd: makeNumberSetting({
+    key: 'spendMonitorPlatformCostFloorUsd',
+    name: 'Spend Monitor: Platform Cost Floor',
+    defaultValue: 20,
+    int: true,
+    min: 1,
+    description:
+      'USD per 15-minute window. A platform provider-cost spike alert needs at least this much provider cost in the window. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAccountSpikeRatio: makeNumberSetting({
+    key: 'spendMonitorAccountSpikeRatio',
+    name: 'Spend Monitor: Account Spike Ratio',
+    defaultValue: 10,
+    int: false,
+    min: 1,
+    description:
+      'Ratio. Raises an account spike alert when one account has credit spend in the last 15-minute window at least this multiple of its own baseline. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAccountSpikeFloorCredits: makeNumberSetting({
+    key: 'spendMonitorAccountSpikeFloorCredits',
+    name: 'Spend Monitor: Account Spike Floor',
+    defaultValue: 1000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. An account spike alert needs at least this much spend by the account in the window. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAccountCeilingCredits: makeNumberSetting({
+    key: 'spendMonitorAccountCeilingCredits',
+    name: 'Spend Monitor: Account Ceiling',
+    defaultValue: 5000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. Any single account spending this much in the window raises an alert regardless of its baseline. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
   teamPlanMinSeats: makeNumberSetting({
     key: 'teamPlanMinSeats',
     // Read by the create-team and billing UIs for non-admin org owners.
@@ -5084,6 +5223,56 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
       'When an account is locked, banned, suspended, disputed or fraud-warned, lock other accounts that paid with the same card and alert on accounts sharing only its network. Also refuses checkout to an account linked to a blocked one.',
+  }),
+  signupMinSubmitMs: makeNumberSetting({
+    key: 'signupMinSubmitMs',
+    name: 'Signup Minimum Submit Time (ms)',
+    defaultValue: 1500,
+    min: 0,
+    max: 60000,
+    description:
+      'A signup form submitted faster than this after the page fetched its form token is recorded as a risk signal on the new account. The submission itself is never rejected.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  signupBotChecksEnabled: makeBooleanSetting({
+    key: 'signupBotChecksEnabled',
+    name: 'Signup Bot Checks',
+    defaultValue: true,
+    description:
+      'Records risk signals (hidden field filled, missing or invalid form token, too-fast submit) at signup and places flagged new accounts in the restricted tier. Turn OFF to stop recording signals.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  shadowTierModelAllowlist: makeObjectSetting<string[]>({
+    key: 'shadowTierModelAllowlist',
+    name: 'Restricted Tier Model Allowlist',
+    defaultValue: ['gpt-5.4-nano', 'gemini-3.1-flash-lite'],
+    description:
+      'Models available to users in the restricted tier. A request for any other model runs on the first entry that is available to the caller; if none is available on this deployment, the requested model runs (the daily cap still applies). Must contain at least one model id.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    schema: z.array(z.string()).min(1),
+  }),
+  shadowTierRequestsPerMin: makeNumberSetting({
+    key: 'shadowTierRequestsPerMin',
+    name: 'Restricted Tier Rate Limit (requests/min)',
+    defaultValue: 3,
+    min: 1,
+    max: 1000,
+    description: 'Max requests per minute, per endpoint, for users in the restricted tier, on sessions and API keys.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+  }),
+  shadowTierDailyTokenCap: makeNumberSetting({
+    key: 'shadowTierDailyTokenCap',
+    name: 'Restricted Tier Daily Token Cap',
+    defaultValue: 20000,
+    min: 1000,
+    max: 10_000_000,
+    description: 'Max input plus output tokens per UTC day for users in the restricted tier.',
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',

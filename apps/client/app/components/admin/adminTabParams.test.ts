@@ -97,6 +97,34 @@ describe('Users tab params', () => {
   });
 });
 
+describe('Users tab analytics drill-down params', () => {
+  const drillDown = {
+    tab: 'users',
+    page: 1,
+    createdFrom: '2026-10-01T00:00:00.000Z',
+    createdTo: '2026-11-01T00:00:00.000Z',
+    verdict: 'suspected',
+    funnelStep: 'firstAction',
+    activeFrom: '2026-10-03',
+    activeTo: '2026-10-03',
+  };
+
+  it('keeps each key through validateSearch and drops an invalid one', () => {
+    expect(parseAdminSearch(drillDown)).toMatchObject(drillDown);
+    expect(
+      parseAdminSearch({ tab: 'users', verdict: 'maybe', funnelStep: 'bought', activeFrom: '2026-13-01', activeTo: 7 })
+    ).toMatchObject({ verdict: undefined, funnelStep: undefined, activeFrom: undefined, activeTo: undefined });
+  });
+
+  it('keeps them on the users tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(parseAdminSearch(drillDown), 'users')).toMatchObject(drillDown);
+    const switched = adminSearchForTab(parseAdminSearch(drillDown), 'admin-settings');
+    for (const key of ['verdict', 'funnelStep', 'activeFrom', 'activeTo'] as const) {
+      expect(switched[key], key).toBeUndefined();
+    }
+  });
+});
+
 describe('Feedback tab params', () => {
   const feedbackSearch = {
     tab: 'feedback',

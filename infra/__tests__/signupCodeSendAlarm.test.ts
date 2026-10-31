@@ -14,7 +14,6 @@ const resources = vi.hoisted(() => {
     alarm: vi.fn(function (_name: string, _args: Record<string, unknown>) {}),
     logGroup: { name: 'server-logs' } as { name: string } | undefined,
     topic: { arn: 'alarm-topic' } as { arn: string } | undefined,
-    oobTopic: { arn: 'email-topic' } as { arn: string } | undefined,
     hasServer: true,
   };
 });
@@ -31,9 +30,6 @@ vi.mock('../web', () => ({
 vi.mock('../dlqAlarms', () => ({
   get dlqAlarmTopic() {
     return resources.topic;
-  },
-  get oobAlarmTopic() {
-    return resources.oobTopic;
   },
 }));
 
@@ -56,7 +52,6 @@ beforeEach(() => {
   vi.stubGlobal('aws', { cloudwatch: { LogMetricFilter: resources.filter, MetricAlarm: resources.alarm } });
   resources.logGroup = { name: 'server-logs' };
   resources.topic = { arn: 'alarm-topic' };
-  resources.oobTopic = { arn: 'email-topic' };
   resources.hasServer = true;
 });
 afterEach(() => {
@@ -104,8 +99,8 @@ describe('signup code send alarm wiring', () => {
       metricName: 'SignupGrant_review',
       threshold: 7,
       period: 300,
-      alarmActions: ['alarm-topic', 'email-topic'],
-      okActions: ['alarm-topic', 'email-topic'],
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
     });
   });
 
@@ -155,8 +150,8 @@ describe('signup code send alarm wiring', () => {
       statistic: 'Sum',
       threshold: 12,
       treatMissingData: 'notBreaching',
-      alarmActions: ['alarm-topic', 'email-topic'],
-      okActions: ['alarm-topic', 'email-topic'],
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
       tags: { Application: 'Signup', Severity: 'Medium' },
     });
   });
@@ -174,8 +169,8 @@ describe('signup code send alarm wiring', () => {
       statistic: 'Sum',
       threshold: 15,
       treatMissingData: 'notBreaching',
-      alarmActions: ['alarm-topic', 'email-topic'],
-      okActions: ['alarm-topic', 'email-topic'],
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
       tags: { Application: 'Signup', Severity: 'High' },
     });
   });
@@ -200,8 +195,8 @@ describe('signup code send alarm wiring', () => {
       statistic: 'Sum',
       threshold: 10,
       comparisonOperator: 'GreaterThanOrEqualToThreshold',
-      alarmActions: ['alarm-topic', 'email-topic'],
-      okActions: ['alarm-topic', 'email-topic'],
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
     });
     const pattern = callFor(resources.filter, 'apiKeyCreationsFilter')?.pattern;
     if (typeof pattern !== 'string') throw new Error('Missing metric filter pattern');
@@ -268,10 +263,6 @@ describe('signup code send alarm wiring', () => {
   it('fails loudly when alarm routing is missing', async () => {
     resources.topic = undefined;
     await expect(loadAlarms()).rejects.toThrow('alarm routing requires dlqAlarmTopic');
-  });
-  it('fails loudly when email routing is missing', async () => {
-    resources.oobTopic = undefined;
-    await expect(loadAlarms()).rejects.toThrow('oobAlarmTopic');
   });
   it('fails loudly when the server is missing', async () => {
     resources.hasServer = false;
