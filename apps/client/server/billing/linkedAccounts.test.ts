@@ -10,7 +10,6 @@ const mocks = vi.hoisted(() => ({
   claimStep: vi.fn(),
   flagDisputePending: vi.fn(),
   postMessageToSlack: vi.fn(),
-  cancelAccountSubscriptions: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -39,9 +38,6 @@ vi.mock('@bike4mind/server-utils/auth/signupNetworkSignals', () => ({
 // Loaded through subscriptionLifecycle (admin links); its model needs a real mongoose.
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
-vi.mock('@server/billing/cancelAccountSubscriptions', () => ({
-  cancelAccountSubscriptions: mocks.cancelAccountSubscriptions,
-}));
 
 import { findLinkedAccounts, lockIfPaidWithBlockedCard, propagateAccountRisk } from './linkedAccounts';
 
@@ -61,7 +57,6 @@ const state = (id: string, overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.settings = {};
-  mocks.cancelAccountSubscriptions.mockResolvedValue({ canceled: [], failed: [] });
   mocks.linkKeysForUser.mockResolvedValue({ cardFingerprints: ['fp_1'], ipHashes: ['hash:pay'] });
   mocks.findLinkedUserIds.mockResolvedValue({ byCard: ['u2'], byNetwork: ['u2', 'u3'] });
   mocks.findIdsBySignupIp.mockResolvedValue(['u4']);
@@ -132,22 +127,6 @@ describe('propagateAccountRisk', () => {
     expect(message).toContain('Review (shared network only, not locked)');
     expect(message).toContain('`u3`');
     expect(message).not.toContain('`u4`');
-  });
-
-  it('cancels the subscriptions of each account it locks, and names them in the alert', async () => {
-    mocks.findLinkStatesByIds.mockImplementation(async (ids: string[]) =>
-      ids.map(id => state(id, id === 'u4' ? { isBanned: true } : {}))
-    );
-    mocks.cancelAccountSubscriptions.mockResolvedValue({ canceled: ['sub_linked'], failed: [] });
-
-    await propagateAccountRisk(input, logger);
-
-    expect(mocks.cancelAccountSubscriptions).toHaveBeenCalledTimes(1);
-    expect(mocks.cancelAccountSubscriptions).toHaveBeenCalledWith(
-      { userId: 'u2', reason: 'payment_risk_lock' },
-      logger
-    );
-    expect(mocks.postMessageToSlack.mock.calls[0][0]).toContain('`sub_linked`');
   });
 
   it('locks again on a redelivery but does not alert twice', async () => {
