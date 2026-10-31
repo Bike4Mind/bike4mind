@@ -2,6 +2,20 @@ import { transformSync } from 'esbuild';
 
 const CLOUDFRONT_FUNCTION_MAX_BYTES = 10_240;
 
+export function pinUrlOriginHost(code: string): string {
+  const urlOrigin =
+    /function setUrlOrigin\(urlHost,\s*override\)\s*\{\s*setForwardedHost\(\);\s*const origin\s*=\s*\{\s*domainName:\s*urlHost,/g;
+  if ([...code.matchAll(urlOrigin)].length !== 1) {
+    throw new Error('SST URL origin helper changed; review Host forwarding before deploying the router');
+  }
+  // Forwarding viewer headers must not send the app hostname to a Lambda function URL.
+  return code.replace(urlOrigin, '$&\n    hostHeader: urlHost,');
+}
+
+export function prepareRouterRequestFunction(code: string): string {
+  return minifyRouterFunction(pinUrlOriginHost(code));
+}
+
 export function minifyRouterFunction(code: string): string {
   // Preserve CloudFront's handler name and SST's identifiers; remove formatting and comments.
   const minified = transformSync(code, {

@@ -7,12 +7,12 @@ import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/use
 import { isPreviewStage } from './constants';
 import {
   USER_FILE_MARKER_HEADER,
-  minifyRouterFunction,
   noindexResponseInjection,
+  prepareRouterRequestFunction,
   userFileCdnPrefixes as bareUserFileCdnPrefixes,
   userFileCspInjection as userFileCspInjectionFor,
 } from './routerFunctionCode';
-import { CLOUDFRONT_VIEWER_JA4_HEADER } from '../packages/server-utils/src/utils/trustedClientIpHeaders';
+import { AUTH_NETWORK_HEADERS, authNetworkCacheBehaviors, authNetworkJa4Injection } from './authNetworkForwarding';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -135,9 +135,7 @@ export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
 export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
 const originVerifyInjection = $interpolate`
-  // Drops a viewer-forged copy. AWS docs show computed cloudfront-viewer-* headers already present here,
-  // so this may also drop the real JA4: remove it before adding JA4 to the origin request policy.
-  delete event.request.headers["${CLOUDFRONT_VIEWER_JA4_HEADER}"];
+  ${authNetworkJa4Injection}
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
 
@@ -165,7 +163,7 @@ const devCorsInjection = `
 // that exceeds CloudFront's 10 KB limit. Transform only this Router's generated request code.
 $transform(aws.cloudfront.Function, (args, _opts, name) => {
   if (name !== 'RouterCloudfrontFunctionRequest') return;
-  args.code = $output(args.code).apply(minifyRouterFunction);
+  args.code = $output(args.code).apply(prepareRouterRequestFunction);
 });
 
 // CloudFront caps functions per account, and every preview's viewer-response code is the same
@@ -174,6 +172,24 @@ $transform(aws.cloudfront.Function, (args, _opts, name) => {
 // today's per-stage function; the shared one is never created or deleted by a stage.
 const sharedResponseFunctionArn =
   isPreviewStage && !$dev ? process.env.PREVIEW_SHARED_RESPONSE_FUNCTION_ARN || undefined : undefined;
+
+// CloudFront caps custom origin request policies per account (20 by default), so like the cache
+// policy above, a deployer can point every stage at one account-level policy instead of each
+// creating its own. docs/ja4-forwarding.md has the matching create command.
+const sharedAuthNetworkOriginRequestPolicyId = process.env.AUTH_NETWORK_ORIGIN_REQUEST_POLICY_ID || undefined;
+
+const authNetworkOriginRequestPolicyId = shouldUseSharedRouter
+  ? undefined
+  : (sharedAuthNetworkOriginRequestPolicyId ??
+    new aws.cloudfront.OriginRequestPolicy('AuthNetworkOriginRequestPolicy', {
+      comment: 'Forward trusted connection metadata on authentication requests',
+      headersConfig: {
+        headerBehavior: 'allViewerAndWhitelistCloudFront',
+        headers: { items: AUTH_NETWORK_HEADERS },
+      },
+      cookiesConfig: { cookieBehavior: 'all' },
+      queryStringsConfig: { queryStringBehavior: 'all' },
+    }).id);
 
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
@@ -262,6 +278,21 @@ const routerInstance = shouldUseSharedRouter
                 { eventType: 'viewer-response', functionArn: sharedResponseFunctionArn },
               ]),
             };
+          }
+
+          // The request-function transform pins origin Host separately from the viewer hostname.
+          // Keep x-forwarded-host, cookies, Authorization and the existing cache/edge settings.
+          // Scope this policy to auth so S3 keeps the managed policy's response-* query filtering.
+          if (authNetworkOriginRequestPolicyId && args.defaultCacheBehavior) {
+            const existing = args.orderedCacheBehaviors as
+              aws.types.input.cloudfront.DistributionOrderedCacheBehavior[] | undefined;
+            args.orderedCacheBehaviors = [
+              ...(existing ?? []),
+              ...authNetworkCacheBehaviors(
+                args.defaultCacheBehavior as aws.types.input.cloudfront.DistributionDefaultCacheBehavior,
+                authNetworkOriginRequestPolicyId
+              ),
+            ];
           }
 
           // Attach the WAF if enabled (ENABLE_WAF=true): the stage-owned ACL, or the
