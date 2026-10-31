@@ -29,7 +29,7 @@ import {
 } from '../backend';
 import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
-import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
+import { capCacheControlMarkers, getCachingAdapter, withRequestTtlMarkers } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { sortToolsForStableCacheKey } from '../caching/stableToolOrder';
 import { DispatchModel } from '../dispatchModel';
@@ -1194,6 +1194,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       );
     }
 
+    // A caller's own content-block markers ride in on `messages` untouched; Bedrock reports no 5m/1h
+    // split, so on a 1h request they must write at 1h to match what settlement charges.
+    if (cacheStrategy?.cacheTTL === '1h') Object.assign(body, withRequestTtlMarkers(body, cacheControl));
     Object.assign(body, capCacheControlMarkers(body));
 
     return {

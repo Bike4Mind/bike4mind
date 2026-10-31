@@ -111,3 +111,75 @@ describe('AnthropicBedrockBackend history cache breakpoint', () => {
     expect(sent.some(message => 'cache' in message)).toBe(false);
   });
 });
+
+// Bedrock reports cache writes without a 5m/1h split, so settlement prices every write at the request
+// TTL. A caller's own marker therefore has to carry that TTL, or its 5m writes bill at the 1h rate.
+describe('AnthropicBedrockBackend caller cache_control on a 1h request', () => {
+  const callerMarked: IMessage[] = [
+    { role: 'system', content: 'Stable head.' },
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Long document', cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: 'Question about it' },
+      ] as IMessage['content'],
+    },
+  ];
+  const sentContent = (strategy: ICacheStrategy): unknown => {
+    const payload = backend.getPayload(ChatModels.CLAUDE_4_6_SONNET_BEDROCK, callerMarked, {
+      cacheStrategy: strategy,
+      maxTokens: 1024,
+    });
+    return (JSON.parse(payload.body) as { messages: Array<{ content: unknown }> }).messages[0]?.content;
+  };
+
+  // A one-shot call from a non-CLI caller: the server places no breakpoint of its own.
+  const oneShot: ICacheStrategy = { ...cacheStrategy, enableCaching: false, cacheConversationHistory: false };
+
+  it('stamps the request TTL onto a caller marker', () => {
+    expect(sentContent({ ...oneShot, cacheTTL: '1h' })).toEqual([
+      { type: 'text', text: 'Long document', cache_control: { type: 'ephemeral', ttl: '1h' } },
+      { type: 'text', text: 'Question about it' },
+    ]);
+  });
+
+  it('stamps a caller marker nested in a tool_result body', () => {
+    const payload = backend.getPayload(
+      ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
+      [
+        { role: 'user', content: 'What time is it?' },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'current_datetime', input: {} }] as IMessage['content'],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_1',
+              content: [{ type: 'text', text: 'noon', cache_control: { type: 'ephemeral' } }],
+            },
+          ] as IMessage['content'],
+        },
+      ],
+      { cacheStrategy: { ...oneShot, cacheTTL: '1h' }, maxTokens: 1024 }
+    );
+    const sent = (JSON.parse(payload.body) as { messages: Array<{ content: unknown }> }).messages;
+
+    expect(sent.at(-1)?.content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'toolu_1',
+        content: [{ type: 'text', text: 'noon', cache_control: { type: 'ephemeral', ttl: '1h' } }],
+      },
+    ]);
+  });
+
+  it('leaves a caller marker as sent on a 5m request', () => {
+    expect(sentContent({ ...oneShot, cacheTTL: '5m' })).toEqual([
+      { type: 'text', text: 'Long document', cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: 'Question about it' },
+    ]);
+  });
+});
