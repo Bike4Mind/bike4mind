@@ -178,7 +178,7 @@ describe('LLM spend metric filters', () => {
 });
 
 describe('LLM spend alarms', () => {
-  it.each(PROVIDERS)('alarms on 5-minute %s spend and routes ALARM and OK to Slack and email', async provider => {
+  it.each(PROVIDERS)('alarms on 5-minute %s spend and routes ALARM and OK to Slack', async provider => {
     await load();
     expect(resources.alarm).toHaveBeenCalledWith(`llmSpendRate-${provider}`, {
       name: `test-app-production-llm-spend-rate-${provider}`,
@@ -232,8 +232,8 @@ describe('LLM spend alarms', () => {
       statistic: 'Sum',
       threshold: 3,
       treatMissingData: 'notBreaching',
-      alarmActions: ['alarm-topic', 'email-topic'],
-      okActions: ['alarm-topic', 'email-topic'],
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
       tags: { Application: 'LLMSpend', Severity: 'High' },
     });
   });
