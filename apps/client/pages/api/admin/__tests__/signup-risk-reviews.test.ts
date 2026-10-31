@@ -274,6 +274,21 @@ describe('signup risk review queue', () => {
     expect(res._getJSONData()).toMatchObject({ updatedUserIds: [USER_A], grantReleasedUserIds: [USER_A] });
   });
 
+  it('does not report a payout for an account whose approval did not land', async () => {
+    h.release.mockResolvedValue(500);
+    h.setState.mockResolvedValue(false);
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON });
+
+    await h.handlers.post(req, res);
+
+    expect(res._getJSONData()).toEqual({
+      updatedUserIds: [],
+      skippedUserIds: [USER_A],
+      failedUserIds: [],
+      ...NO_GRANT_RELEASES,
+    });
+  });
+
   it('leaves the account pending for a retry when the held tranche cannot be paid', async () => {
     h.release.mockRejectedValue(new Error('ledger unavailable'));
     const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON });

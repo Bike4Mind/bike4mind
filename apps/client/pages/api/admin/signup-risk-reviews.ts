@@ -136,6 +136,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         try {
           // Pay before approving: a failed payout leaves the account pending, so the admin can retry it
           // from this queue. A retry after a paid-but-unapproved attempt finds nothing held.
+          let paid = false;
           if (parsed.data.action === 'approve') {
             const credits = await releaseRiskReviewedSignupGrant(userId, {
               reason,
@@ -150,7 +151,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
                 });
               },
             });
-            if (credits > 0) grantReleasedUserIds.push(userId);
+            paid = credits > 0;
           }
           // A strict audit entry rides in the same transaction, so an unrecorded decision rolls back.
           const moved = await withTransaction(async () => {
@@ -165,6 +166,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
             return true;
           });
           (moved ? updatedUserIds : skippedUserIds).push(userId);
+          if (moved && paid) grantReleasedUserIds.push(userId);
         } catch (error) {
           req.logger.error('Signup risk review decision failed for user', { userId, error });
           failedUserIds.push(userId);
