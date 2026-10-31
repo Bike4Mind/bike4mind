@@ -44,6 +44,9 @@ export function isYoungAccount(createdAt: Date | null | undefined, now: Date = n
 }
 
 export function llmUsageSettledFields(usage: LlmUsageSettled, now: Date = new Date()) {
+  // toISOString throws on an invalid date, which would drop the whole spend line from the metrics.
+  const createdAt = usage.accountCreatedAt ? new Date(usage.accountCreatedAt) : undefined;
+  const accountCreatedAt = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toISOString() : undefined;
   return {
     provider: llmSpendProvider(usage.backend),
     backend: usage.backend,
@@ -56,7 +59,7 @@ export function llmUsageSettledFields(usage: LlmUsageSettled, now: Date = new Da
     source: usage.source,
     isYoungAccount: isYoungAccount(usage.accountCreatedAt, now),
     ...(usage.userId ? { userId: String(usage.userId) } : {}),
-    ...(usage.accountCreatedAt ? { accountCreatedAt: new Date(usage.accountCreatedAt).toISOString() } : {}),
+    ...(accountCreatedAt ? { accountCreatedAt } : {}),
   };
 }
 

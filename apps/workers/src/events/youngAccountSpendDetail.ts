@@ -27,6 +27,8 @@ const RESULT_ROW_LIMIT = 500;
 /** Well inside the relay's 60-second timeout; a typical hour of lines answers in a few seconds. */
 const QUERY_DEADLINE_MS = 25_000;
 const POLL_INTERVAL_MS = 1_000;
+/** StopQuery is best-effort cleanup; it must not eat the time left for the Slack post. */
+const STOP_TIMEOUT_MS = 2_000;
 /** Slack caps a section's text at 3000 characters. */
 const SECTION_TEXT_MAX = 2_900;
 
@@ -52,6 +54,12 @@ export interface YoungAccountSpender {
   accountCreatedAt?: Date;
   /** Highest spend first. */
   models: { model: string; usd: number }[];
+}
+
+export interface YoungAccountSpend {
+  spenders: YoungAccountSpender[];
+  /** The query hit RESULT_ROW_LIMIT, so smaller (account, model) pairs are missing from the sums. */
+  truncated: boolean;
 }
 
 export interface SpendWindow {
@@ -117,40 +125,61 @@ export function aggregateSpenders(rows: ResultField[][]): YoungAccountSpender[] 
 
 const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
-/** Runs the query for the window and waits for it, giving up (and stopping it) at the deadline. */
+/**
+ * Runs the query for the window and waits for it. Every call shares one deadline signal, so a
+ * hung request cannot outlive it either; a query left running on any failure is stopped.
+ */
 export async function fetchYoungAccountSpenders(
   window: SpendWindow,
   options: FetchOptions
-): Promise<YoungAccountSpender[]> {
+): Promise<YoungAccountSpend> {
   const client = options.client ?? (defaultClient ??= new CloudWatchLogsClient({}));
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
-  const deadline = now() + (options.deadlineMs ?? QUERY_DEADLINE_MS);
+  const deadlineMs = options.deadlineMs ?? QUERY_DEADLINE_MS;
+  const deadline = now() + deadlineMs;
+  const abortSignal = AbortSignal.timeout(deadlineMs);
+  const timedOut = () => new Error('Logs Insights query did not finish in time');
 
-  const started = await client.send(
-    new StartQueryCommand({
-      logGroupName: options.logGroup,
-      startTime: Math.floor(window.start.getTime() / 1000),
-      endTime: Math.ceil(window.end.getTime() / 1000),
-      queryString: YOUNG_ACCOUNT_SPEND_QUERY,
-      limit: RESULT_ROW_LIMIT,
-    })
-  );
-  const queryId = started.queryId;
-  if (!queryId) throw new Error('Logs Insights returned no query id');
+  let queryId: string | undefined;
+  let settled = false;
+  try {
+    const started = await client.send(
+      new StartQueryCommand({
+        logGroupName: options.logGroup,
+        startTime: Math.floor(window.start.getTime() / 1000),
+        endTime: Math.ceil(window.end.getTime() / 1000),
+        queryString: YOUNG_ACCOUNT_SPEND_QUERY,
+        limit: RESULT_ROW_LIMIT,
+      }),
+      { abortSignal }
+    );
+    queryId = started.queryId;
+    if (!queryId) throw new Error('Logs Insights returned no query id');
 
-  for (;;) {
-    const result = await client.send(new GetQueryResultsCommand({ queryId }));
-    const status = result.status ?? 'Unknown';
-    if (status === 'Complete') return aggregateSpenders(result.results ?? []);
-    if (status === 'Failed' || status === 'Cancelled' || status === 'Timeout') {
-      throw new Error(`Logs Insights query ${status.toLowerCase()}`);
+    for (;;) {
+      const result = await client.send(new GetQueryResultsCommand({ queryId }), { abortSignal });
+      const status = result.status ?? 'Unknown';
+      if (status === 'Complete') {
+        settled = true;
+        const rows = result.results ?? [];
+        return { spenders: aggregateSpenders(rows), truncated: rows.length >= RESULT_ROW_LIMIT };
+      }
+      if (status === 'Failed' || status === 'Cancelled' || status === 'Timeout') {
+        settled = true;
+        throw new Error(`Logs Insights query ${status.toLowerCase()}`);
+      }
+      if (now() >= deadline) throw timedOut();
+      await sleep(POLL_INTERVAL_MS);
     }
-    if (now() >= deadline) {
-      await client.send(new StopQueryCommand({ queryId })).catch(() => undefined);
-      throw new Error('Logs Insights query did not finish in time');
+  } catch (error) {
+    throw abortSignal.aborted ? timedOut() : error;
+  } finally {
+    if (queryId && !settled) {
+      await client
+        .send(new StopQueryCommand({ queryId }), { abortSignal: AbortSignal.timeout(STOP_TIMEOUT_MS) })
+        .catch(() => undefined);
     }
-    await sleep(POLL_INTERVAL_MS);
   }
 }
 
@@ -194,7 +223,7 @@ export function formatSpenderLine(
 /** One mrkdwn section listing the top accounts; capped by count and by Slack's section size. */
 export function formatYoungAccountSpenders(
   spenders: YoungAccountSpender[],
-  options: { windowEnd: Date; appUrl?: string; limit?: number }
+  options: { windowEnd: Date; appUrl?: string; limit?: number; truncated?: boolean }
 ): string {
   if (spenders.length === 0) {
     return `${SECTION_TITLE}\nNo account is named on the spend lines for this window.`;
@@ -203,7 +232,13 @@ export function formatYoungAccountSpenders(
   const lines = spenders.slice(0, limit).map((s, i) => formatSpenderLine(s, i + 1, options.windowEnd, options.appUrl));
   const assemble = () => {
     const rest = spenders.length - lines.length;
-    const footer = rest > 0 ? `and ${rest} more ${rest === 1 ? 'account' : 'accounts'}` : undefined;
+    const noun = rest === 1 ? 'account' : 'accounts';
+    // Past the row limit the tail is unseen, so the count is a floor and the sums may run short.
+    const footer = options.truncated
+      ? `and ${rest > 0 ? `at least ${rest} more ${noun}` : 'possibly more accounts'} (query capped at ${RESULT_ROW_LIMIT} rows)`
+      : rest > 0
+        ? `and ${rest} more ${noun}`
+        : undefined;
     return [SECTION_TITLE, ...lines, footer].filter(Boolean).join('\n');
   };
   let text = assemble();
@@ -229,8 +264,8 @@ export async function youngAccountSpendSection(
   const window = alarmWindow(alarm);
   if (!window) return fallback('Not available: the alarm did not say which window breached.');
   try {
-    const spenders = await (options.fetch ?? fetchYoungAccountSpenders)(window, { logGroup });
-    return formatYoungAccountSpenders(spenders, { windowEnd: window.end, appUrl: options.appUrl });
+    const { spenders, truncated } = await (options.fetch ?? fetchYoungAccountSpenders)(window, { logGroup });
+    return formatYoungAccountSpenders(spenders, { windowEnd: window.end, appUrl: options.appUrl, truncated });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.warn(`[youngAccountSpendDetail] could not list accounts for ${alarm.AlarmName}: ${reason}`);

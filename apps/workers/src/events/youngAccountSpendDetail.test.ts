@@ -163,6 +163,19 @@ describe('formatYoungAccountSpenders', () => {
     expect(text.split('\n').length).toBeLessThan(6);
   });
 
+  it('says the count is a floor when the query hit its row limit', () => {
+    const many: YoungAccountSpender[] = Array.from({ length: 8 }, (_, i) => ({
+      userId: `u${i}`,
+      usd: 8 - i,
+      calls: 1,
+      models: [],
+    }));
+    const lines = formatYoungAccountSpenders(many, { windowEnd, truncated: true }).split('\n');
+    expect(lines[lines.length - 1]).toBe('and at least 3 more accounts (query capped at 500 rows)');
+    const few = formatYoungAccountSpenders(many.slice(0, 2), { windowEnd, truncated: true }).split('\n');
+    expect(few[few.length - 1]).toBe('and possibly more accounts (query capped at 500 rows)');
+  });
+
   it('says so when no line named an account', () => {
     expect(formatYoungAccountSpenders([], { windowEnd })).toBe(
       `${SECTION_TITLE}\nNo account is named on the spend lines for this window.`
@@ -191,8 +204,13 @@ describe('fetchYoungAccountSpenders', () => {
   it('starts the query over the window, polls until complete, and aggregates', async () => {
     const logs = client([{ queryId: 'q1' }, { status: 'Running' }, { status: 'Complete', results: rows }]);
     const sleep = vi.fn(async () => {});
-    const spenders = await fetchYoungAccountSpenders(window, { logGroup: '/sst/chat', client: logs, sleep });
+    const { spenders, truncated } = await fetchYoungAccountSpenders(window, {
+      logGroup: '/sst/chat',
+      client: logs,
+      sleep,
+    });
     expect(spenders.map(s => s.userId)).toEqual(['u1', 'u2', 'u3']);
+    expect(truncated).toBe(false);
     expect(logs.sent[0]).toBeInstanceOf(StartQueryCommand);
     expect(logs.sent[0].input).toMatchObject({
       logGroupName: '/sst/chat',
@@ -204,11 +222,41 @@ describe('fetchYoungAccountSpenders', () => {
     expect(sleep).toHaveBeenCalledTimes(1);
   });
 
-  it('throws when the query fails', async () => {
+  it('flags a result that filled the row limit as truncated', async () => {
+    const full = Array.from({ length: 500 }, (_, i) => row({ userId: `u${i}`, model: 'm', spend: '0.01', calls: '1' }));
+    const logs = client([{ queryId: 'q1' }, { status: 'Complete', results: full }]);
+    const result = await fetchYoungAccountSpenders(window, { logGroup: '/sst/chat', client: logs });
+    expect(result.truncated).toBe(true);
+  });
+
+  it('throws when the query fails, without stopping a query that already ended', async () => {
     const logs = client([{ queryId: 'q1' }, { status: 'Failed' }]);
     await expect(fetchYoungAccountSpenders(window, { logGroup: '/sst/chat', client: logs })).rejects.toThrow(
       'Logs Insights query failed'
     );
+    expect(logs.sent.some(c => c instanceof StopQueryCommand)).toBe(false);
+  });
+
+  it('stops the query when a poll throws', async () => {
+    const logs = client([{ queryId: 'q1' }, new Error('ThrottlingException'), {}]);
+    await expect(fetchYoungAccountSpenders(window, { logGroup: '/sst/chat', client: logs })).rejects.toThrow(
+      'ThrottlingException'
+    );
+    expect(logs.sent[logs.sent.length - 1]).toBeInstanceOf(StopQueryCommand);
+  });
+
+  it('bounds every request by the deadline, so a hung call cannot outlive it', async () => {
+    const logs: LogsClient = {
+      send: vi.fn(
+        (_command: unknown, options?: { abortSignal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            options?.abortSignal?.addEventListener('abort', () => reject(new Error('Request aborted')));
+          })
+      ) as unknown as LogsClient['send'],
+    };
+    await expect(
+      fetchYoungAccountSpenders(window, { logGroup: '/sst/chat', client: logs, deadlineMs: 20 })
+    ).rejects.toThrow('did not finish in time');
   });
 
   it('stops the query and throws at the deadline', async () => {
@@ -233,7 +281,7 @@ describe('fetchYoungAccountSpenders', () => {
 describe('youngAccountSpendSection', () => {
   it('renders the accounts for the alarm window using the configured log group', async () => {
     vi.stubEnv('LLM_SPEND_LOG_GROUP', '/sst/chat');
-    const fetch = vi.fn(async () => aggregateSpenders(rows));
+    const fetch = vi.fn(async () => ({ spenders: aggregateSpenders(rows), truncated: false }));
     const text = await youngAccountSpendSection(hourly, { appUrl: 'https://app.example.com', fetch });
     expect(fetch).toHaveBeenCalledWith(
       { start: new Date('2026-10-31T00:17:00.000Z'), end: windowEnd },
@@ -244,7 +292,7 @@ describe('youngAccountSpendSection', () => {
 
   it('says why when no log group is configured, and never queries', async () => {
     vi.stubEnv('LLM_SPEND_LOG_GROUP', '');
-    const fetch = vi.fn(async () => []);
+    const fetch = vi.fn(async () => ({ spenders: [], truncated: false }));
     expect(await youngAccountSpendSection(hourly, { fetch })).toBe(
       `${SECTION_TITLE}\nNot available: the alarm relay has no spend log group configured.`
     );
@@ -252,7 +300,7 @@ describe('youngAccountSpendSection', () => {
   });
 
   it('says why when the alarm carries no window', async () => {
-    const fetch = vi.fn(async () => []);
+    const fetch = vi.fn(async () => ({ spenders: [], truncated: false }));
     const text = await youngAccountSpendSection(
       { ...hourly, NewStateReason: 'Set by hand', Trigger: undefined },
       { logGroup: '/sst/chat', fetch }

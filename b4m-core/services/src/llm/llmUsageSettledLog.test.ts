@@ -106,6 +106,23 @@ describe('llmUsageSettledFields', () => {
       userId: '507f1f77bcf86cd799439011',
     });
   });
+  it('still writes the line, without the creation date, when that date is invalid', () => {
+    const fields = llmUsageSettledFields(
+      {
+        backend: 'openai',
+        model: 'gpt-4.1',
+        inputTokens: 1,
+        outputTokens: 1,
+        usd: 0.1,
+        source: 'api',
+        userId: 'u1',
+        accountCreatedAt: new Date('not a date'),
+      },
+      now
+    );
+    expect(fields).toMatchObject({ userId: 'u1', isYoungAccount: false, usd: 0.1 });
+    expect(fields).not.toHaveProperty('accountCreatedAt');
+  });
   it('never emits a non-finite usd', () => {
     const fields = llmUsageSettledFields({
       backend: 'openai',

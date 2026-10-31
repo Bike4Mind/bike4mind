@@ -166,7 +166,8 @@ When it (or the 5-minute `llm-spend-young-accounts` alarm) fires, the Slack rela
 over the ChatCompletion log group for the breaching window and adds a "Top
 accounts in the window" section: up to five accounts with id, estimated USD,
 call count, age at the end of the window, top models, and an admin-page link.
-The sum matches the alarm's measured value because both read the same lines.
+The sum matches the alarm's measured value because both read the same lines
+(unless the query hits its 500-row cap, which the post then says).
 Lines logged before `userId` was added are skipped. The relay has `logs:StartQuery`
 on that log group only and a 60-second timeout; a query that fails or runs past
 its 25-second budget leaves a one-line note in the post instead of blocking it.
