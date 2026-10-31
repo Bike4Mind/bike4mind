@@ -387,6 +387,27 @@ describe('adminUpdateUser - lastCreditsPurchasedAt', () => {
     expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
   });
 
+  it('strips throttleTier and throttleReason from the doc write', async () => {
+    const { adapters, update } = makeAdapters(100);
+
+    await adminUpdateUser(
+      ADMIN_ID,
+      { id: TARGET_ID, tags: ['vip'], throttleTier: 'shadow', throttleReason: 'bulk signups' },
+      adapters
+    );
+
+    const written = update.mock.calls[0][0];
+    expect(written).toHaveProperty('tags');
+    expect(written).not.toHaveProperty('throttleTier');
+    expect(written).not.toHaveProperty('throttleReason');
+  });
+
+  it('leaves a blank throttleReason for the route to reject as a 400', () => {
+    expect(
+      adminUpdateUserSchema.safeParse({ id: TARGET_ID, throttleTier: 'shadow', throttleReason: '   ' }).success
+    ).toBe(true);
+  });
+
   it('omits lastCreditsPurchasedAt from the write for an edit that touches no credits', async () => {
     const { adapters, update, target } = makeAdapters(12000);
     target.lastCreditsPurchasedAt = PRIOR_PURCHASE;

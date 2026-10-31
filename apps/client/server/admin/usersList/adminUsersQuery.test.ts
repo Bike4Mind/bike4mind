@@ -131,6 +131,51 @@ describe('buildAdminUsersMatch hasApiKey', () => {
   });
 });
 
+describe('buildAdminUsersMatch analytics cohorts', () => {
+  const id = 'c'.repeat(24);
+  const createdFrom = '2026-10-01T00:00:00.000Z';
+  const createdTo = '2026-11-01T00:00:00.000Z';
+  const resolved = {
+    ...context,
+    verdictUserIds: [id, 'not-an-object-id'],
+    activeUserIds: ['d'.repeat(24)],
+    funnelStepUserIds: [],
+  };
+
+  it('matches the resolved verdict cohort by _id inside the created window', () => {
+    expect(conditionsOf(buildAdminUsersMatch({ verdict: 'legit', createdFrom, createdTo }, resolved))).toEqual([
+      { createdAt: { $gte: new Date(createdFrom), $lt: new Date(createdTo) } },
+      { _id: { $in: [{ objectId: id }] } },
+    ]);
+  });
+
+  it('matches the users active in the window', () => {
+    expect(conditionsOf(buildAdminUsersMatch({ activeFrom: '2026-10-03', activeTo: '2026-10-03' }, resolved))).toEqual([
+      { _id: { $in: [{ objectId: 'd'.repeat(24) }] } },
+    ]);
+  });
+
+  it('matches nobody when the funnel step resolved to no users', () => {
+    expect(conditionsOf(buildAdminUsersMatch({ funnelStep: 'paid', createdFrom, createdTo }, resolved)).at(-1)).toEqual(
+      {
+        _id: { $in: [] },
+      }
+    );
+  });
+
+  it('refuses a cohort filter whose users were not resolved', () => {
+    expect(() => buildAdminUsersMatch({ verdict: 'suspected', createdFrom, createdTo }, context)).toThrow(
+      'verdictUserIds'
+    );
+    expect(() => buildAdminUsersMatch({ activeFrom: '2026-10-01', activeTo: '2026-10-07' }, context)).toThrow(
+      'activeUserIds'
+    );
+    expect(() => buildAdminUsersMatch({ funnelStep: 'signedUp', createdFrom, createdTo }, context)).toThrow(
+      'funnelStepUserIds'
+    );
+  });
+});
+
 describe('adminUsersSort', () => {
   it('breaks ties on _id in the same direction', () => {
     expect(adminUsersSort('currentCredits', 'asc')).toEqual({ currentCredits: 1, _id: 1 });
@@ -157,5 +202,51 @@ describe('AdminUsersQuerySchema', () => {
   it('normalizes a domain and rejects one that is not', () => {
     expect(AdminUsersQuerySchema.parse({ emailDomain: ' Example.COM ' }).emailDomain).toBe('example.com');
     expect(AdminUsersQuerySchema.safeParse({ emailDomain: 'a$b' }).success).toBe(false);
+  });
+
+  const month = { createdFrom: '2026-10-01T00:00:00.000Z', createdTo: '2026-11-01T00:00:00.000Z' };
+  const issuesOf = (query: Record<string, string>) => {
+    const parsed = AdminUsersQuerySchema.safeParse(query);
+    return parsed.success ? [] : parsed.error.issues.map(issue => issue.message);
+  };
+
+  it('takes a verdict or funnel step only with a created window of at most 93 days', () => {
+    expect(AdminUsersQuerySchema.parse({ ...month, verdict: 'legit', funnelStep: 'cameBack' })).toMatchObject({
+      verdict: 'legit',
+      funnelStep: 'cameBack',
+    });
+    expect(issuesOf({ verdict: 'legit', createdFrom: month.createdFrom })).toEqual([
+      'verdict needs both createdFrom and createdTo',
+    ]);
+    expect(issuesOf({ funnelStep: 'paid' })).toEqual(['funnelStep needs both createdFrom and createdTo']);
+    expect(
+      issuesOf({ verdict: 'legit', createdFrom: month.createdFrom, createdTo: '2027-01-03T00:00:00.000Z' })
+    ).toEqual([expect.stringContaining('at most 93 days')]);
+    expect(issuesOf({ verdict: 'legit', createdFrom: month.createdTo, createdTo: month.createdFrom })).toHaveLength(1);
+    // The window alone keeps its old meaning, with no span cap.
+    expect(issuesOf({ createdFrom: '2020-01-01T00:00:00.000Z', createdTo: month.createdTo })).toEqual([]);
+  });
+
+  it('takes an active window of real UTC days, both ends, in order, at most 366 days', () => {
+    expect(AdminUsersQuerySchema.parse({ activeFrom: '2026-10-03', activeTo: '2026-10-03' })).toMatchObject({
+      activeFrom: '2026-10-03',
+      activeTo: '2026-10-03',
+    });
+    expect(issuesOf({ activeFrom: '2025-10-01', activeTo: '2026-10-01' })).toEqual([]);
+    expect(issuesOf({ activeFrom: '2025-10-01', activeTo: '2026-10-02' })).toEqual([
+      expect.stringContaining('at most 366 days'),
+    ]);
+    expect(issuesOf({ activeFrom: '2026-10-03' })).toEqual(['activeFrom and activeTo must be set together']);
+    expect(issuesOf({ activeTo: '2026-10-03' })).toEqual(['activeFrom and activeTo must be set together']);
+    expect(issuesOf({ activeFrom: '2026-10-04', activeTo: '2026-10-03' })).toEqual([
+      'activeTo must not be before activeFrom',
+    ]);
+    expect(issuesOf({ activeFrom: '2026-02-30', activeTo: '2026-03-01' })).toHaveLength(1);
+    expect(issuesOf({ activeFrom: '2026-10-03T00:00:00Z', activeTo: '2026-10-04' })).toHaveLength(1);
+  });
+
+  it('rejects unknown verdicts and funnel steps', () => {
+    expect(issuesOf({ ...month, verdict: 'unclassified' })).toHaveLength(1);
+    expect(issuesOf({ ...month, funnelStep: 'bought' })).toHaveLength(1);
   });
 });

@@ -12,6 +12,7 @@ import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { withEventContext } from '@workers/utils/eventContext';
 import { postNewPaidSubscriptionToSlack } from '@server/integrations/slack/subscriptionLifecycle';
 import { emitPurchaseEvents } from '@server/analytics/signupEvents';
+import { recordSubscriptionPaymentReward } from '@server/referrals/subscriptionReward';
 import { unlockSignupGrantFromSubscription } from '@server/credits/subscriptionUnlock';
 
 export const handler = withEventContext(async (event, logger) => {
@@ -121,5 +122,6 @@ export const handler = withEventContext(async (event, logger) => {
       currency: invoice.currency,
       billingReason: invoice.billing_reason,
     });
+    await recordSubscriptionPaymentReward({ invoice, subscription, payerId: metadata.userId });
   }
 });

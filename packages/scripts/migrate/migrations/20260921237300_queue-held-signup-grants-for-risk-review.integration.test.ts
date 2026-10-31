@@ -5,7 +5,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921237000_queue-held-signup-grants-for-risk-review';
+import migration from './20260921237300_queue-held-signup-grants-for-risk-review';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

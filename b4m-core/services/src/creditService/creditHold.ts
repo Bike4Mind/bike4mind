@@ -121,9 +121,7 @@ export async function holdCredits(
     }
     const availableCredits = reservedHolder.currentCredits + requiredCredits;
     throw insufficientCreditsError(
-      organization
-        ? `Your organization does not have enough credits for ${featureLabel}. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
-        : `You do not have enough credits for ${featureLabel}. You currently have ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+      holdInsufficientCreditsMessage(featureLabel, availableCredits, requiredCredits, Boolean(organization))
     );
   }
 
@@ -221,4 +219,16 @@ export async function settleCreditHold(
     });
   }
   return charged;
+}
+
+/** The copy a refused hold carries; shared so other refusals on held routes read the same. */
+export function holdInsufficientCreditsMessage(
+  featureLabel: string,
+  availableCredits: number,
+  requiredCredits: number,
+  isOrganization: boolean
+): string {
+  return isOrganization
+    ? `Your organization does not have enough credits for ${featureLabel}. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+    : `You do not have enough credits for ${featureLabel}. You currently have ${availableCredits} credits and this requires approximately ${requiredCredits}.`;
 }

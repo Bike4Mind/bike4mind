@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ApiKeyScope } from '@bike4mind/common';
 import { toolRoutesRateLimit } from '@server/middlewares/toolRoutesRateLimit';
@@ -17,7 +18,7 @@ const WebFetchBodySchema = z.object({
 // (confined) keys hold neither scope, so they are refused.
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] })
   .use(toolRoutesRateLimit())
-  .post(async (req, res) =>
+  .post(outboundActionGate(), async (req, res) =>
     runAuditedTool('web_fetch', req.user!.id, req.logger, async () => {
       const { url, offset } = WebFetchBodySchema.parse(req.body);
 

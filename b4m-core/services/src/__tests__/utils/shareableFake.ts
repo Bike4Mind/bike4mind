@@ -1,4 +1,6 @@
-import { Permission } from '@bike4mind/common';
+import { IShareableDocument, Permission, UserSharesChange } from '@bike4mind/common';
+import { vi } from 'vitest';
+import { pushShareable } from '../../sharingService/accept';
 
 /**
  * A shareable repository that applies the real grant rules instead of returning a canned value,
@@ -10,7 +12,7 @@ import { Permission } from '@bike4mind/common';
 export interface ShareableFakeDoc {
   id: string;
   userId: string;
-  users?: Array<{ userId: string; permissions: Permission[] | string[]; projectId?: string }>;
+  users?: Array<{ userId: string; permissions: Permission[] | string[]; projectId?: string; sessionId?: string }>;
   groups?: Array<{ groupId: string; permissions: Permission[] | string[] }>;
 }
 
@@ -34,6 +36,21 @@ const holds = (doc: ShareableFakeDoc, actor: ShareableFakeActor, grants: string[
   );
 };
 
+/** In-memory form of the repository's atomic `updateUserShares`, with the same merge rule. */
+export const applyUserSharesChange = <T extends ShareableFakeDoc>(doc: T, { remove, add = [] }: UserSharesChange) => {
+  if (remove) {
+    doc.users = (doc.users ?? []).filter(
+      row =>
+        !(
+          (remove.userId === undefined || row.userId === remove.userId) &&
+          (remove.projectId === undefined || row.projectId === remove.projectId)
+        )
+    );
+  }
+  for (const grant of add) pushShareable(doc as unknown as IShareableDocument, grant);
+  return doc;
+};
+
 export const createShareableFake = <T extends ShareableFakeDoc>(docs: T[]) => {
   const byId = (id: string) => docs.find(doc => doc.id === id);
   const gateOne = (grants: string[]) => async (actor: ShareableFakeActor, id: string) => {
@@ -52,5 +69,9 @@ export const createShareableFake = <T extends ShareableFakeDoc>(docs: T[]) => {
     findUpdateAccessById: gateOne([Permission.update]),
     findAllUpdateAccessByIds: gateMany([Permission.update]),
     findShareAccessById: gateOne([Permission.share]),
+    updateUserShares: vi.fn(async (id: string, change: UserSharesChange) => {
+      const doc = byId(id);
+      return doc ? applyUserSharesChange(doc, change) : null;
+    }),
   };
 };

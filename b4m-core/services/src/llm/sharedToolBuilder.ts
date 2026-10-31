@@ -24,6 +24,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import type { ServerAgentStore } from './agents/ServerAgentStore';
 import type {
+  ServerOrchestratorDeps,
   ServerSubagentTracker,
   SubagentHandoffSignal,
   SubagentToolPermissions,
@@ -96,6 +97,8 @@ export interface ToolBuilderDeps {
   onToolLlmUsage?: ToolContext['onToolLlmUsage'];
   /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
   decide?: ToolContext['decide'];
+  /** Maps a restricted-tier substitute id to the id recorded in usage events (see ToolContext.toLedgerModel). */
+  toLedgerModel?: ToolContext['toLedgerModel'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
   imageProcessorLambdaName?: string;
@@ -114,6 +117,8 @@ export interface ToolBuilderDeps {
    * other model falls back to the parent's (see `ServerSubagentOrchestrator.resolveAgentRuntime`).
    */
   subagentModels?: ModelInfo[];
+  /** Set on a tier-substituted run so in-process subagents keep the requested model's identity; see `ServerOrchestratorDeps.substituteIdentity`. */
+  substituteIdentity?: ServerOrchestratorDeps['substituteIdentity'];
   apiKeyTable?: ApiKeyTable;
   thinking?: { enabled: boolean; budget_tokens: number };
   /** Reasoning visibility for the caller, applied by every subagent this run spawns. */
@@ -439,6 +444,7 @@ export function buildSharedTools(
       slackDestination: callbacks.slackDestination,
       numberCitables: callbacks.numberCitables,
       decide: deps.decide,
+      toLedgerModel: deps.toLedgerModel,
       getAbortSignal,
     },
     storage,
@@ -449,6 +455,7 @@ export function buildSharedTools(
     llm,
     {
       deep_research: config.deep_research,
+      edit_file: config.edit_file,
       image_generation: config.image_generation,
       edit_image: config.image_generation,
       audio_generation: config.audio_generation,
@@ -643,6 +650,7 @@ export function buildSharedTools(
     getSignal: getAbortSignal,
     onCredits: callbacks.onSubagentCredits,
     availableModels: subagentModels,
+    substituteIdentity: deps.substituteIdentity,
     onStatusUpdate: callbacks.onSubagentStatusUpdate
       ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
       : undefined,
@@ -676,6 +684,7 @@ export function buildSharedTools(
       parentTools,
       getSignal: getAbortSignal,
       availableModels: subagentModels,
+      substituteIdentity: deps.substituteIdentity,
       onCredits: callbacks.onSubagentCredits,
       onStatusUpdate: callbacks.onSubagentStatusUpdate
         ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
