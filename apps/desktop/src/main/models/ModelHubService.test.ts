@@ -6,6 +6,7 @@ import {
   LocalRuntimeError,
   ModelNotFoundError,
   RuntimeConnectionError,
+  installedReviewed,
   loadCuratedManifest,
   type HardwareProfile,
   ollamaPullRef,
@@ -31,7 +32,6 @@ import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import {
   ModelHubService,
   toModelHubError,
-  installedReviewed,
   type HubTokenPort,
   type ModelHubPort,
   type ModelRuntimePort,
@@ -314,7 +314,7 @@ describe('ModelHubService pulls', () => {
 
     expect(hub.verifyOllamaRef).toHaveBeenCalledTimes(1);
     expect(runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
-    expect(pulls[0].options).not.toHaveProperty('runner');
+    expect(pulls[0].options?.runner).toBeUndefined();
     pulls[0].options?.onProgress?.({ status: 'pulling abc', completedBytes: 100, totalBytes: 491_400_032 });
     expect(service.pulls()[0]).toMatchObject({ phase: 'downloading', completedBytes: 100, label: 'Q4_K_M' });
 

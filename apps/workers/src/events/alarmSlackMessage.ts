@@ -4,7 +4,9 @@
  *
  * Layout: a top-level header carries stage and level at a glance; the details sit in a
  * colour-barred attachment (red page / amber warn / blue info on production, grey on any other
- * stage, green when resolved). Mentions only ever apply to production page-level alarms.
+ * stage, green when resolved). Mentions only ever apply to production alarms, at page level
+ * unless the setting widens them to warn (see parseMentionSetting). Stages other than production
+ * post page-level alarms only; their warnings are dropped.
  */
 
 import { classifyStage } from '@bike4mind/common';
@@ -36,7 +38,7 @@ export interface AlarmCatalogEntry {
 export interface FormatOptions {
   /** Origin of the app (https://app.example.com). Admin buttons are omitted when unset. */
   appUrl?: string;
-  /** Slack mention token such as <!channel>; applied to production page-level alarms only. */
+  /** Mention setting, as parseMentionSetting reads it; applied to production alarms only. */
   mention?: string;
 }
 
@@ -282,7 +284,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   },
   SuccessfulSignups: {
     title: 'More new accounts than usual',
-    level: 'warn',
+    level: 'page',
     unit: 'new accounts',
     meaning:
       'The hourly census counted more new accounts in one hour than the ceiling. It notifies once per episode and stays on while each following hour also breaches.',
@@ -291,7 +293,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   },
   NewAccountApiKeys: {
     title: 'New accounts are creating API keys fast',
-    level: 'warn',
+    level: 'page',
     unit: 'API keys',
     meaning:
       'Accounts under 24 hours old created more API keys in one hour than the ceiling. Credit farms create keys right after signing up.',
@@ -315,13 +317,32 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   },
   'young-account-spend-rate': {
     title: 'New accounts are spending a lot on AI',
-    level: 'warn',
+    level: 'page',
     unit: 'USD',
     meaning:
       'Accounts under 7 days old spent more estimated AI dollars in one hour than the ceiling. Credit farms spend their free credits fast.',
     action:
       'Read the young-account spend post in LiveOps for the top accounts, then check the signup activity and the WAF block list.',
     links: SIGNUP_LINKS,
+  },
+  'llm-spend-young-accounts': {
+    title: 'Young-account LLM spend is spiking',
+    level: 'page',
+    unit: 'USD',
+    meaning:
+      'Accounts under 7 days old spent more estimated AI dollars in five minutes than the ceiling. New accounts rarely spend this fast on their own.',
+    action:
+      'Read the latest young-account spend post in LiveOps for the top accounts, open them on the admin users page, and suspend any that look like abuse.',
+    links: ['signup-activity'],
+  },
+  'completion-credit-overdraft': {
+    title: 'A completion settled below zero credits',
+    level: 'warn',
+    unit: 'completions',
+    meaning: 'A completion cost more credits than its account held, so the balance is now negative.',
+    action:
+      'Find the account in the ChatCompletion log line, check its credit ledger and recent purchases on the admin users page, and review how the reservation let it through.',
+    links: ['signup-activity'],
   },
   'llm-spend-rate': {
     title: 'AI provider spend is spiking',
@@ -332,6 +353,34 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     action:
       'Open the LLM spend dashboard for the provider and model, then check the agent executions and signup activity.',
     links: ['agent-executions', 'signup-activity'],
+  },
+  'llm-spend-hourly': {
+    title: 'AI provider spend is running hot',
+    level: 'page',
+    unit: 'USD',
+    meaning:
+      'Estimated spend at one provider over the last hour is at or above the ceiling. A sustained drain from a credit farm, a stolen card, or a runaway agent are the usual causes.',
+    action:
+      'Open the LLM spend dashboard for the provider and top models, check the young-account spend post in LiveOps, then review signup activity and the WAF block list.',
+    links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+  },
+  'provider-reported-spend-hourly': {
+    title: 'A provider reports unusual AI spend',
+    level: 'page',
+    unit: 'USD',
+    meaning:
+      "The provider's own usage report for the last hour, priced with our model rates, is at or above the ceiling. This counts every call billed to the organization, including ones that never reached our ledger.",
+    action:
+      'Open the LLM spend dashboard and the provider console usage page for the top models, then check the young-account spend post, signup activity and the WAF block list.',
+    links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+  },
+  'provider-usage-poll-errors': {
+    title: 'The provider usage poller is failing',
+    level: 'warn',
+    unit: 'failed runs',
+    meaning:
+      'The hourly job that reads Anthropic and OpenAI usage reports failed, so the provider-side spend alarms are blind until it recovers.',
+    action: 'Check the poller Lambda log for the error. A missing or rotated admin key is the usual cause.',
   },
   'mail-send-failures': {
     title: 'Emails are failing to send',
@@ -610,12 +659,40 @@ export function normalizeMentionToken(raw: string | undefined): string | undefin
   return undefined;
 }
 
+export interface MentionSetting {
+  token: string;
+  /** Least urgent level that still gets the mention: page (the default) or warn. */
+  level: Extract<AlarmLevel, 'page' | 'warn'>;
+}
+
+/** Lower is more urgent; a mention applies to every level at or above the setting's. */
+const LEVEL_RANK: Record<AlarmLevel, number> = { page: 0, warn: 1, info: 2 };
+
+const MENTION_LINE: Record<AlarmLevel, string> = {
+  page: 'production is paging',
+  warn: 'production needs attention',
+  info: 'production notice',
+};
+
+/**
+ * Parses the operator-supplied setting: a mention target (see normalizeMentionToken), optionally
+ * followed by a space and the level the mention extends down to. `here` mentions on page-level
+ * alarms only; `here warn` also mentions on warnings. Any other level word is ignored rather than
+ * silencing the page mention, since a typo in the parameter gives no feedback.
+ */
+export function parseMentionSetting(raw: string | undefined): MentionSetting | undefined {
+  const [target, levelWord] = (raw ?? '').trim().split(/\s+/, 2);
+  const token = normalizeMentionToken(target);
+  if (!token) return undefined;
+  return { token, level: levelWord?.toLowerCase() === 'warn' ? 'warn' : 'page' };
+}
+
 export interface ComposeParams {
   stage: string;
   level: AlarmLevel;
   /** Raw text: it goes into a plain_text header, and is escaped for the mrkdwn fallback. */
   title: string;
-  /** Mention token; only honoured on production page-level messages. */
+  /** Mention setting; only honoured on production messages at or above its level. */
   mention?: string;
   /** mrkdwn field cells (two per row). */
   fields?: string[];
@@ -636,11 +713,12 @@ export function composeAlarmMessage(params: ComposeParams): SlackAlarmMessage {
     : `:small_blue_diamond: ${stageLabel(params.stage)} alarm`;
   const color = production ? COLOR[params.level] : COLOR.nonprod;
   const headerText = `${prefix}: ${params.title}`;
-  const mention = production && params.level === 'page' ? normalizeMentionToken(params.mention) : undefined;
+  const setting = production ? parseMentionSetting(params.mention) : undefined;
+  const mention = setting && LEVEL_RANK[params.level] <= LEVEL_RANK[setting.level] ? setting.token : undefined;
 
   const blocks: unknown[] = [];
   if (mention) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `${mention} production is paging` } });
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `${mention} ${MENTION_LINE[params.level]}` } });
   }
   blocks.push({ type: 'header', text: { type: 'plain_text', text: headerText.slice(0, 150), emoji: true } });
 
@@ -681,6 +759,8 @@ export function formatAlarmSlackMessage(
   if (alarm.NewStateValue !== 'ALARM' && alarm.NewStateValue !== 'OK') return null;
 
   const { entry, title, level } = resolveEntry(alarm, stage);
+  // Other stages run the production ceilings against QA traffic, so only their pages are worth a post.
+  if (!isProductionStage(stage) && level !== 'page') return null;
   const when = parseStateChangeTime(alarm.StateChangeTime);
   const url = consoleUrl(alarm);
   const link = url ? `<${url}|Open in CloudWatch>` : undefined;

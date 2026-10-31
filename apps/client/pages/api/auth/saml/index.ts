@@ -1,11 +1,14 @@
 import passport from 'passport';
 import { identityProviderRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { setupSamlStrategy } from '@server/auth/auth';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { AuthenticateOptions } from '@node-saml/passport-saml/lib/types';
 
-const handler = baseApi({ auth: false }).get(async (req, res) => {
+const ipGatedApi = baseApi({ auth: false }).use(checkBlockedIP());
+
+const handler = ipGatedApi.get(async (req, res) => {
   const { idp } = req.query;
 
   if (!idp || typeof idp !== 'string') {

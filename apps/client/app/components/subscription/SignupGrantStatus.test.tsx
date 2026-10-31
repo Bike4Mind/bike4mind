@@ -71,6 +71,16 @@ describe('signup grant status', () => {
     show();
     expect(screen.queryByTestId('signup-grant-unlock-paths')).toBeNull();
   });
+  it('shows the unlock date of a bonus held for a settling payment instead of the unlock paths', () => {
+    const releaseAt = new Date('2026-11-02T08:45:00.000Z');
+    h.grant = { ...h.grant!, heldUnlock: { reason: 'subscription', heldAt: new Date(), releaseAt } };
+    show();
+    const held = screen.getByTestId('signup-grant-held-unlock');
+    expect(held).toHaveTextContent(
+      `They unlock on ${releaseAt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+    );
+    expect(screen.queryByTestId('signup-grant-unlock-paths')).toBeNull();
+  });
   it('has no eligibility-check button', () => {
     show();
     expect(screen.queryByRole('button')).toBeNull();

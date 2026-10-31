@@ -4,12 +4,16 @@ import { subscriptionCheckoutSchema } from '@bike4mind/server-utils/lib/userSubs
 import { findSubscriptionPlan } from '@client/lib/userSubscriptions/constants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
+import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
+import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { readNetworkMeta } from '@server/auth/networkMeta';
+import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -18,6 +22,7 @@ type RequestBody = z.infer<typeof subscriptionCheckoutSchema>;
 
 const handler = baseApi()
   .use(requireStripeWebhook())
+  .use(refuseBlockedAccount())
   .post<Request<unknown, RequestBody>>(async (req, res) => {
     const { priceId, callbackUrl, attributionConsent, surface } = subscriptionCheckoutSchema.parse(req.body);
 
@@ -48,6 +53,8 @@ const handler = baseApi()
         throw new BadRequestError('This plan is not available yet');
       }
     }
+
+    await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'subscription');
 
     const planSubscription = await subscriptionRepository.findUserSubscriptionByPriceId(priceId, req.user.id);
     if (planSubscription) {
@@ -91,10 +98,16 @@ const handler = baseApi()
       }
     }
 
+    const threeDSecureOptions = await firstPurchaseCardOptions(
+      { stripeCustomerId: req.user.stripeCustomerId, accountCreatedAt: req.user.createdAt },
+      req.logger
+    );
+
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       ...USD_CHECKOUT_SESSION_PARAMS,
       payment_method_types: ['card'],
+      ...threeDSecureOptions,
       line_items: [
         {
           price: priceId,

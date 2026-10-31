@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
 import { ZodError } from 'zod';
 
@@ -175,7 +179,7 @@ describe('POST /api/[type]/[id]/invites', () => {
 
     await mockRefs.postHandler!(req, res);
 
-    expect(mockRefs.postMiddleware).toEqual([]);
+    expect(mockRefs.postMiddleware).toEqual([expect.any(Function)]);
     expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
     expect(createInvite).toHaveBeenCalledOnce();
   });

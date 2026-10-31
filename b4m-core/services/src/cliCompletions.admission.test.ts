@@ -47,7 +47,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsByNames: vi.fn(),
 }));
 
-import { ForbiddenError } from '@bike4mind/common';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/common';
 import { executeCompletion } from './cliCompletions';
 
 const entitlementGatedConfigs = [{ id: 'gated-model', enabled: true, allowedEntitlements: ['pro'] }];
@@ -117,6 +117,44 @@ describe('executeCompletion model admission', () => {
     await expect(
       executeCompletion({ ...base, db: adminDb(), scopeActor: actor => ({ ...actor, isAdmin: false }) })
     ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it.each([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+    ['suspended', { moderation: { status: 'suspended' } }],
+  ])('refuses a %s caller before building a backend or moving credits', async (_label, state) => {
+    const db = buildDb([]);
+    db.users.findById.mockResolvedValue({ id: 'user1', currentCredits: 100_000, tags: [], ...state });
+
+    await expect(
+      executeCompletion({
+        userId: 'user1',
+        model: 'gated-model',
+        messages: [{ role: 'user', content: 'hi' }],
+        onChunk: vi.fn().mockResolvedValue(undefined),
+        db,
+      })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(h.getLlmByModel).not.toHaveBeenCalled();
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(db.users.incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the caller no longer exists', async () => {
+    const db = buildDb([]);
+    db.users.findById.mockResolvedValue(null);
+
+    await expect(
+      executeCompletion({
+        userId: 'user1',
+        model: 'gated-model',
+        messages: [{ role: 'user', content: 'hi' }],
+        onChunk: vi.fn().mockResolvedValue(undefined),
+        db,
+      })
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(h.complete).not.toHaveBeenCalled();
   });
 
   describe('free-tier model gate', () => {

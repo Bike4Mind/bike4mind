@@ -6,13 +6,13 @@ import {
   IUserDocument,
   Permission,
   ShareableAccessShape,
+  UserShareGrant,
   grantablePermissions,
   secureParameters,
   BadRequestError,
   NotFoundError,
 } from '@bike4mind/common';
 import { z } from 'zod';
-import { pushShareable } from '../sharingService';
 import { distinctIdCount, mergeIds } from '../utils/objectIds';
 
 const addFilesProjectSchema = z.object({
@@ -87,12 +87,28 @@ export const addFiles = async (
 /**
  * Caps a grant pushed onto `doc` at what `adder` holds on it (its owner holds everything), so adding
  * a file or session you can only read to a project cannot hand the project's members update on it.
- * Returns a filter to call BEFORE pushing: pushShareable mutates `doc.users`, and the adder may be
- * one of the members being pushed.
  */
 export const grantCap = (doc: ShareableAccessShape, adder: Pick<IUserDocument, 'id' | 'groups'>) => {
   const grantable = grantablePermissions(doc, adder.id, adder.groups ?? []);
   return (permissions: Permission[]) => permissions.filter(p => grantable.has(p));
+};
+
+/** The project-tagged grants `doc` gets for the project owner (when not the adder) and each member, capped by grantCap. */
+export const sharesCappedFor = (
+  doc: ShareableAccessShape,
+  adder: Pick<IUserDocument, 'id' | 'groups'>,
+  project: Pick<IProjectDocument, 'id' | 'userId' | 'users'>
+): UserShareGrant[] => {
+  const cap = grantCap(doc, adder);
+  const wanted = [
+    ...(project.userId !== adder.id
+      ? [{ userId: project.userId, permissions: [Permission.read, Permission.update] }]
+      : []),
+    ...project.users.map(({ userId, permissions }) => ({ userId, permissions })),
+  ];
+  return wanted
+    .map(({ userId, permissions }) => ({ userId, permissions: cap(permissions), projectId: project.id }))
+    .filter(grant => grant.permissions.length > 0);
 };
 
 export const updateShareableFiles = async (
@@ -104,16 +120,7 @@ export const updateShareableFiles = async (
   const { db } = adapters;
 
   for (const file of files) {
-    const cap = grantCap(file as ShareableAccessShape, adder);
-    const push = (userId: string, permissions: Permission[]) => {
-      const capped = cap(permissions);
-      if (capped.length > 0) pushShareable(file, { userId, permissions: capped, projectId: project.id });
-    };
-
-    if (project.userId !== adder.id) push(project.userId, [Permission.read, Permission.update]);
-
-    for (const user of project.users) push(user.userId, user.permissions);
-
-    await db.fabFiles.update({ id: file.id, users: file.users });
+    const add = sharesCappedFor(file as ShareableAccessShape, adder, project);
+    if (add.length > 0) await db.fabFiles.shareable.updateUserShares(file.id, { add });
   }
 };

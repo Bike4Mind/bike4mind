@@ -64,6 +64,7 @@ import {
 import {
   buildThinkingParams,
   effortForComplexity,
+  applyAnthropicOutputCeiling,
   isAdaptiveThinkingByDefault,
   planReasoningEffort,
   resolveAnthropicEffort,
@@ -1080,7 +1081,7 @@ export class AnthropicBackend implements ICompletionBackend {
     // then carries no system at all.
     const identityReminder = shouldOmitIdentityReminder(options)
       ? null
-      : buildIdentityReminder(model, options.modelDisplayName);
+      : buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName);
     let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system' && !isToolChangeMessage(m));
@@ -1466,6 +1467,7 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking.budget_tokens = maxThinkingBudget;
       }
     }
+    applyAnthropicOutputCeiling(apiParams, options.outputTokenCeiling);
 
     // Setup the actual API call with API-specific options
     try {

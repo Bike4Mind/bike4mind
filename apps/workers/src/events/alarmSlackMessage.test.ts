@@ -11,6 +11,7 @@ import {
   formatDuration,
   lookupCatalog,
   normalizeMentionToken,
+  parseMentionSetting,
   postAlarmToSlack,
   resolveAlarmWebhookUrl,
   type SlackAlarmMessage,
@@ -146,6 +147,39 @@ describe('formatAlarmSlackMessage on production', () => {
       text: { type: 'mrkdwn', text: '<!subteam^S0123ABC> production is paging' },
     });
     expect(on?.text.startsWith('<!subteam^S0123ABC> :rotating_light: PRODUCTION ALARM')).toBe(true);
+  });
+
+  it('extends the mention to warn-level alarms only when the setting says warn', () => {
+    const pageOnly = formatAlarmSlackMessage(sample, 'production', { mention: 'here' });
+    expect(topBlocks(pageOnly)[0].type).toBe('header');
+    expect(pageOnly?.text).not.toContain('<!here>');
+
+    const withWarn = formatAlarmSlackMessage(sample, 'production', { mention: 'here warn' });
+    expect(topBlocks(withWarn)[0]).toEqual({
+      type: 'section',
+      text: { type: 'mrkdwn', text: '<!here> production needs attention' },
+    });
+    expect(withWarn?.text.startsWith('<!here> :warning: Production warning')).toBe(true);
+
+    const page = formatAlarmSlackMessage(burst, 'production', { mention: 'here warn' });
+    expect(topBlocks(page)[0]).toEqual({
+      type: 'section',
+      text: { type: 'mrkdwn', text: '<!here> production is paging' },
+    });
+  });
+
+  it('never mentions on info-level alarms, whatever the setting', () => {
+    const message = composeAlarmMessage({
+      stage: 'production',
+      level: 'info',
+      title: 'Something to know',
+      mention: 'channel warn',
+      sections: ['*What happened*\nA thing.'],
+      context: ['production'],
+      summary: 'A thing.',
+    });
+    expect(topBlocks(message)[0].type).toBe('header');
+    expect(message.text).not.toContain('<!channel>');
   });
 
   it('omits admin buttons without an app url and the CloudWatch button without a Region', () => {
@@ -296,6 +330,14 @@ describe('formatAlarmSlackMessage on other stages', () => {
     expect(attachment(message).color).toBe('#2EB67D');
     expect(bodyOf(message)[0].text?.text).toContain('staging  |  back to normal at 12:39 UTC');
   });
+
+  it('drops warn-level alarms and their resolutions on stages other than production', () => {
+    const devWarn = { ...sample, AlarmName: 'bike4mind-dev-signup-code-send-rate' };
+    expect(formatAlarmSlackMessage(devWarn, 'dev')).toBeNull();
+    expect(formatAlarmSlackMessage({ ...devWarn, NewStateValue: 'OK' }, 'dev')).toBeNull();
+    expect(formatAlarmSlackMessage({ ...devWarn, AlarmName: 'bike4mind-pr-123-unknown' }, 'pr-123')).toBeNull();
+    expect(formatAlarmSlackMessage(sample, 'production')).not.toBeNull();
+  });
 });
 
 describe('ALARM_CATALOG', () => {
@@ -309,6 +351,15 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG['signup-code-send-burst'].level).toBe('page');
     expect(ALARM_CATALOG['ungranted-credit-purchases'].level).toBe('page');
     expect(ALARM_CATALOG['signup-code-send-rate'].level).toBe('warn');
+    expect(ALARM_CATALOG.SuccessfulSignups.level).toBe('page');
+    expect(ALARM_CATALOG.NewAccountApiKeys.level).toBe('page');
+    expect(ALARM_CATALOG['young-account-spend-rate'].level).toBe('page');
+    expect(ALARM_CATALOG['llm-spend-hourly'].level).toBe('page');
+    expect(ALARM_CATALOG['llm-spend-rate'].level).toBe('warn');
+    expect(ALARM_CATALOG['provider-reported-spend-hourly'].level).toBe('page');
+    expect(ALARM_CATALOG['provider-usage-poll-errors'].level).toBe('warn');
+    expect(ALARM_CATALOG['llm-spend-young-accounts'].level).toBe('page');
+    expect(ALARM_CATALOG['completion-credit-overdraft'].level).toBe('warn');
   });
 });
 
@@ -333,6 +384,24 @@ describe('normalizeMentionToken', () => {
     ['S0123ABC', '<!subteam^S0123ABC>'],
   ])('turns %s into %s', (raw, token) => {
     expect(normalizeMentionToken(raw)).toBe(token);
+  });
+});
+
+describe('parseMentionSetting', () => {
+  it.each([undefined, '', 'off', 'junk', 'off warn', 'warn'])('is off for %s', raw => {
+    expect(parseMentionSetting(raw)).toBeUndefined();
+  });
+
+  it.each([
+    ['here', { token: '<!here>', level: 'page' }],
+    ['here warn', { token: '<!here>', level: 'warn' }],
+    ['  channel   WARN ', { token: '<!channel>', level: 'warn' }],
+    ['S0123ABC warn', { token: '<!subteam^S0123ABC>', level: 'warn' }],
+    ['<!subteam^S0123ABC> page', { token: '<!subteam^S0123ABC>', level: 'page' }],
+    ['here info', { token: '<!here>', level: 'page' }],
+    ['here junk', { token: '<!here>', level: 'page' }],
+  ])('reads %s as %o', (raw, expected) => {
+    expect(parseMentionSetting(raw)).toEqual(expected);
   });
 });
 
@@ -402,8 +471,23 @@ describe('lookupCatalog', () => {
     expect(lookupCatalog('SuccessfulSignups')).toBe(ALARM_CATALOG.SuccessfulSignups);
     expect(lookupCatalog('NewAccountApiKeys')).toBe(ALARM_CATALOG.NewAccountApiKeys);
     expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
+    expect(lookupCatalog('llm-spend-hourly-anthropic')).toBe(ALARM_CATALOG['llm-spend-hourly']);
     expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
+    expect(lookupCatalog('llm-spend-young-accounts')).toBe(ALARM_CATALOG['llm-spend-young-accounts']);
+    expect(lookupCatalog('completion-credit-overdraft')).toBe(ALARM_CATALOG['completion-credit-overdraft']);
     expect(lookupCatalog('account-creation-metrics-missing')).toBe(ALARM_CATALOG['account-creation-metrics-missing']);
+  });
+
+  it('covers the provider-reported spend alarms by provider prefix and the poller alarm by name', () => {
+    for (const provider of ['anthropic', 'openai']) {
+      expect(lookupCatalog(`provider-reported-spend-hourly-${provider}`)).toBe(
+        ALARM_CATALOG['provider-reported-spend-hourly']
+      );
+    }
+    expect(lookupCatalog('provider-usage-poll-errors')).toBe(ALARM_CATALOG['provider-usage-poll-errors']);
+    expect(alarmSuffix('bike4mind-production-provider-reported-spend-hourly-anthropic', 'production')).toBe(
+      'provider-reported-spend-hourly-anthropic'
+    );
   });
 
   it('renders a dead-letter queue alarm with the queue name and the replay button', () => {

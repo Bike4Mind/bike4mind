@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { formatToolExecution } from '../voiceToolExecutor';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { AxiosError, type AxiosResponse } from 'axios';
+
+const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: postMock } }));
+
+import { executeVoiceTool, formatToolExecution } from '../voiceToolExecutor';
 
 describe('formatToolExecution', () => {
   it('formats web_search with the query', () => {
@@ -30,5 +35,32 @@ describe('formatToolExecution', () => {
 
   it('formats unknown tools with the tool name', () => {
     expect(formatToolExecution('some_future_tool', {})).toBe('Using some_future_tool...');
+  });
+});
+
+describe('executeVoiceTool error reporting', () => {
+  beforeEach(() => {
+    postMock.mockReset();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('surfaces the server message when the account-trust gate refuses the tool', async () => {
+    const message = 'Your account is too new to use this tool.';
+    const response = {
+      status: 403,
+      data: { error: message, errorCode: 'account_trust_required' },
+    } as AxiosResponse;
+    postMock.mockRejectedValue(
+      new AxiosError('Request failed with status code 403', 'ERR_BAD_REQUEST', undefined, {}, response)
+    );
+
+    await expect(executeVoiceTool('web_search', { query: 'x' })).resolves.toEqual({ success: false, error: message });
+  });
+
+  it('keeps the plain error message for other failures', async () => {
+    postMock.mockRejectedValue(new Error('boom'));
+
+    await expect(executeVoiceTool('web_search', { query: 'x' })).resolves.toEqual({ success: false, error: 'boom' });
   });
 });

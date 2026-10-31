@@ -20,7 +20,8 @@ describe('addFiles authorization', () => {
     const file = { id: 'file-1', userId: SHAREE, users: [], groups: [] };
 
     const projectUpdate = vi.fn().mockResolvedValue({});
-    const fabFileUpdate = vi.fn().mockResolvedValue(undefined);
+    const fileShares = createShareableFake([file as never]);
+    const fabFileUpdate = fileShares.updateUserShares;
 
     return {
       project,
@@ -29,7 +30,7 @@ describe('addFiles authorization', () => {
       adapters: {
         db: {
           projects: { shareable: createShareableFake([project as never]), updateWithUpdateAccess: projectUpdate },
-          fabFiles: { shareable: createShareableFake([file as never]), update: fabFileUpdate },
+          fabFiles: { shareable: fileShares },
         },
       },
     };
@@ -101,7 +102,7 @@ describe('addFiles grant cap', () => {
           shareable: createShareableFake([project as never]),
           updateWithUpdateAccess: vi.fn(async () => ({})),
         },
-        fabFiles: { shareable: createShareableFake([{ groups: [], ...file } as never]), update: vi.fn() },
+        fabFiles: { shareable: createShareableFake([file as never]) },
       },
     };
     await addFiles(
