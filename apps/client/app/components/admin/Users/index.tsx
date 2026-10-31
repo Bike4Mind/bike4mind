@@ -8,6 +8,7 @@ import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
+import { getServerErrorField } from '@client/app/utils/error';
 import type { AdminUsersListRow } from '@client/app/utils/adminUsersFilter';
 import type { AdminUsersBulkActionType, AdminUsersBulkTarget } from '@client/app/utils/adminUsersBulk';
 import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
@@ -317,7 +318,7 @@ const UsersTab: React.FC = () => {
             getRowId={row => row.id}
             rowTestId={row => `admin-users-row-${row.id}`}
             loading={usersQuery.isLoading}
-            error={usersQuery.isError ? 'Could not load users.' : undefined}
+            error={usersQuery.isError ? (getServerErrorField(usersQuery.error) ?? 'Could not load users.') : undefined}
             onRetry={() => usersQuery.refetch()}
             empty={
               hasFilters ? (

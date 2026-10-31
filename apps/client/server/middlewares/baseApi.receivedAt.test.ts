@@ -38,6 +38,9 @@ vi.mock('next-connect', () => ({
   },
 }));
 
+vi.mock('@server/middlewares/checkBlockedIP', () => ({
+  checkBlockedIP: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
 vi.mock('@bike4mind/database', () => ({
   connectDB: async () => {
     vi.setSystemTime(Date.now() + CONNECT_COST_MS);

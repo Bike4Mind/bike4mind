@@ -1,3 +1,4 @@
+import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
 import {
   ChatCompletionCreateInput,
   ChatCompletionCreateInputSchema,
@@ -237,6 +238,8 @@ interface DatabaseAdapters {
   projects: IProjectRepository;
   organizations: IOrganizationRepository;
   mcpServers: IMcpServerRepository;
+  /** Read at the personal credit reservation; see creditService/newAccountSpendCap.ts. */
+  newAccountSpendCap: NewAccountSpendCapAdapters;
   creditTransactions?: ICreditTransactionRepository;
   /** Optional usage-event sink: dual-write analytics, never billing. */
   usageEvents?: IUsageEventRepository;

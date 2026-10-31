@@ -205,6 +205,9 @@ describe('ImageEditService.process model dispatch', () => {
     (service as any).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
     return { service, quest, creditHolds };
   };
@@ -694,6 +697,9 @@ describe('ImageEditService.process reference images (#2744)', () => {
     (service as any).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
     await service.process({
       body: {
@@ -844,6 +850,9 @@ describe('ImageEditService.process mask access (#3069)', () => {
     (service as any).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
     await service.process({
       body: {
@@ -1301,6 +1310,9 @@ describe('ImageEditService quest partial writes', () => {
     (service as unknown as { tokenizer: unknown }).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
     return { service, quest, update, startImageEditProcess, creditHolds };
   };

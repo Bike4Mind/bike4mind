@@ -64,6 +64,7 @@ beforeEach(() => {
   vi.stubEnv('ENABLE_MONITORING', undefined);
   vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', undefined);
   vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', undefined);
+  vi.stubEnv('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN', undefined);
   vi.stubGlobal('aws', {
     cloudwatch: {
       LogMetricFilter: resources.filter,
@@ -137,14 +138,34 @@ describe('LLM spend metric filters', () => {
     expect(callFor(resources.filter, 'llmSpendYoungAccountUsdFilter')?.metricTransformation).not.toHaveProperty(
       'dimensions'
     );
-    expect(resources.filter).toHaveBeenCalledTimes(4);
+    expect(resources.filter).toHaveBeenCalledTimes(5);
+  });
+
+  it('counts completions that settled below zero credits', async () => {
+    const { COMPLETION_CREDIT_OVERDRAFT_MESSAGE } = await load();
+    expect(callFor(resources.filter, 'completionCreditOverdraftFilter')).toEqual({
+      name: 'test-app-production-completion-credit-overdraft',
+      logGroupName: expect.objectContaining({ value: 'chat-completion-logs' }),
+      pattern: `{ $.message = "${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}" }`,
+      metricTransformation: {
+        name: 'CompletionCreditOverdrafts',
+        namespace: 'test-app/production/LLMSpend',
+        value: '1',
+        unit: 'Count',
+      },
+    });
+    const source = readFileSync(new URL('../../b4m-core/services/src/cliCompletions.ts', import.meta.url), 'utf8');
+    expect(source).toContain(`'${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}'`);
   });
 
   it('selects every extracted metric value and dimension in the CloudWatch pattern', async () => {
     await load();
     for (const [, args] of resources.filter.mock.calls) {
       const transformation = args.metricTransformation as { value: string; dimensions?: Record<string, string> };
-      const selectors = [transformation.value, ...Object.values(transformation.dimensions ?? {})];
+      // A constant value (a count filter) selects nothing from the log line.
+      const selectors = [transformation.value, ...Object.values(transformation.dimensions ?? {})].filter(selector =>
+        selector.startsWith('$.')
+      );
       const pattern = String(args.pattern);
       for (const selector of selectors) {
         // Match a complete selector, so $.model cannot be satisfied by $.modelName.
@@ -202,17 +223,66 @@ describe('LLM spend alarms', () => {
     });
   });
 
+  it('alarms on 5-minute spend by accounts under 7 days old', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('llmSpendYoungAccounts', {
+      name: 'test-app-production-llm-spend-young-accounts',
+      alarmDescription:
+        'Estimated LLM spend per 5 minutes by accounts under 7 days old at or above the configured USD ceiling',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsdYoungAccounts',
+      namespace: 'test-app/production/LLMSpend',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 3,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic', 'email-topic'],
+      okActions: ['alarm-topic', 'email-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'High' },
+    });
+  });
+
+  it('alarms on a single credit overdraft and routes it to Slack only', async () => {
+    await load();
+    expect(resources.alarm).toHaveBeenCalledWith('completionCreditOverdraft', {
+      name: 'test-app-production-completion-credit-overdraft',
+      alarmDescription: expect.any(String),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'CompletionCreditOverdrafts',
+      namespace: 'test-app/production/LLMSpend',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic'],
+      okActions: ['alarm-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  });
+
   it('reads the configured ceilings', async () => {
     vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', '60');
     vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', '9');
+    vi.stubEnv('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN', '7');
     await load();
-    for (const [name, args] of resources.alarm.mock.calls)
-      expect(args.threshold).toBe(name === 'youngAccountSpendRate' ? 9 : 60);
+    const expected: Record<string, number> = {
+      youngAccountSpendRate: 9,
+      llmSpendYoungAccounts: 7,
+      completionCreditOverdraft: 1,
+    };
+    for (const [name, args] of resources.alarm.mock.calls) expect(args.threshold).toBe(expected[name] ?? 60);
   });
 
   it('rejects a malformed young-account ceiling', async () => {
     vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', '0');
     await expect(load()).rejects.toThrow(/YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR/);
+  });
+
+  it('rejects a malformed young-account 5-minute ceiling', async () => {
+    vi.stubEnv('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN', '2.5');
+    await expect(load()).rejects.toThrow(/LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN/);
   });
 
   it.each(['0', '2.5', 'abc'])('rejects a malformed ceiling %s', async raw => {
@@ -275,7 +345,7 @@ describe('LLM spend dashboard', () => {
 describe('LLM spend stage gating', () => {
   it.each(['dev', 'production'])('creates resources on %s', async stage => {
     await load(stage);
-    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length + 1);
+    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length + 3);
     expect(resources.dashboard).toHaveBeenCalledTimes(1);
   });
   it('creates nothing on an unmonitored stage', async () => {
@@ -293,6 +363,7 @@ describe('LLM spend stage gating', () => {
     const contract = JSON.parse(readFileSync(new URL('../deploy-contract.json', import.meta.url), 'utf8'));
     expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_5MIN');
     expect(contract.deployEnv).toContain('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR');
+    expect(contract.deployEnv).toContain('LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN');
     expect(readFileSync(new URL('../index.ts', import.meta.url), 'utf8')).toContain("export * from './llmSpend';");
   });
 });

@@ -20,6 +20,8 @@ export interface IPaymentAttemptDocument extends Document {
   outcome: PaymentAttemptOutcome;
   /** Stripe Radar `outcome.risk_level` of the latest charge, when Stripe reported one. */
   riskLevel: string | null;
+  /** Stripe Radar blocked a charge on this intent (`outcome.type === 'blocked'`). */
+  radarBlocked: boolean;
   ipHash: string | null;
   /** Started from a datacenter ASN or a WAF anonymous-IP address; null when unknown. */
   hostingNetwork: boolean | null;
@@ -37,6 +39,7 @@ export type PaymentAttempt = Pick<
   | 'cardFingerprints'
   | 'outcome'
   | 'riskLevel'
+  | 'radarBlocked'
   | 'ipHash'
   | 'hostingNetwork'
   | 'createdAt'
@@ -58,6 +61,7 @@ const PaymentAttemptSchema = new Schema<IPaymentAttemptDocument>(
     cardFingerprints: { type: [String], default: [] },
     outcome: { type: String, enum: ['started', 'succeeded', 'failed'], required: true },
     riskLevel: { type: String, default: null },
+    radarBlocked: { type: Boolean, default: false },
     ipHash: { type: String, default: null },
     hostingNetwork: { type: Boolean, default: null },
   },
@@ -84,6 +88,7 @@ const toAttempt = (doc: IPaymentAttemptDocument | Record<string, unknown>): Paym
     cardFingerprints: row.cardFingerprints ?? [],
     outcome: row.outcome,
     riskLevel: row.riskLevel ?? null,
+    radarBlocked: row.radarBlocked ?? false,
     ipHash: row.ipHash ?? null,
     hostingNetwork: row.hostingNetwork ?? null,
     createdAt: row.createdAt,
@@ -123,15 +128,32 @@ class PaymentAttemptRepository {
     outcome: Exclude<PaymentAttemptOutcome, 'started'>;
     cardFingerprint: string | null;
     riskLevel: string | null;
+    radarBlocked?: boolean;
     hostingNetwork: boolean | null;
   }): Promise<{ attempt: PaymentAttempt; changed: boolean }> {
-    const { paymentIntentId, cardFingerprint, outcome, riskLevel, userId, kind, amount, currency, hostingNetwork } =
-      input;
+    const {
+      paymentIntentId,
+      cardFingerprint,
+      outcome,
+      riskLevel,
+      radarBlocked,
+      userId,
+      kind,
+      amount,
+      currency,
+      hostingNetwork,
+    } = input;
     // The pre-image says what this delivery added; the second read returns the merged row.
     const before = await PaymentAttemptModel.findOneAndUpdate(
       { paymentIntentId },
       {
-        $set: { outcome, ...(riskLevel !== null && { riskLevel }), ...(amount !== null && { amount, currency }) },
+        $set: {
+          outcome,
+          ...(riskLevel !== null && { riskLevel }),
+          ...(amount !== null && { amount, currency }),
+          // Sticky: a later successful retry on the same intent does not erase that Radar blocked it.
+          ...(radarBlocked && { radarBlocked: true }),
+        },
         $setOnInsert: { userId, kind, ipHash: null, hostingNetwork },
         ...(cardFingerprint && { $addToSet: { cardFingerprints: cardFingerprint } }),
       },
@@ -172,6 +194,57 @@ class PaymentAttemptRepository {
       input.ipHash ? count({ ipHash: input.ipHash }) : null,
     ]);
     return { userCards, networkCards };
+  }
+
+  /** Radar-blocked attempts by this account, and from this network, since `since`. Null = unknown. */
+  async countRadarBlocked(input: {
+    userId: string;
+    ipHash: string | null;
+    since: Date;
+  }): Promise<{ account: number; network: number | null }> {
+    const count = (filter: Record<string, unknown>) =>
+      PaymentAttemptModel.countDocuments({ ...filter, radarBlocked: true, createdAt: { $gte: input.since } }).maxTimeMS(
+        2000
+      );
+    const [account, network] = await Promise.all([
+      count({ userId: input.userId }),
+      input.ipHash ? count({ ipHash: input.ipHash }) : null,
+    ]);
+    return { account, network };
+  }
+
+  /** The cards and payment networks this account has used, for linking it to other accounts. */
+  async linkKeysForUser(userId: string): Promise<{ cardFingerprints: string[]; ipHashes: string[] }> {
+    const rows = await PaymentAttemptModel.find({ userId })
+      .select({ cardFingerprints: 1, ipHash: 1, _id: 0 })
+      .limit(MAX_COUNTED_ROWS)
+      .maxTimeMS(2000)
+      .lean();
+    return {
+      cardFingerprints: [...new Set(rows.flatMap(row => row.cardFingerprints ?? []))],
+      ipHashes: [...new Set(rows.map(row => row.ipHash).filter((hash): hash is string => Boolean(hash)))],
+    };
+  }
+
+  /** Other accounts that used any of these cards, or paid from any of these networks. Capped at `limit` each. */
+  async findLinkedUserIds(input: {
+    userId: string;
+    cardFingerprints: string[];
+    ipHashes: string[];
+    limit: number;
+  }): Promise<{ byCard: string[]; byNetwork: string[] }> {
+    const others = async (filter: Record<string, unknown>): Promise<string[]> => {
+      const userIds: string[] = await PaymentAttemptModel.distinct('userId', {
+        ...filter,
+        userId: { $ne: input.userId },
+      }).maxTimeMS(2000);
+      return userIds.slice(0, input.limit);
+    };
+    const [byCard, byNetwork] = await Promise.all([
+      input.cardFingerprints.length > 0 ? others({ cardFingerprints: { $in: input.cardFingerprints } }) : [],
+      input.ipHashes.length > 0 ? others({ ipHash: { $in: input.ipHashes } }) : [],
+    ]);
+    return { byCard, byNetwork };
   }
 }
 

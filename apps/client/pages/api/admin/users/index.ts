@@ -21,7 +21,11 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         qs.parse(req.query as Record<string, string>, { arrayLimit: ADMIN_USERS_LIST_MAX })
       );
       if (!parsed.success) {
-        return res.status(400).json({ message: 'Invalid query parameters', error: parsed.error.issues });
+        return res.status(400).json({
+          message: 'Invalid query parameters',
+          error: parsed.error.issues[0]?.message ?? 'Invalid query parameters',
+          issues: parsed.error.issues,
+        });
       }
       res.setHeader('Cache-Control', 'private, no-store');
       const { groupBy, ...params } = parsed.data;

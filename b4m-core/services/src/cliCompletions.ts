@@ -27,6 +27,7 @@ import {
   normalizeMultimodalMessages,
   BadRequestError,
   HTTPError,
+  UnauthorizedError,
   type CompletionSource,
   UNKNOWN_MODEL_ERROR_CODE,
   MAX_MODEL_ID_LENGTH,
@@ -598,11 +599,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     loadModelConfigurations(db.adminSettings),
     loadFreeTierAllowedModels(db.adminSettings),
   ]);
-  const actor = storedActor && params.scopeActor ? params.scopeActor(storedActor) : storedActor;
+  // Fail closed: an admission over no user would skip the account-state gate it exists to apply.
+  if (!storedActor) throw new UnauthorizedError('User not found');
+  const actor = params.scopeActor ? params.scopeActor(storedActor) : storedActor;
   await createModelAdmission({
-    user: actor ?? {},
+    user: actor,
     configs: modelConfigs,
-    getEntitlements: actor && params.getEntitlements ? () => params.getEntitlements!(actor) : undefined,
+    getEntitlements: params.getEntitlements ? () => params.getEntitlements!(actor) : undefined,
     models,
     enforceCredits: Boolean(enforceCredits),
     freeTierAllowedModels,
@@ -1304,6 +1307,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
           // Only a spend racing this settlement between the balance read above and this write gets here
           if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
+            // Message text is matched by the overdraft metric filter in infra/llmSpend.ts.
             logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
               userId,
               holderId,

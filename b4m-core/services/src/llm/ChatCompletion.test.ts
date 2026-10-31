@@ -773,6 +773,34 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('quest saves', () => {
+    it('write only changed fields, never deletedAt, and leave every final field persisted', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.deletedAt = null;
+      const writes: Record<string, unknown>[] = [];
+      const record = async (patch: Record<string, unknown>) => {
+        writes.push(JSON.parse(JSON.stringify(patch)));
+        return patch;
+      };
+      mockDb.quests.update.mockImplementation(record);
+      mockDb.quests.updateIfUnfinished.mockImplementation(record);
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      expect(writes.length).toBeGreaterThan(1);
+      for (const w of writes) {
+        expect(w).not.toHaveProperty('deletedAt');
+        expect(w).not.toHaveProperty('createdAt');
+      }
+      expect(writes.filter(w => 'timestamp' in w)).toHaveLength(1);
+
+      const persisted: Record<string, unknown> = Object.assign({}, ...writes);
+      const final = JSON.parse(JSON.stringify(mockQuest));
+      for (const key of ['deletedAt', 'createdAt', 'updatedAt']) delete final[key];
+      expect(persisted).toEqual(final);
+    });
+  });
+
   describe('an unrecognised timezone', () => {
     it('falls back to server time instead of failing the turn', async () => {
       mockSession.userId = 'user1';
@@ -9891,6 +9919,63 @@ describe('ChatCompletionProcess', () => {
       expect(turn.sessionPrompt).toBe('SESSION PROMPT');
       expect(turn.temperature).toBe(0.4);
       expect(turn.maxToolCalls).toBe(5);
+    });
+
+    describe('with a turn responder', () => {
+      const respond = vi.fn();
+      const respondingTable = { 'settings-surface': { ...table['settings-surface'], respond } };
+
+      beforeEach(() => {
+        respond.mockReset();
+        resolve.mockResolvedValue({});
+      });
+
+      it('saves the workspace reply as a finished turn and never calls the model', async () => {
+        const uiSideEffects = [{ type: 'example', payload: {} }];
+        const structuredReplies = [{ type: 'text', text: 'Scripted answer' }];
+        const toolResults = [{ toolName: 'example', result: 'ok' }];
+        respond.mockResolvedValue({ replies: ['Scripted ', 'answer'], uiSideEffects, structuredReplies, toolResults });
+
+        const turn = await runTurn({ surface: 'settings-surface' }, respondingTable);
+
+        expect(turn.processError).toBeUndefined();
+        expect(turn.modelCalled).toBe(false);
+        expect(respond).toHaveBeenCalledWith(
+          expect.objectContaining({
+            session: expect.objectContaining({ surface: 'settings-surface' }),
+            quest: expect.objectContaining({ id: 'quest1' }),
+          })
+        );
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({
+          status: 'done',
+          replies: ['Scripted ', 'answer'],
+          reply: 'Scripted answer',
+          uiSideEffects,
+          structuredReplies,
+          toolResults,
+        });
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0].promptMeta?.model).toBeUndefined();
+      });
+
+      it('hands the turn to the model when the responder returns null', async () => {
+        respond.mockResolvedValue(null);
+
+        const turn = await runTurn({ surface: 'settings-surface' }, respondingTable);
+
+        expect(respond).toHaveBeenCalledOnce();
+        expect(turn.modelCalled).toBe(true);
+      });
+
+      it('fails the turn without a model call when the responder throws', async () => {
+        respond.mockRejectedValue(new Error('script lookup failed'));
+
+        const turn = await runTurn({ surface: 'settings-surface' }, respondingTable);
+
+        expect(turn.processError).toEqual(
+          expect.objectContaining({ cause: expect.objectContaining({ message: 'script lookup failed' }) })
+        );
+        expect(turn.modelCalled).toBe(false);
+      });
     });
   });
 

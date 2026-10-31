@@ -441,11 +441,14 @@ export const SettingKeySchema = z.enum([
   'blockedEmailDomains',
   'apiKeyTrustGateEnabled',
   'apiKeyMinAccountAgeDays',
+  'requireThreeDSecureOnFirstPurchase',
+  'threeDSecureNewAccountDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
   'apiKeyUntrustedRequestsPerDay',
   'apiKeyUntrustedTokensPerMin',
   'apiKeyUntrustedMaxConcurrent',
+  'gearRewardMinAccountAgeDays',
   'usagePatternSignalsEnabled',
   'usagePatternSignalsConfig',
   'thinkingVisibilityFree',
@@ -472,10 +475,23 @@ export const SettingKeySchema = z.enum([
   'paymentRiskMaxCardsPerWindow',
   'paymentRiskCardWindowMinutes',
   'paymentRiskFlagHostingNetwork',
+  'signupNetworkAlertsEnabled',
+  'signupNetworkAlertWindowMinutes',
+  'signupNetworkAlertMaxPerIp',
+  'signupNetworkAlertMaxPerHostingAsn',
+  'signupNetworkAlertMaxPerAsn',
+  'paymentRiskAutoRefundEnabled',
+  'paymentRiskAutoRefundMinUnspentPercent',
+  'paymentRiskCheckoutMaxBlockedAttempts',
+  'paymentRiskCheckoutBlockedWindowMinutes',
+  'paymentRiskLinkedAccountActions',
   'defaultFreeCredits',
   'freeTierDailySpendCapCredits',
   'freeTierDay1SpendCapCredits',
   'freeTierDays2To7SpendCapCredits',
+  'newAccountSpendCapDays',
+  'newAccountHourlySpendCapCredits',
+  'newAccountDailySpendCapCredits',
   'stagedSignupGrantEnabled',
   'signupGrantCredits',
   'verifiedUnlockCredits',
@@ -489,6 +505,7 @@ export const SettingKeySchema = z.enum([
   'signupGrantActivityDailyCredits',
   'signupGrantActivityMaxCredits',
   'signupGrantActivityPreviewTestMode',
+  'signupUnlockPaymentHoldHours',
   'maxSignupsPerIpPerDay',
   'maxSignupsPerAsnPerHour',
   'teamPlanMinSeats',
@@ -2217,11 +2234,15 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupGrantActivityDailyCredits', order: 13 },
       { key: 'signupGrantActivityMaxCredits', order: 14 },
       { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
+      { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
       { key: 'maxSignupsPerIpPerDay', order: 15 },
       { key: 'maxSignupsPerAsnPerHour', order: 16 },
       { key: 'freeTierDailySpendCapCredits', order: 17 },
       { key: 'freeTierDay1SpendCapCredits', order: 18 },
       { key: 'freeTierDays2To7SpendCapCredits', order: 19 },
+      { key: 'newAccountSpendCapDays', order: 19.1 },
+      { key: 'newAccountHourlySpendCapCredits', order: 19.2 },
+      { key: 'newAccountDailySpendCapCredits', order: 19.3 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
       { key: 'turnstileFailClosed', order: 22 },
@@ -2240,6 +2261,18 @@ export const API_SERVICE_GROUPS = {
       { key: 'paymentRiskMaxCardsPerWindow', order: 35 },
       { key: 'paymentRiskCardWindowMinutes', order: 36 },
       { key: 'paymentRiskFlagHostingNetwork', order: 37 },
+      { key: 'requireThreeDSecureOnFirstPurchase', order: 38 },
+      { key: 'threeDSecureNewAccountDays', order: 39 },
+      { key: 'signupNetworkAlertsEnabled', order: 40 },
+      { key: 'signupNetworkAlertWindowMinutes', order: 41 },
+      { key: 'signupNetworkAlertMaxPerIp', order: 42 },
+      { key: 'signupNetworkAlertMaxPerHostingAsn', order: 43 },
+      { key: 'signupNetworkAlertMaxPerAsn', order: 44 },
+      { key: 'paymentRiskAutoRefundEnabled', order: 45 },
+      { key: 'paymentRiskAutoRefundMinUnspentPercent', order: 46 },
+      { key: 'paymentRiskCheckoutMaxBlockedAttempts', order: 47 },
+      { key: 'paymentRiskCheckoutBlockedWindowMinutes', order: 48 },
+      { key: 'paymentRiskLinkedAccountActions', order: 49 },
     ],
   },
   KNOWLEDGE: {
@@ -3509,7 +3542,7 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description:
-      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Payments made while both payment rewards are 0 are not counted.",
     category: 'Referrals',
   }),
   ReferralSecondPaymentCredits: makeNumberSetting({
@@ -3520,7 +3553,7 @@ export const settingsMap = {
     min: 0,
     max: 100_000_000,
     description:
-      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Payments made while both payment rewards are 0 are not counted.",
     category: 'Referrals',
   }),
   ReferralHoldDays: makeNumberSetting({
@@ -3531,7 +3564,7 @@ export const settingsMap = {
     min: 0,
     max: 365,
     description:
-      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward. Not active yet: takes effect once inviter rewards ship.',
+      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward.',
     category: 'Referrals',
   }),
   ReferralInvitesPerUser: makeNumberSetting({
@@ -3903,6 +3936,19 @@ export const settingsMap = {
     description: 'Whether to enable team plans',
     category: 'Users',
   }),
+  // Gears trust gate: an unlocked gear pays out only once the account is this old (anti-farm).
+  // See apps/client/server/services/gears/catalog.ts.
+  gearRewardMinAccountAgeDays: makeNumberSetting({
+    key: 'gearRewardMinAccountAgeDays',
+    name: 'Gear Reward Minimum Account Age (days)',
+    defaultValue: 7,
+    min: 0,
+    max: 365,
+    int: true,
+    description:
+      'Account age, in days, before a verified account can claim Gears credit rewards. 0 lets new accounts claim at once. The Gears page quotes this value.',
+    category: 'Users',
+  }),
   allowOpenRegistration: makeBooleanSetting({
     key: 'allowOpenRegistration',
     name: 'Allow Open Registration',
@@ -3911,15 +3957,15 @@ export const settingsMap = {
       'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the Default Free Credits grant is then applied after they verify their email (anti-spam — see Default Free Credits). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
     category: 'Users',
   }),
-  // Personal API key trust gate. A trusted account has a verified email AND one of: a
-  // purchase or active plan, an account older than apiKeyMinAccountAgeDays, or admin
-  // approval (user.apiKeyTrustApproved). See userApiKeyService/trust.ts.
+  // New-account trust gate for API keys and outbound actions (see assertOutboundActionAllowed). A trusted
+  // account has a verified email AND one of: a purchase or active plan, an account older than
+  // apiKeyMinAccountAgeDays, or admin approval (user.apiKeyTrustApproved). See userApiKeyService/trust.ts.
   apiKeyTrustGateEnabled: makeBooleanSetting({
     key: 'apiKeyTrustGateEnabled',
     name: 'API Key Trust Gate',
     defaultValue: true,
     description:
-      'Restricts personal API key creation for untrusted accounts: an unverified email cannot mint keys, and a verified account that has not purchased, is younger than the minimum age and is not admin-approved is limited to the untrusted key cap. Off restores unrestricted minting and lifts the untrusted rate limit. Changes reach running servers within about 5 minutes (settings cache).',
+      'Restricts personal API key creation for untrusted accounts: an unverified email cannot mint keys, and a verified account that has not purchased, is younger than the minimum age and is not admin-approved is limited to the untrusted key cap. The same trust check blocks untrusted accounts from outbound actions (email send, invites, tools, agent helpers, publishing). Off restores unrestricted minting and lifts the untrusted rate limit and outbound block (moderated accounts stay blocked). Changes reach running servers within about 5 minutes (settings cache).',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 1,
@@ -3931,7 +3977,8 @@ export const settingsMap = {
     min: 0,
     max: 365,
     int: true,
-    description: 'Account age, in days, after which a verified account is trusted for API keys without a purchase.',
+    description:
+      'Account age, in days, after which a verified account is trusted for API keys and outbound actions without a purchase.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 2,
@@ -4388,6 +4435,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
+  signupUnlockPaymentHoldHours: makeNumberSetting({
+    key: 'signupUnlockPaymentHoldHours',
+    name: 'Signup Unlock Payment Hold Hours',
+    defaultValue: 72,
+    min: 0,
+    max: 720,
+    int: true,
+    description:
+      'Hours a subscription or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
   maxSignupsPerIpPerDay: makeNumberSetting({
     key: 'maxSignupsPerIpPerDay',
     name: 'Max Signups per IP per Day',
@@ -4609,6 +4668,42 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
+  // Enforced at every credit hold by assertNewAccountSpendWithinCap
+  // (b4m-core/services/src/creditService/newAccountSpendCap.ts).
+  newAccountSpendCapDays: makeNumberSetting({
+    key: 'newAccountSpendCapDays',
+    name: 'New Account Spend Cap - Account Age (days)',
+    defaultValue: 7,
+    int: true,
+    min: 0,
+    max: 365,
+    description:
+      "Accounts younger than this many days are held to the hourly and daily new-account spend caps, paid or not. Counts the account's own credits, bought or granted; org-billed usage follows the org's own limits. Admins and users an admin has exempted are not capped. Set to 0 to turn the caps off.",
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  newAccountHourlySpendCapCredits: makeNumberSetting({
+    key: 'newAccountHourlySpendCapCredits',
+    name: 'New Account Spend Cap - Credits per Hour',
+    defaultValue: 10_000,
+    int: true,
+    min: 0,
+    description:
+      'Most credits a new account may spend in any rolling hour, counting settled usage, requests still running and the request being made. A request that would cross it is refused before any model call. Set to 0 to drop the hourly cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  newAccountDailySpendCapCredits: makeNumberSetting({
+    key: 'newAccountDailySpendCapCredits',
+    name: 'New Account Spend Cap - Credits per Day',
+    defaultValue: 25_000,
+    int: true,
+    min: 0,
+    description:
+      'Most credits a new account may spend in any rolling 24 hours, counted the same way as the hourly cap. Set to 0 to drop the daily cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
   teamPlanMinSeats: makeNumberSetting({
     key: 'teamPlanMinSeats',
     // Read by the create-team and billing UIs for non-admin org owners.
@@ -4799,7 +4894,7 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Post a LiveOps alert when a card payment matches a risk signal below (young account, shared card, several cards, hosting network). Alerts only; nothing is blocked.',
+      'Post a LiveOps alert when a card payment matches a risk signal below (young account, shared card, several cards, hosting network). Controls the alert only; the automatic actions below have their own settings.',
   }),
   paymentRiskYoungAccountMinutes: makeNumberSetting({
     key: 'paymentRiskYoungAccountMinutes',
@@ -4854,6 +4949,142 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description: 'Flag a payment started from a datacenter network or a WAF anonymous-IP (VPN/proxy/hosting) address.',
+  }),
+  // Read by apps/client/server/integrations/stripe/threeDSecure.ts at every checkout and credit purchase.
+  requireThreeDSecureOnFirstPurchase: makeBooleanSetting({
+    key: 'requireThreeDSecureOnFirstPurchase',
+    name: 'Require 3-D Secure on First Purchase',
+    defaultValue: true,
+    description:
+      'Asks the card issuer for a 3-D Secure challenge when an account buys a subscription or credits for the first time: the paying Stripe customer has no prior successful charge, or the account is younger than the new-account window. A passed challenge usually shifts fraud-chargeback liability to the issuer. Turn off if checkout conversion suffers.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    order: 38,
+  }),
+  threeDSecureNewAccountDays: makeNumberSetting({
+    key: 'threeDSecureNewAccountDays',
+    name: '3-D Secure: New-Account Window (days)',
+    defaultValue: 7,
+    min: 0,
+    max: 365,
+    int: true,
+    description:
+      'Every purchase by an account younger than this many days requests 3-D Secure, even after a successful one, so a second card on a fresh account is challenged too. 0 limits the challenge to the first successful purchase.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    order: 39,
+    dependsOn: 'requireThreeDSecureOnFirstPurchase',
+  }),
+  signupNetworkAlertsEnabled: makeBooleanSetting({
+    key: 'signupNetworkAlertsEnabled',
+    name: 'Signup Network Burst Alerts',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Post a security alert when several self-serve accounts sign up from one IP or network (ASN) within the alert window. Alerts only; nothing is blocked. At most one alert per IP or network per window.',
+  }),
+  signupNetworkAlertWindowMinutes: makeNumberSetting({
+    key: 'signupNetworkAlertWindowMinutes',
+    name: 'Signup Network Alert: Window (minutes)',
+    defaultValue: 180,
+    int: true,
+    min: 1,
+    // Deleted accounts are only traced for 24h (signupNetworkSignals.ts), so a longer window under-counts.
+    max: 1440,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Look-back window for the signup network burst alerts, and how long one alert silences the same IP or network.',
+  }),
+  signupNetworkAlertMaxPerIp: makeNumberSetting({
+    key: 'signupNetworkAlertMaxPerIp',
+    name: 'Signup Network Alert: Max Signups per IP',
+    defaultValue: 1,
+    int: true,
+    min: 0,
+    max: 1000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Alert when more self-serve accounts than this signed up from one IP within the window. 0 turns the check off.',
+  }),
+  signupNetworkAlertMaxPerHostingAsn: makeNumberSetting({
+    key: 'signupNetworkAlertMaxPerHostingAsn',
+    name: 'Signup Network Alert: Max Signups per Hosting/VPN Network',
+    defaultValue: 2,
+    int: true,
+    min: 0,
+    max: 1000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Alert when more self-serve accounts than this signed up within the window from the network (ASN) of a signup made from a datacenter or WAF anonymous-IP (VPN/proxy/hosting) address. 0 turns the check off.',
+  }),
+  signupNetworkAlertMaxPerAsn: makeNumberSetting({
+    key: 'signupNetworkAlertMaxPerAsn',
+    name: 'Signup Network Alert: Max Signups per Network (any ASN)',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 5000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Alert when more self-serve accounts than this signed up from one network (ASN) within the window, hosting or not. Consumer ISPs are busy networks, so keep this well above normal traffic. 0 turns the check off.',
+  }),
+  paymentRiskAutoRefundEnabled: makeBooleanSetting({
+    key: 'paymentRiskAutoRefundEnabled',
+    name: 'Payment Risk: Act on Early Fraud Warnings',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'When Stripe reports an early fraud warning, refund the charge, claw back its credits and any signup credits a subscription unlocked, lock the account, and cancel subscriptions on that card. Off: alert only.',
+  }),
+  paymentRiskAutoRefundMinUnspentPercent: makeNumberSetting({
+    key: 'paymentRiskAutoRefundMinUnspentPercent',
+    name: 'Payment Risk: Refund Only Above Unspent %',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Refund a fraud-warned credit purchase only when at least this percent of its credits is still unspent. The account is locked either way. 0 always refunds.',
+  }),
+  paymentRiskCheckoutMaxBlockedAttempts: makeNumberSetting({
+    key: 'paymentRiskCheckoutMaxBlockedAttempts',
+    name: 'Payment Risk: Refuse Checkout After Radar Blocks',
+    defaultValue: 3,
+    int: true,
+    min: 0,
+    max: 100,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Refuse a new checkout for an account, or from a network, with this many Radar-blocked payments within the blocked window. 0 turns the check off.',
+  }),
+  paymentRiskCheckoutBlockedWindowMinutes: makeNumberSetting({
+    key: 'paymentRiskCheckoutBlockedWindowMinutes',
+    name: 'Payment Risk: Radar Block Window (minutes)',
+    defaultValue: 1440,
+    int: true,
+    min: 1,
+    max: 43_200,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Look-back window for Refuse Checkout After Radar Blocks.',
+  }),
+  paymentRiskLinkedAccountActions: makeBooleanSetting({
+    key: 'paymentRiskLinkedAccountActions',
+    name: 'Payment Risk: Act on Linked Accounts',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'When an account is locked, banned, suspended, disputed or fraud-warned, lock other accounts that paid with the same card and alert on accounts sharing only its network. Also refuses checkout to an account linked to a blocked one.',
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',
