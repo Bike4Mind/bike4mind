@@ -281,6 +281,37 @@ jobs:
               --no-git --source .
           fi
 
+  # Every changed path, any extension: blocked paths, cloud identifiers in added lines. Mirrors
+  # the husky pre-commit guard so a `--no-verify` bypass is still caught. Ungated for the same
+  # reason as secret-scan: docs/** and docs-site/** are non-deployable, and they are exactly where
+  # planning artifacts and pasted identifiers land. checkLeakShapesJobWired.test.ts pins this.
+  # The restricted-term list is not available here (it is a git-ignored local file), so that rule
+  # is skipped and the Restricted Terms workflow remains the authority for it.
+  leak-shapes:
+    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: Leak Shapes
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - name: Resolve base for the leak-shapes check
+        id: base
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: echo "base=$(bash scripts/resolve-guard-base.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Check for leak shapes in changed paths and added lines
+        run: bash scripts/check-no-leak-shapes.sh --changed "$LEAK_SHAPES_BASE"
+        env:
+          LEAK_SHAPES_BASE: ${{ steps.base.outputs.base }}
+
   typecheck:
     needs: core-build
     # Light tier (RUNNER_LABEL): tsgo (native TS) is fast and low-memory and runs
@@ -1208,6 +1239,7 @@ jobs:
       - core-build
       - repo-guards
       - secret-scan
+      - leak-shapes
       - typecheck
       - lint
       - openapi
@@ -1228,6 +1260,7 @@ jobs:
           CORE_BUILD: ${{ needs.core-build.result }}
           REPO_GUARDS: ${{ needs.repo-guards.result }}
           SECRET_SCAN: ${{ needs.secret-scan.result }}
+          LEAK_SHAPES: ${{ needs.leak-shapes.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
           LINT: ${{ needs.lint.result }}
           OPENAPI: ${{ needs.openapi.result }}
@@ -1239,7 +1272,7 @@ jobs:
           DOCS_SCAN: ${{ needs.docs-scan-gate.result }}
           PUBLISHED_DTS: ${{ needs.published-dts.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS secret-scan=$SECRET_SCAN typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test-shards=$TEST_SHARDS cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS secret-scan=$SECRET_SCAN leak-shapes=$LEAK_SHAPES typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test-shards=$TEST_SHARDS cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
           # Same rule as the `test` aggregator: on a deployable run every shard must succeed.
           if [ "$DEPLOYABLE" = "true" ] && [ "$TEST_SHARDS" != "success" ]; then
             echo "::error::Test shards did not all pass; failing the required check."
@@ -1247,7 +1280,7 @@ jobs:
           fi
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$SECRET_SCAN" "$TYPECHECK" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$SECRET_SCAN" "$LEAK_SHAPES" "$TYPECHECK" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1

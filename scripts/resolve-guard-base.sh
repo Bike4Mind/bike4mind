@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prints the commit the "changed lines" guards in ci.yml diff against: the ASCII checks in
-# `repo-guards` and the gitleaks range scan in `secret-scan`. Both jobs call this, so they always
-# agree on what a change added.
+# `repo-guards`, the gitleaks range scan in `secret-scan` and the leak-shapes check in `leak-shapes`.
+# All three call this, so they always agree on what a change added.
 #
 # Inputs arrive as env, never interpolated into a run body: BASE_REF is a branch name, and git
 # permits `;`, `$()`, backticks, `|` and quotes in a ref.
