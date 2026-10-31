@@ -2738,6 +2738,7 @@ export interface components {
           | 'anthropic'
           | 'gemini'
           | 'ollama'
+          | 'openai-compatible'
           | 'bfl'
           | 'xai'
           | 'kimi'
