@@ -263,20 +263,14 @@ const handler = baseApi().put(
       const statusChanges = statusFlagChanges(body, targetBefore);
       const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
 
-      // No self-service privilege: an admin cannot move their own balance or change their own
-      // admin flag. The attempt is recorded as a critical denied entry and answered with a 403.
-      const deniesSelf = isSelfOrImpersonator(currentUser, userId);
-      if (deniesSelf && changesRole) {
+      // No self-service privilege: an admin cannot change their own admin flag. The attempt is
+      // recorded as a critical denied entry and answered with a 403. Self credit adjustments are
+      // allowed for now, pending scoped admin permissions, and flagged in their audit entry.
+      const targetsSelf = isSelfOrImpersonator(currentUser, userId);
+      if (targetsSelf && changesRole) {
         await denySelfAdminAction(req, {
           action: 'user.role.denied',
           attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
-          target: auditTarget,
-        });
-      }
-      if (deniesSelf && changesCredits) {
-        await denySelfAdminAction(req, {
-          action: 'user.credits.denied',
-          attempted: 'user.credits.adjusted',
           target: auditTarget,
         });
       }
@@ -359,7 +353,7 @@ const handler = baseApi().put(
               summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
               reason: creditAdjustment.note,
               changes: [{ field: 'currentCredits', before: previousBalance, after: resultingBalance }],
-              details: { credits },
+              details: { credits, selfGrant: targetsSelf },
               related: creditTransactionId ? { creditTransactionId } : undefined,
             });
           }
