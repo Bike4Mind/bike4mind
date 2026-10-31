@@ -112,6 +112,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
     const { res, run } = call(5);
     await run();
     expect(mockOrgCreate).toHaveBeenCalled();
+    expect(mockSubCreate).toHaveBeenCalledWith(expect.objectContaining({ grantedReason: REASON }));
     expect(mockAddCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 5 * 1000 }), expect.anything());
     expect(res._getJSONData()).toMatchObject({ seats: 5, credits: 5 * 1000 });
   });
@@ -128,10 +129,24 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
         target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
         organizationId: 'org-1',
         reason: REASON,
-        details: expect.objectContaining({ subscriptionType: 'team', seats: 5, credits: 5 * 1000 }),
+        details: expect.objectContaining({
+          subscriptionType: 'team',
+          seats: 5,
+          credits: 5 * 1000,
+          subscriptionId: expect.stringMatching(/^admin_grant_/),
+        }),
         related: { creditTransactionId: 'tx-sub-grant' },
       })
     );
+  });
+
+  it('names the new row in the audit details and returns its record id', async () => {
+    const { res, run } = call(5);
+    await run();
+    const [, input] = vi.mocked(recordAdminActionFromRequest).mock.calls[0];
+    const grantedRowSubscriptionId = mockSubCreate.mock.calls[0][0].subscriptionId;
+    expect(input.details).toMatchObject({ subscriptionId: grantedRowSubscriptionId });
+    expect(res._getJSONData()).toMatchObject({ subscriptionRecordId: 'sub-1' });
   });
 
   it('fails the request without notifying when the strict audit write fails', async () => {
@@ -186,7 +201,13 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
     await run();
 
     expect(mockSubCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerId: 'user-1', priceId: plan.priceId, grantedBy: 'admin-1', quantity: 1 })
+      expect.objectContaining({
+        ownerId: 'user-1',
+        priceId: plan.priceId,
+        grantedBy: 'admin-1',
+        grantedReason: REASON,
+        quantity: 1,
+      })
     );
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: 'user-1', credits: plan.credits * 2 }),
@@ -199,9 +220,11 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
         action: 'user.subscription.granted',
         target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
         reason: REASON,
+        details: expect.objectContaining({ subscriptionId: expect.stringMatching(/^admin_grant_/) }),
         related: { creditTransactionId: 'tx-sub-grant' },
       })
     );
+    expect(res._getJSONData()).toMatchObject({ subscriptionRecordId: 'sub-1' });
   });
 
   it('records the audit inside the grant transaction', async () => {

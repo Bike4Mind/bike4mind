@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { resolveSubscriptionSource, setSeats } from '@server/services/organizationService';
+import { pickPrimarySubscription, resolveSubscriptionSource, setSeats } from '@server/services/organizationService';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { z } from 'zod';
@@ -50,13 +50,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(
     }
 
     const organization = await setSeats(id, seats, { type: 'admin', userId: req.user!.id });
+    // The row setSeats resizes, so the subscription detail page's admin log picks this entry up.
+    const subscriptionId = pickPrimarySubscription(activeSubs)?.subscriptionId ?? null;
 
     await recordAdminActionFromRequest(req, {
       action: 'org.seats.changed',
       target: { kind: 'organization', id: organization.id, displayName: organization.name },
       summary: `set seats to ${organization.seats}`,
       reason,
-      details: { seats: organization.seats, ownerId: organization.userId },
+      details: { seats: organization.seats, ownerId: organization.userId, subscriptionId },
     });
 
     await sendToClient(organization.userId, Resource.websocket.managementEndpoint, {

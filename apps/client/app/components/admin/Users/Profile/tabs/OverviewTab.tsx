@@ -4,7 +4,7 @@ import { USER_TIMELINE_TYPES, resolveUserStorageLimit, storageLimitToBytes, type
 import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
-import UserSubscriptionStatus from '../../Details/UserSubscriptionStatus';
+import { SubscriptionSummaryList } from '../../../Subscriptions/SubscriptionSummaryList';
 import { Fact, SectionCard, StatusChip, formatUtc } from '../../../shared';
 import type { ProfileAction } from '../actions/profileActions';
 import { RiskEvidenceCard } from '../RiskEvidenceCard';
@@ -229,8 +229,8 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
         }
         data-testid="user-profile-subscription-card"
       >
-        <Box sx={{ p: 2 }}>
-          <UserSubscriptionStatus user={user} />
+        <Box sx={{ p: 0.5 }}>
+          <SubscriptionSummaryList userId={user.id} />
         </Box>
       </SectionCard>
     </Stack>
