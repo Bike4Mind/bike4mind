@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   ADMIN_LINKS,
   ALARM_CATALOG,
+  alarmCatalogEntry,
   alarmSuffix,
   appUrlFromEnv,
   composeAlarmMessage,
@@ -182,6 +183,16 @@ describe('formatAlarmSlackMessage on production', () => {
     expect(message.text).not.toContain('<!channel>');
   });
 
+  it('places detail sections between why it matters and what to do', () => {
+    const message = formatAlarmSlackMessage(sample, 'production', {
+      details: ['*Top accounts in the window*\n1. `u1` 1.52 USD'],
+    });
+    const labels = bodyOf(message)
+      .filter(b => b.type === 'section' && b.text)
+      .map(b => b.text!.text.split('\n')[0]);
+    expect(labels).toEqual(['*What happened*', '*Why it matters*', '*Top accounts in the window*', '*What to do*']);
+  });
+
   it('omits admin buttons without an app url and the CloudWatch button without a Region', () => {
     const message = formatAlarmSlackMessage({ ...burst, Region: undefined }, 'production');
     expect(bodyOf(message).find(b => b.type === 'actions')).toBeUndefined();
@@ -341,6 +352,19 @@ describe('formatAlarmSlackMessage on other stages', () => {
 });
 
 describe('ALARM_CATALOG', () => {
+  it('asks for the account list on the young-account spend alarms only', () => {
+    const withDetail = Object.entries(ALARM_CATALOG)
+      .filter(([, entry]) => entry.detail !== undefined)
+      .map(([key]) => key)
+      .sort();
+    expect(withDetail).toEqual(['llm-spend-young-accounts', 'young-account-spend-rate']);
+    expect(ALARM_CATALOG['young-account-spend-rate'].action).toContain('listed above');
+    expect(alarmCatalogEntry({ ...sample, AlarmName: 'bike4mind-dev-young-account-spend-rate' }, 'dev')?.detail).toBe(
+      'young-account-spend'
+    );
+    expect(alarmCatalogEntry(sample, 'production')?.detail).toBeUndefined();
+  });
+
   it('only names admin links that exist', () => {
     for (const entry of Object.values(ALARM_CATALOG)) {
       for (const key of entry.links ?? []) expect(ADMIN_LINKS[key]).toBeDefined();

@@ -9,6 +9,11 @@ const resource = vi.hoisted(() => ({
 
 vi.mock('sst', () => ({ Resource: resource }));
 
+const detail = vi.hoisted(() => ({
+  youngAccountSpendSection: vi.fn(async () => '*Top accounts in the window*\n1. `u1` 1.52 USD in 36 calls'),
+}));
+vi.mock('./youngAccountSpendDetail', () => detail);
+
 import { handler } from './dlqAlarmToSlack';
 
 const makeEvent = (message: string): SNSEvent => ({
@@ -34,22 +39,47 @@ const makeEvent = (message: string): SNSEvent => ({
   ],
 });
 
-const alarmPayload = (state: string) =>
+const alarmPayload = (state: string, alarmName = 'bike4mind-production-test-alarm') =>
   JSON.stringify({
-    AlarmName: 'bike4mind-production-test-alarm',
+    AlarmName: alarmName,
     AlarmDescription: 'Test alarm description',
     NewStateValue: state,
     NewStateReason: 'Threshold crossed',
     StateChangeTime: '2026-01-01T00:00:00.000Z',
   });
 
+const YOUNG_ACCOUNT_ALARM = 'bike4mind-production-young-account-spend-rate';
+
 describe('dlqAlarmToSlack handler', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     resource.SLACK_ALARMS_WEBHOOK_URL = undefined;
+    resource.App.stage = 'production';
+    detail.youngAccountSpendSection.mockClear();
     fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
     vi.stubGlobal('fetch', fetchMock);
+  });
+
+  it('lists the top accounts on a young-account spend alarm', async () => {
+    await handler(makeEvent(alarmPayload('ALARM', YOUNG_ACCOUNT_ALARM)));
+    expect(detail.youngAccountSpendSection).toHaveBeenCalledOnce();
+    expect(detail.youngAccountSpendSection.mock.calls[0][0]).toMatchObject({ AlarmName: YOUNG_ACCOUNT_ALARM });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const sections = (body.attachments[0].blocks as { type: string; text?: { text: string } }[])
+      .filter(b => b.type === 'section' && b.text)
+      .map(b => b.text!.text.split('\n')[0]);
+    expect(sections).toEqual(['*What happened*', '*Why it matters*', '*Top accounts in the window*', '*What to do*']);
+    expect(JSON.stringify(body.attachments)).toContain('`u1` 1.52 USD in 36 calls');
+  });
+
+  it('does not look accounts up for other alarms, resolutions, or alarms this stage drops', async () => {
+    await handler(makeEvent(alarmPayload('ALARM')));
+    await handler(makeEvent(alarmPayload('OK', YOUNG_ACCOUNT_ALARM)));
+    resource.App.stage = 'dev';
+    await handler(makeEvent(alarmPayload('ALARM', 'bike4mind-dev-test-alarm')));
+    expect(detail.youngAccountSpendSection).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('posts an explained message when alarm transitions to ALARM state', async () => {
