@@ -11,11 +11,24 @@ import { join } from 'node:path';
  */
 
 const REAL_SCRIPT = join(__dirname, '../scripts/generate-premium-glue.mjs');
-const GENERATED = 'server/premium-generated/premiumAgentExtensions.generated.ts';
+const GENERATED = 'packages/server-utils/src/premium-generated/premiumAgentExtensions.generated.ts';
 
 let sandbox: string;
 let script: string;
 let clientRoot: string;
+
+// The generator imports an overlay's declared export by relative path, so give each subpath the
+// contributions name an `exports` entry pointing at src/<subpath>.ts.
+function declaredExports(name: string, contributions: Record<string, unknown>) {
+  const specifiers = Object.values(contributions).flatMap(value =>
+    value && typeof value === 'object' && !Array.isArray(value) ? Object.values(value) : [value]
+  );
+  return Object.fromEntries(
+    specifiers
+      .filter((s): s is string => typeof s === 'string' && s.startsWith(`${name}/`))
+      .map(s => [`.${s.slice(name.length)}`, `./src${s.slice(name.length)}.ts`])
+  );
+}
 
 // Hydrates the overlay under packages/premium AND links it from apps/client's node_modules, the
 // way a pnpm workspace link would, so the bare-specifier glue treats it as resolvable.
@@ -23,7 +36,10 @@ function writeOverlay(dir: string, contributions: Record<string, unknown>) {
   const name = `@bike4mind/premium-${dir}`;
   const overlayDir = join(sandbox, 'packages/premium', dir);
   mkdirSync(overlayDir, { recursive: true });
-  writeFileSync(join(overlayDir, 'package.json'), JSON.stringify({ name, b4mContributions: contributions }));
+  writeFileSync(
+    join(overlayDir, 'package.json'),
+    JSON.stringify({ name, exports: declaredExports(name, contributions), b4mContributions: contributions })
+  );
   const linkDir = join(clientRoot, 'node_modules', name);
   mkdirSync(linkDir, { recursive: true });
   writeFileSync(join(linkDir, 'package.json'), JSON.stringify({ name }));
@@ -37,7 +53,7 @@ function runCodegen() {
 function generate() {
   const result = runCodegen();
   expect(result.status, result.stderr).toBe(0);
-  return readFileSync(join(clientRoot, GENERATED), 'utf8');
+  return readFileSync(join(sandbox, GENERATED), 'utf8');
 }
 
 beforeAll(() => {
@@ -73,7 +89,7 @@ describe('premium agent extensions', () => {
     writeOverlay('alpha', { agentExtensionsExport: '@bike4mind/premium-alpha/agent-extensions' });
     const out = generate();
     expect(out).toContain(
-      `import { agentExtensions as extensions0 } from '@bike4mind/premium-alpha/agent-extensions';`
+      `import { agentExtensions as extensions0 } from '../../../premium/alpha/src/agent-extensions';`
     );
     expect(out).toContain('premiumAgentExtensions: AgentExtensionContribution[] = [\n  extensions0\n];');
   });
@@ -82,9 +98,28 @@ describe('premium agent extensions', () => {
     writeOverlay('alpha', { agentExtensionsExport: '@bike4mind/premium-alpha/agent-extensions' });
     writeOverlay('beta', { agentExtensionsExport: '@bike4mind/premium-beta/agent-extensions' });
     const out = generate();
-    expect(out).toContain(`from '@bike4mind/premium-alpha/agent-extensions';`);
-    expect(out).toContain(`from '@bike4mind/premium-beta/agent-extensions';`);
+    expect(out).toContain(`from '../../../premium/alpha/src/agent-extensions';`);
+    expect(out).toContain(`from '../../../premium/beta/src/agent-extensions';`);
     expect(out).toContain('[\n  extensions0,\n  extensions1\n];');
+  });
+
+  it('rejects an export the overlay does not declare', () => {
+    const overlayDir = join(sandbox, 'packages/premium/undeclared');
+    mkdirSync(overlayDir, { recursive: true });
+    writeFileSync(
+      join(overlayDir, 'package.json'),
+      JSON.stringify({
+        name: '@bike4mind/premium-undeclared',
+        b4mContributions: { agentExtensionsExport: '@bike4mind/premium-undeclared/agent-extensions' },
+      })
+    );
+    // Linked, since an unlinked overlay gets the absent form and never reaches the resolver.
+    const linkDir = join(clientRoot, 'node_modules', '@bike4mind/premium-undeclared');
+    mkdirSync(linkDir, { recursive: true });
+    writeFileSync(join(linkDir, 'package.json'), JSON.stringify({ name: '@bike4mind/premium-undeclared' }));
+    const result = runCodegen();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('cannot resolve agentExtensionsExport');
   });
 
   it('rejects a specifier that is not a module path', () => {

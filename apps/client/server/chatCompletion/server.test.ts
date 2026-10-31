@@ -30,7 +30,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: mockEm
 const mockConnectionFind = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/social', () => ({ Connection: { find: mockConnectionFind } }));
 const mockSendToConnection = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/websocket/utils', () => ({ sendToConnection: mockSendToConnection }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToConnection: mockSendToConnection }));
 
 // processQuest is the heavy import chain (DB models, services). Mock it so importing the
 // server doesn't drag in the whole world and so we can assert it's invoked on a valid 202.
@@ -58,6 +58,7 @@ vi.mock('@bike4mind/database', () => ({
   // Pulled in by the completions route for org-billed API keys; unused by these
   // personal/JWT cases but must exist or the mocked-module export getter throws.
   organizationRepository: { findById: vi.fn().mockResolvedValue(null) },
+  cacheRepository: {},
 }));
 
 // executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk
@@ -134,6 +135,15 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
+
+const ipGate = vi.hoisted(() => ({ blocked: false, options: [] as unknown[] }));
+vi.mock('@server/middlewares/checkBlockedIP', () => ({
+  checkBlockedIP: (options: unknown) => {
+    ipGate.options.push(options);
+    return (_req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }, next: () => void) =>
+      ipGate.blocked ? res.status(403).json({ error: 'network blocked' }) : next();
+  },
 }));
 
 import { checkModelCatalogWired, createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
@@ -810,5 +820,37 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
       expect.objectContaining({ name: 'ProcessingFailed', dimensions: { Stage: 'test', Surface: 'cli-ws' } })
     );
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatCompletion IP block gate', () => {
+  afterEach(() => {
+    ipGate.blocked = false;
+  });
+
+  it('mounts one app-surface gate', () => {
+    expect(ipGate.options).toEqual([{ surface: 'app' }]);
+  });
+
+  it.each(['/api/ai/v1/completions', '/api/ai/v1/ws-completions', '/api/embed/chat'])(
+    'refuses %s from a blocked address before auth',
+    async path => {
+      ipGate.blocked = true;
+      const res = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'network blocked' });
+      expect(mockAuth.verifyApiKey).not.toHaveBeenCalled();
+      expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    }
+  );
+
+  it('leaves the internal /process route and /health alone', async () => {
+    ipGate.blocked = true;
+    expect((await post(VALID_BODY, { authorization: AUTH })).status).toBe(202);
+    expect((await fetch(`${baseUrl}/health`)).status).not.toBe(403);
   });
 });

@@ -34,7 +34,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { verifyEmbedApiKey } from '@server/cli/auth';
-import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { parseBrandingColor, parseBrandingDisplayName } from '@bike4mind/common';
 
 /** Per-IP flood backstop: every request costs a key lookup on an unauth surface. */

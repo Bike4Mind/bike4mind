@@ -22,7 +22,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mockGetSettingsMap,
   getSettingsValue: (key: string, settings: Record<string, string>, fallback = 0) => Number(settings[key] ?? fallback),
 }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: mockSlack }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mockSlack }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn() } }));
 
 import { REFERRAL_REWARD_REASON, rewardInviterForFirstAnswer } from './firstAnswerReward';

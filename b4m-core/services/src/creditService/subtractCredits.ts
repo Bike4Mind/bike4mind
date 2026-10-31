@@ -114,11 +114,14 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Text generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'completion_api_usage') {
     tx = await db.creditTransactions.createTransaction('completion_api_usage', {
@@ -130,8 +133,11 @@ export async function subtractCreditsWithLedgerRow(
       source,
       model: params.model,
       apiKeyId: params.apiKeyId, // Optional - present for API key auth, undefined for JWT
+      sessionId: params.sessionId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'decision_usage') {
     tx = await db.creditTransactions.createTransaction('decision_usage', {
@@ -145,6 +151,8 @@ export async function subtractCreditsWithLedgerRow(
       apiKeyId: params.apiKeyId, // Optional - present for API key auth, undefined for JWT
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'image_generation_usage') {
     tx = await db.creditTransactions.createTransaction('image_generation_usage', {
@@ -154,6 +162,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Image generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
@@ -166,6 +175,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Image editing usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
@@ -178,6 +188,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Video generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
@@ -190,6 +201,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Tool usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
@@ -202,6 +214,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Speech to text usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
@@ -213,6 +226,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Text to speech usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
@@ -224,6 +238,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Sound effects usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
@@ -235,6 +250,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Music generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
@@ -256,6 +272,7 @@ export async function subtractCreditsWithLedgerRow(
       description: description || 'Voice usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });

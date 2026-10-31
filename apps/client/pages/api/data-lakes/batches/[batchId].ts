@@ -8,10 +8,16 @@ import {
   fabFileRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { BATCH_TERMINAL_STATUSES, type BatchStatus, type IDataLakeBatchDocument } from '@bike4mind/common';
+import {
+  BATCH_TERMINAL_STATUSES,
+  dataLakeBatchResponseSchema,
+  type BatchStatus,
+  type IDataLakeBatchDocument,
+} from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { respond } from '@server/utils/respond';
 
 const UpdateBatchInput = z.object({
   status: z.enum(['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled']),
@@ -78,7 +84,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       return res.status(404).json({ error: 'Batch not found' });
     }
 
-    return res.json(batch);
+    return respond(res, dataLakeBatchResponseSchema, batch);
   })
   // PUT: update batch status
   .put(async (req: Request, res) => {

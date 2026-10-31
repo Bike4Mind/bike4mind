@@ -12,6 +12,7 @@ import {
   CalendarX,
   ChartColumn,
   ChartLine,
+  ChartSpline,
   Clock,
   Code,
   Coins,
@@ -45,6 +46,7 @@ import {
   Plug,
   Radar,
   RotateCcw,
+  Scale,
   ScanSearch,
   ScrollText,
   Settings,
@@ -136,6 +138,8 @@ export enum AdminTab {
   SignupDomainHolds = 68,
   SignupRiskReview = 69,
   HeldSignupGrants = 70,
+  PreferenceArena = 71,
+  Revenue = 72,
 }
 
 /**
@@ -216,6 +220,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Coins,
     label: 'Money',
     items: [
+      { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue', testid: 'admin-revenue-btn' },
       { Icon: Coins, tab: AdminTab.CreditAnalytics, label: 'Credits' },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
@@ -248,6 +253,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Wrench, tab: AdminTab.ToolDefinitions, label: 'Tools' },
       { Icon: Settings, tab: AdminTab.ManageGears, label: 'Gears' },
       { Icon: ChartColumn, tab: AdminTab.ModelMetrics, label: 'Model metrics' },
+      { Icon: Scale, tab: AdminTab.PreferenceArena, label: 'Preference arena', testid: 'admin-preference-arena-btn' },
       { Icon: CalendarX, tab: AdminTab.ModelLifecycle, label: 'Model lifecycle', testid: 'admin-model-lifecycle-btn' },
       { Icon: ScanSearch, tab: AdminTab.RetrievalRate, label: 'Retrieval', testid: 'admin-retrieval-rate-btn' },
       {

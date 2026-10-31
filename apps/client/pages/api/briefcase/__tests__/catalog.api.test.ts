@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => null }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => null }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => null }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
 vi.mock('@bike4mind/database', () => ({ briefcasePromptRepository: {} }));
 vi.mock('@bike4mind/services', () => ({
   briefcaseService: { getCatalog: (...a: unknown[]) => mockGetCatalog(...a) },

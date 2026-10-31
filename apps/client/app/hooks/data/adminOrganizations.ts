@@ -3,7 +3,7 @@ import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 
-const ADMIN_GRANTS_KEY = ['admin', 'organizations', 'grants'] as const;
+export const ADMIN_GRANTS_KEY = ['admin', 'organizations', 'grants'] as const;
 
 /**
  * Unwrap the server's error message from an axios error so users see the

@@ -30,7 +30,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
-import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';
+import { authorizeLakeConnectorAccess } from '@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess';
 import {
   assertLakeConnectorFree,
   withConnectionId,
@@ -39,7 +39,7 @@ import {
 import {
   purgeConnectionIngestedFiles,
   type PurgeConnectionLogger,
-} from '@server/dataLakes/purgeConnectionIngestedFiles';
+} from '@bike4mind/server-utils/dataLakes/purgeConnectionIngestedFiles';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
@@ -58,7 +58,7 @@ import {
   readGitHubLakeUserToken,
   requireGitHubLakeFlowNonce,
   storeGitHubLakeAuthGrant,
-} from './githubLakeAuthGrant';
+} from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeAuthGrant';
 import {
   deleteInstallation,
   exchangeInstallerCode,
@@ -70,7 +70,7 @@ import {
   type GitHubLakeAppConfig,
   type GitHubLakeUserInstallation,
 } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
-import { findInstallationPolicyViolation } from './lakeAppPolicy';
+import { findInstallationPolicyViolation } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppPolicy';
 
 export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state', expiresIn: '10m' } as const;
 

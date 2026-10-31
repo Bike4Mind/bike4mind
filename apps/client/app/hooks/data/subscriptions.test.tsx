@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
-import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import type { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { useCancelSubscription, useSubscribePlan } from './subscriptions';
 
 /**

@@ -115,6 +115,13 @@ export const adminLedgerRowSchema = z.object({
   questId: z.string().optional(),
   inputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
+  /** Prompt-cache tokens, disjoint from inputTokens and priced on their own. */
+  cacheReadTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
+  /** The client conversation a completion API row belongs to, when the client sent one. */
+  sessionId: z.string().optional(),
+  /** Distinct tools the model called on a completion API row. */
+  toolNames: z.array(z.string()).optional(),
   description: z.string().optional(),
   /** Machine reason on generic_* rows, e.g. admin_adjustment or credit_expiry. */
   reason: z.string().optional(),
@@ -157,6 +164,18 @@ export const adminCreditSummarySchema = z.object({
   byModel: z.array(adminSpendBucketSchema),
   /** Every source with spend in the last 90 days, largest 90-day spend first. */
   bySource: z.array(adminSpendBucketSchema),
+  /**
+   * Provider USD of system-sourced work the user triggered, charged or not: since UTC midnight (what
+   * the free-tier daily cap counts) and over rolling 7/30 days. dailyCapUsd 0 means the cap is off.
+   * capApplies is false when the gate would never refuse this user (enforcement off, admin, paid tier).
+   */
+  systemCost: z.object({
+    todayUsd: z.number(),
+    last7dUsd: z.number(),
+    last30dUsd: z.number(),
+    dailyCapUsd: z.number(),
+    capApplies: z.boolean(),
+  }),
 });
 export type AdminCreditSummary = z.infer<typeof adminCreditSummarySchema>;
 

@@ -224,6 +224,10 @@ describe('autoFixToolRefusal', () => {
     expect(autoFixToolRefusal('session_send', { text: 'merge it' })).not.toBeNull();
   });
 
+  it('refuses changing which PR the session follows', () => {
+    expect(autoFixToolRefusal('set_session_pull_request', { pull_request: '#9' })).not.toBeNull();
+  });
+
   it('checks shell commands and leaves other tools alone', () => {
     expect(autoFixToolRefusal('bash_execute', { command: 'git push -f' })).not.toBeNull();
     expect(autoFixToolRefusal('bash_execute', { command: 'git push' })).toBeNull();

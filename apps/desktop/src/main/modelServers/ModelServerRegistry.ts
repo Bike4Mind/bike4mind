@@ -47,7 +47,7 @@ import {
 import type { LocalChat } from '../chat/localChat';
 import { OllamaLocal } from '../chat/OllamaLocal';
 import type { ModelHubServer } from '../models/ModelHubService';
-import { ServerCredentialsError, ServerUnreachableError } from './errors';
+import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
 
@@ -184,6 +184,11 @@ export class ModelServerRegistry {
     });
     const parsed = parseServerAddress(input.address);
     if (!parsed) return failed('Enter an address like https://host, http://192.168.1.5:11434 or host:port.');
+    if (isLocalOllama(parsed)) {
+      return failed(
+        `${new URL(parsed.baseUrl).host} is ${LOCAL_SERVER_NAME}, which is already listed. To reach another machine through an SSH tunnel, forward a different local port, such as 21434.`
+      );
+    }
     let headers: Record<string, string> | null;
     try {
       headers = credentialHeaders(input.credential);
@@ -209,8 +214,14 @@ export class ModelServerRegistry {
         kind: outcome.kind,
       });
     }
-    if (!outcome.kind)
-      return failed(outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`, base);
+    if (!outcome.kind) {
+      // Some servers answer 403, not 401, when the token is missing.
+      const hint = outcome.forbidden && !headers ? ' If this server needs an API key, enter it and test again.' : '';
+      return failed(
+        `${outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`}${hint}`,
+        base
+      );
+    }
     let openToAnyone = false;
     if (scope === 'public') {
       openToAnyone = headers
@@ -308,6 +319,12 @@ export class ModelServerRegistry {
     const lists = await Promise.all(
       [...this.entries.values()].map(async entry => {
         const server = { id: entry.record.id, name: entry.record.name };
+        // Asking without the credential would get a 401 that replaces this message with a vaguer one.
+        const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
+        if (missing && (entry.health.state !== missing.state || entry.health.error !== missing.error)) {
+          this.setHealth(entry, missing);
+          this.emit();
+        }
         // A server shown as down may be back: a check already running (say, after a pull) decides, or a
         // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
         const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
@@ -423,12 +440,13 @@ export class ModelServerRegistry {
     }
   }
 
-  /** The runtime's 401/403 as a credentials error, and the cause of a connection error it wrapped. */
+  /** The runtime's 401 as a credentials error, its 403 as a refusal, and the cause of a connection error it wrapped. */
   private unwrapFailure(err: unknown, entry: Entry): unknown {
     const inner = err instanceof RuntimeConnectionError && err.cause !== undefined ? err.cause : err;
-    if (inner instanceof RuntimeHttpError && (inner.status === 401 || inner.status === 403)) {
+    if (inner instanceof RuntimeHttpError && inner.status === 401) {
       return new ServerCredentialsError(entry.record.name, !!this.deps.store.headers(entry.record));
     }
+    if (inner instanceof RuntimeHttpError && inner.status === 403) return new ServerForbiddenError(entry.record.name);
     return inner;
   }
 
@@ -476,15 +494,7 @@ export class ModelServerRegistry {
   private async probeEntry(entry: Entry): Promise<void> {
     entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
     if (this.deps.store.credentialMissing(entry.record)) {
-      this.setHealth(entry, {
-        state: 'credentials',
-        version: null,
-        latencyMs: null,
-        checkedAt: new Date().toISOString(),
-        error: this.deps.store.credentialPersisted()
-          ? 'The saved credential could not be read. Enter it again.'
-          : 'The credential was kept only until Desktop quit. Enter it again.',
-      });
+      this.setHealth(entry, this.missingCredentialHealth());
       return;
     }
     const outcome = await probeServer(
@@ -545,6 +555,18 @@ export class ModelServerRegistry {
     void entry.client.recheckTools?.(entry.record.models[0]);
   }
 
+  private missingCredentialHealth(): ModelServerHealth {
+    return {
+      state: 'credentials',
+      version: null,
+      latencyMs: null,
+      checkedAt: new Date().toISOString(),
+      error: this.deps.store.credentialPersisted()
+        ? 'The saved credential could not be read. Enter it again.'
+        : 'The credential was kept only until Desktop quit. Enter it again.',
+    };
+  }
+
   private stale(entry: Entry): boolean {
     const checked = entry.health.checkedAt ? Date.parse(entry.health.checkedAt) : 0;
     return Date.now() - checked >= RECHECK_AFTER_MS;
@@ -587,7 +609,7 @@ export class ModelServerRegistry {
           });
     const runtime: LocalRuntime =
       record.kind === 'ollama'
-        ? new OllamaRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch })
+        ? new OllamaRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch, redact: redactServerResponse })
         : new OpenAICompatibleRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch, product });
     return {
       record,
@@ -663,6 +685,17 @@ export class ModelServerRegistry {
   }
 }
 
+const LOCAL_OLLAMA_PORT = new URL(LOCAL_OLLAMA_URL).port;
+const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '0.0.0.0', '::', '::ffff:7f00:1']);
+
+/** The port "This computer" already uses: saving it again would list the same Ollama twice. */
+function isLocalOllama(parsed: ParsedAddress): boolean {
+  return (
+    LOOPBACK_NAMES.has(parsed.host.toLowerCase().replace(/\.$/, '')) &&
+    new URL(parsed.origin).port === LOCAL_OLLAMA_PORT
+  );
+}
+
 async function resolveAll(host: string): Promise<string[]> {
   const addresses = await dns.promises.lookup(host, { all: true });
   return addresses.map(entry => entry.address);
@@ -694,7 +727,11 @@ function failureHealth(err: unknown, label: string): ModelServerHealth | null {
   if (err instanceof ServerCredentialsError) {
     return { state: 'credentials', version: null, latencyMs: null, checkedAt, error: err.message };
   }
-  if (err instanceof ServerTransportError || err instanceof ServerRedirectError) {
+  if (
+    err instanceof ServerTransportError ||
+    err instanceof ServerRedirectError ||
+    err instanceof ServerForbiddenError
+  ) {
     return { state: 'refused', version: null, latencyMs: null, checkedAt, error: err.message };
   }
   const connection =

@@ -1,7 +1,7 @@
 /** POST /api/v1/skills/market/listings/{id}/versions - the public twin of POST /api/skills/market/[id]/versions. */
 import { submitSkillMarketListingVersionContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { enforceSubmitRateLimits } from '@server/skillMarket/market';
+import { enforceSubmitRateLimits } from '@bike4mind/server-utils/skillMarket/market';
 import { submitNewVersion } from '@server/skillMarket/author';
 import { toPublicListing, toPublicVersion } from '@server/skillMarket/publicView';
 

@@ -435,14 +435,14 @@ export const WAF_OTC_EDGE_SIGNAL_FILTER_PATTERN =
   '($.labels[*].name = "awswaf:managed:aws:anonymous-ip-list:HostingProviderIPList" || ' +
   '$.labels[*].name = "awswaf:managed:aws:bot-control:signal:*") }';
 
-if (productionAlerts && wafAiRateLimitAlarmTopicArn && wafOobAlarmTopic) {
+if (productionAlerts && wafAiRateLimitAlarmTopicArn) {
   const edgeSignalThreshold = parseAlarmThreshold(
     'SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN',
     process.env.SIGNUP_EDGE_SIGNAL_ALARM_PER_5MIN,
     SIGNUP_EDGE_SIGNAL_DEFAULT
   );
   const signupNamespace = `${$app.name}/${$app.stage}/Signup`;
-  const actions = [wafAiRateLimitAlarmTopicArn, wafOobAlarmTopic.arn];
+  const actions = [wafAiRateLimitAlarmTopicArn];
 
   // Follow the selected ACL's logging destination, including externally chosen group names.
   new aws.cloudwatch.LogMetricFilter(

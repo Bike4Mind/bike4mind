@@ -117,7 +117,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 }));
 
 // Keep fire-and-forget analytics writes from touching the DB.
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 // The per-user tier rate-limit middleware resolves the caller's limit from their
 // active subscriptions (a Mongo read via subscriptionRepository). This test stubs
@@ -169,9 +169,19 @@ vi.mock('@bike4mind/services', async orig => {
   };
 });
 
+const invokeOptions = vi.hoisted(() => ({ value: undefined as unknown }));
+
+vi.mock('@server/billing/meterPlatformCompletion', async orig => ({
+  ...(await orig<typeof import('@server/billing/meterPlatformCompletion')>()),
+  createCompletionMeter: vi.fn(),
+}));
+
 vi.mock('@bike4mind/services/llm', async orig => {
   const actual = await orig<Record<string, unknown>>();
   class MockChatCompletionInvoke {
+    constructor(options: unknown) {
+      invokeOptions.value = options;
+    }
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
     invoke = (...a: unknown[]) => mockInvoke(...a);
@@ -419,6 +429,24 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }));
   });
 
+  it("hands the request's key to the QuestMaster completion meter", async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire();
+    await handler(req, res);
+    const { createCompletionMeter: createMeter } = invokeOptions.value as {
+      createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
+    };
+    createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
+
+    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    expect(createCompletionMeter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'QuestMaster planning',
+      expect.objectContaining({ apiKeyId: 'k1' })
+    );
+  });
+
   it.each([
     ['withholds', [ApiKeyScope.AI_CHAT], true],
     ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], false],
@@ -646,6 +674,18 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     );
     expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
       'allowlisted-model'
+    );
+  });
+
+  it('treats a whitespace-only model as model-less and starts on the default', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockResolveDefaultChatModel.mockResolvedValueOnce({ model: 'admin-default' });
+    mockResolveCallerDefaultModel.mockResolvedValueOnce('admin-default');
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', model: '   ' } });
+    await handler(req, res);
+    expect(res.statusCode).toBeLessThan(300);
+    expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
+      'admin-default'
     );
   });
 
@@ -1428,7 +1468,8 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
   });
 
   describe('output-budget exhaustion on wait: true', () => {
-    let requestLogger: Logger;
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
     // Models ChatCompletionProcess: the quest is settled as an error and the failure is left on
     // the instance rather than thrown.
     const processExhaustingBudget = () =>
@@ -1436,10 +1477,9 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
         mockTerminalError.value = new Error('output budget was exhausted');
       });
     beforeEach(() => {
-      // req.logger is the global instance (logging middleware), so spy there.
-      requestLogger = Logger.resetMetadata();
-      vi.spyOn(requestLogger, 'error').mockImplementation(() => {});
-      vi.spyOn(requestLogger, 'warn').mockImplementation(() => {});
+      // req.logger is built per request by the logging middleware, so spy on the class.
+      errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     });
     afterEach(() => {
       mockTerminalError.value = undefined;
@@ -1465,8 +1505,8 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       expect(body).toMatchObject({ quest_id: expect.any(String) });
       expect(body).not.toHaveProperty('errorCode');
       // The 502 is an expected, classified failure: logged at warn so it does not trip the error alert.
-      expect(requestLogger.error).not.toHaveBeenCalled();
-      expect(requestLogger.warn).toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
     });
   });
 

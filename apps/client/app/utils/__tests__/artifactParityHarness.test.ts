@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { parseArtifactsWithFallback as newFallback } from '@client/app/utils/artifactParser';
+import { parseArtifactsWithFallback as newFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { convertCodeBlocksToArtifacts as newCoreConvert } from '@bike4mind/utils/artifactParser';
 import {
   convertCodeBlocksToArtifacts as oldClientConvert,

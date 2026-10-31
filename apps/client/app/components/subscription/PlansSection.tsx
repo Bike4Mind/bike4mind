@@ -16,12 +16,13 @@ import {
   TEAM_PLAN_UNAVAILABLE_MESSAGE,
 } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { professionalPriceIdForStage, SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
+import { SubscriptionPlanDetail } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { Box, Button, Skeleton, Stack, Tab, tabClasses, TabList, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import SubscribeButton from '../Credits/SubscribeButton';
 import ManageSubscriptionButton from './ManageSubscriptionButton';
+import PayNowButton from './PayNowButton';
 import PlanCard from './PlanCard';
 import { isPopularPlan } from './isPopularPlan';
 import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
@@ -234,6 +235,9 @@ export const PlansSection = ({ onSubscriptionChanged }: { onSubscriptionChanged?
                 priceId={plan.priceId}
                 actionButton={
                   <Stack gap={1} direction={{ xs: 'column', sm: 'row' }} sx={{ '& > *': { flex: 1 } }}>
+                    {isStripeManaged && hasPaymentIssue && isCurrentPlan.subscriptionId && (
+                      <PayNowButton subscriptionId={isCurrentPlan.subscriptionId} testId="plan-card-pay-now-btn" />
+                    )}
                     {isStripeManaged && <ManageSubscriptionButton isPrimaryAction={hasPaymentIssue} />}
                     <SubscribeButton
                       priceId={plan.priceId}

@@ -196,7 +196,7 @@ describe('ChatService untrusted content in a reply', () => {
 
   it('asks before a background command once the reply is tainted', async () => {
     const id = await session('auto');
-    await reply(id, [fetch, ['bash_background', { command: 'sleep 30', cwd: root }]]);
+    await reply(id, [fetch, ['bash_background', { command: 'pnpm dev', cwd: root }]]);
 
     const asked = await awaitCall('bash_background', 'awaiting-approval');
     expect(asked.approvalDetail).toContain('read content from the web (web_fetch).');
@@ -208,6 +208,15 @@ describe('ChatService untrusted content in a reply', () => {
 
     await awaitCall('file_read', 'done');
     expect(calls('file_read', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  it('runs a local text pipeline unasked in a tainted reply', async () => {
+    const id = await session('auto');
+    const command = "set -e; for f in notes.txt; do iconv -f latin1 -t utf-8 $f | sed -n '1,5p'; done; sleep 0";
+    await reply(id, [fetch, ['bash_execute', { command, cwd: root }]]);
+
+    await awaitCall('bash_execute', 'done');
+    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
   });
 
   it('does not carry the taint into the next reply of the same conversation', async () => {

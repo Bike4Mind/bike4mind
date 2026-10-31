@@ -256,6 +256,27 @@ describe('active session heartbeat', () => {
     expect(await dripRows(user.id)).toHaveLength(1);
   });
 
+  // Two 1,000-credit rows minutes apart, the second from POST /api/users/active-session, are the signup
+  // tranche and that day's activity drip: two ledger ids, each paid once, not one tranche paid twice.
+  it('pays the tranche once at signup and the day drip once on the heartbeat, under distinct ids', async () => {
+    const user = await createSignupStageUser();
+    await userService.releaseSignupTranche(user.id, adapters);
+    await pingEvery60s(user.id, 0, 600);
+    await pingEvery60s(user.id, 660, 1800);
+    expect((await unlockSignupGrantFromActivity(user.id, at(1900))).creditsGranted).toBe(0);
+    const rows = await CreditTransaction.find({ ownerId: user.id }).sort({ createdAt: 1 }).lean();
+    expect(rows.map(row => ({ transactionId: row.transactionId, reason: row.reason, credits: row.credits }))).toEqual([
+      { transactionId: `verify-grant:${user.id}`, reason: 'signup_tranche', credits: 1000 },
+      {
+        transactionId: `unlock-grant:activity:${user.id}:2030-03-01`,
+        reason: 'signup_unlock:activity_drip',
+        credits: 1000,
+      },
+    ]);
+    expect(await creditsOf(user.id)).toBe(2000);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ creditsReleased: 2000, dripCredits: 1000 });
+  });
+
   it('pays the next day again and resets accrued time at UTC midnight', async () => {
     const user = await createSignupStageUser();
     const before = await creditsOf(user.id);

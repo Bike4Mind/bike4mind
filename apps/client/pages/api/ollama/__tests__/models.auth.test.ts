@@ -18,7 +18,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: vi.fn().mockResolvedValue({ allowed: true, headers: {} }),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/llm-adapters', async orig => ({
   ...(await orig<Record<string, unknown>>()),

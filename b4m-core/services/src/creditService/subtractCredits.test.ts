@@ -209,6 +209,42 @@ describe('creditService - subtractCredits', () => {
     });
   });
 
+  describe('apiKeyId attribution on usage transactions', () => {
+    const questScoped = { model: 'm', questId: 'q1', sessionId: 's1' };
+    const questLess = { model: 'm', sessionId: 's1' };
+    it.each([
+      ['text_generation_usage', { ...questScoped, inputTokens: 1, outputTokens: 1 }],
+      ['image_generation_usage', questScoped],
+      ['image_edit_usage', questScoped],
+      ['video_generation_usage', questScoped],
+      ['tool_usage', questScoped],
+      ['realtime_voice_usage', questLess],
+      ['speech_to_text_usage', questLess],
+      ['text_to_speech_usage', questLess],
+      ['sound_effects_usage', questLess],
+      ['music_generation_usage', questLess],
+    ] as const)('writes apiKeyId on %s', async (type, fields) => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await subtractCredits(
+        {
+          type,
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 5,
+          apiKeyId: 'apikey-123',
+          ...fields,
+        } as SubtractCreditsParameters,
+        mockAdapters
+      );
+
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        type,
+        expect.objectContaining({ apiKeyId: 'apikey-123' })
+      );
+    });
+  });
+
   describe('completion_api_usage transactions', () => {
     it('should forward source field through to createTransaction (CLI/API attribution)', async () => {
       mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
@@ -239,6 +275,39 @@ describe('creditService - subtractCredits', () => {
         inputTokens: 200,
         outputTokens: 100,
       });
+    });
+
+    it('records cache tokens, the client session and tool names, so the row explains its charge', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await subtractCredits(
+        {
+          type: 'completion_api_usage',
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 183,
+          model: 'claude-opus-5-5',
+          sessionId: 'desktop-session-1',
+          inputTokens: 3,
+          outputTokens: 900,
+          cacheReadTokens: 180_000,
+          cacheWriteTokens: 12_000,
+          source: 'desktop',
+          metadata: { toolNames: ['read_file', 'bash'] },
+        },
+        mockAdapters
+      );
+
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        'completion_api_usage',
+        expect.objectContaining({
+          sessionId: 'desktop-session-1',
+          inputTokens: 3,
+          cacheReadTokens: 180_000,
+          cacheWriteTokens: 12_000,
+          metadata: { toolNames: ['read_file', 'bash'] },
+        })
+      );
     });
 
     it('should reject an unknown source value at the Zod enum boundary', async () => {

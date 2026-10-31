@@ -13,10 +13,10 @@
  * - reconnect: find active execution, re-stream current state
  */
 
-import { withWebSocketContext } from '@server/websocket/utils';
+import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { TooManyRequestsError } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
+import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';

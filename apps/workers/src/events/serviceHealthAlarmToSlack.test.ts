@@ -109,6 +109,18 @@ describe('serviceHealthAlarmToSlack handler', () => {
     expect(body.text).toContain('svc&lt;a&amp;b&gt;');
   });
 
+  it('labels a task failure on stage dev as staging', async () => {
+    resource.App.stage = 'dev';
+    try {
+      await handler(makeEvent(taskFailedToStart));
+    } finally {
+      resource.App.stage = 'production';
+    }
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.blocks[0].text.text).toContain('staging alarm');
+    expect(postedText()).not.toContain('dev alarm');
+  });
+
   it('falls back to stoppedReason when no container reported one', async () => {
     const noContainerReason = {
       ...taskFailedToStart,

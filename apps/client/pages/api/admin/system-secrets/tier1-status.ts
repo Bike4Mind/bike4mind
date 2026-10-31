@@ -100,10 +100,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
 
     return res.json(response);
   } catch (error) {
-    Logger.error('Error fetching Tier 1 secrets status:', error);
     if (error instanceof ForbiddenError) {
+      Logger.warn('Error fetching Tier 1 secrets status:', error.message);
       return res.status(403).json({ error: error.message });
     }
+    Logger.error('Error fetching Tier 1 secrets status:', error);
     return res.status(500).json({ error: 'Failed to fetch Tier 1 secrets status' });
   }
 });

@@ -26,12 +26,12 @@
     },
     "./servers": {
       "import": {
-        "types": "./dist/servers/index.d.mts",
-        "default": "./dist/servers/index.mjs"
+        "types": "./dist/servers.d.mts",
+        "default": "./dist/servers.mjs"
       },
       "require": {
-        "types": "./dist/servers/index.d.cts",
-        "default": "./dist/servers/index.cjs"
+        "types": "./dist/servers.d.cts",
+        "default": "./dist/servers.cjs"
       }
     },
     "./testing": {

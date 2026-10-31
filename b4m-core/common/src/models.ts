@@ -654,6 +654,9 @@ export type ModelName = z.infer<typeof supportedModels>;
 /** Whether a model's rates came from a ModelPrice catalog row or the adapter's literal fallback. */
 export type ModelPriceSource = UsagePriceSource;
 
+/** Why a listed model is shown to a caller but not selectable by them. */
+export type ModelAccessLock = { locked: true; reason: 'requires_paid_plan' };
+
 export type ModelInfo = {
   id: ModelName;
   type: 'text' | 'image' | 'speech-to-text' | 'video';
@@ -694,6 +697,17 @@ export type ModelInfo = {
    * Defaults to 'legacy' if unset and can_think is true.
    */
   thinkingStyle?: 'legacy' | 'adaptive';
+  /**
+   * The catalog says this model takes OpenAI's `reasoning_effort`. Set only for a
+   * record whose reasoning style is 'openai-effort'; absent means "not stated" and
+   * the OpenAI adapter falls back to REASONING_SUPPORTED_MODELS.
+   */
+  openaiReasoningEffort?: true;
+  /**
+   * Catalog form of REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: sending an effort
+   * level alongside function tools 400s. Absent means "not stated", not "compatible".
+   */
+  effortIncompatibleWithTools?: boolean;
   pricing: Record<number, PricingInfo>;
   /**
    * Where `pricing` came from. 'catalog' when applyModelPriceCatalog overlaid a ModelPrice row;
@@ -769,6 +783,11 @@ export type ModelInfo = {
   /** Human-readable reason surfaced in the picker (tooltip) and the server-side rejection when `disabled` is true. */
   disabledReason?: string;
   /**
+   * Set only on GET /api/models `lockedModels` entries, which never appear in `models` so nothing can select one.
+   * Display only: call-time createModelAdmission (services/llm/modelAdmission.ts) is the gate.
+   */
+  access?: ModelAccessLock;
+  /**
    * Which backend constructor serves this model. Present only on models the
    * catalog resolved; getLlmByModel dispatches on it and falls back to the
    * legacy id switch when it is absent (see llm-adapters/src/index.ts).
@@ -802,7 +821,7 @@ export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
 
 /** The pricing-map key whose tier covers `tokens` (the largest tier when `tokens` exceeds them all), or null when unpriced. */
-export const pricingTierForTokens = (model: ModelInfo, tokens: number): number | null => {
+export const pricingTierForTokens = (model: Pick<ModelInfo, 'pricing'>, tokens: number): number | null => {
   const thresholds = Object.keys(model.pricing)
     .map(Number)
     .sort((a, b) => a - b);
@@ -857,7 +876,10 @@ export type AppliedRates = IUsageEventRates;
  * place tier selection and cache-rate defaults live, so a stamped rate can never disagree with the
  * cost it explains.
  */
-export const resolveAppliedRates = (model: ModelInfo, tierBasisTokens: number): Required<AppliedRates> | null => {
+export const resolveAppliedRates = (
+  model: Pick<ModelInfo, 'pricing' | 'backend'>,
+  tierBasisTokens: number
+): Required<AppliedRates> | null => {
   const tier = pricingTierForTokens(model, tierBasisTokens);
   // Guard against a malformed or non-tiered pricing map (e.g. a flat
   // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing

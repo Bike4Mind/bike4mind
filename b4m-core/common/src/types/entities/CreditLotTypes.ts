@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
+import { USAGE_FUNDING_SOURCES } from './UsageEventTypes';
 
 /**
  * Where a credit lot's grant originated. Drives the expiry policy applied at
@@ -40,6 +41,12 @@ export const CreditLot = z.object({
    * Clawback handlers look up lots by this field.
    */
   stripeRef: z.string().optional(),
+  /**
+   * What funded the lot when its source alone would misstate it, e.g. an admin-comped
+   * subscription is a 'subscription' lot that nobody paid for. Absent means the source's
+   * default (see FUNDING_SOURCE_BY_LOT_SOURCE).
+   */
+  fundingSource: z.enum(USAGE_FUNDING_SOURCES).optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });

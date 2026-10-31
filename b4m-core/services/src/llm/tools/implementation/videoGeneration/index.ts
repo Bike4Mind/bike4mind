@@ -1,6 +1,7 @@
 import { VIDEO_MODEL_CATALOG, type VideoModelId } from '@bike4mind/common';
 import type { CreateVideoJobInput, CreateVideoJobResult } from '../../../../videoJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
+import { paidPlanRefusalOrRethrow } from '../../helpers/toolModelRefusal';
 import {
   buildJobIdempotencyKey,
   buildUnavailableTool,
@@ -58,17 +59,24 @@ export const videoGenerationTool: ToolDefinition = {
           return 'Video generation failed (invalid_request): set inputImageFileId or inputGeneratedImageKey, not both.';
         }
         const request = toRequest(args);
-        const result = await config.createJob({
-          user: {
-            id: context.userId,
-            organizationId: context.organizationId ?? null,
-            adminRoleWithheld: !context.user.isAdmin,
-          },
-          request,
-          source: 'agent',
-          questId: context.questId,
-          idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, request),
-        });
+        // createVideoJob asserts model admission itself; its REST callers need the throw, the model needs a result.
+        let result: CreateVideoJobResult;
+        try {
+          result = await config.createJob({
+            user: {
+              id: context.userId,
+              organizationId: context.organizationId ?? null,
+              adminRoleWithheld: !context.user.isAdmin,
+            },
+            request,
+            source: 'agent',
+            apiKeyId: context.apiKeyId,
+            questId: context.questId,
+            idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, request),
+          });
+        } catch (error) {
+          return paidPlanRefusalOrRethrow(context, error, request.model, 'video_generation');
+        }
         if (!result.ok) return `Video generation failed (${result.code}): ${result.message}`;
         if (isReplayOfDeadJob(result.created, result.job.state)) {
           const reason = result.job.error?.code ?? result.job.state;

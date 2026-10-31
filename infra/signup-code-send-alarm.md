@@ -10,7 +10,7 @@ are operational signals, not the credit ledger.
 Set `SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN` privately to a positive integer to alert
 when zero-credit review decisions reach that count in five minutes. Unset disables
 this alarm. Monitored stages route both ALARM and OK transitions through the same
-Slack and out-of-band email topics as the other signup alarms. No policy weights,
+Slack topic as the other signup alarms. No policy weights,
 network data, account identifiers or email addresses are included in band messages.
 
 All thresholds are read from the deployer's environment, are listed in
@@ -26,6 +26,8 @@ fail deployment (or, for the scheduled worker, fail the run).
 | `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS`      | 5000                   | Hourly credits spent by accounts under 7 days old                   |
 | `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`     | 25                     | Hourly count of distinct accounts under 7 days old that spent       |
 | `LLM_SPEND_ALARM_USD_PER_5MIN`           | 25                     | Estimated LLM USD per provider, 5-minute `Sum`                      |
+| `LLM_SPEND_ALARM_USD_PER_HOUR`           | 20                     | Estimated LLM USD per provider except Anthropic, hourly `Sum`       |
+| `LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` | 75                     | Estimated LLM USD for Anthropic, hourly `Sum`                       |
 | `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` | 2                      | Estimated LLM USD per hour by accounts under 7 days old             |
 | `SIGNUP_ALARM_PER_HOUR`                  | 8                      | Accounts created per hour (hourly census)                           |
 | `NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR`     | 5                      | User API keys created within 24h of signup per hour (hourly census) |
@@ -54,8 +56,9 @@ the same account do not combine their counts. Each alarm compares its `Sum` with
 the configured threshold using `GreaterThanOrEqualToThreshold`; missing data is
 not breaching.
 
-ALARM and OK transitions go to the DLQ alarm topic (Slack; its handler drops OK)
-and to the out-of-band topic (`OPS_ALERT_EMAIL`). Each alarm notifies on an ALARM transition. A non-breaching evaluation returns it
+ALARM and OK transitions go to the DLQ alarm topic (Slack; its handler drops OK).
+The out-of-band email topic (`OPS_ALERT_EMAIL`) is reserved for the alarms that
+report the Slack relay itself failing. Each alarm notifies on an ALARM transition. A non-breaching evaluation returns it
 to OK, allowing a later burst to notify again; a continuous breach remains one
 alarm episode.
 
@@ -66,8 +69,8 @@ A metric filter on the WAF log group (us-east-1) counts requests whose
 anonymous-IP hosting-provider label or any bot-control `signal:` label. Labels are
 logged whether the managed rule blocks or counts. The metric is
 `OtcEdgeSignalRequests` in `<app-name>/<stage>/Signup` in us-east-1. Alarm actions
-must share the alarm's region, so this alarm routes to the us-east-1 WAF topics:
-`wafAiRateLimitAlarmTopic` (Slack) and `wafOobAlarmTopic` (`OPS_ALERT_EMAIL`).
+must share the alarm's region, so this alarm routes to the us-east-1 WAF Slack
+topic `wafAiRateLimitAlarmTopic`.
 
 ## Young-account spend (`apps/workers/src/cron/youngAccountSpendAlert.ts`)
 
@@ -128,8 +131,10 @@ completions API, CLI and desktop over the service's WebSocket, embeds) logs one
 JSON line with the message `llm-usage-settled`. It carries `provider`
 (`anthropic`, `openai`, `bedrock`, `google`, or `other`), the raw `backend`,
 `model`, token counts, `usd` (the same per-model price the credit settlement
-uses, 6 decimals), `source`, and `isYoungAccount` (account created in the last
-168 hours, the young-account spend definition). It has no user id or prompt.
+uses, 6 decimals), `source`, `isYoungAccount` (account created in the last
+168 hours, the young-account spend definition), and, when the caller knows them,
+`userId` and `accountCreatedAt` (ISO), so the young-account alarm below can name
+the accounts behind a breach. It has no email, name or prompt.
 The line is written by a dedicated info-level JSON logger in
 `b4m-core/services/src/llm/llmUsageSettledLog.ts`, without inheriting request
 metadata. Research completions log each settled configuration, including when
@@ -147,14 +152,32 @@ namespace:
 
 One alarm per provider fires when `EstimatedUsd` sums to at least
 `LLM_SPEND_ALARM_USD_PER_5MIN` (whole USD) in 5 minutes, sending ALARM and OK to
-the Slack DLQ topic and the out-of-band email topic. The
+the Slack DLQ topic. The
 `<app>-<stage>-llm-spend` dashboard shows spend per 5 minutes and across the selected dashboard range,
 output tokens, spend by model, the young-account share of spend, and the signup
 and WAF edge-signal counts from the alarms above.
 
 An hourly alarm on `EstimatedUsdYoungAccounts` fires when accounts under 7 days
 old sum to at least `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` (whole USD) and
-routes to the same two topics. It is not listed in the dashboard alarm-status widget.
+routes to the same Slack DLQ topic. It is not listed in the dashboard alarm-status widget.
+
+When it (or the 5-minute `llm-spend-young-accounts` alarm) fires, the Slack relay
+(`apps/workers/src/events/youngAccountSpendDetail.ts`) runs a Logs Insights query
+over the ChatCompletion log group for the breaching window and adds a "Top
+accounts in the window" section: up to five accounts with id, estimated USD,
+call count, age at the end of the window, top models, and an admin-page link.
+The sum matches the alarm's measured value because both read the same lines
+(unless the query hits its 500-row cap, which the post then says).
+Lines logged before `userId` was added are skipped. The relay has `logs:StartQuery`
+on that log group only and a 60-second timeout; a query that fails or runs past
+its 25-second budget leaves a one-line note in the post instead of blocking it.
+
+A second alarm per provider pages when `EstimatedUsd` sums to at least
+`LLM_SPEND_ALARM_USD_PER_HOUR` (whole USD, default 20) in one hour, or
+`LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC` (default 75) for `anthropic`. It catches
+a sustained drain that stays under the 5-minute ceiling, routes to the same Slack
+DLQ topic, is listed in the alarm-status widget, and has its own "Estimated USD
+per hour by provider" widget with both ceilings drawn.
 
 The figures are estimates from our price table, not provider invoices. Paths
 outside the ChatCompletion service are not counted: the legacy WebSocket CLI

@@ -7,7 +7,7 @@
  * stay out of the resolver module that queue-handler Lambdas import for the
  * pure `getUserEntitlements` path.
  */
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Resource } from 'sst';
 import type { Logger } from '@bike4mind/observability';

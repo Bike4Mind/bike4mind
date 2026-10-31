@@ -20,6 +20,7 @@
 
 import { secrets } from './secrets';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
+import { chatCompletionLogGroupName } from './chatCompletionLogGroup';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
@@ -43,6 +44,7 @@ import {
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
@@ -80,7 +82,9 @@ import {
 } from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
+import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -125,12 +129,26 @@ if (isMonitoredStage) {
   });
 
   const mentionArgs = alarmSlackMentionFunctionArgs();
+  // The young-account spend alarms list the accounts behind a breach by querying the ChatCompletion
+  // log group their metric is filtered from (apps/workers/src/events/youngAccountSpendDetail.ts).
+  // The lookup's arn drops the API's trailing stream wildcard, so the policy names both forms.
+  const spendLogGroupArn = aws.cloudwatch.getLogGroupOutput({ name: chatCompletionLogGroupName }).arn;
   dlqAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
-      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...mentionArgs.environment },
-      permissions: mentionArgs.permissions,
+      // Room for the Logs Insights query (25 s budget) ahead of the Slack post.
+      timeout: '60 seconds',
+      environment: {
+        ...DEFAULT_LAMBDA_ENVIRONMENT,
+        ...mentionArgs.environment,
+        LLM_SPEND_LOG_GROUP: chatCompletionLogGroupName,
+      },
+      permissions: [
+        ...mentionArgs.permissions,
+        { actions: ['logs:StartQuery'], resources: [spendLogGroupArn, $interpolate`${spendLogGroupArn}:*`] },
+        { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
+      ],
     },
     {
       transform: {
@@ -351,6 +369,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: lakeMemoryQueueDLQ,
   },
   {
+    label: 'risk-evidence',
+    displayName: 'Account Risk Evidence',
+    application: 'Signup',
+    sourceQueue: 'riskEvidenceQueue',
+    queue: riskEvidenceQueueDLQ,
+  },
+  {
     label: 'lake-inconsistency-model',
     displayName: 'Lake Model Inconsistency Detection',
     application: 'DataLakeManagement',
@@ -566,12 +591,30 @@ if (isMonitoredStage) {
     });
   }
 
+  if (spendMonitorDeadLetter) {
+    createDlqAlarms({
+      label: 'spend-monitor',
+      displayName: 'Spend Monitor',
+      application: 'Billing',
+      queue: spendMonitorDeadLetter.queue,
+    });
+  }
+
   if (signupGrantHeldReleaseDeadLetter) {
     createDlqAlarms({
       label: 'signup-grant-held-release',
       displayName: 'Signup Grant Held Release',
       application: 'Signup',
       queue: signupGrantHeldReleaseDeadLetter.queue,
+    });
+  }
+
+  if (revenueSnapshotDeadLetter) {
+    createDlqAlarms({
+      label: 'revenue-snapshot',
+      displayName: 'Revenue Snapshot',
+      application: 'Billing',
+      queue: revenueSnapshotDeadLetter.queue,
     });
   }
 

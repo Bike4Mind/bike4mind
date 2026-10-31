@@ -32,15 +32,17 @@ const json = (body: unknown, status = 200) =>
 
 type Handler = (path: string, credentials: Record<string, string> | null) => Response | Promise<Response>;
 
-/** An Ollama that answers on every origin; `down` and `wantToken` change how it answers. */
+/** An Ollama that answers on every origin; `down`, `forbidden` and `wantToken` change how it answers. */
 function fakeOllama(models = ['qwen2.5:0.5b']) {
   const state = {
     down: new Set<string>(),
+    forbidden: false,
     wantToken: null as string | null,
     versionGate: null as Promise<void> | null,
   };
   const calls: { origin: string; path: string; credentials: Record<string, string> | null }[] = [];
   const handler: Handler = (path, credentials) => {
+    if (state.forbidden) return new Response('', { status: 403 });
     if (state.wantToken && credentials?.authorization !== `Bearer ${state.wantToken}`)
       return json({ error: 'unauthorized' }, 401);
     if (path === '/api/version') return json({ version: '0.12.0' });
@@ -219,6 +221,131 @@ describe('ModelServerRegistry', () => {
     const { registry: servers } = registry(fake);
     const probe = await servers.probe({ address: 'http://127.0.0.2:11434', credential: none });
     expect(probe).toMatchObject({ ok: false, needsCredentials: true });
+  });
+
+  it("refuses this computer's own Ollama address before sending anything", async () => {
+    const fake = fakeOllama();
+    const { registry: servers, store } = registry(fake);
+    for (const address of [
+      'http://127.0.0.1:11434',
+      '127.0.0.1:11434',
+      'localhost:11434',
+      'http://localhost.:11434',
+      'http://[::1]:11434/',
+      '0.0.0.0:11434',
+      'http://[::ffff:127.0.0.1]:11434',
+    ]) {
+      const probe = await servers.probe({ address, credential: none });
+      expect(probe).toMatchObject({ ok: false, address: null });
+      expect(probe.error).toMatch(/is This computer, which is already listed.*different local port/);
+    }
+    await expect(
+      servers.add({ address: '127.0.0.1:11434', credential: none, name: 'tunnel', kind: 'ollama', access: 'chat' })
+    ).rejects.toThrow(/This computer/);
+    expect(fake.calls).toHaveLength(0);
+    expect(await store.list()).toHaveLength(0);
+    expect((await servers.probe({ address: '127.0.0.1:21434', credential: none })).ok).toBe(true);
+  });
+
+  it('keeps the session-only message through the first picker load after a restart', async () => {
+    const fake = fakeOllama();
+    fake.state.wantToken = TOKEN;
+    const file = memoryFile();
+    const noKeyring: SecretCipher = { ...cipher, isEncryptionAvailable: () => false };
+    const silent = { debug: () => undefined, warn: () => undefined };
+    await new ModelServerStore(noKeyring, file, silent).add(
+      {
+        name: 'gpu box',
+        kind: 'ollama',
+        transport: { type: 'http', baseUrl: 'http://127.0.0.2:11434' },
+        access: 'chat',
+      },
+      { type: 'bearer', token: TOKEN }
+    );
+    const servers = new ModelServerRegistry({
+      store: new ModelServerStore(noKeyring, file, silent),
+      logger: silent,
+      fetchFor: fake.fetchFor,
+      localFetch: async () => json({ version: '0.12.0' }),
+      resolve: async () => [],
+    });
+    const [model] = await servers.models();
+    expect(fake.calls).toHaveLength(0);
+    expect(model).toBeUndefined();
+    const view = (await servers.views())[1];
+    expect(view.health.state).toBe('credentials');
+    expect(view.health.error).toMatch(/kept only until Desktop quit/);
+  });
+
+  describe('a server that answers 403', () => {
+    const notCredentials = /credential|token/i;
+
+    it('reports the refusal when testing the address, without asking for credentials', async () => {
+      const fake = fakeOllama();
+      fake.state.forbidden = true;
+      const { registry: servers } = registry(fake);
+      const probe = await servers.probe({ address: 'http://127.0.0.2:11434', credential: none });
+      expect(probe).toMatchObject({ ok: false, needsCredentials: false });
+      expect(probe.error).toMatch(/127\.0\.0\.2 answered 403 Forbidden/);
+      expect(probe.error).not.toMatch(notCredentials);
+      expect(probe.error).toMatch(/If this server needs an API key, enter it and test again/);
+
+      const withKey = await servers.probe({
+        address: 'http://127.0.0.2:11434',
+        credential: { type: 'bearer', token: TOKEN },
+      });
+      expect(withKey).toMatchObject({ ok: false, needsCredentials: false });
+      expect(withKey.error).not.toMatch(/needs an API key/);
+    });
+
+    it('marks a saved server with a credential refused on a check and a picker refresh', async () => {
+      const fake = fakeOllama();
+      fake.state.wantToken = TOKEN;
+      const { registry: servers } = registry(fake);
+      await servers.add({
+        address: 'http://127.0.0.2:11434',
+        credential: { type: 'bearer', token: TOKEN },
+        name: 'gpu box',
+        kind: 'ollama',
+        access: 'chat',
+      });
+      fake.state.forbidden = true;
+      const [model] = await servers.models();
+      const refreshed = (await servers.views())[1];
+      expect(refreshed.health.state).toBe('refused');
+      expect(refreshed.health.error).toMatch(/gpu box answered 403 Forbidden/);
+      expect(refreshed.health.error).not.toMatch(notCredentials);
+      expect(model.unavailable).toMatch(/gpu box was refused/);
+
+      const [, checked] = await servers.check();
+      expect(checked.health.state).toBe('refused');
+      expect(checked.health.error).toMatch(/gpu box answered 403 Forbidden/);
+      expect(checked.health.error).not.toMatch(notCredentials);
+    });
+
+    it('turns a 403 mid-chat into a refusal, not a request for new credentials', async () => {
+      const fake = fakeOllama();
+      const { registry: servers } = registry(fake);
+      await servers.add({
+        address: 'http://127.0.0.2:11434',
+        credential: none,
+        name: 'gpu box',
+        kind: 'ollama',
+        access: 'chat',
+      });
+      const [, saved] = await servers.views();
+      fake.state.forbidden = true;
+      const error = await servers
+        .chatFor(`srv-${saved.id}`)!
+        .stream(
+          { model: `local:srv-${saved.id}:qwen2.5:0.5b`, messages: [{ role: 'user', content: 'hi' }] },
+          () => undefined
+        )
+        .catch((err: unknown) => err);
+      expect(error).not.toBeInstanceOf(ServerCredentialsError);
+      expect((error as Error).message).toMatch(/gpu box answered 403 Forbidden/);
+      expect((await servers.views())[1].health.state).toBe('refused');
+    });
   });
 
   it('keys models by server so two servers can offer the same model', async () => {

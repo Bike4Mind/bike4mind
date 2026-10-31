@@ -2,7 +2,7 @@ import { isImageServeable } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import type { SignOutputUrl, StoredOutputRef } from './signedOutput';
+import type { SignOutputUrl, StoredOutputRef } from '@bike4mind/server-utils/generations/signedOutput';
 
 // Only these statuses can still turn 'clean'; 'blocked' (or a missing status) never will.
 const isAwaitingScan = (status: string | null | undefined): boolean => status === 'pending' || status === 'scanning';

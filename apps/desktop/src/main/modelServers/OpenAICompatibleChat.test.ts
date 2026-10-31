@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '@bike4mind/local-models';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
-import { ServerCredentialsError } from './errors';
+import { ServerCredentialsError, ServerForbiddenError } from './errors';
 import { OpenAICompatibleChat, toOpenAIMessages } from './OpenAICompatibleChat';
 
 const BASE = 'http://127.0.0.1:18080';
@@ -95,6 +95,13 @@ describe('OpenAICompatibleChat', () => {
     ).rejects.toBeInstanceOf(ServerCredentialsError);
   });
 
+  it('reports a 403 as a refusal, not as rejected credentials', async () => {
+    const fetch: FetchLike = async () => new Response('', { status: 403 });
+    await expect(
+      collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] })
+    ).rejects.toBeInstanceOf(ServerForbiddenError);
+  });
+
   it('retries without tools when the server refuses them, and remembers', async () => {
     const bodies: Record<string, unknown>[] = [];
     const fetch: FetchLike = async (_url, init) => {
@@ -150,6 +157,67 @@ describe('OpenAICompatibleChat', () => {
       );
     const [model] = await chat(fetch).listModels();
     expect(model).toMatchObject({ id: MODEL, name: 'qwen2.5-0.5b' });
+  });
+});
+
+describe('OpenAICompatibleChat on a server that fronts several models', () => {
+  const MODEL_A = 'local:srv-abc123:a';
+  const MODEL_B = 'local:srv-abc123:b';
+  const tools = [{ toolSchema: { name: 'read_file', parameters: { type: 'object' } } }];
+  const ask = (model: string) => ({ model, messages: [{ role: 'user' as const, content: 'hi' }], tools });
+
+  function proxy(maxModelLen?: number) {
+    const bodies: Record<string, unknown>[] = [];
+    let listings = 0;
+    let refuseA = true;
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models')) {
+        listings += 1;
+        const entry = (name: string) => ({
+          id: name,
+          object: 'model',
+          ...(maxModelLen ? { max_model_len: maxModelLen } : {}),
+        });
+        return new Response(JSON.stringify({ object: 'list', data: [entry('a'), entry('b')] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      bodies.push(body);
+      if (body.tools && body.model === 'a' && refuseA)
+        return new Response('{"error":{"message":"tools param requires --jinja flag"}}', { status: 500 });
+      return body.stream
+        ? sse([delta({ content: 'ok' }, 'stop'), '[DONE]'])
+        : new Response(JSON.stringify({ choices: [{ message: { content: 'p' } }] }), { status: 200 });
+    };
+    return { fetch, bodies, listings: () => listings, acceptA: () => (refuseA = false) };
+  }
+
+  it('turns tools off only for the model that refused them, and probes that model on a recheck', async () => {
+    const server = proxy();
+    const client = chat(server.fetch, null);
+    await collect(client, ask(MODEL_A));
+    await collect(client, ask(MODEL_B));
+    expect(server.bodies.map(body => [body.model, 'tools' in body])).toEqual([
+      ['a', true],
+      ['a', false],
+      ['b', true],
+    ]);
+    expect((await client.listModels()).map(model => [model.name, model.supportsTools])).toEqual([
+      ['a', false],
+      ['b', undefined],
+    ]);
+
+    server.acceptA();
+    await client.recheckTools('b');
+    expect(server.bodies.at(-1)).toMatchObject({ model: 'a', max_tokens: 1 });
+    expect(client.toolsHint()).toBeNull();
+  });
+
+  it('asks a server that lists no context once, not on every turn', async () => {
+    const server = proxy();
+    const client = chat(server.fetch, null);
+    await client.contextTokens(MODEL_A);
+    await client.contextTokens(MODEL_A);
+    expect(server.listings()).toBe(1);
   });
 });
 

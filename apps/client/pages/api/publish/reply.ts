@@ -1,9 +1,10 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Quest, Session } from '@bike4mind/database';
 import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, type PublishUser } from '@server/services/publish';
 import { settlePublication } from '@server/services/publish/settlePublication';
-import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
+import { parseArtifactsWithFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 import {
   REPLY_TITLE_MAX,
   replyFirstLine,
@@ -56,7 +57,7 @@ function extractReplyMarkdown(quest: {
   return combined;
 }
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }

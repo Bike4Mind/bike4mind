@@ -182,6 +182,16 @@ describe('video job end to end with the test provider', () => {
     );
   });
 
+  it('records the API key that created the job on its settlement row', async () => {
+    const t = setup();
+    const created = await createVideoJob({ user, request: request(), source: 'api', apiKeyId: 'key-1' }, t.deps);
+    await t.runToCompletion();
+
+    expect(t.jobOf(created).apiKeyId).toBe('key-1');
+    const [, , entry] = vi.mocked(settleCreditHold).mock.calls[0];
+    expect(entry).toMatchObject({ type: 'video_generation_usage', apiKeyId: 'key-1' });
+  });
+
   describe('final charge rounding', () => {
     const settleOne = async (billedUsd: number) => {
       const t = setup();

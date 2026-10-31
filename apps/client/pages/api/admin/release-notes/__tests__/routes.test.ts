@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 const m = vi.hoisted(() => ({
   adminList: vi.fn(),

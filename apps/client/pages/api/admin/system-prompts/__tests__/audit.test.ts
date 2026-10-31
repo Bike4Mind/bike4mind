@@ -44,7 +44,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));
 vi.mock('@bike4mind/database', () => ({ systemPromptRepository: h.repo }));
-vi.mock('@server/utils/systemPrompts/defaults', () => ({ getDefaultSystemPrompts: h.defaults }));
+vi.mock('@bike4mind/server-utils/utils/systemPrompts/defaults', () => ({ getDefaultSystemPrompts: h.defaults }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import indexHandler from '../index';

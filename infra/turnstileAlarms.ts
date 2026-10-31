@@ -7,7 +7,7 @@
  */
 
 import { web } from './web';
-import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
+import { dlqAlarmTopic } from './dlqAlarms';
 import { messageFilterPattern } from './logMessageFilterPattern';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 
@@ -17,8 +17,8 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
 const metricNamespace = `${$app.name}/${$app.stage}/Turnstile`;
 
 if (isMonitoredStage) {
-  if (!dlqAlarmTopic || !oobAlarmTopic) {
-    throw new Error('alarm routing requires dlqAlarmTopic and oobAlarmTopic');
+  if (!dlqAlarmTopic) {
+    throw new Error('alarm routing requires dlqAlarmTopic');
   }
 
   if (!web.nodes.server) {
@@ -32,9 +32,9 @@ if (isMonitoredStage) {
       return logGroup.name;
     });
 
-  // Slack (dlqAlarmTopic) plus email (oobAlarmTopic). OK actions close each episode so the next
+  // Slack only (dlqAlarmTopic). OK actions close each episode so the next
   // breach is a fresh ALARM transition and notifies again.
-  const actions = [dlqAlarmTopic.arn, oobAlarmTopic.arn];
+  const actions = [dlqAlarmTopic.arn];
 
   const watchEvent = (event: string, resourceName: string, metricName: string, alarmDescription: string) => {
     new aws.cloudwatch.LogMetricFilter(`${resourceName}Filter`, {

@@ -6,7 +6,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 
 const mockIsWithinGraceWindow = vi.fn();
-vi.mock('@server/auth/secretRotationGrace', () => ({
+vi.mock('@bike4mind/server-utils/auth/secretRotationGrace', () => ({
   isRotatedSecretWithinGraceWindow: (...args: unknown[]) => mockIsWithinGraceWindow(...args),
 }));
 

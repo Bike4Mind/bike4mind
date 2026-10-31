@@ -22,9 +22,9 @@ import {
 } from '@bike4mind/database';
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
-import { Subscription } from '@server/models/Subscription';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
-import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
+import { sendToConnection, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';

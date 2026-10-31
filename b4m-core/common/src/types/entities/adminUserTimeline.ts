@@ -73,6 +73,20 @@ export type UserSignupCluster = {
   truncated: boolean;
 };
 
+/**
+ * Accounts linked to a user through payments or signup: the same card (strong), or only the same
+ * signup or payment IP (weak). Built by apps/client/server/billing/linkedAccounts.ts.
+ */
+export type UserLinkedAccount = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  strength: 'strong' | 'weak';
+  via: Array<'card' | 'paymentNetwork' | 'signupNetwork'>;
+  /** Banned, suspended or dispute-locked. */
+  blocked: boolean;
+};
+
 /** Sign-in and signup methods as admins read them. Stored values are free strings (auth strategy names). */
 export const AUTH_METHODS = ['otc', 'password', 'google', 'github', 'okta', 'saml', 'other'] as const;
 export const AuthMethodSchema = z.enum(AUTH_METHODS);

@@ -7,7 +7,7 @@ import { TRUNCATED_FINISH_REASON } from '@bike4mind/common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getThemeConfig } from '../../utils/themes';
-import { parseArtifactsWithFallback, type ParsedArtifact } from '../../utils/artifactParser';
+import { parseArtifactsWithFallback, type ParsedArtifact } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { useStreamingArtifactPersistence } from '../../hooks/useStreamingArtifactPersistence';
 import {
   classifyGeneratedFiles,
@@ -46,8 +46,9 @@ vi.mock('@client/app/hooks/useMessageEditMode', () => {
 // Stands in for the id resolver's no-row-yet path: the card shows the id it would mint from the
 // index it was handed, which is what has to match the row persistence writes.
 vi.mock('./artifacts/ArtifactRenderer', async () => {
-  const { generateCompleteArtifactId, getArtifactTimestamp } =
-    await vi.importActual<typeof import('../../utils/artifactParser')>('../../utils/artifactParser');
+  const { generateCompleteArtifactId, getArtifactTimestamp } = await vi.importActual<
+    typeof import('@bike4mind/server-utils/app/utils/artifactParser')
+  >('@bike4mind/server-utils/app/utils/artifactParser');
   return {
     default: ({
       artifact,

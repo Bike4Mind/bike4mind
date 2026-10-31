@@ -24,7 +24,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
@@ -92,6 +92,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
       user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
       request,
       source,
+      apiKeyId: req.apiKeyInfo?.keyId,
       // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per
       // source keeps a studio retry from replaying an API job that reused the same key.
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),
