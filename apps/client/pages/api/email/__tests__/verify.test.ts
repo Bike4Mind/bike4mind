@@ -50,6 +50,8 @@ const mockFindByToken = vi.fn();
 const mockUpdate = vi.fn();
 const mockClearPending = vi.fn();
 const mockFindBySettingName = vi.fn();
+// Default: this inbox has not claimed its free-credit grant anywhere else, so the domain grant pays.
+const mockClaimFreeCreditGrant = vi.fn(async (_userId: string) => true);
 // Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
 vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
   grantIndividualAdminSubscription: vi.fn(),
@@ -59,6 +61,9 @@ vi.mock('@bike4mind/database', () => ({
     findByEmailVerificationToken: (...a: any[]) => mockFindByToken(...a),
     update: (...a: any[]) => mockUpdate(...a),
     clearPendingFreeCreditGrant: (...a: any[]) => mockClearPending(...a),
+    // The domain grant claims the one-grant-per-inbox entitlement before crediting; these tests
+    // are about the handler, so the inbox is always free here.
+    claimFreeCreditGrant: (...a: any[]) => mockClaimFreeCreditGrant(...a),
   },
   withTransaction: (fn: any) => fn(),
   adminSettingsRepository: { findBySettingName: (...a: any[]) => mockFindBySettingName(...a) },

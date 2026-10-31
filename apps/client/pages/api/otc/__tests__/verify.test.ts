@@ -128,6 +128,8 @@ const mockClearPending = vi.fn();
 const mockAddTagsToUser = vi.fn();
 const mockReleasePending = vi.fn();
 const mockDomainEstablished = vi.fn(async (_domain: string, _verifiedBefore: Date) => false);
+// Default: this inbox has not claimed its free-credit grant anywhere else, so the domain grant pays.
+const mockClaimFreeCreditGrant = vi.fn(async (_userId: string) => true);
 const mockTryIncrement = vi.fn(async (_key: string, _limit: number, _ttlMs: number) => ({
   success: true,
   count: 1,
@@ -164,6 +166,9 @@ vi.mock('@bike4mind/database', () => ({
     clearPendingFreeCreditGrant: (...a: unknown[]) => mockClearPending(...a),
     addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a),
     existsVerifiedUserOnEmailDomain: (...a: unknown[]) => mockDomainEstablished(...a),
+    // The domain grant claims the one-grant-per-inbox entitlement before crediting; these tests
+    // are about the handler, so the inbox is always free here.
+    claimFreeCreditGrant: (...a: unknown[]) => mockClaimFreeCreditGrant(...a),
   },
   pendingOtcTokenRepository: {
     validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
