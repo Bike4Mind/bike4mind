@@ -14,7 +14,7 @@ import { InitialsAvatar } from '../shared/InitialsAvatar';
 import { InlineBar } from '../shared/InlineBar';
 import { StatusChip } from '../shared/StatusChip';
 import { isNewSince } from './subscriptionsLastSeen';
-import { COMPED_DISPLAY, isCompedRow, subscriptionStatusDisplay } from './subscriptionStatusTone';
+import { COMPED_DISPLAY, OWNER_ALERT_DISPLAY, isCompedRow, subscriptionStatusDisplay } from './subscriptionStatusTone';
 
 const DAY_MS = 86_400_000;
 
@@ -246,6 +246,15 @@ export function subscriptionsColumns({
                 label={COMPED_DISPLAY.label}
                 data-testid={`admin-subscriptions-comped-${row.id}`}
               />
+            )}
+            {row.ownerAlert && (
+              <Box component="span" title={OWNER_ALERT_DISPLAY[row.ownerAlert].title} sx={{ display: 'inline-flex' }}>
+                <StatusChip
+                  tone={OWNER_ALERT_DISPLAY[row.ownerAlert].tone}
+                  label={OWNER_ALERT_DISPLAY[row.ownerAlert].label}
+                  data-testid={`admin-subscriptions-owner-alert-${row.id}`}
+                />
+              </Box>
             )}
           </Stack>
         );

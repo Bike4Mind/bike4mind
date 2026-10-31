@@ -47,6 +47,8 @@ const executeResult = (overrides: Partial<AdminUsersBulkResult> = {}): AdminUser
   partial: false,
   remaining: 0,
   blockedDomains: [],
+  canceledSubscriptions: 0,
+  subscriptionCancelFailures: [],
   ...overrides,
 });
 
@@ -57,6 +59,7 @@ const undoResult = (overrides: Partial<AdminUsersBulkUndoResult> = {}): AdminUse
   remaining: 0,
   unblockedDomains: [],
   stillBlockedDomains: [],
+  subscriptionsNotRestored: [],
   ...overrides,
 });
 
@@ -176,6 +179,36 @@ describe('UsersBulkActionDialog', () => {
     fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
 
     await waitFor(() => expect(toastMock.warning).toHaveBeenCalledWith(expect.stringContaining('acme.com')));
+  });
+
+  it('reports canceled subscriptions, warns on cancel failures, and says undo cannot restore them', async () => {
+    apiPost.mockImplementation(async (url: string) => {
+      if (url.endsWith('/preview')) return { data: preview() };
+      if (url.endsWith('/execute')) {
+        return {
+          data: executeResult({
+            canceledSubscriptions: 2,
+            subscriptionCancelFailures: [{ userId: 'u3', error: 'stripe down' }],
+          }),
+        };
+      }
+      return { data: undoResult({ subscriptionsNotRestored: ['sub_a', 'sub_b'] }) };
+    });
+    renderDialog('contain');
+    await screen.findByTestId('admin-users-bulk-dry-run');
+    fireEvent.click(screen.getByTestId('admin-users-bulk-contain-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('admin-users-bulk-contain-confirm-btn'));
+
+    expect(screen.getByText(/live Stripe subscriptions are canceled with no refund and stay canceled/)).toBeTruthy();
+    expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('canceled 2 Stripe subscription(s)');
+    expect(toastMock.warning).toHaveBeenCalledWith(expect.stringContaining('Cancel them in Stripe'));
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+
+    await waitFor(() =>
+      expect(toastMock.warning).toHaveBeenCalledWith(
+        expect.stringContaining('2 canceled Stripe subscription(s) stay canceled')
+      )
+    );
   });
 
   it('defaults Adjust credits to "set to 0" and previews that', async () => {

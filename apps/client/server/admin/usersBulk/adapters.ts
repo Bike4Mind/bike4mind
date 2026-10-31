@@ -20,6 +20,7 @@ import {
   readBlockedEmailDomains,
   removeBlockedEmailDomains,
 } from '@server/admin/blockedEmailDomains';
+import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
 import type { ExecuteDeps } from './execute';
 import type { UsersBulkAuditEntry, UsersBulkDb } from './ports';
 import type { BulkUser, PreviewDeps, ResolveDeps } from './resolve';
@@ -205,6 +206,21 @@ export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?:
         { userId },
         { db: { realtimeConnections: realtimeConnectionRepository }, logger }
       ),
+    cancelSubscriptions: async (user, action, batchId) => {
+      const cancelReason = action === 'contain' ? 'contained' : 'suspended';
+      const result = await cancelAccountSubscriptions({ userId: user.id, reason: cancelReason }, logger ?? console);
+      const entry = subscriptionCancellationAudit(result, cancelReason);
+      // Best-effort per the catalogue: the ban is committed, so a lost entry must not fail the user.
+      if (entry) {
+        await recordAdminActionFromRequest(req, {
+          ...entry,
+          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
+          reason,
+          details: { ...entry.details, batchId },
+        });
+      }
+      return result;
+    },
     logger,
   };
 }

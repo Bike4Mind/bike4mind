@@ -6,8 +6,10 @@ import {
   mongoose,
 } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { userService } from '@bike4mind/services';
 import type {
   AdminSubscriptionOwner,
+  AdminSubscriptionOwnerAlert,
   AdminSubscriptionRow,
   AdminSubscriptionsFilter,
   AdminSubscriptionsListParams,
@@ -15,6 +17,8 @@ import type {
   AdminSubscriptionsSummary,
 } from '@client/app/utils/adminSubscriptionsFilter';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
+import { TERMINAL_SUBSCRIPTION_STATUSES } from '@bike4mind/server-utils/lib/subscriptions/types';
+import type Stripe from 'stripe';
 import {
   adminSubscriptionsSort,
   buildAdminSubscriptionsMatch,
@@ -145,13 +149,21 @@ export async function adminSubscriptionsMatch(
 const toObjectIds = (ids: string[]) =>
   ids.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
 
-async function ownersOf(docs: SubscriptionDoc[]): Promise<Map<string, AdminSubscriptionOwner>> {
+const USER_OWNER_FIELDS = 'name username email stripeCustomerId isBanned disputePending moderation.status';
+
+type OwnerLookup = {
+  owners: Map<string, AdminSubscriptionOwner>;
+  /** Whether each paying account read (user owners and org billing owners) is blocked. Absent: deleted. */
+  accountBlocked: Map<string, boolean>;
+};
+
+async function ownersOf(docs: SubscriptionDoc[]): Promise<OwnerLookup> {
   const userIds = docs.filter(doc => doc.ownerType === 'User').map(doc => doc.ownerId);
   const organizationIds = docs.filter(doc => doc.ownerType === 'Organization').map(doc => doc.ownerId);
   const [users, organizations] = await Promise.all([
     userIds.length > 0
       ? User.find({ _id: { $in: toObjectIds(userIds) } })
-          .select('name username email stripeCustomerId')
+          .select(USER_OWNER_FIELDS)
           .lean()
       : [],
     organizationIds.length > 0
@@ -160,6 +172,20 @@ async function ownersOf(docs: SubscriptionDoc[]): Promise<Map<string, AdminSubsc
           .lean()
       : [],
   ]);
+
+  const accountBlocked = new Map<string, boolean>();
+  const billingOwnerIds = organizations.flatMap(organization =>
+    organization.userId && !userIds.includes(String(organization.userId)) ? [String(organization.userId)] : []
+  );
+  const billingOwners =
+    billingOwnerIds.length > 0
+      ? await User.find({ _id: { $in: toObjectIds(billingOwnerIds) } })
+          .select('isBanned disputePending moderation.status')
+          .lean()
+      : [];
+  for (const account of [...users, ...billingOwners]) {
+    accountBlocked.set(String(account._id), userService.accountBlockReasons(account).length > 0);
+  }
 
   const owners = new Map<string, AdminSubscriptionOwner>();
   for (const user of users) {
@@ -183,7 +209,23 @@ async function ownersOf(docs: SubscriptionDoc[]): Promise<Map<string, AdminSubsc
       billingOwnerId: organization.userId ?? null,
     });
   }
-  return owners;
+  return { owners, accountBlocked };
+}
+
+function ownerAlertOf(
+  doc: SubscriptionDoc,
+  owner: AdminSubscriptionOwner | null,
+  accountBlocked: OwnerLookup['accountBlocked']
+): AdminSubscriptionOwnerAlert | null {
+  if (doc.source === 'admin_grant' || TERMINAL_SUBSCRIPTION_STATUSES.has(doc.status as Stripe.Subscription.Status)) {
+    return null;
+  }
+  if (!owner) return 'owner_deleted';
+  const payingAccountId = owner.kind === 'User' ? owner.id : owner.billingOwnerId;
+  if (!payingAccountId) return null;
+  const blocked = accountBlocked.get(String(payingAccountId));
+  if (blocked === undefined) return 'owner_deleted';
+  return blocked ? 'owner_blocked' : null;
 }
 
 const isoOrNull = (date: Date | null | undefined) => (date ? date.toISOString() : null);
@@ -192,26 +234,30 @@ export async function toAdminSubscriptionRows(
   docs: SubscriptionDoc[],
   catalog: PlanCatalog
 ): Promise<AdminSubscriptionRow[]> {
-  const owners = await ownersOf(docs);
-  return docs.map(doc => ({
-    id: String(doc._id),
-    subscriptionId: doc.subscriptionId,
-    ownerType: doc.ownerType,
-    ownerId: doc.ownerId,
-    owner: owners.get(`${doc.ownerType}:${doc.ownerId}`) ?? null,
-    plan: planOf(doc.priceId, catalog),
-    billedInterval: doc.source === 'admin_grant' ? null : billedIntervalOf(doc.interval, doc.intervalCount),
-    status: doc.status,
-    source: doc.source ?? 'stripe',
-    quantity: doc.quantity,
-    customCreditsPerCycle: doc.customCreditsPerCycle ?? null,
-    mrr: subscriptionMrr(doc),
-    periodStartsAt: isoOrNull(doc.periodStartsAt),
-    periodEndsAt: isoOrNull(doc.periodEndsAt),
-    canceledAt: isoOrNull(doc.canceledAt),
-    cancelAt: isoOrNull(doc.cancelAt ?? (doc.cancelAtPeriodEnd ? doc.periodEndsAt : null)),
-    createdAt: isoOrNull(doc.createdAt),
-  }));
+  const { owners, accountBlocked } = await ownersOf(docs);
+  return docs.map(doc => {
+    const owner = owners.get(`${doc.ownerType}:${doc.ownerId}`) ?? null;
+    return {
+      id: String(doc._id),
+      subscriptionId: doc.subscriptionId,
+      ownerType: doc.ownerType,
+      ownerId: doc.ownerId,
+      owner,
+      ownerAlert: ownerAlertOf(doc, owner, accountBlocked),
+      plan: planOf(doc.priceId, catalog),
+      billedInterval: doc.source === 'admin_grant' ? null : billedIntervalOf(doc.interval, doc.intervalCount),
+      status: doc.status,
+      source: doc.source ?? 'stripe',
+      quantity: doc.quantity,
+      customCreditsPerCycle: doc.customCreditsPerCycle ?? null,
+      mrr: subscriptionMrr(doc),
+      periodStartsAt: isoOrNull(doc.periodStartsAt),
+      periodEndsAt: isoOrNull(doc.periodEndsAt),
+      canceledAt: isoOrNull(doc.canceledAt),
+      cancelAt: isoOrNull(doc.cancelAt ?? (doc.cancelAtPeriodEnd ? doc.periodEndsAt : null)),
+      createdAt: isoOrNull(doc.createdAt),
+    };
+  });
 }
 
 const asStages = (stages: Condition[]) => stages as unknown as mongoose.PipelineStage[];

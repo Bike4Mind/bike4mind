@@ -29,7 +29,8 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
     });
     onClose();
     showUndo({
-      message: removed > 0 ? `Account suspended, credits set to 0` : 'Account suspended',
+      // Undo lifts the ban only: Stripe cannot reinstate a subscription the suspend canceled.
+      message: `${removed > 0 ? 'Account suspended, credits set to 0' : 'Account suspended'}. Undo does not restore canceled subscriptions.`,
       onUndo: () =>
         update({
           isBanned: false,
@@ -45,7 +46,7 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
       open
       onClose={onClose}
       title={`Suspend ${name}?`}
-      description="They are signed out everywhere and cannot sign in until reinstated. Their data is kept."
+      description="They are signed out everywhere and cannot sign in until reinstated. Their data is kept. Their live Stripe subscriptions are canceled now, with no refund, and stay canceled if you undo or reinstate."
       reasonPresets={ADMIN_REASON_PRESETS.suspension}
       confirmLabel="Suspend account"
       tone="danger"

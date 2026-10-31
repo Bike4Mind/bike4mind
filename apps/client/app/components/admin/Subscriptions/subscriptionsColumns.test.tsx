@@ -17,6 +17,7 @@ const row: AdminSubscriptionRow = {
   ownerType: 'User',
   ownerId: 'u1',
   owner: null,
+  ownerAlert: null,
   plan: { priceId: 'price_pro', name: 'Professional', interval: 'monthly' },
   billedInterval: { interval: 'month', intervalCount: 1 },
   status: 'active',
@@ -31,7 +32,7 @@ const row: AdminSubscriptionRow = {
   createdAt: '2026-10-01T00:00:00.000Z',
 };
 
-const renderCell = (columnId: 'renews' | 'started', overrides: Partial<AdminSubscriptionRow>) => {
+const renderCell = (columnId: 'renews' | 'started' | 'status', overrides: Partial<AdminSubscriptionRow>) => {
   const column = subscriptionsColumns({ now: NOW, newSince: null }).find(c => c.id === columnId);
   if (!column) throw new Error(`no ${columnId} column`);
   return render(<>{column.render({ ...row, ...overrides })}</>, { wrapper: Wrapper });
@@ -56,5 +57,21 @@ describe('subscriptionsColumns date fallbacks', () => {
     renderCell('started', {});
     expect(screen.queryByLabelText('None')).toBeNull();
     expect(screen.getByText('14d ago')).toBeTruthy();
+  });
+});
+
+describe('subscriptionsColumns owner alert', () => {
+  it('flags a live subscription that still bills a deleted or blocked owner', () => {
+    const { unmount } = renderCell('status', { ownerAlert: 'owner_deleted' });
+    expect(screen.getByTestId('admin-subscriptions-owner-alert-s1').textContent).toBe('Owner deleted');
+    unmount();
+
+    renderCell('status', { ownerAlert: 'owner_blocked' });
+    expect(screen.getByTestId('admin-subscriptions-owner-alert-s1').textContent).toBe('Owner blocked');
+  });
+
+  it('shows no flag for a healthy owner', () => {
+    renderCell('status', {});
+    expect(screen.queryByTestId('admin-subscriptions-owner-alert-s1')).toBeNull();
   });
 });
