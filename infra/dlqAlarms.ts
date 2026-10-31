@@ -82,6 +82,7 @@ import {
 } from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
@@ -588,6 +589,15 @@ if (isMonitoredStage) {
       displayName: 'Young Account Spend Alert',
       application: 'Signup',
       queue: youngAccountSpendAlertDeadLetter.queue,
+    });
+  }
+
+  if (apiProbeDetectorDeadLetter) {
+    createDlqAlarms({
+      label: 'api-probe-detector',
+      displayName: 'API Probe Detector',
+      application: 'Security',
+      queue: apiProbeDetectorDeadLetter.queue,
     });
   }
 

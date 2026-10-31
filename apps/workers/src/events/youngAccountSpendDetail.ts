@@ -6,13 +6,9 @@
  * email or a name. Every failure degrades to a one-line note so the alarm itself still posts.
  */
 
-import {
-  CloudWatchLogsClient,
-  GetQueryResultsCommand,
-  StartQueryCommand,
-  StopQueryCommand,
-  type ResultField,
-} from '@aws-sdk/client-cloudwatch-logs';
+import type { ResultField } from '@aws-sdk/client-cloudwatch-logs';
+
+import { rowToObject, runLogsInsightsQuery, type LogsClient } from '../utils/logsInsights';
 
 import { escapeMrkdwn, parseReason, parseStateChangeTime } from './alarmSlackMessage';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
@@ -26,9 +22,6 @@ const MODELS_PER_ACCOUNT = 3;
 const RESULT_ROW_LIMIT = 500;
 /** Well inside the relay's 60-second timeout; a typical hour of lines answers in a few seconds. */
 const QUERY_DEADLINE_MS = 25_000;
-const POLL_INTERVAL_MS = 1_000;
-/** StopQuery is best-effort cleanup; it must not eat the time left for the Slack post. */
-const STOP_TIMEOUT_MS = 2_000;
 /** Slack caps a section's text at 3000 characters. */
 const SECTION_TEXT_MAX = 2_900;
 
@@ -67,7 +60,7 @@ export interface SpendWindow {
   end: Date;
 }
 
-export type LogsClient = Pick<CloudWatchLogsClient, 'send'>;
+export type { LogsClient };
 
 export interface FetchOptions {
   logGroup: string;
@@ -76,8 +69,6 @@ export interface FetchOptions {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
-
-let defaultClient: CloudWatchLogsClient | undefined;
 
 /**
  * The span the alarm evaluated: from the oldest breaching datapoint to the end of the newest
@@ -93,11 +84,6 @@ export function alarmWindow(alarm: CloudWatchAlarmPayload): SpendWindow | undefi
   if (!end || span <= 0) return undefined;
   return { start: new Date(end.getTime() - span * 1000), end };
 }
-
-const rowToObject = (row: ResultField[]): Record<string, string> =>
-  Object.fromEntries(
-    row.filter(f => f.field && f.value !== undefined).map(f => [f.field as string, f.value as string])
-  );
 
 /** Sums the per-(account, model) rows into accounts, highest spend first. */
 export function aggregateSpenders(rows: ResultField[][]): YoungAccountSpender[] {
@@ -123,64 +109,17 @@ export function aggregateSpenders(rows: ResultField[][]): YoungAccountSpender[] 
   return spenders.sort((a, b) => b.usd - a.usd || a.userId.localeCompare(b.userId));
 }
 
-const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-
-/**
- * Runs the query for the window and waits for it. Every call shares one deadline signal, so a
- * hung request cannot outlive it either; a query left running on any failure is stopped.
- */
+/** Runs the query for the window and sums its rows per account. */
 export async function fetchYoungAccountSpenders(
   window: SpendWindow,
   options: FetchOptions
 ): Promise<YoungAccountSpend> {
-  const client = options.client ?? (defaultClient ??= new CloudWatchLogsClient({}));
-  const sleep = options.sleep ?? defaultSleep;
-  const now = options.now ?? Date.now;
-  const deadlineMs = options.deadlineMs ?? QUERY_DEADLINE_MS;
-  const deadline = now() + deadlineMs;
-  const abortSignal = AbortSignal.timeout(deadlineMs);
-  const timedOut = () => new Error('Logs Insights query did not finish in time');
-
-  let queryId: string | undefined;
-  let settled = false;
-  try {
-    const started = await client.send(
-      new StartQueryCommand({
-        logGroupName: options.logGroup,
-        startTime: Math.floor(window.start.getTime() / 1000),
-        endTime: Math.ceil(window.end.getTime() / 1000),
-        queryString: YOUNG_ACCOUNT_SPEND_QUERY,
-        limit: RESULT_ROW_LIMIT,
-      }),
-      { abortSignal }
-    );
-    queryId = started.queryId;
-    if (!queryId) throw new Error('Logs Insights returned no query id');
-
-    for (;;) {
-      const result = await client.send(new GetQueryResultsCommand({ queryId }), { abortSignal });
-      const status = result.status ?? 'Unknown';
-      if (status === 'Complete') {
-        settled = true;
-        const rows = result.results ?? [];
-        return { spenders: aggregateSpenders(rows), truncated: rows.length >= RESULT_ROW_LIMIT };
-      }
-      if (status === 'Failed' || status === 'Cancelled' || status === 'Timeout') {
-        settled = true;
-        throw new Error(`Logs Insights query ${status.toLowerCase()}`);
-      }
-      if (now() >= deadline) throw timedOut();
-      await sleep(POLL_INTERVAL_MS);
-    }
-  } catch (error) {
-    throw abortSignal.aborted ? timedOut() : error;
-  } finally {
-    if (queryId && !settled) {
-      await client
-        .send(new StopQueryCommand({ queryId }), { abortSignal: AbortSignal.timeout(STOP_TIMEOUT_MS) })
-        .catch(() => undefined);
-    }
-  }
+  const { logGroup, ...queryOptions } = options;
+  const rows = await runLogsInsightsQuery(
+    { logGroup, window, queryString: YOUNG_ACCOUNT_SPEND_QUERY, limit: RESULT_ROW_LIMIT },
+    { deadlineMs: QUERY_DEADLINE_MS, ...queryOptions }
+  );
+  return { spenders: aggregateSpenders(rows), truncated: rows.length >= RESULT_ROW_LIMIT };
 }
 
 const formatUsd = (usd: number) => (usd >= 0.01 || usd === 0 ? usd.toFixed(2) : usd.toFixed(4));
