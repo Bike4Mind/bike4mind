@@ -162,7 +162,15 @@ type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 
  */
 export type AccountStrip = (status: ReactNode) => ReactNode;
 
-export function ChatShell({ auth, account }: { auth?: AuthState | null; account?: AccountStrip }) {
+export function ChatShell({
+  auth,
+  account,
+  onOpenModelServers,
+}: {
+  auth?: AuthState | null;
+  account?: AccountStrip;
+  onOpenModelServers?: () => void;
+}) {
   const {
     sessions,
     loading,
@@ -745,7 +753,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'models' ? (
-        <ModelsScreen onClose={() => setScreen('conversation')} inUse={modelsInUse} />
+        <ModelsScreen
+          onClose={() => setScreen('conversation')}
+          inUse={modelsInUse}
+          onOpenModelServers={onOpenModelServers}
+        />
       ) : screen === 'skill-market' ? (
         <SkillMarketPanel initial={marketListing} onClose={() => setScreen('customize')} />
       ) : screen === 'customize' ? (
