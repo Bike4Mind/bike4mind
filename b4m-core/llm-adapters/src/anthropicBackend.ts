@@ -69,6 +69,7 @@ import {
   planReasoningEffort,
   resolveAnthropicEffort,
   resolveOutputMaxTokens,
+  supportsAnthropicEffort,
   THINKING_ANSWER_HEADROOM_TOKENS,
   type AnthropicEffort,
   type ReasoningEffortPlan,
@@ -1255,18 +1256,31 @@ export class AnthropicBackend implements ICompletionBackend {
     // precedence; mixing forced-tool with executable tools can deadlock).
     const responseFormat = options.responseFormat;
     const wantsJsonSchema = responseFormat?.type === 'json_schema' && !hasCallerTools;
-    const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported;
-    // A model without forced tool use gets native structured outputs instead of the synthesized tool,
-    // unless a document asks for citations (that pairing is a 400) or the schema is one structured
-    // outputs reject - then the schema goes in the prompt.
-    const citationsBlockFormat =
-      wantsJsonSchema && !forcedToolChoiceSupported && hasCitationsEnabled(apiParams.messages);
+    // The forced tool cannot run alongside thinking, so a caller's own request for adaptive thinking
+    // (not a route default, and not `none`) moves json_schema to native structured outputs.
+    const callerWantsThinking =
+      options.explicitReasoning === true &&
+      currentModelInfo?.can_think === true &&
+      supportsAnthropicEffort(model, currentModelInfo) &&
+      (options.thinking?.enabled === true ||
+        (options.reasoningEffort !== undefined &&
+          options.reasoningEffort !== 'none' &&
+          planReasoningEffort(model, currentModelInfo, options.reasoningEffort, apiParams.max_tokens).kind ===
+            'adaptive'));
+    const wantsNativeFormat = wantsJsonSchema && (!forcedToolChoiceSupported || callerWantsThinking);
+    // Native structured outputs replace the synthesized tool unless a document asks for citations (that
+    // pairing is a 400) or the schema is one structured outputs reject. Then a model with forced tool
+    // use keeps the tool, and one without puts the schema in the prompt.
+    const citationsBlockFormat = wantsNativeFormat && hasCitationsEnabled(apiParams.messages);
     const nativeFormat =
-      wantsJsonSchema && !forcedToolChoiceSupported && !citationsBlockFormat && responseFormat.type === 'json_schema'
+      wantsNativeFormat && !citationsBlockFormat && responseFormat.type === 'json_schema'
         ? buildStructuredOutputFormat(responseFormat.json_schema.schema)
         : null;
     const usingResponseFormatNative = nativeFormat !== null;
+    const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported && !usingResponseFormatNative;
     const usingResponseFormatPrompt = wantsJsonSchema && !forcedToolChoiceSupported && !usingResponseFormatNative;
+    // Caller thinking moved this request off the forced tool; its max_tokens is kept as sent.
+    const thinkingMovedFormatNative = usingResponseFormatNative && forcedToolChoiceSupported;
     if (responseFormat) {
       this.logger.info(
         `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, nativeFormat=${usingResponseFormatNative}, callerTools=${options.tools?.length ?? 0}`
@@ -1397,7 +1411,7 @@ export class AnthropicBackend implements ICompletionBackend {
           // Merged, not assigned: output_config may already carry the structured-output format.
           apiParams.output_config = { ...apiParams.output_config, ...result.thinkingConfig.output_config };
         }
-        apiParams.max_tokens = result.maxTokens;
+        if (!thinkingMovedFormatNative) apiParams.max_tokens = result.maxTokens;
 
         // Apply temperature/top_p constraints
         if (result.temperature === 'delete') {
@@ -1421,7 +1435,7 @@ export class AnthropicBackend implements ICompletionBackend {
         );
         // The synthesized response_format tool is forced via tool_choice, which the API rejects
         // alongside thinking - so only the off switch survives there. Native structured outputs
-        // (models without forced tool use) carry the format in output_config and keep any level.
+        // carry the format in output_config and keep any level.
         const plan: ReasoningEffortPlan =
           usingResponseFormatToolUse && (requested.kind === 'adaptive' || requested.kind === 'budget')
             ? { kind: 'default' }
