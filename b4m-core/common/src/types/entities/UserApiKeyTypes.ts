@@ -187,6 +187,15 @@ export enum ApiKeyScope {
    * the Bob overlay package, with no implementation here.
    */
   BOB_RUN = 'bob:run',
+  /**
+   * Post a message, or a reply in a thread, to a Slack channel through the Bike4Mind bot
+   * (`POST /api/v1/slack/messages`). The caller never holds a Slack token. The scope alone opens
+   * nothing: the channel must sit in a Slack workspace connected to an organization the key's owner
+   * belongs to, and an org owner must have enabled that channel for API posting (`apiPostEnabled` on
+   * its SlackChannelConfig, optionally narrowed to listed key ids). Unsuffixed on purpose, like
+   * {@link BOB_RUN}: posting is outward-facing, so it stays out of the Read-only and Read & write presets.
+   */
+  SLACK_POST = 'slack:post',
 }
 
 /**

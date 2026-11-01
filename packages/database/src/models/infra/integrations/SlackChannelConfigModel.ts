@@ -1,4 +1,5 @@
 import {
+  ISlackChannelApiPostingUpdate,
   ISlackChannelConfig,
   ISlackChannelConfigDocument,
   ISlackChannelConfigRepository,
@@ -21,6 +22,8 @@ const SlackChannelConfigSchema = new Schema<ISlackChannelConfigDocument>(
     configuredBy: { type: String, required: true },
     githubOwner: { type: String },
     githubRepo: { type: String },
+    apiPostEnabled: { type: Boolean, default: false },
+    apiPostAllowedKeyIds: { type: [String], default: undefined },
   },
   {
     timestamps: true,
@@ -68,6 +71,35 @@ class SlackChannelConfigRepository
   async deleteByChannelId(channelId: string): Promise<boolean> {
     const result = await this.model.deleteOne({ channelId });
     return result.deletedCount > 0;
+  }
+
+  async setApiPostingByChannelId(
+    channelId: string,
+    update: ISlackChannelApiPostingUpdate
+  ): Promise<(ISlackChannelConfigDocument & IMongoDocument) | null> {
+    const { slackTeamId, apiPostEnabled, apiPostAllowedKeyIds, configuredBy } = update;
+    try {
+      // The filter pins slackTeamId, so a channel configured under another workspace misses it and the
+      // upsert's insert then collides with the unique channelId index instead of re-homing that config.
+      const result = await this.model.findOneAndUpdate(
+        { channelId, slackTeamId },
+        {
+          $set: { apiPostEnabled, apiPostAllowedKeyIds },
+          $setOnInsert: { channelId, slackTeamId, configuredBy },
+        },
+        { upsert: true, new: true }
+      );
+      return result as ISlackChannelConfigDocument & IMongoDocument;
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000) return null;
+      throw error;
+    }
+  }
+
+  async findApiPostEnabledBySlackTeamId(
+    slackTeamId: string
+  ): Promise<(ISlackChannelConfigDocument & IMongoDocument)[]> {
+    return this.model.find({ slackTeamId, apiPostEnabled: true }).sort({ updatedAt: -1 });
   }
 }
 

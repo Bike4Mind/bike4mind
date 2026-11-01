@@ -231,6 +231,13 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/premium-bob/bob-recheck',
     ],
   },
+  {
+    value: ApiKeyScope.SLACK_POST,
+    label: 'Slack: Post',
+    description:
+      'Post messages and thread replies to Slack channels through the Bike4Mind bot. Reaches only channels an organization owner has enabled for API posting',
+    endpoints: [],
+  },
 ];
 
 /**
