@@ -689,6 +689,21 @@ describe('resolveAlarmWebhookUrl', () => {
     );
     expect(resolveAlarmWebhookUrl(linked, 'cost')).toBe(alarms.value);
   });
+
+  it('falls back to the error-reporting channel when only that secret is linked', () => {
+    // The shape of an outside subscriber to alarmToSlack.handler that links neither alarms secret.
+    const errorsOnly = new Proxy(
+      { SLACK_ERROR_REPORTING_WEBHOOK_URL: errors },
+      {
+        get(target, prop) {
+          if (prop in target) return target[prop as keyof typeof target];
+          throw new Error(`"${String(prop)}" is not linked in your sst.config.ts`);
+        },
+      }
+    );
+    expect(resolveAlarmWebhookUrl(errorsOnly, 'cost')).toBe(errors.value);
+    expect(resolveAlarmWebhookUrl(errorsOnly, 'infra')).toBe(errors.value);
+  });
 });
 
 describe('postAlarmToSlack', () => {
