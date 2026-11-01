@@ -291,7 +291,11 @@ const wafMentionArgs = alarmSlackMentionFunctionArgs();
 export const wafAlarmSlackHandler = productionAlerts
   ? new sst.aws.Function('WafAlarmSlackHandler', {
       handler: 'apps/workers/src/events/wafAlarmToSlack.handler',
-      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
+      link: [
+        secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
+        secrets.SLACK_ALARMS_WEBHOOK_URL,
+        secrets.SLACK_COST_ALARMS_WEBHOOK_URL,
+      ],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...wafMentionArgs.environment },
       permissions: wafMentionArgs.permissions,
       logging: { retention: '1 month' },

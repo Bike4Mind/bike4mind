@@ -6,13 +6,27 @@
  * colour-barred attachment (red page / amber warn / blue info on production, grey on any other
  * stage, green when resolved). Mentions only ever apply to production alarms, at page level
  * unless the setting widens them to warn (see parseMentionSetting). Stages other than production
- * post page-level alarms only; their warnings are dropped.
+ * post page-level alarms only; their warnings are dropped. A resolved line is posted only for an
+ * alarm that was in ALARM; a new alarm settling from INSUFFICIENT_DATA to OK is not news.
+ *
+ * Every catalog entry carries a category, shown in the footer. Cost alarms can route to their own
+ * channel through SLACK_COST_ALARMS_WEBHOOK_URL (see resolveAlarmWebhookUrl).
  */
 
 import { classifyStage } from '@bike4mind/common';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
 
 export type AlarmLevel = 'page' | 'warn' | 'info';
+
+/**
+ * What kind of alarm it is, shown in the footer and used to pick the Slack channel.
+ * cost: money leaving through providers or credits. abuse: signup and API-key farming.
+ * jobs: background work failing or stalled. security: edge and sign-in protections.
+ * infra: everything else about the platform being up.
+ */
+export type AlarmCategory = 'cost' | 'abuse' | 'jobs' | 'infra' | 'security';
+
+export const ALARM_CATEGORIES: readonly AlarmCategory[] = ['cost', 'abuse', 'jobs', 'infra', 'security'];
 
 /** Extra data the relay loads before posting; see youngAccountSpendDetail.ts. */
 export type AlarmDetailKind = 'young-account-spend';
@@ -30,6 +44,7 @@ export type AlarmLinkKey =
 export interface AlarmCatalogEntry {
   title: string;
   level: AlarmLevel;
+  category: AlarmCategory;
   meaning: string;
   action: string;
   /** Short noun for the metric count, used in the "what happened" sentence. */
@@ -81,6 +96,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'signup-code-send-rate': {
     title: 'Sign-in code emails above the hourly ceiling',
     level: 'warn',
+    category: 'abuse',
     unit: 'sign-in code emails',
     meaning:
       'More sign-in code emails went out in one hour than we expect from normal signups and logins. This usually means automated signups.',
@@ -90,6 +106,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'signup-code-send-burst': {
     title: 'Sign-in code emails spiking',
     level: 'page',
+    category: 'abuse',
     unit: 'sign-in code emails',
     meaning:
       'A burst of sign-in code emails went out in five minutes, far above normal. Automated signups are the usual cause.',
@@ -99,6 +116,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'api-key-create-burst': {
     title: 'API keys being created unusually fast',
     level: 'page',
+    category: 'abuse',
     unit: 'API keys',
     meaning: 'Many user API keys were created in five minutes. Normal users create one occasionally.',
     action:
@@ -108,6 +126,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'turnstile-policy-inactive': {
     title: 'The sign-in bot challenge is switched off',
     level: 'page',
+    category: 'security',
     unit: 'reports',
     meaning:
       'The server says the Turnstile challenge is not active on this stage, so sign-ins and signups are not being challenged. The log line names the reason: the secret is not provisioned, the admin toggle is off, or the site key is empty.',
@@ -117,6 +136,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'turnstile-misconfigured': {
     title: 'The sign-in bot challenge is rejecting everyone',
     level: 'page',
+    category: 'security',
     unit: 'rejections',
     meaning:
       'Turnstile is on, but the server cannot verify any challenge: Cloudflare rejected the secret, or the stage has no hostname allowlist. Every challenged sign-in and signup is answered 503 until it is fixed. The log line lists the error codes.',
@@ -126,6 +146,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'ungranted-credit-purchases': {
     title: 'Customer paid but got no credits',
     level: 'page',
+    category: 'cost',
     unit: 'purchases',
     meaning: 'Stripe took a payment and the credits were not added to the account.',
     action:
@@ -134,6 +155,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'billing-event-ingest-failures': {
     title: 'Billing events not reaching Overwatch',
     level: 'page',
+    category: 'jobs',
     unit: 'billing events',
     meaning:
       'Usage and billing events are being dropped before they reach the billing system, so spend is under-counted.',
@@ -142,6 +164,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'anthropic-rate-limit-errors': {
     title: 'Anthropic is rate limiting us',
     level: 'page',
+    category: 'infra',
     unit: 'rate limit errors',
     meaning:
       'Requests to Anthropic are being refused for exceeding our quota, even after retries. Users see failed chats.',
@@ -150,6 +173,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'agent-checkpoint-depth-warning': {
     title: 'An agent run is looping',
     level: 'warn',
+    category: 'jobs',
     unit: 'runs',
     meaning:
       'An agent has handed off to itself more times than expected, which can mean it is stuck in a loop and burning credits.',
@@ -159,6 +183,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'agent-checkpoint-depth-exceeded': {
     title: 'An agent run was stopped for looping',
     level: 'warn',
+    category: 'jobs',
     unit: 'runs',
     meaning: 'An agent hit the hard limit on self-handoffs and was stopped.',
     action: 'Review the session to see why it never finished.',
@@ -167,6 +192,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'liveops-p0-issues': {
     title: 'LiveOps found a blocker issue',
     level: 'page',
+    category: 'infra',
     unit: 'issues',
     meaning: 'The automated triage created a P0 issue from production errors.',
     action: 'Open the newest P0 issue in the tracker and respond.',
@@ -175,6 +201,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'liveops-p1-issues': {
     title: 'LiveOps found a critical issue',
     level: 'warn',
+    category: 'infra',
     unit: 'issues',
     meaning: 'The automated triage created a P1 issue from production errors.',
     action: 'Open the newest P1 issue in the tracker.',
@@ -183,6 +210,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'liveops-high-error-volume': {
     title: 'Production error volume is high',
     level: 'page',
+    category: 'infra',
     unit: 'errors',
     meaning: 'Far more errors than usual were logged. Something may be broken for many users.',
     action: 'Check the latest deploy and the error log for a common cause.',
@@ -191,6 +219,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'ecs-task-failed-to-start': {
     title: 'A background service cannot start',
     level: 'page',
+    category: 'infra',
     unit: 'services',
     meaning:
       'A long-running service has no running copies, so whatever it does (for example real-time updates) is down.',
@@ -199,6 +228,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'dlq-alarm-handler-dlq-messages': {
     title: 'Alarm delivery to Slack is failing',
     level: 'page',
+    category: 'infra',
     unit: 'messages',
     meaning: 'Alarms could not be posted to Slack, so other alarms may be going unseen.',
     action: 'Check the Slack webhook secrets and the alarm relay Lambda errors.',
@@ -207,6 +237,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'waf-alarm-slack-handler-dlq-messages': {
     title: 'WAF alert delivery to Slack is failing',
     level: 'page',
+    category: 'infra',
     unit: 'messages',
     meaning: 'WAF alerts could not be posted to Slack, so abuse alerts may be going unseen.',
     action: 'Check the Slack webhook secrets and the WAF alarm relay Lambda errors.',
@@ -215,6 +246,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'waf-otc-edge-signal-rate': {
     title: 'WAF is flagging many sign-in code requests',
     level: 'warn',
+    category: 'abuse',
     unit: 'requests',
     meaning:
       'Many sign-in code requests in five minutes came from hosting providers or clients the WAF labels as bots. This usually means automated signups.',
@@ -224,6 +256,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'rate-limit-hit': {
     title: 'Integration API rate limit reached',
     level: 'warn',
+    category: 'infra',
     unit: 'rejected requests',
     meaning: 'An integration is making more calls than its limit allows and is getting rejected.',
     action: 'Identify the integration from the logs and slow it down or raise its limit.',
@@ -232,6 +265,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'circuit-breaker-open': {
     title: 'An integration was cut off',
     level: 'page',
+    category: 'infra',
     unit: 'integrations',
     meaning: 'An external integration failed repeatedly, so we stopped calling it to protect the app.',
     action: 'Check which integration opened the breaker and whether the provider is down.',
@@ -240,6 +274,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'model-discovery-no-successful-run': {
     title: 'Model discovery has not completed a successful run',
     level: 'warn',
+    category: 'jobs',
     unit: 'runs',
     meaning: 'The model catalog is not being refreshed, so new or changed models will not show up.',
     action: 'Check the model discovery job logs for the failure.',
@@ -247,6 +282,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'no-successful-run': {
     title: 'The WAF auto-blocker has stopped running',
     level: 'page',
+    category: 'security',
     unit: 'runs',
     meaning:
       'The scheduled job that blocks abusive IPs has not completed a run in 30 minutes. New abusers are not being blocked automatically.',
@@ -255,6 +291,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'slow-no-successful-run': {
     title: "The WAF auto-blocker's daily sweep has stopped",
     level: 'warn',
+    category: 'security',
     unit: 'runs',
     meaning: 'The long-window sweep of the auto-blocker has not completed in 7 hours.',
     action: BLOCKER_LOG_ACTION,
@@ -262,6 +299,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'cap-exceeded': {
     title: 'The WAF auto-blocker found more abusers than it is allowed to block',
     level: 'warn',
+    category: 'security',
     unit: 'IPs',
     meaning:
       'One run found more new abusive IPs than its safety cap, so it held back rather than blocking a large batch blindly.',
@@ -270,6 +308,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'query-failure': {
     title: 'The WAF auto-blocker cannot read the logs',
     level: 'warn',
+    category: 'security',
     unit: 'failed runs',
     meaning: 'Two runs in a row failed to query the WAF logs. The block list is unchanged.',
     action: 'Check the blocker Lambda log for the query error.',
@@ -277,6 +316,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'set-size': {
     title: 'The WAF block list is very large',
     level: 'warn',
+    category: 'security',
     unit: 'blocked IPs',
     meaning: 'The auto-blocker holds more entries than expected.',
     action: 'Review the entries for mistakes before they expire on their own.',
@@ -285,6 +325,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'slow-errors': {
     title: 'A WAF auto-blocker daily sweep failed',
     level: 'warn',
+    category: 'security',
     unit: 'failed runs',
     meaning: 'A long-window run failed. The block list is unchanged.',
     action: 'Check the blocker Lambda log.',
@@ -292,6 +333,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   SuccessfulSignups: {
     title: 'More new accounts than usual',
     level: 'page',
+    category: 'abuse',
     unit: 'new accounts',
     meaning:
       'The hourly census counted more new accounts in one hour than the ceiling. It notifies once per episode and stays on while each following hour also breaches.',
@@ -301,6 +343,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   NewAccountApiKeys: {
     title: 'New accounts are creating API keys fast',
     level: 'page',
+    category: 'abuse',
     unit: 'API keys',
     meaning:
       'Accounts under 24 hours old created more API keys in one hour than the ceiling. Credit farms create keys right after signing up.',
@@ -310,6 +353,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'account-creation-metrics-missing': {
     title: 'The signup census did not run',
     level: 'warn',
+    category: 'jobs',
     unit: 'missed hours',
     meaning: 'No hourly new-account count was published, so the new-account alarms are blind until it runs again.',
     action: 'Check the account creation metrics Lambda log and its dead-letter queue.',
@@ -317,6 +361,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'account-creation-metrics-failed': {
     title: 'The signup census is failing',
     level: 'warn',
+    category: 'jobs',
     unit: 'failed runs',
     meaning: 'The hourly new-account count failed and its event is parked in the failure queue.',
     action: 'Check the account creation metrics Lambda log, fix the cause, then replay the failed hour.',
@@ -325,6 +370,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'young-account-spend-rate': {
     title: 'New accounts are spending a lot on AI',
     level: 'page',
+    category: 'cost',
     unit: 'USD',
     meaning:
       'Accounts under 7 days old spent more estimated AI dollars in one hour than the ceiling. Credit farms spend their free credits fast.',
@@ -336,6 +382,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'llm-spend-young-accounts': {
     title: 'Young-account LLM spend is spiking',
     level: 'page',
+    category: 'cost',
     unit: 'USD',
     meaning:
       'Accounts under 7 days old spent more estimated AI dollars in five minutes than the ceiling. New accounts rarely spend this fast on their own.',
@@ -346,6 +393,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'completion-credit-overdraft': {
     title: 'A completion cost more than its account could pay',
     level: 'warn',
+    category: 'cost',
     unit: 'completions',
     meaning:
       'A completion cost more credits than its account held, so the balance was charged down to zero and the rest went uncollected.',
@@ -356,6 +404,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'llm-spend-rate': {
     title: 'AI provider spend is spiking',
     level: 'warn',
+    category: 'cost',
     unit: 'USD',
     meaning:
       'Estimated spend at one provider in five minutes is at or above the ceiling. A runaway agent or a credit farm are the usual causes.',
@@ -366,6 +415,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'llm-spend-hourly': {
     title: 'AI provider spend is running hot',
     level: 'page',
+    category: 'cost',
     unit: 'USD',
     meaning:
       'Estimated spend at one provider over the last hour is at or above the ceiling. A sustained drain from a credit farm, a stolen card, or a runaway agent are the usual causes.',
@@ -376,6 +426,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'provider-reported-spend-hourly': {
     title: 'A provider reports unusual AI spend',
     level: 'page',
+    category: 'cost',
     unit: 'USD',
     meaning:
       "The provider's own usage report for the last hour, priced with our model rates, is at or above the ceiling. This counts every call billed to the organization, including ones that never reached our ledger.",
@@ -386,6 +437,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'provider-usage-poll-errors': {
     title: 'The provider usage poller is failing',
     level: 'warn',
+    category: 'jobs',
     unit: 'failed runs',
     meaning:
       'The hourly job that reads Anthropic and OpenAI usage reports failed, so the provider-side spend alarms are blind until it recovers.',
@@ -394,6 +446,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'mail-send-failures': {
     title: 'Emails are failing to send',
     level: 'page',
+    category: 'infra',
     unit: 'failed sends',
     meaning:
       'The mail transport rejected outbound emails in the last hour. Sign-in codes go through the same path, so people may be unable to sign in.',
@@ -402,6 +455,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'oauth-signups-refused-burst': {
     title: 'Refused OAuth sign-ups spiking',
     level: 'warn',
+    category: 'abuse',
     unit: 'refused sign-ups',
     meaning:
       'Many Google or other OAuth sign-ups were refused in five minutes because registration is closed to them. The refusing IPs are blocked automatically.',
@@ -411,6 +465,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'stream-idle-timeouts': {
     title: 'AI replies are being cut off by our idle watchdog',
     level: 'warn',
+    category: 'infra',
     unit: 'cut streams',
     meaning:
       'Our idle watchdog cut at least ten model streams in an hour. Each cut attempt is still billed by the provider and then retried or sent to a fallback model, so users see slow or repeated answers.',
@@ -433,6 +488,7 @@ export function dlqCatalogEntry(suffix: string): AlarmCatalogEntry | undefined {
     return {
       title: `Background job failed: ${queue}`,
       level: 'warn',
+      category: 'jobs',
       unit: 'failed messages',
       meaning: `A message for the ${queue} job could not be processed after retries and is parked in its dead-letter queue. Whatever that job does for the affected item did not happen.`,
       action,
@@ -442,6 +498,7 @@ export function dlqCatalogEntry(suffix: string): AlarmCatalogEntry | undefined {
   return {
     title: `Unhandled failure for over an hour: ${queue}`,
     level: 'warn',
+    category: 'jobs',
     unit: 'waiting messages',
     meaning: `A failed message for the ${queue} job has sat in its dead-letter queue for more than an hour without being replayed or dropped.`,
     action,
@@ -449,8 +506,9 @@ export function dlqCatalogEntry(suffix: string): AlarmCatalogEntry | undefined {
   };
 }
 
-/** Level for alarms the catalog does not know. */
+/** Level and category for alarms the catalog does not know. */
 export const DEFAULT_ALARM_LEVEL: AlarmLevel = 'warn';
+export const DEFAULT_ALARM_CATEGORY: AlarmCategory = 'infra';
 
 const COLOR = {
   page: '#E01E5A',
@@ -641,14 +699,24 @@ export function describeFields(alarm: CloudWatchAlarmPayload, unit?: string, cha
 function resolveEntry(alarm: CloudWatchAlarmPayload, stage: string) {
   const suffix = alarmSuffix(alarm.AlarmName, stage);
   const entry = lookupCatalog(suffix);
-  if (entry) return { entry, title: entry.title, level: entry.level };
+  if (entry) return { entry, title: entry.title, level: entry.level, category: entry.category };
   const words = suffix.replace(/-/g, ' ');
-  return { entry: undefined, title: words.charAt(0).toUpperCase() + words.slice(1), level: DEFAULT_ALARM_LEVEL };
+  return {
+    entry: undefined,
+    title: words.charAt(0).toUpperCase() + words.slice(1),
+    level: DEFAULT_ALARM_LEVEL,
+    category: DEFAULT_ALARM_CATEGORY,
+  };
 }
 
 /** The catalog entry an alarm resolves to, so the relay knows what else to load before posting. */
 export function alarmCatalogEntry(alarm: CloudWatchAlarmPayload, stage: string): AlarmCatalogEntry | undefined {
   return resolveEntry(alarm, stage).entry;
+}
+
+/** The category an alarm resolves to; unknown alarms are infra. Drives channel routing in the relays. */
+export function alarmCategory(alarm: CloudWatchAlarmPayload, stage: string): AlarmCategory {
+  return resolveEntry(alarm, stage).category;
 }
 
 export function consoleUrl(alarm: CloudWatchAlarmPayload): string | undefined {
@@ -764,15 +832,19 @@ export function composeAlarmMessage(params: ComposeParams): SlackAlarmMessage {
   };
 }
 
-/** Returns null for INSUFFICIENT_DATA, which is not worth a channel message. */
+/**
+ * Returns null for INSUFFICIENT_DATA, and for an OK that does not follow an ALARM: a freshly
+ * created alarm goes INSUFFICIENT_DATA to OK once it has data, which is not a recovery.
+ */
 export function formatAlarmSlackMessage(
   alarm: CloudWatchAlarmPayload,
   stage: string,
   options: FormatOptions = {}
 ): SlackAlarmMessage | null {
   if (alarm.NewStateValue !== 'ALARM' && alarm.NewStateValue !== 'OK') return null;
+  if (alarm.NewStateValue === 'OK' && alarm.OldStateValue !== 'ALARM') return null;
 
-  const { entry, title, level } = resolveEntry(alarm, stage);
+  const { entry, title, level, category } = resolveEntry(alarm, stage);
   // Other stages run the production ceilings against QA traffic, so only their pages are worth a post.
   if (!isProductionStage(stage) && level !== 'page') return null;
   const when = parseStateChangeTime(alarm.StateChangeTime);
@@ -782,7 +854,7 @@ export function formatAlarmSlackMessage(
   if (alarm.NewStateValue === 'OK') {
     const back = when ? `back to normal at ${formatClock(when)} UTC` : 'back to normal';
     const text = `:white_check_mark: Resolved: ${escapeMrkdwn(title)}`;
-    const context = [escapeMrkdwn(alarm.AlarmName), link].filter(Boolean) as string[];
+    const context = [`category ${category}`, escapeMrkdwn(alarm.AlarmName), link].filter(Boolean) as string[];
     return {
       text,
       blocks: [],
@@ -821,9 +893,13 @@ export function formatAlarmSlackMessage(
   }
 
   const stamp = when ? `${formatClock(when)} UTC, ${when.getUTCDate()} ${MONTHS[when.getUTCMonth()]}` : undefined;
-  const context = [escapeMrkdwn(stageLabel(stage)), `level ${level}`, escapeMrkdwn(alarm.AlarmName), stamp].filter(
-    Boolean
-  ) as string[];
+  const context = [
+    escapeMrkdwn(stageLabel(stage)),
+    `level ${level}`,
+    `category ${category}`,
+    escapeMrkdwn(alarm.AlarmName),
+    stamp,
+  ].filter(Boolean) as string[];
 
   return composeAlarmMessage({
     stage,
@@ -838,14 +914,42 @@ export function formatAlarmSlackMessage(
   });
 }
 
-/** The alarms channel when its secret is configured, otherwise the error-reporting channel. */
-export function resolveAlarmWebhookUrl(resource: {
+export interface AlarmWebhookResources {
   SLACK_ALARMS_WEBHOOK_URL?: { value?: string };
+  SLACK_COST_ALARMS_WEBHOOK_URL?: { value?: string };
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: string };
-}): string {
-  const alarms = resource.SLACK_ALARMS_WEBHOOK_URL?.value;
-  if (alarms && alarms !== 'not-configured') return alarms;
-  return resource.SLACK_ERROR_REPORTING_WEBHOOK_URL.value;
+}
+
+const SECRET_PLACEHOLDER = 'not-configured';
+
+/**
+ * Reads an optional linked secret. sst's Resource proxy throws for a name the function never
+ * linked, and relays outside this repo subscribe to the same handler, so an unlinked optional
+ * secret must read as unset rather than fail the post.
+ */
+function optionalSecret(
+  resource: AlarmWebhookResources,
+  name: 'SLACK_ALARMS_WEBHOOK_URL' | 'SLACK_COST_ALARMS_WEBHOOK_URL'
+): string | undefined {
+  try {
+    const value = resource[name]?.value;
+    return value && value !== SECRET_PLACEHOLDER ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Cost alarms go to the cost channel when its secret is configured. Everything else, and cost
+ * alarms on a stage without that secret, go to the alarms channel when configured, otherwise the
+ * error-reporting channel.
+ */
+export function resolveAlarmWebhookUrl(resource: AlarmWebhookResources, category?: AlarmCategory): string {
+  if (category === 'cost') {
+    const cost = optionalSecret(resource, 'SLACK_COST_ALARMS_WEBHOOK_URL');
+    if (cost) return cost;
+  }
+  return optionalSecret(resource, 'SLACK_ALARMS_WEBHOOK_URL') ?? resource.SLACK_ERROR_REPORTING_WEBHOOK_URL.value;
 }
 
 /** App origin for admin buttons, derived the same way the rest of the server does (app.<apex>). */
