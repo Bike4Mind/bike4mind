@@ -5,6 +5,7 @@ const viewsUpdate = vi.fn();
 const buildSlackModelOptionsFromDashboard = vi.fn();
 const orgFindById = vi.fn();
 const findByChannelId = vi.fn();
+const removeModelConfigByChannelId = vi.fn();
 
 vi.mock('@slack/web-api', () => ({
   WebClient: class {
@@ -35,11 +36,16 @@ vi.mock('../constants/slack-model-options', () => ({
 vi.mock('../di/registry', () => ({
   getSlackDb: () => ({
     Organization: { findById: orgFindById },
-    slackChannelConfigRepository: { findByChannelId },
+    slackChannelConfigRepository: { findByChannelId, removeModelConfigByChannelId },
   }),
 }));
 
-import { handleChannelConfigAdd, handleChannelConfigEdit, handleOrgDefaultsEdit } from './modelConfigHandlers';
+import {
+  handleChannelConfigAdd,
+  handleChannelConfigEdit,
+  handleChannelConfigRemove,
+  handleOrgDefaultsEdit,
+} from './modelConfigHandlers';
 
 const OPTIONS = {
   option_groups: [
@@ -128,5 +134,15 @@ describe('model config modal handlers', () => {
     expect(viewsUpdate).toHaveBeenCalledTimes(1);
     expect(viewsUpdate.mock.calls[0][0].view_id).toBe('V1');
     expect(JSON.stringify(viewsUpdate.mock.calls[0][0].view)).toContain('Failed to load');
+  });
+});
+
+describe('handleChannelConfigRemove', () => {
+  it("removes the channel's settings within the clicking workspace only", async () => {
+    removeModelConfigByChannelId.mockReset().mockResolvedValue(true);
+
+    await expect(handleChannelConfigRemove('U-admin', 'C1', 'T1', 'xoxb-test')).resolves.toEqual({});
+
+    expect(removeModelConfigByChannelId).toHaveBeenCalledWith('C1', 'T1');
   });
 });

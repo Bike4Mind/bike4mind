@@ -86,6 +86,25 @@ class SlackChannelConfigRepository
     return result.deletedCount > 0;
   }
 
+  async removeModelConfigByChannelId(channelId: string, slackTeamId: string): Promise<boolean> {
+    const deleted = await this.model.deleteOne({ channelId, slackTeamId, apiPostEnabled: { $ne: true } });
+    if (deleted.deletedCount > 0) return true;
+    const cleared = await this.model.updateOne(
+      { channelId, slackTeamId, apiPostEnabled: true },
+      {
+        $unset: {
+          preferredModel: '',
+          preferredImageModel: '',
+          temperature: '',
+          maxTokens: '',
+          githubOwner: '',
+          githubRepo: '',
+        },
+      }
+    );
+    return cleared.matchedCount > 0;
+  }
+
   async setApiPostingByChannelId(
     channelId: string,
     update: ISlackChannelApiPostingUpdate

@@ -151,4 +151,23 @@ describe('SlackChannelConfigModel - API posting opt-in', () => {
     expect(after).toMatchObject({ apiPostEnabled: false, apiPostAllowedKeyIds: [] });
     expect(after?.apiPostOrganizationId).toBeUndefined();
   });
+
+  it("removes model settings within one workspace and keeps a channel's API posting opt-in", async () => {
+    await slackChannelConfigRepository.upsertByChannelId('C1', {
+      slackTeamId: 'T-team-a',
+      configuredBy: 'u',
+      preferredModel: 'm',
+    });
+    expect(await slackChannelConfigRepository.removeModelConfigByChannelId('C1', 'T-team-b')).toBe(false);
+    expect(await slackChannelConfigRepository.findByChannelId('C1')).toBeTruthy();
+    expect(await slackChannelConfigRepository.removeModelConfigByChannelId('C1', 'T-team-a')).toBe(true);
+    expect(await slackChannelConfigRepository.findByChannelId('C1')).toBeFalsy();
+
+    await slackChannelConfigRepository.setApiPostingByChannelId('C2', update);
+    await slackChannelConfigRepository.upsertByChannelId('C2', { slackTeamId: 'T-team-a', preferredModel: 'm' });
+    expect(await slackChannelConfigRepository.removeModelConfigByChannelId('C2', 'T-team-a')).toBe(true);
+    const kept = await slackChannelConfigRepository.findByChannelId('C2');
+    expect(kept).toMatchObject({ apiPostEnabled: true, apiPostOrganizationId: 'org-a' });
+    expect(kept?.preferredModel).toBeUndefined();
+  });
 });

@@ -53,6 +53,12 @@ export interface ISlackChannelConfigRepository extends IBaseRepository<ISlackCha
   findBySlackTeamId(slackTeamId: string): Promise<ISlackChannelConfigDocument[]>;
   deleteByChannelId(channelId: string): Promise<boolean>;
   /**
+   * Removes a channel's model and GitHub settings within one workspace. The record is deleted unless
+   * it carries an API posting opt-in, which only the organization route may change; then only the
+   * settings are cleared. Returns whether a record of that workspace was found.
+   */
+  removeModelConfigByChannelId(channelId: string, slackTeamId: string): Promise<boolean>;
+  /**
    * Sets only the API-posting fields, creating the config when absent. Never moves an existing
    * config to another workspace: returns null when the channel's config belongs to a different
    * `slackTeamId`.

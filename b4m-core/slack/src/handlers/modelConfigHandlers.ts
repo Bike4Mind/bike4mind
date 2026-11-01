@@ -7,7 +7,7 @@
 
 import { WebClient } from '@slack/web-api';
 import { Logger } from '@bike4mind/observability';
-import { IModelConfig, McpServerName } from '@bike4mind/common';
+import { IModelConfig, McpServerName, type ISlackChannelConfigRepository } from '@bike4mind/common';
 import { getSlackDb } from '../di/registry';
 import { SlackClient } from '../SlackClient';
 import { AppHomeBuilder } from '../views/AppHomeBuilder';
@@ -254,9 +254,10 @@ export async function handleChannelConfigRemove(
   }
 
   try {
-    const { slackChannelConfigRepository: channelConfigRepo } = getSlackDb();
-    await (channelConfigRepo as any).deleteByChannelId(channelId);
-    Logger.info('[Slack Interactive] Channel config removed', { channelId, slackUserId });
+    const channelConfigRepo = getSlackDb().slackChannelConfigRepository as ISlackChannelConfigRepository;
+    // Scoped to this workspace, and leaves an API posting opt-in to the organization route that owns it.
+    const removed = await channelConfigRepo.removeModelConfigByChannelId(channelId, slackTeamId);
+    Logger.info('[Slack Interactive] Channel config removed', { channelId, slackTeamId, slackUserId, removed });
 
     return {};
   } catch (error) {
