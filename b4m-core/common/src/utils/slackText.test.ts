@@ -48,6 +48,7 @@ describe('neutralizeSlackBroadcastMentions', () => {
     ['<!channel> deploy done', `@${ZWSP}channel deploy done`],
     ['<!here|here> ping', `@${ZWSP}here ping`],
     ['<!EVERYONE>', `@${ZWSP}everyone`],
+    ['<!group> legacy', `@${ZWSP}group legacy`],
     ['team <!subteam^S0123ABC|@oncall> look', `team @${ZWSP}oncall look`],
     ['<!subteam^S0123ABC>', `@${ZWSP}group`],
     ['@channel and @here and @everyone', `@${ZWSP}channel and @${ZWSP}here and @${ZWSP}everyone`],
@@ -59,6 +60,45 @@ describe('neutralizeSlackBroadcastMentions', () => {
   it('leaves user mentions, links, emails and other words alone', () => {
     const text = 'cc <@U0123ABC> see <https://example.com|docs> mail ops@here.example @channels @heretic';
     expect(neutralizeSlackBroadcastMentions(text)).toBe(text);
+  });
+
+  it('replaces rich_text broadcast and usergroup elements with inert text, keeping user elements', () => {
+    const blocks = [
+      {
+        type: 'rich_text',
+        elements: [
+          {
+            type: 'rich_text_section',
+            elements: [
+              { type: 'broadcast', range: 'everyone' },
+              { type: 'broadcast', range: 'channel' },
+              { type: 'broadcast', range: 'here' },
+              { type: 'usergroup', usergroup_id: 'S0123ABC' },
+              { type: 'user', user_id: 'U0123ABC' },
+              { type: 'text', text: ' <!here> done' },
+            ],
+          },
+        ],
+      },
+    ];
+    expect(neutralizeSlackBroadcastMentionsDeep(blocks)).toEqual([
+      {
+        type: 'rich_text',
+        elements: [
+          {
+            type: 'rich_text_section',
+            elements: [
+              { type: 'text', text: `@${ZWSP}everyone` },
+              { type: 'text', text: `@${ZWSP}channel` },
+              { type: 'text', text: `@${ZWSP}here` },
+              { type: 'text', text: `@${ZWSP}group` },
+              { type: 'user', user_id: 'U0123ABC' },
+              { type: 'text', text: ` @${ZWSP}here done` },
+            ],
+          },
+        ],
+      },
+    ]);
   });
 
   it('walks every string in a Block Kit structure without touching other values', () => {

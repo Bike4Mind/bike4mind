@@ -23,13 +23,14 @@ export function escapeSlackCode(value: string): string {
 
 // A zero-width space after the `@` keeps the word readable but stops Slack treating it as a mention.
 const BROKEN_AT = '@​';
-const BROADCAST_SPECIAL_FORM = /<!(channel|here|everyone)(?:\|[^>]*)?>/gi;
+// `<!group>` is the legacy spelling of `<!channel>`.
+const BROADCAST_SPECIAL_FORM = /<!(channel|here|everyone|group)(?:\|[^>]*)?>/gi;
 // User-group mentions notify every member of the group, so they count as broadcasts too.
 const USER_GROUP_FORM = /<!subteam\^[A-Za-z0-9]+(?:\|@?([^>]*))?>/gi;
 const BARE_BROADCAST_WORD = /(^|[^A-Za-z0-9_])@(channel|here|everyone)\b/gi;
 
 /**
- * Turns broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, user groups, and the bare
+ * Turns broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, `<!group>`, user groups, and the bare
  * `@channel` / `@here` / `@everyone` words) into inert text. Unlike {@link escapeSlackText} it leaves
  * the rest of the markup alone, so links and `<@U123>` user mentions still work.
  */
@@ -40,11 +41,22 @@ export function neutralizeSlackBroadcastMentions(value: string): string {
     .replace(BARE_BROADCAST_WORD, (_match, lead: string, word: string) => `${lead}${BROKEN_AT}${word}`);
 }
 
-/** {@link neutralizeSlackBroadcastMentions} applied to every string inside a JSON value (Block Kit). */
+/**
+ * {@link neutralizeSlackBroadcastMentions} applied to every string inside a JSON value (Block Kit), plus
+ * rich_text's structured mentions: a `broadcast` element (`range` channel/here/everyone) or a
+ * `usergroup` element becomes a plain `text` element. `user` elements are kept. Recursive, so callers
+ * must bound the depth first (findSlackApiPostBlocksProblem does for API posts).
+ */
 export function neutralizeSlackBroadcastMentionsDeep<T>(value: T): T {
   if (typeof value === 'string') return neutralizeSlackBroadcastMentions(value) as T;
   if (Array.isArray(value)) return value.map(item => neutralizeSlackBroadcastMentionsDeep(item)) as T;
   if (typeof value === 'object' && value !== null) {
+    const element = value as Record<string, unknown>;
+    if (element.type === 'broadcast') {
+      const range = typeof element.range === 'string' ? element.range.replace(/[^a-z]/gi, '') : '';
+      return { type: 'text', text: `${BROKEN_AT}${range || 'channel'}` } as T;
+    }
+    if (element.type === 'usergroup') return { type: 'text', text: `${BROKEN_AT}group` } as T;
     return Object.fromEntries(
       Object.entries(value).map(([key, child]) => [key, neutralizeSlackBroadcastMentionsDeep(child)])
     ) as T;
