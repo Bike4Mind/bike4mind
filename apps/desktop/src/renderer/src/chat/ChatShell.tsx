@@ -9,7 +9,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
-import type { ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { ChatArtifact, ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
 import { findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
@@ -72,6 +72,7 @@ import { ImageMenuProvider } from './ImageContextMenu';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
+import { ArtifactBrowserContext, openArtifactInSessionBrowser } from './ArtifactCard';
 import { WebLinkContext } from './WebResults';
 import { useConversation, useModelCatalog, useSessionStatuses, useSessions, type SessionPlacement } from './useChat';
 import { useSidebarSections } from './useSidebarSections';
@@ -347,6 +348,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const onHistory = useCallback((enabled: boolean) => void setHistory(enabled), [setHistory]);
   const openInBrowserPane = useCallback(
     (url: string) => openInSessionBrowser(url, activeId, showBrowserPane),
+    [activeId, showBrowserPane]
+  );
+  const openArtifactInBrowserPane = useCallback(
+    (artifact: Pick<ChatArtifact, 'title' | 'content'>) =>
+      openArtifactInSessionBrowser(artifact, activeId, showBrowserPane),
     [activeId, showBrowserPane]
   );
 
@@ -886,108 +892,117 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             ) : (
               <VideoJobsContext.Provider value={videoJobs}>
                 <WebLinkContext.Provider value={openInBrowserPane}>
-                  {/* Keyed so an open menu can never carry an image into another conversation,
-                    should a switch ever skip the `opening` gate that unmounts this today. */}
-                  <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
-                    <MessageThread
-                      // Remounted per conversation, so its window and scroll start over and nothing it
-                      // set going outlives the conversation it was for. Prefixed, as the session panel
-                      // beside it is: two siblings sharing a key leave one of them mounted in the DOM
-                      // after React drops it.
-                      key={`thread-${activeId ?? 'none'}`}
-                      messages={conversation.messages}
-                      sessionId={activeId}
-                      // What stands in for the transcript when there is no session to have one. It is the
-                      // only control on screen that starts one from here, so it is a button and not a
-                      // sentence pointing at the sidebar: the header above says what the state is, this
-                      // says what to do about it, and the composer's placeholder names the same step.
-                      noSession={
-                        mode === 'code' ? (
-                          <Stack spacing={1.5} alignItems="center">
-                            <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
-                              Start a Code session to run a task here.
-                            </Typography>
-                            <Button
-                              size="sm"
-                              variant="soft"
-                              loading={creatingCode}
-                              onClick={() => void onCreate()}
-                              data-testid="chat-start-session-btn"
+                  <ArtifactBrowserContext.Provider value={openArtifactInBrowserPane}>
+                    {/* Keyed so an open menu can never carry an image into another conversation,
+                      should a switch ever skip the `opening` gate that unmounts this today. */}
+                    <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
+                      <MessageThread
+                        // Remounted per conversation, so its window and scroll start over and nothing it
+                        // set going outlives the conversation it was for. Prefixed, as the session panel
+                        // beside it is: two siblings sharing a key leave one of them mounted in the DOM
+                        // after React drops it.
+                        key={`thread-${activeId ?? 'none'}`}
+                        messages={conversation.messages}
+                        sessionId={activeId}
+                        // What stands in for the transcript when there is no session to have one. It is the
+                        // only control on screen that starts one from here, so it is a button and not a
+                        // sentence pointing at the sidebar: the header above says what the state is, this
+                        // says what to do about it, and the composer's placeholder names the same step.
+                        noSession={
+                          mode === 'code' ? (
+                            <Stack spacing={1.5} alignItems="center">
+                              <Typography
+                                level="body-sm"
+                                textColor="text.tertiary"
+                                data-testid="chat-thread-no-session"
+                              >
+                                Start a Code session to run a task here.
+                              </Typography>
+                              <Button
+                                size="sm"
+                                variant="soft"
+                                loading={creatingCode}
+                                onClick={() => void onCreate()}
+                                data-testid="chat-start-session-btn"
+                              >
+                                New Code session
+                              </Button>
+                            </Stack>
+                          ) : (
+                            <BlankChatGreeting line="Start a conversation to chat, write, or create something new.">
+                              <Button
+                                size="sm"
+                                variant="soft"
+                                loading={creatingCode}
+                                onClick={() => void onCreate()}
+                                sx={{ mt: 2.5 }}
+                                data-testid="chat-start-session-btn"
+                              >
+                                New conversation
+                              </Button>
+                            </BlankChatGreeting>
+                          )
+                        }
+                        emptySession={
+                          initialCodeSetup ? (
+                            <Box
+                              sx={{ width: '100%', maxWidth: 420, minWidth: 0 }}
+                              data-testid="chat-code-workspace-setup"
                             >
-                              New Code session
-                            </Button>
-                          </Stack>
-                        ) : (
-                          <BlankChatGreeting line="Start a conversation to chat, write, or create something new.">
-                            <Button
-                              size="sm"
-                              variant="soft"
-                              loading={creatingCode}
-                              onClick={() => void onCreate()}
-                              sx={{ mt: 2.5 }}
-                              data-testid="chat-start-session-btn"
-                            >
-                              New conversation
-                            </Button>
-                          </BlankChatGreeting>
-                        )
-                      }
-                      emptySession={
-                        initialCodeSetup ? (
-                          <Box
-                            sx={{ width: '100%', maxWidth: 420, minWidth: 0 }}
-                            data-testid="chat-code-workspace-setup"
-                          >
-                            <Typography level="title-sm" sx={{ mb: 1.5 }}>
-                              Set up this workspace
-                            </Typography>
-                            <SessionChips
-                              layout="embedded"
-                              project={conversation.session?.project ?? null}
-                              {...(conversation.session?.grantedDirectories
-                                ? { grantedDirectories: conversation.session.grantedDirectories }
-                                : {})}
-                              binding={conversation.project}
-                              settledTurns={conversation.settledTurns}
-                              preparing={conversation.preparing !== null}
-                            />
-                          </Box>
-                        ) : blankChatId ? (
-                          <BlankChat sessionId={blankChatId} tools={creationTools} onPick={fillComposer} />
-                        ) : undefined
-                      }
-                      // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
-                      // one parked at the approval gate - is still running, and Continue must not be
-                      // offered on top of it.
-                      streaming={turnOpen}
-                      onRespond={conversation.respondToApproval}
-                      onMove={background.moveToBackground}
-                      onContinue={() => void conversation.continueReply()}
-                      status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
-                      // At the foot of the thread rather than above the composer: a background command is
-                      // something this conversation started, so it reads as the last thing that happened
-                      // in it. It scrolls with the transcript, which is the trade - the panel is reached
-                      // from the bottom of the thread, not from a bar that is always on screen.
-                      footer={
-                        <>
-                          {/* The turn line's own slot only exists once a reply does, and the worktree is
-                      cut before there is one; this sits where that line will appear. */}
-                          {!conversation.turn && conversation.preparing && (
-                            <Box data-testid="chat-workspace-status">
-                              <TurnStatus
-                                turn={{ startedAt: conversation.preparing.since, tokens: null }}
-                                activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
+                              <Typography level="title-sm" sx={{ mb: 1.5 }}>
+                                Set up this workspace
+                              </Typography>
+                              <SessionChips
+                                layout="embedded"
+                                project={conversation.session?.project ?? null}
+                                {...(conversation.session?.grantedDirectories
+                                  ? { grantedDirectories: conversation.session.grantedDirectories }
+                                  : {})}
+                                binding={conversation.project}
+                                settledTurns={conversation.settledTurns}
+                                preparing={conversation.preparing !== null}
                               />
                             </Box>
-                          )}
-                          {/* The panel lists these itself while it is on screen. */}
-                          {!panelShown && (
-                            <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
-                          )}
-                        </>
-                      }
-                    />
-                  </ImageMenuProvider>
+                          ) : blankChatId ? (
+                            <BlankChat sessionId={blankChatId} tools={creationTools} onPick={fillComposer} />
+                          ) : undefined
+                        }
+                        // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
+                        // one parked at the approval gate - is still running, and Continue must not be
+                        // offered on top of it.
+                        streaming={turnOpen}
+                        onRespond={conversation.respondToApproval}
+                        onMove={background.moveToBackground}
+                        onContinue={() => void conversation.continueReply()}
+                        status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                        // At the foot of the thread rather than above the composer: a background command is
+                        // something this conversation started, so it reads as the last thing that happened
+                        // in it. It scrolls with the transcript, which is the trade - the panel is reached
+                        // from the bottom of the thread, not from a bar that is always on screen.
+                        footer={
+                          <>
+                            {/* The turn line's own slot only exists once a reply does, and the worktree is
+                      cut before there is one; this sits where that line will appear. */}
+                            {!conversation.turn && conversation.preparing && (
+                              <Box data-testid="chat-workspace-status">
+                                <TurnStatus
+                                  turn={{ startedAt: conversation.preparing.since, tokens: null }}
+                                  activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
+                                />
+                              </Box>
+                            )}
+                            {/* The panel lists these itself while it is on screen. */}
+                            {!panelShown && (
+                              <BackgroundTaskChip
+                                running={background.running}
+                                onClick={() => setTasksPanelOpen(true)}
+                              />
+                            )}
+                          </>
+                        }
+                      />
+                    </ImageMenuProvider>
+                  </ArtifactBrowserContext.Provider>
                 </WebLinkContext.Provider>
               </VideoJobsContext.Provider>
             )}

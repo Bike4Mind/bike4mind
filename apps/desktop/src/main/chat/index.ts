@@ -49,6 +49,7 @@ import {
   type BrowserGoAction,
   type BrowserGoRequest,
   type BrowserNavigateRequest,
+  type BrowserOpenArtifactRequest,
   type BrowserPaneBounds,
   type BrowserPaneRequest,
   type BrowserPaneState,
@@ -1158,6 +1159,16 @@ export function registerChat(
       throw new Error('A conversation and a url are required.');
     }
     return browser.navigate(request.sessionId, request.url);
+  });
+  ipcMain.handle(IPC_CHANNELS.browserOpenArtifact, (_event, request: BrowserOpenArtifactRequest) => {
+    if (
+      typeof request?.sessionId !== 'string' ||
+      typeof request?.title !== 'string' ||
+      typeof request?.content !== 'string'
+    ) {
+      throw new Error('A conversation, a title and the artifact content are required.');
+    }
+    return browser.openArtifact(request.sessionId, request.title, request.content);
   });
   ipcMain.handle(IPC_CHANNELS.browserGo, (_event, request: BrowserGoRequest): BrowserPaneState => {
     const actions: readonly BrowserGoAction[] = ['back', 'forward', 'reload'];
