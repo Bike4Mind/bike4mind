@@ -122,7 +122,12 @@ const AccountConnectionPanel = ({
   return (
     <Stack gap="12px">
       <Stack direction="row" gap="8px" flexWrap="wrap">
-        {connection.connected ? (
+        {!connection.connected && (
+          <Button size="sm" loading={connecting} onClick={onConnect} data-testid="integrations-drawer-connect-btn">
+            {connection.needsReconnect ? `Reconnect ${name}` : `Connect ${name}`}
+          </Button>
+        )}
+        {(connection.connected || connection.needsReconnect) && (
           <Button
             size="sm"
             variant="outlined"
@@ -132,10 +137,6 @@ const AccountConnectionPanel = ({
             data-testid="integrations-drawer-disconnect-btn"
           >
             Disconnect {name}
-          </Button>
-        ) : (
-          <Button size="sm" loading={connecting} onClick={onConnect} data-testid="integrations-drawer-connect-btn">
-            {connection.needsReconnect ? `Reconnect ${name}` : `Connect ${name}`}
           </Button>
         )}
         <Button
@@ -150,7 +151,7 @@ const AccountConnectionPanel = ({
       </Stack>
       {connection.needsReconnect && (
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-          The connection to {name} expired or was revoked. Reconnect to use it again.
+          The connection to {name} expired or was revoked. Reconnect to use it again, or disconnect it.
         </Typography>
       )}
     </Stack>
