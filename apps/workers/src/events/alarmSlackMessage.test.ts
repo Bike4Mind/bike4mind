@@ -329,12 +329,12 @@ describe('formatAlarmSlackMessage on production', () => {
     expect(contextOf(formatAlarmSlackMessage(sample, 'production'))).toBe(
       'production  |  level warn  |  category abuse  |  bike4mind-production-signup-code-send-rate  |  05:00 UTC, 27 Oct'
     );
-    const spend = { ...sample, AlarmName: 'bike4mind-production-llm-spend-hourly-anthropic' };
+    const spend = { ...sample, AlarmName: 'bike4mind-production-provider-reported-spend-hourly-anthropic' };
     expect(contextOf(formatAlarmSlackMessage(spend, 'production'))).toContain('level page  |  category cost  |  ');
     expect(
       contextOf(formatAlarmSlackMessage({ ...spend, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production'))
     ).toBe(
-      'category cost  |  bike4mind-production-llm-spend-hourly-anthropic  |  <https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#alarmsV2:alarm/bike4mind-production-llm-spend-hourly-anthropic|Open in CloudWatch>'
+      'category cost  |  bike4mind-production-provider-reported-spend-hourly-anthropic  |  <https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#alarmsV2:alarm/bike4mind-production-provider-reported-spend-hourly-anthropic|Open in CloudWatch>'
     );
     const unknown = { ...sample, AlarmName: 'bike4mind-production-something-new' };
     expect(contextOf(formatAlarmSlackMessage(unknown, 'production'))).toContain('category infra');
@@ -407,31 +407,36 @@ describe('ALARM_CATALOG', () => {
     expect(dlqCatalogEntry('dlq-email-send-age')?.category).toBe('jobs');
   });
 
-  it('files the spend and credit alarms under cost, and nothing else', () => {
+  it('files only provider-reported spend and ungranted purchases under cost', () => {
     const cost = Object.entries(ALARM_CATALOG)
       .filter(([, entry]) => entry.category === 'cost')
       .map(([key]) => key)
       .sort();
-    expect(cost).toEqual([
-      'completion-credit-overdraft',
+    expect(cost).toEqual(['provider-reported-spend-hourly', 'ungranted-credit-purchases']);
+    // Ledger spend alarms catch credit farms, so they stay with the abuse signals.
+    for (const key of [
       'llm-spend-hourly',
       'llm-spend-rate',
       'llm-spend-young-accounts',
-      'provider-reported-spend-hourly',
-      'ungranted-credit-purchases',
       'young-account-spend-rate',
-    ]);
+      'completion-credit-overdraft',
+    ]) {
+      expect(ALARM_CATALOG[key].category).toBe('abuse');
+    }
   });
 
   it('resolves a category per alarm name, infra when unknown', () => {
     expect(
       alarmCategory({ ...sample, AlarmName: 'bike4mind-production-llm-spend-hourly-anthropic' }, 'production')
-    ).toBe('cost');
+    ).toBe('abuse');
     expect(
       alarmCategory(
         { ...sample, AlarmName: 'bike4mind-production-provider-reported-spend-hourly-openai' },
         'production'
       )
+    ).toBe('cost');
+    expect(
+      alarmCategory({ ...sample, AlarmName: 'bike4mind-production-ungranted-credit-purchases' }, 'production')
     ).toBe('cost');
     expect(alarmCategory({ ...sample, AlarmName: 'bike4mind-dev-dlq-email-send-messages' }, 'dev')).toBe('jobs');
     expect(alarmCategory({ ...sample, AlarmName: 'waf-runtime-blocker-prod-no-successful-run' }, 'production')).toBe(

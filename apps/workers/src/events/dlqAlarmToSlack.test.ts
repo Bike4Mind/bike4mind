@@ -55,7 +55,7 @@ const alarmPayload = (
   });
 
 const YOUNG_ACCOUNT_ALARM = 'bike4mind-production-young-account-spend-rate';
-const SPEND_ALARM = 'bike4mind-production-llm-spend-hourly-anthropic';
+const SPEND_ALARM = 'bike4mind-production-provider-reported-spend-hourly-anthropic';
 
 describe('dlqAlarmToSlack handler', () => {
   let fetchMock: ReturnType<typeof vi.fn>;

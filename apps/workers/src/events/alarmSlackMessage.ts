@@ -10,7 +10,9 @@
  * alarm that was in ALARM; a new alarm settling from INSUFFICIENT_DATA to OK is not news.
  *
  * Every catalog entry carries a category, shown in the footer. Cost alarms can route to their own
- * channel through SLACK_COST_ALARMS_WEBHOOK_URL (see resolveAlarmWebhookUrl).
+ * channel through SLACK_COST_ALARMS_WEBHOOK_URL (see resolveAlarmWebhookUrl). The ledger spend
+ * alarms are abuse, not cost: a credit farm is what they catch, and they stay with the other
+ * abuse signals in the alarms channel. Cost is for money the provider or Stripe reports.
  */
 
 import { classifyStage } from '@bike4mind/common';
@@ -20,7 +22,8 @@ export type AlarmLevel = 'page' | 'warn' | 'info';
 
 /**
  * What kind of alarm it is, shown in the footer and used to pick the Slack channel.
- * cost: money leaving through providers or credits. abuse: signup and API-key farming.
+ * cost: spend reported by a provider or a payment that granted nothing. abuse: farming and
+ * runaway ledger spend.
  * jobs: background work failing or stalled. security: edge and sign-in protections.
  * infra: everything else about the platform being up.
  */
@@ -370,7 +373,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'young-account-spend-rate': {
     title: 'New accounts are spending a lot on AI',
     level: 'page',
-    category: 'cost',
+    category: 'abuse',
     unit: 'USD',
     meaning:
       'Accounts under 7 days old spent more estimated AI dollars in one hour than the ceiling. Credit farms spend their free credits fast.',
@@ -382,7 +385,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'llm-spend-young-accounts': {
     title: 'Young-account LLM spend is spiking',
     level: 'page',
-    category: 'cost',
+    category: 'abuse',
     unit: 'USD',
     meaning:
       'Accounts under 7 days old spent more estimated AI dollars in five minutes than the ceiling. New accounts rarely spend this fast on their own.',
@@ -393,7 +396,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'completion-credit-overdraft': {
     title: 'A completion cost more than its account could pay',
     level: 'warn',
-    category: 'cost',
+    category: 'abuse',
     unit: 'completions',
     meaning:
       'A completion cost more credits than its account held, so the balance was charged down to zero and the rest went uncollected.',
@@ -404,7 +407,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'llm-spend-rate': {
     title: 'AI provider spend is spiking',
     level: 'warn',
-    category: 'cost',
+    category: 'abuse',
     unit: 'USD',
     meaning:
       'Estimated spend at one provider in five minutes is at or above the ceiling. A runaway agent or a credit farm are the usual causes.',
@@ -415,7 +418,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   'llm-spend-hourly': {
     title: 'AI provider spend is running hot',
     level: 'page',
-    category: 'cost',
+    category: 'abuse',
     unit: 'USD',
     meaning:
       'Estimated spend at one provider over the last hour is at or above the ceiling. A sustained drain from a credit farm, a stolen card, or a runaway agent are the usual causes.',
