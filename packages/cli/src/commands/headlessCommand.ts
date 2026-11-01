@@ -100,17 +100,31 @@ interface HeadlessJsonResult {
   toolCalls: number;
 }
 
+export const STDIN_HINT_DELAY_MS = 3000;
+export const STDIN_HINT = 'Waiting for input on stdin. If you are not piping anything in, add </dev/null.\n';
+
 /** Read all data from stdin if it's being piped (non-TTY). Returns empty string if no piped data. */
-async function readStdin(): Promise<string> {
+export async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) {
     return '';
   }
 
   return new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
-    process.stdin.on('data', chunk => chunks.push(chunk as Buffer));
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8').trim()));
-    process.stdin.on('error', reject);
+    const hintTimer = setTimeout(() => process.stderr.write(STDIN_HINT), STDIN_HINT_DELAY_MS);
+    hintTimer.unref();
+    process.stdin.on('data', chunk => {
+      clearTimeout(hintTimer);
+      chunks.push(chunk as Buffer);
+    });
+    process.stdin.on('end', () => {
+      clearTimeout(hintTimer);
+      resolve(Buffer.concat(chunks).toString('utf-8').trim());
+    });
+    process.stdin.on('error', err => {
+      clearTimeout(hintTimer);
+      reject(err);
+    });
   });
 }
 
