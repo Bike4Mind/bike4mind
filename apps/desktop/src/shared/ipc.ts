@@ -41,6 +41,7 @@ import type {
   ChatQueuedMessage,
   ChatSession,
   ChatSessionStatusEvent,
+  ChatSessionExportResult,
   ChatSessionSummary,
   ChatStreamEvent,
   ChatVideoJob,
@@ -168,6 +169,7 @@ export const IPC_CHANNELS = {
    */
   chatSetApprovalMode: 'chat:set-approval-mode',
   chatSetSessionArchived: 'chat:set-session-archived',
+  chatExportSession: 'chat:export-session',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
   chatCreateCodeSession: 'chat:create-code-session',
@@ -722,6 +724,8 @@ export interface DesktopApi {
     setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null>;
     /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
+    /** Save a conversation as Markdown or JSON, by the extension picked in the save dialog. Rejects on a write failure. */
+    exportSession(sessionId: string): Promise<ChatSessionExportResult>;
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;

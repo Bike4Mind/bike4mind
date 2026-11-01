@@ -1246,6 +1246,12 @@ export interface ChatSession extends ChatSessionMeta {
   preparingWorkspace?: WorkspacePreparation;
 }
 
+/** What exporting a conversation did; `saved` is false when the user dismissed the save dialog. */
+export interface ChatSessionExportResult {
+  saved: boolean;
+  path?: string;
+}
+
 /** A worktree being cut ahead of a session's first turn. `since` is epoch ms. */
 export interface WorkspacePreparation {
   since: number;

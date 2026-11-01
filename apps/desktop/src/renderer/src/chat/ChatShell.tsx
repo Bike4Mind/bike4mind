@@ -179,6 +179,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     rename,
     renameError,
     clearRenameError,
+    exportSession,
+    exportError,
+    clearExportError,
     apply,
   } = useSessions();
   const {
@@ -735,6 +738,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
         onRename={(session, title) => void rename(session, title)}
+        onDownload={session => void exportSession(session)}
+        downloadError={exportError}
+        onDismissDownloadError={clearExportError}
         renameError={renameError}
         onDismissRenameError={clearRenameError}
         userSections={userSections}
