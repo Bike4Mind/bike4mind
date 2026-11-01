@@ -139,7 +139,7 @@ describe('AnthropicBackend reasoningEffort', () => {
       responseFormat: jsonSchemaFormat,
     });
 
-    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
     expect(request.thinking).toBeUndefined();
     expect(request.output_config).toBeUndefined();
   });
@@ -152,7 +152,7 @@ describe('AnthropicBackend reasoningEffort', () => {
       responseFormat: jsonSchemaFormat,
     });
 
-    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
     expect(request.thinking).toBeUndefined();
     expect(request.output_config).toBeUndefined();
   });
@@ -165,7 +165,7 @@ describe('AnthropicBackend reasoningEffort', () => {
     });
 
     expect(request.thinking).toEqual({ type: 'disabled' });
-    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
   });
 
   it('keeps the native structured-output format when adding effort on a model without forced tool use', async () => {

@@ -477,18 +477,117 @@ describe('AnthropicBackend caller tool_choice on models without forced tool use'
   });
 });
 
-describe('AnthropicBackend on models with forced tool use (unchanged)', () => {
+describe('AnthropicBackend on models with forced tool use', () => {
   it.each(FORCED_MODELS)('synthesizes the forced json_schema tool for %s', async model => {
     const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
     const out = capture();
     await run(backend, model, { stream: false, responseFormat: RESPONSE_FORMAT }, out.cb);
 
     const params = captured[0];
-    expect(params.tools).toEqual([{ name: 'extract_user', description: 'Extract user info', input_schema: SCHEMA }]);
-    expect(params.tool_choice).toEqual({ type: 'tool', name: 'extract_user' });
+    expect(params.tools).toEqual([
+      { name: 'extract_user', description: 'Extract user info', input_schema: SCHEMA, strict: true },
+    ]);
+    expect(params.tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
     expect(params).not.toHaveProperty('output_config');
     expect(JSON.parse(out.text())).toEqual(RESULT);
     expect(out.mode()).toBe('tool_use');
+  });
+
+  it('closes an open schema into its structured-outputs form and sends the tool strict', async () => {
+    const openSchema = {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        address: { type: 'object', properties: { city: { type: 'string' } } },
+        age: { type: 'integer', minimum: 0 },
+      },
+      required: ['name'],
+    };
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
+      stream: false,
+      responseFormat: { type: 'json_schema', json_schema: { name: 'extract_user', schema: openSchema } },
+    });
+
+    const tool = captured[0].tools?.[0];
+    expect(tool?.strict).toBe(true);
+    expect(tool?.input_schema).toEqual(buildStructuredOutputFormat(openSchema)?.schema);
+    expect(tool?.input_schema).toMatchObject({
+      additionalProperties: false,
+      properties: { address: { additionalProperties: false } },
+    });
+  });
+
+  it.each([
+    ['a free-form object', { type: 'object' }],
+    [
+      'a recursive schema',
+      {
+        type: 'object',
+        properties: { root: { $ref: '#/$defs/node' } },
+        $defs: {
+          node: {
+            type: 'object',
+            properties: { children: { type: 'array', items: { $ref: '#/$defs/node' } } },
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
+      },
+    ],
+  ])('sends %s as-is and not strict', async (_label, schema) => {
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
+      stream: false,
+      responseFormat: { type: 'json_schema', json_schema: { name: 'extract_user', schema } },
+    });
+
+    expect(captured[0].tools).toEqual([{ name: 'extract_user', input_schema: schema }]);
+    expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+  });
+
+  it('streams only the first synthesized tool block when the model emits two', async () => {
+    const { backend } = buildBackend(() =>
+      asyncIterable([
+        { type: 'message_start' },
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'tu_1', name: 'extract_user' },
+        },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"name":"Erik",' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '"age":42}' } },
+        { type: 'content_block_stop', index: 0 },
+        {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'tool_use', id: 'tu_2', name: 'extract_user' },
+        },
+        { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"name":"Ada"}' } },
+        { type: 'content_block_stop', index: 1 },
+        { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } },
+        { type: 'message_stop' },
+      ])
+    );
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: true, responseFormat: RESPONSE_FORMAT }, out.cb);
+
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('tool_use');
+  });
+
+  it('keeps only the first synthesized tool block on the non-streaming path', async () => {
+    const { backend } = buildBackend(() => ({
+      content: [
+        { type: 'tool_use', id: 'tu_1', name: 'extract_user', input: RESULT },
+        { type: 'tool_use', id: 'tu_2', name: 'extract_user', input: { name: 'Ada' } },
+      ],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }));
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT }, out.cb);
+
+    expect(JSON.parse(out.text())).toEqual(RESULT);
   });
 
   it.each(FORCED_MODELS)('forwards required and named choices as any / tool for %s', async model => {

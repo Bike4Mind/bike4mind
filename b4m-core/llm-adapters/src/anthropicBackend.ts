@@ -1289,13 +1289,21 @@ export class AnthropicBackend implements ICompletionBackend {
       apiParams.system = appendSystemText(apiParams.system, schemaInstruction);
     }
     if (usingResponseFormatToolUse && responseFormat.type === 'json_schema') {
+      // Unconstrained, the model can emit a nested object as a JSON string. Strict mode needs the
+      // closed structured-outputs form of the schema; one that has none goes as-is, unconstrained.
+      const strictFormat = buildStructuredOutputFormat(responseFormat.json_schema.schema);
       const schemaTool: Tool = {
         name: responseFormat.json_schema.name,
         ...(responseFormat.json_schema.description ? { description: responseFormat.json_schema.description } : {}),
-        input_schema: responseFormat.json_schema.schema as Tool.InputSchema,
+        input_schema: (strictFormat?.schema ?? responseFormat.json_schema.schema) as Tool.InputSchema,
+        ...(strictFormat ? { strict: true } : {}),
       };
       apiParams.tools = [schemaTool];
-      apiParams.tool_choice = { type: 'tool', name: responseFormat.json_schema.name };
+      apiParams.tool_choice = {
+        type: 'tool',
+        name: responseFormat.json_schema.name,
+        disable_parallel_tool_use: true,
+      };
     }
 
     if (hasCallerTools) {
@@ -1822,8 +1830,9 @@ export class AnthropicBackend implements ICompletionBackend {
                         responseFormat?.type === 'json_schema' &&
                         toolBlock.name === responseFormat.json_schema.name
                       ) {
-                        // Mark this index so input_json_delta below streams as text.
-                        responseFormatToolIndices.add(event.index);
+                        // Mark this index so input_json_delta below streams as text. Only the
+                        // first block is the answer: a second would append another JSON object.
+                        if (responseFormatToolIndices.size === 0) responseFormatToolIndices.add(event.index);
                       } else {
                         func[event.index] ||= {};
                         func[event.index].name = toolBlock.name;
@@ -2723,6 +2732,7 @@ export class AnthropicBackend implements ICompletionBackend {
 
         if ('content' in response && Array.isArray(response.content)) {
           this.lastAssistantContent = response.content as ContentBlock[];
+          let responseFormatToolEmitted = false;
 
           for (let i = 0; i < response.content.length; i++) {
             const content = response.content[i] as ContentBlock;
@@ -2747,7 +2757,9 @@ export class AnthropicBackend implements ICompletionBackend {
                   responseFormat?.type === 'json_schema' &&
                   content.name === responseFormat.json_schema.name
                 ) {
-                  streamedText.push(JSON.stringify(content.input ?? {}));
+                  // Only the first block is the answer, as on the streaming path.
+                  if (!responseFormatToolEmitted) streamedText.push(JSON.stringify(content.input ?? {}));
+                  responseFormatToolEmitted = true;
                 } else {
                   // Handle tool use in non-streaming response
                   func[i] ||= {};
@@ -3218,9 +3230,8 @@ export class AnthropicBackend implements ICompletionBackend {
   formatTools(tools: ICompletionOptionTools[] = [], providerTools: ToolSearchServerTool[] = []) {
     const customTools = sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
-      // `strict` is an OpenAI-only tool field. Anthropic rejects it with
-      // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the
-      // spread copy (e.g. a tool schema that sets strict: true for OpenAI structured tools).
+      // A caller's `strict` (usually an OpenAI flag) is dropped: Anthropic 400s strict on any object not
+      // closed with additionalProperties: false. markToolStrict re-adds it where the schema qualifies.
       delete rest.strict;
       return {
         ...rest,
