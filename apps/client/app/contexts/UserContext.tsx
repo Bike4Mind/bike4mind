@@ -13,6 +13,7 @@ import { useGetIdentify } from '@client/app/hooks/data/user';
 import { persist, PersistStorage, StorageValue } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 
 /**
  * Decode the `tokenVersion` claim from a JWT access token without verifying
@@ -405,6 +406,32 @@ export const applyUserPush = (existing: IUserDocument | null, pushed: IUserDocum
   ({ ...(existing ?? {}), ...pushed }) as IUserDocument;
 
 /** Provides user data and operations to children via the zustand store. */
+// The ref guard re-arms whenever the user briefly reads as not needing a reconnect (cleared, then
+// re-identified), so a fixed id makes a repeat replace the visible toast instead of stacking on it.
+export const ATLASSIAN_RECONNECT_TOAST_ID = 'atlassian-reconnect-required';
+
+export function useAtlassianReconnectToast(status: string | undefined, t: TFunction) {
+  const hasShownAtlassianReconnectToast = useRef(false);
+  useEffect(() => {
+    const needsReconnect = status === 'needs_reconnect';
+    if (needsReconnect && !hasShownAtlassianReconnectToast.current) {
+      hasShownAtlassianReconnectToast.current = true;
+      toast.error(t('integrations.atlassian.reconnect_required'), {
+        id: ATLASSIAN_RECONNECT_TOAST_ID,
+        duration: 10000,
+        action: {
+          label: 'Reconnect',
+          onClick: () => {
+            window.location.href = '/profile?tab=integrations';
+          },
+        },
+      });
+    } else if (!needsReconnect) {
+      hasShownAtlassianReconnectToast.current = false;
+    }
+  }, [status, t]);
+}
+
 export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
   const [userId, setCurrentUser] = useUser(useShallow(s => [s.currentUser?.id, s.setCurrentUser, s.refreshUser]));
   const [setAccessToken, expired, accessToken, mfaPending, setMfaPending] = useAccessToken(
@@ -509,26 +536,8 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
     accessToken,
   ]);
 
-  // Check for Atlassian reconnect status and show toast if needed
   const currentUser = useUser(s => s.currentUser);
-  const hasShownAtlassianReconnectToast = useRef(false);
-  useEffect(() => {
-    const needsReconnect = currentUser?.atlassianConnect?.status === 'needs_reconnect';
-    if (needsReconnect && !hasShownAtlassianReconnectToast.current) {
-      hasShownAtlassianReconnectToast.current = true;
-      toast.error(t('integrations.atlassian.reconnect_required'), {
-        duration: 10000,
-        action: {
-          label: 'Reconnect',
-          onClick: () => {
-            window.location.href = '/profile?tab=integrations';
-          },
-        },
-      });
-    } else if (!needsReconnect) {
-      hasShownAtlassianReconnectToast.current = false;
-    }
-  }, [currentUser?.atlassianConnect?.status, t]);
+  useAtlassianReconnectToast(currentUser?.atlassianConnect?.status, t);
 
   // Render children immediately with cached user data from localStorage
   // Fresh data is fetched in background and updates seamlessly when available
