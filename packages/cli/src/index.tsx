@@ -636,8 +636,9 @@ function CliApp() {
         // none resolves (an unbranded fork), instead of dead-ending on an empty URL.
         const endpoint = resolveApiEndpoint(config.apiConfig);
         if (
+          endpoint.status === 'unconfigured' ||
           shouldShowEndpointPicker({
-            endpoint,
+            endpointSource: endpoint.source,
             endpointChosen: !!config.apiConfig?.endpointChosen,
             hasAuthTokens: !!authTokens,
           })

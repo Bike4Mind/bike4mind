@@ -62,22 +62,22 @@ export function decideFolderTrustGate(input: FolderTrustGateInput): FolderTrustG
 }
 
 export type EndpointPickerGateInput = {
-  endpoint: ApiEndpoint;
+  endpointSource: Extract<ApiEndpoint, { status: 'configured' }>['source'];
   endpointChosen: boolean;
   hasAuthTokens: boolean;
 };
 
 /**
- * Whether to show the first-run backend picker: always when no endpoint resolves, and on a
- * fresh install of a build with a baked default (nothing chosen yet, nothing signed in).
+ * Whether a resolved endpoint still warrants the first-run backend picker: only on a fresh install
+ * of a build with a baked default (nothing chosen yet, nothing signed in). An unresolved endpoint
+ * always gets the picker; init() checks that first.
  */
 export function shouldShowEndpointPicker({
-  endpoint,
+  endpointSource,
   endpointChosen,
   hasAuthTokens,
 }: EndpointPickerGateInput): boolean {
-  if (endpoint.status === 'unconfigured') return true;
-  return endpoint.source === 'baked-default' && !endpointChosen && !hasAuthTokens;
+  return endpointSource === 'baked-default' && !endpointChosen && !hasAuthTokens;
 }
 
 export type McpApprovalGateInput = {

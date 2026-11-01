@@ -10,30 +10,18 @@ import {
 
 describe('shouldShowEndpointPicker', () => {
   const baked: EndpointPickerGateInput = {
-    endpoint: { status: 'configured', url: 'https://app.example.com', source: 'baked-default' },
+    endpointSource: 'baked-default',
     endpointChosen: false,
     hasAuthTokens: false,
   };
-  const unconfigured: EndpointPickerGateInput = { ...baked, endpoint: { status: 'unconfigured' } };
 
   // An expired token still counts as signed in here: init() re-authenticates it rather than re-asking.
   it.each<[string, EndpointPickerGateInput, boolean]>([
     ['fresh install with a default', baked, true],
-    ['fork with no endpoint', unconfigured, true],
-    ['fork with no endpoint, marker set', { ...unconfigured, endpointChosen: true }, true],
-    ['fork with no endpoint, tokens present', { ...unconfigured, hasAuthTokens: true }, true],
     ['signed in (valid or expired token)', { ...baked, hasAuthTokens: true }, false],
     ['marker set, e.g. after logout or a flag/command choice', { ...baked, endpointChosen: true }, false],
-    [
-      'saved customUrl',
-      { ...baked, endpoint: { status: 'configured', url: 'https://self.example.com', source: 'custom' } },
-      false,
-    ],
-    [
-      'source-mode dev default',
-      { ...baked, endpoint: { status: 'configured', url: 'http://localhost:3000', source: 'dev-default' } },
-      false,
-    ],
+    ['saved customUrl', { ...baked, endpointSource: 'custom' }, false],
+    ['source-mode dev default', { ...baked, endpointSource: 'dev-default' }, false],
   ])('%s', (_name, input, expected) => {
     expect(shouldShowEndpointPicker(input)).toBe(expected);
   });
