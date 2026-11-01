@@ -18,7 +18,7 @@ import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import type { ChatQueuedMessage, ChatSessionMode } from '@shared/chat';
+import type { ChatQueuedMessage, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
 import { findCommand, matchCommands, type ComposerCommand } from './commands';
 import { ComposerHighlight, type HighlightToken } from './ComposerHighlight';
@@ -41,6 +41,17 @@ import { isMac } from './platform';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
 import { highlightedTokens, insertSkill, matchSkills, skillChipColor, skillQuery } from './skillMenu';
+import { SessionMentionPicker } from './SessionMentionPicker';
+import {
+  expandMentions,
+  insertMention,
+  locateMentions,
+  matchSessions,
+  mentionableSessions,
+  mentionQuery,
+  type MentionableSession,
+  type RecordedMention,
+} from './sessionMentionMenu';
 import { SkillPicker } from './SkillPicker';
 import {
   allowanceArc,
@@ -93,6 +104,7 @@ export function Composer({
   footer,
   leading,
   skills,
+  mentionSessions,
   suggestion,
   onSuggestionDismissed,
   onBrowseSkillMarket,
@@ -180,6 +192,11 @@ export function Composer({
    */
   skills?: SkillsController;
   /**
+   * The sessions `@` can name. Omitted in tests and in any host that has none, which leaves `@`
+   * an ordinary character. The open and archived ones are filtered out here.
+   */
+  mentionSessions?: readonly ChatSessionSummary[];
+  /**
    * A guess at the next message, drawn greyed out INSIDE the empty input - the one place a user
    * looking at a finished reply is already looking. Tab takes it into the draft.
    *
@@ -262,9 +279,11 @@ export function Composer({
       return;
     }
     if (!canSubmit) return;
+    const outgoing = expandMentions(draft, mentions);
     replaceDraft('');
+    setMentions([]);
     onSuggestionDismissed?.();
-    onSend(draft);
+    onSend(outgoing);
   };
 
   // Text coming back out of the queue - cancelled, or its turn stopped or failed. Tracked by
@@ -310,6 +329,8 @@ export function Composer({
    */
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  // Which session each chosen `@Title` in the draft stands for; see the `@` menu below.
+  const [mentions, setMentions] = useState<RecordedMention[]>([]);
 
   const token = (skills || onRunCommand) && !disabled ? skillQuery(text, caret) : null;
   const query = token?.query ?? null;
@@ -363,11 +384,21 @@ export function Composer({
   const highlights = useMemo<HighlightToken[]>(() => {
     const bySkill = new Map((skills?.skills ?? []).map(skill => [skill.name, skill]));
     const isCommand = (name: string) => !!onRunCommand && !!findCommand(name, sessionMode);
-    return highlightedTokens(text, new Set(bySkill.keys()), isCommand).map(mention => {
+    const skillTokens = highlightedTokens(text, new Set(bySkill.keys()), isCommand).map<HighlightToken>(mention => {
       const skill = bySkill.get(mention.name);
       return { ...mention, color: skill ? skillChipColor(skill.source) : 'primary' };
     });
-  }, [text, skills, onRunCommand, sessionMode]);
+    // A skill pill wins where a title happens to contain one: overlapping marks would paint twice.
+    const mentionTokens = locateMentions(text, mentions)
+      .filter(found => !skillTokens.some(token => found.start < token.end && token.start < found.end))
+      .map<HighlightToken>(found => ({
+        name: found.mention.title,
+        start: found.start,
+        end: found.end,
+        color: 'primary',
+      }));
+    return [...skillTokens, ...mentionTokens].sort((a, b) => a.start - b.start);
+  }, [text, skills, onRunCommand, sessionMode, mentions]);
 
   /**
    * Taking a command out of the menu RUNS it, where taking a skill only fills the draft.
@@ -389,7 +420,45 @@ export function Composer({
     textareaRef.current?.focus();
   };
 
+  /**
+   * The `@` menu. Derived from the text and caret like the `/` menu, and open only while some
+   * session answers: an empty box would just be in the way of typing an `@` for any other reason.
+   * `mentions` remembers which session each chosen `@Title` stands for, because the text alone
+   * cannot say; they become markup on submit (see expandMentions).
+   */
+  const candidates = useMemo(
+    () => (mentionSessions ? mentionableSessions(mentionSessions, sessionId) : []),
+    [mentionSessions, sessionId]
+  );
+  const mentionToken = mentionSessions && !disabled ? mentionQuery(text, caret) : null;
+  const mentionQueryText = mentionToken?.query;
+  const mentionMatches = useMemo(
+    () => (mentionQueryText === undefined ? [] : matchSessions(candidates, mentionQueryText)),
+    [candidates, mentionQueryText]
+  );
+  const mentionOpen = mentionQueryText !== undefined && dismissed !== text && mentionMatches.length > 0;
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [mentionQueryText]);
+
+  const pickMention = (session: MentionableSession) => {
+    if (!mentionToken) return;
+    const next = insertMention(text, mentionToken, session.title);
+    replaceDraft(next.text, next.caret);
+    setMentions(current => [
+      ...current.filter(mention => mention.id !== session.id),
+      { id: session.id, title: session.title },
+    ]);
+    setDismissed(null);
+    textareaRef.current?.focus();
+  };
+
   const takeMenuRow = (index: number) => {
+    if (mentionOpen) {
+      const session = mentionMatches[index];
+      if (session) pickMention(session);
+      return;
+    }
     const command = commandMatches[index];
     if (command) {
       runCommand(command);
@@ -413,7 +482,7 @@ export function Composer({
    */
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Escape') {
-      const escape = composerEscapeAction({ pickerOpen, streaming });
+      const escape = composerEscapeAction({ pickerOpen: pickerOpen || mentionOpen, streaming });
       if (escape === 'default') return;
       event.preventDefault();
       if (escape === 'dismiss-picker') setDismissed(text);
@@ -421,12 +490,13 @@ export function Composer({
       return;
     }
 
-    const menu = composerMenuAction(event.key, event.shiftKey, { open: pickerOpen, count: menuCount });
+    const rowCount = mentionOpen ? mentionMatches.length : menuCount;
+    const menu = composerMenuAction(event.key, event.shiftKey, { open: pickerOpen || mentionOpen, count: rowCount });
     if (menu !== 'default') {
       event.preventDefault();
-      if (menu === 'next') setActiveIndex(current => (current + 1) % menuCount);
-      else if (menu === 'previous') setActiveIndex(current => (current - 1 + menuCount) % menuCount);
-      else takeMenuRow(Math.min(activeIndex, menuCount - 1));
+      if (menu === 'next') setActiveIndex(current => (current + 1) % rowCount);
+      else if (menu === 'previous') setActiveIndex(current => (current - 1 + rowCount) % rowCount);
+      else takeMenuRow(Math.min(activeIndex, rowCount - 1));
       return;
     }
 
@@ -556,6 +626,8 @@ export function Composer({
           onBrowseMarket={onBrowseSkillMarket}
         />
       )}
+
+      {mentionOpen && <SessionMentionPicker sessions={mentionMatches} activeIndex={activeIndex} onPick={pickMention} />}
 
       <Box sx={{ ...contentColumnSx, pt: 1.5 }}>
         {/* The button rides INSIDE the input rather than beside it. As a sibling in a row it

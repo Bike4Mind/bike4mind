@@ -1,9 +1,10 @@
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatQueueEvent, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import { formatSessionMention } from '@shared/sessionMention';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
@@ -81,8 +82,8 @@ describe('ChatService session_send', () => {
     for (const stream of streams) stream.end();
   });
 
-  async function codeSession(title: string): Promise<ChatSessionSummary> {
-    const created = await service.createCodeSession({ directory: project, branch: '', workspace: false });
+  async function codeSession(title: string, directory = project): Promise<ChatSessionSummary> {
+    const created = await service.createCodeSession({ directory, branch: '', workspace: false });
     if (!created.ok) throw new Error(created.error);
     // Fixed titles so a relay's own framing never collides with the markers below, and so the
     // rows under test name something a reader recognises.
@@ -524,7 +525,7 @@ describe('ChatService session_send', () => {
     // Every one is an ordinary failed tool result the model can act on - nothing thrown, nothing
     // half-delivered, and no turn started anywhere.
     expect(byId.get('x-gone')?.status).toBe('error');
-    expect(byId.get('x-gone')?.error).toMatch(/No conversation with that id/);
+    expect(byId.get('x-gone')?.error).toMatch(/No conversation matches/);
     expect(byId.get('x-archived')?.status).toBe('error');
     expect(byId.get('x-archived')?.error).toMatch(/is archived/);
     expect(byId.get('x-self')?.status).toBe('error');
@@ -571,9 +572,183 @@ describe('ChatService session_send', () => {
 
     const declared = post.mock.calls[0][1].options.tools as { toolSchema: { name: string; parameters: object } }[];
     const schema = declared.find(entry => entry.toolSchema.name === 'session_send');
+    // notify_when_done only asks for a turn back here; nothing in it says where a message may go.
     expect(Object.keys((schema?.toolSchema.parameters as { properties: object }).properties)).toEqual([
       'session_id',
+      'notify_when_done',
       'message',
     ]);
+  });
+
+  describe('across projects', () => {
+    let other: string;
+
+    beforeEach(async () => {
+      other = await realpath(await mkdtemp(join(tmpdir(), 'b4m-relay-other-')));
+    });
+
+    function callTools(stream: PassThrough, calls: { id: string; name: string; input: object }[]): void {
+      stream.write(
+        frame({
+          type: 'tool_use',
+          tools: calls.map(call => ({ id: call.id, name: call.name, arguments: JSON.stringify(call.input) })),
+        })
+      );
+      stream.write(frame('[DONE]'));
+    }
+
+    /** The first request whose last message is a string matching `pattern`: a fresh turn about it. */
+    async function turnAbout(pattern: RegExp): Promise<number> {
+      const find = () =>
+        post.mock.calls.findIndex((_call, index) => {
+          const messages = messagesOf(index);
+          const last = messages[messages.length - 1]?.content;
+          return typeof last === 'string' && pattern.test(last);
+        });
+      await vi.waitUntil(() => find() >= 0, { timeout: 5000, interval: 5 });
+      return find();
+    }
+
+    const callById = (id: string) =>
+      ['session_send', 'session_read', 'session_list'].flatMap(settledCalls).find(call => call?.id === id);
+
+    it('holds a message to another project until its user lets it in, then runs it there', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, 'please rebase onto main', 'h1');
+      await vi.waitUntil(() => !!callById('h1'), { timeout: 5000, interval: 5 });
+
+      expect(callById('h1')?.error).toBeUndefined();
+      expect(callById('h1')?.preview).toMatch(/waiting for that conversation's/);
+      const held = service.heldRelaysFor(target.id);
+      expect(held).toHaveLength(1);
+      expect(held[0].reason).toBe('other-project');
+      expect(held[0].relay.fromProject).toBe(basename(project));
+      expect(events.some(event => event.type === 'held-relays' && event.sessionId === target.id)).toBe(true);
+      expect(queue.list(target.id)).toHaveLength(0);
+      expect(service.isSessionBusy(target.id)).toBe(false);
+
+      await service.resolveHeldRelay(target.id, held[0].id, true);
+      const index = await turnAbout(/please rebase onto main/);
+      const framed = messagesOf(index).at(-1)?.content as string;
+      expect(framed).toContain(`in the project "${basename(project)}"`);
+      expect(framed).toContain(`session_send with session_id ${sender.id}`);
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+    });
+
+    it('tells the sender when the receiving user declines, and runs nothing there', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, 'delete the build folder', 'd1');
+      await vi.waitUntil(() => service.heldRelaysFor(target.id).length === 1, { timeout: 5000, interval: 5 });
+      await awaitStream(1);
+      endTurn(streams[1]);
+      await vi.waitUntil(() => !service.isSessionBusy(sender.id), { timeout: 5000, interval: 5 });
+      const requests = post.mock.calls.length;
+
+      await service.resolveHeldRelay(target.id, service.heldRelaysFor(target.id)[0].id, false);
+
+      const stored = await store.get(sender.id);
+      expect(stored?.messages.some(message => message.system && /declined your message/.test(message.content))).toBe(
+        true
+      );
+      expect(post.mock.calls).toHaveLength(requests);
+      expect((await store.get(target.id))?.messages).toHaveLength(0);
+    });
+
+    it('holds a message to a conversation in a looser approval mode, even in the same project', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Loose');
+      await store.setApprovalMode(sender.id, 'auto');
+      await store.setApprovalMode(target.id, 'full');
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, 'run the migration', 'm1');
+      await vi.waitUntil(() => service.heldRelaysFor(target.id).length === 1, { timeout: 5000, interval: 5 });
+      expect(service.heldRelaysFor(target.id)[0].reason).toBe('looser-mode');
+    });
+
+    it('addresses a conversation by title, and refuses a title two conversations share', async () => {
+      const sender = await codeSession('Sender');
+      const solo = await codeSession('Solo');
+      await codeSession('Twin');
+      await codeSession('Twin', other);
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      callTools(streams[0], [
+        { id: 't-solo', name: 'session_send', input: { session_id: 'solo', message: 'hello solo' } },
+        { id: 't-twin', name: 'session_send', input: { session_id: 'Twin', message: 'hello twin' } },
+      ]);
+      await vi.waitUntil(() => !!callById('t-solo') && !!callById('t-twin'), { timeout: 5000, interval: 5 });
+
+      expect(callById('t-solo')?.error).toBeUndefined();
+      expect(callById('t-solo')?.preview).toContain(solo.id);
+      expect(callById('t-twin')?.error).toMatch(/matches 2 conversations/);
+    });
+
+    it('lists every project with scope all, and reads another project only once the user mentions it', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+      await service.send(target.id, 'a question the user asked there');
+      await awaitStream(0);
+      endTurn(streams[0], 'the answer over there');
+      await vi.waitUntil(() => !service.isSessionBusy(target.id), { timeout: 5000, interval: 5 });
+
+      await service.send(sender.id, 'go');
+      await awaitStream(1);
+      callTools(streams[1], [
+        { id: 'l-project', name: 'session_list', input: {} },
+        { id: 'l-all', name: 'session_list', input: { scope: 'all' } },
+        { id: 'r-before', name: 'session_read', input: { session_id: target.id } },
+      ]);
+      await vi.waitUntil(() => !!callById('r-before'), { timeout: 5000, interval: 5 });
+      expect(callById('l-project')?.preview).not.toContain(target.id);
+      expect(callById('l-all')?.preview).toContain(target.id);
+      expect(callById('r-before')?.error).toMatch(/another project/);
+      await awaitStream(2);
+      endTurn(streams[2]);
+      await vi.waitUntil(() => !service.isSessionBusy(sender.id), { timeout: 5000, interval: 5 });
+
+      await service.send(sender.id, `what did ${formatSessionMention(target.id, 'Elsewhere')} conclude?`);
+      await awaitStream(3);
+      callTools(streams[3], [{ id: 'r-after', name: 'session_read', input: { session_id: target.id } }]);
+      await vi.waitUntil(() => !!callById('r-after'), { timeout: 5000, interval: 5 });
+      expect(callById('r-after')?.error).toBeUndefined();
+      expect(callById('r-after')?.preview).toContain('the answer over there');
+    });
+
+    it('starts a turn back in the sender when the turn its message ran in ends, if it asked', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Target');
+
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      callTools(streams[0], [
+        {
+          id: 'n1',
+          name: 'session_send',
+          input: { session_id: target.id, message: 'tell me when the tests pass', notify_when_done: true },
+        },
+      ]);
+      const targetTurn = await turnAbout(/tell me when the tests pass/);
+      await awaitStream(targetTurn);
+      endTurn(streams[targetTurn], 'they pass');
+      // The sender's own continuation, whichever order the two requests went out in.
+      await awaitStream(2);
+      for (const stream of streams.slice(0, 3)) endTurn(stream);
+
+      const notice = await turnAbout(/finished the turn your message started/);
+      expect(messagesOf(notice).at(-1)?.content).toContain(target.id);
+      const stored = await store.get(sender.id);
+      expect(stored?.messages.some(message => message.relay?.kind === 'done')).toBe(true);
+    });
   });
 });

@@ -51,6 +51,7 @@ function optionalText(input: Record<string, unknown>, key: string): string | und
 /** One row of the listing, as the model reads it. */
 function formatSession(view: HostSessionView, callerId: string | undefined): string {
   const parts = [`${view.id}  ${view.title}`];
+  parts.push(`project=${view.project ?? '(none)'}`);
   parts.push(`status=${view.status}`, `messages=${view.messageCount}`, `updated=${view.updatedAt}`);
   if (view.archived) parts.push('archived');
   if (view.id === callerId) parts.push('this conversation');
@@ -63,9 +64,11 @@ export const sessionList: ToolDefinition = {
   schema: {
     name: 'session_list',
     description:
-      'List the conversations in this project, newest first. Returns each one id, title, how ' +
+      'List conversations, newest first: this project only by default, or every conversation ' +
+      'the user has with scope "all". Returns each one id, title, project, how ' +
       'many messages it holds, when it was last updated, and whether it is running, waiting on ' +
-      'the user, idle or archived. Use it to find a session id before reading or changing one.',
+      'the user, idle or archived. Use it to find a session id before reading, messaging or ' +
+      'changing one.',
     parameters: {
       type: 'object',
       properties: {
@@ -73,14 +76,20 @@ export const sessionList: ToolDefinition = {
           type: 'boolean',
           description: 'Include archived conversations. Defaults to false.',
         },
+        scope: {
+          type: 'string',
+          enum: ['project', 'all'],
+          description: '"project" (default) for this project, "all" for every project and none.',
+        },
       },
       additionalProperties: false,
     },
   },
   async run(input, context) {
     const host = requireHost(context);
-    const sessions = await host.listSessions({ includeArchived: input.include_archived === true });
-    if (sessions.length === 0) return 'No conversations in this project.';
+    const scope = input.scope === 'all' ? 'all' : 'project';
+    const sessions = await host.listSessions({ includeArchived: input.include_archived === true, scope });
+    if (sessions.length === 0) return scope === 'all' ? 'No conversations.' : 'No conversations in this project.';
     return sessions.map(view => formatSession(view, context.sessionId)).join('\n');
   },
 };
@@ -89,13 +98,17 @@ export const sessionRead: ToolDefinition = {
   schema: {
     name: 'session_read',
     description:
-      'Read one conversation in this project as plain text: every turn, in order, with the ' +
-      'tools each turn ran. Use it to pick up what a session you started concluded. Ids come ' +
-      'from session_list or from session_spawn.',
+      'Read one conversation as plain text: every turn, in order, with the tools each turn ran. ' +
+      'Use it to pick up what a session you started or messaged concluded. Any conversation in ' +
+      'this project; in another project, only one the user @-mentioned here or one that ' +
+      'messaged you.',
     parameters: {
       type: 'object',
       properties: {
-        session_id: { type: 'string', description: 'The conversation to read.' },
+        session_id: {
+          type: 'string',
+          description: 'The conversation: its id, a unique id prefix of 8 characters, or its exact title.',
+        },
       },
       required: ['session_id'],
       additionalProperties: false,
@@ -103,9 +116,7 @@ export const sessionRead: ToolDefinition = {
   },
   async run(input, context) {
     const host = requireHost(context);
-    const transcript = await host.readSession(requireString(input, 'session_id'));
-    if (transcript === null) return 'No conversation with that id in this project.';
-    return transcript;
+    return host.readSession(requireString(input, 'session_id'));
   },
 };
 
@@ -335,19 +346,31 @@ export const sessionSend: ToolDefinition = {
   schema: {
     name: 'session_send',
     description:
-      'Send a message to a conversation that ALREADY EXISTS in this project, and have it run ' +
-      'that message as a turn. Ids come from session_list. Use it to answer a session that has ' +
+      'Send a message to a conversation that ALREADY EXISTS - in this project or, found with ' +
+      'session_list scope "all", any other - and have it run that message as a turn. Use it ' +
+      'to answer a session that has ' +
       'asked you something, to correct one you started, or to give a running one more detail - ' +
       'anything where starting a fresh conversation would throw away what that one has already ' +
       'worked out. If it is mid-reply it reads your message once its current step finishes. It does NOT ' +
       'reply to you in this turn: finish your answer without waiting for it, and use ' +
-      'session_read on its id later if you need what it said. It spends the user credits in ' +
+      'session_read on its id later, or set notify_when_done to be told when it has finished. ' +
+      'A conversation in another project, or one allowed to do more without asking than this ' +
+      'one, gets your message only once ITS user lets it in. It spends the user credits in ' +
       'that conversation and one turn may only send a couple of messages, so send one message ' +
       'saying the whole thing rather than several.',
     parameters: {
       type: 'object',
       properties: {
-        session_id: { type: 'string', description: 'The existing conversation to send to.' },
+        session_id: {
+          type: 'string',
+          description: 'The existing conversation: its id, a unique id prefix of 8 characters, or its exact title.',
+        },
+        notify_when_done: {
+          type: 'boolean',
+          description:
+            'Start a turn here when the turn your message runs in over there ends, with a note ' +
+            'saying so. Only when you need its answer to carry on. Defaults to false.',
+        },
         message: {
           type: 'string',
           description:
@@ -376,20 +399,31 @@ export const sessionSend: ToolDefinition = {
     const sessionId = requireString(input, 'session_id');
     const message = requireString(input, 'message');
 
+    const notify = input.notify_when_done === true;
+
     context.beginWrite?.();
-    const outcome = await host.sendTo(sessionId, message);
+    const outcome = await host.sendTo(sessionId, message, { notify });
     if (!outcome.ok) throw new Error(outcome.message);
 
     // The row has to name the conversation, and the id the model passed is a uuid: this call is
     // the only place the title is known.
-    context.report?.label(`Messaged @${outcome.title}: ${message}`);
+    context.report?.label(`${outcome.held ? 'Asked to message' : 'Messaged'} @${outcome.title}: ${message}`);
+    if (outcome.held) {
+      return [
+        `Your message to ${outcome.sessionId} ("${outcome.title}") is waiting for that conversation's`,
+        'user to let it in, because it could do things there that this conversation cannot. Nothing',
+        'runs until they do, and they may decline - you are told either way. Carry on without it.',
+      ].join('\n');
+    }
     return [
       `Delivered your message to ${outcome.sessionId} ("${outcome.title}").`,
       outcome.queued
         ? 'It is mid-reply, so it reads your message once its current step finishes, or as its next turn.'
         : 'It is running your message now.',
       'It does NOT answer into this turn. Carry on without it, and use session_read on that id',
-      'later if you need what it said. Do not send the same thing again because no reply came.',
+      notify
+        ? 'later if you need what it said; you will also get a turn when it has finished.'
+        : 'later if you need what it said. Do not send the same thing again because no reply came.',
     ].join('\n');
   },
 };
