@@ -26,6 +26,7 @@ import { MUSIC_GENERATION_API_ERROR_CODES, MUSIC_JOB_PUBLIC_ERROR_CODES } from '
 import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
 import { SKILL_MARKET_IMPORT_ERROR_CODES } from './schemas/skillMarketPublic';
+import { SLACK_MESSAGE_ERROR_CODES } from './schemas/slackMessagesApi';
 
 /**
  * The `satisfies readonly ApiErrorCode[]` on each narrowing tuple is what actually
@@ -62,6 +63,7 @@ describe('API_ERROR_CODES', () => {
       STORAGE_ERROR_CODES,
       COMPLETION_TOOL_ERROR_CODES,
       SKILL_MARKET_IMPORT_ERROR_CODES,
+      SLACK_MESSAGE_ERROR_CODES,
       COMPLETION_SSE_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
