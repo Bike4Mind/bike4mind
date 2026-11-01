@@ -405,7 +405,6 @@ export const shouldAdoptIdentifyToken = (heldToken: string | null | undefined): 
 export const applyUserPush = (existing: IUserDocument | null, pushed: IUserDocument): IUserDocument =>
   ({ ...(existing ?? {}), ...pushed }) as IUserDocument;
 
-/** Provides user data and operations to children via the zustand store. */
 // The ref guard re-arms whenever the user briefly reads as not needing a reconnect (cleared, then
 // re-identified), so a fixed id makes a repeat replace the visible toast instead of stacking on it.
 export const ATLASSIAN_RECONNECT_TOAST_ID = 'atlassian-reconnect-required';
@@ -432,6 +431,7 @@ export function useAtlassianReconnectToast(status: string | undefined, t: TFunct
   }, [status, t]);
 }
 
+/** Provides user data and operations to children via the zustand store. */
 export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
   const [userId, setCurrentUser] = useUser(useShallow(s => [s.currentUser?.id, s.setCurrentUser, s.refreshUser]));
   const [setAccessToken, expired, accessToken, mfaPending, setMfaPending] = useAccessToken(
