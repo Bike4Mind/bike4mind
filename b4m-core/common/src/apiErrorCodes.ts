@@ -129,6 +129,11 @@ export const API_ERROR_CODES = [
   'local_changes',
   /** The caller already has a skill with that name; retry with another `name`. */
   'name_taken',
+  // Slack posting (POST /api/v1/slack/messages); see SLACK_MESSAGE_ERROR_CODES in schemas/slackMessagesApi.ts.
+  /** The Bike4Mind bot is not a member of the channel; remediation is inviting it (`/invite @<bot name>`). */
+  'slack_bot_not_in_channel',
+  /** The channel is archived, so nothing can be posted to it. */
+  'slack_channel_archived',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

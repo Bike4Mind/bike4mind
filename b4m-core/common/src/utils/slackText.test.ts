@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { escapeSlackCode, escapeSlackLine, escapeSlackText } from './slackText';
+import {
+  escapeSlackCode,
+  escapeSlackLine,
+  escapeSlackText,
+  neutralizeSlackBroadcastMentions,
+  neutralizeSlackBroadcastMentionsDeep,
+} from './slackText';
 
 describe('escapeSlackText', () => {
   it('neutralizes mentions and links', () => {
@@ -32,5 +38,37 @@ describe('escapeSlackCode', () => {
 
   it('collapses line breaks', () => {
     expect(escapeSlackCode('src/a.ts\nsrc/b.ts')).toBe('src/a.ts src/b.ts');
+  });
+});
+
+describe('neutralizeSlackBroadcastMentions', () => {
+  const ZWSP = '\u200B';
+
+  it.each([
+    ['<!channel> deploy done', `@${ZWSP}channel deploy done`],
+    ['<!here|here> ping', `@${ZWSP}here ping`],
+    ['<!EVERYONE>', `@${ZWSP}everyone`],
+    ['team <!subteam^S0123ABC|@oncall> look', `team @${ZWSP}oncall look`],
+    ['<!subteam^S0123ABC>', `@${ZWSP}group`],
+    ['@channel and @here and @everyone', `@${ZWSP}channel and @${ZWSP}here and @${ZWSP}everyone`],
+    ['(@here)', `(@${ZWSP}here)`],
+  ])('neutralizes %j', (input, expected) => {
+    expect(neutralizeSlackBroadcastMentions(input)).toBe(expected);
+  });
+
+  it('leaves user mentions, links, emails and other words alone', () => {
+    const text = 'cc <@U0123ABC> see <https://example.com|docs> mail ops@here.example @channels @heretic';
+    expect(neutralizeSlackBroadcastMentions(text)).toBe(text);
+  });
+
+  it('walks every string in a Block Kit structure without touching other values', () => {
+    const blocks = [
+      { type: 'section', text: { type: 'mrkdwn', text: '<!channel> shipped' } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: '@here v1.2' }], count: 3, flag: true },
+    ];
+    expect(neutralizeSlackBroadcastMentionsDeep(blocks)).toEqual([
+      { type: 'section', text: { type: 'mrkdwn', text: `@${ZWSP}channel shipped` } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: `@${ZWSP}here v1.2` }], count: 3, flag: true },
+    ]);
   });
 });
