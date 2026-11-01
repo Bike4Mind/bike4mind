@@ -17,8 +17,10 @@ const {
   mockFindWorkspace,
   mockMemberOrgIds,
   mockPostMessage,
+  mockFindKey,
   webClientArgs,
 } = vi.hoisted(() => ({
+  mockFindKey: vi.fn(),
   mockValidate: vi.fn(),
   mockFindUser: vi.fn(),
   mockKeyRateLimit: vi.fn(),
@@ -82,6 +84,15 @@ vi.mock('@bike4mind/database/infra', async orig => ({
   orgSlackWorkspaceRepository: { findBySlackTeamIdWithToken: (...a: unknown[]) => mockFindWorkspace(...a) },
   organizationRepository: { findMembershipOrgIds: (...a: unknown[]) => mockMemberOrgIds(...a) },
 }));
+
+vi.mock('@bike4mind/database/auth', async orig => {
+  const actual = await orig<Record<string, unknown>>();
+  const real = actual.userApiKeyRepository as object;
+  return {
+    ...actual,
+    userApiKeyRepository: Object.assign(Object.create(real), { findById: (...a: unknown[]) => mockFindKey(...a) }),
+  };
+});
 
 vi.mock('@slack/web-api', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -148,7 +159,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   webClientArgs.length = 0;
   withKey();
-  mockFindUser.mockResolvedValue({ id: 'user-1', _id: 'user-1', groups: [], isBanned: false, disputePending: false });
+  mockFindUser.mockResolvedValue({
+    id: 'user-1',
+    _id: 'user-1',
+    name: 'Ada',
+    groups: [],
+    isBanned: false,
+    disputePending: false,
+  });
+  mockFindKey.mockResolvedValue({ id: KEY_ID, name: 'factory' });
   mockKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: {} });
   mockSlackLimit.mockImplementation((_options, _req, _res, next) => next());
   mockFindConfig.mockResolvedValue({ channelId: CHANNEL, slackTeamId: TEAM, apiPostEnabled: true });
@@ -169,6 +188,20 @@ describe('POST /api/v1/slack/messages', () => {
     expect(mockPostMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: CHANNEL, text: 'Shipped v1.2.3' }));
   });
 
+  it('appends an attribution block the caller cannot remove, with escaped names', async () => {
+    mockFindUser.mockResolvedValue({ id: 'user-1', _id: 'user-1', name: 'Eve <!channel>', groups: [] });
+    mockFindKey.mockResolvedValue({ id: KEY_ID, name: 'ci <@U1>' });
+    await post(message());
+
+    const blocks = mockPostMessage.mock.calls[0][0].blocks;
+    expect(blocks[0]).toEqual({ type: 'section', text: { type: 'mrkdwn', text: 'Shipped v1.2.3' } });
+    expect(blocks.at(-1)).toEqual({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: 'Posted via API by Eve &lt;!channel&gt; \u00B7 key ci &lt;@U1&gt;' }],
+    });
+    expect(mockFindKey).toHaveBeenCalledWith(KEY_ID);
+  });
+
   it('marks every post with server-set metadata that names the key and user', async () => {
     await post(message());
     expect(mockPostMessage.mock.calls[0][0].metadata).toEqual({
@@ -184,8 +217,9 @@ describe('POST /api/v1/slack/messages', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockPostMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: CHANNEL, text: 'Shipped v1.2.3', thread_ts: TS, blocks })
+      expect.objectContaining({ channel: CHANNEL, text: 'Shipped v1.2.3', thread_ts: TS })
     );
+    expect(mockPostMessage.mock.calls[0][0].blocks.slice(0, -1)).toEqual(blocks);
   });
 
   it('neutralizes broadcast mentions in text and blocks but keeps user mentions', async () => {
@@ -202,7 +236,7 @@ describe('POST /api/v1/slack/messages', () => {
     expect(res._getStatusCode()).toBe(200);
     const sent = mockPostMessage.mock.calls[0][0];
     expect(sent.text).toBe(`@${ZWSP}channel shipped @${ZWSP}here cc <@U0123ABC>`);
-    expect(sent.blocks).toEqual([
+    expect(sent.blocks.slice(0, -1)).toEqual([
       { type: 'section', text: { type: 'mrkdwn', text: `@${ZWSP}everyone and @${ZWSP}here` } },
       { type: 'context', elements: [{ type: 'mrkdwn', text: `@${ZWSP}channel @${ZWSP}oncall` }] },
     ]);

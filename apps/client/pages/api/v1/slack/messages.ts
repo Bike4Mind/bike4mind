@@ -21,6 +21,7 @@ import {
   TooManyRequestsError,
   UnauthorizedError,
   UnprocessableEntityError,
+  escapeSlackLine,
   postSlackMessageContract,
   SLACK_API_POST_EVENT_TYPE,
   neutralizeSlackBroadcastMentions,
@@ -31,6 +32,7 @@ import {
   orgSlackWorkspaceRepository,
   slackChannelConfigRepository,
 } from '@bike4mind/database/infra';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -85,6 +87,21 @@ const perDayLimit = rateLimit({
 /** Both windows, minute first; counted per key on top of the key's own request limits. */
 const slackPostRateLimit: RequestHandler = (req, res, next) =>
   perMinuteLimit(req, res, error => (error ? next(error) : perDayLimit(req, res, next)));
+
+const ATTRIBUTION_NAME_MAX = 80;
+
+/**
+ * The context block appended to every API post, after the caller's blocks, naming who posted it and
+ * with which key, so a message cannot pass itself off as the bot's own. Names are escaped, so neither
+ * can carry a mention or link.
+ */
+function attributionBlock(userName: string, keyName: string): KnownBlock {
+  const clip = (value: string) => escapeSlackLine(value.slice(0, ATTRIBUTION_NAME_MAX));
+  return {
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text: `Posted via API by ${clip(userName)} \u00B7 key ${clip(keyName)}` }],
+  };
+}
 
 type SlackCallError = { code?: string; data?: { error?: string }; retryAfter?: number };
 
@@ -169,6 +186,13 @@ const handler = nextRouteForContract(postSlackMessageContract, {
     );
   }
 
+  const keyName = (await userApiKeyRepository.findById(keyId))?.name ?? keyId;
+  const postedText = neutralizeSlackBroadcastMentions(text);
+  // Without caller blocks the text becomes a section, so the attribution block has something to follow.
+  const callerBlocks: KnownBlock[] = blocks
+    ? (neutralizeSlackBroadcastMentionsDeep(blocks) as KnownBlock[])
+    : [{ type: 'section', text: { type: 'mrkdwn', text: postedText } }];
+
   // No SDK retries: a Lambda request must not sit out Slack's back-off, and the caller can retry.
   const client = new WebClient(botToken, {
     retryConfig: { retries: 0 },
@@ -178,8 +202,8 @@ const handler = nextRouteForContract(postSlackMessageContract, {
   try {
     const result = await client.chat.postMessage({
       channel: channelId,
-      text: neutralizeSlackBroadcastMentions(text),
-      ...(blocks && { blocks: neutralizeSlackBroadcastMentionsDeep(blocks) as KnownBlock[] }),
+      text: postedText,
+      blocks: [...callerBlocks, attributionBlock(req.user.name || 'unknown user', keyName)],
       ...(threadTs && { thread_ts: threadTs }),
       // Server-set (the request schema is strict, so a caller cannot supply metadata): it marks the
       // message as API-posted, which makes the interactivity handler refuse any action on it.
