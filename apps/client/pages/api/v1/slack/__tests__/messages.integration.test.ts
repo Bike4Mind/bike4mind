@@ -387,17 +387,31 @@ describe('POST /api/v1/slack/messages', () => {
     expect(mockPostMessage).not.toHaveBeenCalled();
   });
 
-  it('limits each key to 30 a minute and 1,000 a day, answering 429 when a window is spent', async () => {
+  it('limits per key and per user (30/min, 1,000/day) and per channel (60/min), answering 429 when spent', async () => {
     await post(message());
-    const windows = mockSlackLimit.mock.calls.map(([options]) => options);
-    expect(windows).toEqual([
-      expect.objectContaining({ limit: 30, windowMs: 60_000 }),
-      expect.objectContaining({ limit: 1000, windowMs: 86_400_000 }),
+    type Window = { limit: number; windowMs: number; subject: (req: unknown) => string | undefined };
+    const windows = mockSlackLimit.mock.calls.map(([options]) => options as Window);
+    expect(windows.map(({ limit, windowMs }) => [limit, windowMs])).toEqual([
+      [30, 60_000],
+      [1000, 86_400_000],
+      [30, 60_000],
+      [1000, 86_400_000],
+      [60, 60_000],
     ]);
-    const subject = (windows[0] as { subject: (req: unknown) => string | undefined }).subject;
-    expect(subject({ apiKeyInfo: { keyId: KEY_ID } })).toBe(`api-key:${KEY_ID}`);
+    const req = { apiKeyInfo: { keyId: KEY_ID }, user: { id: 'user-1' }, body: { channel_id: CHANNEL } };
+    expect(windows.map(window => window.subject(req))).toEqual([
+      `api-key:${KEY_ID}`,
+      `api-key:${KEY_ID}`,
+      'user:user-1',
+      'user:user-1',
+      `channel:${CHANNEL}`,
+    ]);
+    expect(windows[4].subject({ ...req, body: { channel_id: 'nope' } })).toBeUndefined();
 
-    mockSlackLimit.mockImplementation((_options, _req, _res, next) => next(new TooManyRequestsError('slow down')));
+    // Spend only the channel window: the post is refused even though the key and user windows pass.
+    mockSlackLimit.mockImplementation((options: Window, _req, _res, next) =>
+      options.limit === 60 ? next(new TooManyRequestsError('slow down')) : next()
+    );
     const res = await post(message());
     expect(res._getStatusCode()).toBe(429);
     expect(mockPostMessage).toHaveBeenCalledTimes(1);

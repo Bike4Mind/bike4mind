@@ -43,8 +43,8 @@ export const postSlackMessageContract = defineEndpoint({
     'reader can act on is accepted: no interactive elements, `action_id`, `confirm`, or `url` outside a ' +
     'rich_text link, and a section `accessory` must be an image. Broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, user ' +
     'groups, and bare `@channel` / `@here` / `@everyone`) are posted as plain text that notifies nobody; ' +
-    '`<@U...>` user mentions are kept. A block Slack rejects as malformed answers 422. Rate limited per key to 30 messages a minute and 1,000 a day, on ' +
-    "top of the key's own limits. Authenticate with an API key (`b4m_live_`) carrying `slack:post`.",
+    '`<@U...>` user mentions are kept. A block Slack rejects as malformed answers 422. Rate limited to 30 messages a minute and 1,000 a day per key and ' +
+    "per user, and 60 a minute per channel, on top of the key's own limits. Authenticate with an API key (`b4m_live_`) carrying `slack:post`.",
   tags: ['Slack'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.SLACK_POST],

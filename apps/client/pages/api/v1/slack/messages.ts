@@ -23,6 +23,7 @@ import {
   UnprocessableEntityError,
   escapeSlackLine,
   postSlackMessageContract,
+  SLACK_CHANNEL_ID_PATTERN,
   SLACK_API_POST_EVENT_TYPE,
   neutralizeSlackBroadcastMentions,
   neutralizeSlackBroadcastMentionsDeep,
@@ -69,24 +70,47 @@ const REJECTED_CREDENTIAL_ERRORS = new Set([
   'token_expired',
 ]);
 
-const perKey = (req: Parameters<RequestHandler>[0]) => (req.apiKeyInfo ? `api-key:${req.apiKeyInfo.keyId}` : undefined);
+type LimitedRequest = Parameters<RequestHandler>[0];
 
-const perMinuteLimit = rateLimit({
-  limit: SLACK_POSTS_PER_MINUTE,
-  windowMs: 60 * 1000,
-  bucket: 'POST /api/v1/slack/messages:minute',
-  subject: perKey,
-});
-const perDayLimit = rateLimit({
-  limit: SLACK_POSTS_PER_DAY,
-  windowMs: 24 * 60 * 60 * 1000,
-  bucket: 'POST /api/v1/slack/messages:day',
-  subject: perKey,
-});
+const SLACK_POSTS_PER_CHANNEL_PER_MINUTE = 60;
+const MINUTE_MS = 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const BUCKET = 'POST /api/v1/slack/messages';
 
-/** Both windows, minute first; counted per key on top of the key's own request limits. */
-const slackPostRateLimit: RequestHandler = (req, res, next) =>
-  perMinuteLimit(req, res, error => (error ? next(error) : perDayLimit(req, res, next)));
+const perKey = (req: LimitedRequest) => (req.apiKeyInfo ? `api-key:${req.apiKeyInfo.keyId}` : undefined);
+const perUser = (req: LimitedRequest) => (req.user?.id ? `user:${req.user.id}` : undefined);
+// Runs ahead of validation, so a malformed channel id falls back to the default subject (the user).
+const perChannel = (req: LimitedRequest) => {
+  const channelId = (req.body as { channel_id?: unknown } | undefined)?.channel_id;
+  return typeof channelId === 'string' && SLACK_CHANNEL_ID_PATTERN.test(channelId) ? `channel:${channelId}` : undefined;
+};
+
+/**
+ * Every window a post must fit, in order: per key and per user (so one owner's many keys share a cap),
+ * each 30 a minute and 1,000 a day, and per channel 60 a minute. On top of the key's own request limits.
+ */
+const SLACK_POST_LIMITERS: RequestHandler[] = [
+  rateLimit({ limit: SLACK_POSTS_PER_MINUTE, windowMs: MINUTE_MS, bucket: `${BUCKET}:key-minute`, subject: perKey }),
+  rateLimit({ limit: SLACK_POSTS_PER_DAY, windowMs: DAY_MS, bucket: `${BUCKET}:key-day`, subject: perKey }),
+  rateLimit({ limit: SLACK_POSTS_PER_MINUTE, windowMs: MINUTE_MS, bucket: `${BUCKET}:user-minute`, subject: perUser }),
+  rateLimit({ limit: SLACK_POSTS_PER_DAY, windowMs: DAY_MS, bucket: `${BUCKET}:user-day`, subject: perUser }),
+  rateLimit({
+    limit: SLACK_POSTS_PER_CHANNEL_PER_MINUTE,
+    windowMs: MINUTE_MS,
+    bucket: `${BUCKET}:channel-minute`,
+    subject: perChannel,
+  }),
+];
+
+/** Runs the limiters one after another, stopping at the first refusal. */
+const slackPostRateLimit: RequestHandler = (req, res, next) => {
+  const run = (index: number) => {
+    const limiter = SLACK_POST_LIMITERS[index];
+    if (!limiter) return next();
+    return limiter(req, res, error => (error ? next(error) : run(index + 1)));
+  };
+  return run(0);
+};
 
 const ATTRIBUTION_NAME_MAX = 80;
 
