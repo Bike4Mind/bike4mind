@@ -166,7 +166,16 @@ describe('POST /api/v1/slack/messages', () => {
     expect(mockFindWorkspace).toHaveBeenCalledWith(TEAM);
     expect(mockMemberOrgIds).toHaveBeenCalledWith('user-1');
     expect(webClientArgs[0][0]).toBe('decrypted:enc-token');
-    expect(mockPostMessage).toHaveBeenCalledWith({ channel: CHANNEL, text: 'Shipped v1.2.3' });
+    expect(mockPostMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: CHANNEL, text: 'Shipped v1.2.3' }));
+  });
+
+  it('marks every post with server-set metadata that names the key and user', async () => {
+    await post(message());
+    expect(mockPostMessage.mock.calls[0][0].metadata).toEqual({
+      event_type: 'b4m_api_post',
+      event_payload: { key_id: KEY_ID, user_id: 'user-1' },
+    });
+    expect((await post(message({ metadata: { event_type: 'other' } })))._getStatusCode()).toBe(422);
   });
 
   it('passes thread_ts and blocks through to Slack', async () => {
@@ -174,7 +183,9 @@ describe('POST /api/v1/slack/messages', () => {
     const res = await post(message({ thread_ts: TS, blocks }));
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockPostMessage).toHaveBeenCalledWith({ channel: CHANNEL, text: 'Shipped v1.2.3', thread_ts: TS, blocks });
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: CHANNEL, text: 'Shipped v1.2.3', thread_ts: TS, blocks })
+    );
   });
 
   it('neutralizes broadcast mentions in text and blocks but keeps user mentions', async () => {

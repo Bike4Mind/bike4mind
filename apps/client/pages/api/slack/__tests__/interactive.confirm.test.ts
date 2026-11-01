@@ -395,3 +395,54 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
     expect(lastPosted(responseUrl).text).toContain('Failed to delete');
   });
 });
+
+describe('POST /api/slack/interactive on a message posted through the API', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
+    vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
+      select: () =>
+        Promise.resolve({ id: 'workspace-1', name: 'Test', slackOAuthSigningSecret: 'secret', slackBotToken: 'e' }),
+    } as never);
+    vi.mocked(executePendingAction).mockResolvedValue({ success: true, message: 'Created' });
+    vi.mocked(isPendingActionRequester).mockResolvedValue(true);
+    vi.mocked(isFeatureEnabled).mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('refuses every action, whatever its action_id', async () => {
+    const response = await postAction(
+      `confirm_action`,
+      `${QUEST_ID}:${PENDING_ACTION_TS}`,
+      undefined,
+      {},
+      {
+        message: { ts: '1730000000.123456', metadata: { event_type: 'b4m_api_post', event_payload: { key_id: 'k' } } },
+      }
+    );
+
+    expect(response._getStatusCode()).toBe(200);
+    expect(response._getJSONData()).toEqual({});
+    expect(executePendingAction).not.toHaveBeenCalled();
+  });
+
+  it('still handles the same action on a message without that metadata', async () => {
+    await postAction(
+      `confirm_action`,
+      `${QUEST_ID}:${PENDING_ACTION_TS}`,
+      undefined,
+      {},
+      {
+        message: { ts: '1730000000.123456', metadata: { event_type: 'something_else' } },
+      }
+    );
+
+    expect(executePendingAction).toHaveBeenCalled();
+  });
+});

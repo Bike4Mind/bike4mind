@@ -59,7 +59,7 @@ import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { McpServer } from '@bike4mind/database/ai';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
-import { ImageModels, IUserDocument, McpServerName } from '@bike4mind/common';
+import { ImageModels, IUserDocument, McpServerName, SLACK_API_POST_EVENT_TYPE } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 dayjs.extend(utc);
@@ -88,6 +88,7 @@ const SlackInteractivePayloadSchema = z.object({
     .object({
       ts: z.string(),
       thread_ts: z.string().optional(),
+      metadata: z.object({ event_type: z.string().optional() }).passthrough().optional(),
     })
     .optional(),
   actions: z
@@ -411,6 +412,17 @@ async function handleInteractiveAction(
   workspaceId?: string
 ): Promise<any> {
   const { type, user, actions, view, response_url, trigger_id } = payload;
+
+  // A message posted through POST /api/v1/slack/messages is caller-authored: it must never be able to
+  // trigger a bot action, whatever its blocks claim to be. The API refuses interactive blocks; this is
+  // the backstop if one ever reaches Slack.
+  if (payload.message?.metadata?.event_type === SLACK_API_POST_EVENT_TYPE) {
+    Logger.warn('[Slack Interactive] Refused an action on an API-posted message', {
+      actionId: actions?.[0]?.action_id,
+      userId: user?.id,
+    });
+    return {};
+  }
 
   // Handle view_submission (modal form submissions)
   if (type === 'view_submission' && view?.callback_id) {

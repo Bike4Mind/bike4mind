@@ -22,6 +22,7 @@ import {
   UnauthorizedError,
   UnprocessableEntityError,
   postSlackMessageContract,
+  SLACK_API_POST_EVENT_TYPE,
   neutralizeSlackBroadcastMentions,
   neutralizeSlackBroadcastMentionsDeep,
 } from '@bike4mind/common';
@@ -180,6 +181,9 @@ const handler = nextRouteForContract(postSlackMessageContract, {
       text: neutralizeSlackBroadcastMentions(text),
       ...(blocks && { blocks: neutralizeSlackBroadcastMentionsDeep(blocks) as KnownBlock[] }),
       ...(threadTs && { thread_ts: threadTs }),
+      // Server-set (the request schema is strict, so a caller cannot supply metadata): it marks the
+      // message as API-posted, which makes the interactivity handler refuse any action on it.
+      metadata: { event_type: SLACK_API_POST_EVENT_TYPE, event_payload: { key_id: keyId, user_id: req.user.id } },
     });
     if (!result.ts) throw new BadGatewayError('Slack accepted the message but returned no timestamp.');
 
