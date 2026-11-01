@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { stat, statfs } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { app, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
 import { HuggingFaceHub, OllamaRuntime, ollamaLibraryLayers, probeHardware } from '@bike4mind/local-models';
@@ -17,9 +20,11 @@ import { resolveCuratedUrl } from './curated/fetchCurated';
 import { PRODUCTION_CURATED_KEYS } from './curated/keys';
 import { invalid, registerModelsIpc, serverArg, text } from './ipc';
 import { ModelHubService, type ModelHubServiceDeps } from './ModelHubService';
+import { PullLedger } from './pullLedger';
 
 // Room for a daemon busy finishing a pull on a loaded machine, which the library's short default reads as stopped.
 const RUNTIME_HEALTH_TIMEOUT_MS = 10_000;
+const LINUX_SERVICE_STORE = '/usr/share/ollama/.ollama/models';
 
 const warn = (message: string) => console.warn(message);
 
@@ -49,7 +54,8 @@ function curatedSource(onChange: () => void): CuratedSource {
  */
 export function registerModels(
   servers: Pick<ModelServerRegistry, 'hubServer' | 'onServerSaved' | 'specs'>,
-  { localContext }: Pick<ModelHubServiceDeps, 'localContext'>
+  { localContext }: Pick<ModelHubServiceDeps, 'localContext'>,
+  capabilityLedger: ConstructorParameters<typeof PullLedger>[0]
 ): ModelHubService {
   const send = (channel: string, payload?: ModelPull[] | string) => {
     for (const window of appWindows()) window.webContents.send(channel, payload);
@@ -75,7 +81,27 @@ export function registerModels(
     specs: id => servers.specs(id),
     localContext,
     curated: () => source.current(),
-    onPullsChanged: pulls => send(IPC_CHANNELS.modelsPullsChanged, pulls),
+    onPullsChanged: pulls => {
+      send(IPC_CHANNELS.modelsPullsChanged, pulls);
+      void ledger.settled(pulls);
+    },
+    onPullStarted: pull =>
+      void service
+        .storeLocation(pull.serverId)
+        .catch(() => null)
+        .then(location => ledger.started(pull, location)),
+    freeSpace: async path => {
+      const stats = await statfs(path);
+      return stats.bavail * stats.bsize;
+    },
+    // Ollama's own default; a daemon started with OLLAMA_MODELS elsewhere shows its folder once a model is installed.
+    defaultStoreDir: () => {
+      if (process.env.OLLAMA_MODELS) return process.env.OLLAMA_MODELS;
+      // The official Linux install script runs the daemon as its own user, whose home is here.
+      if (process.platform === 'linux' && existsSync(LINUX_SERVICE_STORE)) return LINUX_SERVICE_STORE;
+      return join(homedir(), '.ollama', 'models');
+    },
+    pathExists: async path => (await stat(path)).isDirectory(),
     // Once, right away: the picker's reload waits for any recheck the pull or removal started.
     onInstalledChanged: serverId => send(IPC_CHANNELS.modelsInstalledChanged, serverId),
     keepAwake: on => {
@@ -87,6 +113,8 @@ export function registerModels(
     },
     warn,
   });
+  const ledger = new PullLedger(capabilityLedger, () => service.pulls(), warn);
+  void ledger.retireAll();
   servers.onServerSaved(id => {
     service.serverChanged(id);
     // Entered hardware may have changed, which re-rates the open lists.
