@@ -8,7 +8,8 @@ import { verifySlackRequest } from '@server/integrations/slack/slackWebhookVerif
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
 import { WebClient } from '@slack/web-api';
-import { User, Quest, connectDB, sessionRepository } from '@bike4mind/database';
+import { User, Quest, Session, connectDB, sessionRepository } from '@bike4mind/database';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
 import { createSession } from '@server/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
@@ -1074,6 +1075,18 @@ async function handleSetDefaultNotebook(dbUser: any, slackUserId: string, notebo
   }
 
   try {
+    // Same ownership rule as the settings route (users/[id]/slack-settings.ts): the default notebook is
+    // dereferenced later without a re-check, and the button value is whatever the message carried.
+    const notebook = isValidObjectId(notebookId)
+      ? await Session.findOne({ _id: notebookId, userId: dbUser.id, deletedAt: { $exists: false } }).select('_id')
+      : null;
+    if (!notebook) {
+      return {
+        text: '❌ That notebook was not found in your account',
+        response_type: 'ephemeral',
+      };
+    }
+
     const slackSettings = dbUser.slackSettings || {};
     await updateUserSlackSettings(dbUser.id, {
       ...slackSettings,

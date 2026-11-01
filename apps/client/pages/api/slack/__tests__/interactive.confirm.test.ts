@@ -36,6 +36,7 @@ vi.mock('@bike4mind/database', async () => {
     connectDB: vi.fn().mockResolvedValue(undefined),
     User: { findOne: vi.fn() },
     Quest: { findById: vi.fn(), updateOne: vi.fn() },
+    Session: { findOne: vi.fn() },
   };
 });
 vi.mock('@bike4mind/database/infra', async () => {
@@ -55,7 +56,7 @@ vi.mock('@bike4mind/slack', async () => {
   };
 });
 
-import { User, Quest } from '@bike4mind/database';
+import { User, Quest, Session } from '@bike4mind/database';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
 import {
   cancelPendingActionOnQuest,
@@ -444,5 +445,55 @@ describe('POST /api/slack/interactive on a message posted through the API', () =
     );
 
     expect(executePendingAction).toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/slack/interactive set_default_notebook', () => {
+  const NOTEBOOK_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1', slackSettings: {} } as never);
+    vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
+      select: () =>
+        Promise.resolve({ id: 'workspace-1', name: 'Test', slackOAuthSigningSecret: 'secret', slackBotToken: 'e' }),
+    } as never);
+    (User as unknown as { findByIdAndUpdate?: unknown }).findByIdAndUpdate = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("refuses a notebook outside the clicker's account and saves nothing", async () => {
+    vi.mocked(Session.findOne).mockReturnValue({ select: () => Promise.resolve(null) } as never);
+
+    const response = await postAction('set_default_notebook', NOTEBOOK_ID);
+
+    expect(Session.findOne).toHaveBeenCalledWith(expect.objectContaining({ _id: NOTEBOOK_ID, userId: 'user-1' }));
+    expect(response._getJSONData().text).toMatch(/not found in your account/);
+  });
+
+  it('saves a notebook the clicker owns', async () => {
+    vi.mocked(Session.findOne).mockReturnValue({ select: () => Promise.resolve({ _id: NOTEBOOK_ID }) } as never);
+
+    const response = await postAction('set_default_notebook', NOTEBOOK_ID);
+
+    expect((User as unknown as { findByIdAndUpdate: ReturnType<typeof vi.fn> }).findByIdAndUpdate).toHaveBeenCalledWith(
+      'user-1',
+      { $set: { slackSettings: expect.objectContaining({ defaultNotebookId: NOTEBOOK_ID }) } },
+      expect.anything()
+    );
+    expect(response._getJSONData().text).toMatch(/Default notebook set/);
+  });
+
+  it('refuses a malformed notebook id without a lookup', async () => {
+    const response = await postAction('set_default_notebook', 'not-an-id');
+
+    expect(Session.findOne).not.toHaveBeenCalled();
+    expect(response._getJSONData().text).toMatch(/not found in your account/);
   });
 });
