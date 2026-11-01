@@ -88,6 +88,7 @@ const api: DesktopApi = {
     resumePull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsResumePull, key),
     dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
     remove: (name: string, serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name, serverId),
+    getStoreLocation: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStoreLocation, serverId),
     getHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetHfAccess),
     setHfToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsSaveHfAccess, token),
     clearHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsClearHfAccess),

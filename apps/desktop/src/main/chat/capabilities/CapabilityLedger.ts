@@ -31,8 +31,25 @@ const scopeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tool'), value: z.string() }),
   z.object({ kind: z.literal('project'), value: z.string() }),
   z.object({ kind: z.literal('approval'), value: z.string() }),
+  z.object({
+    kind: z.literal('model-pull'),
+    value: z.string(),
+    model: z.string(),
+    server: z.string(),
+    bytes: z.number().int().nonnegative(),
+    path: z.string().optional(),
+    pathSource: z.enum(['runtime', 'elsewhere', 'default']).optional(),
+  }),
 ]);
-const capabilitySchema = z.enum(['files', 'tool', 'browser-origin', 'credits', 'imported-identity', 'project-trust']);
+const capabilitySchema = z.enum([
+  'files',
+  'tool',
+  'browser-origin',
+  'credits',
+  'imported-identity',
+  'project-trust',
+  'model-download',
+]);
 const grantSchema = z.object({
   id: z.string(),
   subject: subjectSchema,

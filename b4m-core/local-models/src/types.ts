@@ -130,6 +130,8 @@ export interface ModelContents {
   draftBlobs?: (string | null)[];
   /** ADAPTER lines; curated builds do not accept adapters, including unreadable paths. */
   adapterBlobs?: (string | null)[];
+  /** The runtime's model folder on its own disk, from the weights' blob path; null when the path does not show it. */
+  storeDir?: string | null;
 }
 
 export interface InspectOptions {

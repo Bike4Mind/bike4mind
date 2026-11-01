@@ -20,6 +20,7 @@ import {
   type ModelPull,
   type ModelPullResult,
   type ModelRuntimeStatus,
+  type ModelStoreLocation,
   type HfTokenStatus,
 } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -282,6 +283,7 @@ interface Bridge {
   curatedFailures: number;
   curatedPull: CuratedPullResult;
   token: HfTokenStatus;
+  store: ModelStoreLocation;
 }
 
 let bridge: Bridge;
@@ -307,6 +309,7 @@ const calls = {
   setHfToken: vi.fn(),
   clearHfToken: vi.fn(),
   checkCuratedList: vi.fn(),
+  getStoreLocation: vi.fn(),
 };
 
 beforeEach(() => {
@@ -323,6 +326,7 @@ beforeEach(() => {
     curatedFailures: 0,
     curatedPull: libraryPull(),
     token: { set: false, persisted: true },
+    store: { path: '/home/me/.ollama/models', source: 'runtime', freeBytes: 200 * GIB },
   };
   for (const fn of Object.values(calls)) fn.mockReset();
   window.localStorage.clear();
@@ -397,6 +401,10 @@ beforeEach(() => {
       resumePull: calls.resumePull,
       dismissPull: calls.dismissPull,
       remove: calls.remove,
+      getStoreLocation: async (serverId?: string) => {
+        calls.getStoreLocation(serverId);
+        return bridge.store;
+      },
       getHfToken: calls.getHfToken,
       setHfToken: calls.setHfToken,
       clearHfToken: calls.clearHfToken,
@@ -1384,6 +1392,9 @@ describe('ModelsScreen explore', () => {
 
     await click(button);
     expect(q('models-pull-dialog-size')?.textContent).toContain('491 MB download');
+    expect(q('models-pull-dialog-path')?.dataset.state).toBe('confirmed');
+    expect(q('models-pull-dialog-path')?.textContent).toBe('Saved to /home/me/.ollama/models. 214.7 GB free.');
+    expect(calls.getStoreLocation).toHaveBeenCalledWith(undefined);
     await click(q('models-pull-dialog-cancel-btn'));
     expect(q('models-pull-dialog')).toBeNull();
     expect(calls.pull).not.toHaveBeenCalled();
@@ -1742,8 +1753,50 @@ describe('ModelsScreen servers', () => {
     await click(q('models-explore-result-row'));
     await click(q('models-build-pull-btn'));
     expect(q('models-pull-dialog-server')?.textContent).toContain('Desktop cannot see how much free space gpu box has');
+    expect(calls.getStoreLocation).toHaveBeenLastCalledWith('gpu');
     await click(q('models-pull-dialog-confirm-btn'));
     expect(calls.pull).toHaveBeenCalledWith(expect.objectContaining({ repo: REPO, serverId: 'gpu' }));
+  });
+
+  it("names a saved server's model folder when its Ollama shows it, and says so plainly when not", async () => {
+    bridge.store = { path: '/var/lib/ollama/models', source: 'runtime', freeBytes: null };
+    await mount();
+    await pickServer('gpu');
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-path')?.textContent).toBe('Saved on gpu box in /var/lib/ollama/models.');
+    await click(q('models-pull-dialog-cancel-btn'));
+
+    bridge.store = { path: null, source: null, freeBytes: null };
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-path')?.textContent).toBe('Saved with the other models on gpu box.');
+    expect(calls.pull).not.toHaveBeenCalled();
+  });
+
+  it("marks Ollama's default folder as a default, and warns when this computer is short of space", async () => {
+    bridge.store = { path: '/home/me/.ollama/models', source: 'default', freeBytes: 100_000_000 };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    const line = q('models-pull-dialog-path');
+    expect(line?.dataset.state).toBe('default');
+    expect(line?.textContent).toBe(
+      "Saved to Ollama's model folder, /home/me/.ollama/models unless Ollama is set to use another one. 100 MB free, which is not enough for this download."
+    );
+  });
+
+  it("says so when this computer's Ollama keeps its models somewhere this disk does not have", async () => {
+    bridge.store = { path: '/root/.ollama/models', source: 'elsewhere', freeBytes: null };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    const line = q('models-pull-dialog-path');
+    expect(line?.dataset.state).toBe('elsewhere');
+    expect(line?.textContent).toContain('/root/.ollama/models as Ollama reports it');
+    expect(line?.textContent).not.toContain('free');
   });
 
   it('shows no pull or remove controls for a Chat only server', async () => {
