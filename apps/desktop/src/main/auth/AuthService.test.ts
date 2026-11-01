@@ -154,6 +154,29 @@ describe('AuthService', () => {
     service.dispose();
   });
 
+  it('opens the plain verification page when the server omits verification_uri_complete', async () => {
+    process.env[BAKED] = HOSTED;
+    const device = fakeDeviceFlow({
+      initiateDeviceFlow: vi.fn().mockResolvedValue({
+        device_code: 'device-code',
+        user_code: 'WDJB-MJHT',
+        verification_uri: `${HOSTED}/activate`,
+        expires_in: 600,
+        interval: 5,
+      }),
+    });
+    const { service, states, openExternal } = build({ device });
+
+    await service.initialize();
+    await service.signIn();
+
+    expect(openExternal).toHaveBeenCalledWith(`${HOSTED}/activate`);
+    expect(states.find(state => state.status === 'awaiting-approval')?.pending?.verificationUriComplete).toBe(
+      `${HOSTED}/activate`
+    );
+    service.dispose();
+  });
+
   it('surfaces the browser handoff failing without failing the sign-in', async () => {
     process.env[BAKED] = HOSTED;
     const { service, states } = build({
