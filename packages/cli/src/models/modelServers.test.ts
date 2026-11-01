@@ -6,7 +6,10 @@ import { readDesktopModelServers } from '@bike4mind/local-models/servers';
 import {
   findModelServer,
   loadModelServers,
+  loginHint,
   needsCredential,
+  resolveServerTarget,
+  serverAddressLabel,
   serverCredential,
   validateSecret,
   type CliModelServer,
@@ -108,5 +111,36 @@ describe('findModelServer', () => {
     expect(findModelServer(servers, 'gpu')?.id).toBe('b');
     expect(findModelServer(servers, 'Gpu')?.id).toBe('a');
     expect(findModelServer(servers, 'x')).toBeUndefined();
+  });
+});
+
+describe('loginHint', () => {
+  it('quotes a name with a space so the pasted command logs in to that server', async () => {
+    const { servers } = await loaded([stored({ id: 'a', name: 'gpu box' }), stored({ id: 'b', name: 'gpu' })]);
+    expect(loginHint(servers[0])).toBe("b4m models servers login 'gpu box'");
+    expect(loginHint(servers[1])).toBe('b4m models servers login gpu');
+  });
+});
+
+describe('serverAddressLabel', () => {
+  it('shows a usable address and hides one the CLI cannot parse', async () => {
+    const { servers } = await loaded([
+      stored({ id: 'a' }),
+      stored({ id: 'b', name: 'odd', transport: { type: 'http', baseUrl: 'https://h.example/?key=SECRET' } }),
+    ]);
+    expect(serverAddressLabel(servers[0])).toContain('10.0.0.5:11434');
+    expect(serverAddressLabel(servers[1])).not.toContain('SECRET');
+  });
+});
+
+describe('resolveServerTarget', () => {
+  it('redacts the credential from an unreachable-server error', async () => {
+    const { servers } = await loaded([stored({})]);
+    const echo = async () => {
+      throw new Error('upstream said: Bearer tok-SECRET-123 is wrong');
+    };
+    const failure = await resolveServerTarget(servers[0], 'tok-SECRET-123', echo).catch((error: Error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).not.toContain('tok-SECRET-123');
   });
 });

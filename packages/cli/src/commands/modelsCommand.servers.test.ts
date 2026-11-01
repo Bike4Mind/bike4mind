@@ -12,6 +12,7 @@ import {
   type Handler,
 } from '@bike4mind/local-models/testing';
 import { loadCuratedManifest, type HardwareProfile } from '@bike4mind/local-models';
+import { CancelledError } from '../models/localModels.js';
 import { loadModelServers } from '../models/modelServers.js';
 import { readSecretOnTerminal, runModelsCommand, type ModelsDeps, type ModelServersDeps } from './modelsCommand.js';
 
@@ -616,6 +617,14 @@ describe('readSecretOnTerminal', () => {
     expect(await answer).toBe('s3cret-value');
     expect(written.join('')).toContain('Token: ');
     expect(written.join('')).not.toContain('s3cret');
+  });
+
+  it('cancels when the input closes before a line is entered (Ctrl+D)', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const answer = readSecretOnTerminal('Token: ', new AbortController().signal, { input, output });
+    input.end();
+    await expect(answer).rejects.toBeInstanceOf(CancelledError);
   });
 });
 

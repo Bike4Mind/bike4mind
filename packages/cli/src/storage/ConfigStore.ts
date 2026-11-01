@@ -961,7 +961,7 @@ export class ConfigStore {
           // pass still applies to the current session and the stamp simply stays behind, so
           // the migration retries on the next launch rather than being silently skipped.
           try {
-            await fs.writeFile(this.configPath, JSON.stringify(rawConfig, null, 2), 'utf-8');
+            await this.writeConfigFile(JSON.stringify(rawConfig, null, 2));
           } catch {
             // Intentionally ignored - see above.
           }
@@ -1372,11 +1372,41 @@ export class ConfigStore {
   /** The saved credentials as the file has them now, not as this store loaded them. */
   async readModelServerCredentials(): Promise<Record<string, { secret: string }>> {
     try {
-      const raw: unknown = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
-      const parsed = z.object({ modelServerCredentials: CliConfigSchema.shape.modelServerCredentials }).safeParse(raw);
-      return (parsed.success && parsed.data.modelServerCredentials) || {};
-    } catch {
+      return await this.readModelServerCredentialsStrict();
+    } catch (error) {
+      logger.debug(
+        `Could not read model server credentials: ${error instanceof Error ? error.message : String(error)}`
+      );
       return {};
+    }
+  }
+
+  /** Throws when the file exists but cannot be read, so a write never replaces credentials it failed to read. */
+  private async readModelServerCredentialsStrict(): Promise<Record<string, { secret: string }>> {
+    let text: string;
+    try {
+      text = await fs.readFile(this.configPath, 'utf-8');
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return {};
+      throw error;
+    }
+    const raw: unknown = JSON.parse(text);
+    const parsed = z.object({ modelServerCredentials: CliConfigSchema.shape.modelServerCredentials }).safeParse(raw);
+    if (!parsed.success) throw new Error(`${this.configPath} has malformed model server credentials.`);
+    return parsed.data.modelServerCredentials ?? {};
+  }
+
+  /** Writes through a 0600 temp file and a rename, so a reader in another process never sees a half-written file. */
+  private async writeConfigFile(contents: string): Promise<void> {
+    // Rename onto the link's target, so a symlinked config stays a symlink.
+    const target = await fs.realpath(this.configPath).catch(() => this.configPath);
+    const temp = `${target}.${process.pid}.${uuidv4()}.tmp`;
+    try {
+      await fs.writeFile(temp, contents, { encoding: 'utf-8', mode: 0o600 });
+      await fs.rename(temp, target);
+    } catch (error) {
+      await fs.rm(temp, { force: true });
+      throw error;
     }
   }
 
@@ -1390,13 +1420,13 @@ export class ConfigStore {
   /** Read-modify-write against the file, so a login in another terminal is not undone. */
   async setModelServerCredential(serverId: string, secret: string): Promise<void> {
     await this.reloadFromDisk();
-    const current = await this.readModelServerCredentials();
+    const current = await this.readModelServerCredentialsStrict();
     await this.save({ modelServerCredentials: { ...current, [serverId]: { secret } } });
   }
 
   async clearModelServerCredential(serverId: string): Promise<void> {
     await this.reloadFromDisk();
-    const { [serverId]: removed, ...rest } = await this.readModelServerCredentials();
+    const { [serverId]: removed, ...rest } = await this.readModelServerCredentialsStrict();
     void removed;
     await this.save({ modelServerCredentials: rest });
   }
@@ -1475,7 +1505,7 @@ export class ConfigStore {
 
     try {
       // Persist ONLY the global layer, never the merged effective config.
-      await fs.writeFile(this.configPath, JSON.stringify(this.globalConfig, null, 2), 'utf-8');
+      await this.writeConfigFile(JSON.stringify(this.globalConfig, null, 2));
 
       // Set secure permissions (0600 - only owner can read/write)
       // This protects auth tokens and API keys from other users

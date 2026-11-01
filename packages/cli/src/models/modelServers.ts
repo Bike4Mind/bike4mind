@@ -24,6 +24,7 @@ import {
   type SharedServerRecord,
 } from '@bike4mind/local-models/servers';
 import { clean, type RuntimeTarget } from './localModels.js';
+import { shellWord } from '../utils/shellWord.js';
 
 export type CliModelServer = SharedServerRecord & { source: 'desktop' | 'cli' };
 
@@ -80,7 +81,12 @@ export function needsCredential(server: CliModelServer, secret: string | undefin
 }
 
 export function loginHint(server: CliModelServer): string {
-  return `b4m models servers login ${clean(server.name)}`;
+  return `b4m models servers login ${shellWord(clean(server.name))}`;
+}
+
+/** The address to show; one the CLI cannot parse is not echoed, since it may carry a secret in its query. */
+export function serverAddressLabel(server: CliModelServer): string {
+  return parseServerAddress(server.transport.baseUrl)?.baseUrl ?? 'unusable address';
 }
 
 export function serverFetch(server: CliModelServer, secret: string | undefined): FetchLike {
@@ -157,7 +163,9 @@ export async function resolveServerTarget(
       throw new Error(`${refused} Run: ${loginHint(server)}`);
     }
     if (outcome.forbidden) throw new Error(clean(forbiddenMessage(server.name)));
-    throw new Error(clean(outcome.error ?? `Could not reach ${server.name}.`));
+    const redactor = serverRedactor(server, secret);
+    const reason = outcome.error ?? `Could not reach ${server.name}.`;
+    throw new Error(clean(redactor ? redactor.redact(reason) : reason));
   }
   const redactor = serverRedactor(server, secret);
   return {

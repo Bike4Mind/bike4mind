@@ -29,6 +29,22 @@ describe('ConfigStore modelServerCredentials', () => {
     expect((await store.load()).modelServerCredentials).toEqual({ abc123: { secret: 'secret-one' } });
   });
 
+  it('creates a new config file readable only by the owner and leaves no temp file behind', async () => {
+    const store = new ConfigStore(configPath);
+    await store.setModelServerCredential('abc123', 'secret-one');
+    expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+    expect(await fs.readdir(path.dirname(configPath))).toEqual(['config.json']);
+  });
+
+  it('refuses to save when the file cannot be read, instead of dropping the saved credentials', async () => {
+    const store = new ConfigStore(configPath);
+    await store.setModelServerCredential('a', 'one');
+    await fs.writeFile(configPath, '{"modelServerCredentials": {"a": {"secret": "one"}', 'utf-8');
+    await expect(store.setModelServerCredential('b', 'two')).rejects.toThrow();
+    await expect(store.clearModelServerCredential('a')).rejects.toThrow();
+    expect(await fs.readFile(configPath, 'utf-8')).toContain('"one"');
+  });
+
   it('clears one credential and keeps the others', async () => {
     const store = new ConfigStore(configPath);
     await store.setModelServerCredential('a', 'one');

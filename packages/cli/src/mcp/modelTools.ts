@@ -49,6 +49,7 @@ import {
   type PullPlan,
   type RuntimeTarget,
 } from '../models/localModels.js';
+import { shellWord } from '../utils/shellWord.js';
 import { FIT_LABELS, fitForPlan, machineReader, type MachineReader, type ModelFit } from '../models/fit.js';
 import {
   defaultOn,
@@ -226,8 +227,6 @@ function pullElicitation(summary: PullSummary): ElicitRequestFormParams {
     },
   };
 }
-
-const shellWord = (word: string) => (/^[\w.:/@-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
 
 /** The `b4m models` command that does the same on the same runtime, asking the user in their terminal. */
 function terminalCommand(target: RuntimeTarget, subcommand: 'pull' | 'rm', subject: string, flags = ''): string {

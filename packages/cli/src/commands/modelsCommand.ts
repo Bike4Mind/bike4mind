@@ -44,6 +44,7 @@ import {
   findModelServer,
   loadModelServers,
   loginHint,
+  serverAddressLabel,
   needsCredential,
   noSuchServer,
   productLabel,
@@ -903,7 +904,7 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
             name: server.name,
             kind: server.kind,
             product,
-            address: server.transport.baseUrl,
+            address: serverAddressLabel(server),
             access: server.access,
             source: server.source,
             credentials,
@@ -927,7 +928,7 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
     ...rows.map(({ server, product, credentials, status, notes }) => [
       clean(server.name),
       product,
-      clean(server.transport.baseUrl),
+      clean(serverAddressLabel(server)),
       server.access === 'manage' ? 'Manage' : 'Chat only',
       credentials === 'needed' ? `needed: ${loginHint(server)}` : credentials,
       status.text,
@@ -1146,7 +1147,14 @@ export function readSecretOnTerminal(
       cancel();
     });
     signal.addEventListener('abort', cancel, { once: true });
+    // Ctrl+D on an empty line closes readline without answering the question.
+    const onClose = () => {
+      signal.removeEventListener('abort', cancel);
+      reject(new CancelledError());
+    };
+    rl.once('close', onClose);
     rl.question(prompt, answer => {
+      rl.off('close', onClose);
       signal.removeEventListener('abort', cancel);
       rl.close();
       streams.output.write('\n');
