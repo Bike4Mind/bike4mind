@@ -68,6 +68,7 @@ export const DEFAULT_MANIFEST = {
   SECRET_ENCRYPTION_KEY_PREVIOUS: { kind: 'secret', optional: true },
   SESSION_SECRET: { kind: 'secret' },
   SLACK_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },
+  SLACK_COST_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_WEBHOOK_URL: { kind: 'secret', optional: true },
   STRIPE_PUBLISHABLE_KEY: { kind: 'secret', optional: true },

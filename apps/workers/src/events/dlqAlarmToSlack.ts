@@ -5,9 +5,10 @@
  * non-DLQ operational alarms such as feedbackDeliveryFailures - see infra/alarms.ts)
  * and posts a plain-English message to Slack when a subscribed alarm changes state.
  *
- * ALARM transitions get the full explanation; OK (resolved) transitions are posted
- * as a short resolved line. INSUFFICIENT_DATA is skipped.
- * Alarms go to SLACK_ALARMS_WEBHOOK_URL when set, otherwise the error-reporting channel.
+ * ALARM transitions get the full explanation; an OK that follows an ALARM is posted as a short
+ * resolved line. INSUFFICIENT_DATA, and an OK that follows it, are skipped.
+ * Cost alarms go to SLACK_COST_ALARMS_WEBHOOK_URL when set; everything else, and cost alarms
+ * without it, go to SLACK_ALARMS_WEBHOOK_URL when set, otherwise the error-reporting channel.
  * Production page-level alarms carry the mention token from the per-stage SSM parameter.
  * Alarms whose catalog entry asks for a detail get it loaded first (young-account spend lists
  * the accounts behind the breach); a failed load posts the alarm with a note instead.
@@ -18,6 +19,7 @@ import { Resource } from 'sst';
 
 import {
   alarmCatalogEntry,
+  alarmCategory,
   appUrlFromEnv,
   formatAlarmSlackMessage,
   isCloudWatchAlarm,
@@ -61,6 +63,6 @@ export const handler = async (event: SNSEvent): Promise<void> => {
     const message =
       details.length > 0 ? (formatAlarmSlackMessage(payload, stage, { ...options, details }) ?? bare) : bare;
 
-    await postAlarmToSlack(resolveAlarmWebhookUrl(Resource), message);
+    await postAlarmToSlack(resolveAlarmWebhookUrl(Resource, alarmCategory(payload, stage)), message);
   }
 };

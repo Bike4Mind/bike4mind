@@ -1,9 +1,9 @@
 /**
  * Service Health -> Slack Notifier
  *
- * Fans two different signals about long-running ECS services into Slack
- * (SLACK_ALARMS_WEBHOOK_URL when set, otherwise the error-reporting channel),
- * both arriving on one SNS topic:
+ * Fans two different signals about long-running ECS services into Slack, routed by alarm
+ * category the same way as the general relay (see resolveAlarmWebhookUrl), both arriving on
+ * one SNS topic:
  *
  *  1. A CloudWatch "no running tasks" alarm (see infra/serviceHealthAlarms.ts).
  *  2. An ECS Task State Change event forwarded by EventBridge, filtered to
@@ -12,14 +12,16 @@
  *
  * The two are deliberately complementary: the event fires within seconds but only
  * when ECS actually attempts a start, while the alarm catches a service sitting at
- * zero tasks for any reason at all. Alarm ALARM transitions get the full explanation and OK
- * (resolved) transitions a short resolved line; INSUFFICIENT_DATA is skipped.
+ * zero tasks for any reason at all. Alarm ALARM transitions get the full explanation and an OK
+ * that follows an ALARM a short resolved line; INSUFFICIENT_DATA, and an OK that follows it,
+ * are skipped.
  */
 
 import type { SNSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
 
 import {
+  alarmCategory,
   appUrlFromEnv,
   composeAlarmMessage,
   escapeMrkdwn,
@@ -28,6 +30,7 @@ import {
   postAlarmToSlack,
   resolveAlarmWebhookUrl,
   stageLabel,
+  type AlarmCategory,
   type FormatOptions,
   type SlackAlarmMessage,
 } from './alarmSlackMessage';
@@ -63,9 +66,16 @@ function isEcsTaskStateChange(payload: unknown): payload is EcsTaskStateChangeEv
   return (payload as EcsTaskStateChangeEvent)?.['detail-type'] === 'ECS Task State Change';
 }
 
-/** Returns the Slack message for a payload, or null when it should not be reported. */
-function formatMessage(payload: unknown, stage: string, options: FormatOptions): SlackAlarmMessage | null {
-  if (isCloudWatchAlarm(payload)) return formatAlarmSlackMessage(payload, stage, options);
+/** Returns the Slack message for a payload and its category, or null when it should not be reported. */
+function formatMessage(
+  payload: unknown,
+  stage: string,
+  options: FormatOptions
+): { message: SlackAlarmMessage; category: AlarmCategory } | null {
+  if (isCloudWatchAlarm(payload)) {
+    const message = formatAlarmSlackMessage(payload, stage, options);
+    return message ? { message, category: alarmCategory(payload, stage) } : null;
+  }
 
   if (isEcsTaskStateChange(payload)) {
     const detail = payload.detail ?? {};
@@ -75,7 +85,7 @@ function formatMessage(payload: unknown, stage: string, options: FormatOptions):
     const containerReason = detail.containers?.find(c => c.reason)?.reason;
     const service = detail.group ?? 'unknown service';
     const reason = containerReason ?? detail.stoppedReason ?? 'not reported';
-    return composeAlarmMessage({
+    const message = composeAlarmMessage({
       stage,
       level: 'page',
       title: `A background service failed to start: ${service}`,
@@ -85,9 +95,10 @@ function formatMessage(payload: unknown, stage: string, options: FormatOptions):
         `*Task*\n${escapeMrkdwn(detail.taskArn ?? 'unknown')}`,
         '*What to do*\nCheck the service events in ECS; the reason above is usually enough to name the fix (image pull, missing secret).',
       ],
-      context: [escapeMrkdwn(stageLabel(stage)), 'level page', 'ecs task failed to start'],
+      context: [escapeMrkdwn(stageLabel(stage)), 'level page', 'category infra', 'ecs task failed to start'],
       summary: reason,
     });
+    return { message, category: 'infra' };
   }
 
   return null;
@@ -104,9 +115,9 @@ export const handler = async (event: SNSEvent): Promise<void> => {
       continue;
     }
 
-    const message = formatMessage(payload, Resource.App.stage, options);
-    if (!message) continue;
+    const formatted = formatMessage(payload, Resource.App.stage, options);
+    if (!formatted) continue;
 
-    await postAlarmToSlack(resolveAlarmWebhookUrl(Resource), message);
+    await postAlarmToSlack(resolveAlarmWebhookUrl(Resource, formatted.category), formatted.message);
   }
 };

@@ -136,7 +136,11 @@ if (isMonitoredStage) {
   dlqAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
-      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
+      link: [
+        secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
+        secrets.SLACK_ALARMS_WEBHOOK_URL,
+        secrets.SLACK_COST_ALARMS_WEBHOOK_URL,
+      ],
       // Room for the Logs Insights query (25 s budget) ahead of the Slack post.
       timeout: '60 seconds',
       environment: {

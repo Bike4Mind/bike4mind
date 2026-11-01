@@ -341,6 +341,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "SLACK_COST_ALARMS_WEBHOOK_URL": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "SLACK_APP_ID": {
       "type": "sst.sst.Secret"
       "value": string
