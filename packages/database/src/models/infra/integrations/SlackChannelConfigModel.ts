@@ -115,6 +115,14 @@ class SlackChannelConfigRepository
     return this.model.find({ slackTeamId, apiPostEnabled: true }).sort({ updatedAt: -1 });
   }
 
+  async disableApiPostingByChannelId(channelId: string, slackTeamId: string) {
+    return this.model.findOneAndUpdate(
+      { channelId, slackTeamId, apiPostEnabled: true },
+      { $set: { apiPostEnabled: false, apiPostAllowedKeyIds: [] }, $unset: { apiPostOrganizationId: '' } },
+      { new: false }
+    );
+  }
+
   async clearApiPostingBySlackTeamId(slackTeamId: string, keepOrganizationId?: string): Promise<string[]> {
     const filter = {
       slackTeamId,

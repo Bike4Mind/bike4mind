@@ -66,5 +66,10 @@ export interface ISlackChannelConfigRepository extends IBaseRepository<ISlackCha
    * Turns API posting off for every channel of a workspace (on disconnect or a change of hands),
    * keeping any opt-in granted by `keepOrganizationId`. Returns the channel ids it turned off.
    */
+  /**
+   * Turns API posting off for a channel of this workspace, never creating a record. Returns the record
+   * as it was if posting was on, otherwise null (no record, another workspace's, or already off).
+   */
+  disableApiPostingByChannelId(channelId: string, slackTeamId: string): Promise<ISlackChannelConfigDocument | null>;
   clearApiPostingBySlackTeamId(slackTeamId: string, keepOrganizationId?: string): Promise<string[]>;
 }

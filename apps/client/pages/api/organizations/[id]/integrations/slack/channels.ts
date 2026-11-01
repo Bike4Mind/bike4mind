@@ -77,18 +77,41 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const workspace = await orgSlackWorkspaceRepository.findByOrganizationIdWithToken(org.id);
       if (!workspace) throw new NotFoundError('No Slack workspace connected');
 
-      // Turning posting off needs no Slack round trip; turning it on must name a channel of this workspace.
-      let botIsMember: boolean | undefined;
-      if (update.apiPostEnabled) {
-        const botToken = decryptToken(workspace.slackBotToken);
-        if (!botToken) throw new ConflictError('The Slack workspace connection has no bot token. Reconnect Slack.');
-        const channel = await lookUpChannel(botToken, update.channelId);
-        if (!channel.found) {
-          throw new NotFoundError(
-            'Channel not found in the connected Slack workspace. For a private channel, invite the bot first.'
-          );
-        }
-        botIsMember = channel.botIsMember;
+      const audit = (before: ApiPostingView | null) =>
+        recordAdminActionFromRequest(req, {
+          action: 'org.slack_channel_api_posting.updated',
+          actorScope: 'organization',
+          target: { kind: 'organization', id: org.id, displayName: org.name },
+          summary: `${update.apiPostEnabled ? 'enabled' : 'disabled'} Slack API posting for channel ${update.channelId}`,
+          changes: [
+            { field: 'apiPostEnabled', before: before?.apiPostEnabled === true, after: update.apiPostEnabled },
+            {
+              field: 'apiPostAllowedKeyIds',
+              before: before?.apiPostAllowedKeyIds ?? [],
+              after: update.apiPostEnabled ? (update.apiPostAllowedKeyIds ?? []) : [],
+            },
+          ],
+        });
+
+      // Turning posting off needs no Slack round trip and never creates a record. The answer is the same
+      // whether the channel had posting on, had no record, or belongs to another workspace.
+      if (!update.apiPostEnabled) {
+        const before = await slackChannelConfigRepository.disableApiPostingByChannelId(
+          update.channelId,
+          workspace.slackTeamId
+        );
+        if (before) await audit(before);
+        return res.json({ channelId: update.channelId, apiPostEnabled: false, apiPostAllowedKeyIds: [] });
+      }
+
+      // Turning it on must name a channel of this workspace.
+      const botToken = decryptToken(workspace.slackBotToken);
+      if (!botToken) throw new ConflictError('The Slack workspace connection has no bot token. Reconnect Slack.');
+      const channel = await lookUpChannel(botToken, update.channelId);
+      if (!channel.found) {
+        throw new NotFoundError(
+          'Channel not found in the connected Slack workspace. For a private channel, invite the bot first.'
+        );
       }
 
       const before = await slackChannelConfigRepository.findByChannelId(update.channelId);
@@ -100,23 +123,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
         configuredBy: req.user!.id,
       });
       if (!saved) throw new ConflictError('This channel is configured under a different Slack workspace.');
+      await audit(before?.slackTeamId === workspace.slackTeamId ? before : null);
 
-      await recordAdminActionFromRequest(req, {
-        action: 'org.slack_channel_api_posting.updated',
-        actorScope: 'organization',
-        target: { kind: 'organization', id: org.id, displayName: org.name },
-        summary: `${update.apiPostEnabled ? 'enabled' : 'disabled'} Slack API posting for channel ${update.channelId}`,
-        changes: [
-          { field: 'apiPostEnabled', before: before?.apiPostEnabled === true, after: update.apiPostEnabled },
-          {
-            field: 'apiPostAllowedKeyIds',
-            before: before?.apiPostAllowedKeyIds ?? [],
-            after: update.apiPostAllowedKeyIds ?? [],
-          },
-        ],
-      });
-
-      return res.json({ ...toView(saved), ...(botIsMember !== undefined && { botIsMember }) });
+      return res.json({ ...toView(saved), botIsMember: channel.botIsMember });
     })
   );
 

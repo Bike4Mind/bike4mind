@@ -32,6 +32,7 @@ const mockFindWorkspaceWithToken = vi.fn();
 const mockFindEnabled = vi.fn();
 const mockFindConfig = vi.fn();
 const mockSetApiPosting = vi.fn();
+const mockDisableApiPosting = vi.fn();
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: { findById: (...a: unknown[]) => mockOrgFindById(...a) },
   orgSlackWorkspaceRepository: {
@@ -42,6 +43,7 @@ vi.mock('@bike4mind/database/infra', () => ({
     findApiPostEnabledBySlackTeamId: (...a: unknown[]) => mockFindEnabled(...a),
     findByChannelId: (...a: unknown[]) => mockFindConfig(...a),
     setApiPostingByChannelId: (...a: unknown[]) => mockSetApiPosting(...a),
+    disableApiPostingByChannelId: (...a: unknown[]) => mockDisableApiPosting(...a),
   },
 }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository: {} }));
@@ -102,6 +104,7 @@ beforeEach(() => {
     channelId,
     ...update,
   }));
+  mockDisableApiPosting.mockResolvedValue(null);
   mockConversationsInfo.mockResolvedValue({ ok: true, channel: { id: CHANNEL, is_member: true } });
   mockRecordAdminAction.mockResolvedValue(undefined);
 });
@@ -146,14 +149,41 @@ describe('PUT /api/organizations/[id]/integrations/slack/channels', () => {
     expect(res._getJSONData()).toMatchObject({ apiPostEnabled: true, botIsMember: false });
   });
 
-  it('disables a channel without asking Slack', async () => {
+  it("disables a channel of the org's workspace without asking Slack, and audits it", async () => {
+    mockDisableApiPosting.mockResolvedValue({
+      channelId: CHANNEL,
+      slackTeamId: TEAM,
+      apiPostEnabled: true,
+      apiPostAllowedKeyIds: [KEY_ID],
+    });
     const { req, res } = makeReq(owner, { channelId: CHANNEL, apiPostEnabled: false });
 
     await routeHandlers.PUT(req, res);
 
     expect(mockConversationsInfo).not.toHaveBeenCalled();
-    expect(mockSetApiPosting).toHaveBeenCalledWith(CHANNEL, expect.objectContaining({ apiPostEnabled: false }));
+    expect(mockDisableApiPosting).toHaveBeenCalledWith(CHANNEL, TEAM);
+    expect(mockSetApiPosting).not.toHaveBeenCalled();
     expect(res._getJSONData()).toEqual({ channelId: CHANNEL, apiPostEnabled: false, apiPostAllowedKeyIds: [] });
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        changes: [
+          { field: 'apiPostEnabled', before: true, after: false },
+          { field: 'apiPostAllowedKeyIds', before: [KEY_ID], after: [] },
+        ],
+      })
+    );
+  });
+
+  it('answers a disable for an unknown or foreign channel with the same 200, creating and auditing nothing', async () => {
+    const { req, res } = makeReq(owner, { channelId: CHANNEL, apiPostEnabled: false });
+
+    await routeHandlers.PUT(req, res);
+
+    expect(mockSetApiPosting).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ channelId: CHANNEL, apiPostEnabled: false, apiPostAllowedKeyIds: [] });
+    expect(mockRecordAdminAction).not.toHaveBeenCalled();
   });
 
   it('404s a non-owner and changes nothing', async () => {

@@ -136,4 +136,19 @@ describe('SlackChannelConfigModel - API posting opt-in', () => {
     expect((await slackChannelConfigRepository.findByChannelId('C1'))?.apiPostOrganizationId).toBeUndefined();
     expect((await slackChannelConfigRepository.findByChannelId('C3'))?.apiPostEnabled).toBe(true);
   });
+
+  it('disables only an enabled record of the same workspace, and never creates one', async () => {
+    expect(await slackChannelConfigRepository.disableApiPostingByChannelId('C-none', 'T-team-a')).toBeNull();
+    expect(await slackChannelConfigRepository.findByChannelId('C-none')).toBeFalsy();
+
+    await slackChannelConfigRepository.setApiPostingByChannelId('C1', update);
+    expect(await slackChannelConfigRepository.disableApiPostingByChannelId('C1', 'T-team-b')).toBeNull();
+    expect((await slackChannelConfigRepository.findByChannelId('C1'))?.apiPostEnabled).toBe(true);
+
+    const before = await slackChannelConfigRepository.disableApiPostingByChannelId('C1', 'T-team-a');
+    expect(before?.apiPostEnabled).toBe(true);
+    const after = await slackChannelConfigRepository.findByChannelId('C1');
+    expect(after).toMatchObject({ apiPostEnabled: false, apiPostAllowedKeyIds: [] });
+    expect(after?.apiPostOrganizationId).toBeUndefined();
+  });
 });
