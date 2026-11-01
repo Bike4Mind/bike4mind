@@ -94,6 +94,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const before = await slackChannelConfigRepository.findByChannelId(update.channelId);
       const saved = await slackChannelConfigRepository.setApiPostingByChannelId(update.channelId, {
         slackTeamId: workspace.slackTeamId,
+        organizationId: org.id,
         apiPostEnabled: update.apiPostEnabled,
         apiPostAllowedKeyIds: update.apiPostAllowedKeyIds ?? [],
         configuredBy: req.user!.id,

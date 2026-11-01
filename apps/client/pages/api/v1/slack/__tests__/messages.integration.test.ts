@@ -170,7 +170,12 @@ beforeEach(() => {
   mockFindKey.mockResolvedValue({ id: KEY_ID, name: 'factory' });
   mockKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: {} });
   mockSlackLimit.mockImplementation((_options, _req, _res, next) => next());
-  mockFindConfig.mockResolvedValue({ channelId: CHANNEL, slackTeamId: TEAM, apiPostEnabled: true });
+  mockFindConfig.mockResolvedValue({
+    channelId: CHANNEL,
+    slackTeamId: TEAM,
+    apiPostEnabled: true,
+    apiPostOrganizationId: ORG,
+  });
   mockFindWorkspace.mockResolvedValue({ organizationId: ORG, slackTeamId: TEAM, slackBotToken: 'enc-token' });
   mockMemberOrgIds.mockResolvedValue([ORG]);
   mockPostMessage.mockResolvedValue({ ok: true, ts: TS, channel: CHANNEL });
@@ -271,6 +276,7 @@ describe('POST /api/v1/slack/messages', () => {
       channelId: CHANNEL,
       slackTeamId: TEAM,
       apiPostEnabled: true,
+      apiPostOrganizationId: ORG,
       apiPostAllowedKeyIds: ['other-key'],
     });
     expect((await post(message()))._getStatusCode()).toBe(403);
@@ -279,6 +285,7 @@ describe('POST /api/v1/slack/messages', () => {
       channelId: CHANNEL,
       slackTeamId: TEAM,
       apiPostEnabled: true,
+      apiPostOrganizationId: ORG,
       apiPostAllowedKeyIds: ['other-key', KEY_ID],
     });
     expect((await post(message()))._getStatusCode()).toBe(200);
@@ -286,6 +293,20 @@ describe('POST /api/v1/slack/messages', () => {
 
   it("refuses a channel in another organization's workspace (403)", async () => {
     mockFindWorkspace.mockResolvedValue({ organizationId: 'org-2', slackTeamId: TEAM, slackBotToken: 'enc' });
+    const res = await post(message());
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toMatch(/not enabled for API posting/);
+    expect(mockPostMessage).not.toHaveBeenCalled();
+  });
+
+  it('refuses an opt-in granted by an organization other than the one the workspace is connected to (403)', async () => {
+    mockFindConfig.mockResolvedValue({
+      channelId: CHANNEL,
+      slackTeamId: TEAM,
+      apiPostEnabled: true,
+      apiPostOrganizationId: 'org-previous',
+    });
     const res = await post(message());
 
     expect(res._getStatusCode()).toBe(403);

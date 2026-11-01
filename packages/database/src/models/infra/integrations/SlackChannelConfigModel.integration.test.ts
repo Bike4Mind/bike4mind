@@ -12,6 +12,7 @@ let server: Awaited<ReturnType<typeof createMongoServer>>;
 
 const update = {
   slackTeamId: 'T-team-a',
+  organizationId: 'org-a',
   apiPostEnabled: true,
   apiPostAllowedKeyIds: ['key-1'],
   configuredBy: 'owner-1',
@@ -112,5 +113,27 @@ describe('SlackChannelConfigModel - API posting opt-in', () => {
     });
 
     expect(await slackChannelConfigRepository.findByChannelId('C1')).toMatchObject({ apiPostEnabled: false });
+  });
+
+  it('records the granting organization on enable', async () => {
+    const saved = await slackChannelConfigRepository.setApiPostingByChannelId('C1', update);
+    expect(saved?.apiPostOrganizationId).toBe('org-a');
+  });
+
+  it("clears a workspace's opt-ins on disconnect, or only other organizations' on reconnect", async () => {
+    await slackChannelConfigRepository.setApiPostingByChannelId('C1', update);
+    await slackChannelConfigRepository.setApiPostingByChannelId('C2', { ...update, organizationId: 'org-old' });
+    await slackChannelConfigRepository.setApiPostingByChannelId('C3', { ...update, slackTeamId: 'T-team-b' });
+
+    expect(await slackChannelConfigRepository.clearApiPostingBySlackTeamId('T-team-a', 'org-a')).toEqual(['C2']);
+    expect((await slackChannelConfigRepository.findByChannelId('C1'))?.apiPostEnabled).toBe(true);
+
+    expect(await slackChannelConfigRepository.clearApiPostingBySlackTeamId('T-team-a')).toEqual(['C1']);
+    expect(await slackChannelConfigRepository.findByChannelId('C1')).toMatchObject({
+      apiPostEnabled: false,
+      apiPostAllowedKeyIds: [],
+    });
+    expect((await slackChannelConfigRepository.findByChannelId('C1'))?.apiPostOrganizationId).toBeUndefined();
+    expect((await slackChannelConfigRepository.findByChannelId('C3'))?.apiPostEnabled).toBe(true);
   });
 });

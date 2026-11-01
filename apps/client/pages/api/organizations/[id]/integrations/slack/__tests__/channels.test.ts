@@ -120,6 +120,7 @@ describe('PUT /api/organizations/[id]/integrations/slack/channels', () => {
     expect(mockConversationsInfo).toHaveBeenCalledWith({ channel: CHANNEL });
     expect(mockSetApiPosting).toHaveBeenCalledWith(CHANNEL, {
       slackTeamId: TEAM,
+      organizationId: ORG,
       apiPostEnabled: true,
       apiPostAllowedKeyIds: [KEY_ID],
       configuredBy: OWNER,

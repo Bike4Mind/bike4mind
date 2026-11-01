@@ -27,11 +27,18 @@ export interface ISlackChannelConfig extends IModelConfig {
   apiPostEnabled?: boolean;
   /** When non-empty, only these API key ids may post here, even with `apiPostEnabled`. */
   apiPostAllowedKeyIds?: string[];
+  /**
+   * The organization whose owner turned API posting on. A post is refused unless it still matches the
+   * organization the workspace is connected to, so an opt-in never outlives a change of hands.
+   */
+  apiPostOrganizationId?: string;
 }
 
 /** The API-posting opt-in fields an org owner sets on a channel. */
 export interface ISlackChannelApiPostingUpdate {
   slackTeamId: string;
+  /** Required when enabling: the organization granting the opt-in. */
+  organizationId?: string;
   apiPostEnabled: boolean;
   apiPostAllowedKeyIds: string[];
   /** B4M user id of the org owner who changed the setting; written only when the config is created. */
@@ -55,4 +62,9 @@ export interface ISlackChannelConfigRepository extends IBaseRepository<ISlackCha
     update: ISlackChannelApiPostingUpdate
   ): Promise<ISlackChannelConfigDocument | null>;
   findApiPostEnabledBySlackTeamId(slackTeamId: string): Promise<ISlackChannelConfigDocument[]>;
+  /**
+   * Turns API posting off for every channel of a workspace (on disconnect or a change of hands),
+   * keeping any opt-in granted by `keepOrganizationId`. Returns the channel ids it turned off.
+   */
+  clearApiPostingBySlackTeamId(slackTeamId: string, keepOrganizationId?: string): Promise<string[]>;
 }

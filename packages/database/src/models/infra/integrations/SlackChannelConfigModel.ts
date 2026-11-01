@@ -24,6 +24,7 @@ const SlackChannelConfigSchema = new Schema<ISlackChannelConfigDocument>(
     githubRepo: { type: String },
     apiPostEnabled: { type: Boolean, default: false },
     apiPostAllowedKeyIds: { type: [String], default: undefined },
+    apiPostOrganizationId: { type: String },
   },
   {
     timestamps: true,
@@ -61,11 +62,11 @@ class SlackChannelConfigRepository
     channelId: string,
     data: Partial<ISlackChannelConfig>
   ): Promise<ISlackChannelConfigDocument & IMongoDocument> {
-    const { apiPostEnabled, apiPostAllowedKeyIds, ...modelConfig } = data;
+    const { apiPostEnabled, apiPostAllowedKeyIds, apiPostOrganizationId, ...modelConfig } = data;
     if (modelConfig.slackTeamId) {
       await this.model.updateOne(
         { channelId, slackTeamId: { $ne: modelConfig.slackTeamId } },
-        { $set: { apiPostEnabled: false, apiPostAllowedKeyIds: [] } }
+        { $set: { apiPostEnabled: false, apiPostAllowedKeyIds: [] }, $unset: { apiPostOrganizationId: '' } }
       );
     }
     const result = await this.model.findOneAndUpdate(
@@ -89,14 +90,14 @@ class SlackChannelConfigRepository
     channelId: string,
     update: ISlackChannelApiPostingUpdate
   ): Promise<(ISlackChannelConfigDocument & IMongoDocument) | null> {
-    const { slackTeamId, apiPostEnabled, apiPostAllowedKeyIds, configuredBy } = update;
+    const { slackTeamId, organizationId, apiPostEnabled, apiPostAllowedKeyIds, configuredBy } = update;
     try {
       // The filter pins slackTeamId, so a channel configured under another workspace misses it and the
       // upsert's insert then collides with the unique channelId index instead of re-homing that config.
       const result = await this.model.findOneAndUpdate(
         { channelId, slackTeamId },
         {
-          $set: { apiPostEnabled, apiPostAllowedKeyIds },
+          $set: { apiPostEnabled, apiPostAllowedKeyIds, apiPostOrganizationId: organizationId },
           $setOnInsert: { channelId, slackTeamId, configuredBy },
         },
         { upsert: true, new: true }
@@ -112,6 +113,21 @@ class SlackChannelConfigRepository
     slackTeamId: string
   ): Promise<(ISlackChannelConfigDocument & IMongoDocument)[]> {
     return this.model.find({ slackTeamId, apiPostEnabled: true }).sort({ updatedAt: -1 });
+  }
+
+  async clearApiPostingBySlackTeamId(slackTeamId: string, keepOrganizationId?: string): Promise<string[]> {
+    const filter = {
+      slackTeamId,
+      apiPostEnabled: true,
+      ...(keepOrganizationId && { apiPostOrganizationId: { $ne: keepOrganizationId } }),
+    };
+    const affected = await this.model.find(filter).select('channelId').lean();
+    if (affected.length === 0) return [];
+    await this.model.updateMany(filter, {
+      $set: { apiPostEnabled: false, apiPostAllowedKeyIds: [] },
+      $unset: { apiPostOrganizationId: '' },
+    });
+    return affected.map(config => config.channelId);
   }
 }
 

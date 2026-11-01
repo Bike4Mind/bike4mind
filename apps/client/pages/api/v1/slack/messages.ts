@@ -7,7 +7,7 @@
  *  2. the channel's SlackChannelConfig has `apiPostEnabled`, and its `apiPostAllowedKeyIds`, when
  *     non-empty, lists this key;
  *  3. the config's workspace is an enabled OrgSlackWorkspace of an org the key's owner is a member
- *     of, and an org-billed key bills that same org.
+ *     of, that same org granted the opt-in, and an org-billed key bills that same org.
  * The org owner turns the opt-in on through
  * pages/api/organizations/[id]/integrations/slack/channels.ts.
  *
@@ -195,6 +195,8 @@ const handler = nextRouteForContract(postSlackMessageContract, {
   const workspace = await orgSlackWorkspaceRepository.findBySlackTeamIdWithToken(config.slackTeamId);
   if (!workspace) return deny('workspace_not_connected');
   const { organizationId } = workspace;
+  // The opt-in must have been granted by the organization the workspace is connected to now.
+  if (config.apiPostOrganizationId !== organizationId) return deny('opt_in_from_other_org', organizationId);
 
   const keyOrgId = req.apiKeyInfo.organizationId;
   if (keyOrgId && keyOrgId !== organizationId) return deny('key_bills_other_org', organizationId);
