@@ -228,7 +228,7 @@ describe('LoginFlow', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it('falls back to URL and code, without building or opening a link, when verification_uri_complete is omitted', async () => {
+  it('opens the plain URL and offers the code, without building a link, when verification_uri_complete is omitted', async () => {
     const { verification_uri_complete: _omitted, ...partial } = deviceFlowFor('https://app.example.com');
     oauth.initiateDeviceFlow.mockResolvedValue(partial);
     oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
@@ -238,7 +238,7 @@ describe('LoginFlow', () => {
 
     await vi.waitFor(() => expect(lastFrame()).toContain('ABCD-1234'));
     const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
-    expect(frame).toContain('Please visit:');
+    expect(frame).toContain("If it doesn't open, please visit:");
     expect(frame).toContain('https://app.example.com/activate');
     expect(frame).not.toContain('activate?code=');
     expect(frame).not.toContain('Not opening browser');
@@ -247,7 +247,7 @@ describe('LoginFlow', () => {
     stdin.write('c');
     await vi.waitFor(() => expect(lastFrame()).toContain('Code copied to clipboard'));
     expect(copy).toHaveBeenCalledWith('ABCD-1234');
-    expect(open).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith('https://app.example.com/activate');
   });
 
   it('names a link without a verification_uri accurately and does not open it', async () => {

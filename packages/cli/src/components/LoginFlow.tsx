@@ -207,13 +207,15 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
   // Auto-open browser when device flow is initiated
   useEffect(() => {
     // An untrusted URL is never handed to the OS opener; the waiting screen shows the warning.
-    if (link && status === 'waiting' && trusted) {
-      open(link).catch(err => {
+    // Without a link the plain page opens and the user types the code, as Desktop does.
+    const openTarget = link ?? deviceFlow?.verification_uri;
+    if (openTarget && status === 'waiting' && trusted) {
+      open(openTarget).catch(err => {
         // Silent fail - user can still manually visit the URL
         console.error('Failed to auto-open browser:', err);
       });
     }
-  }, [link, status, trusted]);
+  }, [link, deviceFlow, status, trusted]);
 
   const { isRawModeSupported } = useStdin();
   const copyTarget = link ?? (uriTrusted ? deviceFlow?.user_code : undefined);
@@ -323,7 +325,13 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
           {uri && (
             <>
               <Box marginBottom={1}>
-                <Text>{uriTrusted ? 'Please visit:' : 'The server asked you to visit:'}</Text>
+                <Text>
+                  {trusted
+                    ? "Opening browser automatically... If it doesn't open, please visit:"
+                    : uriTrusted
+                      ? 'Please visit:'
+                      : 'The server asked you to visit:'}
+                </Text>
               </Box>
               <Box marginBottom={1} paddingLeft={2}>
                 <Text color="blue" bold>
