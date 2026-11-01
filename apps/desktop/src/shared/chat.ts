@@ -397,7 +397,7 @@ export interface ChatApprovalAnswer {
 
 /**
  * What the user attached to a turn: an image the model looks at, or a text file inlined into
- * the prompt.
+ * the prompt. A PDF is stored whole but reaches the model as its extracted text.
  *
  * Deliberately NOT the same thing as the file tools. The tools are the model going and looking
  * for something; an attachment is the user handing something over - "here is the screenshot of
@@ -407,7 +407,7 @@ export interface ChatApprovalAnswer {
  * because this descriptor is what gets persisted into the session JSON, and that file is read
  * in full every time the sidebar lists conversations.
  */
-export type ChatAttachmentKind = 'image' | 'text';
+export type ChatAttachmentKind = 'image' | 'text' | 'pdf';
 
 export interface ChatAttachment {
   id: string;
@@ -421,6 +421,8 @@ export interface ChatAttachment {
   sourceBytes: number;
   /** Set when the file was too big to send whole; the model is told so in the attachment itself. */
   truncated?: boolean;
+  /** Page count, for a PDF. */
+  pages?: number;
 }
 
 /**

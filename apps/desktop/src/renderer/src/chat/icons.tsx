@@ -519,3 +519,12 @@ export function AskIcon() {
     </Glyph>
   );
 }
+
+export function DocumentIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4 1.75h5l3 3v9.5H4z" />
+      <path d="M9 1.75v3h3M6 8h4M6 10.5h4" />
+    </Glyph>
+  );
+}

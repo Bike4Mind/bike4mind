@@ -5,16 +5,19 @@ import type { AddAttachmentsResult, ChatAttachmentInput } from '@shared/chat';
 import { isValidSessionId } from './SessionStore';
 import {
   IMAGE_INPUT_MAX,
+  PDF_INPUT_MAX,
   MAX_ATTACHMENTS_PER_TURN,
   TEXT_BYTE_CAP,
   formatBytes,
   imageMediaTypeForName,
   isImageMediaType,
+  looksLikePdf,
   prepareImage,
   prepareText,
   type PrepareResult,
   type ShrinkImage,
 } from './attachments';
+import { preparePdf } from './pdfText';
 
 /** Same shape as a session id, and validated for the same reason - both become path components. */
 const ATTACHMENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -66,7 +69,7 @@ export class AttachmentStore {
       const name = input.source === 'path' ? input.path : input.name;
       let prepared: PrepareResult;
       try {
-        prepared = input.source === 'path' ? await this.readPath(input.path) : this.readBytes(input);
+        prepared = input.source === 'path' ? await this.readPath(input.path) : await this.readBytes(input);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn(`CHAT: attachment intake failed for ${name}: ${message}`);
@@ -91,6 +94,7 @@ export class AttachmentStore {
         byteSize: prepared.prepared.bytes.length,
         sourceBytes: prepared.prepared.sourceBytes,
         ...(prepared.prepared.truncated ? { truncated: true } : {}),
+        ...(prepared.prepared.pages ? { pages: prepared.prepared.pages } : {}),
       });
     }
 
@@ -191,18 +195,29 @@ export class AttachmentStore {
     try {
       const head = Buffer.alloc(Math.min(info.size, TEXT_BYTE_CAP + 1));
       const { bytesRead } = await handle.read(head, 0, head.length, 0);
-      return prepareText(path, head.subarray(0, bytesRead), info.size);
+      const headBytes = head.subarray(0, bytesRead);
+      if (looksLikePdf(path, undefined, headBytes)) {
+        if (info.size > PDF_INPUT_MAX) {
+          return {
+            ok: false,
+            reason: `That PDF is ${formatBytes(info.size)}; the limit is ${formatBytes(PDF_INPUT_MAX)}.`,
+          };
+        }
+        return preparePdf(path, await readFile(path));
+      }
+      return prepareText(path, headBytes, info.size);
     } finally {
       await handle.close();
     }
   }
 
   /** The paste path: the bytes are already here, and the media type is the clipboard's word for it. */
-  private readBytes(input: Extract<ChatAttachmentInput, { source: 'bytes' }>): PrepareResult {
+  private async readBytes(input: Extract<ChatAttachmentInput, { source: 'bytes' }>): Promise<PrepareResult> {
     const bytes = Buffer.from(input.data);
     const mediaType =
       input.mediaType && isImageMediaType(input.mediaType) ? input.mediaType : imageMediaTypeForName(input.name);
     if (mediaType) return prepareImage(input.name, mediaType, bytes, this.shrink);
+    if (looksLikePdf(input.name, input.mediaType, bytes)) return preparePdf(input.name, bytes);
     return prepareText(input.name, bytes.subarray(0, TEXT_BYTE_CAP + 1), bytes.length);
   }
 }

@@ -122,6 +122,7 @@ import {
   type WorkspaceOutcome,
 } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
+import { capPdfText, extractPdfText, type PdfText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
@@ -7271,13 +7272,32 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
 /** Reads one attachment's stored bytes, or null when the file is gone. */
 type ReadAttachment = (attachment: ChatAttachment) => Promise<Buffer | null>;
 
+const PDF_TEXT_CACHE_MAX = 16;
+/** Keyed by attachment id, so replaying history does not re-parse every PDF on every turn. */
+const pdfTextCache = new Map<string, PdfText>();
+
+async function pdfTextFor(attachment: ChatAttachment, bytes: Buffer): Promise<PdfText | null> {
+  const cached = pdfTextCache.get(attachment.id);
+  if (cached) return cached;
+  let extracted: PdfText;
+  try {
+    extracted = await extractPdfText(bytes);
+  } catch {
+    return null;
+  }
+  if (pdfTextCache.size >= PDF_TEXT_CACHE_MAX) pdfTextCache.delete(pdfTextCache.keys().next().value as string);
+  pdfTextCache.set(attachment.id, extracted);
+  return extracted;
+}
+
 /**
  * A user turn that carried attachments, as provider-shaped content blocks.
  *
  * Images go FIRST and as real image blocks: the point of this feature is that a screenshot
  * arrives as pixels rather than as a filename the model then invents contents for. Text files
  * are inlined into the single text block ahead of the user's own words, so the question they
- * are asking is the last thing the model reads.
+ * are asking is the last thing the model reads. A PDF goes the same way as its extracted text:
+ * not every model, and no local server, can read a document block.
  *
  * An attachment whose bytes have vanished is skipped rather than faked - a placeholder saying
  * "image.png" is exactly the filename-instead-of-image failure this exists to avoid.
@@ -7301,6 +7321,19 @@ async function toAttachedContent(
         type: 'image',
         source: { type: 'base64', media_type: attachment.mediaType, data: bytes.toString('base64') },
       });
+      continue;
+    }
+
+    if (attachment.kind === 'pdf') {
+      const extracted = await pdfTextFor(attachment, bytes);
+      if (!extracted) continue;
+      const capped = capPdfText(extracted.text);
+      sections.push(
+        textAttachmentBlock(
+          { ...attachment, pages: extracted.pages, truncated: capped.truncated || undefined },
+          capped.text
+        )
+      );
       continue;
     }
 
