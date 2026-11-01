@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_SLACK_MESSAGE_BLOCKS_DEPTH,
+  MAX_SLACK_MESSAGE_USER_MENTIONS,
   SlackMessageRequestSchema,
+  countSlackUserMentions,
   findSlackApiPostBlocksProblem,
 } from './slackMessagesApi';
 
@@ -81,5 +83,37 @@ describe('SlackMessageRequestSchema', () => {
       blocks: [{ type: 'section', text: deep }],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('user mention cap', () => {
+  const mentions = (count: number, offset = 0) =>
+    Array.from({ length: count }, (_, i) => `<@U${String(i + offset).padStart(9, '0')}>`).join(' ');
+
+  it('counts distinct users across text, block strings and rich_text user elements', () => {
+    const blocks = [
+      section('<@U000000001> and <@u000000001|ada>'),
+      {
+        type: 'rich_text',
+        elements: [{ type: 'rich_text_section', elements: [{ type: 'user', user_id: 'U000000002' }] }],
+      },
+    ];
+    expect(countSlackUserMentions('<@U000000001> <@W000000003>', blocks)).toBe(3);
+  });
+
+  it(`accepts ${MAX_SLACK_MESSAGE_USER_MENTIONS} distinct mentions and refuses one more, wherever it is`, () => {
+    const base = { channel_id: 'C0123ABCDEF' };
+    expect(
+      SlackMessageRequestSchema.safeParse({ ...base, text: mentions(MAX_SLACK_MESSAGE_USER_MENTIONS) }).success
+    ).toBe(true);
+    expect(
+      SlackMessageRequestSchema.safeParse({ ...base, text: mentions(MAX_SLACK_MESSAGE_USER_MENTIONS + 1) }).success
+    ).toBe(false);
+    const split = SlackMessageRequestSchema.safeParse({
+      ...base,
+      text: mentions(MAX_SLACK_MESSAGE_USER_MENTIONS),
+      blocks: [section(mentions(1, MAX_SLACK_MESSAGE_USER_MENTIONS))],
+    });
+    expect(split.success).toBe(false);
   });
 });

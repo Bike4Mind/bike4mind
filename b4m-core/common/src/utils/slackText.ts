@@ -22,12 +22,15 @@ export function escapeSlackCode(value: string): string {
 }
 
 // A zero-width space after the `@` keeps the word readable but stops Slack treating it as a mention.
-const BROKEN_AT = '@​';
+const BROKEN_AT = '@\u200B';
 // `<!group>` is the legacy spelling of `<!channel>`.
 const BROADCAST_SPECIAL_FORM = /<!(channel|here|everyone|group)(?:\|[^>]*)?>/gi;
 // User-group mentions notify every member of the group, so they count as broadcasts too.
 const USER_GROUP_FORM = /<!subteam\^[A-Za-z0-9]+(?:\|@?([^>]*))?>/gi;
-const BARE_BROADCAST_WORD = /(^|[^A-Za-z0-9_])@(channel|here|everyone)\b/gi;
+// A `/` lead is a URL path (`https://host/@here`), not a word, and must stay intact.
+const BARE_BROADCAST_WORD = /(^|[^A-Za-z0-9_/])@(channel|here|everyone)\b/gi;
+// Block Kit keys that hold only a URL, which no mention can live in.
+const URL_KEYS = new Set(['url', 'image_url']);
 
 /**
  * Turns broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, `<!group>`, user groups, and the bare
@@ -43,7 +46,7 @@ export function neutralizeSlackBroadcastMentions(value: string): string {
 
 /**
  * {@link neutralizeSlackBroadcastMentions} applied to every string inside a JSON value (Block Kit), plus
- * rich_text's structured mentions: a `broadcast` element (`range` channel/here/everyone) or a
+ * rich_text's structured mentions (`url` and `image_url` values are left alone): a `broadcast` element (`range` channel/here/everyone) or a
  * `usergroup` element becomes a plain `text` element. `user` elements are kept. Recursive, so callers
  * must bound the depth first (findSlackApiPostBlocksProblem does for API posts).
  */
@@ -58,7 +61,10 @@ export function neutralizeSlackBroadcastMentionsDeep<T>(value: T): T {
     }
     if (element.type === 'usergroup') return { type: 'text', text: `${BROKEN_AT}group` } as T;
     return Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [key, neutralizeSlackBroadcastMentionsDeep(child)])
+      Object.entries(value).map(([key, child]) => [
+        key,
+        URL_KEYS.has(key) ? child : neutralizeSlackBroadcastMentionsDeep(child),
+      ])
     ) as T;
   }
   return value;

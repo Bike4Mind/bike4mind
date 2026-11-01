@@ -14,7 +14,7 @@ A post goes through only when all of these hold:
 2. The channel is in a Slack workspace connected to an organization the key's owner belongs to
    (the organization page, **Integrations** tab, Slack Workspace card). An organization-billed key must bill that same
    organization. Only workspaces connected through the organization integration qualify.
-3. An owner of that same organization has enabled the channel for API posting, optionally
+3. An owner of that same organization (or a platform admin) has enabled the channel for API posting, optionally
    limited to listed API key ids. Every channel starts disabled, and disconnecting the workspace
    from the organization turns every channel off again.
 4. The bot is a member of the channel. The bot can post only where it has been invited.
@@ -107,7 +107,11 @@ curl -sS -X POST "https://<your-deployment>/api/v1/slack/messages" \
 - Broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, `<!group>`, user groups, rich_text
   broadcast and user-group elements, and bare `@channel`, `@here`, `@everyone`) are posted as plain
   text that notifies nobody. `<@U...>` user mentions
-  are kept.
+  are kept, up to 10 distinct users per message; more is a `422`.
+- A channel that restricts posting (announcement-only, thread-only) and refuses the bot is a `409`
+  with `errorCode: "slack_channel_restricted"`.
+- In a channel shared between two workspaces, the opt-in belongs to the workspace that granted it:
+  while it is on, the other workspace cannot take over the channel's settings from its App Home.
 - Each key, and each user across all of their keys, may post 30 messages a minute and 1,000 a
   day; each channel takes at most 60 a minute. These are on top of the key's own request limits.
   Over a limit is a `429` with `Retry-After`.

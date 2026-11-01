@@ -112,3 +112,30 @@ describe('neutralizeSlackBroadcastMentions', () => {
     ]);
   });
 });
+
+describe('neutralizeSlackBroadcastMentions in URLs', () => {
+  it('leaves a URL path segment that looks like a broadcast word intact', () => {
+    const link = '<https://social.test/@everyone|profile>';
+    expect(neutralizeSlackBroadcastMentions(link)).toBe(link);
+  });
+
+  it('leaves url and image_url values untouched in blocks while still neutralizing their text', () => {
+    const blocks = [
+      { type: 'image', image_url: 'https://cdn.test/@here.png', alt_text: '@here' },
+      {
+        type: 'rich_text',
+        elements: [
+          { type: 'rich_text_section', elements: [{ type: 'link', url: 'https://x.test/@channel', text: '@channel' }] },
+        ],
+      },
+    ];
+    const [image, richText] = neutralizeSlackBroadcastMentionsDeep(blocks) as [
+      { image_url: string; alt_text: string },
+      { elements: [{ elements: [{ url: string; text: string }] }] },
+    ];
+    expect(image.image_url).toBe('https://cdn.test/@here.png');
+    expect(image.alt_text).toBe('@​here');
+    expect(richText.elements[0].elements[0].url).toBe('https://x.test/@channel');
+    expect(richText.elements[0].elements[0].text).toBe('@​channel');
+  });
+});

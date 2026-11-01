@@ -118,7 +118,7 @@ const TEAM = 'T0123ABCD';
 const ORG = 'org-1';
 const KEY_ID = 'key-1';
 const TS = '1730000000.123456';
-const ZWSP = '​';
+const ZWSP = '\u200B';
 
 function withKey(overrides: Record<string, unknown> = {}) {
   mockValidate.mockResolvedValue({
@@ -351,6 +351,24 @@ describe('POST /api/v1/slack/messages', () => {
     expect(revoked._getJSONData().errorCode).toBe('provider_rejected');
   });
 
+  it.each(['restricted_action', 'restricted_action_read_only_channel', 'restricted_action_thread_only_channel'])(
+    'maps Slack %s to 409 slack_channel_restricted',
+    async slackError => {
+      mockPostMessage.mockRejectedValueOnce(slackPlatformError(slackError));
+      const res = await post(message());
+      expect(res._getStatusCode()).toBe(409);
+      expect(res._getJSONData().errorCode).toBe('slack_channel_restricted');
+    }
+  );
+
+  it('refuses a message mentioning more than 10 distinct users (422) before touching the channel config', async () => {
+    const text = Array.from({ length: 11 }, (_, i) => `<@U${String(i).padStart(9, '0')}>`).join(' ');
+    const res = await post(message({ text }));
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFindConfig).not.toHaveBeenCalled();
+  });
+
   it('maps Slack rejecting the blocks to 422 and an unknown Slack failure to 502', async () => {
     mockPostMessage.mockRejectedValueOnce(slackPlatformError('invalid_blocks'));
     expect((await post(message({ blocks: [{ type: 'section', text: { type: 'bogus' } }] })))._getStatusCode()).toBe(
@@ -436,5 +454,18 @@ describe('POST /api/v1/slack/messages', () => {
     const res = await post(message());
     expect(res._getStatusCode()).toBe(429);
     expect(mockPostMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('spends the channel window only on an authorized post, so refused callers cannot exhaust it', async () => {
+    const channelWindowCalls = () =>
+      mockSlackLimit.mock.calls.filter(([options]) => (options as { limit: number }).limit === 60).length;
+    mockMemberOrgIds.mockResolvedValue(['org-2']);
+
+    expect((await post(message()))._getStatusCode()).toBe(403);
+    expect(channelWindowCalls()).toBe(0);
+
+    mockMemberOrgIds.mockResolvedValue([ORG]);
+    expect((await post(message()))._getStatusCode()).toBe(200);
+    expect(channelWindowCalls()).toBe(1);
   });
 });

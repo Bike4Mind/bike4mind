@@ -290,7 +290,7 @@ export async function handleChannelModelConfigSubmission(
 
   try {
     const { slackChannelConfigRepository: channelConfigRepoForUpsert } = getSlackDb();
-    await (channelConfigRepoForUpsert as any).upsertByChannelId(submission.channelId, {
+    const saved = await (channelConfigRepoForUpsert as any).upsertByChannelId(submission.channelId, {
       slackTeamId: submission.slackTeamId,
       preferredModel: submission.preferredModel,
       temperature: submission.temperature,
@@ -299,6 +299,20 @@ export async function handleChannelModelConfigSubmission(
       githubRepo: submission.githubRepo ?? null,
       configuredBy: user.id,
     });
+    if (!saved) {
+      logger.warn('[Slack Interactive] Channel is API-posting enabled by another workspace', {
+        channelId: submission.channelId,
+        slackTeamId: submission.slackTeamId,
+        slackUserId: user.id,
+      });
+      return {
+        response_action: 'errors',
+        errors: {
+          model_block:
+            "This shared channel is enabled for API posting by the other workspace's organization, so its settings can only be changed from that workspace.",
+        },
+      };
+    }
 
     logger.info('[Slack Interactive] Channel model config saved', {
       channelId: submission.channelId,

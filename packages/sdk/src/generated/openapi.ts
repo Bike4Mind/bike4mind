@@ -1427,7 +1427,7 @@ export interface paths {
     put?: never;
     /**
      * Post a Slack message
-     * @description Posts a message to a Slack channel, or a reply in a thread with `thread_ts`, as the Bike4Mind bot. Returns the message `ts`; pass it back as `thread_ts` to reply in that thread. Three things must hold: the key carries `slack:post`; the channel is in a Slack workspace connected to an organization the key's owner belongs to (an organization-billed key must bill that same organization); and an owner of that same organization has enabled the channel for API posting, optionally limited to listed key ids. Disconnecting the workspace turns every opt-in off. `slack:post` is a confined scope: a posting key carries no other scope and reaches no other route. Mint one from the organization's Slack integration settings. The bot must also be a member of the channel: invite it with `/invite @<bot name>`. `text` is at most 3000 characters and is the notification fallback when `blocks` (Block Kit, at most 49 blocks and 40000 serialized characters) is sent. Blocks are limited to section, header, divider, context, image, rich_text; nothing a reader can act on is accepted: no interactive elements, `action_id`, `confirm`, or `url` outside a rich_text link, and a section `accessory` must be an image. Broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, user groups, and bare `@channel` / `@here` / `@everyone`) are posted as plain text that notifies nobody; `<@U...>` user mentions are kept. Every post ends with a context block naming the posting user and key, and carries message metadata marking it as an API post; Slack actions on it are ignored. A block Slack rejects as malformed answers 422. Rate limited to 30 messages a minute and 1,000 a day per key and per user, and 60 a minute per channel, on top of the key's own limits. Authenticate with an API key (`b4m_live_`) carrying `slack:post`.
+     * @description Posts a message to a Slack channel, or a reply in a thread with `thread_ts`, as the Bike4Mind bot. Returns the message `ts`; pass it back as `thread_ts` to reply in that thread. Three things must hold: the key carries `slack:post`; the channel is in a Slack workspace connected to an organization the key's owner belongs to (an organization-billed key must bill that same organization); and an owner of that same organization (or a platform admin) has enabled the channel for API posting, optionally limited to listed key ids. Disconnecting the workspace turns every opt-in off. `slack:post` is a confined scope: a posting key carries no other scope and reaches no other route. Mint one from the organization's Slack integration settings. The bot must also be a member of the channel: invite it with `/invite @<bot name>`. `text` is at most 3000 characters and is the notification fallback when `blocks` (Block Kit, at most 49 blocks and 40000 serialized characters) is sent. Blocks are limited to section, header, divider, context, image, rich_text; nothing a reader can act on is accepted: no interactive elements, `action_id`, `confirm`, or `url` outside a rich_text link, and a section `accessory` must be an image. Broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, user groups, and bare `@channel` / `@here` / `@everyone`) are posted as plain text that notifies nobody; `<@U...>` user mentions are kept. Every post ends with a context block naming the posting user and key, and carries message metadata marking it as an API post; Slack actions on it are ignored. A block Slack rejects as malformed answers 422. Rate limited to 30 messages a minute and 1,000 a day per key and per user, and 60 a minute per channel, on top of the key's own limits. Authenticate with an API key (`b4m_live_`) carrying `slack:post`.
      */
     post: operations['postSlackMessage'];
     delete?: never;
@@ -6656,7 +6656,8 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'slack_bot_not_in_channel' | 'slack_channel_archived' | 'provider_rejected';
+      errorCode?:
+        'slack_bot_not_in_channel' | 'slack_channel_archived' | 'slack_channel_restricted' | 'provider_rejected';
     };
     postSlackMessageResponse409: {
       error: string;
@@ -6667,7 +6668,8 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'slack_bot_not_in_channel' | 'slack_channel_archived' | 'provider_rejected';
+      errorCode?:
+        'slack_bot_not_in_channel' | 'slack_channel_archived' | 'slack_channel_restricted' | 'provider_rejected';
     };
     /**
      * @example {
@@ -20708,7 +20710,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The bot is not a member of the channel (`errorCode: "slack_bot_not_in_channel"`; invite it), or the channel is archived (`errorCode: "slack_channel_archived"`). */
+      /** @description The bot is not a member of the channel (`errorCode: "slack_bot_not_in_channel"`; invite it), or the channel is archived (`errorCode: "slack_channel_archived"`), or the channel restricts posting, such as announcement-only or thread-only (`errorCode: "slack_channel_restricted"`). */
       409: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

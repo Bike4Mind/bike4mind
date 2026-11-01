@@ -49,7 +49,12 @@ export interface ISlackChannelConfigDocument extends ISlackChannelConfig, IMongo
 
 export interface ISlackChannelConfigRepository extends IBaseRepository<ISlackChannelConfigDocument> {
   findByChannelId(channelId: string): Promise<ISlackChannelConfigDocument | null>;
-  upsertByChannelId(channelId: string, data: Partial<ISlackChannelConfig>): Promise<ISlackChannelConfigDocument>;
+  /**
+   * Sets a channel's model and GitHub settings, creating the config when absent. Moves a config to
+   * another workspace only while its API posting is off: returns null when another workspace's config
+   * of the channel has posting on.
+   */
+  upsertByChannelId(channelId: string, data: Partial<ISlackChannelConfig>): Promise<ISlackChannelConfigDocument | null>;
   findBySlackTeamId(slackTeamId: string): Promise<ISlackChannelConfigDocument[]>;
   deleteByChannelId(channelId: string): Promise<boolean>;
   /**
@@ -69,13 +74,13 @@ export interface ISlackChannelConfigRepository extends IBaseRepository<ISlackCha
   ): Promise<ISlackChannelConfigDocument | null>;
   findApiPostEnabledBySlackTeamId(slackTeamId: string): Promise<ISlackChannelConfigDocument[]>;
   /**
-   * Turns API posting off for every channel of a workspace (on disconnect or a change of hands),
-   * keeping any opt-in granted by `keepOrganizationId`. Returns the channel ids it turned off.
-   */
-  /**
    * Turns API posting off for a channel of this workspace, never creating a record. Returns the record
    * as it was if posting was on, otherwise null (no record, another workspace's, or already off).
    */
   disableApiPostingByChannelId(channelId: string, slackTeamId: string): Promise<ISlackChannelConfigDocument | null>;
+  /**
+   * Turns API posting off for every channel of a workspace (on disconnect or a change of hands),
+   * keeping any opt-in granted by `keepOrganizationId`. Returns the channel ids it turned off.
+   */
   clearApiPostingBySlackTeamId(slackTeamId: string, keepOrganizationId?: string): Promise<string[]>;
 }

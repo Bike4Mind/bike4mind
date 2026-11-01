@@ -35,7 +35,8 @@ export const postSlackMessageContract = defineEndpoint({
     'Returns the message `ts`; pass it back as `thread_ts` to reply in that thread. Three things must hold: ' +
     'the key carries `slack:post`; the channel is in a Slack workspace connected to an organization the ' +
     "key's owner belongs to (an organization-billed key must bill that same organization); and an " +
-    'owner of that same organization has enabled the channel for API posting, optionally limited to listed ' +
+    'owner of that same organization (or a platform admin) has enabled the channel for API posting, ' +
+    'optionally limited to listed ' +
     'key ids. Disconnecting the workspace turns every opt-in off. `slack:post` is a confined scope: a ' +
     "posting key carries no other scope and reaches no other route. Mint one from the organization's " +
     'Slack integration settings. ' +
@@ -76,7 +77,8 @@ export const postSlackMessageContract = defineEndpoint({
     409: {
       description:
         'The bot is not a member of the channel (`errorCode: "slack_bot_not_in_channel"`; invite it), or ' +
-        'the channel is archived (`errorCode: "slack_channel_archived"`).',
+        'the channel is archived (`errorCode: "slack_channel_archived"`), or the channel restricts posting, ' +
+        'such as announcement-only or thread-only (`errorCode: "slack_channel_restricted"`).',
       schema: SlackMessageErrorSchema,
     },
     429: {

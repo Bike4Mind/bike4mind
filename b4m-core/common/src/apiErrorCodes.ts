@@ -134,6 +134,8 @@ export const API_ERROR_CODES = [
   'slack_bot_not_in_channel',
   /** The channel is archived, so nothing can be posted to it. */
   'slack_channel_archived',
+  /** The channel restricts who may post or where (announcement-only or thread-only), and refused the bot. */
+  'slack_channel_restricted',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

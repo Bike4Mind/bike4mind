@@ -127,35 +127,75 @@ export function findSlackApiPostBlocksProblem(blocks: readonly unknown[]): strin
   return null;
 }
 
+/** Distinct users one post may mention: past this, individual mentions add up to a broadcast. */
+export const MAX_SLACK_MESSAGE_USER_MENTIONS = 10;
+const USER_MENTION_FORM = /<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/gi;
+
+/**
+ * Counts the distinct users a post mentions: mrkdwn `<@U...>` in `text` or any string of `blocks`, and
+ * rich_text `user` elements. Iterative, so it is safe on a body the blocks checks have not yet refused.
+ */
+export function countSlackUserMentions(text: string, blocks: readonly unknown[] = []): number {
+  const users = new Set<string>();
+  const collect = (value: string) => {
+    for (const match of value.matchAll(USER_MENTION_FORM)) users.add(match[1].toUpperCase());
+  };
+  collect(text);
+  const stack: unknown[] = [...blocks];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (typeof value === 'string') {
+      collect(value);
+    } else if (Array.isArray(value)) {
+      for (const child of value) stack.push(child);
+    } else if (isRecord(value)) {
+      if (value.type === 'user' && typeof value.user_id === 'string') users.add(value.user_id.toUpperCase());
+      for (const child of Object.values(value)) stack.push(child);
+    }
+  }
+  return users.size;
+}
+
 /** One Block Kit block; the whole array is checked by findSlackApiPostBlocksProblem. */
 const SlackBlockSchema = z.looseObject({ type: z.string().min(1).max(64) });
 
-export const SlackMessageRequestSchema = z.strictObject({
-  channel_id: SlackChannelIdSchema,
-  /** Message text; also the notification and accessibility fallback when `blocks` is sent. */
-  text: z.string().max(MAX_SLACK_MESSAGE_TEXT_LENGTH).regex(/\S/, 'text must not be blank'),
-  blocks: z
-    .array(SlackBlockSchema)
-    .min(1)
-    .max(MAX_SLACK_MESSAGE_BLOCKS)
-    .superRefine((blocks, ctx) => {
-      // Structure first: it bounds depth and size, so the stringify below cannot overflow the stack.
-      const problem = findSlackApiPostBlocksProblem(blocks);
-      if (problem) {
-        ctx.addIssue({ code: 'custom', message: problem });
-        return;
-      }
-      if (JSON.stringify(blocks).length > MAX_SLACK_MESSAGE_BLOCKS_BYTES) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `blocks must serialize to at most ${MAX_SLACK_MESSAGE_BLOCKS_BYTES} characters`,
-        });
-      }
-    })
-    .optional(),
-  /** `ts` of the parent message, to reply in its thread. */
-  thread_ts: SlackMessageTsSchema.optional(),
-});
+export const SlackMessageRequestSchema = z
+  .strictObject({
+    channel_id: SlackChannelIdSchema,
+    /** Message text; also the notification and accessibility fallback when `blocks` is sent. */
+    text: z.string().max(MAX_SLACK_MESSAGE_TEXT_LENGTH).regex(/\S/, 'text must not be blank'),
+    blocks: z
+      .array(SlackBlockSchema)
+      .min(1)
+      .max(MAX_SLACK_MESSAGE_BLOCKS)
+      .superRefine((blocks, ctx) => {
+        // Structure first: it bounds depth and size, so the stringify below cannot overflow the stack.
+        const problem = findSlackApiPostBlocksProblem(blocks);
+        if (problem) {
+          ctx.addIssue({ code: 'custom', message: problem });
+          return;
+        }
+        if (JSON.stringify(blocks).length > MAX_SLACK_MESSAGE_BLOCKS_BYTES) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `blocks must serialize to at most ${MAX_SLACK_MESSAGE_BLOCKS_BYTES} characters`,
+          });
+        }
+      })
+      .optional(),
+    /** `ts` of the parent message, to reply in its thread. */
+    thread_ts: SlackMessageTsSchema.optional(),
+  })
+  .superRefine(({ text, blocks }, ctx) => {
+    if (typeof text !== 'string') return;
+    if (countSlackUserMentions(text, Array.isArray(blocks) ? blocks : []) > MAX_SLACK_MESSAGE_USER_MENTIONS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['text'],
+        message: `a message may mention at most ${MAX_SLACK_MESSAGE_USER_MENTIONS} distinct users`,
+      });
+    }
+  });
 
 export type SlackMessageRequest = z.infer<typeof SlackMessageRequestSchema>;
 
@@ -172,6 +212,7 @@ export type SlackMessageResponse = z.infer<typeof SlackMessageResponseSchema>;
 export const SLACK_MESSAGE_ERROR_CODES = [
   'slack_bot_not_in_channel',
   'slack_channel_archived',
+  'slack_channel_restricted',
   'provider_rejected',
 ] as const satisfies readonly ApiErrorCode[];
 

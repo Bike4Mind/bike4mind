@@ -1082,7 +1082,7 @@ async function handleSetDefaultNotebook(dbUser: any, slackUserId: string, notebo
       : null;
     if (!notebook) {
       return {
-        text: '❌ That notebook was not found in your account',
+        text: '\u274C That notebook was not found in your account',
         response_type: 'ephemeral',
       };
     }

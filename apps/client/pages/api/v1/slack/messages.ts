@@ -61,6 +61,13 @@ const INVALID_MESSAGE_ERRORS = new Set([
   'thread_not_found',
   'invalid_thread_ts',
 ]);
+/** The channel's posting restrictions (announcement-only, thread-only) refused the bot. */
+const RESTRICTED_CHANNEL_ERRORS = new Set([
+  'restricted_action',
+  'restricted_action_read_only_channel',
+  'restricted_action_thread_only_channel',
+  'restricted_action_non_threadable_channel',
+]);
 /** Slack refused the workspace's bot credentials. */
 const REJECTED_CREDENTIAL_ERRORS = new Set([
   'invalid_auth',
@@ -79,28 +86,37 @@ const BUCKET = 'POST /api/v1/slack/messages';
 
 const perKey = (req: LimitedRequest) => (req.apiKeyInfo ? `api-key:${req.apiKeyInfo.keyId}` : undefined);
 const perUser = (req: LimitedRequest) => (req.user?.id ? `user:${req.user.id}` : undefined);
-// Runs ahead of validation, so a malformed channel id falls back to the default subject (the user).
 const perChannel = (req: LimitedRequest) => {
   const channelId = (req.body as { channel_id?: unknown } | undefined)?.channel_id;
   return typeof channelId === 'string' && SLACK_CHANNEL_ID_PATTERN.test(channelId) ? `channel:${channelId}` : undefined;
 };
 
 /**
- * Every window a post must fit, in order: per key and per user (so one owner's many keys share a cap),
- * each 30 a minute and 1,000 a day, and per channel 60 a minute. On top of the key's own request limits.
+ * Every window a post must fit before authorization, in order: per key and per user (so one owner's
+ * many keys share a cap), each 30 a minute and 1,000 a day. On top of the key's own request limits.
  */
 const SLACK_POST_LIMITERS: RequestHandler[] = [
   rateLimit({ limit: SLACK_POSTS_PER_MINUTE, windowMs: MINUTE_MS, bucket: `${BUCKET}:key-minute`, subject: perKey }),
   rateLimit({ limit: SLACK_POSTS_PER_DAY, windowMs: DAY_MS, bucket: `${BUCKET}:key-day`, subject: perKey }),
   rateLimit({ limit: SLACK_POSTS_PER_MINUTE, windowMs: MINUTE_MS, bucket: `${BUCKET}:user-minute`, subject: perUser }),
   rateLimit({ limit: SLACK_POSTS_PER_DAY, windowMs: DAY_MS, bucket: `${BUCKET}:user-day`, subject: perUser }),
-  rateLimit({
-    limit: SLACK_POSTS_PER_CHANNEL_PER_MINUTE,
-    windowMs: MINUTE_MS,
-    bucket: `${BUCKET}:channel-minute`,
-    subject: perChannel,
-  }),
 ];
+
+/**
+ * 60 posts a minute per channel, spent only once a post is authorized: if refused requests counted,
+ * anyone who knows a channel id could exhaust the window of the org that opted the channel in.
+ */
+const channelRateLimit = rateLimit({
+  limit: SLACK_POSTS_PER_CHANNEL_PER_MINUTE,
+  windowMs: MINUTE_MS,
+  bucket: `${BUCKET}:channel-minute`,
+  subject: perChannel,
+});
+
+const spendChannelBudget = (req: LimitedRequest, res: Parameters<RequestHandler>[1]) =>
+  new Promise<void>((resolve, reject) => {
+    Promise.resolve(channelRateLimit(req, res, error => (error ? reject(error) : resolve()))).catch(reject);
+  });
 
 /** Runs the limiters one after another, stopping at the first refusal. */
 const slackPostRateLimit: RequestHandler = (req, res, next) => {
@@ -154,6 +170,15 @@ function toCallerError(error: unknown): { outcome: string; error: Error; retryAf
       error: new ConflictError('This channel is archived.', { errorCode: 'slack_channel_archived' }),
     };
   }
+  if (RESTRICTED_CHANNEL_ERRORS.has(slackError)) {
+    return {
+      outcome: slackError,
+      error: new ConflictError(
+        'This channel restricts posting (for example announcement-only or thread-only) and refused the message.',
+        { errorCode: 'slack_channel_restricted' }
+      ),
+    };
+  }
   if (INVALID_MESSAGE_ERRORS.has(slackError)) {
     return { outcome: slackError, error: new UnprocessableEntityError(`Slack rejected the message: ${slackError}.`) };
   }
@@ -203,6 +228,8 @@ const handler = nextRouteForContract(postSlackMessageContract, {
   // Membership, not platform-admin reach: no admin bypass, so a key only ever posts as its owner's own org.
   const memberOrgIds = await organizationRepository.findMembershipOrgIds(req.user.id);
   if (!memberOrgIds.includes(organizationId)) return deny('not_org_member', organizationId);
+
+  await spendChannelBudget(req, res);
 
   const botToken = decryptToken(workspace.slackBotToken);
   if (!botToken) {

@@ -82,13 +82,34 @@ describe('SlackChannelConfigModel - API posting opt-in', () => {
     expect(enabled.map(config => config.channelId)).toEqual(['C1']);
   });
 
-  it('turns API posting off when the model-config flow moves a channel to another workspace', async () => {
+  it('refuses to let the model-config flow move an opted-in channel to another workspace', async () => {
     await slackChannelConfigRepository.setApiPostingByChannelId('C1', update);
 
-    await slackChannelConfigRepository.upsertByChannelId('C1', { slackTeamId: 'T-team-b', configuredBy: 'U2' });
+    const saved = await slackChannelConfigRepository.upsertByChannelId('C1', {
+      slackTeamId: 'T-team-b',
+      configuredBy: 'U2',
+      preferredModel: 'm',
+    });
 
+    expect(saved).toBeNull();
     const stored = await slackChannelConfigRepository.findByChannelId('C1');
-    expect(stored).toMatchObject({ slackTeamId: 'T-team-b', apiPostEnabled: false, apiPostAllowedKeyIds: [] });
+    expect(stored).toMatchObject({ slackTeamId: 'T-team-a', apiPostEnabled: true, apiPostAllowedKeyIds: ['key-1'] });
+    expect(stored?.preferredModel).toBeUndefined();
+  });
+
+  it('moves a channel with API posting off to another workspace, clearing any leftover posting fields', async () => {
+    await slackChannelConfigRepository.setApiPostingByChannelId('C1', {
+      ...update,
+      apiPostEnabled: false,
+    });
+
+    const saved = await slackChannelConfigRepository.upsertByChannelId('C1', {
+      slackTeamId: 'T-team-b',
+      configuredBy: 'U2',
+    });
+
+    expect(saved).toMatchObject({ slackTeamId: 'T-team-b', apiPostEnabled: false, apiPostAllowedKeyIds: [] });
+    expect(saved?.apiPostOrganizationId).toBeUndefined();
   });
 
   it('keeps API posting when the model-config flow edits the channel within the same workspace', async () => {
