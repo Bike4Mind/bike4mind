@@ -8,6 +8,11 @@ export interface ModelTarget {
   management: ModelServerManagement;
 }
 
+/** Starts a conversation on an installed model, matched by name without case; null when chat does not list it. */
+export type ChatWith = (serverId: string, name: string) => (() => void) | null;
+/** `ChatWith` for the server the screen shows. */
+export type ChatOn = (name: string) => (() => void) | null;
+
 /** Why the screen offers no downloads or removals for the target; null when it does. */
 export function manageNote(target: ModelTarget): string | null {
   if (target.management === 'chat-only')

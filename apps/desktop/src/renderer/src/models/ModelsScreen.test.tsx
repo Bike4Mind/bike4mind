@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import type { ModelsInUse } from './InstalledTab';
 import { ModelsScreen } from './ModelsScreen';
+import type { ChatWith } from './modelTarget';
 import { DOWN_RECHECK_MS } from './useModelHub';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -439,14 +440,26 @@ afterEach(() => {
 
 const flush = () => act(async () => new Promise(resolve => setTimeout(resolve, 0)));
 
-async function mount(inUse?: ModelsInUse, tab: 'curated' | 'installed' = 'installed') {
+async function mount(
+  inUse?: ModelsInUse,
+  tab: 'curated' | 'installed' = 'installed',
+  chatWith?: ChatWith,
+  chatError?: { message: string; onDismiss: () => void }
+) {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   act(() =>
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ModelsScreen onClose={() => {}} inUse={inUse} onOpenModelServers={openModelServers} />
+        <ModelsScreen
+          onClose={() => {}}
+          inUse={inUse}
+          onOpenModelServers={openModelServers}
+          chatWith={chatWith}
+          chatError={chatError?.message}
+          onDismissChatError={chatError?.onDismiss}
+        />
       </CssVarsProvider>
     )
   );
@@ -698,6 +711,38 @@ describe('ModelsScreen curated', () => {
       false,
       false,
     ]);
+  });
+
+  it('offers Use in chat on installed builds that chat lists', async () => {
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>(() => use);
+    bridge.installed = {
+      ok: true,
+      models: [
+        {
+          name: E4B_REF,
+          sizeBytes: 1,
+          quantization: null,
+          family: null,
+          parameterSize: null,
+          modifiedAt: null,
+          capabilities,
+          loaded: false,
+          fit: null,
+        },
+      ],
+    };
+    await mount(undefined, 'curated', chatWith);
+    const rows = inside('models-curated-all', 'models-build-row');
+    expect(rows.map(row => row.querySelector('[data-testid="models-build-use-btn"]') !== null)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(chatWith).toHaveBeenCalledWith('local', E4B_REF);
+    await click(rows[0].querySelector<HTMLElement>('[data-testid="models-build-use-btn"]'));
+    expect(use).toHaveBeenCalledTimes(1);
   });
 
   it('checks a library pick before the dialog, then pulls the reviewed tag', async () => {
@@ -1160,6 +1205,40 @@ describe('ModelsScreen installed', () => {
     expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', undefined);
   });
 
+  it('offers Use in chat only for the models chat lists', async () => {
+    const entry = (name: string) => ({
+      name,
+      sizeBytes: 1,
+      quantization: null,
+      family: null,
+      parameterSize: null,
+      modifiedAt: null,
+      capabilities,
+      loaded: false,
+      fit: null,
+    });
+    bridge.installed = { ok: true, models: [entry('qwen2.5:0.5b'), entry('nomic-embed-text:latest')] };
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>((_serverId, name) => (name === 'qwen2.5:0.5b' ? use : null));
+    await mount(undefined, 'installed', chatWith);
+    const rows = all('models-installed-row');
+    expect(rows.map(row => row.querySelector('[data-testid="models-installed-use-btn"]') !== null)).toEqual([
+      true,
+      false,
+    ]);
+    await click(rows[0].querySelector<HTMLElement>('[data-testid="models-installed-use-btn"]'));
+    expect(use).toHaveBeenCalledTimes(1);
+    expect(chatWith).toHaveBeenCalledWith('local', 'qwen2.5:0.5b');
+  });
+
+  it('shows why Use in chat did not open a conversation, until dismissed', async () => {
+    const onDismiss = vi.fn();
+    await mount(undefined, 'installed', undefined, { message: 'Desktop could not start a conversation.', onDismiss });
+    expect(q('models-chat-error')?.textContent).toContain('Desktop could not start a conversation.');
+    await click(q('models-chat-error-dismiss-btn'));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
   const onComputer = (name: string) => ({ serverId: 'local', name });
   it.each([
     [{ active: onComputer('qwen2.5:0.5b'), conversations: [onComputer('qwen2.5:0.5b')] }, 'The open conversation'],
@@ -1329,6 +1408,34 @@ describe('ModelsScreen explore', () => {
       expect(q('models-build-installed-chip')).not.toBeNull();
     }
   );
+
+  it('offers Use in chat on an installed build under the name Ollama lists it by', async () => {
+    bridge.installed = {
+      ok: true,
+      models: [
+        {
+          name: `hf.co/${REPO}:Q4_K_M`,
+          sizeBytes: 397_000_000,
+          quantization: 'Q4_K_M',
+          family: 'qwen2',
+          parameterSize: '494M',
+          modifiedAt: null,
+          capabilities,
+          loaded: false,
+          fit: null,
+        },
+      ],
+    };
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>(() => use);
+    await mount(undefined, 'installed', chatWith);
+    await openExplore();
+    await click(q('models-explore-result-row'));
+
+    expect(chatWith).toHaveBeenCalledWith('local', `hf.co/${REPO}:q4_k_m`.toLowerCase());
+    await click(q('models-build-use-btn'));
+    expect(use).toHaveBeenCalledTimes(1);
+  });
 
   it('hides abliterated results until the toggle is on, then labels them', async () => {
     bridge.search = {

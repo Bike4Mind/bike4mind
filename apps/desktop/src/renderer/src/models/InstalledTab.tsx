@@ -15,7 +15,7 @@ import Typography from '@mui/joy/Typography';
 import { formatBytes, type InstalledModelsResult, type LocalModelEntry, type ModelRuntimeStatus } from '@shared/models';
 import { TrashIcon } from '../chat/icons';
 import { FitBadge } from './FitBadge';
-import type { ModelTarget } from './modelTarget';
+import type { ChatOn, ModelTarget } from './modelTarget';
 
 /** A device-side model a chat points at: its Ollama name and the server it runs on. */
 export interface ModelInUse {
@@ -60,7 +60,15 @@ function contextLabel(tokens: number): string {
   return tokens >= 1024 ? `${Math.round(tokens / 1024)}K` : String(tokens);
 }
 
-function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: (() => void) | null }) {
+function InstalledRow({
+  model,
+  onUse,
+  onRemove,
+}: {
+  model: LocalModelEntry;
+  onUse: (() => void) | null;
+  onRemove: (() => void) | null;
+}) {
   return (
     <Sheet
       variant="outlined"
@@ -116,6 +124,11 @@ function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: (
           ))}
         </Stack>
       </Box>
+      {onUse && (
+        <Button size="sm" variant="soft" onClick={onUse} data-testid="models-installed-use-btn">
+          Use in chat
+        </Button>
+      )}
       {onRemove && (
         <Button
           size="sm"
@@ -137,6 +150,7 @@ export function InstalledTab({
   target,
   installed,
   inUse,
+  chatOn,
   onRetry,
   onExplore,
 }: {
@@ -144,6 +158,7 @@ export function InstalledTab({
   target: ModelTarget;
   installed: InstalledModelsResult | null;
   inUse?: ModelsInUse;
+  chatOn?: ChatOn;
   onRetry: () => void;
   onExplore: () => void;
 }) {
@@ -244,6 +259,7 @@ export function InstalledTab({
             <InstalledRow
               key={model.name}
               model={model}
+              onUse={chatOn?.(model.name) ?? null}
               onRemove={
                 canManage ? () => setConfirming({ model, serverId: target.local ? undefined : target.id }) : null
               }
