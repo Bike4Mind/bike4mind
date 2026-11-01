@@ -198,6 +198,10 @@ describe('CommandHistoryStore', () => {
       '!curl --user=admin:hunter22 https://example.com',
       '!mysql -u root -phunter22 app',
       '!docker login -u me -p hunter22 registry.example.com',
+      '!aws configure set aws_secret_access_key wJalrXUtnFEMI',
+      '!npm config set //registry.npmjs.org/:_authToken abcdef12',
+      '!sshpass -p hunter22 ssh host',
+      '!gh secret set DEPLOY_KEY --body hunter22',
       '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----',
       '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----',
       'decode eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJl',
@@ -219,6 +223,9 @@ describe('CommandHistoryStore', () => {
       '!mysql -u root -p app',
       '!curl https://example.com/path:8080',
       '!docker login registry.example.com',
+      '!aws configure set region us-east-1',
+      '!sshpass -f ~/.pw ssh host',
+      '!gh secret set DEPLOY_KEY < key.txt',
     ];
 
     const store = new CommandHistoryStore(file, { persist: true });
@@ -330,6 +337,19 @@ describe('CommandHistoryStore', () => {
 
     expect(await freshLoad()).toEqual(['after crash']);
     expect(await tmpFiles()).toEqual([]);
+  });
+
+  it('takes over a lock stamped in the future after the clock moved back', async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(`${file}.lock`, '');
+    const future = new Date(Date.now() + 60_000);
+    await fs.utimes(`${file}.lock`, future, future);
+    const store = new CommandHistoryStore(file, { persist: true });
+
+    store.add('after clock change');
+    await store.whenIdle();
+
+    expect(await freshLoad()).toEqual(['after clock change']);
   });
 
   it('writes nothing when persistence is off', async () => {

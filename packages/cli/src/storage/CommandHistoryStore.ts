@@ -21,6 +21,8 @@ const SECRET_NAME = String.raw`[\w-]*(api[_-]?key|token|secret|passw(or)?d)[\w-]
 const SECRET_PATTERNS: RegExp[] = [
   new RegExp(String.raw`\b${SECRET_NAME}["']?\s*[:=]\s*\S`, 'i'),
   new RegExp(String.raw`(^|\s)--?${SECRET_NAME}(=|\s+)\S`, 'i'),
+  // `aws configure set aws_secret_access_key X`, `npm config set //host/:_authToken X`
+  new RegExp(String.raw`\bset\s+\S*?${SECRET_NAME}\s+\S`, 'i'),
   /:\/\/[^\s/@:]+:[^\s/@]+@/,
   /\b(authorization|x-api-key)\s*:/i,
   /\bbearer\s+[\w.~+/-]{8,}/i,
@@ -30,6 +32,8 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bmysql(dump)?\b.*\s-p\S/,
   /\bcurl\b.*\s(-u\s*|--user[=\s]+)[^\s:]+:\S/,
   /\bdocker\s+login\b.*\s-p(=|\s+)\S/,
+  /\bsshpass\b.*\s-p\s*\S/,
+  /\bgh\s+secret\s+set\b.*\s(-b|--body)(=|\s+)\S/,
 ];
 
 /** False for input that may carry a credential: secret-named assignments or flags, URL passwords, auth headers, keys, tokens. */
@@ -207,7 +211,8 @@ export class CommandHistoryStore {
         stat => Date.now() - stat.mtimeMs,
         () => 0
       );
-      if (lockAge > LOCK_STALE_MS) await fs.rm(this.lockPath, { force: true });
+      // Absolute age: a lock stamped in the future (the clock moved back) would otherwise never go stale.
+      if (Math.abs(lockAge) > LOCK_STALE_MS) await fs.rm(this.lockPath, { force: true });
       else await delay(LOCK_RETRY_MS);
     }
     try {
