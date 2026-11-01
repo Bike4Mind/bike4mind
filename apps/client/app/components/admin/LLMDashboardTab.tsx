@@ -19,6 +19,7 @@ import {
   Input,
   useTheme,
 } from '@mui/joy';
+import type { Theme } from '@mui/joy/styles';
 import ImageIcon from '@mui/icons-material/Image';
 import ChatIcon from '@mui/icons-material/Chat';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -77,6 +78,19 @@ const getModelVendor = (model: LLMModelConfig): string => {
 };
 
 const SEARCH_DEBOUNCE_MS = 250;
+
+const PINNED_LAYOUT = { height: '100%', overflow: 'hidden' } as const;
+
+// A pinned header taller than the viewport leaves the inner-scrolling table 0px tall, so pin only where
+// ~250-300px of rows fit below the tallest measured chrome (655px at md, 513px at lg); elsewhere the tab scrolls.
+export const llmDashboardRootSx = (theme: Theme) => ({
+  p: 2,
+  width: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  [`${theme.breakpoints.up('md')} and (min-height: 960px)`]: PINNED_LAYOUT,
+  [`${theme.breakpoints.up('lg')} and (min-height: 770px)`]: PINNED_LAYOUT,
+});
 
 // Joy's Table uses `table-layout: fixed`, so every column needs a pixel width for the
 // table to widen (and scroll) instead of letting the per-key "Allowed" cells overflow it.
@@ -482,7 +496,7 @@ const LLMDashboardTab: React.FC = () => {
   }
 
   return (
-    <Sheet sx={{ p: 2, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <Sheet data-testid="llm-dashboard-root" sx={llmDashboardRootSx}>
       <Box sx={{ flexShrink: 0 }}>
         <Alert variant="soft" color="primary" sx={{ mb: 3 }} startDecorator={<SecurityIcon />}>
           <Typography level="body-sm">
@@ -544,7 +558,13 @@ const LLMDashboardTab: React.FC = () => {
           spacing={2}
           sx={{ mb: 3 }}
         >
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'center' }}>
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={2}
+            alignItems={{ xs: 'stretch', sm: 'center' }}
+            flexWrap="wrap"
+            useFlexGap
+          >
             <Input
               size="sm"
               placeholder="Search models"
@@ -1206,9 +1226,11 @@ const LLMDashboardTab: React.FC = () => {
         spacing={2}
         alignItems="center"
         justifyContent="space-between"
+        flexWrap="wrap"
+        useFlexGap
         sx={{ mt: 2, px: 1, flexShrink: 0 }}
       >
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <Typography level="body-sm">Rows per page:</Typography>
           <Select
             value={rowsPerPage}
@@ -1221,12 +1243,12 @@ const LLMDashboardTab: React.FC = () => {
             <Option value={25}>25</Option>
             <Option value={50}>50</Option>
           </Select>
-          <Typography level="body-sm" sx={{ ml: 2 }}>
+          <Typography level="body-sm">
             {startIndex + 1}-{Math.min(endIndex, filteredModels.length)} of {filteredModels.length} models
           </Typography>
         </Stack>
 
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <Button
             size="sm"
             variant="plain"

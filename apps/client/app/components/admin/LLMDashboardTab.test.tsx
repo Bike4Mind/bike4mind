@@ -42,7 +42,7 @@ vi.mock('@client/app/hooks/data/user', () => ({
 
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 
-import LLMDashboardTab from './LLMDashboardTab';
+import LLMDashboardTab, { llmDashboardRootSx } from './LLMDashboardTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderTab = () =>
@@ -248,5 +248,47 @@ describe('LLMDashboardTab bulk selection', () => {
 
     fireEvent.click(screen.getByTestId('llm-dashboard-bulk-clear-btn'));
     expect(screen.queryByTestId('llm-dashboard-bulk-bar')).not.toBeInTheDocument();
+  });
+});
+
+describe('llmDashboardRootSx', () => {
+  const sx: Record<string, unknown> = llmDashboardRootSx(appTheme);
+  const pinnedQueries = Object.keys(sx).filter(key => key.startsWith('@media'));
+
+  // jsdom cannot evaluate media queries, so match the min-width/min-height pairs by hand.
+  const pinsAt = (width: number, height: number) =>
+    pinnedQueries.some(query => {
+      const minWidth = Number(/min-width:\s*(\d+)px/.exec(query)?.[1] ?? 0);
+      const minHeight = Number(/min-height:\s*(\d+)px/.exec(query)?.[1] ?? 0);
+      return width >= minWidth && height >= minHeight;
+    });
+
+  it('scrolls the whole tab by default and pins only under width and height queries', () => {
+    expect(sx).not.toHaveProperty('height');
+    expect(sx).not.toHaveProperty('overflow');
+    expect(pinnedQueries.length).toBeGreaterThan(0);
+    for (const query of pinnedQueries) {
+      expect(query).toMatch(/min-width:\s*\d+px/);
+      expect(query).toMatch(/min-height:\s*\d+px/);
+      expect(sx[query]).toEqual({ height: '100%', overflow: 'hidden' });
+    }
+  });
+
+  it.each([
+    [412, 915],
+    [915, 412],
+    [932, 430],
+    [768, 1000],
+    [1180, 820],
+  ])('lets a %ix%i viewport scroll instead of pinning a header taller than the screen', (width, height) => {
+    expect(pinsAt(width, height)).toBe(false);
+  });
+
+  it.each([
+    [1280, 800],
+    [1440, 800],
+    [1000, 1000],
+  ])('keeps the pinned header and inner table scroll at %ix%i', (width, height) => {
+    expect(pinsAt(width, height)).toBe(true);
   });
 });
