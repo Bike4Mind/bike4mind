@@ -10,6 +10,7 @@ import {
   useConnectOrgSlack,
   useDisconnectOrgSlack,
 } from '@client/app/hooks/data/useOrgSlackWorkspace';
+import OrgSlackApiPosting from './OrgSlackApiPosting';
 import { useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
 
@@ -156,6 +157,8 @@ const OrgSlackIntegration: FC<OrgSlackIntegrationProps> = ({ organization }) => 
             Your team can now link their personal Slack accounts via Settings to receive notifications.
           </Alert>
         )}
+
+        {workspace.enabled && <OrgSlackApiPosting organizationId={organization.id} />}
 
         <Box>
           <Button
