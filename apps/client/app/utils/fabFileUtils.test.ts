@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { createElement } from 'react';
+import { render } from '@testing-library/react';
+import { KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import type { IFabFileDocument } from '@bike4mind/common';
 
 const { apiGet, unpdfLoadedSpy, getDocumentProxy, extractText } = vi.hoisted(() => ({
   apiGet: vi.fn(),
@@ -76,5 +79,26 @@ describe('fabFileUtils / caller-supplied content cap', () => {
 
     expect(result).toBe('abcd...');
     expect(apiGet).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileUtils / GetFileIcon CSV', () => {
+  const renderIcon = async (file: Partial<IFabFileDocument>) => {
+    const { GetFileIcon } = await import('./fabFileUtils');
+    return render(createElement(GetFileIcon, { file: { type: KnowledgeType.FILE, ...file } as IFabFileDocument }))
+      .container;
+  };
+
+  it.each([SupportedFabFileMimeTypes.CSV, 'application/csv', 'application/octet-stream'])(
+    'renders the table icon for a .CSV file labelled %s',
+    async mimeType => {
+      const container = await renderIcon({ fileName: 'Data.CSV', mimeType });
+      expect(container.querySelector('[data-testid="TableChartIcon"]')).toBeTruthy();
+    }
+  );
+
+  it('keeps the generic icon for a crawled URL ending in .csv', async () => {
+    const container = await renderIcon({ type: KnowledgeType.URL, fileName: 'export.csv', mimeType: 'text/csv' });
+    expect(container.querySelector('[data-testid="InsertDriveFileIcon"]')).toBeTruthy();
   });
 });
