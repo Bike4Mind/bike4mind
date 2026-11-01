@@ -67,11 +67,15 @@ export function rankSearchHits<T extends Pick<HubModelSummary, 'id' | 'tags' | '
   };
 }
 
-export type RuntimeSource = 'flag' | 'env' | 'config' | 'detected';
+export type RuntimeSource = 'flag' | 'env' | 'config' | 'detected' | 'server';
 
 export interface RuntimeTarget {
   runtime: LocalRuntime;
   source: RuntimeSource;
+  /** Set when `--server` chose a saved model server. */
+  server?: { id: string; name: string };
+  /** Scrubs the saved server's credential from text a server sent back, such as pull progress. */
+  redact?: (text: string) => string;
 }
 
 /** Where models come from and go to; `planPull` needs nothing else. */
@@ -214,9 +218,10 @@ export function formatBytes(bytes: number | null): string {
   return `${bytes} B`;
 }
 
-export function runtimeLabel({ runtime, source }: RuntimeTarget): string {
+export function runtimeLabel({ runtime, source, server }: RuntimeTarget): string {
   const name = runtime.kind === 'ollama' ? 'Ollama' : 'OpenAI-compatible server';
-  return `${name} at ${runtime.baseUrl}${source === 'detected' ? ' (detected)' : ''}`;
+  const saved = server ? ` "${clean(server.name)}"` : '';
+  return `${name}${saved} at ${runtime.baseUrl}${source === 'detected' ? ' (detected)' : ''}`;
 }
 
 /** Permissive only when at least one license is declared and every one is. */

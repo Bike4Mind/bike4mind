@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { HardwareProfile } from '@bike4mind/local-models';
-import { isLoopbackUrl, machineLabel, machineReader, rateDownload } from './fit.js';
+import { fitForPlan, isLoopbackUrl, machineLabel, machineReader, rateDownload } from './fit.js';
+import type { PullPlan } from './localModels.js';
 
 const GIB = 1024 ** 3;
 
@@ -97,5 +98,29 @@ describe('rateDownload', () => {
     expect(fit.verdict).toBe('too-large');
     expect(fit.detail).toContain('with 268 MB reserved headroom, this exceeds the 11.3 GB');
     expect(fit.detail).not.toContain('more than');
+  });
+});
+
+describe('fitForPlan', () => {
+  const plan = (server: { id: string; name: string } | undefined) =>
+    ({
+      kind: 'ollama',
+      target: { runtime: { baseUrl: 'http://127.0.0.1:21434' }, source: server ? 'server' : 'env', server },
+      manifest: { sizeBytes: 40 * GIB },
+    }) as unknown as PullPlan;
+
+  it("never rates a saved server's download against this machine, even on a loopback tunnel", async () => {
+    const read = vi.fn(async () => ({ hardware: cpu(16) }));
+    const fit = await fitForPlan(plan({ id: 'a1', name: 'gpu-box' }), read);
+    expect(read).not.toHaveBeenCalled();
+    expect(fit.verdict).toBe('unknown');
+    expect(fit.detail).toContain('saved model server');
+  });
+
+  it('rates a local runtime against this machine', async () => {
+    const read = vi.fn(async () => ({ hardware: cpu(16) }));
+    const fit = await fitForPlan(plan(undefined), read);
+    expect(read).toHaveBeenCalledWith('http://127.0.0.1:21434');
+    expect(fit.verdict).toBe('too-large');
   });
 });

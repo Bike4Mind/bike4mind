@@ -16,8 +16,11 @@ sidebar_position: 13
 | `b4m models pull <ref>` | Download a model after showing its size, license and fit |
 | `b4m models use <name>` | Make an installed model the CLI's default |
 | `b4m models rm <name>` | Remove an installed model |
+| `b4m models servers` | List the model servers saved in Desktop, with status |
+| `b4m models servers login <name>` | Give the CLI its own credential for a server |
+| `b4m models servers logout <name>` | Remove the CLI's credential for a server |
 
-`ls`, `search` and `show` print JSON with `--output-format json`.
+`ls`, `search`, `show` and `servers` print JSON with `--output-format json`. `ls`, `use`, `pull` and `rm` take `--server <name>` to act on a [Desktop model server](../features/desktop-model-servers.md) instead of the local Ollama.
 
 ## Pick and download a model
 
@@ -143,9 +146,42 @@ b4m models ls --ollama-host http://127.0.0.1:11500
 
 If the far machine has more memory than yours, add `--force` to pull a build rated too large.
 
+## Use the model servers saved in Desktop
+
+The CLI reads the server list you keep in Desktop (Settings > Model servers). It never changes that list. `b4m models servers` shows each server with its kind, address, access, whether the CLI has a credential for it, and whether it answers:
+
+```bash
+b4m models servers
+```
+
+```text
+NAME     KIND    ADDRESS                          ACCESS     CREDENTIALS                              STATUS
+shared   Ollama  http://127.0.0.1:11434           Manage     none                                     online (4 ms)
+vllm     vLLM    http://127.0.0.1:8001            Chat only  none                                     online (6 ms)
+gpu-box  Ollama  https://gpu-box.example.com      Manage     needed: b4m models servers login gpu-box  needs credentials
+```
+
+The NOTE column warns when a server uses plain http on a private network ("Unencrypted") and when a public server answers anyone without credentials ("Open to anyone"). Add `--check-tools` to send each OpenAI-compatible server a one-token request that declares a tool; a server that refuses tool calls gets a note saying what to change on it.
+
+Desktop keeps its credentials in your operating system's encrypted storage, which the CLI cannot read. For a server that needs one, type it once for the CLI. The input is hidden, and the CLI saves it only after the server accepts it:
+
+```bash
+b4m models servers login gpu-box
+```
+
+Pipe the credential instead with `--token-stdin`. The CLI keeps its copy in `~/.bike4mind/config.json`, which only you can read, next to its own sign-in tokens. It never prints a credential. `b4m models servers logout gpu-box` removes it, and also accepts the raw server id to clear a credential whose server was deleted in Desktop. The same address rules as in Desktop apply: credentials go over https, or over http only to this computer or a Tailscale address.
+
+Add `--server <name>` to act on one of these servers:
+
+```bash
+b4m models ls --server vllm
+```
+
+On an OpenAI-compatible server such as vLLM, `ls` shows each model once with its context length, the other names it answers to, and a LoRA adapter's base model. Chatting with a model on one of these servers is not available in the CLI yet, so `use --server` refuses and saves nothing. `pull` and `rm` work only on an Ollama server that Desktop lets you manage. A server set to Chat only in Desktop, and servers such as vLLM that serve a fixed set of models, refuse them. A pull still shows the size and license and asks first.
+
 ## Manage models from an MCP client
 
-When the CLI runs as an MCP server (`b4m mcp serve`), it offers `models_list`, `models_search`, `models_pull` and `models_remove` with the same checks. The host comes from `B4M_OLLAMA_HOST`, the saved host, or detection, as for `b4m models`.
+When the CLI runs as an MCP server (`b4m mcp serve`), it offers `models_list`, `models_search`, `models_pull` and `models_remove` with the same checks. The host comes from `B4M_OLLAMA_HOST`, the saved host, or detection, as for `b4m models`. `models_list`, `models_pull` and `models_remove` also take a `server` argument naming a Desktop model server, with the same credentials and the same pull and remove limits.
 
 `models_pull` never downloads on its own. A client that supports elicitation asks you directly, showing the size, every license and the fit. Any other client gets the preview and a command to run in your terminal, where the CLI asks you:
 
