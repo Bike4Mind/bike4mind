@@ -171,6 +171,7 @@ export interface AuthTokens {
  */
 export interface ApiConfig {
   customUrl?: string; // URL for self-hosted Bike4Mind instance
+  endpointChosen?: boolean; // The user has picked a backend (first-run picker or an API flag/command)
 }
 
 /**

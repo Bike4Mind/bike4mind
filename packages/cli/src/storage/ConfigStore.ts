@@ -123,6 +123,7 @@ const AuthTokensSchema = z.object({
  */
 const ApiConfigSchema = z.object({
   customUrl: z.url().optional(),
+  endpointChosen: z.boolean().optional(),
 });
 
 /**
@@ -1635,7 +1636,16 @@ export class ConfigStore {
   async setCustomApiUrl(url: string | null): Promise<void> {
     await this.load();
     // Reset to the build-time default service (null) or set a self-hosted URL.
-    this.globalConfig!.apiConfig = url === null ? undefined : { customUrl: url };
+    this.globalConfig!.apiConfig = url === null ? { endpointChosen: true } : { customUrl: url, endpointChosen: true };
+    await this.save();
+  }
+
+  /** Record that a backend was chosen, so the first-run picker is not shown again. */
+  async markEndpointChosen(): Promise<void> {
+    await this.load();
+    const g = this.globalConfig!;
+    if (g.apiConfig?.endpointChosen) return;
+    g.apiConfig = { ...g.apiConfig, endpointChosen: true };
     await this.save();
   }
 
@@ -1665,13 +1675,13 @@ export class ConfigStore {
     let newApiConfig: CliConfig['apiConfig'];
     if (target === 'prod') {
       newUrl = getDefaultApiUrl();
-      newApiConfig = undefined;
+      newApiConfig = { endpointChosen: true };
     } else if (target === 'dev') {
       newUrl = LOCAL_DEV_URL;
-      newApiConfig = { customUrl: LOCAL_DEV_URL };
+      newApiConfig = { customUrl: LOCAL_DEV_URL, endpointChosen: true };
     } else {
       newUrl = target.customUrl;
-      newApiConfig = { customUrl: target.customUrl };
+      newApiConfig = { customUrl: target.customUrl, endpointChosen: true };
     }
     const envName = getEnvironmentName(newApiConfig);
 
@@ -1679,6 +1689,10 @@ export class ConfigStore {
 
     // No-op when already pointed at the requested environment - leave auth alone.
     if (!swap.changed) {
+      if (!g.apiConfig?.endpointChosen) {
+        g.apiConfig = newApiConfig;
+        await this.save();
+      }
       return { url: newUrl, envName, changed: false, authenticated: isAuthTokenValid(g.auth) };
     }
 

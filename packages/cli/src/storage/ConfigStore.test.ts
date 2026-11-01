@@ -3,7 +3,8 @@
  *
  * Covers the per-environment auth token cache: no-op same-env, stash on switch
  * away, restore on switch back, logout-then-switch dropping the stale cache
- * entry, URL-key normalization, and the expiry-aware authenticated flag.
+ * entry, URL-key normalization, and the expiry-aware authenticated flag. Also
+ * covers the endpointChosen marker every backend choice persists.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -128,7 +129,8 @@ describe('ConfigStore.switchApiEnvironment', () => {
       const config = await store.get();
       expect(config.auth).toEqual(prodTokens);
       expect(config.authByEnv?.[LOCAL_DEV_URL]).toEqual(devTokens);
-      expect(config.apiConfig).toBeUndefined();
+      expect(config.apiConfig?.customUrl).toBeUndefined();
+      expect(config.apiConfig?.endpointChosen).toBe(true);
     });
 
     it('reports authenticated:false when the restored token is expired', async () => {
@@ -184,6 +186,44 @@ describe('ConfigStore.switchApiEnvironment', () => {
       expect(result.authenticated).toBe(true);
       const afterReturn = await store.get();
       expect(afterReturn.auth).toEqual(tokens);
+    });
+  });
+
+  describe('endpointChosen marker', () => {
+    const persistedApiConfig = async () => (await new ConfigStore(configPath).get()).apiConfig;
+
+    it('persists the marker on a no-op switch to the current environment (--prod on a fresh install)', async () => {
+      const result = await store.switchApiEnvironment('prod');
+
+      expect(result.changed).toBe(false);
+      expect(await persistedApiConfig()).toEqual({ endpointChosen: true });
+    });
+
+    it('leaves an already-chosen custom URL alone on a no-op switch', async () => {
+      await store.switchApiEnvironment('dev');
+      await store.switchApiEnvironment('dev');
+
+      expect(await persistedApiConfig()).toEqual({ customUrl: LOCAL_DEV_URL, endpointChosen: true });
+    });
+
+    it('persists the marker when setting or resetting a custom URL', async () => {
+      await store.setCustomApiUrl('https://self.example.com');
+      expect(await persistedApiConfig()).toEqual({ customUrl: 'https://self.example.com', endpointChosen: true });
+
+      await store.setCustomApiUrl(null);
+      expect(await persistedApiConfig()).toEqual({ endpointChosen: true });
+    });
+
+    it('markEndpointChosen keeps an existing custom URL', async () => {
+      await store.setCustomApiUrl('https://self.example.com');
+      const raw = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      raw.apiConfig = { customUrl: 'https://self.example.com' };
+      await fs.writeFile(configPath, JSON.stringify(raw));
+
+      const fresh = new ConfigStore(configPath);
+      await fresh.markEndpointChosen();
+
+      expect(await persistedApiConfig()).toEqual({ customUrl: 'https://self.example.com', endpointChosen: true });
     });
   });
 });

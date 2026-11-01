@@ -329,6 +329,11 @@ Because that default is injected only at build time, the endpoint is resolved li
 4. Otherwise (a published, unbranded fork with no baked default), the first `b4m` **prompts you
    to choose a backend**.
 
+A build with a baked default also shows this picker on a fresh install, listing the default
+first and preselected, then the local dev server and a custom URL. Any choice (the picker,
+`--prod`, `--dev`, `--api-url`, `--reset-api`, `/set-api`, `/reset-api`) is remembered, so
+later launches go straight to sign-in.
+
 **Quick switch between local dev and production:** use the `b4m --dev` / `b4m --prod`
 launch flags (see [Switching environments](#switching-environments---dev----prod)).
 They persist your choice and cache auth per-environment. The `/set-api`, `/reset-api`,
