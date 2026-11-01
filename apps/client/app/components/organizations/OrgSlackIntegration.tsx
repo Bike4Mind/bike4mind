@@ -58,7 +58,7 @@ const OrgSlackIntegration: FC<OrgSlackIntegrationProps> = ({ organization }) => 
       type: 'danger',
       title: 'Disconnect Slack Workspace',
       description:
-        'Are you sure you want to disconnect this Slack workspace? Team members will no longer receive Slack notifications from this organization.',
+        'Are you sure you want to disconnect this Slack workspace? Team members will no longer receive Slack notifications from this organization, and API posting is turned off for every channel.',
       onOk: () => {
         disconnectMutation.mutate(organization.id);
       },
@@ -158,7 +158,9 @@ const OrgSlackIntegration: FC<OrgSlackIntegrationProps> = ({ organization }) => 
           </Alert>
         )}
 
-        {workspace.enabled && <OrgSlackApiPosting organizationId={organization.id} />}
+        {workspace.enabled && (
+          <OrgSlackApiPosting organizationId={organization.id} organizationName={organization.name} />
+        )}
 
         <Box>
           <Button

@@ -234,8 +234,9 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
     value: ApiKeyScope.SLACK_POST,
     label: 'Slack: Post',
+    // Confined, so it is minted from the organization's Slack integration settings, not the New-Key modals.
     description:
-      'Post messages and thread replies to Slack channels through the Bike4Mind bot. Reaches only channels an organization owner has enabled for API posting',
+      'Post messages and thread replies to Slack channels through the Bike4Mind bot. Reaches only channels an organization owner has enabled for API posting. Confined: a slack:post key carries no other scope and reaches no other API route',
     endpoints: [],
   },
 ];

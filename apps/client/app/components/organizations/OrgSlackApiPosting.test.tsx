@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ReactNode } from 'react';
@@ -14,6 +14,14 @@ const channelsState: { data?: unknown[]; isLoading: boolean; isError: boolean } 
 vi.mock('@client/app/hooks/data/useOrgSlackWorkspace', () => ({
   useGetOrgSlackApiPostingChannels: () => channelsState,
   useSetOrgSlackChannelApiPosting: () => ({ mutateAsync: mockMutateAsync, isPending: false }),
+}));
+const mockCreateKey = vi.fn();
+let createKeyOnSuccess: ((result: { id: string; key: string }) => void) | undefined;
+vi.mock('@client/app/hooks/data/userApiKeys', () => ({
+  useCreateUserApiKey: ({ onSuccess }: { onSuccess?: (result: { id: string; key: string }) => void } = {}) => {
+    createKeyOnSuccess = onSuccess;
+    return { mutate: mockCreateKey, isPending: false };
+  },
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -96,5 +104,18 @@ describe('OrgSlackApiPosting', () => {
 
     await waitFor(() => expect(mockMutateAsync).toHaveBeenCalled());
     expect(screen.queryByTestId('org-slack-api-posting-invite-hint')).not.toBeInTheDocument();
+  });
+
+  it('mints a key carrying only slack:post and shows it once', async () => {
+    renderIt();
+    fireEvent.click(screen.getByTestId('org-slack-api-posting-create-key-btn'));
+
+    expect(mockCreateKey).toHaveBeenCalledWith({ name: 'Slack posting (org-1)', scopes: ['slack:post'] });
+
+    act(() => createKeyOnSuccess?.({ id: 'key-id-1', key: 'b4m_example' }));
+    const minted = await screen.findByTestId('org-slack-api-posting-minted-key');
+    expect(minted.textContent).toContain('b4m_example');
+    expect(minted.textContent).toContain('key-id-1');
+    expect(screen.queryByTestId('org-slack-api-posting-create-key-btn')).toBeNull();
   });
 });
