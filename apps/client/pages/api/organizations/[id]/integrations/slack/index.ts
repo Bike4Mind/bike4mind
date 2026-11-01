@@ -54,7 +54,7 @@ const handler = baseApi()
     })
   )
   .delete(
-    asyncHandler<{}, { success: boolean; message: string }, unknown, { id?: string }>(async (req, res) => {
+    asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const orgId = req.query.id!;
       const user = req.user!;
 
