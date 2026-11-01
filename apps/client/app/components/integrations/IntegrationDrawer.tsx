@@ -123,7 +123,13 @@ const AccountConnectionPanel = ({
     <Stack gap="12px">
       <Stack direction="row" gap="8px" flexWrap="wrap">
         {!connection.connected && (
-          <Button size="sm" loading={connecting} onClick={onConnect} data-testid="integrations-drawer-connect-btn">
+          <Button
+            size="sm"
+            loading={connecting}
+            disabled={disconnecting}
+            onClick={onConnect}
+            data-testid="integrations-drawer-connect-btn"
+          >
             {connection.needsReconnect ? `Reconnect ${name}` : `Connect ${name}`}
           </Button>
         )}
@@ -133,6 +139,7 @@ const AccountConnectionPanel = ({
             variant="outlined"
             color="neutral"
             loading={disconnecting}
+            disabled={connecting}
             onClick={disconnect}
             data-testid="integrations-drawer-disconnect-btn"
           >
