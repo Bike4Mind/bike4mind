@@ -420,6 +420,7 @@ beforeEach(() => {
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
+const openModelServers = vi.fn();
 
 afterEach(() => {
   act(() => root?.unmount());
@@ -437,7 +438,7 @@ async function mount(inUse?: ModelsInUse, tab: 'curated' | 'installed' = 'instal
   act(() =>
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ModelsScreen onClose={() => {}} inUse={inUse} />
+        <ModelsScreen onClose={() => {}} inUse={inUse} onOpenModelServers={openModelServers} />
       </CssVarsProvider>
     )
   );
@@ -1193,12 +1194,31 @@ describe('ModelsScreen installed', () => {
     await mount();
     expect(q('models-runtime-status')?.dataset.state).toBe('down');
     expect(q('models-installed-runtime-down')?.textContent).toContain('Ollama is not running');
-    expect(q('models-runtime-download-link')?.getAttribute('href')).toBe('https://ollama.com/download');
 
     await openExplore();
     await click(q('models-explore-result-row'));
     expect(q('models-detail-runtime-down')).not.toBeNull();
     expect(q('models-build-pull-btn')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('offers Install Ollama and Point at a server with no local runtime, and installs nothing itself', async () => {
+    bridge.status = DOWN;
+    openModelServers.mockReset();
+    await mount(undefined, 'curated');
+    expect(q('models-no-runtime-text')?.textContent).toContain('127.0.0.1:11434');
+    expect(q('models-no-runtime-error')?.textContent).toBe('refused');
+    expect(q('models-curated-runtime-down')).not.toBeNull();
+    expect(calls.pull).not.toHaveBeenCalled();
+    const openExternal = (window as unknown as { b4m: { shell: { openExternal: ReturnType<typeof vi.fn> } } }).b4m.shell
+      .openExternal;
+    expect(openExternal).not.toHaveBeenCalled();
+
+    await click(q('models-install-ollama-btn'));
+    expect(openExternal).toHaveBeenCalledWith('https://ollama.com/download');
+    expect(calls.pull).not.toHaveBeenCalled();
+
+    await click(q('models-point-at-server-btn'));
+    expect(openModelServers).toHaveBeenCalledTimes(1);
   });
 
   it('checks again on its own while Ollama looks down, and lists its models once it answers', async () => {
@@ -1207,6 +1227,7 @@ describe('ModelsScreen installed', () => {
       bridge.status = { ...DOWN, error: 'timed out after 1500ms' };
       await mount();
       expect(q('models-runtime-status')?.dataset.state).toBe('down');
+      expect(q('models-no-runtime-error')?.textContent).toBe('timed out after 1500ms');
 
       bridge.status = RUNNING;
       bridge.installed = {
@@ -1748,7 +1769,8 @@ describe('ModelsScreen servers', () => {
     await pickServer('gpu');
     expect(q('models-runtime-status')?.dataset.state).toBe('down');
     expect(q('models-runtime-status')?.textContent).toContain('Could not reach gpu box: connection refused');
-    expect(q('models-runtime-download-link')).toBeNull();
+    expect(q('models-install-ollama-btn')).toBeNull();
+    expect(q('models-point-at-server-btn')).toBeNull();
     expect(q('models-installed-runtime-down')?.textContent).toContain('gpu box is not reachable');
 
     await pickServer('local');
