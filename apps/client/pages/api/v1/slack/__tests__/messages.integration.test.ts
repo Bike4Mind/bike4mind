@@ -287,7 +287,9 @@ describe('POST /api/v1/slack/messages', () => {
 
   it('maps Slack rejecting the blocks to 422 and an unknown Slack failure to 502', async () => {
     mockPostMessage.mockRejectedValueOnce(slackPlatformError('invalid_blocks'));
-    expect((await post(message({ blocks: [{ type: 'bogus' }] })))._getStatusCode()).toBe(422);
+    expect((await post(message({ blocks: [{ type: 'section', text: { type: 'bogus' } }] })))._getStatusCode()).toBe(
+      422
+    );
 
     mockPostMessage.mockRejectedValueOnce(new Error('socket hang up'));
     expect((await post(message()))._getStatusCode()).toBe(502);
@@ -300,13 +302,38 @@ describe('POST /api/v1/slack/messages', () => {
     ['blank text', message({ text: '   ' })],
     ['text over 3,000 characters', message({ text: 'x'.repeat(3001) })],
     ['a malformed thread_ts', message({ thread_ts: '12345' })],
-    ['more than 50 blocks', message({ blocks: Array.from({ length: 51 }, () => ({ type: 'divider' })) })],
+    ['more than 49 blocks', message({ blocks: Array.from({ length: 50 }, () => ({ type: 'divider' })) })],
     ['a block without a type', message({ blocks: [{ text: 'no type' }] })],
     [
       'blocks over the size cap',
       message({ blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'x'.repeat(40_001) } }] }),
     ],
     ['an unknown field', message({ reply_broadcast: true })],
+    [
+      'a button disguised as a link (forged action)',
+      message({
+        blocks: [
+          {
+            type: 'section',
+            text: { type: 'mrkdwn', text: 'View logs' },
+            accessory: {
+              type: 'button',
+              text: { type: 'plain_text', text: 'View logs' },
+              action_id: 'sre_approve_fix',
+            },
+          },
+        ],
+      }),
+    ],
+    ['an actions block', message({ blocks: [{ type: 'actions', elements: [] }] })],
+    [
+      'a url button field',
+      message({ blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'x' }, url: 'https://e.x' }] }),
+    ],
+    [
+      'nesting past the depth ceiling',
+      message({ blocks: [{ type: 'section', fields: [[[[[[[[[[[[[['x']]]]]]]]]]]]]] }] }),
+    ],
   ])('rejects %s with 422 before any lookup', async (_label, body) => {
     const res = await post(body);
 

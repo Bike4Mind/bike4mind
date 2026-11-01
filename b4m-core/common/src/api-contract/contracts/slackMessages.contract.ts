@@ -8,6 +8,7 @@ import {
   SlackMessageErrorSchema,
   SlackMessageRequestSchema,
   SlackMessageResponseSchema,
+  SLACK_API_POST_BLOCK_TYPES,
 } from '../../schemas/slackMessagesApi';
 import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
@@ -38,7 +39,9 @@ export const postSlackMessageContract = defineEndpoint({
     'The bot must also be a member of the channel: invite it with `/invite @<bot name>`. ' +
     `\`text\` is at most ${MAX_SLACK_MESSAGE_TEXT_LENGTH} characters and is the notification fallback when ` +
     `\`blocks\` (Block Kit, at most ${MAX_SLACK_MESSAGE_BLOCKS} blocks and ${MAX_SLACK_MESSAGE_BLOCKS_BYTES} ` +
-    'serialized characters) is sent. Broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, user ' +
+    `serialized characters) is sent. Blocks are limited to ${SLACK_API_POST_BLOCK_TYPES.join(', ')}; nothing a ` +
+    'reader can act on is accepted: no interactive elements, `action_id`, `confirm`, or `url` outside a ' +
+    'rich_text link, and a section `accessory` must be an image. Broadcast mentions (`<!channel>`, `<!here>`, `<!everyone>`, user ' +
     'groups, and bare `@channel` / `@here` / `@everyone`) are posted as plain text that notifies nobody; ' +
     '`<@U...>` user mentions are kept. A block Slack rejects as malformed answers 422. Rate limited per key to 30 messages a minute and 1,000 a day, on ' +
     "top of the key's own limits. Authenticate with an API key (`b4m_live_`) carrying `slack:post`.",

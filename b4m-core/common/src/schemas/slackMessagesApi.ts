@@ -9,8 +9,8 @@ import { ApiErrorSchema } from './chat';
 
 /** Slack truncates a message's top-level `text` well past this; we refuse instead of truncating. */
 export const MAX_SLACK_MESSAGE_TEXT_LENGTH = 3000;
-/** Slack's own ceiling on blocks per message. */
-export const MAX_SLACK_MESSAGE_BLOCKS = 50;
+/** Slack allows 50 blocks per message; the server appends one attribution block, so callers get 49. */
+export const MAX_SLACK_MESSAGE_BLOCKS = 49;
 /** Ceiling on the serialized `blocks` array, so one request cannot carry an outsized payload. */
 export const MAX_SLACK_MESSAGE_BLOCKS_BYTES = 40_000;
 
@@ -27,7 +27,107 @@ const SlackMessageTsSchema = z
   .string()
   .regex(SLACK_MESSAGE_TS_PATTERN, 'must be a Slack message timestamp such as 1730000000.123456');
 
-/** One Block Kit block. Only `type` is checked here; Slack validates the rest and the route maps its refusal. */
+/** Block types a caller may send: layout and content only, never anything a reader can click to act. */
+export const SLACK_API_POST_BLOCK_TYPES = ['section', 'header', 'divider', 'context', 'image', 'rich_text'] as const;
+/** Nesting depth and node count ceilings for `blocks`, checked iteratively before anything recurses over it. */
+export const MAX_SLACK_MESSAGE_BLOCKS_DEPTH = 12;
+export const MAX_SLACK_MESSAGE_BLOCKS_NODES = 5000;
+
+/**
+ * `event_type` of the metadata the server attaches to every API post. The Slack interactivity handler
+ * refuses any action on a message carrying it (apps/client/pages/api/slack/interactive.ts).
+ */
+export const SLACK_API_POST_EVENT_TYPE = 'b4m_api_post';
+
+const ALLOWED_BLOCK_TYPES: ReadonlySet<string> = new Set(SLACK_API_POST_BLOCK_TYPES);
+// Element types a reader can act on. Slack generates an action_id when one is omitted, so these are
+// refused by type as well as by the presence of action_id.
+const INTERACTIVE_ELEMENT_TYPES: ReadonlySet<string> = new Set([
+  'actions',
+  'input',
+  'button',
+  'workflow_button',
+  'overflow',
+  'datepicker',
+  'timepicker',
+  'datetimepicker',
+  'checkboxes',
+  'radio_buttons',
+  'static_select',
+  'external_select',
+  'users_select',
+  'conversations_select',
+  'channels_select',
+  'multi_static_select',
+  'multi_external_select',
+  'multi_users_select',
+  'multi_conversations_select',
+  'multi_channels_select',
+  'plain_text_input',
+  'email_text_input',
+  'url_text_input',
+  'number_input',
+  'file_input',
+  'rich_text_input',
+]);
+// Keys that make an element act or navigate. `url` is allowed only on a rich_text `link`, which is
+// the same plain hyperlink mrkdwn `<https://...|text>` already allows in text.
+const FORBIDDEN_KEYS: ReadonlySet<string> = new Set(['action_id', 'confirm', 'url', 'dispatch_action']);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * Returns why `blocks` may not be posted, or null when it may. Iterative, so a deeply nested body is
+ * refused instead of overflowing the stack: blocks are limited to {@link SLACK_API_POST_BLOCK_TYPES},
+ * and no node anywhere may be an interactive element or carry `action_id`, `confirm` or `url` (except
+ * a rich_text link). A section `accessory` may only be an image.
+ */
+export function findSlackApiPostBlocksProblem(blocks: readonly unknown[]): string | null {
+  for (const [index, block] of blocks.entries()) {
+    const type = isRecord(block) ? block.type : undefined;
+    if (typeof type !== 'string' || !ALLOWED_BLOCK_TYPES.has(type)) {
+      return `blocks[${index}].type must be one of ${SLACK_API_POST_BLOCK_TYPES.join(', ')}`;
+    }
+  }
+
+  const stack: Array<{ value: unknown; depth: number; path: string }> = blocks.map((value, index) => ({
+    value,
+    depth: 1,
+    path: `blocks[${index}]`,
+  }));
+  let nodes = 0;
+  while (stack.length > 0) {
+    const { value, depth, path } = stack.pop()!;
+    nodes += 1;
+    if (nodes > MAX_SLACK_MESSAGE_BLOCKS_NODES)
+      return `blocks may hold at most ${MAX_SLACK_MESSAGE_BLOCKS_NODES} values`;
+    if (depth > MAX_SLACK_MESSAGE_BLOCKS_DEPTH)
+      return `blocks may nest at most ${MAX_SLACK_MESSAGE_BLOCKS_DEPTH} levels`;
+
+    if (Array.isArray(value)) {
+      value.forEach((child, i) => stack.push({ value: child, depth: depth + 1, path: `${path}[${i}]` }));
+      continue;
+    }
+    if (!isRecord(value)) continue;
+
+    if (typeof value.type === 'string' && INTERACTIVE_ELEMENT_TYPES.has(value.type)) {
+      return `${path}: interactive elements (${value.type}) are not allowed`;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (FORBIDDEN_KEYS.has(key) && !(key === 'url' && value.type === 'link')) {
+        return `${path}.${key} is not allowed`;
+      }
+      if (key === 'accessory' && !(isRecord(child) && child.type === 'image')) {
+        return `${path}.accessory may only be an image`;
+      }
+      stack.push({ value: child, depth: depth + 1, path: `${path}.${key}` });
+    }
+  }
+  return null;
+}
+
+/** One Block Kit block; the whole array is checked by findSlackApiPostBlocksProblem. */
 const SlackBlockSchema = z.looseObject({ type: z.string().min(1).max(64) });
 
 export const SlackMessageRequestSchema = z.strictObject({
@@ -38,8 +138,19 @@ export const SlackMessageRequestSchema = z.strictObject({
     .array(SlackBlockSchema)
     .min(1)
     .max(MAX_SLACK_MESSAGE_BLOCKS)
-    .refine(blocks => JSON.stringify(blocks).length <= MAX_SLACK_MESSAGE_BLOCKS_BYTES, {
-      message: `blocks must serialize to at most ${MAX_SLACK_MESSAGE_BLOCKS_BYTES} characters`,
+    .superRefine((blocks, ctx) => {
+      // Structure first: it bounds depth and size, so the stringify below cannot overflow the stack.
+      const problem = findSlackApiPostBlocksProblem(blocks);
+      if (problem) {
+        ctx.addIssue({ code: 'custom', message: problem });
+        return;
+      }
+      if (JSON.stringify(blocks).length > MAX_SLACK_MESSAGE_BLOCKS_BYTES) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `blocks must serialize to at most ${MAX_SLACK_MESSAGE_BLOCKS_BYTES} characters`,
+        });
+      }
     })
     .optional(),
   /** `ts` of the parent message, to reply in its thread. */
