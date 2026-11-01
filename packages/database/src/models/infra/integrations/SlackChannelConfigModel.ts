@@ -52,13 +52,25 @@ class SlackChannelConfigRepository
     return this.findOne({ channelId });
   }
 
+  /**
+   * The model-config write (Slack App Home). It never sets the API-posting fields, and when it moves a
+   * channel to another workspace (a shared channel configured from the other side) it first turns API
+   * posting off, so an opt-in never travels with the channel to a team that did not grant it.
+   */
   async upsertByChannelId(
     channelId: string,
     data: Partial<ISlackChannelConfig>
   ): Promise<ISlackChannelConfigDocument & IMongoDocument> {
+    const { apiPostEnabled, apiPostAllowedKeyIds, ...modelConfig } = data;
+    if (modelConfig.slackTeamId) {
+      await this.model.updateOne(
+        { channelId, slackTeamId: { $ne: modelConfig.slackTeamId } },
+        { $set: { apiPostEnabled: false, apiPostAllowedKeyIds: [] } }
+      );
+    }
     const result = await this.model.findOneAndUpdate(
       { channelId },
-      { $set: { ...data, channelId } },
+      { $set: { ...modelConfig, channelId } },
       { upsert: true, new: true }
     );
     return result as ISlackChannelConfigDocument & IMongoDocument;
