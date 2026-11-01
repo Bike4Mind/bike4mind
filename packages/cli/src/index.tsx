@@ -636,9 +636,8 @@ function CliApp() {
         // none resolves (an unbranded fork), instead of dead-ending on an empty URL.
         const endpoint = resolveApiEndpoint(config.apiConfig);
         if (
-          endpoint.status === 'unconfigured' ||
           shouldShowEndpointPicker({
-            endpointSource: endpoint.source,
+            endpoint,
             endpointChosen: !!config.apiConfig?.endpointChosen,
             hasAuthTokens: !!authTokens,
           })
@@ -4082,7 +4081,6 @@ function CliApp() {
                 exit();
               });
             } catch (err) {
-              setState(prev => ({ ...prev, showEnvironmentPicker: false }));
               console.error(`\n❌ Failed to save endpoint: ${err instanceof Error ? err.message : String(err)}\n`);
               exit();
             }
