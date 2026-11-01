@@ -51,7 +51,11 @@ export function specsInput(value: unknown): ModelServerSpecs | null | undefined 
 
 function probeInput(value: unknown): ModelServerProbeInput {
   const raw = (value ?? {}) as Record<string, unknown>;
-  return { address: text(raw.address, 2_048), credential: credentialInput(raw.credential) };
+  return {
+    address: text(raw.address, 2_048),
+    credential: credentialInput(raw.credential),
+    transport: raw.transport === 'ssh' ? 'ssh' : 'http',
+  };
 }
 
 export function registerModelServersIpc(

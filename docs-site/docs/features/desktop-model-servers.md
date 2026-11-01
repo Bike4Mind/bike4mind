@@ -40,6 +40,7 @@ If your computer has no secure storage available, Desktop keeps the credential o
 |-------|-------------------|-------------|
 | Tailscale with HTTPS | `https://gpu.tailnet-name.ts.net` | Optional |
 | Caddy in front of Ollama | `https://ollama.example.com` | Bearer token |
+| Connect with: SSH | `user@gpu.example.com` or a `Host` alias | Your SSH keys |
 | SSH local port forward | `http://127.0.0.1:21434` | None needed |
 | Plain LAN | `http://192.168.1.20:11434` | None, shown as Unencrypted |
 
@@ -106,9 +107,53 @@ curl -i -H "Authorization: Bearer $OLLAMA_TOKEN" https://ollama.example.com/api/
 
 The first call returns `401`. The second returns the Ollama version.
 
-## SSH local port forward
+## SSH
 
-If you can already SSH to the server, forward its Ollama port to your computer. Desktop then sees a loopback address, which it trusts without `https`, and SSH encrypts the traffic.
+If you can already sign in to the server with SSH, Desktop can reach its Ollama through SSH. Nothing is installed on the server, Ollama stays on `127.0.0.1`, and SSH encrypts the traffic. Desktop can open the SSH connection itself, or you can run a port forward yourself.
+
+### Connect with an SSH destination
+
+Desktop runs your computer's own `ssh` client with a stdio forward to `127.0.0.1:11434` on the server, the same as `ssh -W 127.0.0.1:11434 user@gpu.example.com`. It reads your SSH config and keys, so a `Host` alias and its `HostName`, `User`, `Port`, `IdentityFile` and `ProxyJump` settings all apply.
+
+Before you add the server:
+
+1. Run Ollama on the server on its default address, `127.0.0.1:11434`.
+2. In a terminal on your computer, run `ssh user@gpu.example.com` once. This confirms you can sign in and trusts the server's host key.
+3. Sign in with a key. Desktop cannot type a password or a passphrase. If your key has a passphrase, load it into your SSH agent with `ssh-add` first.
+4. Check that the server's SSH daemon allows TCP forwarding. OpenSSH allows it by default; some systems set `AllowTcpForwarding no` in `sshd_config`. Set it to `yes` or `local`.
+
+Then add it in Desktop:
+
+1. Open Settings > Model servers. Under Add a server, set Connect with to SSH.
+2. Enter the SSH destination: `user@gpu.example.com`, or a `Host` alias from your SSH config. A destination may contain only letters, digits, dots, dashes, underscores and one `@`.
+3. Select Test. Desktop reports the Ollama version, model count and latency, or why it could not connect.
+4. Check the Name, set Access, then select Save server.
+
+An SSH server is always Ollama, and it has no token or header: SSH does the sign-in. Its models appear in the model picker next to the ones on your computer, even when your computer runs the same model, and each chat goes to the server you picked.
+
+How Desktop runs `ssh`:
+
+- It never prompts. It runs with `BatchMode=yes`, a 15-second connect timeout, agent and X11 forwarding off, and no terminal. A `RemoteCommand` in your config, such as one that starts `tmux`, is turned off for this connection.
+- It checks host keys strictly. A server whose host key you have not trusted yet fails with "Connect once from a terminal with `ssh <destination>` to trust this server's host key." A host key that changed fails too.
+- On a `ProxyJump` host, host key checks and sign-in follow your SSH config, not the settings above. Connect once from a terminal so that host's key is trusted too.
+- It passes `ssh` a minimal environment: your user and home, `PATH`, locale settings and `SSH_AUTH_SOCK` for your agent. API keys and other variables in Desktop's environment are not passed on, so a `ProxyCommand` that needs another variable, such as `AWS_PROFILE` for `aws ssm`, does not work.
+- It shares one SSH connection between requests when your SSH config sets no `ControlPath`, through a socket in `~/.ssh/b4m` that closes two minutes after the last request. If your config sets a `ControlPath`, Desktop uses a shared connection you already have open but never opens one there itself. On Windows, and when your home folder path is too long for a socket path, each request opens its own SSH connection, which is slower but otherwise the same.
+
+The `b4m` CLI lists an SSH server under `b4m models servers` as SSH, Desktop only. The CLI cannot use it yet; save a local port forward in Desktop for CLI access.
+
+If an SSH server does not work, read the message under Test or on the server in Settings:
+
+- Connect once from a terminal: run `ssh <destination>` in a terminal, accept the host key, then select Check now.
+- Refused the SSH login: run `ssh <destination>` in a terminal. If it asks for a password or passphrase, set up a key, or load your key with `ssh-add`.
+- Does not allow SSH port forwarding: set `AllowTcpForwarding` to `yes` or `local` in the server's `sshd_config` and restart its SSH daemon.
+- Nothing answers at `127.0.0.1:11434` there: SSH works, but Ollama is not running on the server, or listens on another port.
+- Refused the forward to `127.0.0.1:11434`: over a shared connection `ssh` reports both of the causes above the same way. Check that Ollama is running on the server and that its `sshd_config` allows TCP forwarding.
+- Could not find `<destination>`: the host name does not resolve. Check the spelling, or the `HostName` for that alias in your SSH config.
+- Unreachable with an `ssh <destination> failed` message: the last line of `ssh`'s own error, such as a timeout.
+
+### SSH local port forward
+
+Use a port forward for llama-server or another OpenAI-compatible server, for an Ollama on another port, or for the CLI. Forward the server's port to your computer. Desktop then sees a loopback address, which it trusts without `https`, and SSH encrypts the traffic.
 
 ```bash
 ssh -N -L 21434:127.0.0.1:11434 user@gpu.example.com

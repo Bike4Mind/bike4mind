@@ -6,7 +6,14 @@ import type { ChatModelOption } from '@shared/chat';
 import type { ModelServerProbeResult } from '@shared/modelServers';
 import { ModelServerRegistry, PICKER_CHECK_WAIT_MS } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
-import type { ServerEndpoint } from '@bike4mind/local-models/servers';
+import {
+  describeSshFailure,
+  SshConnectionError,
+  type ServerEndpoint,
+  type SshEndpoint,
+} from '@bike4mind/local-models/servers';
+import type { OllamaLocal } from '../chat/OllamaLocal';
+import { LocalModels } from './LocalModels';
 
 const TOKEN = 'tok-secret-zz';
 
@@ -711,5 +718,170 @@ describe('ModelServerRegistry', () => {
     const [saved] = (await servers.views()).slice(1);
     const chat = servers.chatFor(`srv-${saved.id}`)!;
     expect(await chat.contextTokens(`local:srv-${saved.id}:m`)).toBe(8192);
+  });
+});
+
+describe('ModelServerRegistry SSH servers', () => {
+  type Mode = 'up' | 'down' | 'unknown-host-key';
+
+  /** Each destination answers as the fake Ollama over SSH, or fails the way ssh does in `modes`. */
+  function sshSetup(file: StoreFile = memoryFile()) {
+    const fake = fakeOllama();
+    const modes: Record<string, Mode> = {};
+    const sshCalls: string[] = [];
+    const sshFetchFor =
+      (endpoint: SshEndpoint): FetchLike =>
+      async (input, init) => {
+        sshCalls.push(`${endpoint.destination} ${new URL(String(input)).pathname}`);
+        const mode = modes[endpoint.destination] ?? 'up';
+        if (mode === 'down') {
+          throw new TypeError('fetch failed', {
+            cause: new SshConnectionError(
+              `ssh ${endpoint.destination} failed: ssh: connect to host gpu port 22: Connection refused`
+            ),
+          });
+        }
+        if (mode === 'unknown-host-key') {
+          throw describeSshFailure('Host key verification failed.\n', 255, endpoint.destination);
+        }
+        return fake.fetchFor({
+          origin: 'http://127.0.0.1:11434',
+          label: endpoint.label,
+          credentialHeaders: () => null,
+        })(input, init);
+      };
+    const store = new ModelServerStore(cipher, file, { debug: () => undefined, warn: () => undefined });
+    const instance = new ModelServerRegistry({
+      store,
+      logger: { debug: () => undefined, warn: () => undefined },
+      fetchFor: fake.fetchFor,
+      sshFetchFor,
+      localFetch: async () => json({ version: '0.12.0' }),
+      resolve: async () => [],
+    });
+    return { registry: instance, store, fake, modes, sshCalls };
+  }
+
+  const addSsh = (servers: ModelServerRegistry, destination = 'me@gpu', name = 'lab') =>
+    servers.add({ address: destination, transport: 'ssh', credential: none, name, kind: 'ollama', access: 'chat' });
+
+  it('adds a server by SSH destination under its own id, as Ollama with no credential', async () => {
+    const { registry: servers, store } = sshSetup();
+    await servers.add({
+      address: ' me@gpu ',
+      transport: 'ssh',
+      credential: { type: 'bearer', token: TOKEN },
+      name: 'lab',
+      kind: 'openai-compatible',
+      access: 'chat',
+    });
+    const [, lab] = await servers.views();
+    expect(lab).toMatchObject({
+      transport: 'ssh',
+      address: 'me@gpu',
+      kind: 'ollama',
+      auth: { type: 'none' },
+      unencrypted: false,
+      health: { state: 'online', version: '0.12.0' },
+      models: ['qwen2.5:0.5b'],
+    });
+    expect(lab.id).toMatch(/^[0-9a-f]{12}$/);
+    const [record] = await store.list();
+    expect(record.transport).toEqual({ type: 'ssh', destination: 'me@gpu' });
+  });
+
+  it('refuses a destination starting with "-" before running ssh', async () => {
+    const { registry: servers, sshCalls } = sshSetup();
+    const result = await servers.probe({ address: '-oProxyCommand=touch /tmp/x', transport: 'ssh', credential: none });
+    expect(result).toMatchObject({ ok: false, error: 'An SSH destination cannot start with "-".' });
+    await expect(addSsh(servers, '-oProxyCommand=x')).rejects.toThrow('cannot start with "-"');
+    expect(sshCalls).toEqual([]);
+  });
+
+  it('points a user@host typed as an address at the SSH choice', async () => {
+    const { registry: servers } = sshSetup();
+    const result = await servers.probe({ address: 'me@gpu', credential: none });
+    expect(result.error).toBe('This looks like an SSH destination. Choose SSH above, then test again.');
+  });
+
+  it('fails closed on an unknown host key with the terminal hint', async () => {
+    const { registry: servers, modes } = sshSetup();
+    modes['me@gpu'] = 'unknown-host-key';
+    const result = await servers.probe({ address: 'me@gpu', transport: 'ssh', credential: none });
+    expect(result).toMatchObject({
+      ok: false,
+      error: "Connect once from a terminal with `ssh me@gpu` to trust this server's host key.",
+    });
+    await expect(addSsh(servers)).rejects.toThrow('to trust this server');
+  });
+
+  it('lists the same model on this computer and the SSH server as two entries, each chatting with its own server', async () => {
+    const { registry: servers, sshCalls } = sshSetup();
+    await addSsh(servers);
+    const [, lab] = await servers.views();
+    const computer = {
+      models: vi.fn(async (): Promise<ChatModelOption[]> => [
+        { id: 'local:ollama:qwen2.5:0.5b', name: 'qwen2.5:0.5b', backend: 'ollama' } as ChatModelOption,
+      ]),
+      contextFit: vi.fn(),
+      stream: vi.fn(async () => undefined),
+      contextTokens: vi.fn(async () => 2048),
+      growFor: vi.fn(async () => undefined),
+    };
+    const local = new LocalModels(computer as unknown as OllamaLocal, servers);
+    const models = await local.models();
+    expect(models.map(model => [model.id, model.server?.name ?? null])).toEqual([
+      ['local:ollama:qwen2.5:0.5b', null],
+      [`local:srv-${lab.id}:qwen2.5:0.5b`, 'lab'],
+    ]);
+
+    sshCalls.length = 0;
+    expect(await local.contextTokens(`local:srv-${lab.id}:qwen2.5:0.5b`)).not.toBe(2048);
+    expect(sshCalls).toContain('me@gpu /api/show');
+    expect(computer.contextTokens).not.toHaveBeenCalled();
+
+    sshCalls.length = 0;
+    expect(await local.contextTokens('local:ollama:qwen2.5:0.5b')).toBe(2048);
+    expect(sshCalls).toEqual([]);
+  });
+
+  it("marks a stopped SSH server's models unavailable without blocking other servers", async () => {
+    const { registry: servers, modes } = sshSetup();
+    await addSsh(servers);
+    await servers.add({
+      address: 'http://127.0.0.2:11434',
+      credential: none,
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    modes['me@gpu'] = 'down';
+    await servers.check();
+    const models = await servers.models();
+    expect(models.find(model => model.server?.name === 'lab')?.unavailable).toMatch(/lab is unreachable/);
+    expect(models.find(model => model.server?.name === 'gpu box')?.unavailable).toBeUndefined();
+    const lab = (await servers.views()).find(view => view.name === 'lab');
+    expect(lab?.health).toMatchObject({ state: 'unreachable' });
+    expect(lab?.health.error).toMatch(/ssh me@gpu failed: .*Connection refused/);
+  });
+
+  it('keeps an SSH server on Ollama with no credential', async () => {
+    const { registry: servers } = sshSetup();
+    await addSsh(servers);
+    const [, lab] = await servers.views();
+    await expect(servers.update(lab.id, { kind: 'openai-compatible' })).rejects.toThrow(/kind stays Ollama/);
+    await expect(servers.update(lab.id, { credential: { type: 'bearer', token: TOKEN } })).rejects.toThrow(/SSH keys/);
+    const views = await servers.update(lab.id, { access: 'manage' });
+    expect(views[1]).toMatchObject({ access: 'manage', transport: 'ssh' });
+  });
+
+  it('loads a saved SSH server back after a restart', async () => {
+    const file = memoryFile();
+    await addSsh(sshSetup(file).registry);
+    const { registry: restarted, sshCalls } = sshSetup(file);
+    const [, lab] = await restarted.views();
+    expect(lab).toMatchObject({ name: 'lab', transport: 'ssh', address: 'me@gpu' });
+    await restarted.check(lab.id);
+    expect(sshCalls).toContain('me@gpu /api/version');
   });
 });
