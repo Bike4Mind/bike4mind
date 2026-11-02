@@ -67,6 +67,11 @@ shows the delete-account 409 list and `pending` launches on the restore screen:
 SIMCTL_CHILD_B4M_UI_FIXTURES=1 xcrun simctl launch booted com.bike4mind.app
 ```
 
+Fixture details worth knowing: each of the first sessions opens its own small transcript, and the pre-seeded "Working" turn in
+Trip planning settles a few seconds after the session is first opened. Media items open generated local files (an image per tile, one
+audio and one video clip; `FixtureMediaFiles.swift`). A fixture capture send steps through queued, uploading, registering and done so the
+Sessions upload chip can be watched; the first send to the Receipts lake fails once ("No connection.") so Retry can be tried.
+
 ## Push notifications and universal links
 
 - `Bike4Mind.entitlements` declares `aps-environment` (`development`; Xcode rewrites it to `production` when
