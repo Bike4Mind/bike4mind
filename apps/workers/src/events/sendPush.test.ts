@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import type { EventBridgeEvent } from 'aws-lambda';
-import type { PushNotificationEvent } from '@bike4mind/common';
+import type { LiveActivityPushEvent, PushNotificationEvent } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   createTransport: vi.fn(),
@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
   removeByToken: vi.fn(),
   removeBySids: vi.fn(),
   findLiveSids: vi.fn(),
+  findLiveActivityByQuest: vi.fn(),
+  removeLiveActivityByQuest: vi.fn(),
   userFindById: vi.fn(),
   orgFindById: vi.fn(),
 }));
@@ -30,12 +32,23 @@ vi.mock('@workers/utils/eventContext', () => ({
 }));
 
 vi.mock('@server/utils/eventBus', async () => {
-  const { PushNotificationEventSchema } = await import('@bike4mind/common');
-  return { NotificationEvents: { Push: { schema: PushNotificationEventSchema } } };
+  const { PushNotificationEventSchema, LiveActivityPushEventSchema } = await import('@bike4mind/common');
+  return {
+    NotificationEvents: {
+      Push: { schema: PushNotificationEventSchema },
+      LiveActivity: { schema: LiveActivityPushEventSchema },
+    },
+  };
 });
 
 vi.mock('@bike4mind/database', () => ({
-  pushTokenRepository: { findByUser: h.findByUser, removeByToken: h.removeByToken, removeBySids: h.removeBySids },
+  pushTokenRepository: {
+    findByUser: h.findByUser,
+    removeByToken: h.removeByToken,
+    removeBySids: h.removeBySids,
+    findLiveActivityByQuest: h.findLiveActivityByQuest,
+    removeLiveActivityByQuest: h.removeLiveActivityByQuest,
+  },
   authSessionRepository: { findLiveSids: h.findLiveSids },
   userRepository: { findById: h.userFindById },
   organizationRepository: { findById: h.orgFindById },
@@ -46,7 +59,15 @@ vi.mock('./sendPush.apns', async importOriginal => ({
   createHttp2ApnsTransport: h.createTransport,
 }));
 
-import { deliverPush, handler, loadPushRecipient, REDACTED_PUSH_COPY, type SendPushDeps } from './sendPush';
+import {
+  deliverLiveActivityPush,
+  deliverPush,
+  handler,
+  loadPushRecipient,
+  REDACTED_PUSH_COPY,
+  type SendLiveActivityDeps,
+  type SendPushDeps,
+} from './sendPush';
 import type { ApnsRequest, ApnsResponse } from './sendPush.apns';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -556,5 +577,176 @@ describe('handler', () => {
       expect(h.createTransport).toHaveBeenCalledTimes(2);
       expect(first.close).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('deliverLiveActivityPush', () => {
+  const USER_ID = '507f1f77bcf86cd799439011';
+  const UPDATE: LiveActivityPushEvent = {
+    userId: USER_ID,
+    questId: 'quest-1',
+    event: 'update',
+    contentState: { status: 'running', stageLabel: 'Searching', progress: 0.4 },
+  };
+  const END: LiveActivityPushEvent = {
+    userId: USER_ID,
+    questId: 'quest-1',
+    event: 'end',
+    contentState: { status: 'completed' },
+    dismissalDate: 1_800_000_060,
+  };
+  const NOW_SECONDS = 1_800_000_000;
+
+  function makeActivityDeps(tokens: Token[], respond?: (request: ApnsRequest) => ApnsResponse) {
+    const sent: ApnsRequest[] = [];
+    const removed: string[] = [];
+    const deps: SendLiveActivityDeps = {
+      tokens: {
+        findLiveActivityByQuest: vi.fn(async () => tokens.map(token => ({ sid: 'sid-live', ...token }))),
+        removeByToken: vi.fn(async (token: string) => {
+          removed.push(token);
+          return true;
+        }),
+        removeLiveActivityByQuest: vi.fn(async () => tokens.length),
+      },
+      transport: {
+        send: vi.fn(async (request: ApnsRequest) => {
+          sent.push(request);
+          return respond?.(request) ?? { status: 200 };
+        }),
+        close: vi.fn(),
+      },
+      topic: 'com.example.client',
+    };
+    return { deps, sent, removed };
+  }
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it("selects the quest's liveActivity tokens for the owner and skips quietly when there are none", async () => {
+    const { deps } = makeActivityDeps([]);
+    await expect(deliverLiveActivityPush(UPDATE, deps, logger, NOW_SECONDS)).resolves.toEqual({
+      status: 'skipped',
+      reason: 'no_tokens',
+    });
+    expect(deps.tokens.findLiveActivityByQuest).toHaveBeenCalledWith(USER_ID, 'quest-1');
+    expect(deps.transport.send).not.toHaveBeenCalled();
+    expect(deps.tokens.removeLiveActivityByQuest).not.toHaveBeenCalled();
+  });
+
+  it('sends an update with the liveactivity push type, topic suffix, priority 5 and the content state', async () => {
+    const { deps, sent } = makeActivityDeps([{ token: 'act-a', environment: 'sandbox' }]);
+
+    await expect(
+      deliverLiveActivityPush({ ...UPDATE, staleDate: 1_800_000_900 }, deps, logger, NOW_SECONDS)
+    ).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 0,
+      failed: 0,
+    });
+    expect(sent[0].deviceToken).toBe('act-a');
+    expect(sent[0].environment).toBe('sandbox');
+    expect(sent[0].headers).toEqual({
+      'apns-topic': 'com.example.client.push-type.liveactivity',
+      'apns-push-type': 'liveactivity',
+      'apns-priority': '5',
+    });
+    expect(payloadOf(sent[0])).toEqual({
+      aps: {
+        timestamp: NOW_SECONDS,
+        event: 'update',
+        'content-state': { status: 'running', stageLabel: 'Searching', progress: 0.4 },
+        'stale-date': 1_800_000_900,
+      },
+    });
+    expect(deps.tokens.removeLiveActivityByQuest).not.toHaveBeenCalled();
+  });
+
+  it('sends end at priority 10 with the dismissal date, then deletes the quest tokens', async () => {
+    const { deps, sent } = makeActivityDeps([
+      { token: 'act-a', environment: 'production' },
+      { token: 'act-b', environment: 'production' },
+    ]);
+
+    await deliverLiveActivityPush(END, deps, logger, NOW_SECONDS);
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0].headers['apns-priority']).toBe('10');
+    expect(payloadOf(sent[0]).aps).toEqual({
+      timestamp: NOW_SECONDS,
+      event: 'end',
+      'content-state': { status: 'completed' },
+      'dismissal-date': 1_800_000_060,
+    });
+    expect(deps.tokens.removeLiveActivityByQuest).toHaveBeenCalledWith(USER_ID, 'quest-1');
+  });
+
+  it('prunes a dead token on update and keeps the others', async () => {
+    const { deps, removed } = makeActivityDeps(
+      [
+        { token: 'dead', environment: 'production' },
+        { token: 'live', environment: 'production' },
+      ],
+      request => (request.deviceToken === 'dead' ? { status: 410, reason: 'Unregistered' } : { status: 200 })
+    );
+
+    await expect(deliverLiveActivityPush(UPDATE, deps, logger, NOW_SECONDS)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 1,
+      failed: 1,
+    });
+    expect(removed).toEqual(['dead']);
+  });
+
+  it('throws on all-transient failure so the event retries, and keeps the tokens for the retry of an end', async () => {
+    const { deps } = makeActivityDeps([{ token: 'act-a', environment: 'production' }], () => ({
+      status: 503,
+      reason: 'ServiceUnavailable',
+    }));
+
+    await expect(deliverLiveActivityPush(END, deps, logger, NOW_SECONDS)).rejects.toThrow(/transiently/);
+    expect(deps.tokens.removeLiveActivityByQuest).not.toHaveBeenCalled();
+  });
+});
+
+describe('handler routing on detail-type', () => {
+  const saved: Record<string, string | undefined> = {};
+  const ENV = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY', 'APNS_TOPIC'] as const;
+  const KEY_PEM = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const name of ENV) saved[name] = process.env[name];
+    Object.assign(process.env, {
+      APNS_KEY_ID: 'K',
+      APNS_TEAM_ID: 'T',
+      APNS_KEY: KEY_PEM,
+      APNS_TOPIC: 'com.example.client',
+    });
+  });
+  afterEach(() => {
+    for (const name of ENV) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  });
+
+  it('routes notification.liveActivity to the liveActivity token lookup, not the device lookup', async () => {
+    h.findLiveActivityByQuest.mockResolvedValue([]);
+    const detail: LiveActivityPushEvent = {
+      userId: '507f1f77bcf86cd799439011',
+      questId: 'quest-9',
+      event: 'update',
+      contentState: { status: 'running' },
+    };
+
+    await handler({ 'detail-type': 'notification.liveActivity', detail } as EventBridgeEvent<string, unknown>);
+
+    expect(h.findLiveActivityByQuest).toHaveBeenCalledWith(detail.userId, 'quest-9');
+    expect(h.findByUser).not.toHaveBeenCalled();
   });
 });

@@ -258,7 +258,12 @@ import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-uti
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
-import { createAgentPushDeps, withAgentTerminalPush, publishAgentTerminalPush } from './agentExecutor.push';
+import {
+  createAgentPushDeps,
+  withAgentTerminalPush,
+  publishAgentTerminalPush,
+  endAgentLiveActivity,
+} from './agentExecutor.push';
 import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
@@ -961,7 +966,8 @@ async function processExecution(
   checkpointDepth: number = 0
 ): Promise<void> {
   logger.updateMetadata({ executionId });
-  // Every terminal frame of a top-level run also publishes its push (agentExecutor.push.ts).
+  // Every terminal frame of a top-level run also publishes its push, and progress frames feed its live
+  // activity (agentExecutor.push.ts).
   const sendWs = withAgentTerminalPush(createWsSender(connectionId, logger), createAgentPushDeps(logger), logger);
 
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
@@ -3710,6 +3716,11 @@ async function fireDagNodeTerminalOnRefusal(args: {
       await sendWs('failed', { executionId: parentExecutionId, reason: 'dag_hook_error' });
       // This sender belongs to the child's dispatch, so the parent's push is published explicitly.
       await publishAgentTerminalPush(
+        { executionId: parentExecutionId, outcome: 'failed' },
+        createAgentPushDeps(logger),
+        logger
+      );
+      await endAgentLiveActivity(
         { executionId: parentExecutionId, outcome: 'failed' },
         createAgentPushDeps(logger),
         logger

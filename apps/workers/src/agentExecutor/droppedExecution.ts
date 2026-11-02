@@ -1,7 +1,11 @@
 import { agentExecutionRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
-import { createAgentPushDeps, publishAgentTerminalPush } from '@workers/queueHandlers/agentExecutor.push';
+import {
+  createAgentPushDeps,
+  endAgentLiveActivity,
+  publishAgentTerminalPush,
+} from '@workers/queueHandlers/agentExecutor.push';
 import type { ExecutionTarget } from './queueMessage';
 
 /**
@@ -11,7 +15,8 @@ import type { ExecutionTarget } from './queueMessage';
  *
  * Status-guarded through the same compare-and-swap the message's own claim uses, so an execution
  * that already moved on (running, finished, or aborted) is left alone. No run frame reaches the wrapped
- * sender on this path, so the run's `agent_failed` push is published here.
+ * sender on this path, so the run's `agent_failed` push is published, and its live activity
+ * ended, here.
  */
 export async function settleDroppedExecution(
   target: ExecutionTarget,
@@ -28,10 +33,8 @@ export async function settleDroppedExecution(
   if (quests.failedExecutionIds.length > 0) {
     await agentExecutionRepository.markQuestSettlementFailed(quests.failedExecutionIds);
   }
-  await publishAgentTerminalPush(
-    { executionId: target.executionId, outcome: 'failed' },
-    createAgentPushDeps(logger),
-    logger
-  );
+  const pushDeps = createAgentPushDeps(logger);
+  await publishAgentTerminalPush({ executionId: target.executionId, outcome: 'failed' }, pushDeps, logger);
+  await endAgentLiveActivity({ executionId: target.executionId, outcome: 'failed' }, pushDeps, logger);
   return true;
 }

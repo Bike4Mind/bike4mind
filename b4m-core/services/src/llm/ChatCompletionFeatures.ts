@@ -537,6 +537,12 @@ export interface IChatCompletionServiceOptions {
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
   /**
+   * Optional observer of the turn's user-visible status lines ("Searching the web...", ...), fired for
+   * every non-silent, non-null status the turn sends. Out-of-band and best effort: a throw is logged
+   * and never reaches the turn. Hosts use it to mirror progress to surfaces other than the websocket.
+   */
+  onStatusUpdate?: (questId: string, status: string) => void;
+  /**
    * The `decide` tool's execution seam, forwarded into every ToolBuilder this service builds.
    * The app tier supplies it from the shared decision runner; absent, the tool refuses.
    */

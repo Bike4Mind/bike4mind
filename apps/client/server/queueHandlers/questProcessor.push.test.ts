@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@server/utils/eventBus', () => ({ NotificationEvents: { Push: { publish: vi.fn() } } }));
+vi.mock('@server/utils/eventBus', () => ({
+  NotificationEvents: { Push: { publish: vi.fn() }, LiveActivity: { publish: vi.fn() } },
+}));
 const pushDelivery = vi.hoisted(() => ({ configured: true }));
 vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
   isPushDeliveryConfigured: () => pushDelivery.configured,
 }));
 
 import type { WatchedConnectionRow } from '@server/utils/pushNotifications';
-import { publishChatCompletedPush } from './questProcessor.push';
+import { createChatLiveActivity, publishChatCompletedPush } from './questProcessor.push';
 
 const logger = { warn: vi.fn() };
 const liveWebRow = { source: 'web', authExpiresAt: new Date(Date.now() + 10 * 60_000) };
@@ -115,5 +117,88 @@ describe('publishChatCompletedPush connection gating', () => {
     expect(deps.publish).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Reply ready', body: 'Your reply is ready.' })
     );
+  });
+});
+
+describe('createChatLiveActivity', () => {
+  const liveTurn = { userId: 'user-1', questId: 'quest-1' };
+
+  function makeLive(
+    quest: { status?: string; type?: string } | null | Error = { status: 'done', type: 'chat' },
+    turnOverride = liveTurn
+  ) {
+    const publishLiveActivity = vi.fn(async () => undefined);
+    const findQuest = vi.fn(async () => {
+      if (quest instanceof Error) throw quest;
+      return quest;
+    });
+    const live = createChatLiveActivity(turnOverride, { findQuest, publishLiveActivity }, logger);
+    return { live, publishLiveActivity, findQuest };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pushDelivery.configured = true;
+  });
+
+  it('mirrors a status line as a running update for its own quest only', () => {
+    const { live, publishLiveActivity } = makeLive();
+    expect(live.onStatusUpdate).toBeTypeOf('function');
+    live.onStatusUpdate?.('other-quest', 'Not mine');
+    live.onStatusUpdate?.('quest-1', 'Searching the web');
+
+    expect(publishLiveActivity).toHaveBeenCalledExactlyOnceWith({
+      userId: 'user-1',
+      questId: 'quest-1',
+      event: 'update',
+      contentState: { status: 'running', stageLabel: 'Searching the web' },
+    });
+  });
+
+  it.each([
+    ['done', { status: 'done', type: 'chat' }, { status: 'completed' }],
+    ['an error quest', { status: 'done', type: 'error' }, { status: 'failed', errored: true }],
+    ['a stopped quest', { status: 'stopped', type: 'chat' }, { status: 'stopped' }],
+    ['a missing quest', null, { status: 'completed' }],
+  ])('ends with the outcome of %s', async (_label, quest, contentState) => {
+    const { live, publishLiveActivity } = makeLive(quest);
+    await live.end();
+    expect(publishLiveActivity).toHaveBeenCalledExactlyOnceWith({
+      userId: 'user-1',
+      questId: 'quest-1',
+      event: 'end',
+      contentState,
+    });
+  });
+
+  it('ends as failed without reading the quest when told the turn failed', async () => {
+    const { live, publishLiveActivity, findQuest } = makeLive();
+    await live.end('failed');
+    expect(findQuest).not.toHaveBeenCalled();
+    expect(publishLiveActivity.mock.calls[0][0].contentState).toEqual({ status: 'failed', errored: true });
+  });
+
+  it('does not gate on a live websocket connection and does not throw when the quest read fails', async () => {
+    const { live, publishLiveActivity } = makeLive(new Error('db down'));
+    await expect(live.end()).resolves.toBeUndefined();
+    expect(publishLiveActivity).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('[LiveActivity] chat live activity end failed', expect.anything());
+  });
+
+  it('is inert for API-key turns', async () => {
+    const { live, publishLiveActivity } = makeLive(undefined, { ...liveTurn, apiKeyId: 'key-1' } as typeof liveTurn);
+    expect(live.onStatusUpdate).toBeUndefined();
+    await live.end();
+    expect(publishLiveActivity).not.toHaveBeenCalled();
+  });
+
+  it('installs no status observer and ends without a read or publish while push is unconfigured', async () => {
+    pushDelivery.configured = false;
+    const { live, publishLiveActivity, findQuest } = makeLive();
+    expect(live.onStatusUpdate).toBeUndefined();
+    await live.end();
+    await live.end('failed');
+    expect(findQuest).not.toHaveBeenCalled();
+    expect(publishLiveActivity).not.toHaveBeenCalled();
   });
 });

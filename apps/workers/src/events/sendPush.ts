@@ -1,6 +1,7 @@
 import type { EventBridgeEvent } from 'aws-lambda';
 import {
   isPushCategoryEnabled,
+  type LiveActivityPushEvent,
   type PushNotificationCategory,
   type PushNotificationEvent,
   type PushNotificationPreferences,
@@ -36,6 +37,9 @@ import {
  * (the publisher's collapseId, else one derived from category + quest/session), so an EventBridge
  * redelivery or a second terminal site for the same run replaces the notification on the device
  * instead of stacking a duplicate.
+ *
+ * The same Lambda also consumes `notification.liveActivity` (see deliverLiveActivityPush), routed on
+ * the event's detail-type.
  */
 
 /**
@@ -142,8 +146,100 @@ export async function deliverPush(
   };
   const payload = JSON.stringify(buildPayload(event, recipient.redactContent, deps.appUrl));
 
+  const outcome = await sendToTokens(tokens, headers, payload, deps, logger);
+  const { delivered, failed, retryable } = outcome;
+  const pruned = orphansPruned + outcome.pruned;
+
+  logger.info('[Push] delivery finished', { category: event.category, delivered, pruned, failed });
+  // Retry (and finally dead-letter) when nothing landed and at least one device may still be
+  // reachable: pruned, config-error and permanently rejected tokens fail the same way on redelivery and
+  // must not mask a transient failure. A partial success is not retried: collapse-id would absorb the
+  // repeat, but APNs would still bill the quota and the user's other devices would re-alert.
+  if (delivered === 0 && retryable > 0) {
+    throw new Error(`APNs delivery failed transiently for ${retryable} of ${failed} device(s)`);
+  }
+  return { status: 'sent', delivered, pruned, failed };
+}
+
+export type SendLiveActivityDeps = {
+  tokens: {
+    findLiveActivityByQuest(
+      userId: string,
+      questId: string
+    ): Promise<ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment }>>;
+    removeByToken(token: string, options: { sid: string }): Promise<boolean>;
+    removeLiveActivityByQuest(userId: string, questId: string): Promise<number>;
+  };
+  transport: ApnsTransport;
+  /** The client's bundle id; live activity pushes go to `${topic}.push-type.liveactivity`. */
+  topic: string;
+};
+
+export type LiveActivityDeliveryResult =
+  { status: 'skipped'; reason: 'no_tokens' } | { status: 'sent'; delivered: number; pruned: number; failed: number };
+
+/**
+ * Delivers one live activity frame to the activity tokens registered for the quest. No user
+ * preference, redaction or collapse-id applies: the frame is the activity's own state, not a
+ * notification. An `end` frame also deletes the quest's tokens once it has been sent, since the
+ * activity is over and its tokens will not be used again.
+ */
+export async function deliverLiveActivityPush(
+  event: LiveActivityPushEvent,
+  deps: SendLiveActivityDeps,
+  logger: Pick<Logger, 'info' | 'warn' | 'error'>,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): Promise<LiveActivityDeliveryResult> {
+  const tokens = await deps.tokens.findLiveActivityByQuest(event.userId, event.questId);
+  if (tokens.length === 0) {
+    logger.info('[LiveActivity] no activity tokens for the quest; nothing to send', { event: event.event });
+    return { status: 'skipped', reason: 'no_tokens' };
+  }
+
+  const ending = event.event === 'end';
+  const headers = {
+    'apns-topic': `${deps.topic}.push-type.liveactivity`,
+    'apns-push-type': 'liveactivity',
+    // 5 is the low-power tier APNs recommends for frequent updates; the closing frame must land.
+    'apns-priority': ending ? '10' : '5',
+  };
+  const payload = JSON.stringify({
+    aps: {
+      timestamp: nowSeconds,
+      event: event.event,
+      'content-state': event.contentState,
+      ...(event.staleDate !== undefined && { 'stale-date': event.staleDate }),
+      ...(event.dismissalDate !== undefined && { 'dismissal-date': event.dismissalDate }),
+    },
+  });
+
+  const outcome = await sendToTokens(tokens, headers, payload, deps, logger);
+  logger.info('[LiveActivity] delivery finished', { event: event.event, ...outcome });
+  // Same rule as deliverPush: a transient failure is retried even next to tokens that failed for good.
+  if (outcome.delivered === 0 && outcome.retryable > 0) {
+    throw new Error(
+      `APNs live activity delivery failed transiently for ${outcome.retryable} of ${outcome.failed} token(s)`
+    );
+  }
+  if (ending) await deps.tokens.removeLiveActivityByQuest(event.userId, event.questId);
+  return { status: 'sent', delivered: outcome.delivered, pruned: outcome.pruned, failed: outcome.failed };
+}
+
+type DeliveryTally = { delivered: number; pruned: number; failed: number; retryable: number };
+
+/**
+ * One APNs request per token, pruning tokens APNs says are dead; `retryable` counts transient failures.
+ * Configuration rejections (CONFIG_ERROR_HINTS, any 403) are counted as failed, never retried or pruned.
+ */
+async function sendToTokens(
+  tokens: ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment }>,
+  headers: Record<string, string>,
+  payload: string,
+  deps: { transport: ApnsTransport; tokens: Pick<SendPushDeps['tokens'], 'removeByToken'> },
+  logger: Pick<Logger, 'warn' | 'error'>
+): Promise<DeliveryTally> {
   let delivered = 0;
-  let pruned = orphansPruned;
+  let pruned = 0;
   let failed = 0;
   let retryable = 0;
   const configErrors = new Map<string, { status: number; hint: string }>();
@@ -200,24 +296,16 @@ export async function deliverPush(
   };
   await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_SENDS, tokens.length) }, worker));
 
-  // One error per invocation, not per device: the cause is the deployment, and every token shares it.
+  // One error per invocation, not per token: the cause is the deployment, and every token shares it.
   for (const [reason, { status, hint }] of configErrors) {
     logger.error('[Push] APNs rejected the server configuration; push delivery is not working', {
       status,
       reason,
       likelyCause: hint,
-      category: event.category,
+      pushType: headers['apns-push-type'],
     });
   }
-  logger.info('[Push] delivery finished', { category: event.category, delivered, pruned, failed });
-  // Retry (and finally dead-letter) when nothing landed and at least one device may still be
-  // reachable: pruned, config-error and permanently rejected tokens fail the same way on redelivery and
-  // must not mask a transient failure. A partial success is not retried: collapse-id would absorb the
-  // repeat, but APNs would still bill the quota and the user's other devices would re-alert.
-  if (delivered === 0 && retryable > 0) {
-    throw new Error(`APNs delivery failed transiently for ${retryable} of ${failed} device(s)`);
-  }
-  return { status: 'sent', delivered, pruned, failed };
+  return { delivered, pruned, failed, retryable };
 }
 
 /**
@@ -306,13 +394,21 @@ function transportFor(config: ApnsConfig): ApnsTransport {
   return shared.transport;
 }
 
-const handleWithContext = withEventContext(async (event, logger) => {
-  const payload = NotificationEvents.Push.schema.parse(event.properties);
-  logger.updateMetadata({ handler: 'sendPush', userId: payload.userId, category: payload.category });
+const LIVE_ACTIVITY_DETAIL_TYPE = 'notification.liveActivity';
 
+const handleWithContext = withEventContext(async (event, logger) => {
   const config = readApnsConfig();
   if (!config) return;
   const transport = transportFor(config);
+  if (event.event === LIVE_ACTIVITY_DETAIL_TYPE) {
+    const payload = NotificationEvents.LiveActivity.schema.parse(event.properties);
+    logger.updateMetadata({ handler: 'sendPush', userId: payload.userId, questId: payload.questId });
+    await deliverLiveActivityPush(payload, { tokens: pushTokenRepository, transport, topic: config.topic }, logger);
+    return;
+  }
+
+  const payload = NotificationEvents.Push.schema.parse(event.properties);
+  logger.updateMetadata({ handler: 'sendPush', userId: payload.userId, category: payload.category });
   await deliverPush(
     payload,
     {

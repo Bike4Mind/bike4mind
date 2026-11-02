@@ -1,5 +1,6 @@
-import type { PushNotificationEvent } from '@bike4mind/common';
+import type { LiveActivityPushEvent, PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { createLiveActivityThrottle } from '@server/utils/liveActivityPush';
 import {
   type ConnectionLookup,
   hasLiveConnection,
@@ -71,4 +72,73 @@ export async function publishChatCompletedPush(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+export type ChatLiveActivityDeps = {
+  findQuest(questId: string): Promise<{ status?: string; type?: string } | null>;
+  /** Must not throw (publishLiveActivityUpdate). */
+  publishLiveActivity(event: LiveActivityPushEvent): Promise<void>;
+};
+
+export type ChatLiveActivity = {
+  /**
+   * For ChatCompletionProcess's `onStatusUpdate`: mirrors the turn's status lines, throttled. Never throws.
+   * Absent when the turn has no activity, so the chat path installs no status observer at all.
+   */
+  onStatusUpdate?: (questId: string, status: string) => void;
+  /** Ends the activity once the turn has settled, reading the quest for how it ended. Never throws. */
+  end(outcome?: 'failed'): Promise<void>;
+};
+
+const MAX_STAGE_LABEL_LENGTH = 60;
+
+/**
+ * The live activity of one chat turn (quest). API-key turns have no activity, and neither does any turn
+ * while push delivery is unconfigured: `end` then resolves at once with no quest read and no publish.
+ * Unlike the `chat_completed` push this is not gated on a live websocket: an activity exists while
+ * the user may be away from the app.
+ */
+export function createChatLiveActivity(
+  turn: { userId: string; questId: string; apiKeyId?: string },
+  deps: ChatLiveActivityDeps,
+  logger: Pick<Logger, 'warn'>
+): ChatLiveActivity {
+  if (turn.apiKeyId || !isPushDeliveryConfigured()) return { end: async () => undefined };
+  const throttle = createLiveActivityThrottle(deps.publishLiveActivity);
+
+  return {
+    onStatusUpdate(questId, status) {
+      if (questId !== turn.questId) return;
+      void throttle
+        .emit({
+          userId: turn.userId,
+          questId: turn.questId,
+          event: 'update',
+          contentState: { status: 'running', stageLabel: truncateForPush(status.trim(), MAX_STAGE_LABEL_LENGTH) },
+        })
+        .catch(error =>
+          logger.warn('[LiveActivity] chat status update failed', {
+            questId: turn.questId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        );
+    },
+    async end(outcome) {
+      try {
+        const quest = outcome ? null : await deps.findQuest(turn.questId);
+        const contentState: LiveActivityPushEvent['contentState'] =
+          outcome === 'failed' || quest?.type === 'error'
+            ? { status: 'failed', errored: true }
+            : quest?.status === 'stopped'
+              ? { status: 'stopped' }
+              : { status: 'completed' };
+        await throttle.emit({ userId: turn.userId, questId: turn.questId, event: 'end', contentState });
+      } catch (error) {
+        logger.warn('[LiveActivity] chat live activity end failed', {
+          questId: turn.questId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+  };
 }

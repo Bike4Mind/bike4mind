@@ -39,6 +39,7 @@ describe('dispatchSelfHostEvent', () => {
     ['session.tag', 'sessionTagging'],
     ['notebook.curation.start', 'notebookCuration'],
     ['notification.push', 'sendPush'],
+    ['notification.liveActivity', 'sendPush'],
   ] as const)('routes %s to the matching handler with an EventBridge-shaped event', async (detailType, key) => {
     const detail = { sessionId: 's1' };
     await dispatchSelfHostEvent(detailType, detail);
