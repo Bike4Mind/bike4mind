@@ -14,7 +14,7 @@ import {
   type TurnUsage,
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
-import { executeToolsBatch, shouldEndTurnAfterTools } from '../executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from '../executeToolsBatch';
 import { logToolRound, summarizeToolOutcomes } from '../toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
 import {
@@ -796,7 +796,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
                 if (isAbortError(outcome.error)) throw outcome.error;
-                Logger.globalInstance.error(
+                Logger.globalInstance[toolFailureLogLevel(outcome.error)](
                   `[BaseBedrockBackend] Tool ${outcome.name} failed:`,
                   outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
                 );
@@ -975,7 +975,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 } catch (err) {
                   if (err instanceof PermissionDeniedError) throw err;
                   if (isAbortError(err)) throw err;
-                  Logger.globalInstance.error(
+                  Logger.globalInstance[toolFailureLogLevel(err)](
                     `[BaseBedrockBackend] Tool ${name} failed:`,
                     err instanceof Error ? err.message : String(err)
                   );

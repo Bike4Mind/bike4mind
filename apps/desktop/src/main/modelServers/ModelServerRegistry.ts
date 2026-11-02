@@ -55,6 +55,7 @@ import type { LocalChat } from '../chat/localChat';
 import { OllamaLocal } from '../chat/OllamaLocal';
 import type { ModelHubServer } from '../models/ModelHubService';
 import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
+import { withLocalNetworkHint } from './localNetworkHint';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
 
@@ -106,6 +107,8 @@ export interface ModelServerRegistryDeps {
   now?(): number;
   /** This computer's entered hardware was loaded or changed, so whatever was sized from its probe is stale. */
   localSpecsChanged?(): void;
+  /** Defaults to `process.platform`; decides whether a LAN failure gets the macOS Local Network hint. */
+  platform?: NodeJS.Platform;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -131,6 +134,10 @@ export class ModelServerRegistry {
   private readonly checking = new WeakMap<Entry, Promise<void>>();
 
   constructor(private readonly deps: ModelServerRegistryDeps) {}
+
+  private get platform(): NodeJS.Platform {
+    return this.deps.platform ?? process.platform;
+  }
 
   /** Calls `listener` with a server's id after its saved settings change or it is removed. */
   onServerSaved(listener: (id: string) => void): () => void {
@@ -223,8 +230,15 @@ export class ModelServerRegistry {
     if (!outcome.kind) {
       // Some servers answer 403, not 401, when the token is missing.
       const hint = outcome.forbidden && !headers ? ' If this server needs an API key, enter it and test again.' : '';
+      // The system code tells a declined macOS Local Network permission (EHOSTUNREACH) apart from a down server.
+      if (outcome.code) this.deps.logger.warn(`MODEL SERVERS: testing ${label} (${scope}) failed with ${outcome.code}`);
       return failed(
-        `${outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`}${hint}`,
+        withLocalNetworkHint(
+          `${outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`}${hint}`,
+          outcome.code,
+          scope,
+          this.platform
+        ),
         base
       );
     }
@@ -391,10 +405,15 @@ export class ModelServerRegistry {
             return listed.map(model => ({ ...model, server }));
           } catch (raw) {
             const err = this.unwrapFailure(raw, entry);
-            entry.health = failureHealth(err, entry.record.name) ?? {
+            entry.health = failureHealth(err, entry.record.name, entry.scope, this.platform) ?? {
               ...entry.health,
               state: 'unreachable',
-              error: `${entry.record.name}: ${describeFailure(err)}`,
+              error: withLocalNetworkHint(
+                `${entry.record.name}: ${describeFailure(err)}`,
+                errorCode(err),
+                entry.scope,
+                this.platform
+              ),
             };
           }
         }
@@ -473,12 +492,14 @@ export class ModelServerRegistry {
       // A stalled pull says nothing about chat, so the server's health is left as it was.
       if (err instanceof PullIdleTimeoutError)
         throw new ServerUnreachableError(entry.record.name, describeFailure(err), { cause: err });
-      const health = failureHealth(err, entry.record.name);
+      const health = failureHealth(err, entry.record.name, entry.scope, this.platform);
       if (!health) throw raw;
       entry.health = health;
       this.emit();
-      if (health.state === 'unreachable')
-        throw new ServerUnreachableError(entry.record.name, describeFailure(err), { cause: err });
+      if (health.state === 'unreachable') {
+        const reason = withLocalNetworkHint(describeFailure(err), errorCode(err), entry.scope, this.platform);
+        throw new ServerUnreachableError(entry.record.name, reason, { cause: err });
+      }
       throw err;
     }
   }
@@ -560,12 +581,17 @@ export class ModelServerRegistry {
       return;
     }
     if (!outcome.kind) {
+      if (outcome.code) {
+        this.deps.logger.debug(
+          `MODEL SERVERS: checking ${entry.record.name} (${entry.scope}) failed with ${outcome.code}`
+        );
+      }
       this.setHealth(entry, {
         state: outcome.refused ? 'refused' : 'unreachable',
         version: null,
         latencyMs: null,
         checkedAt,
-        error: outcome.error,
+        error: outcome.error && withLocalNetworkHint(outcome.error, outcome.code, entry.scope, this.platform),
       });
       return;
     }
@@ -796,7 +822,12 @@ function unavailableReason(entry: Entry): string {
 }
 
 /** The health a failed request implies; null when the failure says nothing about the server (a model error). */
-function failureHealth(err: unknown, label: string): ModelServerHealth | null {
+function failureHealth(
+  err: unknown,
+  label: string,
+  scope: AddressScope | null,
+  platform: NodeJS.Platform
+): ModelServerHealth | null {
   const checkedAt = new Date().toISOString();
   if (err instanceof ServerCredentialsError) {
     return { state: 'credentials', version: null, latencyMs: null, checkedAt, error: err.message };
@@ -820,6 +851,6 @@ function failureHealth(err: unknown, label: string): ModelServerHealth | null {
     version: null,
     latencyMs: null,
     checkedAt,
-    error: `${label}: ${describeFailure(err)}`,
+    error: withLocalNetworkHint(`${label}: ${describeFailure(err)}`, errorCode(err), scope, platform),
   };
 }
