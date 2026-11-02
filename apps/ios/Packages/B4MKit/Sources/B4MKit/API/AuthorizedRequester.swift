@@ -15,15 +15,17 @@ struct AuthorizedRequester: Sendable {
 
   /// Returns any HTTP response (callers branch on status); throws `APIError` for transport failures and
   /// for a 401 that survives one token refresh.
-  func send(method: String, path: String, jsonBody: Data? = nil) async throws -> Response {
+  func send(
+    method: String, path: String, query: [URLQueryItem] = [], jsonBody: Data? = nil
+  ) async throws -> Response {
     do {
       let token = try await tokens.accessToken()
-      let first = try await perform(method: method, path: path, body: jsonBody, token: token)
+      let first = try await perform(method: method, path: path, query: query, body: jsonBody, token: token)
       guard first.status == 401 else { return first }
 
       await tokens.invalidateAccessToken()
       let fresh = try await tokens.accessToken()
-      let retry = try await perform(method: method, path: path, body: jsonBody, token: fresh)
+      let retry = try await perform(method: method, path: path, query: query, body: jsonBody, token: fresh)
       if retry.status == 401 {
         await tokens.sessionRejected()
         throw APIError.signedOut
@@ -42,8 +44,12 @@ struct AuthorizedRequester: Sendable {
     }
   }
 
-  private func perform(method: String, path: String, body: Data?, token: String) async throws -> Response {
-    var request = URLRequest(url: baseURL.appending(path: path))
+  private func perform(
+    method: String, path: String, query: [URLQueryItem], body: Data?, token: String
+  ) async throws -> Response {
+    var url = baseURL.appending(path: path)
+    if !query.isEmpty { url.append(queryItems: query) }
+    var request = URLRequest(url: url)
     request.httpMethod = method
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Accept")

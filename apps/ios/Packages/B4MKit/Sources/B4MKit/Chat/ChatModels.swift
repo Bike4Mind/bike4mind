@@ -11,10 +11,13 @@ public struct ChatSendRequest: Hashable, Sendable {
 
   public let message: String
   public let target: Target
+  /// Uploaded files to attach to the turn (`fileIds` on the wire).
+  public let fileIDs: [String]
 
-  public init(message: String, target: Target) {
+  public init(message: String, target: Target, fileIDs: [String] = []) {
     self.message = message
     self.target = target
+    self.fileIDs = fileIDs
   }
 }
 
