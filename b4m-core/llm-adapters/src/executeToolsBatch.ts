@@ -28,7 +28,10 @@ export class ToolBlockedError extends Error {
   }
 }
 
-/** Log level for a tool failure fed back to the model. Every adapter's tool loop logs through this. */
+/**
+ * Log level for a tool failure fed back to the model. Adapters that log a failed tool
+ * (Bedrock, Anthropic, Gemini) pick the level through this.
+ */
 export function toolFailureLogLevel(error: unknown): 'warn' | 'error' {
   return error instanceof ToolBlockedError ? 'warn' : 'error';
 }
