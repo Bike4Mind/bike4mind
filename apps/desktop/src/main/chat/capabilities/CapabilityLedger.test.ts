@@ -346,6 +346,66 @@ describe('CapabilityLedger', () => {
     diagnostic.mockRestore();
   });
 
+  it('keeps grants and the file when a newer build wrote kinds this build does not know', async () => {
+    const { path, store } = await makeLedger();
+    const files = await store.grant({
+      subject: { kind: 'desktop-user' },
+      capability: 'files',
+      scope: { kind: 'path', value: '/tmp/kept' },
+      source: 'folder-picker',
+    });
+    const at = '2026-01-01T00:00:00.000Z';
+    const future = [
+      {
+        sequence: 1,
+        type: 'grant',
+        timestamp: at,
+        grant: {
+          id: 'g-future',
+          subject: { kind: 'desktop-user' },
+          capability: 'teleport',
+          scope: { kind: 'planet', value: 'mars' },
+          createdAt: at,
+          source: 'approval',
+        },
+      },
+      {
+        sequence: 2,
+        type: 'use',
+        timestamp: at,
+        grantId: 'g-future',
+        capability: 'teleport',
+        scope: { kind: 'planet' },
+      },
+      { sequence: 3, type: 'revoke', timestamp: at, grantId: 'g-future' },
+      { sequence: 4, type: 'checkpoint', timestamp: at },
+    ];
+    await appendFile(path, future.map(event => JSON.stringify(event) + '\n').join(''), 'utf8');
+    const written = await readFile(path, 'utf8');
+
+    const restarted = new CapabilityLedger(path);
+    const state = await restarted.state();
+    expect(state.grants.map(grant => grant.id)).toEqual([files.id]);
+    expect(state.grants[0].revokedAt).toBeUndefined();
+    expect((await readdir(join(path, '..'))).some(file => file.includes('.corrupt-'))).toBe(false);
+
+    await restarted.use('files', { kind: 'path', value: '/tmp/kept' }, files.id);
+    const lines = (await readFile(path, 'utf8')).trim().split('\n');
+    expect(lines.slice(0, 5).join('\n') + '\n').toBe(written);
+    expect(JSON.parse(lines[5]).sequence).toBe(5);
+    expect((await new CapabilityLedger(path).state()).audit[0]).toMatchObject({ type: 'use', sequence: 5 });
+  });
+
+  it('still quarantines a malformed event of a kind this build knows', async () => {
+    const { path, store } = await makeLedger();
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await store.use('credits', { kind: 'tool', value: 'generate_image' });
+    await appendFile(path, JSON.stringify({ sequence: 1, type: 'use', capability: 'files' }) + '\n', 'utf8');
+    expect((await new CapabilityLedger(path).state()).audit).toEqual([]);
+    expect((await readdir(join(path, '..'))).some(file => file.includes('.corrupt-'))).toBe(true);
+    diagnostic.mockRestore();
+  });
+
   it('quarantines out-of-order JSONL sequences instead of permanently rejecting', async () => {
     const { path, store } = await makeLedger();
     const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);

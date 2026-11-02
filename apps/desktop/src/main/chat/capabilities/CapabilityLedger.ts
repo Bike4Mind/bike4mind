@@ -65,6 +65,26 @@ const eventSchema = z.discriminatedUnion('type', [
     grantId: z.string(),
   }),
 ]);
+/** Only the fields that say which kinds an event uses; see laterBuildSequence. */
+const kindsSchema = z.object({
+  sequence: z.number().int().nonnegative(),
+  type: z.string(),
+  capability: z.string().optional(),
+  scope: z.object({ kind: z.string() }).optional(),
+  grant: z
+    .object({
+      capability: z.string().optional(),
+      scope: z.object({ kind: z.string() }).optional(),
+      subject: z.object({ kind: z.string() }).optional(),
+      source: z.string().optional(),
+    })
+    .optional(),
+});
+const EVENT_TYPES = new Set<string>(eventSchema.options.map(option => option.shape.type.value));
+const SCOPE_KINDS = new Set<string>(scopeSchema.options.map(option => option.shape.kind.value));
+const SUBJECT_KINDS = new Set<string>(subjectSchema.options.map(option => option.shape.kind.value));
+const CAPABILITIES = new Set<string>(capabilitySchema.options);
+const SOURCES = new Set<string>(grantSchema.shape.source.options);
 const fileSchema = z.object({ version: z.literal(1), events: z.array(eventSchema) }).superRefine((value, context) => {
   value.events.forEach((event, index) => {
     if (event.sequence !== index)
@@ -343,9 +363,15 @@ export class CapabilityLedger {
           for (const event of legacy.events) this.apply(event);
           return;
         }
-        const event = eventSchema.parse(JSON.parse(line));
-        if (event.sequence !== this.sequence) throw new SyntaxError('Out of order audit sequence');
-        this.apply(event);
+        const value: unknown = JSON.parse(line);
+        const parsed = eventSchema.safeParse(value);
+        // A newer build's event keeps its place in the sequence and its line in the file, but
+        // grants nothing here. A malformed event of a kind this build knows still quarantines.
+        const sequence = parsed.success ? parsed.data.sequence : laterBuildSequence(value);
+        if (sequence === null) throw parsed.error;
+        if (sequence !== this.sequence) throw new SyntaxError('Out of order audit sequence');
+        if (parsed.success) this.apply(parsed.data);
+        else this.sequence = sequence + 1;
       }
       // A process can stop after the JSON record but before its newline. Repair
       // that boundary before the next append can concatenate two valid records.
@@ -437,6 +463,21 @@ function normalizeScope(scope: CapabilityScope): CapabilityScope {
   if (scope.kind === 'path' || scope.kind === 'project') return { ...scope, value: resolve(scope.value) };
   if (scope.kind !== 'browser-origin') return scope;
   return { ...scope, value: new URL(scope.value).origin };
+}
+
+/** The sequence of an event that names a type, capability, scope, subject or source this build does not know; else null. */
+function laterBuildSequence(value: unknown): number | null {
+  const parsed = kindsSchema.safeParse(value);
+  if (!parsed.success) return null;
+  const event = parsed.data;
+  const unknown = (known: Set<string>, kind: string | undefined) => kind !== undefined && !known.has(kind);
+  const newer =
+    !EVENT_TYPES.has(event.type) ||
+    unknown(CAPABILITIES, event.capability ?? event.grant?.capability) ||
+    unknown(SCOPE_KINDS, (event.scope ?? event.grant?.scope)?.kind) ||
+    unknown(SUBJECT_KINDS, event.grant?.subject?.kind) ||
+    unknown(SOURCES, event.grant?.source);
+  return newer ? event.sequence : null;
 }
 
 function isLegacyDocument(line: string): boolean {
