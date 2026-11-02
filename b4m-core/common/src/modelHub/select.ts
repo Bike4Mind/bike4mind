@@ -54,8 +54,21 @@ export interface HubPick {
   alternates: HubCandidate[];
 }
 
-// Ollama forces one slot for these architectures whatever OLLAMA_NUM_PARALLEL says.
-const OLLAMA_SINGLE_SLOT_ARCHS = new Set(['qwen35', 'qwen3next', 'nemotron_h', 'lfm2']);
+// Ollama forces one slot for these architectures whatever OLLAMA_NUM_PARALLEL says (Scheduler.load in server/sched.go);
+// the planner does the same for embedding models.
+const OLLAMA_SINGLE_SLOT_ARCHS = new Set([
+  'mllama',
+  'qwen3vl',
+  'qwen3vlmoe',
+  'qwen35',
+  'qwen35moe',
+  'qwen3next',
+  'lfm2',
+  'lfm2moe',
+  'nemotron_h',
+  'nemotron_h_moe',
+  'nemotron_h_omni',
+]);
 // Ollama 0.40.11 passes --spec-draft-n-max 2 for a model that ships a draft unless the Modelfile sets one.
 const OLLAMA_DEFAULT_DRAFT_MAX = 2;
 
