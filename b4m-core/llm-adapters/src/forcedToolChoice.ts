@@ -117,6 +117,26 @@ export function isStrictCompatibleSchema(schema: unknown): boolean {
   return children.every(isStrictCompatibleSchema);
 }
 
+/**
+ * Whether any object in the schema explicitly allows keys beyond `properties` (`additionalProperties`
+ * set to anything but false). buildStructuredOutputFormat closes those objects, so a caller relying on
+ * the extra keys would silently lose them.
+ */
+export function declaresOpenObject(schema: unknown): boolean {
+  if (!isRecord(schema)) return false;
+  if ('additionalProperties' in schema && schema.additionalProperties !== false) return true;
+  const children: unknown[] = [schema.items];
+  for (const key of ['properties', '$defs', 'definitions'] as const) {
+    const named = schema[key];
+    if (isRecord(named)) children.push(...Object.values(named));
+  }
+  for (const key of ['anyOf', 'oneOf', 'allOf'] as const) {
+    const variants = schema[key];
+    if (Array.isArray(variants)) children.push(...variants);
+  }
+  return children.some(declaresOpenObject);
+}
+
 const STRUCTURED_OUTPUT_KEPT_KEYWORDS = new Set(['type', 'description', 'title', 'enum', 'const', 'required']);
 
 const LOCAL_DEF_REF = /^#\/(?:\$defs|definitions)\/[^/]+$/;
