@@ -12,6 +12,7 @@ import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/in
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { recordPaymentStart } from '@server/billing/paymentRisk';
 import { readNetworkMeta } from '@server/auth/networkMeta';
+import { readVisitId } from '@server/analytics/visitSession';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
 import {
   backfillCustomerSignupMetadata,
@@ -130,7 +131,9 @@ const handler = baseApi()
       undefined,
       req.logger
     );
-    // The webhook only sees Stripe's network, so where the buyer paid from is stamped here.
+    // The webhook only sees Stripe's network, so where the buyer paid from is stamped here, and
+    // the visit they paid in with it: the purchase event reads it back by payment intent, so it
+    // is never put on the intent's metadata.
     await recordPaymentStart(
       {
         paymentIntentId: paymentIntent.id,
@@ -138,6 +141,7 @@ const handler = baseApi()
         amount: paymentDetails.amount,
         currency: 'usd',
         network: readNetworkMeta(req),
+        visitId: readVisitId(req.headers.cookie),
       },
       req.logger
     );

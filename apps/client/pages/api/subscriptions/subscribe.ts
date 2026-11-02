@@ -11,6 +11,8 @@ import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/in
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
+import { recordCheckoutVisit } from '@server/analytics/billingEventDetails';
+import { readVisitId } from '@server/analytics/visitSession';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
 import { backfillCustomerSignupMetadata, signupNetworkMetadata } from '@server/integrations/stripe/riskMetadata';
 import { readNetworkMeta } from '@server/auth/networkMeta';
@@ -146,6 +148,15 @@ const handler = baseApi()
           ...(surface && { checkout_surface: surface }),
         },
       },
+    });
+
+    // The visit this checkout was opened in, for the subscription's first `purchase` event. Kept
+    // in core's own record under the session id, which the first invoice can be traced back to,
+    // and never put on the session itself. Never throws.
+    await recordCheckoutVisit({
+      checkoutSessionId: session.id,
+      userId: req.user.id,
+      visitId: readVisitId(req.headers.cookie),
     });
 
     return res.status(200).send({ sessionUrl: session.url });

@@ -170,6 +170,12 @@ export type BillingEvent =
  * sent verbatim, so it must never be a raw user id; use the pseudonym (see emitSignupForSourceProducts).
  * Synthetic users are skipped.
  *
+ * `visitId` is the browser visit the event happened in, when the caller knows one (only a
+ * purchase does; see emitPurchaseEvents). It goes on the host's copy alone, as its session id,
+ * the way a signup's visit goes on `signup_completed` and not on the credited `signup`: the host
+ * minted the visit and only the host's stream holds its `visit` event, so on a credited product's
+ * copy the id would join nothing and would only hand that product a host browsing identifier.
+ *
  * Awaited by its callers but never throws and never rejects: a webhook must not fail, or be
  * retried, over analytics. Resolves to the products it ATTEMPTED, like the signup emit.
  */
@@ -178,9 +184,10 @@ export async function emitBillingEvent(opts: {
   event: BillingEvent;
   occurrence: string;
   metadata: Record<string, string | number | boolean>;
+  visitId?: string;
 }): Promise<string[]> {
   try {
-    const { user, event, occurrence } = opts;
+    const { user, event, occurrence, visitId } = opts;
     if (!user?.id || user.isSynthetic || !occurrence) return [];
     // The credit marks and userAction are this emitter's to set. Dropped from the caller's
     // metadata, not just overridden: the host copy adds no credit marks, so a caller's
@@ -188,8 +195,15 @@ export async function emitBillingEvent(opts: {
     const { attribution: _attribution, touch: _touch, userAction: _userAction, ...callerMetadata } = opts.metadata;
     const acquisition = user.acquisition ?? undefined;
     const hostUtm = acquisition?.firstTouch;
-    const copies: Array<{ productId: string; utm?: OverwatchUtm; credit?: { touch: string; attribution: string } }> = [
-      ...(ingestKeyFor(HOST_PRODUCT_ID) ? [{ productId: HOST_PRODUCT_ID, ...(hostUtm && { utm: hostUtm }) }] : []),
+    const copies: Array<{
+      productId: string;
+      utm?: OverwatchUtm;
+      sessionId?: string;
+      credit?: { touch: string; attribution: string };
+    }> = [
+      ...(ingestKeyFor(HOST_PRODUCT_ID)
+        ? [{ productId: HOST_PRODUCT_ID, ...(hostUtm && { utm: hostUtm }), ...(visitId && { sessionId: visitId }) }]
+        : []),
       ...[...sourceProducts(acquisition).entries()].map(([productId, { touch, utm }]) => ({
         productId,
         utm,
@@ -197,13 +211,14 @@ export async function emitBillingEvent(opts: {
       })),
     ];
     await Promise.all(
-      copies.map(({ productId, utm, credit }) =>
+      copies.map(({ productId, utm, sessionId, credit }) =>
         emitProductEvent({
           productId,
           event,
           eventId: stableEventId(event, productId, occurrence),
           reportFailure: true,
           userId: user.id,
+          ...(sessionId && { sessionId }),
           ...(utm && { utm }),
           metadata: { ...callerMetadata, ...credit, userAction: false },
         }).catch(() => {
@@ -232,6 +247,13 @@ export async function emitBillingEvent(opts: {
  * `value` is in the currency's major unit (29.99, not 2999), the GA4 convention the client pixel
  * also follows. The divisor follows the currency (minorUnitsPerMajor): a yen amount is already
  * whole yen, so dividing every currency by 100 would under-report it 100x.
+ *
+ * `visitId` is the browser visit the payment was started in, read back from core's own record of
+ * the payment's start (billingEventDetails.ts), so the analytics consumer can place the purchase
+ * in that visit. Only a purchase the buyer started in the browser names one: a credit pack, or
+ * the invoice that opened a subscription through Checkout. A renewal, a seat change or any other
+ * invoice Stripe raised on its own happened in no visit, so it names none whatever the caller
+ * passes.
  */
 export async function emitPurchaseEvents(opts: {
   user: PurchaseCreditUser | null | undefined;
@@ -243,10 +265,13 @@ export async function emitPurchaseEvents(opts: {
   currency: string | null | undefined;
   /** Stripe's billing_reason for an invoice: `subscription_create`, `subscription_cycle`, ... */
   billingReason?: string | null;
+  /** The visit the payment was started in, when one was recorded. */
+  visitId?: string;
 }): Promise<string[]> {
   const { user, paymentId, kind, amountMinor, currency, billingReason } = opts;
   if (!paymentId || !currency) return [];
   if (typeof amountMinor !== 'number' || !Number.isFinite(amountMinor) || amountMinor <= 0) return [];
+  const startedInVisit = kind === 'credits' || billingReason === 'subscription_create';
   return emitBillingEvent({
     user,
     event: PURCHASE_EVENT,
@@ -257,5 +282,6 @@ export async function emitPurchaseEvents(opts: {
       currency: currency.toUpperCase(),
       ...(billingReason && { billingReason }),
     },
+    ...(startedInVisit && opts.visitId && { visitId: opts.visitId }),
   });
 }
