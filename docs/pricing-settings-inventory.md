@@ -79,6 +79,8 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `apiRateLimitProPerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | Same as `apiRateLimitFreePerMin`. | no. A request rate limit. | Usage limits |
 | `apiRateLimitDefaultWritePerMin` | Admin Settings > Security > API Rate Limiting | The default per-user write limit (`apps/client/server/middlewares/defaultWriteRateLimit.ts`), mounted by `baseApi` on every authenticated route: one counter per signed-in user across all POST, PUT, PATCH and DELETE requests. API-key requests, admins, developer-tagged users and routes that opt out are not counted. | no. A request rate limit. | Usage limits |
 | `apiRateLimitDefaultWriteMode` | Admin Settings > Security > API Rate Limiting | The same middleware: `log` allows and logs writes over the limit, `enforce` refuses them with 429, `off` stops counting. | no. A request rate limit. | Usage limits |
+| `fileUploadLimitFreePerHour` | Admin Settings > Security > API Rate Limiting | The per-user hourly file-upload allowance (`apps/client/server/files/fileUploadBudget.ts`), spent per file by every upload route: single and batch presign, direct upload, URL import, generated-image copy, re-chunk, reprocess and the public API. Applies to Free and admin-restricted users; a value of 0 blocks their uploads. Default 300 files per hour. | no. An upload rate limit. | Usage limits |
+| `fileUploadLimitPaidPerHour` | Admin Settings > Security > API Rate Limiting | Same as `fileUploadLimitFreePerHour`, for Basic and Pro subscribers. Admins and developer-tagged users are not limited. Default 3000 files per hour. | no. An upload rate limit. | Usage limits |
 
 ## Pricing that is not an admin setting
 
@@ -417,5 +419,17 @@ No match outside the definition and tests.
 <details><summary><code>apiRateLimitDefaultWriteMode</code> (1 file)</summary>
 
 - `apps/client/server/middlewares/defaultWriteRateLimit.ts`
+
+</details>
+
+<details><summary><code>fileUploadLimitFreePerHour</code> (1 file)</summary>
+
+- `apps/client/server/files/fileUploadBudget.ts`
+
+</details>
+
+<details><summary><code>fileUploadLimitPaidPerHour</code> (1 file)</summary>
+
+- `apps/client/server/files/fileUploadBudget.ts`
 
 </details>
