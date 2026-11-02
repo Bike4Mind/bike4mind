@@ -23,13 +23,28 @@ struct RootView: View {
     }
     .animation(.default, value: auth.state)
     .onChange(of: auth.state) { _, state in
-      // Cached rows belong to the account that fetched them.
-      guard case .signedOut = state else { return }
-      Task { await services.sessionListCache.clear() }
+      handleAuthState(state)
     }
-    .onChange(of: scenePhase) { _, phase in
+    .onChange(of: scenePhase, initial: true) { _, phase in
       // Lock on the way out so the app-switcher snapshot never shows content.
       if phase == .background { auth.lockIfNeeded() }
+      if phase == .active { Task { await services.push.appDidBecomeActive() } }
+    }
+  }
+
+  private func handleAuthState(_ state: AuthController.State) {
+    switch state {
+    case .signedIn, .locked:
+      // First sign-in (or a restored launch) is the moment to ask for quiet push authorization.
+      Task { await services.push.sessionDidStart() }
+      if state == .signedIn { services.navigator.releasePendingRoute() }
+    case .signedOut:
+      // Cached rows belong to the account that fetched them.
+      Task { await services.sessionListCache.clear() }
+      services.push.sessionDidEnd()
+      services.navigator.discardPendingRoute()
+    case .restoring:
+      break
     }
   }
 }

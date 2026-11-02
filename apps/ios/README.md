@@ -35,3 +35,14 @@ and credits (`Bike4Mind/Features/Debug/FixtureServices.swift`):
 ```sh
 SIMCTL_CHILD_B4M_UI_FIXTURES=1 xcrun simctl launch booted com.bike4mind.app
 ```
+
+## Push notifications and universal links
+
+- `Bike4Mind.entitlements` declares `aps-environment` (`development`; Xcode rewrites it to `production` when
+  archiving with distribution signing) and `applinks:app.bike4mind.com`.
+- Unsigned simulator builds ignore entitlements (the simulator `.xcent` is empty), so `make build` stays green with
+  no team. Nothing is gated. Once an Apple Developer team exists: set `DEVELOPMENT_TEAM`, enable the Push
+  Notifications and Associated Domains capabilities on the App ID, and publish the AASA file on app.bike4mind.com.
+  Until then, universal links open in Safari and APNs registration fails (logged, harmless) in the simulator.
+- Authorization: provisional (silent) on first signed-in moment; the system prompt appears once, when the user first
+  opens a conversation (`PushRegistrationCoordinator.userDidReachValueMoment`).

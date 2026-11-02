@@ -5,6 +5,7 @@ import SwiftUI
 struct Bike4MindApp: App {
   @State private var auth: AuthController
   @State private var services: AppServices
+  @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
   init() {
     #if DEBUG
@@ -20,7 +21,9 @@ struct Bike4MindApp: App {
     #endif
     let auth = AuthController(environment: environment, tokenStore: tokenStore)
     _auth = State(initialValue: auth)
-    _services = State(initialValue: AppServices(auth: auth))
+    let services = AppServices(auth: auth)
+    AppDelegate.services = services
+    _services = State(initialValue: services)
   }
 
   var body: some Scene {
@@ -28,6 +31,11 @@ struct Bike4MindApp: App {
       RootView()
         .environment(auth)
         .environment(services)
+        .onOpenURL { services.events.handle(url: $0) }
+        .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+          guard let url = activity.webpageURL else { return }
+          services.events.handle(url: url)
+        }
     }
   }
 }
