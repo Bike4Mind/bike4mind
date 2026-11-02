@@ -43,6 +43,7 @@ export {
 } from './errors';
 export { isAbliteratedModel } from './abliterated';
 export {
+  BUNDLED_CURATED_JSON_TEXT,
   configuredNumCtx,
   curatedBuildForRef,
   curatedEntryForRef,

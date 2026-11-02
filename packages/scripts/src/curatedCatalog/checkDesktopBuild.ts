@@ -1,20 +1,22 @@
 /**
- * Release gate for a built Desktop app (`apps/desktop/out`): the public test keys must not be in it, and the list
- * URL it baked in must be empty or the expected https URL. Each `--also-scan` dir (the externalized
- * `@bike4mind/local-models` dist, which holds the keyring and ships from node_modules) gets the test-key scan only.
- * The desktop release workflow runs it between the build and packaging.
+ * Release gate for a built Desktop app (`apps/desktop/out`) or CLI (`packages/cli/dist`): the public test keys must
+ * not be in it, and the list URL it baked in must be empty or the expected https URL. Each `--also-scan` dir (the
+ * externalized `@bike4mind/local-models` dist, which holds the keyring and ships from node_modules) gets the
+ * test-key scan only. The release workflows run it between the build and packaging.
  *
  *   pnpm --filter @bike4mind/scripts curated:check-build apps/desktop/out [--expect-url <public list URL>]
  *     [--also-scan <dir>]...
  */
-import { readdir, readFile } from 'node:fs/promises';
+import { access, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { cliPath, isEntry } from './cli';
 import { CURATED_DEV_SEED_TEXTS, curatedDevKey } from './devKey';
 
-// Written by the curatedBuildInfo plugin in apps/desktop/electron.vite.config.ts.
+// Written by the curatedBuildInfo plugin in apps/desktop/electron.vite.config.ts, and for the CLI by
+// curatedBuildInfoPlugin in packages/cli/tsdown.config.ts (at the root of dist).
 export const BUILD_INFO_PATH = path.join('main', 'curated-build.json');
+export const CLI_BUILD_INFO_PATH = 'curated-build.json';
 
 export interface BuildFinding {
   file: string;
@@ -47,6 +49,26 @@ export async function findDevKey(dir: string): Promise<BuildFinding[]> {
   return findings;
 }
 
+// A CLI build replaces these reads at build time; one that survives would let the environment override the baked value.
+const RUNTIME_READS = ['process.env.B4M_CURATED_MANIFEST_URL', 'process.env.B4M_CURATED_DEV_KEYS'];
+
+/** Every file under `dir` that still reads a baked curated variable from the environment. */
+export async function findRuntimeReads(dir: string): Promise<BuildFinding[]> {
+  const findings: BuildFinding[] = [];
+  for await (const file of files(dir)) {
+    const bytes = await readFile(file);
+    for (const read of RUNTIME_READS)
+      if (bytes.includes(read)) findings.push({ file: path.relative(dir, file), marker: read });
+  }
+  return findings;
+}
+
+const isCliBuild = (dir: string) =>
+  access(path.join(dir, CLI_BUILD_INFO_PATH)).then(
+    () => true,
+    () => false
+  );
+
 /** Null when the URL a release bakes in is acceptable: unset (remote list off), or https and exactly `expected`. */
 export function manifestUrlProblem(raw: string | undefined, expected?: string): string | null {
   if (!raw) return null;
@@ -59,14 +81,21 @@ export function manifestUrlProblem(raw: string | undefined, expected?: string): 
 
 /** The problems `curated-build.json` reports; a build without one cannot be checked, so that is one too. */
 export async function buildInfoProblems(dir: string, expectedUrl?: string): Promise<string[]> {
-  let info: { devKeys?: unknown; manifestUrl?: unknown };
-  try {
-    info = JSON.parse(await readFile(path.join(dir, BUILD_INFO_PATH), 'utf8'));
-  } catch {
-    return [`${BUILD_INFO_PATH} is missing or unreadable; is this an apps/desktop/out build?`];
+  let info: { devKeys?: unknown; manifestUrl?: unknown } | undefined;
+  let found = BUILD_INFO_PATH;
+  for (const candidate of [BUILD_INFO_PATH, CLI_BUILD_INFO_PATH]) {
+    try {
+      info = JSON.parse(await readFile(path.join(dir, candidate), 'utf8'));
+      found = candidate;
+      break;
+    } catch {
+      info = undefined;
+    }
   }
+  if (info === undefined)
+    return [`${BUILD_INFO_PATH} is missing or unreadable; is this an apps/desktop/out or packages/cli/dist build?`];
   if (typeof info !== 'object' || info === null || typeof info.manifestUrl !== 'string')
-    return [`${BUILD_INFO_PATH} is malformed`];
+    return [`${found} is malformed`];
   const problems: string[] = [];
   if (info.devKeys !== false) problems.push('the build was made with B4M_CURATED_DEV_KEYS=1');
   const urlProblem = manifestUrlProblem(info.manifestUrl.trim(), expectedUrl?.trim());
@@ -92,6 +121,11 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, log = console
   const dir = cliPath(parsed.positionals[0], env);
   const findings = await findDevKey(dir);
   for (const finding of findings) log(`${finding.file}: contains the curated ${finding.marker}`);
+  if (await isCliBuild(dir))
+    for (const read of await findRuntimeReads(dir)) {
+      findings.push(read);
+      log(`${read.file}: still reads ${read.marker} at runtime`);
+    }
   let scanFailed = false;
   for (const extra of parsed.values['also-scan'] ?? []) {
     const extraDir = cliPath(extra, env);

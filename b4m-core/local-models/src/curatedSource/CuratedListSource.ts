@@ -5,6 +5,7 @@ import {
   parseCuratedSignatureFile,
   verifyCurated,
   type CuratedKey,
+  type CuratedVerifyFailure,
 } from '../curatedSignature';
 import { CuratedStore, type CuratedCheckState } from './CuratedStore';
 import { fetchCurated, type CuratedFetchResult } from './fetchCurated';
@@ -47,6 +48,8 @@ export interface CuratedListSourceDeps {
   /** Reads a list the envelope check passed, never throwing; the client's own entry filters go here. */
   load: (json: unknown) => HubManifest;
   allowLoopbackHttp: boolean;
+  /** False keeps the verified cached list in use but never makes a request; default true. */
+  network?: boolean;
   /** Sent on every request, naming the client and nothing about the install. */
   userAgent: string;
   fetch?: typeof fetch;
@@ -69,10 +72,21 @@ interface Copy {
 
 type Verdict =
   | { ok: true; json: unknown; sequence: number; signedBy: CuratedKey[] }
-  | { ok: false; stage: 'signature' | 'content'; detail: string };
+  | { ok: false; stage: 'signature'; reason: CuratedVerifyFailure; detail: string }
+  | { ok: false; stage: 'content'; detail: string };
 
 const sameBytes = (a: Uint8Array, b: Uint8Array | null) =>
   b !== null && a.byteLength === b.byteLength && a.every((byte, i) => byte === b[i]);
+
+// A bundled list whose exact file text is not available (the CLI re-serializes its JSON import) still matches by content.
+function sameJson(a: Uint8Array, b: Uint8Array): boolean {
+  try {
+    const decode = (bytes: Uint8Array) => JSON.stringify(JSON.parse(new TextDecoder().decode(bytes)));
+    return decode(a) === decode(b);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The curated list a client shows: the bundled copy, or a newer verified one from the baked URL, checked when due or
@@ -135,8 +149,10 @@ export class CuratedListSource {
     const { lastSuccessAt } = this.#state;
     const age = now - Date.parse(chosen.manifest.updatedAt);
     const checkedRecently = lastSuccessAt !== null && now - lastSuccessAt <= STALE_CHECK_AGE_MS;
+    // Before any check this session, the saved state still says whether the last attempt failed.
+    const priorFailure = this.#status === 'idle' && this.#state.failures > 0;
     const check: CuratedCheckStatus =
-      !this.available || !this.#enabled ? 'off' : this.#status === 'rejected' ? 'failed' : this.#status;
+      !this.available || !this.#enabled ? 'off' : this.#status === 'rejected' || priorFailure ? 'failed' : this.#status;
     return {
       origin: chosen.origin,
       sequence: chosen.manifest.sequence ?? null,
@@ -168,7 +184,7 @@ export class CuratedListSource {
   async checkIfDue(): Promise<void> {
     await this.#loaded;
     if (this.#inFlight) return this.#inFlight;
-    if (!this.available || !this.#enabled || !this.#due(this.#now())) return;
+    if (!this.#canCheck() || !this.#due(this.#now())) return;
     return this.#start();
   }
 
@@ -176,8 +192,12 @@ export class CuratedListSource {
   async checkNow(): Promise<void> {
     await this.#loaded;
     if (this.#inFlight) return this.#inFlight;
-    if (!this.available || !this.#enabled) return;
+    if (!this.#canCheck()) return;
     return this.#start();
+  }
+
+  #canCheck(): boolean {
+    return this.available && this.#enabled && this.#deps.network !== false;
   }
 
   #now(): number {
@@ -237,10 +257,13 @@ export class CuratedListSource {
     const copy = await store.readCopy(source);
     const verdict = copy ? this.#verify(copy.manifest, copy.signature) : null;
     if (copy && verdict && !verdict.ok) {
+      // A key this build does not know may belong to a newer client's valid cache; leave it for that client.
+      const foreign = verdict.stage === 'signature' && verdict.reason === 'unknown-key';
       this.#log(`ignored the cached curated list: ${verdict.detail}`);
-      await store.deleteCopy(source).catch((error: unknown) => {
-        this.#log(`could not delete the cached curated list: ${String(error)}`);
-      });
+      if (!foreign)
+        await store.deleteCopy(source).catch((error: unknown) => {
+          this.#log(`could not delete the cached curated list: ${String(error)}`);
+        });
     }
     const recovered = verdict?.ok ? this.#revocations(verdict) : null;
     const lost = revoked.status === 'lost';
@@ -305,7 +328,8 @@ export class CuratedListSource {
   /** Size cap and signature, then UTF-8, JSON, the v2 envelope and a sequence; entries are read tolerantly later. */
   #verify(bytes: Uint8Array, signature: Uint8Array): Verdict {
     const signed = verifyCurated(bytes, signature, this.#deps.keys, this.#revoked);
-    if (!signed.ok) return { ok: false, stage: 'signature', detail: `${signed.reason}: ${signed.detail}` };
+    if (!signed.ok)
+      return { ok: false, stage: 'signature', reason: signed.reason, detail: `${signed.reason}: ${signed.detail}` };
     let json: unknown;
     try {
       json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
@@ -421,7 +445,7 @@ export class CuratedListSource {
       return kept;
     }
     if (verdict.sequence === current.sequence) {
-      if (!sameBytes(bytes, current.bytes))
+      if (!sameBytes(bytes, current.bytes) && !(current.origin === 'bundled' && sameJson(bytes, current.bytes)))
         this.#log(
           `warning: curated list ${verdict.sequence} differs from the current list with that sequence; kept it`
         );

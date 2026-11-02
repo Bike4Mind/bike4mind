@@ -341,7 +341,19 @@ const argv = await yargs(hideBin(process.argv))
       }, async () => {
         // Handled by external command handler
       })
-      .command('curated', 'List the models Bike4Mind picked, with picks for this computer first', {}, async () => {
+      .command('curated', 'List the models Bike4Mind picked, with picks for this computer first', (yargs) => {
+        return yargs
+          .option('refresh', {
+            type: 'boolean',
+            description: 'Check for a newer signed list now instead of when the last check is 6 hours old',
+            default: false,
+          })
+          .option('offline', {
+            type: 'boolean',
+            description: 'Use the last verified list on this computer (else the bundled one) with no update check (also: B4M_CURATED=off)',
+            default: false,
+          });
+      }, async () => {
         // Handled by external command handler
       })
       .command('pull <ref>', 'Download a model after showing its size and license', (yargs) => {
@@ -363,6 +375,11 @@ const argv = await yargs(hideBin(process.argv))
           .option('force', {
             type: 'boolean',
             description: 'Download even when the fit check rates the model too large for this machine',
+            default: false,
+          })
+          .option('offline', {
+            type: 'boolean',
+            description: 'Use the last verified curated list on this computer with no update check (also: B4M_CURATED=off)',
             default: false,
           })
           .example('b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M', 'Pull a Hugging Face GGUF build')
