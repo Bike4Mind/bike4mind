@@ -25,6 +25,7 @@ import AnalyticsTab from './Analytics';
 import UsersTab from './Users';
 import dynamic from 'next/dynamic';
 import AdminSubscriptions from './Subscriptions';
+import AdminRevenue from './Revenue';
 import OrganizationsTab from './OrganizationsTab';
 import CreditAnalyticsTab from './CreditAnalysis';
 import SecretsRotationTab from './SecretsRotationTab';
@@ -68,6 +69,7 @@ const SignupRiskReviewTab = dynamic(() => import('./SignupRiskReviewTab'), { ssr
 const HeldSignupGrantsTab = dynamic(() => import('./HeldSignupGrantsTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
+const PreferenceArenaTab = dynamic(() => import('./PreferenceArenaTab'), { ssr: false });
 const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
@@ -152,6 +154,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.GrowthPricing} sx={{ padding: 0 }}>
             {activeTab === AdminTab.GrowthPricing && <AdminGrowthPricingTab />}
           </TabPanel>
+          <TabPanel value={AdminTab.PreferenceArena} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.PreferenceArena && <PreferenceArenaTab />}
+          </TabPanel>
           <TabPanel value={AdminTab.AdminSettings} sx={{ padding: 0 }}>
             {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
           </TabPanel>
@@ -198,6 +203,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
             {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
           </TabPanel>
+          <TabPanel value={AdminTab.Revenue}>{activeTab === AdminTab.Revenue && <AdminRevenue />}</TabPanel>
           <TabPanel value={AdminTab.Subscriptions}>
             {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
           </TabPanel>

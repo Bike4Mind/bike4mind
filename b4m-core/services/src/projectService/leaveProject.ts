@@ -64,12 +64,8 @@ export const leaveProject = async (
     project.sessionIds = pruned.sessionIds;
   }
 
-  await adapters.db.projects.update({
-    id: project.id,
-    users: project.users,
-    fileIds: project.fileIds,
-    sessionIds: project.sessionIds,
-  });
+  await adapters.db.projects.shareable.updateUserShares(project.id, { remove: { userId: userIdToRemove ?? user.id } });
+  await adapters.db.projects.update({ id: project.id, fileIds: project.fileIds, sessionIds: project.sessionIds });
 
   return project;
 };

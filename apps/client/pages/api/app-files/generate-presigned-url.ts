@@ -9,7 +9,7 @@ import {
   isExecutableUploadMimeType,
 } from '@bike4mind/common';
 import { AppFile } from '@bike4mind/database/content';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';

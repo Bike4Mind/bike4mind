@@ -364,7 +364,8 @@ export interface MemoryBudgets {
 
 export function memoryBudgets(hw: HardwareProfile): MemoryBudgets {
   if (hw.memoryKind === 'unified') {
-    // AMD reports what ROCm can allocate, which a firmware carve-out keeps outside totalMemoryBytes.
+    // AMD reports what ROCm can allocate, which a firmware carve-out keeps outside totalMemoryBytes. hardwareClass in
+    // tiers.ts classes the Curated tier by the same pool.
     if (hw.gpuMemoryBytes) return { gpu: hw.gpuMemoryBytes, ramPool: 0, cpuOnly: false };
     const fraction =
       hw.totalMemoryBytes >= FIT_CONSTANTS.unifiedLargeMinBytes

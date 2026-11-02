@@ -29,8 +29,12 @@ const ALL_KEYS = {
   imageGen: 'http://localhost:7860',
 };
 
-/** Backends that hold no key of their own: AWS IAM covers both. */
-const KEYLESS: ReadonlySet<string> = new Set<string>([ModelBackend.Bedrock, ModelBackend.AWS]);
+/** Backends that hold no key of their own: AWS IAM covers two, and the client builds the third itself. */
+const KEYLESS: ReadonlySet<string> = new Set<string>([
+  ModelBackend.Bedrock,
+  ModelBackend.AWS,
+  ModelBackend.OpenAICompatible,
+]);
 
 describe('buildApiKeyTable', () => {
   it('maps a key for every backend that has one', () => {

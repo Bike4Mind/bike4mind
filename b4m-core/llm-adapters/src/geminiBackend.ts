@@ -9,7 +9,7 @@ import {
   Tool,
 } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
@@ -671,7 +671,10 @@ export class GeminiBackend implements ICompletionBackend {
     // Empty text plus no reminder still leaves `systemInstruction: undefined` below.
     const systemInstruction = shouldOmitIdentityReminder(options)
       ? callerSystemText
-      : appendIdentityReminder(callerSystemText, buildIdentityReminder(modelName, options.modelDisplayName));
+      : appendIdentityReminder(
+          callerSystemText,
+          buildIdentityReminder(options.modelIdentityId ?? modelName, options.modelDisplayName)
+        );
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
     const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
@@ -983,7 +986,10 @@ export class GeminiBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
-                this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+                this.logger[toolFailureLogLevel(outcome.error)](
+                  `[Gemini] Error executing tool ${outcome.toolCall.name}:`,
+                  outcome.error
+                );
                 // Strip too - matches the success path above (openaiBackend does the same for
                 // its error branch) so an error message can't carry echoable artifact markup.
                 const errorContent = JSON.stringify({
@@ -1284,7 +1290,10 @@ export class GeminiBackend implements ICompletionBackend {
             } as IMessage);
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-            this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+            this.logger[toolFailureLogLevel(outcome.error)](
+              `[Gemini] Error executing tool ${outcome.toolCall.name}:`,
+              outcome.error
+            );
             // Strip too - matches the success path above (openaiBackend does the same for its
             // error branch) so an error message can't carry echoable artifact markup.
             const errorContent = JSON.stringify({
@@ -1648,6 +1657,18 @@ export class GeminiBackend implements ICompletionBackend {
   }
 
   private getGenerationConfig(
+    model: ModelInfo,
+    options: Partial<ICompletionOptions>
+  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {
+    const config = this.getUncappedGenerationConfig(model, options);
+    // The thinking reserve sits on top of the caller's cap; a billing ceiling bounds the sum.
+    const ceiling = options.outputTokenCeiling;
+    return ceiling !== undefined && (config.maxOutputTokens ?? Infinity) > ceiling
+      ? { ...config, maxOutputTokens: ceiling }
+      : config;
+  }
+
+  private getUncappedGenerationConfig(
     model: ModelInfo,
     options: Partial<ICompletionOptions>
   ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {

@@ -19,7 +19,7 @@
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Resource } from 'sst';
-import { sendToConnection } from '@server/websocket/utils';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { Connection } from '@bike4mind/database/social';
 import { Quest } from '@bike4mind/database/content';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';

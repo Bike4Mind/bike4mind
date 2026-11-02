@@ -1,4 +1,4 @@
-import { CreditHolderType, CreditLotSource, dayjs, ICreditLotRepository } from '@bike4mind/common';
+import { CreditHolderType, CreditLotSource, dayjs, ICreditLotRepository, UsageFundingSource } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 /**
@@ -34,6 +34,8 @@ export interface StampCreditLotParams {
   amount: number;
   grantType: CreditLotGrantType;
   stripeRef?: string;
+  /** Overrides the funding the lot's source implies; see ICreditLot.fundingSource. */
+  fundingSource?: UsageFundingSource;
   now?: Date;
 }
 
@@ -59,6 +61,7 @@ export async function stampCreditLot(params: StampCreditLotParams, { db }: Stamp
       expiresAt: expiresAtForGrantType(params.grantType, now),
       consumedAssigned: 0,
       stripeRef: params.stripeRef,
+      fundingSource: params.fundingSource,
     });
   } catch (err) {
     Logger.error('Failed to stamp credit lot', err, {

@@ -229,6 +229,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'lakeMemoryQueue',
   },
   {
+    label: 'risk-evidence',
+    displayName: 'Account Risk Evidence',
+    application: 'Signup',
+    sourceQueue: 'riskEvidenceQueue',
+  },
+  {
     label: 'lake-inconsistency-model',
     displayName: 'Lake Model Inconsistency Detection',
     application: 'DataLakeManagement',

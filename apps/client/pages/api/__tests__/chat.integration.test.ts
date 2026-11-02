@@ -117,7 +117,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 }));
 
 // Keep fire-and-forget analytics writes from touching the DB.
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 // The per-user tier rate-limit middleware resolves the caller's limit from their
 // active subscriptions (a Mongo read via subscriptionRepository). This test stubs
@@ -135,8 +135,12 @@ vi.mock('@server/utils/userRateTier', () => ({
 // their edges. getSettingsValue stays real (with {} it falls back to the default
 // model). SQSService is inert; the tokenizer/default-options are irrelevant to
 // the async response.
+const { mockOptionsFindUser, mockProcessOptions } = vi.hoisted(() => ({
+  mockOptionsFindUser: vi.fn(),
+  mockProcessOptions: vi.fn(),
+}));
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
-  getDefaultChatCompletionOptions: () => ({}),
+  getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
   resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),
   isChatModelUsable: (...a: unknown[]) => mockIsChatModelUsable(...a),
@@ -165,15 +169,28 @@ vi.mock('@bike4mind/services', async orig => {
   };
 });
 
+const invokeOptions = vi.hoisted(() => ({ value: undefined as unknown }));
+
+vi.mock('@server/billing/meterPlatformCompletion', async orig => ({
+  ...(await orig<typeof import('@server/billing/meterPlatformCompletion')>()),
+  createCompletionMeter: vi.fn(),
+}));
+
 vi.mock('@bike4mind/services/llm', async orig => {
   const actual = await orig<Record<string, unknown>>();
   class MockChatCompletionInvoke {
+    constructor(options: unknown) {
+      invokeOptions.value = options;
+    }
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
     invoke = (...a: unknown[]) => mockInvoke(...a);
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
   class MockChatCompletionProcess {
+    constructor(options: unknown) {
+      mockProcessOptions(options);
+    }
     pipelinePhases = undefined;
     get terminalError() {
       return mockTerminalError.value;
@@ -280,7 +297,8 @@ function fire({
   apiKey = VALID_KEY as string | null,
   bearer = null as string | null,
   body = { message: 'hello', sessionId: 'sess-1' },
-}: { apiKey?: string | null; bearer?: string | null; body?: unknown } = {}) {
+  cookie = null as string | null,
+}: { apiKey?: string | null; bearer?: string | null; body?: unknown; cookie?: string | null } = {}) {
   const payload = JSON.stringify(body);
   const { req, res } = createMocks(
     {
@@ -291,6 +309,7 @@ function fire({
         'content-length': String(Buffer.byteLength(payload)),
         ...(apiKey ? { 'x-api-key': apiKey } : {}),
         ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+        ...(cookie ? { cookie } : {}),
       },
       body,
     },
@@ -412,6 +431,24 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }));
   });
 
+  it("hands the request's key to the QuestMaster completion meter", async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire();
+    await handler(req, res);
+    const { createCompletionMeter: createMeter } = invokeOptions.value as {
+      createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
+    };
+    createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
+
+    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    expect(createCompletionMeter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'QuestMaster planning',
+      expect.objectContaining({ apiKeyId: 'k1' })
+    );
+  });
+
   it.each([
     ['withholds', [ApiKeyScope.AI_CHAT], true],
     ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], false],
@@ -421,6 +458,23 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     await handler(req, res);
     expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
   });
+
+  it.each([
+    ['withholds', [ApiKeyScope.AI_CHAT], false],
+    ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], true],
+  ] as const)(
+    '%s the admin role from a wait=true tool that re-reads the owner, for a key with scopes %j',
+    async (_, scopes, expected) => {
+      validateWithScopes([...scopes]);
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      const { users } = (
+        mockProcessOptions.mock.calls[0][0] as { db: { users: { findById: (id: string) => unknown } } }
+      ).db;
+      mockOptionsFindUser.mockResolvedValueOnce({ id: 'user-1', isAdmin: true });
+      expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(expected);
+    }
+  );
 
   describe.each([
     {
@@ -464,6 +518,29 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect((mockInvoke.mock.calls[0][0] as { authOrigin?: string }).authOrigin).toBe('session');
     expect((mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBeUndefined();
     expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(false);
+  });
+
+  describe('the visit handed to the queued turn (its first_value names it)', () => {
+    const visitId = 'a'.repeat(32);
+    const invokedVisit = () => (mockInvoke.mock.calls[0][0] as { visitId?: string }).visitId;
+
+    it("hands invoke() a browser caller's visit cookie", async () => {
+      const { req, res } = fire({ apiKey: null, cookie: `b4m_vid=${visitId}` });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedVisit()).toBe(visitId);
+    });
+
+    it.each([
+      ['no visit cookie', null, null],
+      ['an API key, even with a visit cookie', VALID_KEY, `b4m_vid=${visitId}`],
+    ])('hands it no visit for %s', async (_, apiKey, cookie) => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ apiKey, cookie });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedVisit()).toBeUndefined();
+    });
   });
 
   it('accepts an ai:generate-only key (2xx) — proves OR semantics', async () => {
@@ -622,6 +699,18 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     );
     expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
       'allowlisted-model'
+    );
+  });
+
+  it('treats a whitespace-only model as model-less and starts on the default', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockResolveDefaultChatModel.mockResolvedValueOnce({ model: 'admin-default' });
+    mockResolveCallerDefaultModel.mockResolvedValueOnce('admin-default');
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', model: '   ' } });
+    await handler(req, res);
+    expect(res.statusCode).toBeLessThan(300);
+    expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
+      'admin-default'
     );
   });
 
@@ -1258,6 +1347,7 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       type: 'error',
       reply: 'You do not have access to this session',
       replies: [],
+      createdAt: new Date('2026-08-03T00:00:00Z'),
     });
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
     await handler(req, res);
@@ -1271,7 +1361,10 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
   });
 
   it('returns the prompt text when includeSystemPrompt is set', async () => {
-    const TEXT = { blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false }] };
+    const TEXT = {
+      blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false, placement: 'system' }],
+      sizeCapped: false,
+    };
     mockSystemPromptText.value = TEXT;
     const { req, res } = fire({
       body: { message: 'hello', sessionId: 'sess-1', wait: true, includeSystemPrompt: true },
@@ -1279,6 +1372,26 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().promptText).toEqual(TEXT);
+  });
+
+  it('sends a wait reply the contract declares in full, with every optional field present', async () => {
+    mockSystemPromptText.value = {
+      blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false, placement: 'system' }],
+      sizeCapped: false,
+    };
+    const warn = vi.spyOn(Logger.resetMetadata(), 'warn');
+    const { req, res } = fire({
+      body: {
+        message: 'hello',
+        sessionId: 'sess-1',
+        wait: true,
+        includeSystemPrompt: true,
+        includePromptDetails: true,
+      },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(warn.mock.calls.filter(([message]) => String(message).startsWith('[contract]'))).toEqual([]);
   });
 
   it('omits the prompt text without the flag, so the text is never returned unasked', async () => {
@@ -1380,7 +1493,8 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
   });
 
   describe('output-budget exhaustion on wait: true', () => {
-    let requestLogger: Logger;
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
     // Models ChatCompletionProcess: the quest is settled as an error and the failure is left on
     // the instance rather than thrown.
     const processExhaustingBudget = () =>
@@ -1388,10 +1502,9 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
         mockTerminalError.value = new Error('output budget was exhausted');
       });
     beforeEach(() => {
-      // req.logger is the global instance (logging middleware), so spy there.
-      requestLogger = Logger.resetMetadata();
-      vi.spyOn(requestLogger, 'error').mockImplementation(() => {});
-      vi.spyOn(requestLogger, 'warn').mockImplementation(() => {});
+      // req.logger is built per request by the logging middleware, so spy on the class.
+      errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     });
     afterEach(() => {
       mockTerminalError.value = undefined;
@@ -1417,8 +1530,8 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       expect(body).toMatchObject({ quest_id: expect.any(String) });
       expect(body).not.toHaveProperty('errorCode');
       // The 502 is an expected, classified failure: logged at warn so it does not trip the error alert.
-      expect(requestLogger.error).not.toHaveBeenCalled();
-      expect(requestLogger.warn).toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
     });
   });
 
@@ -1512,7 +1625,14 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       mockReleaseReservedCredits.mockResolvedValue(undefined);
       mockSendStatusUpdate.mockReset().mockResolvedValue(undefined);
       // A turn still mid-flight when the deadline fires: nothing streamed yet.
-      mockInvoke.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
+      mockInvoke.mockResolvedValue({
+        id: 'quest-2',
+        status: 'running',
+        type: 'message',
+        reply: '',
+        replies: [],
+        createdAt: new Date('2026-08-03T00:00:00Z'),
+      });
     });
     afterEach(() => {
       waitTurnLimits.budgetMs = 45_000;

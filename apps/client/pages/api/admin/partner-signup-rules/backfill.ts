@@ -13,7 +13,7 @@ import { organizationService } from '@bike4mind/services';
 import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { auditSeatCeilingRaised } from '@server/organizations/notifySeatCeilingRaised';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 

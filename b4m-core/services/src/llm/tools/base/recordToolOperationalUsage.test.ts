@@ -187,6 +187,16 @@ describe('recordToolOperationalUsage', () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
+  it("attributes the spend to the turn's authenticating API key", async () => {
+    await recordToolOperationalUsage(makeContext({ authOrigin: 'apiKey', apiKeyId: 'key-1' }), {
+      model: 'gpt-4o-mini',
+      completionInfo,
+      startTime: Date.now(),
+    });
+
+    expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({ apiKeyId: 'key-1' });
+  });
+
   it('passes the host billing repos through so the spend can debit', async () => {
     const operationalBilling = { creditTransactions: {}, users: {}, organizations: {}, activePlans: {} };
     const context = makeContext();
@@ -344,6 +354,47 @@ describe('recordToolOperationalUsage', () => {
         startTime: Date.now(),
       });
       expect(recordOperationalUsageMock.mock.calls[0][0].priceStamp).toBeUndefined();
+    });
+  });
+
+  it('records the mapped model and its provider when toLedgerModel is set, cost from the run model', async () => {
+    const requested = { id: 'claude-x', backend: 'anthropic' } as never;
+    await recordToolOperationalUsage(
+      makeContext({
+        availableModels: [modelInfo, requested],
+        toLedgerModel: id => (id === 'gpt-4o-mini' ? 'claude-x' : id),
+      }),
+      { model: 'gpt-4o-mini', completionInfo, startTime: Date.now() }
+    );
+    expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-x',
+      executedProvider: 'openai',
+      executedModel: 'gpt-4o-mini',
+      costUsd: 0.0042,
+    });
+  });
+
+  it('names no executed model when the run model is the recorded one', async () => {
+    await recordToolOperationalUsage(makeContext({ toLedgerModel: id => id }), {
+      model: 'gpt-4o-mini',
+      completionInfo,
+      startTime: Date.now(),
+    });
+    expect(recordOperationalUsageMock.mock.calls[0][0]).not.toHaveProperty('executedModel');
+  });
+
+  it('omits the run model provider when the mapped id is not in the catalog', async () => {
+    await recordToolOperationalUsage(makeContext(), {
+      model: 'gpt-4o-mini',
+      ledgerModel: 'gpt-4',
+      completionInfo,
+      startTime: Date.now(),
+    });
+    expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({
+      provider: 'unknown',
+      model: 'gpt-4',
+      executedModel: 'gpt-4o-mini',
     });
   });
 });

@@ -76,11 +76,13 @@ describe('applyReplyDone', () => {
       done({
         content: 'x',
         stopReason: 'tool_turn_limit',
+        contextSnapshot: { model: 'test', inputTokens: 100, overhead: [] },
         artifacts: [{ id: 'a1', type: 'html', mimeType: 'text/html', title: 'Demo', content: '<b>hi</b>' }],
       })
     );
 
     expect(settled.stopReason).toBe('tool_turn_limit');
+    expect(settled.contextSnapshot?.inputTokens).toBe(100);
     expect(settled.artifacts).toHaveLength(1);
   });
 
@@ -115,6 +117,12 @@ describe('applyReplyDone', () => {
   it('keeps a usage the event does not restate', () => {
     const message: ChatMessage = { ...streaming([{ text: 'x', toolCallIds: [] }]), usage: { inputTokens: 900 } };
     expect(applyReplyDone(message, done({ content: 'x' })).usage?.inputTokens).toBe(900);
+  });
+
+  it('takes the prompt cache stamp, which only the settled reply carries', () => {
+    const stamp = { cachedAt: 1_000, ttl: '1h' as const, model: 'claude-opus-5-5' };
+    const message = streaming([{ text: 'x', toolCallIds: [] }]);
+    expect(applyReplyDone(message, done({ content: 'x', promptCache: stamp })).promptCache).toEqual(stamp);
   });
 
   it('leaves the text a reply with no artifact in it streamed', () => {

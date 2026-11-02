@@ -20,7 +20,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, sreErrorTrackingRepository, cacheRepository } from '@bike4mind/database';
 import { classifyForScan } from '@bike4mind/database/infra';
 import { SreAgentConfigSchema, resolveFullConfig } from '@bike4mind/common';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import {
   matchesLabelFilter,
   dispatchIssueToSre,

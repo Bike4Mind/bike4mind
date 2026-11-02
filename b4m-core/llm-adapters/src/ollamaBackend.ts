@@ -91,9 +91,12 @@ export class OllamaBackend implements ICompletionBackend {
   private _clientHost: string;
   private _clientHeaders: Record<string, string>;
   private _agent: Agent;
+  private _fetch?: typeof globalThis.fetch;
   public currentModel: string = '';
 
-  constructor(host?: string, logger?: ILogger) {
+  /** `options.fetch` replaces the default transport, for servers that need credentials the host URL cannot carry. */
+  constructor(host?: string, logger?: ILogger, options: { fetch?: typeof globalThis.fetch } = {}) {
+    this._fetch = options.fetch;
     this._logger = logger ?? new Logger();
     this._host = host ?? 'http://localhost:11434';
     const url = new URL(this._host);
@@ -122,10 +125,11 @@ export class OllamaBackend implements ICompletionBackend {
    * and the raised timeouts survive.
    */
   private createClient(signal?: AbortSignal): Ollama {
+    const custom = this._fetch;
     const fetchWithTimeout: typeof globalThis.fetch = (input, init) =>
-      (globalThis.fetch as (i: typeof input, o: object) => Promise<Response>)(input, {
+      ((custom ?? globalThis.fetch) as (i: typeof input, o: object) => Promise<Response>)(input, {
         ...init,
-        dispatcher: this._agent,
+        ...(!custom && { dispatcher: this._agent }),
         // Streaming requests already carry the client's own controller signal;
         // combine rather than replace so either source can cancel.
         ...(signal && { signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal }),
@@ -250,8 +254,16 @@ export class OllamaBackend implements ICompletionBackend {
       return { capabilities, contextWindow };
     } catch (error) {
       this._logger.debug(`[OllamaBackend] Could not fetch details for ${model}:`, error);
+      this._detailsFailed.add(model);
       return { capabilities: [], contextWindow: OllamaBackend.DEFAULT_CONTEXT_WINDOW };
     }
+  }
+
+  private readonly _detailsFailed = new Set<string>();
+
+  /** True when /api/show failed for `model`, so its `supportsTools: false` is a fallback, not what Ollama said. */
+  toolSupportUnchecked(model: string): boolean {
+    return this._detailsFailed.has(model);
   }
 
   /**
@@ -312,7 +324,10 @@ export class OllamaBackend implements ICompletionBackend {
     const conversationMessages = offerTools ? messages : stripToolDependentMessages(messages);
     const requestMessages = shouldOmitIdentityReminder({ ...options, tools: offerTools ? options.tools : undefined })
       ? conversationMessages
-      : appendIdentityReminderToMessages(conversationMessages, buildIdentityReminder(model, options.modelDisplayName));
+      : appendIdentityReminderToMessages(
+          conversationMessages,
+          buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+        );
     const baseRequest = {
       model,
       // This backend withholds tools in place rather than recursing, so the strip has to track

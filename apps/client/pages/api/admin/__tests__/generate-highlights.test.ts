@@ -38,7 +38,7 @@ const mockAudit = vi.fn();
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a) }));
 
 import handler from '../generate-highlights';
-import { HIGHLIGHTS_NOTE_LIMIT } from '@server/whatsNew/releaseNoteHighlights';
+import { HIGHLIGHTS_NOTE_LIMIT } from '@bike4mind/server-utils/whatsNew/releaseNoteHighlights';
 
 const logger = { warn: vi.fn(), log: vi.fn(), info: vi.fn(), error: vi.fn() };
 

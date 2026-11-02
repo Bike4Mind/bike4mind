@@ -89,9 +89,11 @@ jobs:
           # sst-pin patch inspection below still sees every file. Kept to test dirs and
           # *.test/*.spec files so all 51 real files under these paths still redden the gate.
           # An empty result is correct, not a failure: a tests-only PR is not applicable.
-          grep -vE '(^|/)__tests__/|\.(test|spec)\.[cm]?[jt]sx?$' /tmp/files.txt > /tmp/files_glob.txt || true
+          # Markdown under these paths is notes (infra/*.md), never read by sst, and is
+          # dropped for the same reason: it has no deploy surface to preview.
+          grep -vE '(^|/)__tests__/|\.(test|spec)\.[cm]?[jt]sx?$|\.mdx?$' /tmp/files.txt > /tmp/files_glob.txt || true
           if ! cmp -s /tmp/files.txt /tmp/files_glob.txt; then
-            echo "Excluded from the path glob as non-deploy-surface tests:"
+            echo "Excluded from the path glob as non-deploy-surface tests or markdown:"
             comm -23 <(sort /tmp/files.txt) <(sort /tmp/files_glob.txt) | sed 's/^/  /'
           fi
 

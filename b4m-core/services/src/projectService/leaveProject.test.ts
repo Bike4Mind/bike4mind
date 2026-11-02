@@ -20,7 +20,7 @@ describe('projectService - leaveProject', () => {
 
   let adapters: {
     db: {
-      projects: { shareable: { findAccessibleById: Mock }; update: Mock; updateGuarded: Mock };
+      projects: { shareable: { findAccessibleById: Mock; updateUserShares: Mock }; update: Mock; updateGuarded: Mock };
       sessions: { shareable: { findAccessibleById: Mock }; findAllByIds: Mock; updateGuarded: Mock };
       fabFiles: { shareable: { findAccessibleById: Mock }; findAllByIds: Mock; updateGuarded: Mock };
       users: { findById: Mock };
@@ -43,7 +43,11 @@ describe('projectService - leaveProject', () => {
     vi.clearAllMocks();
     adapters = {
       db: {
-        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
+        projects: {
+          shareable: { findAccessibleById: vi.fn(), updateUserShares: vi.fn() },
+          update: vi.fn(),
+          updateGuarded: vi.fn(),
+        },
         sessions: {
           shareable: { findAccessibleById: vi.fn() },
           findAllByIds: vi.fn(async () => []),
@@ -69,9 +73,11 @@ describe('projectService - leaveProject', () => {
     const result = await run(ownerId, memberId);
 
     expect(result.users).toEqual([{ userId: coMemberId, permissions: [Permission.read] }]);
+    expect(adapters.db.projects.shareable.updateUserShares).toHaveBeenCalledWith(project.id, {
+      remove: { userId: memberId },
+    });
     expect(adapters.db.projects.update).toHaveBeenCalledWith({
       id: project.id,
-      users: project.users,
       fileIds: project.fileIds,
       sessionIds: project.sessionIds,
     });
@@ -84,9 +90,11 @@ describe('projectService - leaveProject', () => {
     const result = await run(memberId);
 
     expect(result.users).toEqual([{ userId: coMemberId, permissions: [Permission.read] }]);
+    expect(adapters.db.projects.shareable.updateUserShares).toHaveBeenCalledWith(project.id, {
+      remove: { userId: memberId },
+    });
     expect(adapters.db.projects.update).toHaveBeenCalledWith({
       id: project.id,
-      users: project.users,
       fileIds: project.fileIds,
       sessionIds: project.sessionIds,
     });
@@ -97,6 +105,7 @@ describe('projectService - leaveProject', () => {
 
     await expect(run(coMemberId, memberId)).rejects.toThrow(UnauthorizedError);
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
+    expect(adapters.db.projects.shareable.updateUserShares).not.toHaveBeenCalled();
   });
 
   it('refuses the owner leaving their own project', async () => {
@@ -104,6 +113,7 @@ describe('projectService - leaveProject', () => {
 
     await expect(run(ownerId)).rejects.toThrow(UnauthorizedError);
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
+    expect(adapters.db.projects.shareable.updateUserShares).not.toHaveBeenCalled();
   });
 
   it('refuses to remove someone who is not a member, and writes nothing', async () => {
@@ -111,6 +121,7 @@ describe('projectService - leaveProject', () => {
 
     await expect(run(ownerId, 'stranger')).rejects.toThrow(NotFoundError);
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
+    expect(adapters.db.projects.shareable.updateUserShares).not.toHaveBeenCalled();
   });
 
   it('404s on a project the caller cannot reach', async () => {

@@ -1,7 +1,8 @@
 /**
  * Local model logic shared by `b4m models` (src/commands/modelsCommand.ts) and the MCP model tools
  * (src/mcp/modelTools.ts): ref parsing, runtime resolution, build and license checks, and pull planning.
- * Each surface does its own output and asks the user its own way.
+ * Each surface does its own output and asks the user its own way. The pull checks shared with Desktop and the
+ * model host live in @bike4mind/local-models (src/pulls); this file words their refusals for the terminal.
  */
 
 import {
@@ -10,12 +11,18 @@ import {
   HuggingFaceHub,
   ModelNotFoundError,
   OllamaRuntime,
+  checkInstalledDigest,
+  checkReviewedLayers,
+  checkRuntime,
   curatedBuildForRef,
+  curatedEntryForRef,
   detectRuntimes,
   findHubBuild,
   hubBuildTag,
   isAbliteratedModel,
   isHubRepoId,
+  licensesChanged,
+  manifestChange,
   ollamaModelKey,
   isPermissiveEntry,
   type DetectedRuntime,
@@ -24,9 +31,11 @@ import {
   type HubModelSummary,
   type InstalledModel,
   type LocalRuntime,
+  type ModelInspection,
   type OllamaRefIssue,
+  type OllamaRegistryLayers,
 } from '@bike4mind/local-models';
-import type { HubManifest } from '@bike4mind/common';
+import type { HubBuild, HubEntry, HubManifest } from '@bike4mind/common';
 import { withDefaultOllamaPort } from '../utils/ollamaHost.js';
 import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import {
@@ -36,7 +45,7 @@ import {
   type OllamaManifestInfo,
 } from '../commands/ollamaRegistry.js';
 
-export type HubClient = Pick<HuggingFaceHub, 'endpoint' | 'search' | 'getModel' | 'verifyOllamaRef'>;
+export type HubClient = Pick<HuggingFaceHub, 'endpoint' | 'search' | 'getModel' | 'verifyOllamaRef' | 'ollamaLayers'>;
 
 export const NOT_RECOMMENDED_LABEL = 'abliterated or uncensored build';
 
@@ -60,11 +69,15 @@ export function rankSearchHits<T extends Pick<HubModelSummary, 'id' | 'tags' | '
   };
 }
 
-export type RuntimeSource = 'flag' | 'env' | 'config' | 'detected';
+export type RuntimeSource = 'flag' | 'env' | 'config' | 'detected' | 'server';
 
 export interface RuntimeTarget {
   runtime: LocalRuntime;
   source: RuntimeSource;
+  /** Set when `--server` chose a saved model server. */
+  server?: { id: string; name: string };
+  /** Scrubs the saved server's credential from text a server sent back, such as pull progress. */
+  redact?: (text: string) => string;
 }
 
 /** Where models come from and go to; `planPull` needs nothing else. */
@@ -72,11 +85,13 @@ export interface ModelSourceDeps {
   hub: () => HubClient;
   /** Size and license texts of an Ollama registry model, read before pulling it. */
   ollamaRegistry: (name: string, signal: AbortSignal) => Promise<OllamaManifestInfo>;
+  /** The layers the Ollama library serves for a ref, checked against a curated build's pins; null when no such tag. */
+  libraryLayers: (ref: string, signal: AbortSignal) => Promise<OllamaRegistryLayers | null>;
   resolveRuntime: () => Promise<RuntimeTarget>;
   /** Aborted on Ctrl-C. */
   signal: AbortSignal;
-  /** The bundled Curated list; a pull of one of its refs also honors the license the list records for it. */
-  curated?: () => HubManifest;
+  /** The Curated list in use; a pull of one of its refs also honors the license the list records for it. */
+  curated?: () => HubManifest | Promise<HubManifest>;
 }
 
 export type PullTarget = { kind: 'hub'; repo: string; tag: string | null } | { kind: 'ollama'; name: string };
@@ -98,9 +113,16 @@ export function licenseName(license: LicenseInfo): string {
   return license.base ? `${own} and base model ${license.base}` : own;
 }
 
+/** The Curated list's reviewed build a pull's ref names; its pins are checked before and after the download. */
+export interface CuratedPull {
+  entry: HubEntry;
+  build: HubBuild;
+}
+
 export interface HubPullPlan {
   kind: 'hub';
   target: RuntimeTarget;
+  curated: CuratedPull | null;
   hub: HubClient;
   detail: HubModelDetail;
   build: HubGgufBuild;
@@ -114,6 +136,7 @@ export interface HubPullPlan {
 export interface OllamaPullPlan {
   kind: 'ollama';
   target: RuntimeTarget;
+  curated: CuratedPull | null;
   name: string;
   manifest: OllamaManifestInfo;
   license: LicenseInfo;
@@ -152,6 +175,7 @@ export const DEFAULT_QUANT = 'Q4_K_M';
 export const NO_LICENSE = 'none declared';
 const HF_HOSTS: ReadonlySet<string> = new Set(['hf.co', 'huggingface.co']);
 
+// Wider than @bike4mind/local-models/licenses, which Desktop and checkApproval use; kept apart so CLI prompts stay as they were.
 const PERMISSIVE_LICENSES = new Set([
   '0bsd',
   'apache-2.0',
@@ -197,9 +221,10 @@ export function formatBytes(bytes: number | null): string {
   return `${bytes} B`;
 }
 
-export function runtimeLabel({ runtime, source }: RuntimeTarget): string {
+export function runtimeLabel({ runtime, source, server }: RuntimeTarget): string {
   const name = runtime.kind === 'ollama' ? 'Ollama' : 'OpenAI-compatible server';
-  return `${name} at ${runtime.baseUrl}${source === 'detected' ? ' (detected)' : ''}`;
+  const saved = server ? ` "${clean(server.name)}"` : '';
+  return `${name}${saved} at ${runtime.baseUrl}${source === 'detected' ? ' (detected)' : ''}`;
 }
 
 /** Permissive only when at least one license is declared and every one is. */
@@ -407,10 +432,6 @@ function changedSinceReview(subject: string, what: string): Error {
   );
 }
 
-const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((entry, index) => entry === b[index]);
-
-const sameEntries = (a: string[], b: string[]) => sameList([...a].sort(), [...b].sort());
-
 /**
  * Re-reads the manifest after the user approved it, because Ollama then pulls by tag and a tag can move.
  * Refuses when the license texts or layers differ from the ones shown.
@@ -421,8 +442,9 @@ export async function requireUnchangedManifest(
   deps: RegistryReader
 ): Promise<void> {
   const now = await readRegistry(name, deps);
-  if (!sameList(now.licenses, shown.licenses)) throw changedSinceReview(clean(name), 'its license text changed');
-  if (!sameList(now.layers, shown.layers)) {
+  const change = manifestChange(shown, now);
+  if (change === 'licenses') throw changedSinceReview(clean(name), 'its license text changed');
+  if (change === 'layers') {
     throw changedSinceReview(clean(name), `the registry now serves ${shortDigest(now.digest)}`);
   }
 }
@@ -439,7 +461,7 @@ export async function requireUnchangedLicenses(
   // The Hub may list the same ids in another order; the label is rebuilt in the order the user saw.
   const reviewed = licenseFor({ ...currentDetail, licenses: detail.licenses }, hub.endpoint);
   if (
-    !sameEntries(currentDetail.licenses, detail.licenses) ||
+    licensesChanged(detail.licenses, currentDetail.licenses) ||
     reviewed.label !== shown.label ||
     reviewed.link !== shown.link
   ) {
@@ -450,26 +472,54 @@ export async function requireUnchangedLicenses(
 async function planOllamaPull(name: string, deps: ModelSourceDeps): Promise<OllamaPullPlan> {
   const { page } = parseOllamaName(name);
   const target = await requirePullable(deps);
-  const manifest = await readRegistry(name, deps);
-  const license = classifyLicenses(manifest.licenses);
+  const manifest = deps.curated ? await abortable(Promise.resolve(deps.curated()), deps.signal) : undefined;
+  const curated = manifest ? curatedBuildForRef(manifest, name) : null;
+  await requireCuratedRuntime(target, curated, deps.signal);
+  const registry = await readRegistry(name, deps);
+  const license = classifyLicenses(registry.licenses);
   return {
     kind: 'ollama',
     target,
+    curated,
     name,
-    manifest,
+    manifest: registry,
     license: withCuratedLicense(
       { label: clean(license.title), link: page, restricted: !license.permissive },
       name,
-      deps
+      manifest
     ),
   };
 }
 
-/** A curated ref is restricted when the list records its own or its base model's license as not permissive. */
-function withCuratedLicense<T extends LicenseInfo>(license: T, ref: string, deps: ModelSourceDeps): T {
-  const curated = deps.curated && curatedBuildForRef(deps.curated(), ref);
-  if (!curated) return license;
-  const { entry } = curated;
+/** Refuses a curated build the target's Ollama is too old for, as Desktop does; nothing has downloaded yet. */
+async function requireCuratedRuntime(
+  target: RuntimeTarget,
+  curated: CuratedPull | null,
+  signal: AbortSignal
+): Promise<void> {
+  if (!curated?.build.runtimeMin?.ollama) return;
+  const health = await abortable(target.runtime.health(), signal);
+  const name = clean(curated.entry.name);
+  const checked = checkRuntime(health, curated.build);
+  if (checked.ok) return;
+  // Unreachable is not outdated: telling the user to update would send them the wrong way.
+  if (checked.reason === 'runtime-unreachable') {
+    throw new Error(
+      `Could not read the version of ${runtimeLabel(target)} (${clean(checked.error ?? 'no reply')}), which ${name} needs to be ${curated.build.runtimeMin.ollama} or newer, so nothing was downloaded.`
+    );
+  }
+  throw new Error(
+    `${checked.blocked} for ${name}, so nothing was downloaded. Update ${runtimeLabel(target)}, then pull it again.`
+  );
+}
+
+/**
+ * A curated ref is restricted when the list records its own or its base model's license as not permissive. Every
+ * entry counts, so a fine-tune Curated does not offer still carries the base license the list records for it.
+ */
+function withCuratedLicense<T extends LicenseInfo>(license: T, ref: string, manifest: HubManifest | undefined): T {
+  const entry = manifest && curatedEntryForRef(manifest, ref);
+  if (!entry) return license;
   const base = entry.license.base.class === 'permissive' ? undefined : clean(entry.license.base.id);
   const listed = !license.restricted && entry.license.class !== 'permissive' ? clean(entry.license.id) : undefined;
   return {
@@ -516,16 +566,115 @@ export async function planPull(
   }
 
   const target = await requirePullable(deps);
+  const ref = `hf.co/${detail.id}:${build.quant}`;
+  const manifest = deps.curated ? await abortable(Promise.resolve(deps.curated()), deps.signal) : undefined;
+  const curated = manifest ? curatedBuildForRef(manifest, ref) : null;
+  await requireCuratedRuntime(target, curated, deps.signal);
   return {
     kind: 'hub',
     target,
+    curated,
     hub,
     detail,
     build,
     id,
-    license: withCuratedLicense(licenseFor(detail, hub.endpoint), `hf.co/${detail.id}:${build.quant}`, deps),
+    license: withCuratedLicense(licenseFor(detail, hub.endpoint), ref, manifest),
     projectorBytes: largestProjectorBytes(detail),
   };
+}
+
+const LAYERS_CHANGED =
+  "This model's weights, chat template, settings or license changed at its source since Bike4Mind reviewed it";
+
+/**
+ * Refuses a curated build unless the registry serves its reviewed weights and exactly its pinned other layers.
+ * `ref` is the name Ollama pulls; for a Hugging Face build its tag names the file.
+ */
+export async function requireReviewedLayers(
+  curated: CuratedPull,
+  ref: string,
+  sources: Pick<ModelSourceDeps, 'libraryLayers' | 'signal'> & { hub: () => HubClient }
+): Promise<void> {
+  const { signal } = sources;
+  const checked = await abortable(
+    checkReviewedLayers(
+      curated.build,
+      ref.slice(ref.lastIndexOf(':') + 1),
+      {
+        libraryLayers: libraryRef => sources.libraryLayers(libraryRef, signal),
+        hfLayers: (repo, tag) => sources.hub().ollamaLayers(repo, tag, { signal }),
+      },
+      signal
+    ),
+    signal
+  );
+  if (checked.ok) return;
+  if (checked.reason === 'layers-changed') throw new Error(`${LAYERS_CHANGED}, so nothing was downloaded.`);
+  throw new Error(`The registry no longer serves ${clean(ref)} as Bike4Mind reviewed it, so nothing was downloaded.`);
+}
+
+/** Cancelling after the download, during the reviewed-build check, leaves the model installed but unchecked. */
+export function installedUncheckedMessage(ref: string): string {
+  const name = clean(ref);
+  return (
+    `Cancelled while checking ${name} against the reviewed build. ` +
+    `It is still installed; remove it with \`b4m models rm ${name}\` unless you trust it.`
+  );
+}
+
+/** Whether `ref` is installed before a pull; null when the runtime could not say. */
+export async function hadTagBefore(target: RuntimeTarget, ref: string, signal: AbortSignal): Promise<boolean | null> {
+  try {
+    return !!findInstalledModel(await abortable(target.runtime.list(), signal), ref);
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return null;
+  }
+}
+
+// Ollama can hold /api/show on a just-pulled model for about 15 s on a busy host.
+const CHECK_TIMEOUT_MS = 30_000;
+
+/**
+ * After a curated pull: throws unless Ollama installed the reviewed build. What it did install is removed only when
+ * the tag was definitely absent before (`hadTag` false), since a tag the user already had is theirs.
+ */
+export async function requireInstalledReviewed(
+  target: RuntimeTarget,
+  curated: CuratedPull,
+  ref: string,
+  hadTag: boolean | null,
+  signal: AbortSignal
+): Promise<void> {
+  const name = clean(ref);
+  let inspection: ModelInspection;
+  try {
+    inspection = await abortable(
+      target.runtime.inspect(ref, { tags: false, signal, timeoutMs: CHECK_TIMEOUT_MS }),
+      signal
+    );
+  } catch (error) {
+    if (signal.aborted) throw error;
+    const reason = clean(error instanceof Error ? error.message : String(error));
+    throw new Error(
+      `Ollama could not describe ${name} after downloading it (${reason}), so it was not checked against the ` +
+        `reviewed build. It is still installed; remove it with \`b4m models rm ${name}\` unless you trust it.`
+    );
+  }
+  const checked = await checkInstalledDigest(inspection, curated.build, {
+    hadTag,
+    remove: () => target.runtime.remove(ref),
+  });
+  if (checked.ok) return;
+  if (checked.outcome === 'left-in-place') {
+    throw new Error(
+      `${LAYERS_CHANGED}. ${name} ${checked.hadTag ? 'was installed before this download' : 'may have been installed before this download'}, so it was left in place.`
+    );
+  }
+  if (checked.outcome === 'remove-failed') {
+    throw new Error(`${LAYERS_CHANGED}, and removing it failed. Remove it with \`b4m models rm ${name}\`.`);
+  }
+  throw new Error(`${LAYERS_CHANGED}, so what Ollama downloaded was removed.`);
 }
 
 /** The largest vision projector Ollama's Hugging Face registry may add to a pull from this repo; 0 when none. */

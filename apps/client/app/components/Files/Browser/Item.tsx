@@ -181,13 +181,16 @@ export const getFileIcon = (file: IFabFileDocument, size: number = 48) => {
             [SupportedFabFileMimeTypes.XML]: TagIcon,
             // Data
             [SupportedFabFileMimeTypes.JSON]: Description,
-            [SupportedFabFileMimeTypes.CSV]: DataObjectIcon,
+            [SupportedFabFileMimeTypes.CSV]: TableChartIcon,
             [SupportedFabFileMimeTypes.YAML]: DataObjectIcon,
             [SupportedFabFileMimeTypes.TOML]: DataObjectIcon,
           } as Record<string, React.ElementType>
         )[file.mimeType] || InsertDriveFileIcon;
+  // Browsers label CSV uploads inconsistently (application/csv, application/octet-stream), so trust the extension.
+  const Icon =
+    file.type !== KnowledgeType.URL && file.fileName?.toLowerCase().endsWith('.csv') ? TableChartIcon : IconComponent;
 
-  return <IconComponent sx={{ fontSize: size }} />;
+  return <Icon sx={{ fontSize: size }} />;
 };
 
 interface IFileBrowserItemProps {

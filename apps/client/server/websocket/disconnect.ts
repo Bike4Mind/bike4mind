@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
-import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
+import { sendToClient, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async function (event, context, logger) {

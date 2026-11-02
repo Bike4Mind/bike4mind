@@ -30,6 +30,8 @@ const config = {
   stagedSignupGrantEnabled: 'true',
   signupGrantCredits: '12',
   verifiedUnlockCredits: '28',
+  // Payment unlocks pay on the payment here; paymentUnlockHold.e2e.test.ts covers the hold.
+  signupUnlockPaymentHoldHours: '0',
 };
 const adminSettings = {
   findBySettingName: async (key: string) =>
@@ -652,6 +654,25 @@ describe('staged signup ledger', () => {
     expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(0);
     expect((await User.findById(user.id))?.signupGrant?.nextCondition).toBe('verification');
     expect((await User.findById(user.id))?.currentCredits).toBe(12);
+  });
+
+  it('labels the tranche and the subscription unlock ledger rows with a reason and description', async () => {
+    const user = await createUser();
+    await userService.releaseSignupTranche(user.id, adapters);
+    await userService.unlockSignupGrant(user.id, 'subscription', {
+      ...adapters,
+      validators: { subscription: async current => current.emailVerified },
+    });
+    const rows = await CreditTransaction.find({ type: 'generic_add' }).lean();
+    expect(rows.map(row => ({ reason: row.reason, description: row.description }))).toEqual(
+      expect.arrayContaining([
+        { reason: 'signup_tranche', description: 'Signup credits' },
+        {
+          reason: 'signup_unlock:subscription',
+          description: 'Signup credits unlocked: paid subscription started',
+        },
+      ])
+    );
   });
 
   it('releases the remainder only once when different reasons race', async () => {

@@ -73,7 +73,7 @@ vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreCiRetryMessage: (...args: unknown[]) => mockPostSreCiRetryMessage(...args),
 }));
 
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: {
     forSystem: vi.fn(async () => ({
       hasCommentWithMarker: (...args: unknown[]) => mockHasCommentWithMarker(...args),

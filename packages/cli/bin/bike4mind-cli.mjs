@@ -30,6 +30,33 @@ const require = createRequire(import.meta.url);
 // whichever package.json it discovers first, which is not necessarily ours.
 const { version: cliVersion } = require('../package.json');
 
+// Auto-detect environment: prefer production mode when dist exists
+const distPath = join(__dirname, '../dist/index.mjs');
+const srcPath = join(__dirname, '../src/index.tsx');
+const hasSource = existsSync(srcPath);
+const hasDist = existsSync(distPath);
+
+// Development mode ONLY when:
+// 1. NODE_ENV is explicitly 'development', OR
+// 2. dist doesn't exist but source does (fallback)
+// Otherwise: use production mode (this is what npm users will run)
+const isDev = process.env.NODE_ENV === 'development' ||
+              (!hasDist && hasSource);
+
+// `b4m host ...` is b4m-host: its arguments go through untouched, before yargs or the env flags see them,
+// and dial-stdio's stdout must carry nothing but the bridged bytes.
+if (process.argv[2] === 'host') {
+  let handleHostCommand;
+  if (isDev) {
+    const { register } = require('tsx/esm/api');
+    register();
+    ({ handleHostCommand } = await import('../src/commands/hostCommand.ts'));
+  } else {
+    ({ handleHostCommand } = await import('../dist/commands/hostCommand.mjs'));
+  }
+  process.exit(await handleHostCommand(process.argv.slice(3)));
+}
+
 // --- API environment flags (--dev / --prod) ---
 // Intercept these BEFORE yargs parses argv (see envFlags.mjs) and strip them so
 // yargs sees a clean argv.
@@ -297,9 +324,37 @@ const argv = await yargs(hideBin(process.argv))
       })
       .demandCommand(1, 'You must provide a subcommand (push)');
   })
+  .command('host', 'Run b4m-host, which reports this machine\'s hardware and Ollama to Bike4Mind (see: b4m host --help)', {}, () => {
+    // `host` as the first argument is handled at the top of this file; reaching here means a flag came before it.
+    process.stderr.write('b4m host must be the first argument: b4m host <command> (see: b4m host --help)\n');
+    process.exit(2);
+  })
   .command('models', 'Find, download and use local models (Ollama, Hugging Face GGUF)', (yargs) => {
     return yargs
+      .option('server', {
+        type: 'string',
+        description: "Run ls, use, pull or rm against one of Desktop's saved model servers (see: b4m models servers)",
+      })
       .command(['ls', 'list'], 'List models installed on the local runtime', {}, async () => {
+        // Handled by external command handler
+      })
+      .command('servers [action] [name]', "List Desktop's saved model servers, or log in or out of one", (yargs) => {
+        return yargs
+          .positional('action', { type: 'string', choices: ['login', 'logout'], describe: 'Keep or remove the CLI\'s credential for a server' })
+          .positional('name', { type: 'string', describe: 'Server name, as `b4m models servers` shows it' })
+          .option('check-tools', {
+            type: 'boolean',
+            description: 'servers: send each OpenAI-compatible server a one-token request to see whether it accepts tool calls',
+            default: false,
+          })
+          .option('token-stdin', {
+            type: 'boolean',
+            description: 'login: read the credential from stdin instead of prompting',
+            default: false,
+          })
+          .example('b4m models servers', 'List the servers with their status')
+          .example('b4m models servers login gpu-box', 'Enter the CLI\'s credential for gpu-box (hidden)');
+      }, async () => {
         // Handled by external command handler
       })
       .command('search <query..>', 'Search Hugging Face for GGUF models', (yargs) => {
@@ -318,7 +373,19 @@ const argv = await yargs(hideBin(process.argv))
       }, async () => {
         // Handled by external command handler
       })
-      .command('curated', 'List the models Bike4Mind picked, with picks for this computer first', {}, async () => {
+      .command('curated', 'List the models Bike4Mind picked, with picks for this computer first', (yargs) => {
+        return yargs
+          .option('refresh', {
+            type: 'boolean',
+            description: 'Check for a newer signed list now instead of when the last check is 6 hours old',
+            default: false,
+          })
+          .option('offline', {
+            type: 'boolean',
+            description: 'Use the last verified list on this computer (else the bundled one) with no update check (also: B4M_CURATED=off)',
+            default: false,
+          });
+      }, async () => {
         // Handled by external command handler
       })
       .command('pull <ref>', 'Download a model after showing its size and license', (yargs) => {
@@ -340,6 +407,11 @@ const argv = await yargs(hideBin(process.argv))
           .option('force', {
             type: 'boolean',
             description: 'Download even when the fit check rates the model too large for this machine',
+            default: false,
+          })
+          .option('offline', {
+            type: 'boolean',
+            description: 'Use the last verified curated list on this computer with no update check (also: B4M_CURATED=off)',
             default: false,
           })
           .example('b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M', 'Pull a Hugging Face GGUF build')
@@ -364,7 +436,7 @@ const argv = await yargs(hideBin(process.argv))
         // Handled by external command handler
       })
       .example('b4m models ls --ollama-host http://127.0.0.1:11434', 'Use and remember an Ollama host')
-      .demandCommand(1, 'You must provide a subcommand (ls, search, show, curated, pull, rm, use)');
+      .demandCommand(1, 'You must provide a subcommand (ls, search, show, curated, servers, pull, rm, use)');
   })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')
@@ -429,23 +501,10 @@ if (argv.resume) {
 }
 // Positional task (claude `<prompt>` form): seeds AND submits turn 1, stays interactive.
 // Only when it's not a known subcommand and headless -p wasn't used.
-const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'models', 'update', 'doctor', 'acp']);
+const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'models', 'update', 'doctor', 'acp', 'host']);
 if (argv.prompt === undefined && argv._.length > 0 && !KNOWN_SUBCOMMANDS.has(String(argv._[0]))) {
   process.env.B4M_INITIAL_PROMPT = String(argv._[0]);
 }
-
-// Auto-detect environment: prefer production mode when dist exists
-const distPath = join(__dirname, '../dist/index.mjs');
-const srcPath = join(__dirname, '../src/index.tsx');
-const hasSource = existsSync(srcPath);
-const hasDist = existsSync(distPath);
-
-// Development mode ONLY when:
-// 1. NODE_ENV is explicitly 'development', OR
-// 2. dist doesn't exist but source does (fallback)
-// Otherwise: use production mode (this is what npm users will run)
-const isDev = process.env.NODE_ENV === 'development' ||
-              (!hasDist && hasSource);
 
 // Signal source mode to the app so endpoint resolution can default an
 // otherwise-unconfigured run to the local dev server (build-time brand

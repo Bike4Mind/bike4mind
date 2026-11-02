@@ -211,6 +211,20 @@ describe('DataTable', () => {
     expect(retry).toHaveBeenCalledTimes(2);
   });
 
+  it('offers a way back to page 1 from the error state only past page 1', () => {
+    const onPageChange = vi.fn();
+    const pagination = (page: number) => ({ page, pageSize: 25, total: 0, onPageChange, onPageSizeChange: vi.fn() });
+    const rendered = renderTable({ error: 'Could not load', pagination: pagination(2) });
+    fireEvent.click(screen.getByTestId('admin-error-first-page-btn'));
+    expect(onPageChange).toHaveBeenCalledWith(1);
+    rendered.rerender(
+      <CssVarsProvider theme={theme}>
+        <DataTable {...defaults} error="Could not load" pagination={pagination(1)} />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('admin-error-first-page-btn')).toBeNull();
+  });
+
   it('clamps pagination when a filter shrinks the result', () => {
     const rendered = renderTable();
     fireEvent.click(screen.getByTestId('admin-table-next-btn'));

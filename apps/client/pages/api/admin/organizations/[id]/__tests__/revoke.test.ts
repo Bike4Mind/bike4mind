@@ -16,14 +16,14 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockFindActiveByOwner = vi.fn();
 const mockSubUpdate = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveSubscriptionsByOwner: (...args: unknown[]) => mockFindActiveByOwner(...args),
     update: (...args: unknown[]) => mockSubUpdate(...args),
   },
 }));
 vi.mock('@server/services/organizationService', () => ({ resolveSubscriptionSource: () => 'admin_grant' }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 vi.mock('@server/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
   return { ...actual, recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) };
@@ -31,7 +31,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => {
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
 import handler from '../revoke';
 

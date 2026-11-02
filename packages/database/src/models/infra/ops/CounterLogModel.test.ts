@@ -531,7 +531,39 @@ describe('findYoungAccountSpend', () => {
 
     expect(result.totalCredits).toBe(540);
     expect(result.accountCount).toBe(2);
-    expect(result.topSpenders).toEqual([{ userId: big, creditsSpent: 500, accountCreatedAt: threeDaysBefore }]);
+    expect(result.topSpenders).toEqual([
+      { userId: big, creditsSpent: 500, accountCreatedAt: threeDaysBefore, stripeCustomerId: null },
+    ]);
+  });
+
+  it("carries each spender's Stripe customer id, or null when the account has none", async () => {
+    const paying = await seedUser('paying@example.com', threeDaysBefore);
+    const unpaid = await seedUser('unpaid@example.com', threeDaysBefore);
+    await mongoose.connection
+      .collection('users')
+      .updateOne({ _id: new mongoose.Types.ObjectId(paying) }, { $set: { stripeCustomerId: 'cus_paying' } });
+    await spendFor(paying, 300, halfHourAgo);
+    await spendFor(unpaid, 200, halfHourAgo);
+
+    const result = await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
+
+    expect(result.topSpenders.map(({ userId, stripeCustomerId }) => ({ userId, stripeCustomerId }))).toEqual([
+      { userId: paying, stripeCustomerId: 'cus_paying' },
+      { userId: unpaid, stripeCustomerId: null },
+    ]);
+  });
+
+  it('reads the hour through the ownerType/createdAt/type index instead of a collection scan', async () => {
+    await CreditTransaction.init();
+    await spendFor(await seedUser('plan@example.com', threeDaysBefore), 100, halfHourAgo);
+    const aggregate = vi.spyOn(CreditTransaction, 'aggregate');
+    await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
+    const pipeline = aggregate.mock.calls[0][0] as mongoose.PipelineStage[];
+    const explain = await CreditTransaction.collection.aggregate(pipeline).explain('queryPlanner');
+    // Only the winning plan counts; a losing candidate can still name the index.
+    const plan = JSON.stringify(explain, (key, value) => (key === 'rejectedPlans' ? undefined : value));
+    expect(plan).toContain('ownerType_1_createdAt_-1_type_1');
+    expect(plan).not.toContain('COLLSCAN');
   });
 
   it('excludes non-user owners and non-usage ledger entries', async () => {

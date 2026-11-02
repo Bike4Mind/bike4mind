@@ -106,6 +106,9 @@ export function mapBackendToProvider(backend: ModelBackend | string): ModelTelem
     case ModelBackend.Ollama:
     case 'ollama':
       return 'ollama';
+    case ModelBackend.OpenAICompatible:
+    case 'openai-compatible':
+      return 'openai-compatible';
     case ModelBackend.Kimi:
     case 'kimi':
       return 'moonshot';

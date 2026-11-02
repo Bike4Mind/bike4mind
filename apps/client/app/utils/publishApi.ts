@@ -10,7 +10,7 @@ import type {
   UploadUrlResponse,
 } from '@bike4mind/common';
 import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX, deriveArtifactPublishSlug } from '@bike4mind/common';
-import { detectElidedSafe } from '@client/app/utils/artifactParser';
+import { detectElidedSafe } from '@bike4mind/server-utils/app/utils/artifactParser';
 import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
 import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
 import { encodeReactPublishUpload } from '@client/app/utils/reactArtifactPublish';

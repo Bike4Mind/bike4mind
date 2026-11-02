@@ -76,7 +76,7 @@ vi.mock('@server/utils/adminAudit', () => ({
   recordAdminActionFromRequest: credit.recordAdminActionFromRequest,
 }));
 vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
-vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));
 
 import '@pages/api/organizations/[id]/index';

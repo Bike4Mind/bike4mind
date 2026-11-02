@@ -26,7 +26,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 const createProject = vi.hoisted(() => vi.fn(async () => ({ id: 'p1', name: 'n', description: 'd' })));
 vi.mock('@bike4mind/services', () => ({ projectService: { createProject } }));
 vi.mock('@bike4mind/database', () => ({ projectRepository: {}, fabFileRepository: {}, sessionRepository: {} }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
 
 import '@pages/api/projects/index';
 

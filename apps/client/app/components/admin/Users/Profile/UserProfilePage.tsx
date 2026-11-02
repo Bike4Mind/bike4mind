@@ -5,7 +5,6 @@ import { isAxiosError } from 'axios';
 import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { useGetUser } from '@client/app/hooks/data/user';
 import { parseUserId } from '../usersTabSearch';
-import AdminProfileModal from '../../AdminProfileModal';
 import ComplianceModal from '../ComplianceModal';
 import { UndoToastProvider } from '../../shared';
 import { UserProfileView } from './UserProfileView';
@@ -74,8 +73,7 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({ userId, tab, o
     <Sheet data-testid="user-profile-page" sx={{ minHeight: '100vh', overflowY: 'auto', bgcolor: 'admin.canvas' }}>
       <UndoToastProvider>
         <Box sx={{ maxWidth: 1280, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>{renderBody()}</Box>
-        {/* Opened from the header's More menu; on /admin the Users tab mounts these instead. */}
-        <AdminProfileModal />
+        {/* Opened from the header's More menu; on /admin the Users tab mounts it instead. */}
         <ComplianceModal />
       </UndoToastProvider>
     </Sheet>

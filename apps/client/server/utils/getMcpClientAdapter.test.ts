@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const invokeMock = vi.fn();
-vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: (...a: unknown[]) => invokeMock(...a) }));
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({
+  invokeMcpHandler: (...a: unknown[]) => invokeMock(...a),
+}));
 vi.mock('@server/utils/mcpEnv', () => ({ buildMcpEnvVariables: vi.fn(async () => [{ key: 'K', value: 'V' }]) }));
 
 import { getMcpClientAdapter } from './getMcpClientAdapter';

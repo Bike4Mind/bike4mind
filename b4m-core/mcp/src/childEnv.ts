@@ -39,6 +39,51 @@ export const MCP_SERVER_ENV_KEYS: Readonly<Record<McpServerName, readonly string
 };
 
 /**
+ * The variables a bundled server refuses to start without. Its startup check exits before the
+ * stdio handshake, which the client only ever sees as `MCP error -32000: Connection closed`;
+ * checking first turns that into an error that names the key. Notion and Atlassian read their
+ * config lazily, per tool call, so they start without credentials and are not listed.
+ *
+ * MUST STAY IN SYNC with the module-load checks in `github/config.ts` and `linkedin/index.ts`.
+ */
+export const MCP_SERVER_REQUIRED_ENV_KEYS: Readonly<Partial<Record<McpServerName, readonly string[]>>> = {
+  [McpServerName.Github]: ['GITHUB_ACCESS_TOKEN'],
+  [McpServerName.LinkedIn]: ['LINKEDIN_ACCESS_TOKEN', 'COMPANY_NAME'],
+};
+
+/**
+ * A bundled server's configuration lacks a variable it needs to start. This is the user's
+ * integration setup, not a fault in the platform or the provider, and retrying cannot fix it.
+ */
+export class McpServerConfigError extends Error {
+  readonly missingKeys: string[];
+
+  constructor(serverName: string, missingKeys: string[]) {
+    super(`The ${serverName} integration is missing ${missingKeys.join(', ')}. Reconnect it in Settings.`);
+    this.name = 'McpServerConfigError';
+    this.missingKeys = missingKeys;
+  }
+}
+
+/**
+ * Required keys the child for `serverName` would start without. Judged on the environment the
+ * child would actually get, so a key the allowlist drops (a renamed `GITHUB_TOKEN`) or an empty
+ * value counts as missing, exactly as the server's own `!process.env.X` check sees it.
+ */
+export function findMissingMcpEnvKeys(serverName: string, envVariables: readonly McpEnvVariable[]): string[] {
+  const required = (MCP_SERVER_REQUIRED_ENV_KEYS as Record<string, readonly string[] | undefined>)[serverName];
+  if (!required) return [];
+  const { env } = buildMcpChildEnv({ serverName, envVariables });
+  return required.filter(key => !env[key]);
+}
+
+/** Throws `McpServerConfigError` when a bundled server would exit before its handshake. */
+export function assertMcpServerStartable(serverName: string, envVariables: readonly McpEnvVariable[]): void {
+  const missingKeys = findMissingMcpEnvKeys(serverName, envVariables);
+  if (missingKeys.length > 0) throw new McpServerConfigError(serverName, missingKeys);
+}
+
+/**
  * Keys that make the runtime execute caller-chosen code before the server's entry point runs:
  * NODE_OPTIONS can `--require` a file, the loader variables preload a shared object, and
  * ELECTRON_RUN_AS_NODE changes what the binary is. Matching is case-insensitive because Windows

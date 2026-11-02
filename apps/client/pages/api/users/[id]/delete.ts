@@ -6,7 +6,7 @@ import {
   realtimeConnectionRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { EmailEvents } from '@server/utils/eventBus';

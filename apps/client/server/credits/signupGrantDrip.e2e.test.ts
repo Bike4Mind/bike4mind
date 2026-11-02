@@ -26,6 +26,8 @@ const config: Record<string, string> = {
   signupGrantCredits: '1000',
   verifiedUnlockCredits: '9000',
   signupGrantDailyBudget: '0',
+  // Payment unlocks pay on the payment here; paymentUnlockHold.e2e.test.ts covers the hold.
+  signupUnlockPaymentHoldHours: '0',
   signupGrantActivityDailyCredits: '1000',
   signupGrantActivityMaxCredits: '9000',
 };

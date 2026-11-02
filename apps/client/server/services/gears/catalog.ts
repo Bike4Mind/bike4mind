@@ -20,6 +20,7 @@ import {
   McpServer,
   agentRepository,
   dataLakeRepository,
+  adminSettingsRepository,
   creditTransactionRepository,
   gearStampRepository,
   gearOverrideRepository,
@@ -84,10 +85,14 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
       emailVerified?: boolean;
     } | null>,
   ]);
-  // A missing createdAt predates mongoose timestamps, so the account is old (matches userApiKeyService/trust.ts).
-  const accountAgeInDays = user?.createdAt
-    ? (Date.now() - user.createdAt.getTime()) / (1000 * 60 * 60 * 24)
-    : Number.POSITIVE_INFINITY;
+  // Mirrors accountCreatedMs in userApiKeyService/trust.ts.
+  const createdAtMs = user?.createdAt ? new Date(user.createdAt).getTime() : NaN;
+  const createdMs = Number.isFinite(createdAtMs)
+    ? createdAtMs
+    : /^[0-9a-f]{24}$/i.test(userId)
+      ? parseInt(userId.slice(0, 8), 16) * 1000
+      : NaN;
+  const accountAgeInDays = Number.isFinite(createdMs) ? (Date.now() - createdMs) / (1000 * 60 * 60 * 24) : 0;
   return {
     userId,
     usageFeatures: new Set(usageFeatures),
@@ -368,6 +373,12 @@ export interface GearEvaluation {
   pendingReason?: GearPendingReason;
 }
 
+/** The gearRewardMinAccountAgeDays admin setting, or the code default when unset or unreadable. */
+export async function loadGearMinAccountAgeDays(): Promise<number> {
+  const value = await adminSettingsRepository.getSettingsValue('gearRewardMinAccountAgeDays');
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : GEAR_TRUST_MIN_AGE_DAYS;
+}
+
 /**
  * Every active gear's unlock and reward state for one user. Shared by this
  * endpoint and the claim one, so the button a user sees and the payout it
@@ -379,10 +390,18 @@ export interface GearEvaluation {
 export async function evaluateGears(
   userId: string,
   onlyKeys?: GearKey[]
-): Promise<{ evaluations: GearEvaluation[]; overrides: Awaited<ReturnType<typeof gearOverrideRepository.byKey>> }> {
+): Promise<{
+  evaluations: GearEvaluation[];
+  overrides: Awaited<ReturnType<typeof gearOverrideRepository.byKey>>;
+  minAccountAgeDays: number;
+}> {
   // Admin overrides (Manage Gears) layer over the code defaults: disabled
   // gears vanish (no card, no payout).
-  const [facts, overrides] = await Promise.all([gatherFacts(userId), gearOverrideRepository.byKey()]);
+  const [facts, overrides, minAccountAgeDays] = await Promise.all([
+    gatherFacts(userId),
+    gearOverrideRepository.byKey(),
+    loadGearMinAccountAgeDays(),
+  ]);
   const activeGears = GEARS.filter(
     g => overrides.get(g.key)?.enabled !== false && (!onlyKeys || onlyKeys.includes(g.key))
   );
@@ -408,7 +427,7 @@ export async function evaluateGears(
       } else if (!facts.emailVerified) {
         rewardEligible = false;
         pendingReason = 'unverified';
-      } else if (facts.accountAgeInDays < GEAR_TRUST_MIN_AGE_DAYS) {
+      } else if (facts.accountAgeInDays < minAccountAgeDays) {
         rewardEligible = false;
         pendingReason = 'too_new';
       } else {
@@ -427,5 +446,5 @@ export async function evaluateGears(
       };
     })
   );
-  return { evaluations, overrides };
+  return { evaluations, overrides, minAccountAgeDays };
 }

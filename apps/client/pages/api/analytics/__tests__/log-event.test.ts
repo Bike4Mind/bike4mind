@@ -9,7 +9,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockLogEvent = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: (...args: unknown[]) => mockLogEvent(...args),
 }));
 

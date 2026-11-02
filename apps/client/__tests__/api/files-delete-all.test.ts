@@ -48,7 +48,7 @@ vi.mock('@casl/mongoose', () => ({
   accessibleBy: () => ({ ofType: () => ({ __deleteScope: true }) }),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: vi.fn().mockResolvedValue({ artifacts: [] }),
 }));

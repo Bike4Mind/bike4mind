@@ -22,9 +22,9 @@ import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/uti
 import { LLMEvents } from '@server/utils/eventBus';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { encryptToken, decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';

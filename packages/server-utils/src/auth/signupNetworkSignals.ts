@@ -71,10 +71,14 @@ export async function countRecentSignups(input: {
   userId?: string;
   at: Date;
   windows: { ip: boolean; prefix: boolean; asn: boolean };
+  // Overrides SIGNUP_NETWORK_WINDOWS. Deleted accounts are only traced for 24h, so a longer window
+  // under-counts them.
+  windowMs?: { ip: number; asn: number };
   // When set, a failed trace count is logged and skipped (live signups only) instead of thrown.
   traceFallback?: WarnLogger;
 }): Promise<SignupCounts> {
   const { network, userId, at, windows, traceFallback } = input;
+  const windowMs = input.windowMs ?? { ip: SIGNUP_NETWORK_WINDOWS.ipMs, asn: SIGNUP_NETWORK_WINDOWS.asnMs };
   const hashes = hashSignupNetwork(network.ip);
   const scan = async (ms: number, scope: { ip: string | null; asn: number | null; prefix?: boolean }) => {
     const since = new Date(at.getTime() - ms);
@@ -101,14 +105,14 @@ export async function countRecentSignups(input: {
       asnSignups: addCounts(live.asnSignups, deleted.asnSignups),
     };
   };
-  const [day, hour] = await Promise.all([
-    windows.ip ? scan(SIGNUP_NETWORK_WINDOWS.ipMs, { ip: network.ip, asn: null, prefix: windows.prefix }) : null,
-    windows.asn ? scan(SIGNUP_NETWORK_WINDOWS.asnMs, { ip: null, asn: network.asn }) : null,
+  const [ipWindow, asnWindow] = await Promise.all([
+    windows.ip ? scan(windowMs.ip, { ip: network.ip, asn: null, prefix: windows.prefix }) : null,
+    windows.asn ? scan(windowMs.asn, { ip: null, asn: network.asn }) : null,
   ]);
   return {
-    ipSignups: day?.ipSignups ?? null,
-    prefixSignups: day?.prefixSignups ?? null,
-    asnSignups: hour?.asnSignups ?? null,
+    ipSignups: ipWindow?.ipSignups ?? null,
+    prefixSignups: ipWindow?.prefixSignups ?? null,
+    asnSignups: asnWindow?.asnSignups ?? null,
   };
 }
 

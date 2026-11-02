@@ -3,7 +3,10 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MAX_CONTRIBUTED_SIGNUP_CREDITS, isReservedContributionKey } from '@client/lib/entitlements/registry';
+import {
+  MAX_CONTRIBUTED_SIGNUP_CREDITS,
+  isReservedContributionKey,
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 
 /**
  * Guard for the entitlement grant contribution (see `PremiumEntitlementGrants`): the registry trusts
@@ -12,7 +15,7 @@ import { MAX_CONTRIBUTED_SIGNUP_CREDITS, isReservedContributionKey } from '@clie
  */
 
 const REAL_SCRIPT = join(__dirname, '../scripts/generate-premium-glue.mjs');
-const GENERATED = 'app/premium-generated/premiumEntitlementGrants.generated.ts';
+const GENERATED = 'packages/server-utils/src/premium-generated/premiumEntitlementGrants.generated.ts';
 
 let sandbox: string;
 let script: string;
@@ -35,7 +38,7 @@ function runCodegen() {
 function generate() {
   const result = runCodegen();
   expect(result.status, result.stderr).toBe(0);
-  return readFileSync(join(clientRoot, GENERATED), 'utf8');
+  return readFileSync(join(sandbox, GENERATED), 'utf8');
 }
 
 function expectRejected(pattern: RegExp) {

@@ -45,6 +45,11 @@ vi.mock('@bike4mind/database', () => ({
   pendingCreditHoldRepository: { record: recordHold, claim: claimHold, markSettled, findSettlement },
   usageEventRepository: {},
   withTransaction,
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 const checkDailyCap = vi.hoisted(() => vi.fn());
 vi.mock('./freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: checkDailyCap }));
@@ -328,6 +333,43 @@ describe('reserveRequestCredits', () => {
       expect(reservation).toMatchObject({ ownerId: 'o1', ownerType: CreditHolderType.Organization });
       expect(checkDailyCap).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: 'o1' }));
       expect(orgIncrement).toHaveBeenCalledWith('o1', -5);
+    });
+  });
+
+  describe('API-key attribution on the settled ledger row', () => {
+    const reserve = (apiKeyInfo?: unknown) =>
+      reserveRequestCredits({ req: userReq(apiKeyInfo), requiredCredits: 2, enforceCredits: true, featureLabel: 'x' });
+
+    it('records the authenticating key on the row', async () => {
+      const reservation = await reserve({ keyId: 'key-1', billingOwnerType: CreditHolderType.User });
+
+      await reservation.settle(1, ledger);
+
+      expect(deductCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKeyId: 'key-1' }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('keeps a key the entry already names', async () => {
+      const reservation = await reserve({ keyId: 'key-1', billingOwnerType: CreditHolderType.User });
+
+      await reservation.settle(1, { ...ledger, apiKeyId: 'key-explicit' });
+
+      expect(deductCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKeyId: 'key-explicit' }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('records no key for a JWT caller', async () => {
+      const reservation = await reserve();
+
+      await reservation.settle(1, ledger);
+
+      expect(deductCredits.mock.calls.at(-1)?.[0]).not.toHaveProperty('apiKeyId');
     });
   });
 

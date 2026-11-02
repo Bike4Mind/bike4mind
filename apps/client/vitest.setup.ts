@@ -136,6 +136,30 @@ vi.mock('@/app/contexts/WebsocketContext', () => ({
   }),
 }));
 
+// The default per-user write limit (defaultWriteRateLimit.ts) reads admin settings and a Mongo
+// counter on every signed-in write that baseApi serves, so route suites that stub the database
+// would hang on it. Pass through by default; its own suite unmocks it.
+vi.mock('@server/middlewares/defaultWriteRateLimit', () => ({
+  defaultWriteRateLimit: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+// The `app` surface of the IP-block gate (checkBlockedIP.ts, mounted on every authenticated write
+// by baseApi) reads the active `all` blocks from Mongo. Suites that drive the real baseApi chain
+// with connectDB stubbed would wait out Mongoose's 10s command buffer on each write, so that
+// surface passes through by default. The `login` surface stays real for the sign-in suites.
+// Suites that exercise the app surface mock the module themselves or `vi.unmock` it.
+vi.mock('@server/middlewares/checkBlockedIP', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/middlewares/checkBlockedIP')>();
+  const passThrough: ReturnType<typeof actual.checkBlockedIP> = (_req, _res, next) => next();
+  return {
+    ...actual,
+    checkBlockedIP: (options: Parameters<typeof actual.checkBlockedIP>[0] = {}) =>
+      options.surface === 'app' ? passThrough : actual.checkBlockedIP(options),
+    ipBlockRefusal: async (...args: Parameters<typeof actual.ipBlockRefusal>) =>
+      args[1] === 'app' ? null : actual.ipBlockRefusal(...args),
+  };
+});
+
 // The paid-only API key switch (apiKeyAccessGate.ts) reads admin settings and subscriptions, and
 // defaults to paid on hosted, so every test that authenticates a key or CLI session would need a
 // seeded subscription. Allow by default; suites that exercise the gate mock or unmock it per file.

@@ -13,11 +13,11 @@ import { handler } from './wafAlarmToSlack';
 
 const makeEvent = (message: string): SNSEvent => ({ Records: [{ Sns: { Message: message } }] }) as unknown as SNSEvent;
 
-const alarm = (state: string) =>
+const alarm = (state: string, oldState = state === 'OK' ? 'ALARM' : 'OK') =>
   JSON.stringify({
     AlarmName: 'waf-runtime-blocker-prod-no-successful-run',
     NewStateValue: state,
-    OldStateValue: 'OK',
+    OldStateValue: oldState,
     NewStateReason: 'Insufficient Data: 6 datapoints were missing',
     StateChangeTime: '2026-10-27T05:00:58.488+0000',
     Trigger: { Period: 300, EvaluationPeriods: 6 },
@@ -47,14 +47,16 @@ describe('wafAlarmToSlack handler', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('https://hooks.slack.example/alarms');
   });
 
-  it('posts a resolved message for OK', async () => {
+  it('posts a resolved message for an OK that follows an ALARM', async () => {
     await handler(makeEvent(alarm('OK')));
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(body.text).toBe(':white_check_mark: Resolved: The WAF auto-blocker has stopped running');
+    expect(JSON.stringify(body.attachments)).toContain('category security');
   });
 
-  it('skips INSUFFICIENT_DATA, non-JSON and non-alarm payloads', async () => {
+  it('skips INSUFFICIENT_DATA, an OK that follows it, non-JSON and non-alarm payloads', async () => {
     await handler(makeEvent(alarm('INSUFFICIENT_DATA')));
+    await handler(makeEvent(alarm('OK', 'INSUFFICIENT_DATA')));
     await handler(makeEvent('not-json'));
     await handler(makeEvent(JSON.stringify({ hello: 'world' })));
     expect(fetchMock).not.toHaveBeenCalled();

@@ -1,5 +1,6 @@
 import { IMAGE_SIZE_CONSTRAINTS, ImageModels } from '../models';
 import { z } from 'zod';
+import { ModelIdSchema, MAX_MODEL_ID_LENGTH } from './modelId';
 import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 import { BFL_IMAGE_MODELS } from './bfl';
 import { XAI_IMAGE_MODELS } from './xai';
@@ -7,8 +8,8 @@ import { GEMINI_IMAGE_MODELS } from './gemini';
 
 export const ChatCompletionCreateInputSchema = z.object({
   // We are flexible about model name, since we'll validate it against the model info
-  model: z.string(),
-  imageModel: z.string().optional(),
+  model: ModelIdSchema,
+  imageModel: ModelIdSchema.optional(),
   temperature: z.number().min(0).max(2).optional(),
   top_p: z.number().min(0).max(1).optional(),
   n: z.number().min(1).max(10).optional(),
@@ -191,7 +192,13 @@ export const OpenAIImageGenerationInput = z.object({
     // "anime/foo.safetensors"); the `local-image/` prefix stays anchored. The
     // leading (?=.*\S) lookahead requires at least one non-whitespace character
     // so an all-blank suffix (e.g. "local-image/   ") is rejected.
-    z.union([z.enum(ALL_IMAGE_MODELS), z.string().regex(/^local-image\/(?=.*\S)[\w.:/ -]+$/)])
+    z.union([
+      z.enum(ALL_IMAGE_MODELS),
+      z
+        .string()
+        .max(MAX_MODEL_ID_LENGTH)
+        .regex(/^local-image\/(?=.*\S)[\w.:/ -]+$/),
+    ])
   ),
   n: z.number().min(1).max(MAX_IMAGES_PER_REQUEST).optional(),
   // 'auto' is valid here and bills at the ceiling tier - see OPENAI_IMAGE_QUALITIES.

@@ -1,6 +1,7 @@
 import type { IpcMain } from 'electron';
 import { isHubRepoId } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
+import type { ModelStoreLocation } from '@shared/models';
 import type { ModelHubService } from './ModelHubService';
 
 const MAX_TEXT = 512;
@@ -45,6 +46,7 @@ export function registerModelsIpc(
     | 'resume'
     | 'dismiss'
     | 'remove'
+    | 'storeLocation'
   >
 ): void {
   ipc.handle(IPC_CHANNELS.modelsGetStatus, (_event, value: unknown) => {
@@ -62,9 +64,10 @@ export function registerModelsIpc(
     if (query === null) return invalid;
     return service.search({ query, cursor: text(body?.cursor) });
   });
-  ipc.handle(IPC_CHANNELS.modelsGetDetail, (_event, repo: unknown) => {
+  ipc.handle(IPC_CHANNELS.modelsGetDetail, (_event, repo: unknown, value: unknown) => {
     const id = text(repo);
-    return id ? service.detail(id) : invalid;
+    const target = serverArg(value);
+    return id && target ? service.detail(id, target.id) : invalid;
   });
   ipc.handle(IPC_CHANNELS.modelsGetCuratedPull, (_event, entryId: unknown, buildId: unknown, value: unknown) => {
     const entry = text(entryId);
@@ -129,5 +132,9 @@ export function registerModelsIpc(
     const id = text(name);
     const target = serverArg(value);
     return id && target ? service.remove(id, target.id) : invalid;
+  });
+  ipc.handle(IPC_CHANNELS.modelsGetStoreLocation, (_event, value: unknown): Promise<ModelStoreLocation> => {
+    const target = serverArg(value);
+    return target ? service.storeLocation(target.id) : Promise.resolve({ path: null, source: null, freeBytes: null });
   });
 }

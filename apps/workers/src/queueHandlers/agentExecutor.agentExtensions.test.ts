@@ -18,7 +18,7 @@ const { order, tag } = vi.hoisted(() => {
 vi.mock('./agentExecutorUtils/decomposeGuard', () => ({ guardDecomposeOnce: vi.fn(tag('decompose-once')) }));
 vi.mock('./agentExecutorUtils/planCompletionGuard', () => ({ guardPlanCompletion: vi.fn(tag('plan-completion')) }));
 vi.mock('./agentExecutorUtils/briefContextInjector', () => ({ injectBriefContext: vi.fn(tag('brief-context')) }));
-vi.mock('@server/premium-generated/premiumAgentExtensions.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumAgentExtensions.generated', () => ({
   premiumAgentExtensions: [{ toolMapGuards: [{ id: 'fixture-guard', priority: 10, apply: tag('fixture-guard') }] }],
 }));
 

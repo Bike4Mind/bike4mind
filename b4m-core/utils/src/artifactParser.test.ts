@@ -217,7 +217,7 @@ describe('convertCodeBlocksToArtifacts - HTML promotion', () => {
  * artifact as tool-call JSON rather than an <artifact> tag or ```html fence. The
  * HTML in its arguments must be promoted, while ordinary JSON stays untouched.
  * The client render path converts through this same function;
- * apps/client/app/utils/artifactParser.test.ts pins it through parseArtifactsWithFallback.
+ * packages/server-utils/src/app/utils/artifactParser.test.ts pins it through parseArtifactsWithFallback.
  */
 describe('convertCodeBlocksToArtifacts - tool-call JSON promotion', () => {
   const promote = (input: string) => {
@@ -304,7 +304,7 @@ describe('convertCodeBlocksToArtifacts - tool-call JSON promotion', () => {
  * Small local models sometimes stub out an image as an empty <svg> placeholder
  * (only a "goes here" comment) alongside a real generated image. parseArtifacts
  * faithfully extracts it, and it renders as a blank canvas. It must be suppressed.
- * The client's parseArtifacts applies the same predicate; apps/client/app/utils/artifactParser.test.ts
+ * The client's parseArtifacts applies the same predicate; packages/server-utils/src/app/utils/artifactParser.test.ts
  * pins that filter.
  */
 describe('parseArtifacts - graphically-empty SVG suppression', () => {
@@ -560,7 +560,7 @@ describe('parseArtifacts — multi-line and special-character opening tags', () 
  * The fenced detectors match a fence on its own and check the promotion anchors in the
  * callback, so these cases pin the promotion decisions and the behaviour that changed
  * when the anchors moved out of the patterns. Mirrors the client suite in
- * apps/client/app/utils/artifactParser.test.ts, which now runs the same detectors.
+ * packages/server-utils/src/app/utils/artifactParser.test.ts, which now runs the same detectors.
  */
 describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
@@ -801,7 +801,7 @@ describe('convertCodeBlocksToArtifacts - component declaration line gate', () =>
 
 /**
  * promoteBareHtmlDocument runs last inside convertCodeBlocksToArtifacts, so these cases
- * drive it through that entry point; apps/client/app/utils/artifactParser.test.ts runs the same
+ * drive it through that entry point; packages/server-utils/src/app/utils/artifactParser.test.ts runs the same
  * inputs through the client re-export.
  */
 describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {

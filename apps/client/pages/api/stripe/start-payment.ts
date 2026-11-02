@@ -5,28 +5,36 @@ import { PaymentDetails, TransactionType } from '@client/lib/credits/types';
 import { handlePackageTransaction, handlePerCreditTransaction } from '@client/lib/credits/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
+import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
+import { recordPaymentStart } from '@server/billing/paymentRisk';
+import { readNetworkMeta } from '@server/auth/networkMeta';
+import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import {
+  backfillCustomerSignupMetadata,
+  paymentRiskMetadata,
+  signupNetworkMetadata,
+} from '@server/integrations/stripe/riskMetadata';
+import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 import type Stripe from 'stripe';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
+  .use(refuseBlockedAccount())
   .post(async (req, res) => {
     const parsedBody = transactionSchema.parse(req.body);
 
-    // Credit purchases are pay-as-you-go and do not require an active subscription.
-    // We still block accounts with an open payment dispute (mirrors the API-key auth
-    // guard) so a flagged chargeback fraudster cannot keep buying credits.
-    if (req.user.disputePending) {
-      throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
-    }
+    await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'credit_purchase');
 
+    // The risk fields are what Radar rules read (`::account_age_hours::`); see riskMetadata.ts.
     const metadata: PaymentDetails['metadata'] = {
       userId: req.user.id,
       environment: Config.STAGE,
       transactionType: parsedBody.transactionType,
+      ...paymentRiskMetadata(req.user),
     };
 
     let paymentDetails: PaymentDetails;
@@ -45,6 +53,11 @@ const handler = baseApi()
     // fallback and billing portal depend on it too. A customer created here is only persisted once
     // an intent references it, and is deleted if the intent cannot be created, so a failed start
     // never leaves a customer behind.
+    const threeDSecureOptions = await firstPurchaseCardOptions(
+      { stripeCustomerId: req.user.stripeCustomerId, accountCreatedAt: req.user.createdAt },
+      req.logger
+    );
+
     let customerId = req.user.stripeCustomerId ?? undefined;
     let createdCustomerId: string | undefined;
     if (!customerId) {
@@ -52,8 +65,11 @@ const handler = baseApi()
         email: req.user.email!,
         name: req.user.name!,
         type: CustomerType.User,
+        metadata: signupNetworkMetadata(req.user),
       });
       customerId = createdCustomerId = customer.id;
+    } else {
+      await backfillCustomerSignupMetadata({ customerId, user: req.user }, req.logger);
     }
 
     let paymentIntent: Stripe.PaymentIntent;
@@ -71,6 +87,7 @@ const handler = baseApi()
         automatic_payment_methods: {
           enabled: true,
         },
+        ...threeDSecureOptions,
       });
     } catch (error) {
       if (createdCustomerId) {
@@ -111,6 +128,17 @@ const handler = baseApi()
         },
       },
       undefined,
+      req.logger
+    );
+    // The webhook only sees Stripe's network, so where the buyer paid from is stamped here.
+    await recordPaymentStart(
+      {
+        paymentIntentId: paymentIntent.id,
+        userId: req.user.id,
+        amount: paymentDetails.amount,
+        currency: 'usd',
+        network: readNetworkMeta(req),
+      },
       req.logger
     );
 

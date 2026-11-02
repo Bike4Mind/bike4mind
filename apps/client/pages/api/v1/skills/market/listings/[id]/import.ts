@@ -1,7 +1,7 @@
 /** POST /api/v1/skills/market/listings/{id}/import - the public twin of POST /api/skills/market/[id]/import. */
 import { ConflictError, importSkillMarketListingContract, isConcurrencyConflictError } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { importRateLimit } from '@server/skillMarket/market';
+import { importRateLimit } from '@bike4mind/server-utils/skillMarket/market';
 import { importListing } from '@server/skillMarket/importListing';
 
 const handler = nextRouteForContract(importSkillMarketListingContract, { rateLimit: importRateLimit() }).post(

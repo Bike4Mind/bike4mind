@@ -1,5 +1,10 @@
 import { emailDomain } from '@client/app/utils/signupAnomaly';
-import { type DomainSignupSignal, type SignupSignal, SIGNUP_SIGNALS } from '@client/app/utils/signupSignals';
+import {
+  type DomainSignupSignal,
+  type SignupSignal,
+  isSuspectedSignup,
+  SIGNUP_SIGNALS,
+} from '@client/app/utils/signupSignals';
 import { deliveryMailbox } from '@server/utils/deliveryMailbox';
 import { ipv6Slash64 } from '@server/utils/ipv6Slash64';
 
@@ -292,4 +297,17 @@ export function classifySignups(
       return [user.id, classifySignup(user, cohortSignals, now)];
     })
   );
+}
+
+export type SignupVerdict = 'suspected' | 'legit' | 'unclassified';
+
+/**
+ * An account's verdict from its signals. The analytics rollup and the users list's verdict filter both
+ * decide here, so they can never disagree. Unclassified is never folded into legit.
+ */
+export function signupVerdictOf(signals: readonly SignupSignal[], createdAt: Date, now: Date): SignupVerdict {
+  if (isSuspectedSignup(signals)) return 'suspected';
+  // Too young for dormancy to be evaluable, and one more weak signal would make it suspected.
+  if (now.getTime() - createdAt.getTime() < DORMANCY_MIN_AGE_MS) return 'unclassified';
+  return 'legit';
 }

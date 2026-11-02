@@ -846,6 +846,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     providerUndated: signals.providerUndated,
     providerSourceNames: input.providerSourceNames,
     operatorOwnedModelIds,
+    staticModelIds,
     presentationOwnedElsewhere,
     credentials,
     policy: ctx.autoEnable,
@@ -896,6 +897,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     priorContributors,
     autoRemap: ctx.autoRemap,
     operatorOwnedModelIds,
+    staticModelIds,
     runStartedAt: effectiveAt,
     runId,
   });

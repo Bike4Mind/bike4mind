@@ -66,22 +66,23 @@ class DistributionTest(unittest.TestCase):
     def test_manifests_pin_payloads_and_hash_actual_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for suffix in ('arm64.dmg', 'arm64.dmg.blockmap', 'arm64.zip', 'arm64.zip.blockmap', 'x64.AppImage'):
+            for suffix in ('arm64.dmg', 'arm64.dmg.blockmap', 'arm64.zip', 'arm64.zip.blockmap', 'x64.AppImage',
+                           'setup.exe', 'setup.exe.blockmap'):
                 (root / f'Bike4Mind-0.2.2-{suffix}').write_bytes(appimage() if suffix == 'x64.AppImage' else suffix.encode())
             (root / 'install.sh').write_text('#!/bin/sh\n')
             assemble(root, '0.2.2', 'owner/dist', 'owner/source')
             self.assertIn('  install.sh\n', (root / 'SHA256SUMS.txt').read_text())
             self.assertFalse((root / 'Bike4Mind-0.2.2-arm64.dmg.blockmap').exists())
             original = (root / 'SHA256SUMS.txt').read_text()
-            for platform in ('mac', 'linux'):
-                manifest = yaml.safe_load((root / f'latest-{platform}.yml').read_text())
+            for manifest_name in ('latest-mac.yml', 'latest-linux.yml', 'latest.yml'):
+                manifest = yaml.safe_load((root / manifest_name).read_text())
                 self.assertEqual(manifest['version'], '0.2.2')
                 for file in manifest['files']:
                     self.assertTrue(file['url'].startswith('https://github.com/owner/dist/releases/download/desktop-v0.2.2/'))
                     payload = (root / file['url'].split('/')[-1]).read_bytes()
                     self.assertEqual(file['size'], len(payload))
                     self.assertEqual(file['sha512'], base64.b64encode(hashlib.sha512(payload).digest()).decode())
-                    if platform == 'linux':
+                    if manifest_name == 'latest-linux.yml':
                         self.assertEqual(file['blockMapSize'], int.from_bytes(payload[-4:], 'big'))
                     else:
                         self.assertNotIn('blockMapSize', file)
@@ -91,10 +92,12 @@ class DistributionTest(unittest.TestCase):
             self.assertFalse((root / 'latest-mac.yml').exists())
             self.assertTrue((root / 'latest-linux.yml').exists())
             self.assertNotIn('latest-mac.yml', (root / 'SHA256SUMS.txt').read_text())
+            self.assertIn('  latest.yml\n', (root / 'SHA256SUMS.txt').read_text())
             self.assertTrue((root / 'Bike4Mind-0.2.2-arm64.dmg').exists())
             self.assertEqual(sorted(p.name for p in root.iterdir()),
-                             ['Bike4Mind-0.2.2-arm64.dmg', 'Bike4Mind-0.2.2-x64.AppImage', 'SHA256SUMS.txt',
-                              'install.sh', 'latest-linux.yml'])
+                             ['Bike4Mind-0.2.2-arm64.dmg', 'Bike4Mind-0.2.2-setup.exe', 'Bike4Mind-0.2.2-setup.exe.blockmap',
+                              'Bike4Mind-0.2.2-x64.AppImage', 'SHA256SUMS.txt',
+                              'install.sh', 'latest-linux.yml', 'latest.yml'])
             with self.assertRaises(ValueError):
                 assemble(root, '0.2.2', 'owner/dist', 'owner/source', '')
             (root / 'install.sh').unlink()
@@ -106,10 +109,25 @@ class DistributionTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 assemble(root, '0.2.2', 'owner/dist', 'owner/source')
 
+    def test_missing_windows_installer_or_blockmap_fails(self):
+        for missing in ('Bike4Mind-0.2.2-setup.exe', 'Bike4Mind-0.2.2-setup.exe.blockmap'):
+            for mode in ('signed', 'adhoc'):
+                with self.subTest(missing=missing, mode=mode), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    for suffix in ('arm64.dmg', 'arm64.zip', 'arm64.zip.blockmap', 'x64.AppImage',
+                                   'setup.exe', 'setup.exe.blockmap'):
+                        (root / f'Bike4Mind-0.2.2-{suffix}').write_bytes(
+                            appimage() if suffix == 'x64.AppImage' else suffix.encode())
+                    (root / 'install.sh').write_text('#!/bin/sh\n')
+                    (root / missing).unlink()
+                    with self.assertRaises(ValueError):
+                        assemble(root, '0.2.2', 'owner/dist', 'owner/source', mode)
+
     def test_prune_keeps_only_checksummed_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for suffix in ('arm64.dmg', 'arm64.dmg.blockmap', 'arm64.zip', 'arm64.zip.blockmap', 'x64.AppImage'):
+            for suffix in ('arm64.dmg', 'arm64.dmg.blockmap', 'arm64.zip', 'arm64.zip.blockmap', 'x64.AppImage',
+                           'setup.exe', 'setup.exe.blockmap'):
                 (root / f'Bike4Mind-0.2.2-{suffix}').write_bytes(appimage() if suffix == 'x64.AppImage' else suffix.encode())
             (root / 'SHA256SUMS.txt').write_text('abc  Bike4Mind-0.2.2-arm64.dmg\nabc  Bike4Mind-0.2.2-x64.AppImage\n')
             prune(root)

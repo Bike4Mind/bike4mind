@@ -72,9 +72,11 @@
     "ollama": "^0.6.3",
     "openai": "^6.46.0",
     "undici": "^7.29.0",
-    "uuid": "^14.0.2"
+    "uuid": "^14.0.2",
+    "zod": "^4.6.6"
   },
   "devDependencies": {
+    "@bike4mind/local-models": "workspace:*",
     "@types/lodash": "^4.17.24",
     "dotenv": "^17.4.2",
     "tsdown": "^0.22.3",

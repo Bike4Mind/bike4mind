@@ -16,6 +16,7 @@ import {
   type DeductCreditsParams,
 } from './deductCreditsWithOrgSupport';
 import { isMemberCreditCapExceeded } from './memberCreditCap';
+import { assertNewAccountSpendWithinCap, type NewAccountSpendCapAdapters } from './newAccountSpendCap';
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
@@ -35,6 +36,7 @@ export type CreditHoldAdapters = {
    * module-mocked tests) keeps that seam.
    */
   deductCredits?: typeof deductCreditsWithOrgSupport;
+  newAccountSpendCap: NewAccountSpendCapAdapters;
 };
 
 type HolderAdapters = Pick<CreditHoldAdapters, 'users' | 'organizations'>;
@@ -86,6 +88,11 @@ export async function holdCredits(
     );
   }
 
+  await assertNewAccountSpendWithinCap(
+    { user, requestedCredits: requiredCredits, billedToOrganization: organization !== null, logger },
+    adapters.newAccountSpendCap
+  );
+
   const ownerId = organizationId ?? userId;
   const ownerType = organization ? CreditHolderType.Organization : CreditHolderType.User;
   const holderMethods = holderMethodsFor({ ownerType }, adapters);
@@ -114,9 +121,7 @@ export async function holdCredits(
     }
     const availableCredits = reservedHolder.currentCredits + requiredCredits;
     throw insufficientCreditsError(
-      organization
-        ? `Your organization does not have enough credits for ${featureLabel}. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
-        : `You do not have enough credits for ${featureLabel}. You currently have ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+      holdInsufficientCreditsMessage(featureLabel, availableCredits, requiredCredits, Boolean(organization))
     );
   }
 
@@ -214,4 +219,16 @@ export async function settleCreditHold(
     });
   }
   return charged;
+}
+
+/** The copy a refused hold carries; shared so other refusals on held routes read the same. */
+export function holdInsufficientCreditsMessage(
+  featureLabel: string,
+  availableCredits: number,
+  requiredCredits: number,
+  isOrganization: boolean
+): string {
+  return isOrganization
+    ? `Your organization does not have enough credits for ${featureLabel}. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+    : `You do not have enough credits for ${featureLabel}. You currently have ${availableCredits} credits and this requires approximately ${requiredCredits}.`;
 }

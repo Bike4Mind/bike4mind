@@ -116,7 +116,10 @@ export function fitForHubBuild(build: HubGgufBuild, detail: HubModelDetail, read
 
 /** The verdict for what a pull plan downloads, projector included. */
 export async function fitForPlan(plan: PullPlan, read: MachineReader): Promise<ModelFit> {
-  const reading = await read(plan.target.runtime.baseUrl);
+  // A saved server on a loopback address is often a tunnel to another machine, so its address says nothing about whose memory it uses.
+  const reading: MachineReading = plan.target.server
+    ? { unknown: "A saved model server's memory cannot be read from this machine" }
+    : await read(plan.target.runtime.baseUrl);
   if (plan.kind === 'ollama') return rateDownload(plan.manifest.sizeBytes, reading, null);
   return fitForHubBuild(plan.build, plan.detail, reading);
 }

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import { readFileSync } from 'node:fs';
@@ -30,7 +30,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: mockEm
 const mockConnectionFind = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/social', () => ({ Connection: { find: mockConnectionFind } }));
 const mockSendToConnection = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/websocket/utils', () => ({ sendToConnection: mockSendToConnection }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToConnection: mockSendToConnection }));
 
 // processQuest is the heavy import chain (DB models, services). Mock it so importing the
 // server doesn't drag in the whole world and so we can assert it's invoked on a valid 202.
@@ -58,6 +58,7 @@ vi.mock('@bike4mind/database', () => ({
   // Pulled in by the completions route for org-billed API keys; unused by these
   // personal/JWT cases but must exist or the mocked-module export getter throws.
   organizationRepository: { findById: vi.fn().mockResolvedValue(null) },
+  cacheRepository: {},
 }));
 
 // executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk
@@ -134,6 +135,15 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
+
+const ipGate = vi.hoisted(() => ({ blocked: false, options: [] as unknown[] }));
+vi.mock('@server/middlewares/checkBlockedIP', () => ({
+  checkBlockedIP: (options: unknown) => {
+    ipGate.options.push(options);
+    return (_req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }, next: () => void) =>
+      ipGate.blocked ? res.status(403).json({ error: 'network blocked' }) : next();
+  },
 }));
 
 import { checkModelCatalogWired, createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
@@ -403,6 +413,54 @@ describe('checkModelCatalogWired', () => {
     setModelCatalogProvider(async () => []);
     expect(checkModelCatalogWired(logger)).toBe(true);
     expect(logger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatCompletion origin verification', () => {
+  const SECRET = 'origin-secret-value';
+  const GATED = ['/api/ai/v1/completions', '/api/ai/v1/ws-completions', '/api/embed/chat'];
+  const call = (path: string, headers: Record<string, string> = {}) =>
+    fetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: '{}',
+    });
+
+  beforeEach(() => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', SECRET);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it.each(GATED)('returns 403 on %s without the header', async path => {
+    expect((await call(path)).status).toBe(403);
+  });
+
+  it.each(GATED)('returns 403 on %s with a wrong or empty header', async path => {
+    expect((await call(path, { 'x-b4m-origin-verify': 'wrong-secret-value!' })).status).toBe(403);
+    expect((await call(path, { 'x-b4m-origin-verify': '' })).status).toBe(403);
+  });
+
+  it.each(GATED)('lets %s through to its handler with the right header', async path => {
+    const res = await call(path, { 'x-b4m-origin-verify': SECRET });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('gates a path registered after the gate that is not one of the known routes', async () => {
+    expect((await call('/api/ai/v1/not-a-route')).status).toBe(403);
+  });
+
+  it('leaves /health and /process to their own checks', async () => {
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
+    expect((await post(VALID_BODY, { authorization: AUTH })).status).toBe(202);
+  });
+
+  it('does not gate when ORIGIN_VERIFY_SECRET is unset', async () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', '');
+    expect((await call('/api/ai/v1/completions')).status).not.toBe(403);
   });
 });
 
@@ -810,5 +868,37 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
       expect.objectContaining({ name: 'ProcessingFailed', dimensions: { Stage: 'test', Surface: 'cli-ws' } })
     );
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatCompletion IP block gate', () => {
+  afterEach(() => {
+    ipGate.blocked = false;
+  });
+
+  it('mounts one app-surface gate', () => {
+    expect(ipGate.options).toEqual([{ surface: 'app' }]);
+  });
+
+  it.each(['/api/ai/v1/completions', '/api/ai/v1/ws-completions', '/api/embed/chat'])(
+    'refuses %s from a blocked address before auth',
+    async path => {
+      ipGate.blocked = true;
+      const res = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'network blocked' });
+      expect(mockAuth.verifyApiKey).not.toHaveBeenCalled();
+      expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    }
+  );
+
+  it('leaves the internal /process route and /health alone', async () => {
+    ipGate.blocked = true;
+    expect((await post(VALID_BODY, { authorization: AUTH })).status).toBe(202);
+    expect((await fetch(`${baseUrl}/health`)).status).not.toBe(403);
   });
 });

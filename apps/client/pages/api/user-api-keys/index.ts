@@ -8,8 +8,8 @@ import {
   gateEmbedBrandingWrite,
   type EmbedKeyOwnerRef,
 } from '@server/entitlements/embedKeyEntitlement';
-import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
 import {
   ApiKeyScope,
@@ -24,10 +24,11 @@ import {
   USER_API_KEY_SCOPE_VALUES,
   isApiKeyScopeOffered,
   isKnownApiKeyScope,
-} from '@client/app/constants/apiKeyScopes';
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
+import { requestRiskEvidenceRefresh } from '@server/auth/riskEvidence';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {
@@ -250,6 +251,7 @@ const handler = baseApi()
     );
     // A key minted soon after signup is one of the risk signals, so rescore now rather than wait.
     await refreshSignupRiskScore(userId, req.logger);
+    await requestRiskEvidenceRefresh(userId, 'api_key_created', req.logger);
 
     await logEventSafe(
       {

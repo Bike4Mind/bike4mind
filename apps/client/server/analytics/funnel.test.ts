@@ -11,8 +11,11 @@ const { mockEmit, mockGetSetting, mockLogEventSafe, mockUserUpdate, mockUpdateOn
     mockRewardInviter: vi.fn(),
   })
 );
-vi.mock('./emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: mockEmit }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
+  HOST_PRODUCT_ID: 'bike4mind',
+  emitProductEvent: mockEmit,
+}));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
 vi.mock('@server/referrals/firstAnswerReward', () => ({ rewardInviterForFirstAnswer: mockRewardInviter }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 vi.mock('@bike4mind/database', () => ({
@@ -202,6 +205,14 @@ describe('emitFunnelEvent', () => {
     expect(mockEmit.mock.calls[1][0].metadata).toEqual({ method: 'otc' });
   });
 
+  it('names the visit the stage happened in, and no session when there is none', async () => {
+    await emitFunnelEvent({ user: { id: 'u1' }, event: 'signup_completed', visitId: 'a'.repeat(32) });
+    await emitFunnelEvent({ user: { id: 'u2' }, event: 'signup_completed' });
+
+    expect(mockEmit.mock.calls[0][0].sessionId).toBe('a'.repeat(32));
+    expect(mockEmit.mock.calls[1][0]).not.toHaveProperty('sessionId');
+  });
+
   it('never throws when the emitter rejects', async () => {
     mockEmit.mockRejectedValue(new Error('network'));
     await expect(emitFunnelEvent({ user: { id: 'u1' }, event: 'email_verified' })).resolves.toBe(true);
@@ -231,6 +242,23 @@ describe('emitSignupFunnelEvents', () => {
     expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
       ['credits_granted', { amount: 50, source: 'signup', method: 'github' }],
       ['signup_completed', { method: 'github' }],
+    ]);
+  });
+
+  it('ties every stage of the signup to the visit it came from', async () => {
+    const visitId = 'b'.repeat(32);
+    await emitSignupFunnelEvents({
+      user: { id: 'u1' },
+      method: 'github',
+      emailVerified: true,
+      creditsGranted: 5,
+      visitId,
+    });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.sessionId])).toEqual([
+      ['email_verified', visitId],
+      ['credits_granted', visitId],
+      ['signup_completed', visitId],
     ]);
   });
 
@@ -418,5 +446,38 @@ describe('recordFirstChatValue', () => {
   it('never throws when the quest read fails', async () => {
     const loadQuest = () => Promise.reject(new Error('db down'));
     await expect(recordFirstChatValue({ user, loadQuest })).resolves.toBe(false);
+  });
+
+  describe('the visit the question was asked in', () => {
+    const visitId = 'c'.repeat(32);
+    const loadQuest = async () => ({ status: 'done', type: 'message' });
+
+    it('names it as the session of first_value', async () => {
+      expect(await recordFirstChatValue({ user, loadQuest, visitId })).toBe(true);
+      expect(mockEmit).toHaveBeenCalledTimes(1);
+      expect(mockEmit.mock.calls[0][0]).toMatchObject({ event: 'first_value', sessionId: visitId });
+    });
+
+    it('names no visit when the turn carried none', async () => {
+      expect(await recordFirstChatValue({ user, loadQuest })).toBe(true);
+      expect(mockEmit.mock.calls[0][0]).not.toHaveProperty('sessionId');
+    });
+
+    it('emits once for a redelivered turn, under the visit it carried', async () => {
+      mockUpdateOne.mockResolvedValueOnce({ modifiedCount: 1 }).mockResolvedValueOnce({ modifiedCount: 0 });
+      expect(await recordFirstChatValue({ user, loadQuest, visitId })).toBe(true);
+      expect(await recordFirstChatValue({ user, loadQuest, visitId })).toBe(false);
+      expect(mockEmit.mock.calls.map(([event]) => event.sessionId)).toEqual([visitId]);
+    });
+
+    it('changes nothing for a user whose first answer is already recorded', async () => {
+      const quest = vi.fn(loadQuest);
+      expect(
+        await recordFirstChatValue({ user: { ...user, firstValueAt: new Date() }, loadQuest: quest, visitId })
+      ).toBe(false);
+      expect(quest).not.toHaveBeenCalled();
+      expect(mockUpdateOne).not.toHaveBeenCalled();
+      expect(mockEmit).not.toHaveBeenCalled();
+    });
   });
 });

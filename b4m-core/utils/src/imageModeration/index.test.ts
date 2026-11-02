@@ -5,11 +5,14 @@ import {
   ImageTooLargeException,
   InvalidImageFormatException,
   InvalidParameterException,
+  ProvisionedThroughputExceededException,
 } from '@aws-sdk/client-rekognition';
 import { Logger } from '@bike4mind/observability';
 import {
   RekognitionImageModerationService,
   ImageModerationBlockedError,
+  ModerationUnavailableError,
+  isThrottlingError,
   UnsupportedImageFormatError,
   EXPLICIT_NUDITY_CONFIDENCE,
 } from './index';
@@ -170,6 +173,77 @@ describe('RekognitionImageModerationService.checkImage', () => {
 
     // Must reject - an unavailable detector must NOT be treated as clean.
     await expect(svc.checkImage(buf, 'image/png')).rejects.toBeTruthy();
+  });
+
+  describe('throttling', () => {
+    const throttle = () =>
+      new ProvisionedThroughputExceededException({ message: 'Provisioned rate exceeded', $metadata: {} });
+    const quietLogger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) as unknown as Logger;
+
+    it('backs off and recovers from a throttle burst without logging a warning', async () => {
+      let call = 0;
+      const client = fakeClient(async () => {
+        if (++call <= 4) throw throttle();
+        return { ModerationLabels: [] };
+      });
+      const sleep = vi.fn(async () => {});
+      const logger = quietLogger();
+      const svc = new RekognitionImageModerationService(logger, client, { sleep });
+
+      await expect(svc.checkImage(buf, 'image/png')).resolves.toBeUndefined();
+
+      // 4 throttles is past the generic 3-attempt budget, so this only passes on the throttle budget.
+      expect(client.send).toHaveBeenCalledTimes(5);
+      expect(sleep).toHaveBeenCalledTimes(4);
+      // Full jitter under an exponentially growing ceiling: 200, 400, 800, 1600ms.
+      sleep.mock.calls.forEach(([ms], i) => {
+        expect(ms).toBeGreaterThanOrEqual(0);
+        expect(ms).toBeLessThan(200 * 2 ** i);
+      });
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('fails closed with a throttled ModerationUnavailableError once the throttle budget is spent', async () => {
+      const client = fakeClient(async () => {
+        throw throttle();
+      });
+      const sleep = vi.fn(async () => {});
+      const svc = new RekognitionImageModerationService(quietLogger(), client, { sleep });
+
+      const caught = await svc.checkImage(buf, 'image/png').catch((err: unknown) => err);
+
+      expect(caught).toBeInstanceOf(ModerationUnavailableError);
+      expect((caught as ModerationUnavailableError).throttled).toBe(true);
+      expect((caught as Error).message).toContain('Provisioned rate exceeded');
+      expect(client.send).toHaveBeenCalledTimes(6);
+      // No sleep after the final attempt, and every wait stays under the cap.
+      expect(sleep).toHaveBeenCalledTimes(5);
+      for (const [ms] of sleep.mock.calls) expect(ms).toBeLessThan(3000);
+    });
+
+    it('keeps the shorter budget, and a warning, for a non-throttle transient error', async () => {
+      const client = fakeClient(async () => {
+        throw new Error('ServiceUnavailable');
+      });
+      const sleep = vi.fn(async () => {});
+      const logger = quietLogger();
+      const svc = new RekognitionImageModerationService(logger, client, { sleep });
+
+      const caught = await svc.checkImage(buf, 'image/png').catch((err: unknown) => err);
+
+      expect(caught).toBeInstanceOf(ModerationUnavailableError);
+      expect((caught as ModerationUnavailableError).throttled).toBe(false);
+      expect(client.send).toHaveBeenCalledTimes(3);
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+    });
+
+    it('recognizes throttles by SDK error name or retryable flag', () => {
+      expect(isThrottlingError(throttle())).toBe(true);
+      expect(isThrottlingError(Object.assign(new Error('x'), { name: 'ThrottlingException' }))).toBe(true);
+      expect(isThrottlingError(Object.assign(new Error('x'), { $retryable: { throttling: true } }))).toBe(true);
+      expect(isThrottlingError(new Error('ServiceUnavailable'))).toBe(false);
+      expect(isThrottlingError(invalidImageFormatError())).toBe(false);
+    });
   });
 
   describe('unsupported / unaccepted image formats', () => {
@@ -368,5 +442,25 @@ describe('RekognitionImageModerationService.checkImage', () => {
       await expect(svc.checkImage(bomb, 'image/png')).rejects.toThrow(/decode limit/);
       expect(client.send).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('RekognitionImageModerationService without an injected logger', () => {
+  it('logs to the Logger.globalInstance active at call time, not at construction', async () => {
+    const svc = new RekognitionImageModerationService(
+      undefined,
+      fakeClient(async () => {
+        throw new Error('ServiceUnavailable');
+      })
+    );
+    const requestLogger = new Logger();
+    const warn = vi.spyOn(requestLogger, 'warn').mockImplementation(() => {});
+    Logger.setContextProvider(() => requestLogger);
+    try {
+      await expect(svc.checkImage(buf, 'image/png')).rejects.toThrow('ServiceUnavailable');
+    } finally {
+      Logger.setContextProvider(undefined);
+    }
+    expect(warn).toHaveBeenCalled();
   });
 });

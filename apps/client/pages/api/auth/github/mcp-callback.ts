@@ -341,7 +341,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     // Dynamically discover tools from the GitHub MCP server so the tools list
     // matches what the server actually provides.
     try {
-      const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
+      const { invokeMcpHandler } = await import('@bike4mind/server-utils/utils/invokeMcpHandler');
       const result = await invokeMcpHandler<any>({
         envVariables: plaintextEnvVariables,
         name: 'github',

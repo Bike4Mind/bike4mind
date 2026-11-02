@@ -22,6 +22,7 @@ type MfaHookOptions = {
 // Factory-safe mock handles (vi.mock is hoisted above imports).
 const mocks = vi.hoisted(() => ({
   sendOTC: vi.fn(),
+  formToken: { data: 'form-tok-1' as string | undefined, refetch: vi.fn() },
   verifyOTC: vi.fn(),
   startOAuthSignIn: vi.fn(),
   setCurrentUser: vi.fn(),
@@ -45,11 +46,21 @@ const mocks = vi.hoisted(() => ({
   websiteUrl: '',
 }));
 
-vi.mock('@client/app/hooks/data/auth', () => ({
-  useSendOTC: () => ({ mutateAsync: mocks.sendOTC, isPending: false }),
-  useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
-  useStartOAuthSignIn: () => mocks.startOAuthSignIn,
-}));
+vi.mock('@client/app/hooks/data/auth', async () => {
+  const { useState } = await vi.importActual<typeof import('react')>('react');
+  return {
+    useSignupBotFields: () => {
+      const [honeypot, setHoneypot] = useState('');
+      return {
+        botFields: { formToken: mocks.formToken.data, formExtra: honeypot },
+        honeypotProps: { value: honeypot, onChange: setHoneypot },
+      };
+    },
+    useSendOTC: () => ({ mutateAsync: mocks.sendOTC, isPending: false }),
+    useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
+    useStartOAuthSignIn: () => mocks.startOAuthSignIn,
+  };
+});
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ setCurrentUser: mocks.setCurrentUser, currentUser: mocks.userState.currentUser }),
 }));
@@ -980,5 +991,45 @@ describe('MultiStepLogin - OAuth registration_closed redirect', () => {
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
     const [, options] = mocks.toast.error.mock.calls[0];
     expect(options.action).toBeUndefined();
+  });
+});
+
+describe('MultiStepLogin - signup bot checks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.formToken.data = 'form-tok-1';
+    mocks.sendOTC.mockResolvedValue({ pendingToken: 'ptok-1' });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ requiresRedirect: false }),
+    }) as unknown as typeof fetch;
+  });
+
+  const submitEmail = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await screen.findByTestId('login-otc-input');
+  };
+
+  it('sends the form token and an empty honeypot value with the initial code request', async () => {
+    renderLogin();
+    await submitEmail(userEvent.setup());
+    expect(mocks.sendOTC).toHaveBeenCalledWith({ email: 'new@test.com', formToken: 'form-tok-1', formExtra: '' });
+  });
+
+  it('sends the honeypot value when it was filled', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    await user.type(screen.getByTestId('signup-honeypot-input'), 'spam');
+    await submitEmail(user);
+    expect(mocks.sendOTC).toHaveBeenCalledWith(expect.objectContaining({ formExtra: 'spam' }));
+  });
+
+  it('submits immediately without a token when none is loaded', async () => {
+    mocks.formToken.data = undefined;
+    renderLogin();
+    await submitEmail(userEvent.setup());
+    expect(mocks.formToken.refetch).not.toHaveBeenCalled();
+    expect(mocks.sendOTC).toHaveBeenCalledWith({ email: 'new@test.com', formToken: undefined, formExtra: '' });
   });
 });

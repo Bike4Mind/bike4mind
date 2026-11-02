@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { NotFoundError } from '@bike4mind/utils';
 import { MCPClient } from '@bike4mind/mcp';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';

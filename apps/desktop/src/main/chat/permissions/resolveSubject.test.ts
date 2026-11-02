@@ -22,6 +22,11 @@ describe('resolveSubject', () => {
     expect((await resolveSubject({ tool: 'file_read', paths: [alias] })).paths).toEqual([alias, target]);
   });
 
+  it('resolves a name too long to exist lexically instead of failing', async () => {
+    const message = join(root, `fix: ${'a long commit message line '.repeat(20)}\n\nwith a body`);
+    expect((await resolveSubject({ tool: 'bash_execute', paths: [message] })).paths).toEqual([message]);
+  });
+
   it('resolves symlinked parents for a file that will be created', async () => {
     await mkdir(join(root, 'protected'));
     await symlink(join(root, 'protected'), join(root, 'alias'));

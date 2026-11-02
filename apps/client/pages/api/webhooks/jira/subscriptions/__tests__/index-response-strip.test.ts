@@ -15,7 +15,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/slack', () => ({ resolveNotificationDestination: h.destination }));
-vi.mock('@server/integrations/jira/atlassianTokenManager', () => ({
+vi.mock('@bike4mind/server-utils/integrations/jira/atlassianTokenManager', () => ({
   AtlassianTokenManager: { getValidTokens: h.getValidTokens },
 }));
 vi.mock('@server/integrations/jira/types', () => ({ validateFilters: vi.fn(() => undefined) }));

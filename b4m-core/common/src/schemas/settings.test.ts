@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   ARTIFACT_EMISSION_PROMPT,
   settingsMap,
+  stageHiddenSettingKeys,
   publicSafeSettingKeys,
   userReadableSettingKeys,
   redactSettingSecrets,
@@ -294,6 +295,9 @@ describe('public settings projection (M2.5 security boundary)', () => {
         // admin guard - carry no secret, but were missed by the initial opt-in pass.
         'ReferralCreditsAmount',
         'SystemFiles',
+        // The Desktop app follows these rather than deciding deferral itself.
+        'EnableDeferredToolLoading',
+        'DeferredToolStartSetMaxTokens',
       ]) {
         expect(keys.has(k)).toBe(true);
       }
@@ -1487,5 +1491,66 @@ describe('BedrockNews Headword reward settings', () => {
     ['BedrockNewsRewardsDailyBudget', 200000],
   ] as const)('%s defaults to %s', (key, expected) => {
     expect(settingsMap[key].defaultValue).toBe(expected);
+  });
+});
+
+describe('spend monitor settings', () => {
+  const expectedDefaults = {
+    spendMonitorEnabled: true,
+    spendMonitorSlackEnabled: false,
+    spendMonitorPlatformSpikeRatio: 3,
+    spendMonitorPlatformCriticalRatio: 6,
+    spendMonitorPlatformSpikeFloorCredits: 5000,
+    spendMonitorPlatformCostFloorUsd: 20,
+    spendMonitorAccountSpikeRatio: 10,
+    spendMonitorAccountSpikeFloorCredits: 1000,
+    spendMonitorAccountCeilingCredits: 5000,
+  } as const;
+
+  it.each(Object.entries(expectedDefaults))('%s defaults to %s and belongs to the CREDITS group', (key, expected) => {
+    const setting = settingsMap[key as keyof typeof expectedDefaults];
+    expect(setting.defaultValue).toBe(expected);
+    expect(setting.schema.parse(undefined)).toBe(expected);
+    expect(API_SERVICE_GROUPS.CREDITS.settings.some(entry => entry.key === key)).toBe(true);
+  });
+
+  it.each([
+    'spendMonitorPlatformSpikeFloorCredits',
+    'spendMonitorPlatformCostFloorUsd',
+    'spendMonitorAccountSpikeFloorCredits',
+    'spendMonitorAccountCeilingCredits',
+  ] as const)('%s rejects 0 and accepts 1', key => {
+    expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
+    expect(settingsMap[key].schema.parse(1)).toBe(1);
+  });
+
+  it('keeps the settings admin-only', () => {
+    const readable = new Set(userReadableSettingKeys());
+    for (const key of Object.keys(expectedDefaults)) {
+      expect(readable.has(key as never)).toBe(false);
+    }
+  });
+});
+
+describe('preference arena settings exposure', () => {
+  it('keeps every arena setting except the enabled flag out of the user-readable set', () => {
+    const readable = new Set<string>(userReadableSettingKeys());
+    const arenaKeys = Object.keys(settingsMap).filter(key => key.startsWith('preferenceArena'));
+    expect(arenaKeys.length).toBeGreaterThan(1);
+    expect(arenaKeys.filter(key => readable.has(key))).toEqual(['preferenceArenaEnabled']);
+  });
+});
+
+describe('stageHiddenSettingKeys', () => {
+  it('hides the deprecated drip settings and preview test mode on production stages', () => {
+    expect(stageHiddenSettingKeys(true).sort()).toEqual([
+      'signupGrantActivityMinDays',
+      'signupGrantActivityMinMessages',
+      'signupGrantActivityPreviewTestMode',
+    ]);
+  });
+
+  it('hides nothing elsewhere', () => {
+    expect(stageHiddenSettingKeys(false)).toEqual([]);
   });
 });

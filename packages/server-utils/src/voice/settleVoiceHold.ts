@@ -1,6 +1,13 @@
 import { CONVERSATIONAL_VOICE_MODEL_ID, CreditHolderType } from '@bike4mind/common';
-import { creditTransactionRepository, sessionRepository, userRepository, withTransaction } from '@bike4mind/database';
+import {
+  creditTransactionRepository,
+  newAccountSpendCapAdapters,
+  sessionRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { creditService } from '@bike4mind/services';
 import { creditsForElapsed, realtimeCreditsFloor } from './voiceSessionLimits';
 
 const logger = new Logger({ metadata: { service: 'voiceHoldSettlement' } });
@@ -174,7 +181,8 @@ export async function settleVoiceHold(
  * The caller's balance pre-check reads the user before the provider call, so it can be stale by
  * now (another call's reserve, a chat debit). The reserve is therefore re-checked against the
  * balance inside the transaction: a reserve the balance no longer covers throws `unaffordable()`
- * and the transaction aborts with nothing moved.
+ * and the transaction aborts with nothing moved. A reserve that would take a new account over its
+ * spend cap is refused before anything opens, with the cap's 422 `insufficient_credits`.
  */
 export async function reserveVoiceHold(args: {
   userId: string;
@@ -185,6 +193,15 @@ export async function reserveVoiceHold(args: {
   realtime: boolean;
   unaffordable: () => Error;
 }): Promise<boolean> {
+  if (args.reservedCredits) {
+    const user = await userRepository.findById(args.userId);
+    if (user) {
+      await creditService.assertNewAccountSpendWithinCap(
+        { user, requestedCredits: args.reservedCredits, billedToOrganization: false },
+        newAccountSpendCapAdapters
+      );
+    }
+  }
   return withTransaction(async () => {
     const opened = await sessionRepository.openVoiceHold(args.sessionId, args.priorStartedAt, {
       voiceReservedCredits: args.reservedCredits,

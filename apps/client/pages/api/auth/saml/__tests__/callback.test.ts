@@ -38,7 +38,7 @@ vi.mock('@server/auth/auth', () => ({ setupSamlStrategy: () => 'saml-idp-1' }));
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: vi.fn().mockResolvedValue({ accessToken: 'tok' }),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 
 const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
@@ -52,6 +52,7 @@ vi.mock('@server/auth/networkMeta', () => ({
   recordSignupNetwork: (...a: unknown[]) => mockRecordSignupNetwork(...a),
 }));
 const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 vi.mock('@server/auth/signupRiskScore', () => ({
   refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
 }));

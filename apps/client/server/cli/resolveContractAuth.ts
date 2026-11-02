@@ -1,5 +1,5 @@
 import { type EndpointContract, ForbiddenError } from '@bike4mind/common';
-import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
+import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { verifyApiKey, verifyJwtToken, type ApiKeyInfo, type VerifiedUser } from './auth';
 
 export type ContractAuthResult =

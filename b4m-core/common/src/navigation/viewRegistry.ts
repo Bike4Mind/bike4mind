@@ -392,6 +392,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.revenue',
+    section: 'admin',
+    label: 'Revenue',
+    description: 'MRR, ARR, paying customers, new and churned MRR, MRR by plan and at-risk subscriptions over time',
+    navigationType: 'tab',
+    target: '72', // AdminTab.Revenue
+    keywords: ['revenue', 'mrr', 'arr', 'churn', 'recurring revenue', 'paying customers', 'at risk'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.subscriptions',
     section: 'admin',
     label: 'Subscriptions',
@@ -718,6 +728,17 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '64', // AdminTab.GrowthPricing
     keywords: ['pricing', 'prices', 'credit price', 'free credits', 'referral credits', 'monetization', 'growth'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.preference_arena',
+    section: 'admin',
+    label: 'Preference arena',
+    description:
+      'Import answer pairs for the rate-two-answers arena, toggle them, and review vote quality and model win rates',
+    navigationType: 'tab',
+    target: '71', // AdminTab.PreferenceArena
+    keywords: ['preference arena', 'arena', 'rate answers', 'pairwise votes', 'gold questions', 'model win rate'],
     requiresAdmin: true,
   },
   {

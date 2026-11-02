@@ -41,23 +41,31 @@ export {
   RuntimeStorageError,
   RuntimeUnsupportedError,
 } from './errors';
+export { lockFile, type FileLock, type LockOptions } from './fileLock';
 export { isAbliteratedModel } from './abliterated';
 export {
+  BUNDLED_CURATED_JSON_TEXT,
+  configuredNumCtx,
   curatedBuildForRef,
+  curatedEntryForRef,
   curatedLibrary,
   curatedListing,
   curatedOllamaBlocked,
   curatedParamsLabel,
   curatedPicks,
   curatedPins,
+  curatedRunner,
   curatedSource,
+  installedReviewed,
   isCuratedListable,
   isCuratedPullable,
   isPermissiveEntry,
   loadCuratedManifest,
+  servesReviewed,
   type CuratedListing,
   type CuratedSource,
   type CuratedTierPick,
+  type LoadCuratedOptions,
 } from './curated';
 export {
   CURATED_KEY_ROLES,
@@ -80,6 +88,58 @@ export {
   type CuratedVerifyFailure,
   type CuratedVerifyResult,
 } from './curatedSignature';
+export {
+  CURATED_BACKOFF_BASE_MS,
+  CURATED_CHECK_INTERVAL_MS,
+  CuratedListSource,
+  type CuratedCheckStatus,
+  type CuratedListSettings,
+  type CuratedListSourceDeps,
+  type CuratedSourceView,
+} from './curatedSource/CuratedListSource';
+export {
+  CuratedStore,
+  curatedStoreRoot,
+  type CuratedCheckState,
+  type CuratedCopy,
+  type CuratedRevoked,
+} from './curatedSource/CuratedStore';
+export {
+  curatedSibling,
+  fetchCurated,
+  resolveCuratedUrl,
+  type CuratedFetchFailure,
+  type CuratedFetchOptions,
+  type CuratedFetchResult,
+} from './curatedSource/fetchCurated';
+export { PRODUCTION_CURATED_KEYS } from './curatedSource/keys';
+export {
+  checkApproval,
+  checkInstalledDigest,
+  checkReviewedLayers,
+  checkRuntime,
+  curatedLicensesMatch,
+  hubBuildId,
+  licensesChanged,
+  manifestChange,
+  pullBlock,
+  sameRepo,
+  type ApprovalDeps,
+  type ApprovalFailure,
+  type ApprovalResult,
+  type ApprovedCurated,
+  type HubPullApproval,
+  type InstalledCheck,
+  type LayersCheck,
+  type LayerSources,
+  type LibraryPullApproval,
+  type PullApproval,
+  type PullBlock,
+  type PullCheckHub,
+  type RegistryManifestFacts,
+  type RuntimeCheck,
+} from './pulls';
+export { licenseKind, type LicenseKind } from './licenses';
 export { BodyTooLargeError, DEFAULT_REQUEST_TIMEOUT_MS, readCapped } from './http';
 export { archFromModelInfo, tensorStatsFromTensors } from './arch';
 export {
@@ -185,9 +245,71 @@ export {
   type StartModelOptions,
 } from './llamaServerRuntime';
 export {
+  gpuQueries,
+  parseMeminfo,
+  parseNvidiaSmiUsage,
+  parseRocmSmiVram,
   probeHardware,
+  probeMemoryUsage,
   type ExecLike,
+  type GpuQueries,
+  type GpuUsage,
   type HardwareProbeOptions,
   type HardwareProfile,
+  type MemoryUsage,
   type StatfsResult,
 } from './hardware';
+export {
+  OLLAMA_ENV_KEYS,
+  OLLAMA_SETTING_DEFAULTS,
+  fitRuntimeFromOllamaSettings,
+  ollamaDefaultContext,
+  ollamaEnvValue,
+  ollamaFitConfidence,
+  type OllamaEnvironment,
+  type OllamaEnvKey,
+} from './ollamaSettings';
+export {
+  MODEL_HOST_DROP_IN,
+  OLLAMA_UNIT,
+  attributeSystemdEnvironment,
+  detectOllamaInstall,
+  findOllamaProcesses,
+  parseEnvironmentFile,
+  parseOllamaHost,
+  parseSystemctlShow,
+  parseUnitEnvironment,
+  readOllamaSettings,
+  servesUrl,
+  splitSystemctlWords,
+  splitSystemdWords,
+  type Attribution,
+  type OllamaHost,
+  type OllamaInstallOptions,
+  type OllamaInstallProbe,
+  type OllamaProcess,
+  type OllamaSettingsRead,
+  type ReadOllamaSettingsOptions,
+  type SystemdUnit,
+  type UnitEnvironmentEvent,
+} from './ollamaInstall';
+export {
+  mountFor,
+  parseMountinfo,
+  passwdHome,
+  resolveStorePath,
+  serviceHome,
+  storeDisk,
+  type MountEntry,
+  type StoreDisk,
+  type StoreDiskOptions,
+  type StorePathInput,
+  type StorePathSource,
+} from './storeDisk';
+export {
+  parseCpuinfo,
+  parseOsRelease,
+  probeModelHost,
+  type ModelHostProbe,
+  type ModelHostProbeOptions,
+} from './hostFacts';

@@ -10,16 +10,18 @@ import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authS
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
+import { oauthIpRateLimit } from '@server/middlewares/oauthIpRateLimit';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import passport from 'passport';
 import { z } from 'zod';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
+import { readVisitId } from '@server/analytics/visitSession';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { AuthEvents } from '@bike4mind/common';
@@ -50,6 +52,7 @@ const handler = baseApi({ auth: false })
   })
   .use(checkBlockedIP())
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }))
+  .use(oauthIpRateLimit('oauth-callback'))
   .get(async (req: Request<{}, unknown, unknown, { strategy: AuthStrategy; state: string }>, res, next) => {
     const { strategy } = req.query;
 
@@ -105,6 +108,10 @@ const handler = baseApi({ auth: false })
               : resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
           const logFailure = reason === 'internal' ? console.error : console.warn;
           logFailure('Passport Authenticate User Not Found Info:', info);
+          // Counted by the OAuthSignupsRefused metric filter in infra/authAbuseAlarms.ts; keep the
+          // message in sync with its pattern. Only registration_closed is logged on purpose: the alarm
+          // tracks closed-registration waves, while the auto-block runner also counts the other reasons.
+          if (reason === 'registration_closed') req.logger?.info('oauth-signup-refused');
           try {
             await authFailLogRepository.create({
               strategy,
@@ -210,6 +217,9 @@ const handler = baseApi({ auth: false })
             method: strategy,
             emailVerified: user.emailVerified === true,
             creditsGranted: user.signupCreditsGranted ?? 0,
+            // The visit cookie is SameSite=Lax, so it arrives on this top-level GET as the
+            // campaign cookies do: the signup joins the visit it came from.
+            visitId: readVisitId(req.headers.cookie),
           });
           if (!isSyntheticSignup) {
             await emitSignupForSourceProducts({

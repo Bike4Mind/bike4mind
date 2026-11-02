@@ -5,6 +5,7 @@ import {
   IProjectRepository,
   IUserRepository,
   secureParameters,
+  UserShareGrant,
   BadRequestError,
   ForbiddenError,
 } from '@bike4mind/common';
@@ -90,12 +91,8 @@ export const removeFiles = async (
       }
     }
 
-    const nextUsers: typeof file.users = [];
-    for (const entry of file.users) {
-      if (entry.projectId !== project.id) {
-        nextUsers.push(entry);
-        continue;
-      }
+    const directGrants: UserShareGrant[] = [];
+    for (const entry of projectMemberEntries) {
       const email = granteeEmailsById.get(entry.userId);
       const directGrantPermissions = email
         ? Array.from(
@@ -111,12 +108,11 @@ export const removeFiles = async (
         // permission union pushShareable may have merged in from the project side -
         // otherwise a permission that came SOLELY from project membership (e.g. update,
         // when the direct invite only ever granted read+share) would outlive this revoke.
-        nextUsers.push({ ...entry, projectId: undefined, permissions: directGrantPermissions });
+        directGrants.push({ userId: entry.userId, permissions: directGrantPermissions });
       }
       // else: access came solely from this project - drop the entry entirely.
     }
-    file.users = nextUsers;
-    await db.fabFiles.update({ id: file.id, users: file.users });
+    await db.fabFiles.shareable.updateUserShares(file.id, { remove: { projectId: project.id }, add: directGrants });
   }
 
   await db.projects.update({ id: project.id, fileIds: project.fileIds, updatedAt: project.updatedAt });

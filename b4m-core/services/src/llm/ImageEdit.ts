@@ -109,6 +109,8 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   /** Minted per invoke(); see ImageGenerationBodySchema.generationId. */
   generationId: z.string().optional(),
   adminRoleWithheld: z.boolean().optional(),
+  /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
+  apiKeyId: z.string().optional(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
   // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
@@ -203,15 +205,19 @@ export class ImageEditService {
     this.imageModerationService = options.imageModerationService;
     this.resolveLakeAccess = options.resolveLakeAccess;
     this.deleteFabFile = options.deleteFabFile;
-    this.tokenizer = new TiktokenTokenizer({ logger: Logger.globalInstance });
+    // The service is cached per container, so the tokenizer must not keep a request's logger;
+    // request-scoped calls go through withLogger(logger) instead.
+    this.tokenizer = new TiktokenTokenizer({ logger: new Logger({ metadata: { component: 'tokenizer' } }) });
   }
 
   public async invoke({
     body,
     userId,
     adminRoleWithheld,
+    apiKeyId,
   }: {
     adminRoleWithheld?: boolean;
+    apiKeyId?: string;
     body: z.infer<typeof EditImageRequestBodySchema>;
     userId: string;
   }) {
@@ -311,6 +317,7 @@ export class ImageEditService {
           organizationId,
           generationId: uuidv4(),
           adminRoleWithheld,
+          apiKeyId,
         })
       );
     } catch (error) {
@@ -454,6 +461,7 @@ export class ImageEditService {
       questId,
       userId,
       adminRoleWithheld,
+      apiKeyId,
       prompt,
       model: requestedModel,
       safety_tolerance,
@@ -630,7 +638,8 @@ export class ImageEditService {
       }
 
       // Encode the prompt to tokens
-      const promptTokens = await this.tokenizer.encodeTokens(prompt, model);
+      const tokenizer = this.tokenizer.withLogger(logger);
+      const promptTokens = await tokenizer.encodeTokens(prompt, model);
 
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
@@ -659,7 +668,7 @@ export class ImageEditService {
         prompt,
         promptTokens,
         maxTokens: models.find(m => m.id === model)?.max_tokens,
-        tokenizer: this.tokenizer,
+        tokenizer,
         modelId: model,
         logger,
       });
@@ -900,7 +909,7 @@ export class ImageEditService {
         const creditsCharged = await this.creditHolds.settle(
           creditHold,
           settlement.credits,
-          { type: 'image_edit_usage', sessionId, questId, model },
+          { type: 'image_edit_usage', sessionId, questId, model, apiKeyId },
           { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger }
         );
         creditHold = undefined;

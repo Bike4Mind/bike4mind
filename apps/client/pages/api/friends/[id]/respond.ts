@@ -2,7 +2,7 @@ import { activityRepository, compareMongoIds, Friendship, friendshipRepository, 
 import { friendshipService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { FriendshipEvents } from '@bike4mind/common';
 
 export const ResponseFriendRequestSchema = z.object({

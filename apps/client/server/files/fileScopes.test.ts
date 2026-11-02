@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
-import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
+import { SCOPE_STAGING_ENV_VAR } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import {
   FILES_READ_OR_WRITE_SCOPES,
   FILES_READ_SCOPES,

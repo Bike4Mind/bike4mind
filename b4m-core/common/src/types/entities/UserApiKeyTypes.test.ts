@@ -23,6 +23,7 @@ const EXPECTED_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.SKILLS_READ,
   ApiKeyScope.RELEASE_NOTES_WRITE,
   ApiKeyScope.REWARDS_GRANT,
+  ApiKeyScope.SLACK_POST,
 ]);
 
 const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
@@ -155,6 +156,7 @@ describe('public API reference scope classification', () => {
     ApiKeyScope.SKILLS_READ,
     ApiKeyScope.SKILLS_WRITE,
     ApiKeyScope.SKILLS_REVIEW,
+    ApiKeyScope.SLACK_POST,
   ]);
 
   it('classifies every ApiKeyScope as public or undocumented, so a new scope fails here until decided', () => {
@@ -168,8 +170,9 @@ describe('public API reference scope classification', () => {
     expect(new Set(UNDOCUMENTED_API_KEY_SCOPES)).toEqual(EXPECTED_UNDOCUMENTED);
   });
 
-  it('publishes no confined scope except the customer-minted skills:read', () => {
-    for (const scope of CONFINED_API_KEY_SCOPES.filter(s => s !== ApiKeyScope.SKILLS_READ)) {
+  it('publishes no confined scope except the customer-minted skills:read and slack:post', () => {
+    const customerMinted: readonly ApiKeyScope[] = [ApiKeyScope.SKILLS_READ, ApiKeyScope.SLACK_POST];
+    for (const scope of CONFINED_API_KEY_SCOPES.filter(s => !customerMinted.includes(s))) {
       expect(PUBLIC_DOC_API_KEY_SCOPES).not.toContain(scope);
     }
   });

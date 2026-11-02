@@ -1,7 +1,18 @@
-import { insufficientCreditsError, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
-import { adminSettingsRepository, organizationRepository, userRepository } from '@bike4mind/database';
+import {
+  insufficientCreditsError,
+  type ISessionDocument,
+  type ModelInfo,
+  type TooManyRequestsError,
+} from '@bike4mind/common';
+import {
+  adminSettingsRepository,
+  organizationRepository,
+  usageEventRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { areCreditsEnforced, creditService, isOperationalBillingEnabled } from '@bike4mind/services';
-import type { Logger } from '@bike4mind/observability';
+import { Logger } from '@bike4mind/observability';
+import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from '@server/billing/freeTierDailyCapGate';
 import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
 
 /**
@@ -36,8 +47,12 @@ export interface SessionOperationalCreditPreflightArgs {
   logger?: Logger;
 }
 
-/** Discriminated so a caller that must not fail its primary action can branch on the reason. */
-export type SessionOperationalCreditVerdict = { allowed: true } | { allowed: false; reason: string };
+/**
+ * Discriminated so a caller that must not fail its primary action can branch on the reason. `dailyCapError`
+ * is set when the free-tier daily cap refused, so the throwing entry point keeps its 429 and Retry-After.
+ */
+export type SessionOperationalCreditVerdict =
+  { allowed: true } | { allowed: false; reason: string; dailyCapError?: TooManyRequestsError };
 
 type BillingUser = NonNullable<Awaited<ReturnType<typeof userRepository.findById>>>;
 type BillingOrg = Awaited<ReturnType<typeof organizationRepository.findById>>;
@@ -251,6 +266,20 @@ export async function checkSessionOperationalCredits({
     return gateDisabled(err);
   }
 
+  // These publishers sit behind no chat turn, so the free-tier daily caps (credit and system cost)
+  // are checked here too. The gate fails open on its own read errors.
+  try {
+    await checkFreeTierDailySpendCap({
+      user: billingUser,
+      billingOrganizationId: billingOrg?.id,
+      usageEventRepository,
+      logger: logger ?? Logger.globalInstance,
+    });
+  } catch (err) {
+    if (isFreeTierDailyCapError(err)) return { allowed: false, reason: err.message, dailyCapError: err };
+    throw err;
+  }
+
   const requiredCredits = operationCount * MIN_CREDITS_PER_OPERATION;
 
   const refusalReason = resolveRefusalReason({
@@ -281,11 +310,11 @@ export async function checkSessionOperationalCredits({
 /**
  * `checkSessionOperationalCredits` for the entry points whose whole purpose is the operational
  * spend, where a refusal is the answer to the request. Throws a 422 tagged
- * `insufficient_credits` - a billing state, not a bug.
+ * `insufficient_credits` - a billing state, not a bug - or the free-tier daily cap's 429.
  */
 export async function assertSessionOperationalCredits(args: SessionOperationalCreditPreflightArgs): Promise<void> {
   const verdict = await checkSessionOperationalCredits(args);
-  if (!verdict.allowed) throw insufficientCreditsError(verdict.reason);
+  if (!verdict.allowed) throw verdict.dailyCapError ?? insufficientCreditsError(verdict.reason);
 }
 
 /**

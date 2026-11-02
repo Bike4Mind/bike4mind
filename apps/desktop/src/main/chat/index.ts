@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, readFile } from 'node:fs/promises';
+import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
@@ -15,7 +15,7 @@ import {
   shell,
   type WebContents,
 } from 'electron';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, isPromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
@@ -59,6 +59,7 @@ import type { McpMutationResult, McpServerInput, McpServersState } from '@shared
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
+import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
 import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware } from './localContextSizing';
@@ -74,7 +75,8 @@ import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
-import { ChatService, type ChatServiceDeps } from './ChatService';
+import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
+import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
@@ -97,6 +99,9 @@ import { registerModelServersIpc } from '../modelServers/ipc';
 import { LocalModels } from '../modelServers/LocalModels';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { withEnteredSpecs } from '../models/enteredHardware';
+import { machineView } from '../models/fit';
+import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -110,6 +115,7 @@ import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { ApprovalLog } from './permissions/ApprovalLog';
+import { formatApprovalSummary, readApprovalLog, summarizeApprovals } from './permissions/approvalSummary';
 import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
@@ -168,6 +174,12 @@ const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
  * SessionStore - so this only reaches a conversation that has never been given one.
  */
 const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
+
+/** Local overrides of the server's deferred tool loading setting; see parseDeferredToolsOverride. */
+const DEFERRED_TOOLS_OVERRIDE = parseDeferredToolsOverride(
+  process.env.B4M_DESKTOP_DEFERRED_TOOLS,
+  process.env.B4M_DESKTOP_DEFERRED_START_MAX_TOKENS
+);
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
@@ -277,6 +289,8 @@ export interface RegisteredChat {
   modelServers: ModelServerRegistry;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
+  /** The capability ledger, which the Models screen records approved downloads in. */
+  capabilityLedger: CapabilityLedger;
 }
 
 /**
@@ -355,10 +369,14 @@ export function registerChat(
   auth: AuthService,
   hooks: Pick<ChatServiceDeps, 'sessionClosed' | 'releaseSessionTerminals'> & {
     observeStream?(event: ChatStreamEvent): void;
+    /** Revoking a model-pull grant in Settings stops that download; true once it no longer runs. */
+    cancelModelPull?(key: string): Promise<boolean>;
   } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
+  // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
+  const approvalLog = new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message));
   // Beside approval-mode.json and app-wide like it; see ModelPreference for why.
   const modelPreference = new ModelPreference(join(userData, 'model-preference.json'));
   // Unconditional, unlike everything else at this level: it is the one way to check which model
@@ -375,6 +393,15 @@ export function registerChat(
   // a scope folder on first use, and this records how the user likes to work rather than
   // anything belonging to one conversation or one account.
   const approvalModes = new ApprovalModePreference(join(userData, 'approval-mode.json'));
+  const deferredTools = new DeferredToolsSetting({
+    filePath: join(userData, 'deferred-tools.json'),
+    getApiClient: () => auth.getApiClient(),
+    getEnvironmentUrl: () => auth.getState().environment.url,
+    logger,
+    override: DEFERRED_TOOLS_OVERRIDE,
+  });
+  // Asked at launch so the first turn already has the server's answer.
+  void deferredTools.refresh();
   // Scoped to the backend and the account, not just to this machine: one install reaches
   // production and a local server, and can be signed in as a different person on each. The
   // provider is read per operation, so a switch takes effect on the next list with nothing
@@ -385,7 +412,8 @@ export function registerChat(
     randomUUID(),
     () => sessionScopeForChat(auth.getState()),
     approvalModes,
-    REASONING_EFFORT
+    REASONING_EFFORT,
+    new PromptCacheTtlPreference(join(userData, 'prompt-cache-ttl.json'))
   );
   keepSessionWritesIn(store);
   const access = new AccessStore(join(userData, 'tool-access.json'));
@@ -452,7 +480,13 @@ export function registerChat(
       models.forgetLocal();
       send(IPC_CHANNELS.modelServersChanged, servers);
     },
+    localSpecsChanged: () => {
+      forgetLocalContexts();
+      localSizing.forget?.();
+      models.forgetLocal();
+    },
   });
+  localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
   void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
   const local = new LocalModels(new OllamaLocal((url, init) => net.fetch(url, init), localSizing), modelServers);
   const models = new ModelCatalog(
@@ -603,8 +637,7 @@ export function registerChat(
         return capabilityLedger.revokeMatching(match);
       },
     },
-    // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
-    approvalLog: new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message)),
+    approvalLog,
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
@@ -615,6 +648,7 @@ export function registerChat(
     sidebarSections,
     mcp,
     browser,
+    pullRequests,
     screen: desktopScreenCapturer(app.getName()),
     prepareImage: prepareToolImage,
     history,
@@ -625,6 +659,9 @@ export function registerChat(
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
     protectedPaths: [userData],
+    get deferredTools() {
+      return deferredTools.current();
+    },
     getApiClient: () => auth.getApiClient(),
     isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
     getEnvironmentUrl: () => auth.getState().environment.url,
@@ -642,7 +679,10 @@ export function registerChat(
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
-  registerModelServersIpc(ipcMain, modelServers);
+  registerModelServersIpc(ipcMain, modelServers, async () => {
+    const probed = await localHardware.probed();
+    return probed && machineView(probed);
+  });
   ipcMain.handle(IPC_CHANNELS.chatListSuggestionModels, () => service.listSuggestionModels());
   registerLocalContextIpc(ipcMain, {
     preference: localContext,
@@ -653,6 +693,7 @@ export function registerChat(
     },
     fit: () => local.contextFit(),
   });
+  ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
     service.setSessionArchived(sessionId, archived)
   );
@@ -712,6 +753,9 @@ export function registerChat(
     const setting = storedReasoningEffortSetting(effort);
     return setting ? service.setSessionReasoningEffort(sessionId, setting) : null;
   });
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionPromptCacheTtl, (_event, sessionId: string, ttl: unknown) =>
+    isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
+  );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );
@@ -767,6 +811,19 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
     permissions.setShareClaudeCode(share === true)
   );
+  // Written only where the user picks in the save dialog: the digest never leaves the machine otherwise.
+  ipcMain.handle(IPC_CHANNELS.permissionsExportApprovalSummary, async event => {
+    const options = {
+      defaultPath: join(app.getPath('downloads'), `approval-summary-${new Date().toISOString().slice(0, 10)}.md`),
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    };
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+    if (picked.canceled || !picked.filePath) return false;
+    const entries = await readApprovalLog([approvalLog.rotatedPath, approvalLog.filePath]);
+    await writeFile(picked.filePath, formatApprovalSummary(summarizeApprovals(entries)), 'utf8');
+    return true;
+  });
   const capabilityIpc = capabilityHandlers({
     ledger: capabilityLedger,
     ready: capabilitiesReady,
@@ -794,6 +851,7 @@ export function registerChat(
         return true;
       },
       revokeAllow: (scope, rule) => permissions.revokeAllow(scope, rule),
+      cancelModelPull: key => hooks.cancelModelPull?.(key) ?? Promise.resolve(false),
     },
   });
   ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, () => capabilityIpc.getState());
@@ -881,7 +939,9 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
     service.removeContextDirectory(sessionId, directory)
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetSession, (_event, sessionId: string) => service.getSession(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string) =>
+    sessionForRenderer(await service.getSession(sessionId))
+  );
   // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
   // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
   // and a repository git cannot read already says so on the branch chip beside it.
@@ -1256,7 +1316,18 @@ export function registerChat(
     logger,
   });
 
-  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, modelServers, localContext };
+  return {
+    service,
+    background,
+    mcp,
+    browser,
+    pullRequests,
+    claudeImport,
+    spareWorktrees,
+    modelServers,
+    localContext,
+    capabilityLedger,
+  };
 }
 
 export { ChatService } from './ChatService';

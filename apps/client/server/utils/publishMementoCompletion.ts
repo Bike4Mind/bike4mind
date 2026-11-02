@@ -46,7 +46,7 @@ import {
   resolveExecutionMementoGates,
   type MementoGateAdapters,
   type MementoGateExecution,
-} from './resolveExecutionMementoGates';
+} from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 
 export type MementoCompletionExecution = Pick<
   IAgentExecution,

@@ -58,12 +58,27 @@ export type AdminUsersQueryContext = {
   toObjectId: (id: string) => unknown;
   /** Users holding a live API key, resolved by the caller; required when the filter sets `hasApiKey`. */
   liveApiKeyUserIds?: string[];
+  /** Users created in the window with the filter's signup verdict; required when it sets `verdict`. */
+  verdictUserIds?: string[];
+  /** Users with AI activity in the active window; required when the filter sets `activeFrom`/`activeTo`. */
+  activeUserIds?: string[];
+  /** Users created in the window whose furthest funnel step is the filter's; required with `funnelStep`. */
+  funnelStepUserIds?: string[];
 };
+
+type ResolvedIdsKey = 'verdictUserIds' | 'activeUserIds' | 'funnelStepUserIds';
+
+function resolvedIdsCondition(context: AdminUsersQueryContext, key: ResolvedIdsKey, filterKey: string): Condition {
+  const ids = context[key];
+  if (!ids) throw new Error(`${filterKey} needs ${key} in the query context`);
+  return { _id: { $in: ids.filter(id => OBJECT_ID.test(id)).map(context.toObjectId) } };
+}
 
 /**
  * The `$match` for a filter. Every condition is on a User field, so it also serves `find()` callers.
- * `hasApiKey` matches `_id` against ids resolved up front rather than a per-user `$lookup`: the lookup
- * cost one subquery per filtered user, and the DocumentDB converter dropped its `status` condition.
+ * `hasApiKey`, `verdict`, the active window and `funnelStep` match `_id` against ids resolved up front
+ * rather than a per-user `$lookup`: the lookup cost one subquery per filtered user, and the DocumentDB
+ * converter dropped its `status` condition.
  */
 export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUsersQueryContext): Condition {
   const conditions: Condition[] = [];
@@ -109,6 +124,11 @@ export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUse
     const ids = context.liveApiKeyUserIds.filter(id => OBJECT_ID.test(id)).map(context.toObjectId);
     conditions.push({ _id: filter.hasApiKey === 'yes' ? { $in: ids } : { $nin: ids } });
   }
+  if (filter.verdict) conditions.push(resolvedIdsCondition(context, 'verdictUserIds', 'verdict'));
+  if (filter.activeFrom || filter.activeTo) {
+    conditions.push(resolvedIdsCondition(context, 'activeUserIds', 'activeFrom'));
+  }
+  if (filter.funnelStep) conditions.push(resolvedIdsCondition(context, 'funnelStepUserIds', 'funnelStep'));
   return conditions.length > 0 ? { $and: conditions } : {};
 }
 

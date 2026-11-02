@@ -61,7 +61,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 // The real failure path (logEventSafe swallowing a thrown write) is covered by
 // analytics-failure.test.ts, which leaves analyticsLog unmocked.
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));

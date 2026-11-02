@@ -19,6 +19,9 @@ export const secrets = {
   SLACK_WEBHOOK_URL: new sst.Secret('SLACK_WEBHOOK_URL', 'not-configured'),
   SLACK_ERROR_REPORTING_WEBHOOK_URL: new sst.Secret('SLACK_ERROR_REPORTING_WEBHOOK_URL', 'not-configured'),
   SLACK_ALARMS_WEBHOOK_URL: new sst.Secret('SLACK_ALARMS_WEBHOOK_URL', 'not-configured'),
+  // Cost-category alarms (apps/workers/src/events/alarmSlackMessage.ts) post here when set;
+  // otherwise they fall through to SLACK_ALARMS_WEBHOOK_URL like every other alarm.
+  SLACK_COST_ALARMS_WEBHOOK_URL: new sst.Secret('SLACK_COST_ALARMS_WEBHOOK_URL', 'not-configured'),
   GOOGLE_CLIENT_ID: new sst.Secret('GOOGLE_CLIENT_ID', 'not-configured'),
   GOOGLE_CLIENT_SECRET: new sst.Secret('GOOGLE_CLIENT_SECRET', 'not-configured'),
   GITHUB_CLIENT_ID: new sst.Secret('GITHUB_CLIENT_ID', 'not-configured'),

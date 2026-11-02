@@ -16,9 +16,9 @@ import {
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { foldTagName, InviteType, ProjectEvents } from '@bike4mind/common';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { Resource } from 'sst';
 import { unlockSignupGrantFromOrgInvite } from '@server/credits/orgInviteUnlock';
 

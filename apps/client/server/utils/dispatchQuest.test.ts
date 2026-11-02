@@ -75,6 +75,16 @@ describe('dispatchQuest', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('sends the retry the same visit as the first attempt', async () => {
+    const visitId = 'a'.repeat(32);
+    fetchMock.mockRejectedValueOnce(new Error('ECONNREFUSED')).mockResolvedValueOnce(res(202));
+    const promise = dispatchQuest({ ...params, visitId }, logger);
+    await vi.advanceTimersByTimeAsync(500);
+    await promise;
+    const sentVisits = fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body as string).visitId);
+    expect(sentVisits).toEqual([visitId, visitId]);
+  });
+
   it('throws after exhausting the single retry', async () => {
     fetchMock.mockResolvedValue(res(500, 'boom'));
     const promise = dispatchQuest(params, logger);
