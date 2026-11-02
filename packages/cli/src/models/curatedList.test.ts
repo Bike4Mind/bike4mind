@@ -49,7 +49,8 @@ const list = (options: { offline?: boolean; keys?: readonly CuratedKey[]; env?: 
   createCliCuratedList({
     offline: options.offline ?? false,
     keys: options.keys ?? [],
-    env: { XDG_CONFIG_HOME: dir, B4M_CURATED_DEV_URL: LATEST, ...options.env },
+    dataDir: dir,
+    env: { B4M_CURATED_DEV_URL: LATEST, ...options.env },
     fetch: fetchFake,
     log: message => logs.push(message),
   });
@@ -86,9 +87,9 @@ describe('createCliCuratedList', () => {
     vi.stubEnv('B4M_CURATED_DEV_KEYS', '1');
     publish(5);
     const curated = list();
-    expect(existsSync(path.join(dir, 'b4m'))).toBe(false);
+    expect(existsSync(path.join(dir, 'model-hub'))).toBe(false);
     await curated.manifest();
-    expect(existsSync(path.join(dir, 'b4m'))).toBe(true);
+    expect(existsSync(path.join(dir, 'model-hub'))).toBe(true);
   });
 
   describe('in a build that trusts the test keys', () => {
@@ -162,17 +163,37 @@ describe('createCliCuratedList', () => {
       expect(requests).toEqual([]);
     });
 
-    it('stops waiting for a stalled check after its budget and uses the list it has', async () => {
-      fetchFake = ((_url: string, init?: RequestInit) =>
-        new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-        })) as unknown as typeof fetch;
+    it('stops waiting for a stalled check after its budget without counting it as a failure', async () => {
+      const stalled = vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          })
+      );
+      fetchFake = stalled as unknown as typeof fetch;
       const started = Date.now();
       const curated = list();
       expect((await curated.manifest()).sequence).toBe(1);
       expect(Date.now() - started).toBeLessThan(5000);
-      expect(curated.origin()?.check).toBe('failed');
-    }, 10000);
+      expect(curated.origin()?.check).not.toBe('failed');
+      expect(logs.some(line => line.includes('check failed'))).toBe(false);
+
+      // No backoff was recorded, so the next command checks again and picks up the list once the server answers.
+      publish(5);
+      fetchFake = vi.fn(async (url: string | URL | Request) => {
+        const body = files.get(String(url));
+        return body === undefined ? new Response('', { status: 404 }) : new Response(body);
+      }) as unknown as typeof fetch;
+      expect((await list().manifest()).sequence).toBe(5);
+    }, 15000);
+
+    it('gives each caller its own budget when two read the list at once', async () => {
+      publish(5);
+      const curated = list();
+      const [first, second] = await Promise.all([curated.manifest(), curated.manifest()]);
+      expect([first.sequence, second.sequence]).toEqual([5, 5]);
+      expect(requests.filter(url => url.endsWith('.sig'))).toHaveLength(1);
+    });
 
     it('checks again on refresh even when the last check was recent', async () => {
       publish(5);
@@ -192,7 +213,8 @@ describe('createCliCuratedList', () => {
       const production = createCliCuratedList({
         offline: false,
         keys: [],
-        env: { XDG_CONFIG_HOME: dir },
+        dataDir: dir,
+        env: {},
         fetch: fetchFake,
         log: () => {},
       });

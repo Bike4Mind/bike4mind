@@ -826,6 +826,42 @@ describe('CuratedListSource', () => {
     expect(restarted.view().check).toBe('failed');
   });
 
+  it('does not count a check its caller stopped as a failure, so the next caller checks at once', async () => {
+    server.fetch.mockImplementationOnce(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          if (init?.signal?.aborted) return reject(new Error('aborted'));
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        })
+    );
+    const s = source();
+    const stop = new AbortController();
+    const checking = s.checkIfDue(stop.signal);
+    stop.abort();
+    await checking;
+    expect(s.view().check).toBe('idle');
+    logged(/stopped the curated list check before it finished/);
+    expect(logs.some(line => /check failed/.test(line))).toBe(false);
+
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
+    await s.checkIfDue();
+    expect(s.view()).toMatchObject({ origin: 'updated', sequence: 3 });
+  });
+
+  it('reports a cache signed by an unknown key once, not on every start', async () => {
+    const newer = signer('signing');
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [newer], 3));
+    await source({ keys: [newer.key, recovery.key] }).checkNow();
+
+    await source().loaded();
+    logged(/ignored the cached curated list: unknown-key/);
+    logs = [];
+    await source().loaded();
+    expect(logs.some(line => /ignored the cached curated list/.test(line))).toBe(false);
+  });
+
   it('reports a setting write failure without changing the effective choice', async () => {
     const broken = new CuratedStore(dir);
     vi.spyOn(broken, 'writeEnabled').mockRejectedValue(new Error('disk full'));

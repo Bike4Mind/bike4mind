@@ -90,9 +90,17 @@ describe('curated:check-build', () => {
     ]);
     expect(await main([dir], {}, log)).toBe(1);
     await rm(path.join(dir, BUILD_INFO_PATH));
-    expect(await buildInfoProblems(dir)).toEqual([expect.stringMatching(/is missing or unreadable/)]);
+    expect(await buildInfoProblems(dir)).toEqual([expect.stringMatching(/is missing;/)]);
     await info({ devKeys: false });
     expect(await buildInfoProblems(dir)).toEqual([expect.stringMatching(/is malformed/)]);
+  });
+
+  it('reports a build info file that is not JSON or cannot be read, instead of looking for the other one', async () => {
+    await writeFile(path.join(dir, BUILD_INFO_PATH), '{ not json');
+    expect(await buildInfoProblems(dir)).toEqual([`${BUILD_INFO_PATH} is malformed`]);
+    await rm(path.join(dir, BUILD_INFO_PATH));
+    await mkdir(path.join(dir, BUILD_INFO_PATH));
+    expect(await buildInfoProblems(dir)).toEqual([expect.stringMatching(/curated-build\.json is unreadable \(/)]);
   });
 
   it('checks a CLI build by the build info at the root of its dist', async () => {

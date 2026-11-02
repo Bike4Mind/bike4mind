@@ -50,6 +50,7 @@ export async function findDevKey(dir: string): Promise<BuildFinding[]> {
 }
 
 // A CLI build replaces these reads at build time; one that survives would let the environment override the baked value.
+// Only the dotted form is matched because it is the only form tsdown replaces: the source must read them exactly so.
 const RUNTIME_READS = ['process.env.B4M_CURATED_MANIFEST_URL', 'process.env.B4M_CURATED_DEV_KEYS'];
 
 /** Every file under `dir` that still reads a baked curated variable from the environment. */
@@ -81,19 +82,27 @@ export function manifestUrlProblem(raw: string | undefined, expected?: string): 
 
 /** The problems `curated-build.json` reports; a build without one cannot be checked, so that is one too. */
 export async function buildInfoProblems(dir: string, expectedUrl?: string): Promise<string[]> {
-  let info: { devKeys?: unknown; manifestUrl?: unknown } | undefined;
+  let info: { devKeys?: unknown; manifestUrl?: unknown } | null | undefined;
   let found = BUILD_INFO_PATH;
   for (const candidate of [BUILD_INFO_PATH, CLI_BUILD_INFO_PATH]) {
+    let text: string;
     try {
-      info = JSON.parse(await readFile(path.join(dir, candidate), 'utf8'));
-      found = candidate;
-      break;
-    } catch {
-      info = undefined;
+      text = await readFile(path.join(dir, candidate), 'utf8');
+    } catch (error) {
+      // Only a missing file means "not this kind of build"; any other failure is the real answer.
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue;
+      return [`${candidate} is unreadable (${error instanceof Error ? error.message : String(error)})`];
     }
+    try {
+      info = JSON.parse(text);
+    } catch {
+      return [`${candidate} is malformed`];
+    }
+    found = candidate;
+    break;
   }
   if (info === undefined)
-    return [`${BUILD_INFO_PATH} is missing or unreadable; is this an apps/desktop/out or packages/cli/dist build?`];
+    return [`${BUILD_INFO_PATH} is missing; is this an apps/desktop/out or packages/cli/dist build?`];
   if (typeof info !== 'object' || info === null || typeof info.manifestUrl !== 'string')
     return [`${found} is malformed`];
   const problems: string[] = [];

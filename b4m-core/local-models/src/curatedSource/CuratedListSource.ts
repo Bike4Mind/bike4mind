@@ -108,6 +108,8 @@ export class CuratedListSource {
   #enabled = true;
   #status: 'idle' | 'checking' | Outcome = 'idle';
   #inFlight: Promise<void> | null = null;
+  // The running check's stop signal, if its caller gave one.
+  #stop: AbortSignal | undefined;
 
   constructor(deps: CuratedListSourceDeps) {
     this.#deps = deps;
@@ -180,12 +182,16 @@ export class CuratedListSource {
     return this.settings();
   }
 
-  /** Checks when the last success is 6 h old (or the clock moved back) and any failure backoff has passed. */
-  async checkIfDue(): Promise<void> {
+  /**
+   * Checks when the last success is 6 h old (or the clock moved back) and any failure backoff has passed. Aborting
+   * `stop` cancels the check's requests; a check stopped that way keeps the current list and does not count as a
+   * failure. A caller that joins a check already running waits on that check's own `stop`.
+   */
+  async checkIfDue(stop?: AbortSignal): Promise<void> {
     await this.#loaded;
     if (this.#inFlight) return this.#inFlight;
     if (!this.#canCheck() || !this.#due(this.#now())) return;
-    return this.#start();
+    return this.#start(stop);
   }
 
   /** Bypasses the throttle and backoff; joins a check already running. */
@@ -257,13 +263,22 @@ export class CuratedListSource {
     const copy = await store.readCopy(source);
     const verdict = copy ? this.#verify(copy.manifest, copy.signature) : null;
     if (copy && verdict && !verdict.ok) {
-      // A key this build does not know may belong to a newer client's valid cache; leave it for that client.
+      // A key this build does not know may belong to a newer client's valid cache; leave it for that client, and
+      // report it once rather than on every start.
       const foreign = verdict.stage === 'signature' && verdict.reason === 'unknown-key';
-      this.#log(`ignored the cached curated list: ${verdict.detail}`);
+      const fingerprint = CuratedStore.fingerprint(copy.signature);
+      if (!foreign || this.#state.foreignCopy !== fingerprint)
+        this.#log(`ignored the cached curated list: ${verdict.detail}`);
       if (!foreign)
         await store.deleteCopy(source).catch((error: unknown) => {
           this.#log(`could not delete the cached curated list: ${String(error)}`);
         });
+      else if (this.#state.foreignCopy !== fingerprint) {
+        this.#state = { ...this.#state, foreignCopy: fingerprint };
+        await store.writeState(source, this.#state).catch((error: unknown) => {
+          this.#log(`could not save the curated check state: ${String(error)}`);
+        });
+      }
     }
     const recovered = verdict?.ok ? this.#revocations(verdict) : null;
     const lost = revoked.status === 'lost';
@@ -342,14 +357,17 @@ export class CuratedListSource {
     return { ok: true, json, sequence, signedBy: signed.keys };
   }
 
-  #start(): Promise<void> {
-    this.#inFlight = this.#check().finally(() => {
+  #start(stop?: AbortSignal): Promise<void> {
+    this.#inFlight = this.#check(stop).finally(() => {
       this.#inFlight = null;
+      this.#stop = undefined;
     });
     return this.#inFlight;
   }
 
-  async #check(): Promise<void> {
+  async #check(stop?: AbortSignal): Promise<void> {
+    const before = this.#status;
+    this.#stop = stop;
     this.#status = 'checking';
     this.#deps.onChange();
     let outcome: Outcome;
@@ -362,6 +380,13 @@ export class CuratedListSource {
     } catch (error) {
       this.#log(`curated list check failed: ${String(error)}`);
       outcome = 'failed';
+    }
+    // The caller ran out of time to wait, which says nothing about the server: no backoff, and the next caller checks.
+    if (outcome === 'failed' && stop?.aborted) {
+      this.#log('stopped the curated list check before it finished; kept the current list');
+      this.#status = before;
+      this.#deps.onChange();
+      return;
     }
     const now = this.#now();
     this.#state =
@@ -376,9 +401,14 @@ export class CuratedListSource {
   }
 
   async #fetch(url: string, maxBytes: number): Promise<CuratedFetchResult> {
-    const { fetch, timeoutMs, allowLoopbackHttp, userAgent } = this.#deps;
-    const result = await fetchCurated(url, maxBytes, { fetch, timeoutMs, allowLoopbackHttp, userAgent });
-    if (!result.ok) this.#log(`curated list check failed (${result.failure}): ${result.detail}`);
+    const { timeoutMs, allowLoopbackHttp, userAgent } = this.#deps;
+    const send = this.#deps.fetch ?? fetch;
+    const stop = this.#stop;
+    const stoppable: typeof fetch = stop
+      ? (input, init) => send(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, stop]) : stop })
+      : send;
+    const result = await fetchCurated(url, maxBytes, { fetch: stoppable, timeoutMs, allowLoopbackHttp, userAgent });
+    if (!result.ok && !stop?.aborted) this.#log(`curated list check failed (${result.failure}): ${result.detail}`);
     return result;
   }
 

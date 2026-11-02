@@ -22,6 +22,8 @@ export interface CliCuratedListOptions {
   /** Use the last verified list on disk (else the bundled one) and make no request, as `--offline` asks. */
   offline: boolean;
   env?: Record<string, string | undefined>;
+  /** Where the CLI keeps its state, `~/.bike4mind` by default; tests only. */
+  dataDir?: string;
   /** Replaces the production keyring; tests only. */
   keys?: readonly CuratedKey[];
   fetch?: typeof fetch;
@@ -48,9 +50,6 @@ export interface CliCuratedList {
   origin(): CuratedOrigin | null;
 }
 
-const configHome = (env: Record<string, string | undefined>) =>
-  env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : path.join(homedir(), '.config');
-
 /**
  * The CLI's curated list: the bundled one, or a newer signed one fetched from the URL baked at build time and cached.
  * tsdown replaces the two B4M_CURATED build variables, so a published CLI ignores the environment for them. The store
@@ -65,21 +64,14 @@ export function createCliCuratedList(options: CliCuratedListOptions): CliCurated
   const url = resolveCuratedUrl(raw, dev);
   const offline = options.offline || env.B4M_CURATED === 'off';
   const offered = url !== null && keys.length > 0;
-  const send = options.fetch ?? fetch;
-
-  let budget: AbortController | null = null;
-  const fetchWithinBudget: typeof fetch = (input, init) =>
-    send(
-      input,
-      budget ? { ...init, signal: init?.signal ? AbortSignal.any([init.signal, budget.signal]) : budget.signal } : init
-    );
+  const dataDir = options.dataDir ?? path.join(homedir(), '.bike4mind');
 
   let opened: CuratedListSource | undefined;
   const open = () =>
     (opened ??= new CuratedListSource({
       url,
       keys,
-      store: new CuratedStore(curatedStoreRoot(path.join(configHome(env), 'b4m'), dev)),
+      store: new CuratedStore(curatedStoreRoot(dataDir, dev)),
       bundledText: BUNDLED_CURATED_JSON_TEXT,
       load: json => loadCuratedManifest(log, json),
       allowLoopbackHttp: dev,
@@ -87,7 +79,7 @@ export function createCliCuratedList(options: CliCuratedListOptions): CliCurated
       userAgent: 'Bike4Mind-CLI',
       timeoutMs: CHECK_TIMEOUT_MS,
       now: options.now,
-      fetch: fetchWithinBudget,
+      fetch: options.fetch,
       log,
       onChange: () => {},
     }));
@@ -96,16 +88,14 @@ export function createCliCuratedList(options: CliCuratedListOptions): CliCurated
     async manifest() {
       const source = open();
       await source.loaded();
-      budget = new AbortController();
-      const controller = budget;
+      const budget = new AbortController();
       // Aborting the requests, rather than leaving them to finish, lets a one-shot process exit at once.
-      const timer = setTimeout(() => controller.abort(), CHECK_BUDGET_MS);
+      const timer = setTimeout(() => budget.abort(), CHECK_BUDGET_MS);
       timer.unref();
       try {
-        await source.checkIfDue();
+        await source.checkIfDue(budget.signal);
       } finally {
         clearTimeout(timer);
-        budget = null;
       }
       return source.current();
     },
