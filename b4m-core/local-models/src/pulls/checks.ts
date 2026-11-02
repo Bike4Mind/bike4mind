@@ -54,12 +54,33 @@ export type InstalledCheck =
  * After a curated pull: passes when Ollama installed the reviewed build. Anything else is removed only when the tag
  * was definitely absent before (`hadTag` false), since a tag that was already there is the user's.
  */
-export async function checkInstalledDigest(
+export function checkInstalledDigest(
   inspection: ModelInspection,
   reviewed: HubBuild,
+  removal: { hadTag: boolean | null; remove: () => Promise<void> }
+): Promise<InstalledCheck> {
+  return settleInstalled(installedReviewed(inspection, reviewed), removal);
+}
+
+/**
+ * After an uncurated pull: passes when Ollama installed weights whose sha256 is `sha256`, with no adapter. A mismatch
+ * is removed under the same rule as `checkInstalledDigest`.
+ */
+export function checkInstalledBlob(
+  inspection: ModelInspection,
+  sha256: string,
+  removal: { hadTag: boolean | null; remove: () => Promise<void> }
+): Promise<InstalledCheck> {
+  const contents = inspection.contents;
+  const matches = !!contents && contents.modelBlob === sha256 && !contents.adapterBlobs?.length;
+  return settleInstalled(matches, removal);
+}
+
+async function settleInstalled(
+  matches: boolean,
   { hadTag, remove }: { hadTag: boolean | null; remove: () => Promise<void> }
 ): Promise<InstalledCheck> {
-  if (installedReviewed(inspection, reviewed)) return { ok: true };
+  if (matches) return { ok: true };
   if (hadTag !== false) return { ok: false, outcome: 'left-in-place', hadTag };
   try {
     await remove();

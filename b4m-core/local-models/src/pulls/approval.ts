@@ -1,7 +1,7 @@
 import type { HubBuild, HubEntry } from '@bike4mind/common';
 import { isAbliteratedModel } from '../abliterated';
 import { curatedLibrary, isPermissiveEntry } from '../curated';
-import type { HubGgufBuild, HubModelDetail } from '../huggingface';
+import { ollamaPullRef, type HubGgufBuild, type HubModelDetail } from '../huggingface';
 import { licenseKind } from '../licenses';
 import type { OllamaRegistryLayers, RuntimeHealth } from '../types';
 import { checkReviewedLayers, checkRuntime, type LayersCheck, type LayerSources, type RuntimeCheck } from './checks';
@@ -78,9 +78,12 @@ export async function curatedLicensesMatch(
   return licenseSet(base.licenses) === licenseSet([entry.license.base.id]);
 }
 
-/** `ref` is the name Ollama pulls, proven to serve the approved file. */
+/**
+ * `ref` is the name Ollama pulls, proven to serve the approved file unless `verified` is false (see
+ * `ApprovalDeps.checkAfterPull`).
+ */
 export type ApprovalResult =
-  | { ok: true; ref: string }
+  | { ok: true; ref: string; verified?: false }
   | {
       ok: false;
       reason:
@@ -111,6 +114,11 @@ export interface ApprovalDeps {
   signal: AbortSignal;
   /** Called once the build is known and approved, before the runtime is asked. */
   onReviewed?: (build: { label: string; sizeBytes: number }) => void;
+  /**
+   * For a reader with no Hub token: a gated repo's checksum is hidden, so no manifest can prove the ref. True lets
+   * an uncurated build through unverified once access is confirmed, and the caller must check the installed blob.
+   */
+  checkAfterPull?: boolean;
 }
 
 export const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -147,7 +155,8 @@ async function checkHub(approval: HubPullApproval, deps: ApprovalDeps): Promise<
       return { ok: false, reason: 'license-changed' };
   }
   const block = pullBlock(detail, build);
-  if (block) return { ok: false, reason: 'blocked', block };
+  const deferred = block === 'needs-access' && !curated && deps.checkAfterPull === true ? build.ollamaRef : null;
+  if (block && !deferred) return { ok: false, reason: 'blocked', block };
   const isPermissive = deps.isPermissive ?? (licenses => licenseKind(licenses) === 'permissive');
   const restricted = !isPermissive(detail.licenses) || (curated && !isPermissiveEntry(curated.entry));
   if (restricted && !approval.licenseAccepted) return { ok: false, reason: 'license-required' };
@@ -158,6 +167,7 @@ async function checkHub(approval: HubPullApproval, deps: ApprovalDeps): Promise<
   if (signal.aborted) return { ok: false, reason: 'cancelled' };
   const runtime = checkRuntime(health, curated?.build ?? null);
   if (!runtime.ok) return runtime;
+  if (deferred) return { ok: true, ref: ollamaPullRef(deferred, true), verified: false };
   // The registry serves the first file whose name ends with the tag; only its manifest proves which one.
   const ref = await hub.verifyOllamaRef(detail, build, { signal });
   if (signal.aborted) return { ok: false, reason: 'cancelled' };

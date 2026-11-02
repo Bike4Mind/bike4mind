@@ -88,6 +88,7 @@ export {
 } from './curatedSignature';
 export {
   checkApproval,
+  checkInstalledBlob,
   checkInstalledDigest,
   checkReviewedLayers,
   checkRuntime,

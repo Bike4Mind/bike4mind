@@ -141,6 +141,28 @@ describe('checkApproval for a Hugging Face build', () => {
     expect(await checkApproval(hfApproval({ accessConfirmed: true }), deps(hub))).toMatchObject({ ok: true });
   });
 
+  it('lets a gated build whose checksum is hidden through unverified only when asked to check after the pull', async () => {
+    const masked = hubBuild({ files: [{ path: 'model-Q4_K_M.gguf', sizeBytes: 1024, sha256: null, url: 'u' }] });
+    const hub = fakeHub(hubDetail({ gated: true, ollamaNeedsSshKey: true, builds: [masked] }));
+    const confirmed = hfApproval({ accessConfirmed: true });
+    expect(await checkApproval(confirmed, deps(hub))).toEqual({ ok: false, reason: 'blocked', block: 'needs-access' });
+    expect(await checkApproval(hfApproval(), deps(hub, { checkAfterPull: true }))).toEqual({
+      ok: false,
+      reason: 'access-required',
+    });
+    expect(await checkApproval(confirmed, deps(hub, { checkAfterPull: true }))).toEqual({
+      ok: true,
+      ref: 'huggingface.co/org/repo:Q4_K_M',
+      verified: false,
+    });
+    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+    const restricted = fakeHub(hubDetail({ gated: true, ollamaNeedsSshKey: true, builds: [masked], licenses: [] }));
+    expect(await checkApproval(confirmed, deps(restricted, { checkAfterPull: true }))).toEqual({
+      ok: false,
+      reason: 'license-required',
+    });
+  });
+
   it('refuses when the runtime is down, before asking the registry', async () => {
     const hub = fakeHub(hubDetail());
     const health = vi.fn(async () => ({ ok: false, version: null, error: 'refused' }));
@@ -206,6 +228,16 @@ describe('checkApproval for a curated Hugging Face build', () => {
     const result = await checkApproval(approval, deps(hub));
     expect(result).toEqual({ ok: true, ref: `hf.co/${detail.id}:${build.quant.label}` });
     expect(hub.ollamaLayers).toHaveBeenCalledWith(build.hf?.repo, build.quant.label, expect.anything());
+  });
+
+  it('never lets a gated build with a hidden checksum through unverified, even with checkAfterPull', async () => {
+    const { hub, approval } = setup(({ detail }) => {
+      detail.ollamaNeedsSshKey = true;
+      detail.builds[0] = { ...detail.builds[0], files: [{ ...detail.builds[0].files[0], sha256: null }] };
+    });
+    const result = await checkApproval({ ...approval, accessConfirmed: true }, deps(hub, { checkAfterPull: true }));
+    expect(result).toEqual({ ok: false, reason: 'blocked', block: 'needs-access' });
+    expect(hub.ollamaLayers).not.toHaveBeenCalled();
   });
 
   it('refuses a request that does not name the reviewed repo and file', async () => {
