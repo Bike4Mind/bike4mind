@@ -3425,8 +3425,7 @@ export const settingsMap = {
     defaultValue: 1.5,
     min: 1,
     max: 5,
-    description:
-      'Multiplier applied to a Headword rung solved in hard mode.',
+    description: 'Multiplier applied to a Headword rung solved in hard mode.',
     category: 'Referrals',
   }),
   BedrockNewsFirstSolveCredits: makeNumberSetting({
@@ -3447,8 +3446,7 @@ export const settingsMap = {
     int: true,
     min: 0,
     max: 100_000_000,
-    description:
-      'Most credits one Bike4Mind user can earn from Headword per puzzle day, bonus excluded.',
+    description: 'Most credits one Bike4Mind user can earn from Headword per puzzle day, bonus excluded.',
     category: 'Referrals',
   }),
   BedrockNewsRewardsDailyBudget: makeNumberSetting({
@@ -3458,8 +3456,7 @@ export const settingsMap = {
     int: true,
     min: 0,
     max: 100_000_000,
-    description:
-      'Most Headword credits paid to all users in any rolling 24 hours. 0 stops all payouts.',
+    description: 'Most Headword credits paid to all users in any rolling 24 hours. 0 stops all payouts.',
     category: 'Referrals',
   }),
   EnableReferralToEmail: makeBooleanSetting({
