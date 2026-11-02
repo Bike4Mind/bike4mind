@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Contract: `POST /api/partners/rewards/grant`, auth by API key holding `rewards:grant`, body `{ userId: string, puzzleDate: "YYYY-MM-DD", tier: 5|6|7, hard: boolean }`, 200 `{ granted: boolean, credits: number, balance: number, firstSolveCredits: number }`. `granted: false, credits: 0` on a replay. 400 on a bad body, 404 when the user does not exist, 403 when the user may not be paid (unverified, banned, deleted, synthetic) or when a cap is hit; the 403 body carries `{ error, code: "USER_NOT_ELIGIBLE" | "DAILY_CAP" | "BUDGET_EXHAUSTED" }`.
+- Contract: `POST /api/partners/rewards/grant` (BedrockNews reaches it as `{B4mBaseUrl}/partners/rewards/grant`, its base URL already ends in `/api`), auth by API key holding `rewards:grant`, body `{ userId: string, puzzleDate: "YYYY-MM-DD", tier: 5|6|7, hard: boolean }`, 200 `{ granted: boolean, credits: number, balance: number, firstSolveCredits: number }`. On a replay `granted: false` and `credits` is the stored ledger row's amount (the caller may have lost its own record of the payment and stamps what it is told); `firstSolveCredits: 0`. 400 on a bad body, 404 when the user does not exist, 403 when the user may not be paid (unverified, banned, deleted, synthetic) or when a cap is hit; the 403 body carries `{ error, code: "USER_NOT_ELIGIBLE" | "DAILY_CAP" | "BUDGET_EXHAUSTED" }`.
 - Ledger row: `type: 'generic_add'`, `ownerType: CreditHolderType.User`, `reason: 'bedrocknews_puzzle_reward'`, `transactionId: \`bedrocknews-puzzle:${userId}:${puzzleDate}:${tier}\``, `metadata: { product: 'bedrocknews', game: 'headword', puzzleDate, tier, hard }`, `description: 'Headword: solved the N-letter word on YYYY-MM-DD'`.
 - First-solve bonus row: same `type/ownerType`, `reason: 'bedrocknews_first_solve'`, `transactionId: \`bedrocknews-first-solve:${userId}\``.
 - Settings (all `makeNumberSetting`, `int: true` except the multiplier, `min: 0`, `category: 'Referrals'`, defaults as listed): `BedrockNewsPuzzleCredits5` 40, `BedrockNewsPuzzleCredits6` 60, `BedrockNewsPuzzleCredits7` 100, `BedrockNewsPuzzleHardMultiplier` 1.5, `BedrockNewsFirstSolveCredits` 500, `BedrockNewsPuzzleDailyCap` 300 (per user, per `puzzleDate`, excluding the first-solve bonus), `BedrockNewsRewardsDailyBudget` 200000 (global, rolling 24 h, all reasons above). A per-tier amount of 0 means that rung pays nothing but still answers `granted: true, credits: 0`.
@@ -73,14 +73,14 @@ Algorithm (the parts the signature does not fix):
 2. Settings via `getSettingsMap(..., { names: [the seven], skipCache: true })`; `amount = Math.round(tierCredits * (hard ? multiplier : 1))`.
 3. Daily cap: `CreditTransaction.aggregate` sum of `credits` where `ownerId, reason: BEDROCKNEWS_PUZZLE_REASON, 'metadata.puzzleDate': puzzleDate`; if `sum + amount > cap` → 403 `DAILY_CAP`. (The replay case never reaches here with a new row, see step 5.)
 4. Budget: sum of `credits` over both reasons with `createdAt >= now - 24h`; `sum + amount > budget` → 403 `BUDGET_EXHAUSTED`.
-5. `addCreditsWithLedgerRow` with the puzzle row; `creditTransactionId` null/undefined (duplicate, net zero) → `granted: false, credits: 0`, no bonus attempt.
+5. `addCreditsWithLedgerRow` with the puzzle row; `creditTransactionId` null/undefined (duplicate, net zero) → `granted: false`, `credits` = the existing row's `credits` (read it by `transactionId`), no bonus attempt.
 6. On a fresh grant and `BedrockNewsFirstSolveCredits > 0`: `addCreditsWithLedgerRow` with the bonus row; a duplicate → `firstSolveCredits: 0`.
 7. `balance` = re-read `currentCredits` after the writes.
-Order of checks 3 and 4 before 5 is deliberate: a replay must not be refused by a cap it already consumed, so do the duplicate check first: `CreditTransaction.exists({ transactionId })` → if it exists return `granted: false` before the caps.
+Order of checks 3 and 4 before 5 is deliberate: a replay must not be refused by a cap it already consumed, so do the duplicate check first: `CreditTransaction.findOne({ transactionId }).select('credits')` → if it exists return `granted: false, credits: <its credits>` before the caps.
 
 - [ ] **Step 1: Failing tests** (`it.each` where natural):
   1. pays 40 for tier 5, 60 for 6, 100 for 7; hard → 60/90/150; metadata and transactionId exact;
-  2. replay (`exists` true) → `granted: false, credits: 0`, `addCredits` not called;
+  2. replay (an existing row with credits 40) → `granted: false, credits: 40`, `addCredits` not called;
   3. first fresh grant also writes the first-solve row with 500; second day's grant does not (bonus duplicate → 0);
   4. cap: existing 300 on the date → `DAILY_CAP`;
   5. budget exhausted → `BUDGET_EXHAUSTED`;
