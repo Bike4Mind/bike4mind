@@ -258,9 +258,15 @@ jobs:
         env:
           B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
           B4M_CREDITS_URL: ${{ vars.B4M_CREDITS_URL }}
+          B4M_CURATED_MANIFEST_URL: ${{ vars.B4M_CURATED_MANIFEST_URL }}
         run: |
           pnpm core:build
           pnpm --filter "@bike4mind/cli" build
+
+      - name: Check the CLI build for curated test keys
+        env:
+          CURATED_PUBLIC_URL: ${{ vars.CURATED_PUBLIC_URL }}
+        run: pnpm --filter @bike4mind/scripts curated:check-build packages/cli/dist --expect-url "$CURATED_PUBLIC_URL"
 
       # changeset publish shells out to `npm publish`; OIDC trusted publishing
       # needs npm >= 11.5.1, newer than what some Node 24 images bundle.
