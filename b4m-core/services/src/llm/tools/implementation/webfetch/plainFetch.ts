@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { UnprocessableEntityError } from '@bike4mind/common';
 import { htmlToMarkdown } from '../../../../lib/turndown';
 import { refuseFetch, resolveAndVetUrl } from './ssrfGuard';
 
@@ -10,6 +11,18 @@ const MAX_BODY_BYTES = 5 * 1024 * 1024;
 // Only these are worth converting to markdown; anything else (binary, PDFs, images, archives) is
 // rejected before the body is read so we never buffer a large non-text payload.
 const READABLE_CONTENT_TYPES = ['text/html', 'application/xhtml+xml', 'text/plain'];
+
+/**
+ * The page was fetched but yielded no readable text (empty, script-only, binary). A property of the
+ * page, not a fault of ours, so it is a 422: the web_fetch tool returns it to the model as text and
+ * /api/tools/web-fetch answers 422 instead of 500. Thrown by both the Firecrawl and plain-fetch paths.
+ */
+export class NoExtractableContentError extends UnprocessableEntityError {
+  constructor() {
+    super('No content could be extracted from the URL');
+    this.name = 'NoExtractableContentError';
+  }
+}
 
 export interface PlainFetchResult {
   markdown: string;
@@ -106,7 +119,7 @@ export async function plainFetchScrape(url: string, options?: { timeoutMs?: numb
     const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
     if (contentType && !READABLE_CONTENT_TYPES.some(t => contentType.includes(t))) {
       await res.body?.cancel().catch(() => {}); // don't buffer a binary / non-text payload
-      throw new Error('No content could be extracted from the URL');
+      throw new NoExtractableContentError();
     }
 
     const declaredLength = res.headers.get('content-length');
@@ -124,7 +137,7 @@ export async function plainFetchScrape(url: string, options?: { timeoutMs?: numb
   const title = $('title').first().text().trim() || undefined;
   const markdown = htmlToMarkdown(html);
   if (!markdown) {
-    throw new Error('No content could be extracted from the URL');
+    throw new NoExtractableContentError();
   }
   return { markdown, title };
 }

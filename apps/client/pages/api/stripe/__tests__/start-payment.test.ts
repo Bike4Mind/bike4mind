@@ -51,6 +51,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 const mockCreateCustomer = vi.fn();
 const mockPaymentIntentsCreate = vi.fn();
 const mockCustomersDel = vi.fn();
+const mockCustomersUpdate = vi.fn();
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   createCustomer: (...args: unknown[]) => mockCreateCustomer(...args),
   CustomerType: { User: 'user' },
@@ -60,6 +61,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
     },
     customers: {
       del: (...args: unknown[]) => mockCustomersDel(...args),
+      update: (...args: unknown[]) => mockCustomersUpdate(...args),
     },
   },
 }));
@@ -112,7 +114,7 @@ function makeReq(body: unknown, userOverrides: Record<string, unknown> = {}) {
     disputePending: false,
     ...userOverrides,
   };
-  (req as Record<string, unknown>).logger = { info: vi.fn(), error: vi.fn() };
+  (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 
@@ -131,6 +133,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     });
     mockPaymentIntentsCreate.mockResolvedValue({ client_secret: 'cs_test_abc', id: 'pi_1' });
     mockCustomersDel.mockResolvedValue({ id: 'cus_new', deleted: true });
+    mockCustomersUpdate.mockResolvedValue({ id: 'cus_existing' });
     mockFirstPurchaseCardOptions.mockResolvedValue({});
   });
 
@@ -301,6 +304,85 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
       expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
     }
   );
+
+  describe('risk metadata for Radar rules', () => {
+    const HOUR_MS = 60 * 60 * 1000;
+    const signupMeta = {
+      ip: '203.0.113.7',
+      userAgent: 'agent',
+      asn: 16509,
+      asnOrg: 'hosting',
+      country: 'DE',
+      isDatacenter: true,
+      capturedAt: new Date('2026-10-01T00:00:00Z'),
+    };
+    const signupFields = { signup_asn: '16509', signup_is_datacenter: 'true', signup_country: 'DE' };
+
+    it('stamps the account age and signup network on the payment intent, never the IP', async () => {
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { createdAt: new Date(Date.now() - 3 * HOUR_MS - 60 * 1000), signupMeta }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      const args = mockPaymentIntentsCreate.mock.calls[0][0] as { metadata: Record<string, string> };
+      expect(args.metadata).toMatchObject({ account_age_hours: '3', ...signupFields, userId: 'user_1' });
+      expect(JSON.stringify(args.metadata)).not.toContain('203.0.113.7');
+    });
+
+    it('sends the age alone for an account with no signup capture', async () => {
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { createdAt: new Date(Date.now() - 50 * HOUR_MS) }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      const args = mockPaymentIntentsCreate.mock.calls[0][0] as { metadata: Record<string, string> };
+      expect(args.metadata.account_age_hours).toBe('50');
+      expect(args.metadata).not.toHaveProperty('signup_is_datacenter');
+      expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('creates a new customer with the signup fields and skips the backfill', async () => {
+      mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { stripeCustomerId: null, signupMeta }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCreateCustomer).toHaveBeenCalledWith(expect.objectContaining({ metadata: signupFields }));
+      expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('backfills the signup fields onto an existing customer before charging it', async () => {
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { signupMeta }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCustomersUpdate).toHaveBeenCalledWith('cus_existing', { metadata: signupFields });
+      expect(mockPaymentIntentsCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('still charges when the customer backfill fails', async () => {
+      mockCustomersUpdate.mockRejectedValue(new Error('stripe down'));
+      const { req, res } = makeReq(
+        { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
+        { signupMeta }
+      );
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockPaymentIntentsCreate).toHaveBeenCalledTimes(1);
+      expect(res.statusCode).toBe(200);
+    });
+  });
 
   describe('3-D Secure on first purchase', () => {
     const accountCreatedAt = new Date('2026-10-01T00:00:00Z');

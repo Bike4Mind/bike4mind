@@ -72,7 +72,9 @@ async function readSettings(logger: Request['logger']): Promise<{ mode: DefaultW
 
 /** Runs after auth (baseApi), so `req.user` is the signed-in user, impersonated or OAuth sessions included. */
 export async function defaultWriteRateLimit(req: Request, res: Response, next: NextFunction) {
-  const user = req.user;
+  // Declared locally: the `impersonatedBy` augmentation lives in apps/client/global.d.ts, which a
+  // program importing this file from outside apps/client does not load.
+  const user = req.user as (Request['user'] & { impersonatedBy?: string }) | undefined;
   if (
     SAFE_METHODS.has(req.method.toUpperCase()) ||
     !user ||

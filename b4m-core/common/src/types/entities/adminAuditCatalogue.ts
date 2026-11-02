@@ -316,6 +316,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.agent_ops.repaired': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
+
+  'model_hub.curated.imported': { category: 'settings', severity: 'critical', write: 'strict' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;

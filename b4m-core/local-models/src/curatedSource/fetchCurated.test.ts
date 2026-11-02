@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { curatedSibling, fetchCurated, resolveCuratedUrl } from './fetchCurated';
 
 const LIST = 'https://catalog.example.com/model-hub/curated-v2/latest.json';
+const UA = 'Bike4Mind-Test';
 
 function fakeFetch(routes: Record<string, () => Response>) {
   return vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
@@ -41,14 +42,14 @@ describe('resolveCuratedUrl', () => {
 describe('fetchCurated', () => {
   it('sends only the fixed headers to the exact URL, with redirects handled by hand', async () => {
     const fetch = fakeFetch({ [LIST]: () => new Response('{}') });
-    expect(await fetchCurated(LIST, 100, { fetch, allowLoopbackHttp: false })).toEqual({
+    expect(await fetchCurated(LIST, 100, { fetch, allowLoopbackHttp: false, userAgent: UA })).toEqual({
       ok: true,
       bytes: new TextEncoder().encode('{}'),
     });
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, init] = fetch.mock.calls[0];
     expect(url).toBe(LIST);
-    expect(init?.headers).toEqual({ accept: 'application/json', 'user-agent': 'Bike4Mind-Desktop' });
+    expect(init?.headers).toEqual({ accept: 'application/json', 'user-agent': UA });
     expect(init?.redirect).toBe('manual');
   });
 
@@ -60,11 +61,15 @@ describe('fetchCurated', () => {
       [hop(2)]: redirect(hop(3)),
       [hop(3)]: () => new Response('ok'),
     };
-    expect(await fetchCurated(LIST, 100, { fetch: fakeFetch(routes), allowLoopbackHttp: false })).toMatchObject({
+    expect(
+      await fetchCurated(LIST, 100, { fetch: fakeFetch(routes), allowLoopbackHttp: false, userAgent: UA })
+    ).toMatchObject({
       ok: true,
     });
     const four = { ...routes, [hop(3)]: redirect(hop(4)), [hop(4)]: () => new Response('ok') };
-    expect(await fetchCurated(LIST, 100, { fetch: fakeFetch(four), allowLoopbackHttp: false })).toMatchObject({
+    expect(
+      await fetchCurated(LIST, 100, { fetch: fakeFetch(four), allowLoopbackHttp: false, userAgent: UA })
+    ).toMatchObject({
       ok: false,
       failure: 'redirect',
     });
@@ -72,16 +77,22 @@ describe('fetchCurated', () => {
 
   it('refuses a redirect to http, and allows loopback http only from loopback in a dev build', async () => {
     const toHttp = { [LIST]: redirect('http://catalog.example.com/latest.json') };
-    expect(await fetchCurated(LIST, 100, { fetch: fakeFetch(toHttp), allowLoopbackHttp: true })).toMatchObject({
+    expect(
+      await fetchCurated(LIST, 100, { fetch: fakeFetch(toHttp), allowLoopbackHttp: true, userAgent: UA })
+    ).toMatchObject({
       ok: false,
       failure: 'redirect',
     });
     const local = 'http://127.0.0.1:4321/a.json';
     const loop = { [local]: redirect('/b.json'), 'http://127.0.0.1:4321/b.json': () => new Response('ok') };
-    expect(await fetchCurated(local, 100, { fetch: fakeFetch(loop), allowLoopbackHttp: true })).toMatchObject({
+    expect(
+      await fetchCurated(local, 100, { fetch: fakeFetch(loop), allowLoopbackHttp: true, userAgent: UA })
+    ).toMatchObject({
       ok: true,
     });
-    expect(await fetchCurated(local, 100, { fetch: fakeFetch(loop), allowLoopbackHttp: false })).toMatchObject({
+    expect(
+      await fetchCurated(local, 100, { fetch: fakeFetch(loop), allowLoopbackHttp: false, userAgent: UA })
+    ).toMatchObject({
       ok: false,
       failure: 'redirect',
     });
@@ -89,7 +100,7 @@ describe('fetchCurated', () => {
 
   it.each([403, 404, 500])('reports HTTP %i as a failed check', async status => {
     const fetch = fakeFetch({ [LIST]: () => new Response('<html>', { status }) });
-    expect(await fetchCurated(LIST, 100, { fetch, allowLoopbackHttp: false })).toMatchObject({
+    expect(await fetchCurated(LIST, 100, { fetch, allowLoopbackHttp: false, userAgent: UA })).toMatchObject({
       ok: false,
       failure: 'http',
     });
@@ -97,12 +108,12 @@ describe('fetchCurated', () => {
 
   it('caps the body, by declared length and by bytes read', async () => {
     const declared = fakeFetch({ [LIST]: () => new Response('x', { headers: { 'content-length': '101' } }) });
-    expect(await fetchCurated(LIST, 100, { fetch: declared, allowLoopbackHttp: false })).toMatchObject({
+    expect(await fetchCurated(LIST, 100, { fetch: declared, allowLoopbackHttp: false, userAgent: UA })).toMatchObject({
       ok: false,
       failure: 'oversize',
     });
     const streamed = fakeFetch({ [LIST]: () => new Response('x'.repeat(101)) });
-    expect(await fetchCurated(LIST, 100, { fetch: streamed, allowLoopbackHttp: false })).toMatchObject({
+    expect(await fetchCurated(LIST, 100, { fetch: streamed, allowLoopbackHttp: false, userAgent: UA })).toMatchObject({
       ok: false,
       failure: 'oversize',
     });
@@ -115,14 +126,16 @@ describe('fetchCurated', () => {
           init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
         )
     );
-    expect(await fetchCurated(LIST, 100, { fetch: hanging, timeoutMs: 20, allowLoopbackHttp: false })).toMatchObject({
+    expect(
+      await fetchCurated(LIST, 100, { fetch: hanging, timeoutMs: 20, allowLoopbackHttp: false, userAgent: UA })
+    ).toMatchObject({
       ok: false,
       failure: 'timeout',
     });
     const down = vi.fn(async () => {
       throw new TypeError('fetch failed');
     });
-    expect(await fetchCurated(LIST, 100, { fetch: down, allowLoopbackHttp: false })).toMatchObject({
+    expect(await fetchCurated(LIST, 100, { fetch: down, allowLoopbackHttp: false, userAgent: UA })).toMatchObject({
       ok: false,
       failure: 'network',
     });

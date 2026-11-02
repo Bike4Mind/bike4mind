@@ -21,6 +21,7 @@ import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgSt
 import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { signupNetworkMetadata } from '@server/integrations/stripe/riskMetadata';
 import { readNetworkMeta } from '@server/auth/networkMeta';
 import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 
@@ -116,7 +117,9 @@ const handler = baseApi()
       // orphaned the winner's. The gate now reads the org one round trip earlier than the old
       // inline findById did, which widens that window, so the conditional update is what keeps it
       // closed. See attachOrgStripeCustomer for the full argument.
-      customerId = await attachOrgStripeCustomer(organization);
+      // The org's customer pays the invoices, so the buyer's signup network rides on it for
+      // Radar (`::customer:signup_is_datacenter::`); an existing customer is left as it is.
+      customerId = await attachOrgStripeCustomer(organization, signupNetworkMetadata(req.user));
 
       // Clamp at the ceiling so an over-cap org's checkout minimum can't exceed the maximum (#1424) -
       // without this, minimum > maximum makes Stripe reject the session and the self-serve checkout wedges.
@@ -126,6 +129,7 @@ const handler = baseApi()
         email: req.user.email!,
         name: organizationData?.name ?? req.user.email!,
         type: CustomerType.Organization,
+        metadata: signupNetworkMetadata(req.user),
       });
 
       customerId = customer.id;

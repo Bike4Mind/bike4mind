@@ -33,10 +33,15 @@ export async function probeServer(
   const get = async (path: string) => {
     const started = now();
     try {
-      const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
+      const signal = AbortSignal.timeout(timeoutMs);
+      const response = await fetch(`${baseUrl}${path}`, { signal });
       const latencyMs = Math.round(now() - started);
+      // A body that stalls past the deadline is no answer, not an answer of the wrong kind.
       const body: unknown = response.ok
-        ? await response.json().catch(() => null)
+        ? await response.json().catch((error: unknown) => {
+            if (signal.aborted) throw error;
+            return null;
+          })
         : (await response.body?.cancel(), null);
       return { status: response.status, body, latencyMs, error: null as unknown };
     } catch (error) {

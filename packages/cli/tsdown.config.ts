@@ -65,6 +65,24 @@ function verifyBundleExternalsPlugin(pkgDir: string) {
   };
 }
 
+const curatedUrl = process.env.B4M_CURATED_MANIFEST_URL ?? '';
+const curatedDevKeys = process.env.B4M_CURATED_DEV_KEYS === '1';
+
+/** Records the curated values this build baked in, for packages/scripts `curated:check-build` to gate a publish on. */
+function curatedBuildInfoPlugin() {
+  return {
+    name: 'curated-build-info',
+    generateBundle() {
+      const info = JSON.stringify({ devKeys: curatedDevKeys, manifestUrl: curatedUrl });
+      (this as unknown as { emitFile(file: object): void }).emitFile({
+        type: 'asset',
+        fileName: 'curated-build.json',
+        source: `${info}\n`,
+      });
+    },
+  };
+}
+
 export default defineConfig({
   entry: [
     'src/index.tsx',
@@ -84,7 +102,7 @@ export default defineConfig({
   target: 'node24',
   platform: 'node',
   clean: true,
-  plugins: [verifyBundleExternalsPlugin(__dirname)],
+  plugins: [verifyBundleExternalsPlugin(__dirname), curatedBuildInfoPlugin()],
   banner: {
     js: '#!/usr/bin/env node',
   },
@@ -97,6 +115,10 @@ export default defineConfig({
   env: {
     B4M_DEFAULT_API_URL: process.env.B4M_DEFAULT_API_URL ?? '',
     B4M_CREDITS_URL: process.env.B4M_CREDITS_URL ?? '',
+    // The signed curated models list: empty URL means the bundled list only; the test keys need the flag in the
+    // shell (never `.env`), and curated:check-build refuses a publish that has them.
+    B4M_CURATED_MANIFEST_URL: curatedUrl,
+    B4M_CURATED_DEV_KEYS: curatedDevKeys ? '1' : '',
   },
   // Keep all npm packages external (will be installed via package.json dependencies)
   // Bundle @bike4mind/* workspace packages into the CLI
