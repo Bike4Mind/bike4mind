@@ -8,11 +8,18 @@ const mocks = vi.hoisted(() => ({
   deleteByKey: vi.fn(),
   postMessageToSlackWithOutcome: vi.fn(),
   loggerError: vi.fn(),
+  recordShadowDetection: vi.fn(),
+  userWrite: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   cacheRepository: { claimDedup: mocks.claimDedup, deleteByKey: mocks.deleteByKey },
+  shadowDetectionRepository: { record: mocks.recordShadowDetection },
+  // Shadow recording must never act on the account: any write here fails the no-side-effects test.
+  userRepository: { update: mocks.userWrite, updateOne: mocks.userWrite, findByIdAndUpdate: mocks.userWrite },
+  userApiKeyRepository: { update: mocks.userWrite, revokeAllForUser: mocks.userWrite },
+  creditTransactionRepository: { create: mocks.userWrite },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -31,9 +38,11 @@ import { Logger } from '@bike4mind/observability';
 import {
   alertSignupNetworkBurst,
   asnThresholdFor,
+  buildSignupNetworkShadowDetection,
   evaluateSignupNetworkBursts,
   formatSignupNetworkAlert,
   readSignupNetworkAlertThresholds,
+  SIGNUP_NETWORK_BURST_POLICY_VERSION,
   type SignupNetworkAlertThresholds,
 } from './signupNetworkAlerts';
 
@@ -164,6 +173,8 @@ describe('alertSignupNetworkBurst', () => {
     mocks.deleteByKey.mockReset().mockResolvedValue(undefined);
     mocks.postMessageToSlackWithOutcome.mockReset().mockResolvedValue('sent');
     mocks.loggerError.mockReset();
+    mocks.recordShadowDetection.mockReset().mockResolvedValue('d1');
+    mocks.userWrite.mockReset();
     vi.spyOn(Logger.globalInstance, 'error').mockImplementation(mocks.loggerError);
   });
 
@@ -245,5 +256,120 @@ describe('alertSignupNetworkBurst', () => {
     mocks.countRecentSignups.mockRejectedValue(new Error('db down'));
     await expect(alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
     expect(mocks.loggerError).toHaveBeenCalledWith('[signup-network-alerts] Burst check failed', expect.any(Error));
+  });
+
+  it('records one shadow detection per burst under its own dedupe claim', async () => {
+    await alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' });
+
+    expect(mocks.claimDedup).toHaveBeenCalledWith(
+      'shadow-detection:signup-network:ip:hash:203.0.113.7',
+      { userId: 'u1' },
+      180 * 60_000
+    );
+    expect(mocks.claimDedup).toHaveBeenCalledWith(
+      'shadow-detection:signup-network:asn:64500',
+      { userId: 'u1' },
+      180 * 60_000
+    );
+    expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(2);
+    expect(mocks.recordShadowDetection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detector: 'signupNetworkBurst',
+        policyVersion: SIGNUP_NETWORK_BURST_POLICY_VERSION,
+        wouldAction: 'contain',
+        userIds: ['u1'],
+        summary: '2 self-serve signups from one IP in 180 minutes',
+        signals: [{ key: 'ipSignups', label: expect.any(String), observed: 2, threshold: 1 }],
+      })
+    );
+  });
+
+  it('records nothing when the shadow claim is already held, even if the alert claim is free', async () => {
+    mocks.claimDedup.mockImplementation(async (key: string) => ({ claimed: !key.startsWith('shadow-detection:') }));
+    await alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' });
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlackWithOutcome).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the shadow claim when the Slack post fails', async () => {
+    mocks.countRecentSignups.mockResolvedValue({ ipSignups: 2, prefixSignups: null, asnSignups: null });
+    mocks.postMessageToSlackWithOutcome.mockResolvedValue('failed');
+    await alertSignupNetworkBurst({ network: CONSUMER, userId: 'u1', method: 'otc' });
+    expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteByKey).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteByKey).toHaveBeenCalledWith('signup-network-alert:ip:hash:203.0.113.7');
+  });
+
+  it('records nothing when shadow recording is switched off, and still alerts', async () => {
+    mocks.settings = { shadowDetectionRecordingEnabled: 'false' };
+    await alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' });
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
+    expect(mocks.claimDedup).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^shadow-detection:/),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mocks.postMessageToSlackWithOutcome).toHaveBeenCalledTimes(2);
+  });
+
+  it('records nothing when the alerts are switched off', async () => {
+    mocks.settings = { signupNetworkAlertsEnabled: 'false' };
+    await alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' });
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
+  });
+
+  it('still alerts when recording fails, and logs the failure', async () => {
+    mocks.recordShadowDetection.mockRejectedValue(new Error('db down'));
+    await expect(alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
+    expect(mocks.postMessageToSlackWithOutcome).toHaveBeenCalledTimes(2);
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      '[signup-network-alerts] Shadow detection was not recorded',
+      expect.objectContaining({ error: expect.any(Error) })
+    );
+  });
+
+  it('never writes to the account, its keys or its credits', async () => {
+    await alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' });
+    expect(mocks.recordShadowDetection).toHaveBeenCalled();
+    expect(mocks.userWrite).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildSignupNetworkShadowDetection', () => {
+  const detectedAt = new Date('2026-10-01T00:00:00Z');
+
+  it('describes a network burst with the network it came from', () => {
+    expect(
+      buildSignupNetworkShadowDetection({
+        burst: { scope: 'asn', signups: 3, max: 2, hosting: true },
+        network: HOSTED,
+        userId: 'u1',
+        windowMinutes: 60,
+        detectedAt,
+      })
+    ).toEqual({
+      detector: 'signupNetworkBurst',
+      policyVersion: 1,
+      wouldAction: 'contain',
+      summary: '3 self-serve signups from one network in 60 minutes',
+      userIds: ['u1'],
+      network: { ip: '203.0.113.7', asn: 64500, asnOrg: 'Example Cloud', country: 'US', hosting: true },
+      signals: [{ key: 'asnSignups', label: 'Self-serve signups from this network', observed: 3, threshold: 2 }],
+      windowMinutes: 60,
+      detectedAt,
+    });
+  });
+
+  it('reports a truncated count as a floor with no observed number', () => {
+    const detection = buildSignupNetworkShadowDetection({
+      burst: { scope: 'ip', signups: Infinity, max: 1 },
+      network: CONSUMER,
+      userId: 'u1',
+      windowMinutes: 180,
+      detectedAt,
+    });
+    expect(detection.summary).toBe('more than 5,000 self-serve signups from one IP in 180 minutes');
+    expect(detection.signals[0]).toMatchObject({ observed: null, threshold: 1 });
+    expect(detection.network?.hosting).toBe(false);
   });
 });
