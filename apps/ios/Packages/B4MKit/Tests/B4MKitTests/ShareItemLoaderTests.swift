@@ -155,7 +155,8 @@ final class ShareItemLoaderTests: XCTestCase {
 
   func testHEICNamesAreRewrittenAfterTheTranscode() {
     let location = URL(fileURLWithPath: "/tmp/IMG.jpg")
-    XCTAssertEqual(ShareItemLoader.fileName(suggested: "IMG_0001.HEIC", location: location, type: .jpeg), "IMG_0001.jpg")
+    XCTAssertEqual(
+      ShareItemLoader.fileName(suggested: "IMG_0001.HEIC", location: location, type: .jpeg), "IMG_0001.jpg")
     XCTAssertEqual(ShareItemLoader.fileName(suggested: nil, location: location, type: .jpeg), "IMG.jpg")
     XCTAssertEqual(ShareItemLoader.fileName(suggested: "a/b", location: location, type: nil), "a-b")
   }
@@ -206,5 +207,50 @@ final class ShareItemLoaderTests: XCTestCase {
     CGImageDestinationAddImage(sink, image, nil)
     guard CGImageDestinationFinalize(sink) else { throw XCTSkip("Encoder failed for \(type.identifier)") }
     return url
+  }
+}
+
+final class LocalFileAttachmentTests: XCTestCase {
+  func testAnAppProducedPhotoLoadsLikeASharedOne() async throws {
+    let temp = TempDirectory()
+    let file = temp.file("IMG_0001.jpg", contents: Data([0xFF, 0xD8, 0xFF, 0xD9]))
+    let item = try await ShareItemLoader().load(LocalFileAttachment(fileURL: file, type: .jpeg))
+    guard case .image(let shared) = item else { return XCTFail("expected an image, got \(item)") }
+    XCTAssertEqual(shared.mimeType, "image/jpeg")
+    XCTAssertEqual(shared.fileName, "IMG_0001.jpg")
+    XCTAssertEqual(shared.byteCount, 4)
+  }
+
+  func testAnEmptyFileIsRejected() async {
+    let temp = TempDirectory()
+    let file = temp.file("empty.jpg", contents: Data())
+    do {
+      _ = try await ShareItemLoader().load(LocalFileAttachment(fileURL: file, type: .jpeg))
+      XCTFail("expected an error")
+    } catch {
+      XCTAssertEqual(error as? ShareItemLoadError, .empty)
+    }
+  }
+}
+
+final class ReattachTests: XCTestCase {
+  func testAForeignSessionIsAcknowledgedAtOnce() async {
+    let temp = TempDirectory()
+    let engine = CaptureEngine(
+      store: FileUploadJobStore(directory: temp.url), api: FakeCaptureAPI(),
+      ownIdentifier: BackgroundSessionIdentifier.app, makeUploader: { _ in FakeUploader() })
+    let acknowledged = expectation(description: "completion called")
+    await engine.reattach(identifier: "com.example.other") { acknowledged.fulfill() }
+    await fulfillment(of: [acknowledged], timeout: 1)
+  }
+
+  func testACaptureSessionWithoutARealUploaderIsAcknowledgedToo() async {
+    let temp = TempDirectory()
+    let engine = CaptureEngine(
+      store: FileUploadJobStore(directory: temp.url), api: FakeCaptureAPI(),
+      ownIdentifier: BackgroundSessionIdentifier.app, makeUploader: { _ in FakeUploader() })
+    let acknowledged = expectation(description: "completion called")
+    await engine.reattach(identifier: BackgroundSessionIdentifier.shareExtension) { acknowledged.fulfill() }
+    await fulfillment(of: [acknowledged], timeout: 1)
   }
 }

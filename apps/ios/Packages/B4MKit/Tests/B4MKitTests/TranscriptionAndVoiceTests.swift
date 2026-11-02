@@ -35,7 +35,8 @@ final class TranscriptionClientTests: XCTestCase {
     XCTAssertEqual(text, "hello world")
 
     let requests = await transport.requests
-    XCTAssertEqual(requests.map { $0.url?.host() ?? "" }, ["app.example.test", "bucket.s3.amazonaws.com", "app.example.test"])
+    XCTAssertEqual(
+      requests.map { $0.url?.host() ?? "" }, ["app.example.test", "bucket.s3.amazonaws.com", "app.example.test"])
     let mint = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(requests[0].httpBody)) as? [String: Any])
     XCTAssertEqual(mint["mime_type"] as? String, "audio/mp4")
     XCTAssertEqual(mint["file_size"] as? Int, 100)
@@ -60,7 +61,8 @@ final class TranscriptionClientTests: XCTestCase {
       let range = try XCTUnwrap(body.range(of: #"name="\#(field)""#), "missing \(field)")
       XCTAssertLessThan(range.lowerBound, fileRange.lowerBound, "\(field) must precede the file")
     }
-    XCTAssertTrue(body.hasSuffix("AUDIO\r\n--" + String(contentType.dropFirst("multipart/form-data; boundary=".count)) + "--\r\n"))
+    XCTAssertTrue(
+      body.hasSuffix("AUDIO\r\n--" + String(contentType.dropFirst("multipart/form-data; boundary=".count)) + "--\r\n"))
   }
 
   func testAnEmptyRecordingNeverReachesTheNetwork() async {

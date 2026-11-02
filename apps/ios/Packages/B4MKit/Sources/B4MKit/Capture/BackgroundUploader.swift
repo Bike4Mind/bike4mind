@@ -96,7 +96,12 @@ public final class URLSessionBackgroundUploader: BackgroundUploading, @unchecked
   private final class Relay: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     let stream: AsyncStream<UploadEvent>
     private let continuation: AsyncStream<UploadEvent>.Continuation
-    private let systemCompletion = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
+    private struct Completion {
+      var handler: (@Sendable () -> Void)?
+      /// The session finished delivering events before the system's handler was adopted.
+      var eventsFinishedEarly = false
+    }
+    private let systemCompletion = OSAllocatedUnfairLock(initialState: Completion())
 
     override init() {
       (stream, continuation) = AsyncStream<UploadEvent>.makeStream(bufferingPolicy: .unbounded)
@@ -104,7 +109,15 @@ public final class URLSessionBackgroundUploader: BackgroundUploading, @unchecked
     }
 
     func setSystemCompletion(_ handler: @escaping @Sendable () -> Void) {
-      systemCompletion.withLock { $0 = handler }
+      let runNow = systemCompletion.withLock { completion in
+        if completion.eventsFinishedEarly {
+          completion.eventsFinishedEarly = false
+          return true
+        }
+        completion.handler = handler
+        return false
+      }
+      if runNow { DispatchQueue.main.async(execute: handler) }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
@@ -116,8 +129,12 @@ public final class URLSessionBackgroundUploader: BackgroundUploading, @unchecked
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-      guard let handler = systemCompletion.withLock({ value in defer { value = nil }; return value }) else { return }
-      DispatchQueue.main.async(execute: handler)
+      let handler = systemCompletion.withLock { completion in
+        defer { completion.handler = nil }
+        if completion.handler == nil { completion.eventsFinishedEarly = true }
+        return completion.handler
+      }
+      if let handler { DispatchQueue.main.async(execute: handler) }
     }
   }
 }

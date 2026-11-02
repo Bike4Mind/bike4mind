@@ -17,7 +17,7 @@ public struct UploadTicket: Hashable, Sendable, Codable {
 /// The server's scan state of an uploaded file; a file is usable once it is `clean`.
 public enum RemoteFileStatus: String, Sendable, Equatable {
   case pending, scanning, clean, blocked
-  /// A record that predates scanning (`moderation_status: null`); usable.
+  /// A record that predates scanning (`moderationStatus: null`); usable.
   case unscanned
 }
 
@@ -80,19 +80,19 @@ public struct CaptureClient: CaptureAPI {
   // MARK: - Wire types
 
   private struct CreateUploadBody: Encodable {
-    let file_name: String
-    let mime_type: String
-    let file_size: Int
+    let fileName: String
+    let mimeType: String
+    let fileSize: Int
   }
 
   private struct CreateUploadReply: Decodable {
     let id: String
-    let upload_url: String
-    let upload_url_expires_at: String
+    let uploadUrl: String
+    let uploadUrlExpiresAt: String
   }
 
   private struct FileReply: Decodable {
-    let moderation_status: String?
+    let moderationStatus: String?
   }
 
   private struct NotesBody: Encodable {
@@ -103,11 +103,11 @@ public struct CaptureClient: CaptureAPI {
     struct Lake: Decodable {
       let id: String
       let name: String
-      let file_count: Int
-      let built_in: Bool
+      let fileCount: Int
+      let builtIn: Bool
     }
     let data: [Lake]
-    let next_cursor: String?
+    let nextCursor: String?
   }
 
   private struct ErrorReply: Decodable {
@@ -117,12 +117,12 @@ public struct CaptureClient: CaptureAPI {
   // MARK: - Operations
 
   public func createUpload(fileName: String, mimeType: String, byteCount: Int) async throws -> UploadTicket {
-    let body = try Self.encode(CreateUploadBody(file_name: fileName, mime_type: mimeType, file_size: byteCount))
+    let body = try Self.encode(CreateUploadBody(fileName: fileName, mimeType: mimeType, fileSize: byteCount))
     let response = try await requester.send(method: "POST", path: "api/v1/files", jsonBody: body)
     try Self.require(201, response)
-    guard let reply = try? JSONDecoder().decode(CreateUploadReply.self, from: response.body),
-      let url = URL(string: reply.upload_url),
-      let expiresAt = (try? LenientISO8601DateTranscoder().decode(reply.upload_url_expires_at))
+    guard let reply = try? Self.decoder.decode(CreateUploadReply.self, from: response.body),
+      let url = URL(string: reply.uploadUrl),
+      let expiresAt = (try? LenientISO8601DateTranscoder().decode(reply.uploadUrlExpiresAt))
     else { throw APIError.malformedResponse }
     return UploadTicket(fileID: reply.id, uploadURL: url, expiresAt: expiresAt)
   }
@@ -130,10 +130,10 @@ public struct CaptureClient: CaptureAPI {
   public func fileStatus(fileID: String) async throws -> RemoteFileStatus {
     let response = try await requester.send(method: "GET", path: "api/v1/files/\(fileID)")
     try Self.require(200, response)
-    guard let reply = try? JSONDecoder().decode(FileReply.self, from: response.body) else {
+    guard let reply = try? Self.decoder.decode(FileReply.self, from: response.body) else {
       throw APIError.malformedResponse
     }
-    guard let raw = reply.moderation_status else { return .unscanned }
+    guard let raw = reply.moderationStatus else { return .unscanned }
     return RemoteFileStatus(rawValue: raw) ?? .pending
   }
 
@@ -148,13 +148,13 @@ public struct CaptureClient: CaptureAPI {
     if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
     let response = try await requester.send(method: "GET", path: "api/v1/data-lakes", query: query)
     try Self.require(200, response)
-    guard let reply = try? JSONDecoder().decode(LakeListReply.self, from: response.body) else {
+    guard let reply = try? Self.decoder.decode(LakeListReply.self, from: response.body) else {
       throw APIError.malformedResponse
     }
     let lakes = reply.data.map {
-      LakeSummary(id: $0.id, name: $0.name, fileCount: $0.file_count, isBuiltIn: $0.built_in)
+      LakeSummary(id: $0.id, name: $0.name, fileCount: $0.fileCount, isBuiltIn: $0.builtIn)
     }
-    return Page(items: lakes, nextCursor: reply.next_cursor)
+    return Page(items: lakes, nextCursor: reply.nextCursor)
   }
 
   public func addFileToLake(lakeID: String, fileID: String) async throws {
@@ -175,8 +175,15 @@ public struct CaptureClient: CaptureAPI {
 
   private static func encode(_ value: some Encodable) throws -> Data {
     let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
     encoder.outputFormatting = .sortedKeys
     return try encoder.encode(value)
+  }
+
+  private static var decoder: JSONDecoder {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return decoder
   }
 
   private static func require(_ status: Int, _ response: AuthorizedRequester.Response) throws {
@@ -186,7 +193,7 @@ public struct CaptureClient: CaptureAPI {
   }
 
   private static func rejection(_ response: AuthorizedRequester.Response) -> CaptureError {
-    let message = (try? JSONDecoder().decode(ErrorReply.self, from: response.body))?.error
+    let message = (try? Self.decoder.decode(ErrorReply.self, from: response.body))?.error
     return .rejected(message: message ?? "The server could not accept this.")
   }
 }

@@ -16,6 +16,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     return true
   }
 
+  /// The system relaunched the app to deliver background upload events (a share-extension or app upload that
+  /// finished while the process was gone). The completion handler is called once they are all delivered.
+  func application(
+    _ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+    completionHandler: @escaping () -> Void
+  ) {
+    let completion = UncheckedSendableBox(completionHandler)
+    Task { @MainActor in
+      guard let services = Self.services else { return completion.value() }
+      services.reattachCaptureSession(identifier: identifier) { completion.value() }
+    }
+  }
+
   func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
     Task { @MainActor in await Self.services?.push.didReceiveDeviceToken(deviceToken) }
   }
@@ -50,4 +63,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
       completionHandler()
     }
   }
+}
+
+/// The system's completion handler is not marked Sendable but is documented as callable from the main thread,
+/// which is where it is invoked.
+private struct UncheckedSendableBox<Value>: @unchecked Sendable {
+  let value: Value
+  init(_ value: Value) { self.value = value }
 }

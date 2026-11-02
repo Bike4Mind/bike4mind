@@ -28,8 +28,10 @@ final class UploadJobStoreTests: XCTestCase {
 
   func testLoadAllIsOrderedByCreationAndSkipsDamagedRecords() throws {
     let store = FileUploadJobStore(directory: temp.url)
-    let later = UploadJob(destination: destination, payload: .message("b"), note: nil, now: Date(timeIntervalSince1970: 20))
-    let earlier = UploadJob(destination: destination, payload: .message("a"), note: nil, now: Date(timeIntervalSince1970: 10))
+    let later = UploadJob(
+      destination: destination, payload: .message("b"), note: nil, now: Date(timeIntervalSince1970: 20))
+    let earlier = UploadJob(
+      destination: destination, payload: .message("a"), note: nil, now: Date(timeIntervalSince1970: 10))
     try store.save(later)
     try store.save(earlier)
     let jobsDirectory = temp.url.appending(path: "Capture/jobs")
@@ -97,7 +99,8 @@ final class SharedContainerTests: XCTestCase {
   func testTheContainerFallsBackToAWritableDirectory() throws {
     let directory = SharedContainer.directory()
     var isDirectory: ObjCBool = false
-    XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path(percentEncoded: false), isDirectory: &isDirectory))
+    XCTAssertTrue(
+      FileManager.default.fileExists(atPath: directory.path(percentEncoded: false), isDirectory: &isDirectory))
     XCTAssertTrue(isDirectory.boolValue)
     let probe = directory.appending(path: ".probe-\(UUID().uuidString)")
     try Data([1]).write(to: probe)
@@ -121,12 +124,21 @@ final class SharedContainerTests: XCTestCase {
 
   func testTheKeychainStoreAcceptsAnAccessGroupAndTheFallbackBehavesLikeBefore() throws {
     // With no group the store is exactly the pre-extension store; round-trips are covered in TokenStoreTests.
-    let store = KeychainTokenStore(service: "com.bike4mind.tests.\(UUID().uuidString)", accessGroup: KeychainAccessGroup.resolved())
-    XCTAssertNoThrow(try store.refreshToken())
+    // A hostless simulator test bundle has no keychain entitlement at all, so only the macOS host can read it.
+    let store = KeychainTokenStore(
+      service: "com.bike4mind.tests.\(UUID().uuidString)", accessGroup: KeychainAccessGroup.resolved())
+    let token: String?
+    do {
+      token = try store.refreshToken()
+    } catch let error as KeychainError where error.status == errSecMissingEntitlement {
+      throw XCTSkip("no keychain entitlement in this test host")
+    }
+    XCTAssertNil(token)
   }
 
   func testShareItemAccessors() {
-    let file = SharedFile(fileURL: URL(fileURLWithPath: "/tmp/a.png"), fileName: "a.png", mimeType: "image/png", byteCount: 1)
+    let file = SharedFile(
+      fileURL: URL(fileURLWithPath: "/tmp/a.png"), fileName: "a.png", mimeType: "image/png", byteCount: 1)
     XCTAssertEqual(ShareItem.image(file).file, file)
     XCTAssertNil(ShareItem.text("x").file)
     XCTAssertEqual(ShareItem.pdf(file).kindLabel, "PDF")

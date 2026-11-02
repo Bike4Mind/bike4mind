@@ -106,7 +106,9 @@ public actor CaptureEngine {
   /// Enqueues, then mints tickets and hands every file to the background session. Returns when the bytes are
   /// in the system's hands (or the first problem), which is as long as the share extension needs to stay alive.
   @discardableResult
-  public func submit(_ items: [ShareItem], to destination: CaptureDestination, note: String?) async throws
+  public func submit(
+    _ items: [ShareItem], to destination: CaptureDestination, note: String?
+  ) async throws
     -> [UploadJob]
   {
     let jobs = try enqueue(items, to: destination, note: note)
@@ -124,6 +126,19 @@ public actor CaptureEngine {
   /// The system relaunched the app to deliver events of a background session (`identifier`).
   public func reattach(identifier: String) {
     _ = uploader(for: identifier)
+  }
+
+  /// `handleEventsForBackgroundURLSession`: re-creates the session and hands it the system's completion
+  /// handler, which it calls once every pending event has been delivered. Foreign identifiers are acknowledged
+  /// immediately so the system is never left waiting.
+  public func reattach(identifier: String, systemCompletion: @escaping @Sendable () -> Void) {
+    guard BackgroundSessionIdentifier.isCaptureSession(identifier),
+      let real = uploader(for: identifier) as? URLSessionBackgroundUploader
+    else {
+      systemCompletion()
+      return
+    }
+    real.adoptSystemCompletionHandler(systemCompletion)
   }
 
   public func retry(jobID: UUID) async {

@@ -22,7 +22,8 @@ final class CaptureClientTests: XCTestCase {
             .utf8)
       )
     }
-    let ticket = try await client(transport).createUpload(fileName: "a b.pdf", mimeType: "application/pdf", byteCount: 42)
+    let ticket = try await client(transport).createUpload(
+      fileName: "a b.pdf", mimeType: "application/pdf", byteCount: 42)
 
     XCTAssertEqual(ticket.fileID, "f1")
     XCTAssertEqual(ticket.uploadURL.host(), "bucket.s3.amazonaws.com")

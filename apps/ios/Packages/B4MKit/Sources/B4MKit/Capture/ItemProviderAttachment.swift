@@ -18,11 +18,26 @@ public struct ItemProviderAttachment: AttachmentSource, @unchecked Sendable {
   public var suggestedName: String? { provider.suggestedName }
 
   public func loadURL() async throws -> URL {
+    // `loadItem` can hand back an archived NSURL (a binary plist) rather than a URL; `loadObject` decodes
+    // every representation the system produces.
+    if provider.canLoadObject(ofClass: URL.self), let url = try? await loadObjectURL() { return url }
     let item = try await provider.loadItem(forTypeIdentifier: "public.url")
     if let url = item as? URL { return url }
     if let string = item as? String, let url = URL(string: string) { return url }
     if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) { return url }
     throw ShareItemLoadError.unsupported
+  }
+
+  private func loadObjectURL() async throws -> URL {
+    try await withCheckedThrowingContinuation { continuation in
+      _ = provider.loadObject(ofClass: URL.self) { url, error in
+        if let url {
+          continuation.resume(returning: url)
+        } else {
+          continuation.resume(throwing: error ?? ShareItemLoadError.unsupported)
+        }
+      }
+    }
   }
 
   public func loadText() async throws -> String {

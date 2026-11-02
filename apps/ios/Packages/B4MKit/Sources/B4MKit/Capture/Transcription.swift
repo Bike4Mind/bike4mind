@@ -31,19 +31,33 @@ public struct TranscriptionClient: TranscriptionService {
     self.transport = transport
   }
 
+  // Explicit keys, not a snake-case strategy: `uploadFields` holds S3 form-field names that must stay verbatim.
   private struct UploadRequest: Encodable {
-    let mime_type: String
-    let file_size: Int
+    let mimeType: String
+    let fileSize: Int
+
+    enum CodingKeys: String, CodingKey {
+      case mimeType = "mime_type"
+      case fileSize = "file_size"
+    }
   }
 
   private struct UploadReply: Decodable {
-    let upload_url: String
-    let upload_fields: [String: String]
-    let file_key: String
+    let uploadUrl: String
+    let uploadFields: [String: String]
+    let fileKey: String
+
+    enum CodingKeys: String, CodingKey {
+      case uploadUrl = "upload_url"
+      case uploadFields = "upload_fields"
+      case fileKey = "file_key"
+    }
   }
 
   private struct TranscribeRequest: Encodable {
-    let file_key: String
+    let fileKey: String
+
+    enum CodingKeys: String, CodingKey { case fileKey = "file_key" }
   }
 
   private struct TextReply: Decodable {
@@ -61,17 +75,17 @@ public struct TranscriptionClient: TranscriptionService {
 
     let mint = try await requester.send(
       method: "POST", path: "api/v1/transcriptions/uploads",
-      jsonBody: try JSONEncoder().encode(UploadRequest(mime_type: mimeType, file_size: audio.count)))
+      jsonBody: try JSONEncoder().encode(UploadRequest(mimeType: mimeType, fileSize: audio.count)))
     try Self.require(201, mint)
     guard let ticket = try? JSONDecoder().decode(UploadReply.self, from: mint.body),
-      let uploadURL = URL(string: ticket.upload_url)
+      let uploadURL = URL(string: ticket.uploadUrl)
     else { throw APIError.malformedResponse }
 
-    try await upload(audio, fileName: audioFile.lastPathComponent, fields: ticket.upload_fields, to: uploadURL)
+    try await upload(audio, fileName: audioFile.lastPathComponent, fields: ticket.uploadFields, to: uploadURL)
 
     let response = try await requester.send(
       method: "POST", path: "api/v1/transcriptions",
-      jsonBody: try JSONEncoder().encode(TranscribeRequest(file_key: ticket.file_key)))
+      jsonBody: try JSONEncoder().encode(TranscribeRequest(fileKey: ticket.fileKey)))
     try Self.require(200, response)
     guard let reply = try? JSONDecoder().decode(TextReply.self, from: response.body) else {
       throw APIError.malformedResponse
@@ -103,7 +117,9 @@ public struct TranscriptionClient: TranscriptionService {
     } catch is URLError {
       throw APIError.offline
     }
-    guard (200..<300).contains(status) else { throw TranscriptionError.failed(message: "The recording did not upload.") }
+    guard (200..<300).contains(status) else {
+      throw TranscriptionError.failed(message: "The recording did not upload.")
+    }
   }
 
   private static func require(_ status: Int, _ response: AuthorizedRequester.Response) throws {

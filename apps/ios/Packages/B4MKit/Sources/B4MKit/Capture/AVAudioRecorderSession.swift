@@ -24,7 +24,7 @@
 
     public func start() async throws {
       let session = AVAudioSession.sharedInstance()
-      try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+      try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
       try session.setActive(true)
       let url = FileManager.default.temporaryDirectory.appending(path: "voice-\(UUID().uuidString).m4a")
       let settings: [String: Any] = [
@@ -39,7 +39,10 @@
     }
 
     public func stop() async throws -> VoiceRecording {
-      guard let recorder = lock.withLock({ () -> AVAudioRecorder? in defer { self.recorder = nil }; return self.recorder })
+      guard
+        let recorder = lock.withLock({ () -> AVAudioRecorder? in
+          defer { self.recorder = nil }; return self.recorder
+        })
       else { throw VoiceCaptureError.recordingFailed }
       let duration = recorder.currentTime
       recorder.stop()
@@ -48,7 +51,10 @@
     }
 
     public func cancel() async {
-      guard let recorder = lock.withLock({ () -> AVAudioRecorder? in defer { self.recorder = nil }; return self.recorder })
+      guard
+        let recorder = lock.withLock({ () -> AVAudioRecorder? in
+          defer { self.recorder = nil }; return self.recorder
+        })
       else { return }
       recorder.stop()
       recorder.deleteRecording()

@@ -26,6 +26,7 @@ private struct SessionsListScreen: View {
   var body: some View {
     content
       .navigationTitle("Sessions")
+      .toolbar { ToolbarItem(placement: .primaryAction) { CaptureMenu() } }
       .task { await model.load() }
       .refreshable { await model.refresh() }
   }
