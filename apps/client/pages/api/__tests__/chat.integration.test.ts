@@ -297,7 +297,8 @@ function fire({
   apiKey = VALID_KEY as string | null,
   bearer = null as string | null,
   body = { message: 'hello', sessionId: 'sess-1' },
-}: { apiKey?: string | null; bearer?: string | null; body?: unknown } = {}) {
+  cookie = null as string | null,
+}: { apiKey?: string | null; bearer?: string | null; body?: unknown; cookie?: string | null } = {}) {
   const payload = JSON.stringify(body);
   const { req, res } = createMocks(
     {
@@ -308,6 +309,7 @@ function fire({
         'content-length': String(Buffer.byteLength(payload)),
         ...(apiKey ? { 'x-api-key': apiKey } : {}),
         ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+        ...(cookie ? { cookie } : {}),
       },
       body,
     },
@@ -516,6 +518,29 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect((mockInvoke.mock.calls[0][0] as { authOrigin?: string }).authOrigin).toBe('session');
     expect((mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBeUndefined();
     expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(false);
+  });
+
+  describe('the visit handed to the queued turn (its first_value names it)', () => {
+    const visitId = 'a'.repeat(32);
+    const invokedVisit = () => (mockInvoke.mock.calls[0][0] as { visitId?: string }).visitId;
+
+    it("hands invoke() a browser caller's visit cookie", async () => {
+      const { req, res } = fire({ apiKey: null, cookie: `b4m_vid=${visitId}` });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedVisit()).toBe(visitId);
+    });
+
+    it.each([
+      ['no visit cookie', null, null],
+      ['an API key, even with a visit cookie', VALID_KEY, `b4m_vid=${visitId}`],
+    ])('hands it no visit for %s', async (_, apiKey, cookie) => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ apiKey, cookie });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedVisit()).toBeUndefined();
+    });
   });
 
   it('accepts an ai:generate-only key (2xx) — proves OR semantics', async () => {
