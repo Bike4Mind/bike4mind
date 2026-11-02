@@ -1,4 +1,4 @@
-import { parseHubManifest, type HubManifest } from '@bike4mind/common';
+import { parseHubManifest, type HubManifest } from '@bike4mind/common/modelHub';
 import {
   CURATED_MAX_MANIFEST_BYTES,
   CURATED_MAX_SIGNATURE_BYTES,
