@@ -59,6 +59,22 @@ describe('curated:check-build', () => {
     expect(await main([dir], {}, log)).toBe(1);
   });
 
+  it('scans each --also-scan dir for the test keys and fails on one that is missing', async () => {
+    const extra = await mkdtemp(path.join(tmpdir(), 'curated-extra-'));
+    try {
+      await writeFile(path.join(extra, 'index.mjs'), 'export const keys = [];');
+      expect(await main([dir, '--also-scan', extra], {}, log)).toBe(0);
+      await writeFile(path.join(extra, 'index.mjs'), `export const id = "${curatedDevKey().keyId}";`);
+      expect(await main([dir, '--also-scan', extra], {}, log)).toBe(1);
+      expect(lines).toContain(`${path.join(extra, 'index.mjs')}: contains the curated signing test key id`);
+      expect(await main([dir], {}, log)).toBe(0);
+      expect(await main([dir, '--also-scan', path.join(extra, 'missing')], {}, log)).toBe(1);
+      expect(lines.at(-1)).toMatch(/cannot be scanned/);
+    } finally {
+      await rm(extra, { recursive: true, force: true });
+    }
+  });
+
   it('fails a flagged build, a non-https baked URL, and a build without its build info', async () => {
     await info({ devKeys: true, manifestUrl: 'http://127.0.0.1:4321/latest.json' });
     expect(await buildInfoProblems(dir)).toEqual([

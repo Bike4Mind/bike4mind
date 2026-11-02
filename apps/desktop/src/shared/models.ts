@@ -226,6 +226,7 @@ export interface CuratedPickView {
   recommended: boolean;
 }
 
+// The curated types below mirror b4m-core/local-models curatedSource/CuratedListSource.ts; keep them in sync.
 /** 'off' when this build has no list URL or trusted key, or the user turned checks off; rejected lists show as failed. */
 export type CuratedCheckStatus = 'off' | 'idle' | 'checking' | 'up-to-date' | 'updated' | 'failed';
 

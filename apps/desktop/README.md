@@ -322,6 +322,7 @@ Local testing can build with `B4M_CURATED_DEV_KEYS=1` in the shell and use the r
 The override is ignored in packaged apps and builds without test keys. Test-key
 builds use a separate cache directory and are rejected by `curated:check-build`;
 never enable the dev flag for a release.
+A dev build that cached a list under the old signature format drops it on next start, and a republish at a lower sequence is refused until the `curated-test-keys/` directory is deleted.
 
 The validation job generates `latest-mac.yml`, `latest-linux.yml` and `latest.yml` (Windows) from the actual
 installer bytes, with SHA-512 and size. ZIP and setup.exe blockmaps are mandatory; AppImage blockmaps
