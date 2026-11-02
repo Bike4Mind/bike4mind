@@ -21,7 +21,9 @@ Before a desktop release, and whenever changing this catalog:
    with `CURATED_BUILD=gemma-4-e4b/qat-q4-0` when testing different minimum versions. The report logs the
    actual daemon version and declared minimum; a pass on a newer version does not prove the minimum.
 5. Review upstream changes, licenses and model behavior before updating pins. Increment `sequence`,
-   update `updatedAt` and the changelog, run catalog/unit tests, then ship a desktop release. Signed publishing tools are described in
+   update `updatedAt` and the changelog, run catalog/unit tests (after editing the manifest Zod schema, run
+   `pnpm --filter @bike4mind/common build` and then `pnpm --filter @bike4mind/scripts curated:schema` to regenerate
+   `schema/curated-v2.schema.json`), then ship a desktop release. Signed publishing tools are described in
    [packages/scripts](../../packages/scripts/README.md); the production publishing workflow and
    storage configuration are separate work.
 

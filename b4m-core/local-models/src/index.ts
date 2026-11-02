@@ -239,6 +239,7 @@ export {
   ollamaEnvValue,
   ollamaFitConfidence,
   type OllamaEnvironment,
+  type OllamaEnvKey,
 } from './ollamaSettings';
 export {
   MODEL_HOST_DROP_IN,
