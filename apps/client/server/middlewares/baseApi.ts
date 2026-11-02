@@ -256,10 +256,6 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // and 403 for an OAuth token unless this route opted in via `oauthScopes`.
     router.use(oauthRouteGate({ oauthScopes: resolvedOptions.oauthScopes }));
 
-    // After baseApi's auth gates, so a request they refuse never spends the user's write budget. Requests
-    // refused later (a route's own rateLimit, validation, handler errors) still count.
-    if (resolvedOptions.defaultWriteRateLimit !== false) router.use(defaultWriteRateLimit);
-
     // Fire-and-forget analytics: ≤1 emit/user/UTC-day per Lambda instance (best-effort).
     // Gates on human JWT only; no-op when B4M_ANALYTICS_ENABLED is false or secrets unset.
     router.use(analyticsMiddleware());
@@ -268,6 +264,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // checkout, every AI completion route, and whatever spends money or compute next, with no per-route
     // list to keep current. Anonymous entry points (sign-in, signup, embed) opt in with checkBlockedIP.
     router.use(checkBlockedIP({ surface: 'app', writesOnly: true, exemptAdmins: true }));
+
+    // After baseApi's auth and IP-block gates, so a request they refuse never spends the user's write budget.
+    // Requests refused later (a route's own rateLimit, validation, handler errors) still count.
+    if (resolvedOptions.defaultWriteRateLimit !== false) router.use(defaultWriteRateLimit);
   }
 
   // TODO: idempotency middleware disabled - it was creating a lot of idempotency keys in local
