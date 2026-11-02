@@ -8,7 +8,7 @@ import os
 /// `accessToken()` is the only way any other code obtains a bearer token.
 @MainActor
 @Observable
-public final class AuthController {
+public final class AuthController: AccessTokenProviding {
   public enum State: Equatable, Sendable {
     /// The Keychain has not been read yet.
     case restoring
@@ -155,6 +155,15 @@ public final class AuthController {
   /// `accessToken()` refreshes.
   public func invalidateAccessToken() {
     cachedAccessToken = nil
+  }
+
+  /// The server refused a token minted moments ago, so refreshing again cannot help. Ends the session
+  /// the same way a rejected refresh does.
+  public func sessionRejected() {
+    guard case .signedOut = state else {
+      endSession(.sessionEnded)
+      return
+    }
   }
 
   private func refreshSession() async throws -> String {

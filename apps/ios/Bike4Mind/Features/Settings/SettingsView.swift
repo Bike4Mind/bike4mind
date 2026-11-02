@@ -8,6 +8,8 @@ struct SettingsView: View {
   var body: some View {
     @Bindable var auth = auth
     Form {
+      CreditsSection()
+
       Section {
         Toggle("App Lock", isOn: $auth.isAppLockEnabled)
           .disabled(!auth.canUseAppLock)

@@ -1,0 +1,129 @@
+import B4MKit
+import SwiftUI
+
+/// One chat bubble. Takes a `TranscriptMessage` and nothing else, so the live chat screen can render
+/// streaming replies with the same view by swapping the message's text.
+struct MessageBubble: View {
+  let message: TranscriptMessage
+
+  private var isUser: Bool { message.role == .user }
+
+  var body: some View {
+    HStack(alignment: .bottom, spacing: 0) {
+      if isUser { Spacer(minLength: Tokens.Spacing.xxl) }
+      VStack(alignment: isUser ? .trailing : .leading, spacing: Tokens.Spacing.xs) {
+        bubble
+        footer
+      }
+      if !isUser { Spacer(minLength: Tokens.Spacing.xxl) }
+    }
+    .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(accessibilityLabel)
+  }
+
+  @ViewBuilder
+  private var bubble: some View {
+    VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
+      if message.text.isEmpty {
+        // A turn still working has no text yet; the badge below says why.
+        Text(" ")
+      } else {
+        Text(MarkdownText.attributed(message.text))
+          .textSelection(.enabled)
+      }
+      if let action = message.pendingAction {
+        PendingActionCard(action: action)
+      }
+    }
+    .padding(.horizontal, Tokens.Spacing.m)
+    .padding(.vertical, Tokens.Spacing.s + 2)
+    .background(isUser ? Tokens.Palette.userBubble : Tokens.Palette.assistantBubble)
+    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous))
+    .frame(maxWidth: Tokens.Layout.bubbleMaxWidth, alignment: isUser ? .trailing : .leading)
+  }
+
+  @ViewBuilder
+  private var footer: some View {
+    HStack(spacing: Tokens.Spacing.s) {
+      if let badge = message.badge {
+        StatusBadge(badge: badge)
+      }
+      Text(RelativeTime.describe(message.createdAt))
+      if !isUser, let credits = message.creditsUsed {
+        Text("\u{00B7}").accessibilityHidden(true)
+        Text("\(CreditsViewModel.formatted(credits)) credits")
+      }
+    }
+    .font(Tokens.Typography.meta)
+    .foregroundStyle(Tokens.Palette.secondaryText)
+  }
+
+  private var accessibilityLabel: String {
+    let speaker = isUser ? "You" : "Bike4Mind"
+    return "\(speaker): \(message.text)"
+  }
+}
+
+struct StatusBadge: View {
+  let badge: TranscriptMessage.Badge
+
+  var body: some View {
+    Label(title, systemImage: symbol)
+      .font(Tokens.Typography.meta.weight(.semibold))
+      .foregroundStyle(tint)
+      .labelStyle(.titleAndIcon)
+  }
+
+  private var title: String {
+    switch badge {
+    case .queued: "Queued"
+    case .working: "Working"
+    case .stopped: "Stopped"
+    case .failed: "Failed"
+    case .awaitingApproval: "Needs approval"
+    case .outOfCredits(let code): code == .spendCapExceeded ? "Spend cap reached" : "Out of credits"
+    }
+  }
+
+  private var symbol: String {
+    switch badge {
+    case .queued: "clock"
+    case .working: "ellipsis.circle"
+    case .stopped: "stop.circle"
+    case .failed, .outOfCredits: "exclamationmark.triangle"
+    case .awaitingApproval: "hand.raised"
+    }
+  }
+
+  private var tint: Color {
+    switch badge {
+    case .queued, .working, .stopped: Tokens.Palette.secondaryText
+    case .failed: Tokens.Palette.destructive
+    case .awaitingApproval, .outOfCredits: Tokens.Palette.warning
+    }
+  }
+}
+
+/// Shows which tool is waiting and with what. Approve/deny belongs to chat (M3).
+private struct PendingActionCard: View {
+  let action: PendingAction
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+      Label(action.tool, systemImage: "wrench.and.screwdriver")
+        .font(Tokens.Typography.caption.weight(.semibold))
+      ForEach(action.parameters.sorted(by: { $0.key < $1.key }), id: \.key) { name, value in
+        Text("\(name): \(value)")
+          .font(Tokens.Typography.meta.monospaced())
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .lineLimit(2)
+      }
+    }
+    .padding(Tokens.Spacing.s)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Tokens.Palette.background.opacity(0.6))
+    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous))
+    .accessibilityIdentifier("message-pending-action")
+  }
+}

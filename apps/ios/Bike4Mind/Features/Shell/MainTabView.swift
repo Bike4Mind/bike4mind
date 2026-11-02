@@ -11,9 +11,7 @@ struct MainTabView: View {
   var body: some View {
     TabView(selection: $selection) {
       NavigationStack {
-        PlaceholderScreen(
-          title: "Sessions", systemImage: "bubble.left.and.bubble.right",
-          message: "Your chat sessions will appear here.")
+        SessionsView()
       }
       .tabItem { Label("Sessions", systemImage: "bubble.left.and.bubble.right") }
       .tag(Tab.sessions)

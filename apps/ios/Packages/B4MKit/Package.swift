@@ -11,8 +11,20 @@ let package = Package(
   products: [
     .library(name: "B4MKit", targets: ["B4MKit"])
   ],
+  dependencies: [
+    .package(path: "../B4MClient"),
+    .package(url: "https://github.com/apple/swift-openapi-runtime", exact: "1.13.3"),
+    .package(url: "https://github.com/apple/swift-http-types", from: "1.3.0"),
+  ],
   targets: [
-    .target(name: "B4MKit"),
+    .target(
+      name: "B4MKit",
+      dependencies: [
+        "B4MClient",
+        .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+        .product(name: "HTTPTypes", package: "swift-http-types"),
+      ]
+    ),
     .testTarget(name: "B4MKitTests", dependencies: ["B4MKit"]),
   ]
 )
