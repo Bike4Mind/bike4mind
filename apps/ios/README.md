@@ -1,6 +1,36 @@
 # Bike4Mind iOS
 
-`make build`, `make test`, `make format`, `make lint` (see the Makefile).
+Native iPhone app (SwiftUI, Swift 6). `make build`, `make test`, `make format`, `make lint` (see the Makefile).
+Simulator-only until an Apple Developer team exists; see [DEVICE_TESTING.md](DEVICE_TESTING.md) for everything that
+needs a device or signing.
+
+## Feature map
+
+| Area | Where it lives |
+|------|----------------|
+| Sign-in (PKCE, Keychain refresh token, App Lock) | `B4MKit/Auth`, `Bike4Mind/Features/SignIn` |
+| First-launch welcome | `B4MKit/Onboarding`, `Bike4Mind/Features/Onboarding` |
+| Sessions list and streaming chat over the realtime socket | `B4MKit/Sessions`, `Chat`, `Realtime`; `Features/Sessions` |
+| Push registration, deep links and universal links | `B4MKit/Push`, `Links` |
+| Live Activities and agent runs | `B4MKit/LiveActivity`, `Agents`; `Widgets/QuestLiveActivity.swift` |
+| Share extension, camera and voice capture | `B4MKit/Capture`, `CaptureUI`, `ShareExtension` |
+| Widgets, App Intents, media gallery | `Widgets`, `Features/Intents`, `Features/Media` |
+| Account deletion and restore | `B4MKit/Account`, `Features/Account` |
+
+## Targets and packages
+
+- **Bike4Mind**: the app. **Widgets**: widget and Live Activity extension. **ShareExtension**: the share sheet target.
+- **Packages/B4MKit**: everything that is not a view (API, auth, view models, wire formats); unit-tested on the simulator and the host.
+- **Packages/B4MClient**: the generated OpenAPI client (see below).
+- Screens never use generated types; `B4MKit` maps them to domain models behind `B4MAPI`.
+
+## Account deletion
+
+App Store Guideline 5.1.1(v). Settings > Delete Account requires typing `DELETE` and states the 30-day grace period. The wire is
+hand-written (`B4MKit/Account/AccountDeletionWire.swift`) because the routes are not in the OpenAPI snapshot yet:
+`DELETE /api/users/me`, `POST /api/users/me/restore-deletion`, a 409 `account_deletion_org_transfer_required` envelope listing
+organizations, and the 403 `{accountDeletionPending, deletionScheduledFor}` gate. `URLSessionTransport` recognizes that 403 on any
+call and `RootView` swaps the shell for the restore screen. Move the routes into the generated client when the snapshot catches up.
 
 ## Generated API client
 
@@ -13,8 +43,8 @@
 - **Snapshot.** `Packages/B4MClient/openapi.json` is a copy of `apps/client/public/openapi.json`.
 - **Filter.** `openapi-generator-config.yaml` lists the operations the app uses. The full spec generates
   ~140k lines; add an operation to the `filter.operations` list when a screen needs it.
-  `sendChatMessage` is excluded for now: its request schema has both `max_tokens` and `maxTokens`, which
-  collide and do not compile. Chat (M3) has to fix that first.
+  `sendChatMessage` is excluded: its request schema has both `max_tokens` and `maxTokens`, which collide and do not compile,
+  so chat uses the hand-written `ChatSendWire`.
 
 Regenerate:
 
@@ -29,8 +59,9 @@ Screens never use generated types: `B4MKit` maps them to domain models behind th
 
 ## UI fixtures
 
-A DEBUG build launched with `B4M_UI_FIXTURES=1` skips sign-in and serves canned sessions, transcript
-and credits (`Bike4Mind/Features/Debug/FixtureServices.swift`):
+A DEBUG build launched with `B4M_UI_FIXTURES=1` skips sign-in and serves canned sessions, transcript,
+credits, media, widgets and capture (`Bike4Mind/Features/Debug/FixtureServices.swift`). `B4M_UI_FIXTURE_ACCOUNT=org-transfer`
+shows the delete-account 409 list and `pending` launches on the restore screen:
 
 ```sh
 SIMCTL_CHILD_B4M_UI_FIXTURES=1 xcrun simctl launch booted com.bike4mind.app
@@ -70,3 +101,42 @@ SIMCTL_CHILD_B4M_UI_FIXTURES=1 xcrun simctl launch booted com.bike4mind.app
   effect (an unsigned build) the keychain item stays private to the app, the App Group falls back to Application Support, and the
   extension simply reports it is signed out. The share flow works end to end only on a signed build with both capabilities enabled.
 - `B4M_UI_FIXTURES=1` swaps in fixture destinations, submission and transcription, in the app and in the extension.
+
+## App icon and launch screen
+
+The icon is a generated **placeholder** (three connected nodes on a brand-blue gradient, no text) so builds look finished.
+Replace it with real artwork whenever it exists: drop a 1024x1024 PNG over
+`Bike4Mind/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png` and the launch mark in `LaunchMark.imageset`.
+To regenerate the placeholder: `swift Tools/GenerateAppIcon.swift`. The launch screen is `AppSupport/Info.plist` (`UILaunchScreen`:
+`LaunchBackground` colour plus the centered `LaunchMark` image).
+
+## Privacy manifests and App Privacy answers
+
+`PrivacyInfo.xcprivacy` ships in the app, `Widgets` and `ShareExtension`. No tracking, no tracking domains, no diagnostics or
+analytics SDKs. Required-reason API declared: UserDefaults (`CA92.1` app's own data, `1C8F.1` same App Group). Re-check this list when
+adding code that reads file timestamps, disk space or system uptime.
+
+App Store Connect questionnaire (all data is **linked to the user**, **not used for tracking**, purpose **App Functionality**):
+
+| Data type | Collected | Why |
+|-----------|-----------|-----|
+| Contact Info: Email Address, Name | Yes | Account sign-in (completed in the web sign-in sheet) |
+| Identifiers: User ID, Device ID | Yes | Session identity; APNs token for push |
+| User Content: Photos or Videos, Audio Data, Other User Content | Yes | Chat messages, files, images and voice notes the user sends |
+| Diagnostics (crash, performance), Usage Data, Location, Health, Financial, Browsing, Search | No | Not collected |
+
+Does the app track users across other companies' apps or sites: **No**. Account deletion is available in the app. Keep this table
+in sync with the manifests and with what the build actually sends.
+
+## fastlane and CI
+
+- `bundle install`, then `bundle exec fastlane test` (same as `make test`), `build` (simulator build) and `beta` (TestFlight).
+  **`beta` is a stub:** it refuses to run until `IOS_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_CONTENT_BASE64` are set,
+  and signing does not exist yet.
+- `.github/workflows/ios.yml` runs on changes to `apps/ios/**` and `apps/client/public/openapi.json`: `make lint`, `make test`,
+  the generated-client reproducibility check (`make generate-client` then `git diff --exit-code`) and `make build`, with SwiftPM cached.
+  The runner needs an Xcode that matches the project's SDK; adjust the runner image if it lags.
+
+## Device testing
+
+[DEVICE_TESTING.md](DEVICE_TESTING.md) is the checklist for everything the simulator cannot prove.
