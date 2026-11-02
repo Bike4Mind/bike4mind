@@ -141,17 +141,17 @@ describe('CuratedListSource', () => {
 
   it('does not warn when the list served at the bundled sequence is the bundled content in other formatting', async () => {
     const served = `${JSON.stringify(JSON.parse(BUNDLED_CURATED_TEXT), null, 4)}\n`;
-    server.publish(1, served, sigText(served, [signing], 1));
+    server.publish(2, served, sigText(served, [signing], 2));
     const s = source({ bundledText: JSON.stringify(JSON.parse(BUNDLED_CURATED_TEXT)) });
     await s.checkNow();
-    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'up-to-date' });
+    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 2, check: 'up-to-date' });
     expect(logs.some(line => /differs from the current list/.test(line))).toBe(false);
 
-    const other = listText(1, list => (list.updatedAt = '2026-10-29T00:00:00Z'));
-    server.publish(1, other, sigText(other, [signing], 1));
+    const other = listText(2, list => (list.updatedAt = '2026-10-29T00:00:00Z'));
+    server.publish(2, other, sigText(other, [signing], 2));
     clock += 1000;
     await s.checkNow();
-    logged(/warning: curated list 1 differs from the current list with that sequence; kept it/);
+    logged(/warning: curated list 2 differs from the current list with that sequence; kept it/);
   });
 
   it('accepts a newer signed list, caches it, and shows it again after a restart without fetching', async () => {
@@ -227,7 +227,7 @@ describe('CuratedListSource', () => {
     server.publish(3, manifest, sig);
     const s = source();
     await s.checkNow();
-    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
+    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 2, check: 'failed' });
     logged(/rejected the curated list: bad-signature/);
   });
 
@@ -793,7 +793,7 @@ describe('CuratedListSource', () => {
     const older = source();
     await older.loaded();
     await older.checkIfDue();
-    expect(older.view()).toMatchObject({ origin: 'bundled', sequence: 1 });
+    expect(older.view()).toMatchObject({ origin: 'bundled', sequence: 2 });
     logged(/ignored the cached curated list: unknown-key/);
     await expect(readFile(join(sourceDir, 'pair.json'))).resolves.toBeTruthy();
 
