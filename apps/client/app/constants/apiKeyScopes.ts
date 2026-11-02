@@ -589,6 +589,12 @@ export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     endpoints: ['POST /api/overwatch/v1/events'],
   },
   {
+    value: ApiKeyScope.REWARDS_GRANT,
+    label: 'Partners: Rewards',
+    description: 'Server-to-server credit grants for partner games (BedrockNews Headword)',
+    endpoints: ['POST /api/partners/rewards/grant'],
+  },
+  {
     value: ApiKeyScope.QA_INGEST,
     label: 'QA: Ingest',
     description: 'CI ingest of end-to-end test runs for the admin status page',

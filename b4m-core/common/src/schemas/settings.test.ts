@@ -1475,3 +1475,17 @@ describe('API rate limit settings floor', () => {
     }
   );
 });
+
+describe('BedrockNews Headword reward settings', () => {
+  it.each([
+    ['BedrockNewsPuzzleCredits5', 40],
+    ['BedrockNewsPuzzleCredits6', 60],
+    ['BedrockNewsPuzzleCredits7', 100],
+    ['BedrockNewsPuzzleHardMultiplier', 1.5],
+    ['BedrockNewsFirstSolveCredits', 500],
+    ['BedrockNewsPuzzleDailyCap', 300],
+    ['BedrockNewsRewardsDailyBudget', 200000],
+  ] as const)('%s defaults to %s', (key, expected) => {
+    expect(settingsMap[key].defaultValue).toBe(expected);
+  });
+});
