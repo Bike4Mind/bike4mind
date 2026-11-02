@@ -18,6 +18,7 @@ const running = (pulls: readonly ModelPull[]) =>
  */
 export class PullLedger {
   #runningKeys = '';
+  #settling: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly ledger: Ledger,
@@ -50,7 +51,13 @@ export class PullLedger {
   }
 
   /** Revokes the grant of every download that is no longer running. */
-  async settled(pulls: readonly ModelPull[]): Promise<void> {
+  settled(pulls: readonly ModelPull[]): Promise<void> {
+    // One at a time: a call overlapping an unfinished one would compare against keys that write had not stored yet.
+    this.#settling = this.#settling.then(() => this.#settle(pulls));
+    return this.#settling;
+  }
+
+  async #settle(pulls: readonly ModelPull[]): Promise<void> {
     const live = running(pulls);
     const keys = [...live].sort().join('\n');
     if (keys === this.#runningKeys) return;

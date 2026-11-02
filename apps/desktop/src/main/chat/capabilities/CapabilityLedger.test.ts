@@ -378,13 +378,15 @@ describe('CapabilityLedger', () => {
         scope: { kind: 'planet' },
       },
       { sequence: 3, type: 'revoke', timestamp: at, grantId: 'g-future' },
-      { sequence: 4, type: 'checkpoint', timestamp: at },
+      { sequence: 4, type: 'checkpoint', timestamp: at, scope: 'every-model', capability: ['files'] },
     ];
     await appendFile(path, future.map(event => JSON.stringify(event) + '\n').join(''), 'utf8');
     const written = await readFile(path, 'utf8');
 
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const restarted = new CapabilityLedger(path);
     const state = await restarted.state();
+    expect(warning).toHaveBeenCalledWith('[CapabilityLedger] Skipped 3 event(s) written by a newer Desktop');
     expect(state.grants.map(grant => grant.id)).toEqual([files.id]);
     expect(state.grants[0].revokedAt).toBeUndefined();
     expect((await readdir(join(path, '..'))).some(file => file.includes('.corrupt-'))).toBe(false);
@@ -394,6 +396,7 @@ describe('CapabilityLedger', () => {
     expect(lines.slice(0, 5).join('\n') + '\n').toBe(written);
     expect(JSON.parse(lines[5]).sequence).toBe(5);
     expect((await new CapabilityLedger(path).state()).audit[0]).toMatchObject({ type: 'use', sequence: 5 });
+    warning.mockRestore();
   });
 
   it('still quarantines a malformed event of a kind this build knows', async () => {

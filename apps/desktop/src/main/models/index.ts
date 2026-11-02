@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { stat, statfs } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { app, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
 import { HuggingFaceHub, OllamaRuntime, ollamaLibraryLayers, probeHardware } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
@@ -27,6 +27,20 @@ const RUNTIME_HEALTH_TIMEOUT_MS = 10_000;
 const LINUX_SERVICE_STORE = '/usr/share/ollama/.ollama/models';
 
 const warn = (message: string) => console.warn(message);
+
+const isMissing = (error: unknown) => error instanceof Error && 'code' in error && error.code === 'ENOENT';
+
+/** Free bytes on the disk holding `path`; Ollama makes its folder on first pull, so a missing one is read upward. */
+async function freeBytes(path: string): Promise<number> {
+  for (let current = path; ; current = dirname(current)) {
+    try {
+      const stats = await statfs(current);
+      return stats.bavail * stats.bsize;
+    } catch (error) {
+      if (!isMissing(error) || dirname(current) === current) throw error;
+    }
+  }
+}
 
 /**
  * The curated list's source. The URL is baked in at build time from B4M_CURATED_MANIFEST_URL (see the `define`
@@ -90,10 +104,7 @@ export function registerModels(
         .storeLocation(pull.serverId)
         .catch(() => null)
         .then(location => ledger.started(pull, location)),
-    freeSpace: async path => {
-      const stats = await statfs(path);
-      return stats.bavail * stats.bsize;
-    },
+    freeSpace: freeBytes,
     // Ollama's own default; a daemon started with OLLAMA_MODELS elsewhere shows its folder once a model is installed.
     defaultStoreDir: () => {
       if (process.env.OLLAMA_MODELS) return process.env.OLLAMA_MODELS;
