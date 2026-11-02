@@ -83,6 +83,17 @@ describe('FallbackLlmBackend', () => {
     expect(callback).toHaveBeenCalledOnce();
   });
 
+  it('never falls back from a model on a saved model server to a hosted one', async () => {
+    const inner = createMockBackend({ failWith: new Error('vllm could not be reached') });
+    const fallback = new FallbackLlmBackend(inner, ['claude-sonnet'], onFallback);
+
+    await expect(
+      fallback.complete('local:srv-vllm01:qwen-small', makeMessages(), makeOptions(), callback)
+    ).rejects.toThrow('vllm could not be reached');
+    expect(inner.complete).toHaveBeenCalledOnce();
+    expect(onFallback).not.toHaveBeenCalled();
+  });
+
   it('throws when all models are exhausted', async () => {
     const error = new Error('unavailable');
     const inner = createMockBackend({ failWith: error });
