@@ -101,6 +101,7 @@ apps/client/pages/api/admin/modal-tool.ts
 apps/client/pages/api/admin/modals/variants.ts
 apps/client/pages/api/admin/model-deprecation-status.ts
 apps/client/pages/api/admin/model-discovery.ts
+apps/client/pages/api/admin/model-hub/curated/versions.ts  # deliberately accepts ADMIN-scoped API keys: the curated publish script imports signed lists with one
 apps/client/pages/api/admin/model-logs.ts
 apps/client/pages/api/admin/model-metrics.ts
 apps/client/pages/api/admin/model-prices.ts
@@ -529,6 +530,7 @@ apps/client/pages/api/modals/[id]/delete.ts
 apps/client/pages/api/modals/[id]/update.ts
 apps/client/pages/api/modals/create.ts
 apps/client/pages/api/modals/index.ts
+apps/client/pages/api/model-hub/curated/v2/[file].ts  # deliberately unauthenticated (auth: false): Desktop and the CLI fetch the signed curated list signed out; rate limited, read-only
 apps/client/pages/api/models.ts
 apps/client/pages/api/models/stats.ts
 apps/client/pages/api/notebooks/curate.ts

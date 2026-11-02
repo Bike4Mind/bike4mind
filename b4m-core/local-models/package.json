@@ -34,6 +34,16 @@
         "default": "./dist/servers.cjs"
       }
     },
+    "./curated-signing": {
+      "import": {
+        "types": "./dist/curated-signing.d.mts",
+        "default": "./dist/curated-signing.mjs"
+      },
+      "require": {
+        "types": "./dist/curated-signing.d.cts",
+        "default": "./dist/curated-signing.cjs"
+      }
+    },
     "./licenses": {
       "import": {
         "types": "./dist/licenses.d.mts",
