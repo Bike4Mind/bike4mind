@@ -46,6 +46,7 @@ public final class AuthController: AccessTokenProviding {
   /// Bumped whenever the session changes hands, so a refresh that lands after sign-out is discarded
   /// instead of writing a dead session's token back to the Keychain.
   @ObservationIgnored private var sessionGeneration = 0
+  @ObservationIgnored private var rotationContinuations: [UUID: AsyncStream<String>.Continuation] = [:]
 
   private static let appLockKey = "b4m.appLockEnabled"
 
@@ -212,7 +213,20 @@ public final class AuthController: AccessTokenProviding {
     }
     let token = AccessToken(value: result.accessToken, issuedAt: now())
     cachedAccessToken = token
+    for continuation in rotationContinuations.values { continuation.yield(token.value) }
     return token.value
+  }
+
+  /// Every access token minted by a refresh from now on. Long-lived connections that authenticated
+  /// with an earlier token (the realtime socket) move onto each one.
+  public func accessTokenRotations() -> AsyncStream<String> {
+    let (stream, continuation) = AsyncStream<String>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    let id = UUID()
+    continuation.onTermination = { [weak self] _ in
+      Task { @MainActor in self?.rotationContinuations[id] = nil }
+    }
+    rotationContinuations[id] = continuation
+    return stream
   }
 
   private func endSession(_ reason: SignOutReason) {
