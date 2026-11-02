@@ -23,23 +23,40 @@ export const BUNDLED_CURATED_JSON_TEXT = JSON.stringify(bundled);
 const EMPTY = { schemaVersion: 2, updatedAt: '1970-01-01T00:00:00Z', families: {}, rankings: {}, entries: [] };
 const SHOWN_DROPS = 5;
 
+export interface LoadCuratedOptions {
+  /** This CLI's version; entries whose `minCliVersion` is newer are left out. */
+  cliVersion?: string;
+}
+
 /**
  * The curated list from `input` (a fetched list can be passed here), never throwing: unreadable input falls back to
  * the bundled list, and what the reader dropped is logged by path and reason.
  */
-export function loadCuratedManifest(warn: (message: string) => void, input: unknown = bundled): HubManifest {
+export function loadCuratedManifest(
+  warn: (message: string) => void,
+  input: unknown = bundled,
+  options: LoadCuratedOptions = {}
+): HubManifest {
   try {
     const { manifest, dropped } = parseHubManifest(input);
+    const { cliVersion } = options;
+    const tooNew = cliVersion
+      ? manifest.entries.filter(entry => entry.minCliVersion && versionBelow(cliVersion, entry.minCliVersion))
+      : [];
+    for (const entry of tooNew)
+      dropped.push({ path: `entries.${entry.id}`, reason: `needs CLI ${entry.minCliVersion} or newer` });
     if (dropped.length > 0) {
       const shown = dropped.slice(0, SHOWN_DROPS).map(drop => `${drop.path}: ${drop.reason}`);
       warn(`MODELS: curated list dropped ${dropped.length} item(s): ${shown.join('; ')}`);
     }
-    return manifest;
+    return tooNew.length === 0
+      ? manifest
+      : Object.freeze({ ...manifest, entries: manifest.entries.filter(entry => !tooNew.includes(entry)) });
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'unknown';
     if (input !== bundled) {
       warn(`MODELS: curated list unreadable, showing the bundled one: ${reason}`);
-      return loadCuratedManifest(warn);
+      return loadCuratedManifest(warn, bundled, options);
     }
     warn(`MODELS: bundled curated list unreadable, showing none: ${reason}`);
     return parseHubManifest(EMPTY).manifest;
@@ -98,8 +115,19 @@ export function curatedOllamaBlocked(build: HubBuild, version: string | null): s
   const needs = `Needs Ollama ${minimum} or newer`;
   const have = version ? versionParts(version) : undefined;
   if (!have) return `${needs}, and Ollama did not report its version`;
+  return partsBelow(have, want) ? needs : null;
+}
+
+function partsBelow(have: number[], want: number[]): boolean {
   const differs = have.findIndex((part, index) => part !== want[index]);
-  return differs !== -1 && have[differs] < want[differs] ? needs : null;
+  return differs !== -1 && have[differs] < want[differs];
+}
+
+/** True when `version` (major.minor.patch, suffix ignored) is below `minimum`; an unreadable version is not. */
+function versionBelow(version: string, minimum: string): boolean {
+  const have = versionParts(version);
+  const want = versionParts(minimum);
+  return !!have && !!want && partsBelow(have, want);
 }
 
 export interface CuratedSource {

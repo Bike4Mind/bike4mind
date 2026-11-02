@@ -12,6 +12,7 @@ import {
   type CuratedCheckStatus,
   type CuratedKey,
 } from '@bike4mind/local-models';
+import packageJson from '../../package.json';
 import { curatedDevKeys } from './curatedDevKey.js';
 
 const CHECK_TIMEOUT_MS = 8000;
@@ -73,7 +74,7 @@ export function createCliCuratedList(options: CliCuratedListOptions): CliCurated
       keys,
       store: new CuratedStore(curatedStoreRoot(dataDir, dev)),
       bundledText: BUNDLED_CURATED_JSON_TEXT,
-      load: json => loadCuratedManifest(log, json),
+      load: json => loadCuratedManifest(log, json, { cliVersion: packageJson.version }),
       allowLoopbackHttp: dev,
       network: !offline,
       userAgent: 'Bike4Mind-CLI',

@@ -441,6 +441,8 @@ const EntryHeaderSchema = z.object({
   notesUrl: HttpsUrlSchema.nullable().optional(),
   // Older Desktops leave the entry out; compared to the app's major.minor.patch.
   minDesktopVersion: SemverSchema.optional(),
+  // Older CLIs (`b4m models`, the MCP model tools) leave the entry out; clients that predate the field ignore it.
+  minCliVersion: SemverSchema.optional(),
 });
 type EntryHeader = z.infer<typeof EntryHeaderSchema>;
 
