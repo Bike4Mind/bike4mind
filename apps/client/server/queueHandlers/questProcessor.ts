@@ -51,6 +51,8 @@ import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
+import { publishChatCompletedPush } from './questProcessor.push';
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
@@ -418,6 +420,23 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     loadQuest: () => questRepository.findById(params.questId),
     visitId: params.visitId,
   });
+
+  await publishChatCompletedPush(
+    {
+      userId: params.userId,
+      sessionId: params.sessionId,
+      questId: params.questId,
+      sessionName: session.name,
+      apiKeyId: params.apiKeyId,
+    },
+    {
+      connections: Connection,
+      findQuest: questId => questRepository.findById(questId),
+      sessionDeepLink,
+      publish: event => publishPushNotification(event, logger),
+    },
+    logger
+  );
 
   return;
 }

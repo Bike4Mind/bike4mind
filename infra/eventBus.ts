@@ -119,6 +119,48 @@ export const emailSendSubscription = eventBus.subscribe(
 
 emailEventsDeadLetter.allowRules([emailSendSubscription]);
 
+// Push notifications to first-party native clients (apps/workers/src/events/sendPush.ts).
+// The APNS_* values are deploy-time env config, never committed; with any of them unset the
+// handler consumes events as a no-op, so stages without push credentials need nothing here.
+const pushEventsDLQ = new sst.aws.Queue('pushEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const pushEventsDeadLetter = createEventBusDeadLetter('pushEventsDLQ', pushEventsDLQ);
+
+export const notificationPushSubscription = eventBus.subscribe(
+  'notification-push',
+  {
+    handler: 'apps/workers/src/events/sendPush.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets],
+    // VPC for the database egress path the other Mongo-reading subscribers use; APNs is reached via NAT.
+    vpc: lambdaVpc,
+    timeout: '30 seconds',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+      APNS_KEY_ID: process.env.APNS_KEY_ID || '',
+      APNS_TEAM_ID: process.env.APNS_TEAM_ID || '',
+      APNS_KEY: process.env.APNS_KEY || '',
+      APNS_TOPIC: process.env.APNS_TOPIC || '',
+    },
+    permissions: [pushEventsDeadLetter.sendPermission],
+    transform: pushEventsDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      detailType: ['notification.push'],
+    },
+    transform: pushEventsDeadLetter.ruleTarget,
+  }
+);
+
+pushEventsDeadLetter.allowRules([notificationPushSubscription]);
+
 // Session events
 //
 // Session enrichment handlers share one dead letter (see infra/eventBusDeadLetter.ts).
@@ -451,6 +493,7 @@ export {
   telemetryAlertDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
+  pushEventsDeadLetter,
   notebookEventsDeadLetter,
   completionEventsDeadLetter,
   sessionEnrichmentDeadLetter,

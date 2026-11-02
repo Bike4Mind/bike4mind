@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   sendToClient: vi.fn(),
   createCompletionMeter: vi.fn(),
   getUserEntitlements: vi.fn(async (_user: unknown) => ['plan:paid']),
+  publishPushNotification: vi.fn(async () => undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -57,6 +58,12 @@ vi.mock('@bike4mind/utils', () => ({
   ClientMessageSender: class MockClientMessageSender {
     sendToClient = h.sendToClient;
   },
+}));
+
+vi.mock('@server/utils/pushNotifications', () => ({
+  publishPushNotification: h.publishPushNotification,
+  sessionDeepLink: (sessionId: string) => `https://app.example.test/notebooks/${sessionId}`,
+  truncateForPush: (text: string) => text,
 }));
 
 vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: h.createCompletionMeter }));
@@ -127,6 +134,26 @@ describe('agentProactiveMessage consumer', () => {
     expect(h.sendToClient).toHaveBeenCalledTimes(2);
   });
 
+  it('publishes an agent_message push to config.userId after the message is sent', async () => {
+    h.agentFindAccessibleById.mockResolvedValue({ id: 'agent-1', name: 'Scout' });
+    h.sessionFindById.mockResolvedValue({ ...SESSION_EDITOR_HAS_WRITE, name: 'Roadmap' });
+
+    await dispatch(makeEvent(payload), {} as never, logger);
+
+    expect(h.publishPushNotification).toHaveBeenCalledExactlyOnceWith(
+      {
+        userId: 'editor',
+        category: 'agent_message',
+        title: 'Scout',
+        body: 'New message in "Roadmap".',
+        deepLink: 'https://app.example.test/notebooks/session-1',
+        collapseId: 'agent-message:session-1:agent-1',
+        sessionId: 'session-1',
+      },
+      logger
+    );
+  });
+
   it('skips without executing when config.userId no longer has write access to the session (revoked session grant)', async () => {
     h.sessionFindById.mockResolvedValue(SESSION_EDITOR_REVOKED);
 
@@ -167,6 +194,7 @@ describe('agentProactiveMessage consumer', () => {
 
     await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
+    expect(h.publishPushNotification).not.toHaveBeenCalled();
   });
 
   it('skips without retrying or notifying when the owner hit the free-tier daily cap', async () => {

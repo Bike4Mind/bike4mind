@@ -96,4 +96,48 @@ describe('publishRunPendingAction', () => {
     ).rejects.toThrow('db down');
     expect(sendWs).not.toHaveBeenCalled();
   });
+  it('publishes an approval_needed push once the card is on the run quest', async () => {
+    const calls: string[] = [];
+    const quests = { setPendingAction: vi.fn(async () => void calls.push('write')) };
+    const publish = vi.fn(async () => void calls.push('push'));
+    await publishRunPendingAction({
+      executionId: EXECUTION_ID,
+      questId: QUEST_ID,
+      action,
+      questRepository: quests,
+      sendWs: vi.fn(async () => undefined),
+      logger: makeLogger(),
+      approvalPush: {
+        userId: 'user-1',
+        sessionId: 'session-1',
+        sessionDeepLink: id => `/notebooks/${id}`,
+        publish,
+      },
+    });
+    expect(calls.slice(0, 2)).toEqual(['write', 'push']);
+    expect(publish).toHaveBeenCalledExactlyOnceWith({
+      userId: 'user-1',
+      category: 'approval_needed',
+      title: 'Approval needed',
+      body: 'An agent wants to run create_issue and is waiting for your confirmation.',
+      deepLink: '/notebooks/session-1',
+      collapseId: `approval:${QUEST_ID}`,
+      questId: QUEST_ID,
+      sessionId: 'session-1',
+    });
+  });
+
+  it('publishes no approval push without a run quest', async () => {
+    const publish = vi.fn(async () => undefined);
+    await publishRunPendingAction({
+      executionId: EXECUTION_ID,
+      questId: undefined,
+      action,
+      questRepository: makeQuests(),
+      sendWs: vi.fn(async () => undefined),
+      logger: makeLogger(),
+      approvalPush: { userId: 'u', sessionId: 's', sessionDeepLink: id => id, publish },
+    });
+    expect(publish).not.toHaveBeenCalled();
+  });
 });

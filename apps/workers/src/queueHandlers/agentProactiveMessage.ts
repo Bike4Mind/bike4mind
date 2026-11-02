@@ -24,6 +24,7 @@ import * as agentProactiveMessagingService from '@bike4mind/services/agentProact
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { canAccessSession } from '@bike4mind/server-utils/utils/sessionAccess';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { publishPushNotification, sessionDeepLink, truncateForPush } from '@server/utils/pushNotifications';
 
 const agentProactiveMessageQueuePayload = z.object({
   sessionAgentConfigId: z.string(),
@@ -146,6 +147,23 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
       action: 'invalidate_query',
       queryKey: ['recent-proactive-messages'],
     });
+
+    // Scheduled and unprompted, so it is pushed whether or not the user is connected.
+    const sessionName = session.name?.trim();
+    await publishPushNotification(
+      {
+        userId: config.userId,
+        category: 'agent_message',
+        title: agent.name ? truncateForPush(agent.name, 60) : 'New message',
+        body: sessionName
+          ? `New message in "${truncateForPush(sessionName, 60)}".`
+          : 'Your agent sent you a new message.',
+        deepLink: sessionDeepLink(config.sessionId),
+        collapseId: `agent-message:${config.sessionId}:${config.agentId}`,
+        sessionId: config.sessionId,
+      },
+      logger
+    );
 
     logger.info(`Successfully processed proactive message for agent ${config.agentId}`);
   } catch (error) {
