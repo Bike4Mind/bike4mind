@@ -24,8 +24,10 @@ import {
   formatInterval,
   formatSpendToday,
   lastRunLabel,
+  LoopMarkdown,
   LoopStatusChip,
   nextRunLabel,
+  unavailableTools,
 } from '@client/app/components/Loops/loopUi';
 import {
   countNeedsYou,
@@ -34,7 +36,10 @@ import {
   useLoops,
   useLoopTickets,
   useOverrideDirective,
+  useResolveUnsure,
 } from '@client/app/hooks/data/loops';
+import { useConfig } from '@client/app/hooks/data/settings';
+import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import CloseIcon from '@mui/icons-material/Close';
 import AgentRunViewer from '@client/app/components/Session/AgentExecution/AgentRunViewer';
@@ -52,6 +57,8 @@ export default function LoopDetailPage() {
   const { data: events } = useLoopEvents(id);
   const { data: loops = [] } = useLoops();
   const overrideDirective = useOverrideDirective();
+  const resolveUnsure = useResolveUnsure();
+  const toolAvailability = useConfig().data?.toolAvailability;
   const needsYou = countNeedsYou(events);
   useDocumentTitle(loop?.name ?? 'Loop');
 
@@ -67,6 +74,8 @@ export default function LoopDetailPage() {
       </Box>
     );
   }
+
+  const missingTools = unavailableTools(loop.tools, toolAvailability).map(tool => getToolDisplayName(tool));
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
@@ -99,19 +108,23 @@ export default function LoopDetailPage() {
             </Link>
           )}
         </Stack>
+        {missingTools.length > 0 && (
+          <Typography level="body-sm" color="warning" data-testid="loop-detail-unavailable-tools">
+            {missingTools.join(', ')} {missingTools.length === 1 ? "isn't" : "aren't"} available on this server, so runs
+            skip {missingTools.length === 1 ? 'it' : 'them'}.
+          </Typography>
+        )}
         <LoopOversightLine loopId={loop.id} oversees={loop.oversees ?? []} loops={loops} />
         <AccordionGroup variant="outlined" sx={{ borderRadius: 'sm' }}>
           <Accordion>
             <AccordionSummary data-testid="loop-detail-memory-toggle">Memory</AccordionSummary>
             <AccordionDetails>
               <Typography level="title-sm">Next action</Typography>
-              <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', mb: 1 }}>
-                {loop.memory.nextAction || '-'}
-              </Typography>
+              <Box sx={{ mb: 1 }}>
+                <LoopMarkdown testId="loop-detail-memory-next-action">{loop.memory.nextAction || '-'}</LoopMarkdown>
+              </Box>
               <Typography level="title-sm">Notes</Typography>
-              <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap' }}>
-                {loop.memory.notes || '-'}
-              </Typography>
+              <LoopMarkdown testId="loop-detail-memory-notes">{loop.memory.notes || '-'}</LoopMarkdown>
             </AccordionDetails>
           </Accordion>
           <Accordion>
@@ -124,6 +137,9 @@ export default function LoopDetailPage() {
                 loops={loops}
                 onOverride={(eventId, action, note) =>
                   overrideDirective.mutate({ loopId: loop.id, eventId, action, note })
+                }
+                onResolveUnsure={(eventId, outcome, note) =>
+                  resolveUnsure.mutate({ loopId: loop.id, eventId, outcome, note })
                 }
               />
             </AccordionDetails>

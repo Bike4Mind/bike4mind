@@ -1,6 +1,18 @@
-import { Chip, Stack, Typography, type ColorPaletteProp } from '@mui/joy';
-import { loopStatusNeedsOwner, type ILoop, type ILoopWithUsage, type LoopStatus } from '@bike4mind/common';
+import { Box, Chip, Stack, Typography, type ColorPaletteProp } from '@mui/joy';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import {
+  loopStatusNeedsOwner,
+  type B4MLLMTools,
+  type ILoop,
+  type ILoopWithUsage,
+  type LoopStatus,
+} from '@bike4mind/common';
+import type { ToolAvailability } from '@pages/api/settings/serverConfig';
+import { createMarkdownComponents } from '@client/app/components/Session/markdown/markdownComponents';
+import { link } from '@client/app/components/Session/MarkdownLink';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
+import { isToolKeyMissing } from '@client/app/utils/toolMapping';
 
 const STATUS_COLOR: Record<LoopStatus, ColorPaletteProp> = {
   draft: 'neutral',
@@ -63,5 +75,36 @@ export function LoopStatusChip({ loop }: { loop: Pick<ILoop, 'status' | 'statusR
         </Typography>
       )}
     </Stack>
+  );
+}
+
+/** The loop's tools the server cannot run (missing key or config); runs skip them. MCP tools are never listed. */
+export const unavailableTools = (tools: readonly string[], availability: ToolAvailability | undefined) =>
+  tools.filter(tool => isToolKeyMissing(tool as B4MLLMTools, availability));
+
+const markdownComponents = { ...createMarkdownComponents({ highlightText: node => node }), a: link };
+
+/**
+ * Model-written loop text (questions, directive threads, ticket reasons, memory) rendered with chat's markdown
+ * components. No rehype-raw, so raw HTML in the text stays escaped.
+ */
+export function LoopMarkdown({ children, testId }: { children: string; testId?: string }) {
+  return (
+    <Box
+      data-testid={testId}
+      sx={{
+        typography: 'body-sm',
+        overflowWrap: 'anywhere',
+        '& > :first-of-type': { mt: 0 },
+        '& > :last-child': { mb: 0 },
+        '& p, & ul, & ol': { my: 0.5 },
+        '& ul, & ol': { pl: 2.5 },
+        '& h1, & h2, & h3, & h4': { fontSize: 'inherit', my: 0.5 },
+      }}
+    >
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {children}
+      </ReactMarkdown>
+    </Box>
   );
 }

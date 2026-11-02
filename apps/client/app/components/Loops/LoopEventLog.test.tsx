@@ -20,17 +20,19 @@ const event = (overrides: Partial<ILoopUnsureRow> = {}): ILoopUnsureRow => ({
   ...overrides,
 });
 
-const renderLog = (data?: ILoopEventRow[], onViewRun = vi.fn()) =>
+const renderLog = (data?: ILoopEventRow[], onViewRun = vi.fn(), onResolveUnsure?: Mock) =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <LoopEventLog data={data} onViewRun={onViewRun} />
+      <LoopEventLog data={data} onViewRun={onViewRun} onResolveUnsure={onResolveUnsure} />
     </CssVarsProvider>
   );
 
 describe('LoopEventLog', () => {
   it('shows an empty state', () => {
     renderLog([]);
-    expect(screen.getByTestId('loop-log-empty')).toBeTruthy();
+    expect(screen.getByTestId('loop-log-empty')).toHaveTextContent(
+      'Nothing yet. A run parks a ticket here when it asks you a question, or when its tools keep returning nothing useful. Directives between loops show here too.'
+    );
   });
 
   it('shows an unanswered unsure run as needing you, with its confidence and reason', () => {
@@ -67,6 +69,65 @@ describe('LoopEventLog', () => {
     renderLog([event()], onViewRun);
     fireEvent.click(screen.getByTestId('loop-log-view-run-btn'));
     expect(onViewRun).toHaveBeenCalledWith('exec-1');
+  });
+
+  describe('a question a run asked', () => {
+    const asked = (overrides: Partial<ILoopUnsureRow> = {}) =>
+      event({ source: 'asked', iteration: undefined, confidence: undefined, reason: 'EU or US?', ...overrides });
+
+    it('reads "Asked you" and resumes only with an answer', () => {
+      const onResolve = vi.fn();
+      renderLog([asked()], vi.fn(), onResolve);
+      expect(screen.getByTestId('loop-log-unsure-subtitle').textContent).toMatch(/^Asked you - /);
+      expect(screen.getByTestId('loop-log-row').textContent).not.toContain('confidence');
+
+      const resume = screen.getByTestId('loop-log-unsure-resume-btn');
+      expect(resume).toBeDisabled();
+      fireEvent.change(screen.getByTestId('loop-log-unsure-answer-input'), { target: { value: ' EU ' } });
+      expect(resume).toBeEnabled();
+      fireEvent.click(resume);
+      expect(onResolve).toHaveBeenLastCalledWith('e1', 'resumed', 'EU');
+
+      fireEvent.click(screen.getByTestId('loop-log-unsure-reject-btn'));
+      expect(onResolve).toHaveBeenLastCalledWith('e1', 'rejected', 'EU');
+    });
+
+    it('rejects without an answer', () => {
+      const onResolve = vi.fn();
+      renderLog([asked()], vi.fn(), onResolve);
+      fireEvent.click(screen.getByTestId('loop-log-unsure-reject-btn'));
+      expect(onResolve).toHaveBeenCalledWith('e1', 'rejected', undefined);
+    });
+
+    it("shows the owner's answer once resolved, with no controls", () => {
+      renderLog(
+        [asked({ resolution: { outcome: 'resumed', at: '2026-10-29T11:00:00.000Z', note: 'EU **only**' } })],
+        vi.fn(),
+        vi.fn()
+      );
+      expect(screen.getByTestId('loop-log-resolution').textContent).toBe('Resumed');
+      expect(screen.getByTestId('loop-log-unsure-answer').querySelector('strong')).toHaveTextContent('only');
+      expect(screen.queryByTestId('loop-log-unsure-answer-input')).not.toBeInTheDocument();
+    });
+
+    it('leaves a gate-sourced row as it was: confidence subtitle, no answer box', () => {
+      renderLog([event()], vi.fn(), vi.fn());
+      expect(screen.getByTestId('loop-log-unsure-subtitle').textContent).toMatch(/^Unsure \(31% confidence\) - /);
+      expect(screen.queryByTestId('loop-log-unsure-answer-input')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('loop-log-unsure-resume-btn')).not.toBeInTheDocument();
+    });
+  });
+
+  it('renders an unsure reason as markdown, with safe external links and no raw HTML', () => {
+    renderLog([event({ reason: '**bold**\n\n- a\n- b\n\n[x](https://e.com) <script>alert(1)</script>' })]);
+    const reason = screen.getByTestId('loop-log-unsure-reason');
+    expect(reason.querySelector('strong')).toHaveTextContent('bold');
+    expect(reason.querySelectorAll('li')).toHaveLength(2);
+    expect(reason.textContent).not.toContain('**');
+    const link = reason.querySelector('a')!;
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link.getAttribute('rel')).toContain('noopener');
+    expect(reason.querySelector('script')).toBeNull();
   });
 });
 
@@ -154,8 +215,8 @@ describe('LoopEventLog directives', () => {
       { onViewRun }
     );
     const replies = screen.getAllByTestId('loop-log-directive-reply').map(reply => reply.textContent);
-    expect(replies[0]).toContain('Worker pushed back: Tests catch bugs');
-    expect(replies[1]).toContain('You overruled: Do it anyway');
+    expect(replies[0]).toMatch(/^Worker pushed back - .*Tests catch bugs/);
+    expect(replies[1]).toMatch(/^You overruled - .*Do it anyway$/);
     fireEvent.click(screen.getByTestId('loop-log-directive-view-run-btn'));
     expect(onViewRun).toHaveBeenCalledWith('exec-w');
   });
@@ -184,5 +245,42 @@ describe('LoopEventLog directives', () => {
     fireEvent.click(screen.getByTestId('loop-log-directive-overrule-btn'));
     expect((screen.getByTestId('loop-log-directive-note-input') as HTMLInputElement).value).toBe('');
     expect(onOverride).not.toHaveBeenCalled();
+  });
+
+  it('shows an overruled directive as Overruled until the worker answers again', () => {
+    const overrule = { by: 'owner' as const, outcome: 'overruled' as const, at: '2026-10-29T12:00:00.000Z' };
+    const pushBack = {
+      by: 'worker' as const,
+      outcome: 'pushed_back' as const,
+      executionId: 'exec-w',
+      at: '2026-10-29T11:00:00.000Z',
+    };
+    renderDirectives([directive({ state: 'open', replies: [pushBack, overrule] })]);
+    expect(screen.getByTestId('loop-log-directive-state').textContent).toBe('Overruled');
+    cleanup();
+
+    renderDirectives([
+      directive({
+        state: 'accepted',
+        replies: [pushBack, overrule, { ...pushBack, outcome: 'accepted', at: '2026-10-29T13:00:00.000Z' }],
+      }),
+    ]);
+    expect(screen.getByTestId('loop-log-directive-state').textContent).toBe('Accepted');
+  });
+
+  it('renders the instruction, reason and replies as markdown', () => {
+    renderDirectives([
+      directive({
+        instruction: 'Do **this**\n\n- a\n- b',
+        reason: 'See [docs](https://e.com)',
+        replies: [{ by: 'owner', outcome: 'overruled', note: '**now**', at: '2026-10-29T12:00:00.000Z' }],
+        state: 'open',
+      }),
+    ]);
+    const instruction = screen.getByTestId('loop-log-directive-instruction');
+    expect(instruction.querySelector('strong')).toHaveTextContent('this');
+    expect(instruction.querySelectorAll('li')).toHaveLength(2);
+    expect(screen.getByTestId('loop-log-directive-reason').querySelector('a')).toHaveAttribute('target', '_blank');
+    expect(screen.getByTestId('loop-log-directive-reply-note').querySelector('strong')).toHaveTextContent('now');
   });
 });

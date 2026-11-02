@@ -22,6 +22,8 @@ import { PICKABLE_TOOLS } from '@client/app/components/Agent/OrchestrationSectio
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useGetAgents } from '@client/app/hooks/data/agents';
+import { useConfig } from '@client/app/hooks/data/settings';
+import { unavailableTools } from '@client/app/components/Loops/loopUi';
 import { useCreateLoop, useLoops, useUpdateLoop, type LoopFormPayload } from '@client/app/hooks/data/loops';
 
 // Limits mirror apps/client/server/utils/loopValidation.ts; keep in sync.
@@ -159,6 +161,11 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
   const { data: mcpServers = [] } = useMcpServers();
   const { data: agents = [] } = useGetAgents();
   const { data: loops = [], isSuccess: loopsLoaded } = useLoops();
+  const toolAvailability = useConfig().data?.toolAvailability;
+  // A saved tool stays listed even when unavailable, so the Select can still render it and the owner can remove it.
+  const missingTools = unavailableTools(PICKABLE_TOOLS, toolAvailability);
+  const pickableTools = PICKABLE_TOOLS.filter(tool => !missingTools.includes(tool) || values.tools.includes(tool));
+  const pickedMissing = missingTools.filter(tool => values.tools.includes(tool)).map(tool => getToolDisplayName(tool));
   const otherLoops = loops.filter(other => other.id !== loop?.id);
   // Drop ids of loops deleted since this one was saved; the Select can't show them, and the API rejects them.
   const oversees = loopsLoaded
@@ -256,9 +263,10 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
               slotProps={{ listbox: { sx: { maxHeight: 320, overflow: 'auto' } } }}
               data-testid="loop-form-tools-select"
             >
-              {PICKABLE_TOOLS.map(tool => (
+              {pickableTools.map(tool => (
                 <Option key={tool} value={tool}>
                   {getToolDisplayName(tool)}
+                  {missingTools.includes(tool) && ' (unavailable)'}
                 </Option>
               ))}
               {mcpTools.map(tool => (
@@ -267,9 +275,16 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
                 </Option>
               ))}
             </Select>
-            <FormHelperText>
-              {errors.tools ?? 'Runs are unattended, so the tools picked here are pre-approved for every run.'}
-            </FormHelperText>
+            {errors.tools || pickedMissing.length === 0 ? (
+              <FormHelperText>
+                {errors.tools ?? 'Runs are unattended, so the tools picked here are pre-approved for every run.'}
+              </FormHelperText>
+            ) : (
+              <FormHelperText sx={{ color: 'warning.plainColor' }} data-testid="loop-form-tools-unavailable-warning">
+                {pickedMissing.join(', ')} {pickedMissing.length === 1 ? "isn't" : "aren't"} available on this server,
+                so runs skip {pickedMissing.length === 1 ? 'it' : 'them'}.
+              </FormHelperText>
+            )}
           </FormControl>
           <FormControl error={!!errors.stages}>
             <FormLabel>Stages</FormLabel>

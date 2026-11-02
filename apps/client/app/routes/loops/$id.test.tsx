@@ -4,7 +4,8 @@ import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { navigate, search, loopState, actions, eventsState, loopsState, overrideDirective } = vi.hoisted(() => ({
+const { navigate, search, loopState, actions, eventsState, loopsState, overrideDirective, config } = vi.hoisted(() => ({
+  config: { toolAvailability: undefined as Record<string, boolean> | undefined },
   navigate: vi.fn(),
   loopsState: { data: [] as unknown[] },
   overrideDirective: { mutate: vi.fn() },
@@ -44,7 +45,9 @@ vi.mock('@client/app/hooks/data/loops', async importOriginal => ({
   useLoopEvents: () => eventsState,
   useLoops: () => loopsState,
   useOverrideDirective: () => overrideDirective,
+  useResolveUnsure: () => ({ mutate: vi.fn() }),
 }));
+vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: config }) }));
 
 import LoopDetailPage from './$id';
 
@@ -63,6 +66,7 @@ const loop = (overrides: Record<string, unknown> = {}) => ({
   sessionId: 's1',
   intervalMinutes: 30,
   stages: ['todo', 'done'],
+  tools: ['web_search', 'github__create_issue'],
   status: 'live',
   memory: { notes: '', nextAction: '' },
   runCount: 2,
@@ -79,6 +83,7 @@ beforeEach(() => {
   loopState.error = null;
   eventsState.data = undefined;
   loopsState.data = [];
+  config.toolAvailability = undefined;
 });
 
 describe('LoopDetailPage states', () => {
@@ -86,6 +91,30 @@ describe('LoopDetailPage states', () => {
     loopState.data = loop({ creditsToday: 5, budgetCreditsPerDay: 10 });
     renderPage();
     expect(screen.getByTestId('loop-detail-spend-today')).toHaveTextContent('5 / 10 credits today');
+  });
+
+  it('names the loop tools this server cannot run, and shows nothing when all are available', () => {
+    config.toolAvailability = { web_search: true };
+    const { unmount } = renderPage();
+    expect(screen.queryByTestId('loop-detail-unavailable-tools')).not.toBeInTheDocument();
+    unmount();
+
+    config.toolAvailability = { web_search: false };
+    renderPage();
+    expect(screen.getByTestId('loop-detail-unavailable-tools')).toHaveTextContent(
+      "Web Search isn't available on this server, so runs skip it."
+    );
+  });
+
+  it('renders the memory as markdown', () => {
+    loopState.data = loop({
+      memory: { notes: '**done** - a\n\n- one\n- two', nextAction: 'check [x](https://e.com)' },
+    });
+    renderPage();
+    const notes = screen.getByTestId('loop-detail-memory-notes');
+    expect(notes.querySelector('strong')).toHaveTextContent('done');
+    expect(notes.querySelectorAll('li')).toHaveLength(2);
+    expect(screen.getByTestId('loop-detail-memory-next-action').querySelector('a')).toHaveAttribute('target', '_blank');
   });
 
   it('says not found on a 404 and links back to the list', () => {

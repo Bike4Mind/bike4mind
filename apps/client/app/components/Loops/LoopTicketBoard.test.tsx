@@ -117,4 +117,27 @@ describe('LoopTicketBoard', () => {
       expect.anything()
     );
   });
+
+  it('renders a blocked reason as markdown on the card', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopTicketBoard
+          loop={loop}
+          data={{
+            stages: [
+              {
+                stage: 'todo',
+                tickets: [ticket('b', { status: 'blocked', statusReason: 'Unsure: pick **one**\n\n- EU\n- US' })],
+              },
+            ],
+          }}
+          onViewRun={onViewRun}
+        />
+      </CssVarsProvider>
+    );
+    const reason = screen.getByTestId('loop-ticket-blocked-reason');
+    expect(reason.querySelector('strong')).toHaveTextContent('one');
+    expect(reason.querySelectorAll('li')).toHaveLength(2);
+    expect(reason.textContent).not.toContain('**');
+  });
 });

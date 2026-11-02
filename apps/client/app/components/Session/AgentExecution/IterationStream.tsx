@@ -18,6 +18,7 @@ import {
   Stack,
   Typography,
 } from '@mui/joy';
+import { visibleReplyText } from '@bike4mind/common';
 import {
   useAgentExecutionStore,
   selectExecution,
@@ -224,6 +225,8 @@ const IterationStream: FC<IterationStreamProps> = ({
   // generic spinner. Cleared per-iteration when the terminal step lands (store side).
   const pendingText = isActive ? execution.pendingTextByIteration?.[execution.lastKnownIteration] : undefined;
   const hasPendingText = !!pendingText && pendingText.length > 0;
+  // Reasoning-model answers can carry `<think>` blocks (often empty); show only the visible text.
+  const finalAnswer = execution.status === 'completed' ? visibleReplyText(execution.answer).trim() : '';
 
   return (
     <Box
@@ -446,7 +449,7 @@ const IterationStream: FC<IterationStreamProps> = ({
           )}
         </Typography>
       ) : null}
-      {execution.status === 'completed' && execution.answer && !hideFinalAnswer ? (
+      {finalAnswer && !hideFinalAnswer ? (
         <Box
           data-testid={`iteration-stream-${executionId}-final-answer`}
           sx={{
@@ -458,7 +461,7 @@ const IterationStream: FC<IterationStreamProps> = ({
           }}
         >
           <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap' }}>
-            {execution.answer}
+            {finalAnswer}
           </Typography>
         </Box>
       ) : null}
