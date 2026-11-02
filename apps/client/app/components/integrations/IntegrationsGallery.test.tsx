@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   navigate: vi.fn(),
   logEvent: vi.fn(),
   refreshUser: vi.fn(),
+  disconnectAtlassian: vi.fn(),
   stub: (testId: string) => ({ default: () => React.createElement('div', { 'data-testid': testId }) }),
 }));
 
@@ -53,7 +54,7 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useDisconnectGoogleDrive: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/mcpServers', () => ({
-  useDisconnectAtlassian: () => ({ mutate: vi.fn(), isPending: false }),
+  useDisconnectAtlassian: () => ({ mutate: h.disconnectAtlassian, isPending: false }),
   useDisconnectNotion: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 // The existing Profile > Integrations sections are rendered as is in the drawer; their own
@@ -268,6 +269,17 @@ describe('IntegrationsGallery', () => {
     connections = { atlassian: { connected: false, needsReconnect: true } };
     renderGallery();
     expect(screen.getByTestId('integrations-action-btn-atlassian')).toHaveTextContent('Reconnect');
+  });
+
+  it('lets an expired grant be disconnected from the drawer, not only reconnected', async () => {
+    connections = { atlassian: { connected: false, needsReconnect: true } };
+    renderGallery();
+    await userEvent.click(screen.getByTestId('integrations-open-btn-atlassian'));
+    const drawer = await screen.findByTestId('integrations-drawer');
+
+    expect(within(drawer).getByTestId('integrations-drawer-connect-btn')).toHaveTextContent('Reconnect Atlassian');
+    await userEvent.click(within(drawer).getByTestId('integrations-drawer-disconnect-btn'));
+    expect(h.disconnectAtlassian).toHaveBeenCalledTimes(1);
   });
 
   it('opens the drawer with capabilities and the existing management UI', async () => {
