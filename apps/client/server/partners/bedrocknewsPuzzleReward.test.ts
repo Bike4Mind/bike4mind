@@ -240,9 +240,10 @@ describe('grantPuzzleReward', () => {
       expect(match.createdAt.$gte.getTime()).toBeLessThanOrEqual(Date.now() - DAY_MS);
     });
 
+    // The check reserves room for the 500 first-solve bonus on top of the 40 rung.
     it.each([
-      [199_960, true],
-      [199_961, false],
+      [199_460, true],
+      [199_461, false],
     ])('with %i paid in the window a 40 grant is allowed: %s', async (last24h, allowed) => {
       givenSpend({ last24h });
 

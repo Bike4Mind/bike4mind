@@ -134,11 +134,13 @@ export async function grantPuzzleReward({
     return { ok: false, status: 403, code: 'DAILY_CAP' };
   }
 
+  // The bonus counts toward the budget too; a new player's first grant may add it on top of the rung.
+  const bonus = setting('BedrockNewsFirstSolveCredits');
   const paidInWindow = await sumCredits({
     reason: { $in: [BEDROCKNEWS_PUZZLE_REASON, BEDROCKNEWS_FIRST_SOLVE_REASON] },
     createdAt: { $gte: new Date(Date.now() - DAY_MS) },
   });
-  if (paidInWindow + amount > setting('BedrockNewsRewardsDailyBudget')) {
+  if (paidInWindow + amount + bonus > setting('BedrockNewsRewardsDailyBudget')) {
     return { ok: false, status: 403, code: 'BUDGET_EXHAUSTED' };
   }
 
@@ -166,7 +168,6 @@ export async function grantPuzzleReward({
   }
 
   let firstSolveCredits = 0;
-  const bonus = setting('BedrockNewsFirstSolveCredits');
   if (bonus > 0) {
     const bonusWrite = await creditService.addCreditsWithLedgerRow(
       {
