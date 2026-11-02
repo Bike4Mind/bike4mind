@@ -1243,7 +1243,7 @@ const LLMDashboardTab: React.FC = () => {
             <Option value={25}>25</Option>
             <Option value={50}>50</Option>
           </Select>
-          <Typography level="body-sm">
+          <Typography level="body-sm" sx={{ ml: { sm: 2 } }}>
             {startIndex + 1}-{Math.min(endIndex, filteredModels.length)} of {filteredModels.length} models
           </Typography>
         </Stack>
