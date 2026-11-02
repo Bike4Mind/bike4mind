@@ -402,6 +402,89 @@ describe('buildStructuredOutputFormat', () => {
       additionalProperties: false,
     });
   });
+
+  it('moves an object repeated inline to one $defs entry', () => {
+    const claim = {
+      type: 'object',
+      properties: {
+        text: { type: 'string', maxLength: 280 },
+        cites: { type: 'array', items: { type: 'string' }, minItems: 1 },
+      },
+      required: ['text', 'cites'],
+    };
+    const schema = {
+      type: 'object',
+      properties: {
+        headline: claim,
+        bull: { type: 'array', items: claim },
+        bear: { type: 'array', items: claim },
+        refusal: {
+          anyOf: [
+            { type: 'object', properties: { reason: { type: 'string' } }, required: ['reason'] },
+            { type: 'null' },
+          ],
+        },
+      },
+      required: ['headline', 'bull', 'bear', 'refusal'],
+    };
+    const before = structuredClone(schema);
+
+    const format = buildStructuredOutputFormat(schema);
+
+    expect(schema).toEqual(before);
+    expect(format?.schema).toEqual({
+      type: 'object',
+      properties: {
+        headline: { $ref: '#/$defs/shared1' },
+        bull: { type: 'array', items: { $ref: '#/$defs/shared1' } },
+        bear: { type: 'array', items: { $ref: '#/$defs/shared1' } },
+        refusal: {
+          anyOf: [
+            {
+              type: 'object',
+              properties: { reason: { type: 'string' } },
+              required: ['reason'],
+              additionalProperties: false,
+            },
+            { type: 'null' },
+          ],
+        },
+      },
+      required: ['headline', 'bull', 'bear', 'refusal'],
+      additionalProperties: false,
+      $defs: {
+        shared1: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: '{maxLength: 280}' },
+            cites: { type: 'array', items: { type: 'string' }, minItems: 1 },
+          },
+          required: ['text', 'cites'],
+          additionalProperties: false,
+        },
+      },
+    });
+  });
+
+  it('keeps existing $defs, skips a taken name and leaves allOf members inline', () => {
+    const item = { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] };
+    const format = buildStructuredOutputFormat({
+      type: 'object',
+      properties: { x: item, y: item, z: { $ref: '#/$defs/shared1' }, w: { allOf: [item] } },
+      required: ['x', 'y', 'z', 'w'],
+      $defs: { shared1: { type: 'string' } },
+    });
+
+    expect(format?.schema.$defs).toEqual({
+      shared1: { type: 'string' },
+      shared2: { type: 'object', properties: { a: { type: 'string' } }, required: ['a'], additionalProperties: false },
+    });
+    expect(format?.schema.properties).toMatchObject({
+      x: { $ref: '#/$defs/shared2' },
+      y: { $ref: '#/$defs/shared2' },
+      w: { allOf: [{ type: 'object', properties: { a: { type: 'string' } } }] },
+    });
+  });
 });
 
 describe('AnthropicBackend caller tool_choice on models without forced tool use', () => {
