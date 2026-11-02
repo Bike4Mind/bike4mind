@@ -27,7 +27,7 @@ import {
 } from '@bike4mind/common';
 import { federatedAnthropicCredentials } from './anthropicFederation';
 import { selectedWifTokenSource } from './wifTokenSource';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -2547,7 +2547,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-                this.logger.error('[Tool Execution] Tool failed', {
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
                   model,
                   toolName: outcome.name,
                   error: errorMessage,
@@ -3026,7 +3026,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-                this.logger.error('[Tool Execution] Tool failed (non-streaming)', {
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed (non-streaming)', {
                   model,
                   toolName: outcome.name,
                   error: errorMessage,
