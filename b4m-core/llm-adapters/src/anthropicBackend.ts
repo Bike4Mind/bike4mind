@@ -27,7 +27,7 @@ import {
 } from '@bike4mind/common';
 import { federatedAnthropicCredentials } from './anthropicFederation';
 import { selectedWifTokenSource } from './wifTokenSource';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -69,6 +69,7 @@ import {
   planReasoningEffort,
   resolveAnthropicEffort,
   resolveOutputMaxTokens,
+  supportsAnthropicEffort,
   THINKING_ANSWER_HEADROOM_TOKENS,
   type AnthropicEffort,
   type ReasoningEffortPlan,
@@ -88,6 +89,7 @@ import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityRemind
 import {
   appendSystemText,
   buildStructuredOutputFormat,
+  declaresOpenObject,
   buildToolUseInstruction,
   downgradeForcedToolChoice,
   hasCitationsEnabled,
@@ -1255,18 +1257,36 @@ export class AnthropicBackend implements ICompletionBackend {
     // precedence; mixing forced-tool with executable tools can deadlock).
     const responseFormat = options.responseFormat;
     const wantsJsonSchema = responseFormat?.type === 'json_schema' && !hasCallerTools;
-    const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported;
-    // A model without forced tool use gets native structured outputs instead of the synthesized tool,
-    // unless a document asks for citations (that pairing is a 400) or the schema is one structured
-    // outputs reject - then the schema goes in the prompt.
-    const citationsBlockFormat =
-      wantsJsonSchema && !forcedToolChoiceSupported && hasCitationsEnabled(apiParams.messages);
+    // Structured outputs close every object, so a schema that explicitly keeps one open stays on the
+    // unconstrained forced tool, where extra keys still come through.
+    const schemaDeclaresOpenObject =
+      responseFormat?.type === 'json_schema' && declaresOpenObject(responseFormat.json_schema.schema);
+    // The forced tool cannot run alongside thinking, so a caller's own request for adaptive thinking
+    // (not a route default, and not `none`) moves json_schema to native structured outputs.
+    const callerWantsThinking =
+      options.explicitReasoning === true &&
+      !schemaDeclaresOpenObject &&
+      currentModelInfo?.can_think === true &&
+      supportsAnthropicEffort(model, currentModelInfo) &&
+      (options.thinking?.enabled === true ||
+        (options.reasoningEffort !== undefined &&
+          options.reasoningEffort !== 'none' &&
+          planReasoningEffort(model, currentModelInfo, options.reasoningEffort, apiParams.max_tokens).kind ===
+            'adaptive'));
+    const wantsNativeFormat = wantsJsonSchema && (!forcedToolChoiceSupported || callerWantsThinking);
+    // Native structured outputs replace the synthesized tool unless a document asks for citations (that
+    // pairing is a 400) or the schema is one structured outputs reject. Then a model with forced tool
+    // use keeps the tool, and one without puts the schema in the prompt.
+    const citationsBlockFormat = wantsNativeFormat && hasCitationsEnabled(apiParams.messages);
     const nativeFormat =
-      wantsJsonSchema && !forcedToolChoiceSupported && !citationsBlockFormat && responseFormat.type === 'json_schema'
+      wantsNativeFormat && !citationsBlockFormat && responseFormat.type === 'json_schema'
         ? buildStructuredOutputFormat(responseFormat.json_schema.schema)
         : null;
     const usingResponseFormatNative = nativeFormat !== null;
+    const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported && !usingResponseFormatNative;
     const usingResponseFormatPrompt = wantsJsonSchema && !forcedToolChoiceSupported && !usingResponseFormatNative;
+    // Caller thinking moved this request off the forced tool; its max_tokens is kept as sent.
+    const thinkingMovedFormatNative = usingResponseFormatNative && forcedToolChoiceSupported;
     if (responseFormat) {
       this.logger.info(
         `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, nativeFormat=${usingResponseFormatNative}, callerTools=${options.tools?.length ?? 0}`
@@ -1289,13 +1309,24 @@ export class AnthropicBackend implements ICompletionBackend {
       apiParams.system = appendSystemText(apiParams.system, schemaInstruction);
     }
     if (usingResponseFormatToolUse && responseFormat.type === 'json_schema') {
+      // Unconstrained, the model can emit a nested object as a JSON string. Strict mode needs the
+      // closed structured-outputs form of the schema; one that has none, or that declares an open
+      // object, goes as-is, unconstrained.
+      const strictFormat = schemaDeclaresOpenObject
+        ? null
+        : buildStructuredOutputFormat(responseFormat.json_schema.schema);
       const schemaTool: Tool = {
         name: responseFormat.json_schema.name,
         ...(responseFormat.json_schema.description ? { description: responseFormat.json_schema.description } : {}),
-        input_schema: responseFormat.json_schema.schema as Tool.InputSchema,
+        input_schema: (strictFormat?.schema ?? responseFormat.json_schema.schema) as Tool.InputSchema,
+        ...(strictFormat ? { strict: true } : {}),
       };
       apiParams.tools = [schemaTool];
-      apiParams.tool_choice = { type: 'tool', name: responseFormat.json_schema.name };
+      apiParams.tool_choice = {
+        type: 'tool',
+        name: responseFormat.json_schema.name,
+        disable_parallel_tool_use: true,
+      };
     }
 
     if (hasCallerTools) {
@@ -1389,7 +1420,7 @@ export class AnthropicBackend implements ICompletionBackend {
           // Merged, not assigned: output_config may already carry the structured-output format.
           apiParams.output_config = { ...apiParams.output_config, ...result.thinkingConfig.output_config };
         }
-        apiParams.max_tokens = result.maxTokens;
+        if (!thinkingMovedFormatNative) apiParams.max_tokens = result.maxTokens;
 
         // Apply temperature/top_p constraints
         if (result.temperature === 'delete') {
@@ -1413,7 +1444,7 @@ export class AnthropicBackend implements ICompletionBackend {
         );
         // The synthesized response_format tool is forced via tool_choice, which the API rejects
         // alongside thinking - so only the off switch survives there. Native structured outputs
-        // (models without forced tool use) carry the format in output_config and keep any level.
+        // carry the format in output_config and keep any level.
         const plan: ReasoningEffortPlan =
           usingResponseFormatToolUse && (requested.kind === 'adaptive' || requested.kind === 'budget')
             ? { kind: 'default' }
@@ -1822,8 +1853,9 @@ export class AnthropicBackend implements ICompletionBackend {
                         responseFormat?.type === 'json_schema' &&
                         toolBlock.name === responseFormat.json_schema.name
                       ) {
-                        // Mark this index so input_json_delta below streams as text.
-                        responseFormatToolIndices.add(event.index);
+                        // Mark this index so input_json_delta below streams as text. Only the
+                        // first block is the answer: a second would append another JSON object.
+                        if (responseFormatToolIndices.size === 0) responseFormatToolIndices.add(event.index);
                       } else {
                         func[event.index] ||= {};
                         func[event.index].name = toolBlock.name;
@@ -2547,7 +2579,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-                this.logger.error('[Tool Execution] Tool failed', {
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
                   model,
                   toolName: outcome.name,
                   error: errorMessage,
@@ -2723,6 +2755,7 @@ export class AnthropicBackend implements ICompletionBackend {
 
         if ('content' in response && Array.isArray(response.content)) {
           this.lastAssistantContent = response.content as ContentBlock[];
+          let responseFormatToolEmitted = false;
 
           for (let i = 0; i < response.content.length; i++) {
             const content = response.content[i] as ContentBlock;
@@ -2747,7 +2780,9 @@ export class AnthropicBackend implements ICompletionBackend {
                   responseFormat?.type === 'json_schema' &&
                   content.name === responseFormat.json_schema.name
                 ) {
-                  streamedText.push(JSON.stringify(content.input ?? {}));
+                  // Only the first block is the answer, as on the streaming path.
+                  if (!responseFormatToolEmitted) streamedText.push(JSON.stringify(content.input ?? {}));
+                  responseFormatToolEmitted = true;
                 } else {
                   // Handle tool use in non-streaming response
                   func[i] ||= {};
@@ -3026,7 +3061,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
-                this.logger.error('[Tool Execution] Tool failed (non-streaming)', {
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed (non-streaming)', {
                   model,
                   toolName: outcome.name,
                   error: errorMessage,
@@ -3218,9 +3253,8 @@ export class AnthropicBackend implements ICompletionBackend {
   formatTools(tools: ICompletionOptionTools[] = [], providerTools: ToolSearchServerTool[] = []) {
     const customTools = sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
-      // `strict` is an OpenAI-only tool field. Anthropic rejects it with
-      // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the
-      // spread copy (e.g. a tool schema that sets strict: true for OpenAI structured tools).
+      // A caller's `strict` (usually an OpenAI flag) is dropped: Anthropic 400s strict on any object not
+      // closed with additionalProperties: false. markToolStrict re-adds it where the schema qualifies.
       delete rest.strict;
       return {
         ...rest,

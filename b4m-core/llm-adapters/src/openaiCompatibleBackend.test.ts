@@ -234,6 +234,82 @@ describe('OpenAICompatibleBackend against vLLM', () => {
     expect(notices).toHaveLength(1);
   });
 
+  it('fails with the restart hint, and sends nothing, when the context cannot hold the prompt even without tools', async () => {
+    const fake = await vllm({ maxModelLen: 4096 });
+    const { backend } = make(fake.baseUrl, 'vllm');
+    const messages = [
+      { role: 'system', content: 'x'.repeat(16_000) },
+      { role: 'user', content: 'hi' },
+    ] as unknown as IMessage[];
+    const failure = backend.complete('qwen-small', messages, { stream: true }, async () => undefined);
+    await expect(failure).rejects.toThrow(
+      "gpu-box runs qwen-small with a 4096-token context, too small for the CLI's instructions even without tools (about 4000 tokens). Restart vLLM with --max-model-len 16384, then start a new b4m session."
+    );
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it('names the message, not the instructions, when the message is what does not fit', async () => {
+    const fake = await vllm({ maxModelLen: 4096 });
+    const { backend } = make(fake.baseUrl, 'vllm');
+    await expect(run(backend, 'qwen-small', [], 'x'.repeat(16_000))).rejects.toThrow(
+      "This message (about 4000 tokens) is too long for qwen-small's 4096-token context on gpu-box. Send a shorter message, or use a model with a larger context."
+    );
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it('fails instead of cutting the reply short when the conversation leaves too little room', async () => {
+    const fake = await vllm({ maxModelLen: 4096 });
+    const { backend } = make(fake.baseUrl, 'vllm');
+    const messages = [
+      { role: 'user', content: 'x'.repeat(7_000) },
+      { role: 'assistant', content: 'x'.repeat(7_000) },
+      { role: 'user', content: 'hi' },
+    ] as unknown as IMessage[];
+    const failure = backend.complete('qwen-small', messages, { stream: true, maxTokens: 2048 }, async () => undefined);
+    await expect(failure).rejects.toThrow(
+      "This conversation no longer fits qwen-small's 4096-token context window on gpu-box with room for a reply. Start a new conversation, or use a model with a larger context."
+    );
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it('caps max_tokens by the room the prompt leaves in a fixed context', async () => {
+    const fake = await vllm({ maxModelLen: 4096 });
+    const { backend } = make(fake.baseUrl, 'vllm');
+    await backend.complete(
+      'qwen-small',
+      userMessage('x'.repeat(10_000)),
+      { stream: true, maxTokens: 2048 },
+      async () => undefined
+    );
+    expect((fake.requests[0] as { max_tokens?: number }).max_tokens).toBe(1596);
+    await backend.complete('qwen-small', userMessage('hi'), { stream: true, maxTokens: 512 }, async () => undefined);
+    expect((fake.requests[1] as { max_tokens?: number }).max_tokens).toBe(512);
+  });
+
+  it('leaves tools on and stops when the turn is aborted during the refusal probe', async () => {
+    const controller = new AbortController();
+    let chats = 0;
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (req, res) => {
+        if (!bodyOf(req).stream) return controller.abort();
+        if (chats++ === 0) return sendJson(res, { object: 'error', message: 'tools are not supported' }, 400);
+        sse(res, [{ content: 'ok' }]);
+      },
+    });
+    const { backend, notices } = make(server.baseUrl, 'vllm');
+    const tools = [weatherTool(async () => '')];
+    const failure = backend.complete(
+      'm',
+      userMessage('hi'),
+      { stream: true, tools, abortSignal: controller.signal },
+      async () => undefined
+    );
+    await expect(failure).rejects.toThrow('aborted');
+    expect(notices).toEqual([]);
+    expect((await run(backend, 'm', tools)).text).toBe('ok');
+    expect(server.requests.map(bodyOf).filter(body => body.stream)[1].tools).toHaveLength(1);
+  });
+
   it('lists aliases once and names an adapter with its base', async () => {
     const fake = await vllm({ maxModelLen: 32768 });
     const { backend } = make(fake.baseUrl, 'vllm');
@@ -277,6 +353,23 @@ describe('OpenAICompatibleBackend against vLLM', () => {
     const { backend } = make(server.baseUrl, null, fetch);
     expect((await run(backend, 'm')).text).toBe('hi');
     expect(server.requests[0].headers).not.toHaveProperty('authorization');
+  });
+
+  it('ends the turn with the idle error when a streaming reply goes silent', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'he' } }] })}\n\n`);
+      },
+    });
+    const fetch = createServerFetch(
+      { origin: server.baseUrl, label: 'gpu-box', app: 'The CLI', credentialHeaders: () => null },
+      { bodyIdleTimeoutMs: 100 }
+    );
+    const { backend } = make(server.baseUrl, null, fetch);
+    await expect(run(backend, 'm')).rejects.toThrow(
+      /gpu-box stopped sending its reply for 0\.1 s\. The CLI stopped waiting\./
+    );
   });
 
   it('throws OutputBudgetExhaustedError when the budget ends the reply before any text', async () => {

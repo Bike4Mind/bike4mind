@@ -19,7 +19,6 @@ import {
   isAbliteratedModel,
   isHubRepoId,
   isPermissiveEntry,
-  loadCuratedManifest,
   ollamaLibraryLayers,
   probeHardware,
   RuntimeHttpError,
@@ -31,16 +30,20 @@ import {
   answersWithoutCredentials,
   parseServerAddress,
   leastTrusted,
+  localModelId,
   probeServer,
   probeToolSupport,
   scopeOfIp,
+  serverRuntimeId,
   toolsOffHint,
   transportVerdict,
   type AddressScope,
 } from '@bike4mind/local-models/servers';
 import { ConfigStore } from '../storage/ConfigStore.js';
+import { createCliCuratedList, type CuratedOrigin } from '../models/curatedList.js';
 import {
   defaultOn,
+  DESKTOP_ONLY_STATUS,
   findModelServer,
   loadModelServers,
   loginHint,
@@ -156,8 +159,10 @@ export interface ModelsDeps extends ModelSourceDeps {
   machine: MachineReader;
   /** The Ollama host a command would use before it is resolved; null when it would detect one on this machine. */
   runtimeHost: () => string | null;
-  /** The curated list Desktop uses, bundled with the CLI. */
-  curated: () => HubManifest;
+  /** The curated list Desktop uses: the one bundled with the CLI, or a newer signed one. */
+  curated: () => HubManifest | Promise<HubManifest>;
+  /** Present when this CLI can fetch a newer list: checks now, and says where the list in use came from. */
+  curatedSource?: { refresh: () => Promise<void>; origin: () => CuratedOrigin | null };
   /** This computer's memory, which picks its tier of the Curated list. */
   hardware: () => Promise<HardwareProfile>;
   servers?: ModelServersDeps;
@@ -172,6 +177,8 @@ export interface ModelsOptions {
   includeAbliterated: boolean;
   /** `servers`: also ask each OpenAI-compatible server whether it accepts tool calls. */
   checkTools?: boolean;
+  /** `curated`: check for a newer list now instead of when the last check is 6 hours old. */
+  refresh?: boolean;
 }
 
 export type PullResult = 'pulled' | 'declined' | 'cancelled';
@@ -485,7 +492,9 @@ const sizeOfBuild = (build: HubBuild) => curatedSource(build).sizeBytes;
 
 /** Lists the Curated models without contacting any runtime; downloading one is always a separate `pull`. */
 export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
-  const manifest = deps.curated();
+  if (opts.refresh) await abortable(deps.curatedSource?.refresh() ?? Promise.resolve(), deps.signal);
+  const manifest = await abortable(Promise.resolve(deps.curated()), deps.signal);
+  const origin = deps.curatedSource?.origin() ?? null;
   const hardware = await abortable(deps.hardware(), deps.signal);
   const listing = curatedListing(manifest).map(({ entry, builds }) => ({
     entry,
@@ -498,6 +507,15 @@ export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promis
       JSON.stringify(
         {
           updatedAt: manifest.updatedAt,
+          ...(origin && {
+            source: {
+              origin: origin.origin,
+              sequence: origin.sequence,
+              check: origin.check,
+              stale: origin.stale,
+              checkedAt: origin.checkedAt,
+            },
+          }),
           machine: {
             memoryKind: hardware.memoryKind,
             totalMemoryBytes: hardware.totalMemoryBytes,
@@ -524,6 +542,8 @@ export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promis
   }
 
   deps.log(`Curated list from ${clean(manifest.updatedAt.slice(0, 10))}. ${machineText(hardware)}`);
+  if (origin) deps.log(origin.text);
+  else if (opts.refresh) deps.log('This CLI has no online curated list; showing the bundled one.');
   if (listing.length === 0) {
     deps.log('The Curated list has no models. Search Hugging Face with: b4m models search <query>');
     return 0;
@@ -786,6 +806,7 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
 
 export async function useModel(name: string, deps: ModelsDeps): Promise<number> {
   const target = await abortable(deps.resolveRuntime(), deps.signal);
+  if (target.server) return useServerModel(name, { ...target, server: target.server }, deps);
   const { runtime } = target;
   // The chat backend (OllamaBackend in @bike4mind/llm-adapters) only talks to Ollama.
   if (runtime.kind !== 'ollama')
@@ -799,6 +820,28 @@ export async function useModel(name: string, deps: ModelsDeps): Promise<number> 
     ...(deps.config.ollamaHost !== runtime.baseUrl && { ollamaHost: runtime.baseUrl }),
   });
   deps.log(`Default model: ${clean(model.name)} on Ollama at ${runtime.baseUrl}`);
+  deps.log('Start chatting with: b4m');
+  return 0;
+}
+
+/** Saves the server's id with the model, so chat goes to that server and never to a same-named model elsewhere. */
+async function useServerModel(
+  name: string,
+  target: RuntimeTarget & { server: NonNullable<RuntimeTarget['server']> },
+  deps: ModelsDeps
+): Promise<number> {
+  const server = clean(target.server.name);
+  const models = await abortable(target.runtime.list(), deps.signal);
+  const model = findInstalledModel(models, name) ?? models.find(listed => listed.aliases?.includes(name));
+  if (!model) {
+    throw new Error(`No model named ${clean(name)} on ${server}. See: b4m models ls --server ${server}`);
+  }
+  if (model.name !== name && model.aliases?.includes(name)) {
+    deps.log(`${clean(name)} is another name for ${clean(model.name)} on ${server}; saving ${clean(model.name)}.`);
+  }
+  const id = localModelId(serverRuntimeId(target.server.id), model.name);
+  await deps.config.save({ defaultModel: id, localDefaultModel: id });
+  deps.log(`Default model: ${clean(model.name)} on ${server}`);
   deps.log('Start chatting with: b4m');
   return 0;
 }
@@ -893,24 +936,39 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
     Promise.all(loaded.servers.map(server => describeServer(server, ctx, Boolean(opts.checkTools)))),
     deps.signal
   );
+  const desktopOnly = loaded.desktopOnly ?? [];
   if (opts.json) {
     deps.log(
       JSON.stringify(
         {
           problem: loaded.problem,
           toolsChecked: Boolean(opts.checkTools),
-          servers: rows.map(({ server, product, credentials, status, notes }) => ({
-            id: server.id,
-            name: server.name,
-            kind: server.kind,
-            product,
-            address: serverAddressLabel(server),
-            access: server.access,
-            source: server.source,
-            credentials,
-            status,
-            notes,
-          })),
+          servers: [
+            ...rows.map(({ server, product, credentials, status, notes }) => ({
+              id: server.id,
+              name: server.name,
+              kind: server.kind,
+              product,
+              address: serverAddressLabel(server),
+              access: server.access,
+              source: server.source,
+              credentials,
+              status,
+              notes,
+            })),
+            ...desktopOnly.map(server => ({
+              id: server.id,
+              name: server.name,
+              kind: server.kind,
+              product: productLabel(server.kind, null),
+              address: `ssh ${server.transport.destination}`,
+              access: server.access,
+              source: 'desktop',
+              credentials: 'none',
+              status: { state: 'desktop-only', latencyMs: null, text: DESKTOP_ONLY_STATUS },
+              notes: [],
+            })),
+          ],
         },
         null,
         2
@@ -918,7 +976,7 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
     );
     return 0;
   }
-  if (rows.length === 0) {
+  if (rows.length === 0 && desktopOnly.length === 0) {
     deps.log(loaded.problem ?? 'No model servers are saved in Desktop. Add one in Desktop under Settings.');
     return 0;
   }
@@ -933,6 +991,15 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
       credentials === 'needed' ? `needed: ${loginHint(server)}` : credentials,
       status.text,
       notes.map(clean).join(' '),
+    ]),
+    ...desktopOnly.map(server => [
+      clean(server.name),
+      productLabel(server.kind, null),
+      clean(`ssh ${server.transport.destination}`),
+      server.access === 'manage' ? 'Manage' : 'Chat only',
+      'none',
+      DESKTOP_ONLY_STATUS,
+      '',
     ]),
   ]);
   for (const line of lines) deps.log(line);
@@ -1004,11 +1071,6 @@ export async function logoutServer(name: string, deps: ModelsDeps): Promise<numb
 async function onServer(name: string, subcommand: string, deps: ModelsDeps): Promise<ModelsDeps> {
   const ctx = requireServers(deps);
   const server = await chosenServer(name, ctx, deps.signal);
-  if (subcommand === 'use') {
-    throw new Error(
-      `Chat with models on ${clean(server.name)} is coming in a later release, so it cannot be set as the default yet. Nothing was saved.`
-    );
-  }
   if (subcommand === 'pull' || subcommand === 'rm' || subcommand === 'remove') requireManageable(server);
   return {
     ...deps,
@@ -1034,6 +1096,7 @@ export async function runModelsCommand(
     acceptLicense: Boolean(argv['accept-license']),
     includeAbliterated: Boolean(argv['include-abliterated']),
     checkTools: Boolean(argv['check-tools']),
+    refresh: Boolean(argv.refresh),
   };
   try {
     if (argv.server !== undefined) {
@@ -1197,6 +1260,7 @@ export async function handleModelsCommand(subcommand: string | undefined, argv: 
   process.on('SIGINT', onSigint);
 
   let hub: HubClient | undefined;
+  const curatedList = createCliCuratedList({ offline: Boolean(argv.offline) });
   try {
     return await runModelsCommand(subcommand, argv, {
       hub: () => (hub ??= new HuggingFaceHub({ token: process.env.HF_TOKEN })),
@@ -1228,7 +1292,8 @@ export async function handleModelsCommand(subcommand: string | undefined, argv: 
         const host = flagHost || process.env.B4M_OLLAMA_HOST || models.ollamaHost;
         return host ? withDefaultOllamaPort(host) : null;
       },
-      curated: () => loadCuratedManifest(message => console.error(message)),
+      curated: () => curatedList.manifest(),
+      curatedSource: curatedList,
       hardware: () => probeHardware(),
       servers: {
         load: () => loadModelServers(),

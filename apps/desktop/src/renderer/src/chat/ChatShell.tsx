@@ -162,7 +162,15 @@ type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 
  */
 export type AccountStrip = (status: ReactNode) => ReactNode;
 
-export function ChatShell({ auth, account }: { auth?: AuthState | null; account?: AccountStrip }) {
+export function ChatShell({
+  auth,
+  account,
+  onOpenModelServers,
+}: {
+  auth?: AuthState | null;
+  account?: AccountStrip;
+  onOpenModelServers?: () => void;
+}) {
   const {
     sessions,
     loading,
@@ -605,6 +613,61 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     if (created) setActiveId(created);
   }, [startSession, markSessionStart]);
 
+  /** "Use in chat" on the Models screen: a new Chat conversation already on that model. */
+  const [chatOnError, setChatOnError] = useState<string | null>(null);
+  const startingChatOn = useRef(false);
+  const startChatOn = useCallback(
+    async (modelId: string) => {
+      if (startingChatOn.current) return;
+      startingChatOn.current = true;
+      setChatOnError(null);
+      try {
+        markSessionStart('new');
+        const created = await create();
+        const updated = await window.b4m.chat.setSessionModel(created, modelId).catch(() => null);
+        if (!updated) {
+          // Opening it anyway would send the first message to the default model, which can be a hosted one.
+          const removed = await remove(created).then(
+            () => true,
+            () => false
+          );
+          setChatOnError(
+            removed
+              ? 'Desktop could not start a conversation on that model. Try again, or pick it in a chat.'
+              : 'Desktop could not start a conversation on that model, and could not remove the empty one it made. Delete it from the sidebar before chatting in it.'
+          );
+          return;
+        }
+        apply(updated);
+        setMode('chat');
+        setActiveId(created);
+        setScreen('conversation');
+      } catch (error) {
+        setChatOnError(
+          `Desktop could not start a conversation: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        startingChatOn.current = false;
+      }
+    },
+    [create, remove, apply, markSessionStart]
+  );
+  /** The catalog's own entry for an installed model, so the conversation routes to the server it runs on. */
+  const chatWith = useCallback(
+    (serverId: string, name: string) => {
+      const wanted = name.toLowerCase();
+      const option = catalog.models.find(
+        model =>
+          isLocalBackend(model) &&
+          !model.unavailable &&
+          (model.server?.id ?? LOCAL_SERVER_ID) === serverId &&
+          model.name.toLowerCase() === wanted
+      );
+      return option ? () => void startChatOn(option.id) : null;
+    },
+    [catalog.models, startChatOn]
+  );
+
   /**
    * New, from a user section's header or menu: the same session New makes, but in that section
    * from the moment main mints its id - see CreateSessionRequest.
@@ -745,7 +808,17 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'models' ? (
-        <ModelsScreen onClose={() => setScreen('conversation')} inUse={modelsInUse} />
+        <ModelsScreen
+          onClose={() => {
+            setChatOnError(null);
+            setScreen('conversation');
+          }}
+          inUse={modelsInUse}
+          onOpenModelServers={onOpenModelServers}
+          chatWith={chatWith}
+          chatError={chatOnError}
+          onDismissChatError={() => setChatOnError(null)}
+        />
       ) : screen === 'skill-market' ? (
         <SkillMarketPanel initial={marketListing} onClose={() => setScreen('customize')} />
       ) : screen === 'customize' ? (

@@ -10,6 +10,7 @@ import { oauthRouteGate } from '@server/middlewares/oauthRouteGate';
 import { impersonationGate, impersonationAnonymousGate } from './impersonationGate';
 import { apiKeyAnomalyDetection } from '@server/middlewares/apiKeyAnomalyDetection';
 import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
+import { defaultWriteRateLimit } from '@server/middlewares/defaultWriteRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
 import { connectDB } from '@bike4mind/database';
 import { ApiKeyScopeValue, MethodNotAllowedError } from '@bike4mind/common';
@@ -86,6 +87,12 @@ interface BaseAPIOptions {
    * no-match answer is a 404 that only fires after auth has already run.
    */
   allowedMethods?: readonly string[];
+  /**
+   * `false` opts this route out of the default per-user write limit (defaultWriteRateLimit.ts), for
+   * high-frequency, low-cost writes the app sends on its own, such as analytics events. Defaults to
+   * true; a route's own `rateLimit` still applies either way.
+   */
+  defaultWriteRateLimit?: boolean;
 }
 
 /** 405s any method outside `allowedMethods` (GET implies HEAD), setting `Allow`; passes the rest. */
@@ -257,6 +264,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // checkout, every AI completion route, and whatever spends money or compute next, with no per-route
     // list to keep current. Anonymous entry points (sign-in, signup, embed) opt in with checkBlockedIP.
     router.use(checkBlockedIP({ surface: 'app', writesOnly: true, exemptAdmins: true }));
+
+    // After baseApi's auth and IP-block gates, so a request they refuse never spends the user's write budget.
+    // Requests refused later (a route's own rateLimit, validation, handler errors) still count.
+    if (resolvedOptions.defaultWriteRateLimit !== false) router.use(defaultWriteRateLimit);
   }
 
   // TODO: idempotency middleware disabled - it was creating a lot of idempotency keys in local

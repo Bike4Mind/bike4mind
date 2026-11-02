@@ -253,6 +253,35 @@ describe('b4m models servers', () => {
     expect(output()).toMatch(/No model servers are saved in Desktop/);
   });
 
+  it('lists a Desktop SSH server as Desktop only, without connecting to it', async () => {
+    const ollama = await plainOllama();
+    open.push(ollama);
+    await writeServers([
+      record({ id: 'aaa', name: 'shared', transport: { type: 'http', baseUrl: ollama.baseUrl } }),
+      record({ id: 'sss', name: 'lab', access: 'chat', transport: { type: 'ssh', destination: 'me@lab' } }),
+    ]);
+    expect(await run('servers', {})).toBe(0);
+    expect(output()).toMatch(/shared\s+Ollama\s+http:\/\/127\.0\.0\.1:\d+\s+Manage\s+none\s+online/);
+    expect(output()).toMatch(/lab\s+Ollama\s+ssh me@lab\s+Chat only\s+none\s+SSH, Desktop only/);
+
+    lines.length = 0;
+    await run('servers', { 'output-format': 'json' });
+    const parsed = JSON.parse(output()) as { servers: { name: string; address: string; status: { state: string } }[] };
+    expect(parsed.servers.find(server => server.name === 'lab')).toMatchObject({
+      address: 'ssh me@lab',
+      status: { state: 'desktop-only' },
+    });
+
+    await expect(run('ls', { server: 'lab' })).rejects.toThrow(/lab connects over SSH, which only Desktop supports/);
+  });
+
+  it('lists only Desktop SSH servers without saying there are none', async () => {
+    await writeServers([record({ id: 'sss', name: 'lab', transport: { type: 'ssh', destination: 'lab' } })]);
+    await run('servers', {});
+    expect(output()).not.toMatch(/No model servers/);
+    expect(output()).toContain('SSH, Desktop only');
+  });
+
   it('reports an unreachable server as offline', async () => {
     await writeServers([record({ name: 'gone' })]);
     await run('servers', {});
@@ -441,7 +470,7 @@ describe('--server routing', () => {
     expect(text.match(/^qwen-small/gm)?.length).toBe(1);
   });
 
-  it('use --server refuses and saves nothing, on vLLM and on Ollama', async () => {
+  it('use --server saves the server-scoped id, canonicalizing an alias, on vLLM and on Ollama', async () => {
     const vllm = await startFakeVllm();
     const ollama = await plainOllama();
     open.push(vllm, ollama);
@@ -455,12 +484,33 @@ describe('--server routing', () => {
       }),
       record({ id: 'aaa', name: 'shared', transport: { type: 'http', baseUrl: ollama.baseUrl } }),
     ]);
-    await expect(run('use', { server: 'vllm', name: 'qwen' })).rejects.toThrow(
-      'Chat with models on vllm is coming in a later release, so it cannot be set as the default yet. Nothing was saved.'
-    );
-    await expect(run('use', { server: 'shared', name: 'qwen2.5:0.5b' })).rejects.toThrow(/Nothing was saved\./);
-    expect(saved).toEqual([]);
+    expect(await run('use', { server: 'vllm', name: 'qwen' })).toBe(0);
+    expect(output()).toContain('qwen is another name for qwen-small on vllm; saving qwen-small.');
+    expect(output()).toContain('Default model: qwen-small on vllm');
+    expect(await run('use', { server: 'shared', name: 'qwen2.5:0.5b' })).toBe(0);
+    expect(saved).toEqual([
+      { defaultModel: 'local:srv-bbb:qwen-small', localDefaultModel: 'local:srv-bbb:qwen-small' },
+      { defaultModel: 'local:srv-aaa:qwen2.5:0.5b', localDefaultModel: 'local:srv-aaa:qwen2.5:0.5b' },
+    ]);
     expect(vllm.requests).toEqual([]);
+  });
+
+  it('use --server names the server and saves nothing when it does not serve the model', async () => {
+    const vllm = await startFakeVllm();
+    open.push(vllm);
+    await writeServers([
+      record({
+        id: 'bbb',
+        name: 'vllm',
+        kind: 'openai-compatible',
+        access: 'chat',
+        transport: { type: 'http', baseUrl: vllm.baseUrl },
+      }),
+    ]);
+    await expect(run('use', { server: 'vllm', name: 'llama3' })).rejects.toThrow(
+      'No model named llama3 on vllm. See: b4m models ls --server vllm'
+    );
+    expect(saved).toEqual([]);
   });
 
   it('an empty --server is an error, not the local runtime', async () => {

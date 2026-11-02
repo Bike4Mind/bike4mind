@@ -254,8 +254,16 @@ export class OllamaBackend implements ICompletionBackend {
       return { capabilities, contextWindow };
     } catch (error) {
       this._logger.debug(`[OllamaBackend] Could not fetch details for ${model}:`, error);
+      this._detailsFailed.add(model);
       return { capabilities: [], contextWindow: OllamaBackend.DEFAULT_CONTEXT_WINDOW };
     }
+  }
+
+  private readonly _detailsFailed = new Set<string>();
+
+  /** True when /api/show failed for `model`, so its `supportsTools: false` is a fallback, not what Ollama said. */
+  toolSupportUnchecked(model: string): boolean {
+    return this._detailsFailed.has(model);
   }
 
   /**

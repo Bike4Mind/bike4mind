@@ -13,6 +13,8 @@ export {
   serverRuntimeId,
   type DesktopDirsOptions,
   type DesktopModelServers,
+  type DesktopOnlyServer,
+  type HttpTransport,
   type ModelServerAccess,
   type ModelServerCredentialInput,
   type ModelServerKind,
@@ -22,6 +24,7 @@ export {
   type ModelServerTransport,
   type ReadDesktopOptions,
   type SharedServerRecord,
+  type SshTransport,
   type StoredAuth,
   type StoredServer,
 } from './modelServerFile';
@@ -46,11 +49,32 @@ export {
   type ServerEndpoint,
   type ServerFetchDeps,
 } from './serverFetch';
+export {
+  createSshFetch,
+  describeSshFailure,
+  parseSshDestination,
+  setsControlPath,
+  sharedControlPath,
+  SSH_CONNECT_TIMEOUT_S,
+  SSH_OLLAMA_URL,
+  SSH_PROBE_TIMEOUT_MS,
+  sshArgs,
+  sshChildEnv,
+  SshConnectionError,
+  sshDestinationProblem,
+  SshRefusedError,
+  suggestSshName,
+  type SshDeps,
+  type SshEndpoint,
+} from './ssh';
 export { describeFailure, DROP_CODES, errorCode } from './failure';
 export { answersWithoutCredentials, forbiddenMessage, probeServer, type ProbeOutcome } from './probe';
 export {
   contextTooSmallHint,
+  conversationFullHint,
   isToolRefusal,
+  messageTooLongHint,
+  promptTooLargeHint,
   refusesTools,
   probeToolSupport,
   serverContextTokens,

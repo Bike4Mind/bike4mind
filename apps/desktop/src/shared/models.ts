@@ -226,6 +226,7 @@ export interface CuratedPickView {
   recommended: boolean;
 }
 
+// The curated types below mirror b4m-core/local-models curatedSource/CuratedListSource.ts; keep them in sync.
 /** 'off' when this build has no list URL or trusted key, or the user turned checks off; rejected lists show as failed. */
 export type CuratedCheckStatus = 'off' | 'idle' | 'checking' | 'up-to-date' | 'updated' | 'failed';
 
@@ -303,6 +304,22 @@ export interface ModelPull {
 export type ModelPullResult = { ok: true; ref: string } | { ok: false; error: ModelHubError; listed: boolean };
 
 export type ModelRemoveResult = { ok: true } | { ok: false; error: ModelHubError };
+
+/** Where a pull would land, shown before it starts. */
+export interface ModelStoreLocation {
+  /** The model folder on the target's disk; null when nothing says where it is. */
+  path: string | null;
+  source: ModelStoreSource | null;
+  /** Free space at `path`; this computer only, and only for a folder found on its disk. */
+  freeBytes: number | null;
+}
+
+/**
+ * Where a model folder came from. `runtime`: the runtime reported it (and, on this computer, it is on this disk).
+ * `elsewhere`: Ollama at this computer's address reported a folder this disk does not have, as a container, WSL or
+ * a tunnel would. `default`: Ollama's default folder, a guess.
+ */
+export type ModelStoreSource = 'runtime' | 'elsewhere' | 'default';
 
 export type CuratedCheckResult = { ok: true } | { ok: false; error: ModelHubError };
 

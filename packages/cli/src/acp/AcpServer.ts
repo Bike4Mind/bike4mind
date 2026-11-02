@@ -556,7 +556,13 @@ export class AcpServer {
     await this.mergeRemoteSkills(config, apiClient);
 
     const startupLog: string[] = [];
-    const { llm, wsManager, models, modelInfo } = await buildLlmBackend({ config, apiClient, tokenGetter, startupLog });
+    // All saved servers attach: fallback models and pinned subagent models may live on a non-default one.
+    const { llm, wsManager, models, modelInfo } = await buildLlmBackend({
+      config,
+      apiClient,
+      tokenGetter,
+      startupLog,
+    });
 
     const permissionManager = new PermissionManager(
       new ToolCatalog(),
