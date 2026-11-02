@@ -8,8 +8,15 @@ export type PaymentAttemptOutcome = 'started' | 'succeeded' | 'failed';
  * route stamps the network it came from; the Stripe webhook adds every card fingerprint that tried
  * to pay and the final outcome. Holds no raw IP and no card details: the IP is a keyed HMAC
  * (hashSignupNetwork) and a card fingerprint is Stripe's opaque per-card id.
+ *
+ * It also keeps the browser visit a payment was started in, for the `purchase` analytics event,
+ * here rather than on anything sent to Stripe. A subscription Checkout has no payment intent until
+ * it is paid, so the visit it was opened in gets a row of its own, keyed on the Checkout session
+ * (recordCheckoutStart); that row holds nothing else, and the risk checks find no card or network
+ * on it.
  */
 export interface IPaymentAttemptDocument extends Document {
+  /** The Stripe payment intent id, or a Checkout session id (`cs_...`) on a recordCheckoutStart row. */
   paymentIntentId: string;
   userId: string;
   kind: PaymentAttemptKind;
@@ -25,6 +32,12 @@ export interface IPaymentAttemptDocument extends Document {
   ipHash: string | null;
   /** Started from a datacenter ASN or a WAF anonymous-IP address; null when unknown. */
   hostingNetwork: boolean | null;
+  /**
+   * The browser visit the payment was started in (the client app's visit cookie, shape-checked by
+   * readVisitId), so the analytics consumer can place the purchase in its visit. Never sent to
+   * Stripe. Null when the starting request carried no visit, and on a row the webhook created.
+   */
+  visitId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -64,6 +77,7 @@ const PaymentAttemptSchema = new Schema<IPaymentAttemptDocument>(
     radarBlocked: { type: Boolean, default: false },
     ipHash: { type: String, default: null },
     hostingNetwork: { type: Boolean, default: null },
+    visitId: { type: String, default: null },
   },
   { timestamps: true, versionKey: false }
 );
@@ -105,13 +119,49 @@ class PaymentAttemptRepository {
     currency: string;
     ipHash: string | null;
     hostingNetwork: boolean | null;
+    visitId?: string | null;
   }): Promise<void> {
-    const { paymentIntentId, ...fields } = input;
+    const { paymentIntentId, visitId, ...fields } = input;
     await PaymentAttemptModel.updateOne(
       { paymentIntentId },
-      { $setOnInsert: { ...fields, outcome: 'started', cardFingerprints: [] } },
+      { $setOnInsert: { ...fields, visitId: visitId ?? null, outcome: 'started', cardFingerprints: [] } },
       { upsert: true }
     );
+  }
+
+  /**
+   * Records the visit a subscription Checkout was opened in, keyed on the Checkout session id: the
+   * session is all the subscribe route has (its payment intent does not exist until the customer
+   * pays) and is what the first invoice can be traced back to. Holds no amount, card or network,
+   * so the risk checks, which read cards and networks, see nothing on it. Idempotent per session.
+   */
+  async recordCheckoutStart(input: { checkoutSessionId: string; userId: string; visitId: string }): Promise<void> {
+    await PaymentAttemptModel.updateOne(
+      { paymentIntentId: input.checkoutSessionId },
+      {
+        $setOnInsert: {
+          userId: input.userId,
+          kind: 'subscription',
+          amount: null,
+          currency: null,
+          ipHash: null,
+          hostingNetwork: null,
+          visitId: input.visitId,
+          outcome: 'started',
+          cardFingerprints: [],
+        },
+      },
+      { upsert: true }
+    );
+  }
+
+  /** The visit recorded for this payment intent or Checkout session; null when none was. */
+  async findVisitId(paymentIntentId: string): Promise<string | null> {
+    const row = await PaymentAttemptModel.findOne({ paymentIntentId })
+      .select({ visitId: 1, _id: 0 })
+      .maxTimeMS(2000)
+      .lean();
+    return row?.visitId ?? null;
   }
 
   /**
