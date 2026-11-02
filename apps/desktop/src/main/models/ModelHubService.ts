@@ -68,6 +68,7 @@ import {
   type ModelRemoveResult,
   type ModelRuntimeStatus,
   type ModelServerManagement,
+  type ModelStoreLocation,
 } from '@shared/models';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME, specsRate, type ModelServerSpecs } from '@shared/modelServers';
@@ -119,6 +120,16 @@ export interface ModelHubServer {
   runtime: ModelRuntimePort;
 }
 
+export interface StartedPull {
+  key: string;
+  serverId: string;
+  serverName: string;
+  /** The name Ollama pulls. */
+  ref: string;
+  label: string | null;
+  sizeBytes: number;
+}
+
 export interface ModelHubServiceDeps {
   /** This computer's Ollama. */
   runtime: ModelRuntimePort;
@@ -142,6 +153,14 @@ export interface ModelHubServiceDeps {
   curated: () => HubManifest;
   onPullsChanged: (pulls: ModelPull[]) => void;
   onInstalledChanged: (serverId: string) => void;
+  /** A reviewed pull passed every check and its download starts; not called again on resume. */
+  onPullStarted?: (pull: StartedPull) => void;
+  /** Free bytes on the disk holding `path` on this computer; null when it cannot be read. */
+  freeSpace?: (path: string) => Promise<number | null>;
+  /** Ollama's model folder on this computer when no installed model shows where it is. */
+  defaultStoreDir?: () => string | null;
+  /** Whether `path` is a folder on this computer's disk; assumed true when absent. */
+  pathExists?: (path: string) => Promise<boolean>;
   /** True while a download to a saved server runs: that server's Ollama stops it if this computer sleeps. */
   keepAwake?: (on: boolean) => void;
   /** The main log. */
@@ -192,6 +211,10 @@ function pause(ms: number, signal: AbortSignal): Promise<boolean> {
 
 /** Cold-cache /api/show reads in flight at once, so a long installed list does not swamp a busy daemon. */
 const INSPECT_CONCURRENCY = 4;
+/** Installed models read for a blob path before the model folder counts as unknown; cloud models have none. */
+const STORE_PROBES = 3;
+/** How long a revoke waits for its download to stop before it reports the grant still active, in ms. */
+const STOP_WAIT_MS = 15_000;
 
 async function mapLimited<T, R>(items: readonly T[], limit: number, map: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
@@ -552,6 +575,9 @@ export class ModelHubService {
     string,
     Promise<{ arch: ModelArch | null; parameters: string | null; contextLength: number | null } | null>
   >();
+  /** Model folders read from a runtime, by server id; a guessed default is never kept. */
+  readonly #stores = new Map<string, string>();
+  readonly #pullWaiters = new Set<() => void>();
   #hardware: Promise<HardwareProfile> | null = null;
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1053,6 +1079,8 @@ export class ModelHubService {
         management: 'unsupported',
       };
     const health = await target.runtime.health();
+    // A runtime that went away may come back with another model folder, so it is read again then.
+    if (!health.ok) this.#stores.delete(target.id);
     return {
       reachable: health.ok,
       version: health.version,
@@ -1062,6 +1090,40 @@ export class ModelHubService {
       serverName: target.name,
       management: target.management,
     };
+  }
+
+  /**
+   * Where a pull to `serverId` lands. Ollama has no API for its model folder, so it is read from an installed
+   * model's blob path; with none installed, this computer falls back to Ollama's default folder, marked a guess.
+   */
+  async storeLocation(serverId?: string): Promise<ModelStoreLocation> {
+    const target = this.#target(serverId);
+    if (!target) return { path: null, source: null, freeBytes: null };
+    const exists = (path: string) => this.#deps.pathExists?.(path).catch(() => false) ?? Promise.resolve(true);
+    const cached = this.#stores.get(target.id) ?? null;
+    // A remembered folder that is gone from this disk was moved, so the runtime is asked again.
+    const stale = cached !== null && target.local && !(await exists(cached));
+    let reported = stale ? null : cached;
+    if (!reported) {
+      const models = await target.runtime.list().catch(() => []);
+      for (const model of models.slice(0, STORE_PROBES)) {
+        const inspection = await target.runtime.inspect(model.name, { tags: false }).catch(() => null);
+        reported = inspection?.contents?.storeDir ?? null;
+        if (reported) break;
+      }
+      if (reported) this.#stores.set(target.id, reported);
+      else this.#stores.delete(target.id);
+    }
+    if (!target.local) return { path: reported, source: reported ? 'runtime' : null, freeBytes: null };
+    const free = (path: string) => this.#deps.freeSpace?.(path).catch(() => null) ?? Promise.resolve(null);
+    if (reported) {
+      const here = reported === cached && !stale ? true : await exists(reported);
+      return here
+        ? { path: reported, source: 'runtime', freeBytes: await free(reported) }
+        : { path: reported, source: 'elsewhere', freeBytes: null };
+    }
+    const fallback = this.#deps.defaultStoreDir?.() ?? null;
+    return { path: fallback, source: fallback ? 'default' : null, freeBytes: fallback ? await free(fallback) : null };
   }
 
   async installed(serverId?: string): Promise<InstalledModelsResult> {
@@ -1210,6 +1272,14 @@ export class ModelHubService {
     if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
     entry.ref = ref;
     entry.curated = curated && { ...curated, hadTag };
+    this.#deps.onPullStarted?.({
+      key,
+      serverId: target.id,
+      serverName: target.name,
+      ref,
+      label: entry.view.label,
+      sizeBytes: request.sizeBytes,
+    });
     return this.#download(key, entry, target);
   }
 
@@ -1363,6 +1433,30 @@ export class ModelHubService {
     else entry?.controller.abort();
   }
 
+  /**
+   * Cancels `key` and resolves true once it no longer runs, false if it still does after `timeoutMs`. A Curated
+   * pull stopped during its post-download check ends failed: the model stays installed, marked unverified.
+   */
+  stop(key: string, timeoutMs = STOP_WAIT_MS): Promise<boolean> {
+    this.cancel(key);
+    if (!this.#running(key)) return Promise.resolve(true);
+    return new Promise(resolve => {
+      const finish = (stopped: boolean) => {
+        clearTimeout(timer);
+        this.#pullWaiters.delete(check);
+        resolve(stopped);
+      };
+      const check = () => !this.#running(key) && finish(true);
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      this.#pullWaiters.add(check);
+    });
+  }
+
+  #running(key: string): boolean {
+    const phase = this.#pulls.get(key)?.view.phase;
+    return phase !== undefined && phase !== 'failed' && phase !== 'paused';
+  }
+
   /** Clears a failed or paused pull from the list; active pulls are cancelled instead. */
   dismiss(key: string): void {
     const entry = this.#pulls.get(key);
@@ -1371,6 +1465,7 @@ export class ModelHubService {
 
   /** Called when a saved server changes or is removed: stops and clears its pulls once it no longer allows them. */
   serverChanged(serverId: string): void {
+    this.#stores.delete(serverId);
     const target = this.#target(serverId);
     const reason = target ? manageRefusal(target) : hubError('not-found', SERVER_GONE);
     if (!reason) return;
@@ -1442,6 +1537,7 @@ export class ModelHubService {
   }
 
   #push(now: boolean): void {
+    for (const check of [...this.#pullWaiters]) check();
     if (this.#disposed) return;
     const awake = [...this.#pulls.values()].some(
       ({ view }) => view.serverId !== LOCAL_SERVER_ID && view.phase !== 'paused' && view.phase !== 'failed'

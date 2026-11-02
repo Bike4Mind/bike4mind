@@ -20,12 +20,14 @@ import {
   type ModelPull,
   type ModelPullResult,
   type ModelRuntimeStatus,
+  type ModelStoreLocation,
   type HfTokenStatus,
 } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import type { ModelsInUse } from './InstalledTab';
 import { ModelsScreen } from './ModelsScreen';
+import type { ChatWith } from './modelTarget';
 import { DOWN_RECHECK_MS } from './useModelHub';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -283,6 +285,7 @@ interface Bridge {
   curatedFailures: number;
   curatedPull: CuratedPullResult;
   token: HfTokenStatus;
+  store: ModelStoreLocation;
 }
 
 let bridge: Bridge;
@@ -308,6 +311,7 @@ const calls = {
   setHfToken: vi.fn(),
   clearHfToken: vi.fn(),
   checkCuratedList: vi.fn(),
+  getStoreLocation: vi.fn(),
 };
 
 beforeEach(() => {
@@ -324,6 +328,7 @@ beforeEach(() => {
     curatedFailures: 0,
     curatedPull: libraryPull(),
     token: { set: false, persisted: true },
+    store: { path: '/home/me/.ollama/models', source: 'runtime', freeBytes: 200 * GIB },
   };
   for (const fn of Object.values(calls)) fn.mockReset();
   window.localStorage.clear();
@@ -398,6 +403,10 @@ beforeEach(() => {
       resumePull: calls.resumePull,
       dismissPull: calls.dismissPull,
       remove: calls.remove,
+      getStoreLocation: async (serverId?: string) => {
+        calls.getStoreLocation(serverId);
+        return bridge.store;
+      },
       getHfToken: calls.getHfToken,
       setHfToken: calls.setHfToken,
       clearHfToken: calls.clearHfToken,
@@ -432,14 +441,26 @@ afterEach(() => {
 
 const flush = () => act(async () => new Promise(resolve => setTimeout(resolve, 0)));
 
-async function mount(inUse?: ModelsInUse, tab: 'curated' | 'installed' = 'installed') {
+async function mount(
+  inUse?: ModelsInUse,
+  tab: 'curated' | 'installed' = 'installed',
+  chatWith?: ChatWith,
+  chatError?: { message: string; onDismiss: () => void }
+) {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   act(() =>
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ModelsScreen onClose={() => {}} inUse={inUse} onOpenModelServers={openModelServers} />
+        <ModelsScreen
+          onClose={() => {}}
+          inUse={inUse}
+          onOpenModelServers={openModelServers}
+          chatWith={chatWith}
+          chatError={chatError?.message}
+          onDismissChatError={chatError?.onDismiss}
+        />
       </CssVarsProvider>
     )
   );
@@ -691,6 +712,38 @@ describe('ModelsScreen curated', () => {
       false,
       false,
     ]);
+  });
+
+  it('offers Use in chat on installed builds that chat lists', async () => {
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>(() => use);
+    bridge.installed = {
+      ok: true,
+      models: [
+        {
+          name: E4B_REF,
+          sizeBytes: 1,
+          quantization: null,
+          family: null,
+          parameterSize: null,
+          modifiedAt: null,
+          capabilities,
+          loaded: false,
+          fit: null,
+        },
+      ],
+    };
+    await mount(undefined, 'curated', chatWith);
+    const rows = inside('models-curated-all', 'models-build-row');
+    expect(rows.map(row => row.querySelector('[data-testid="models-build-use-btn"]') !== null)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(chatWith).toHaveBeenCalledWith('local', E4B_REF);
+    await click(rows[0].querySelector<HTMLElement>('[data-testid="models-build-use-btn"]'));
+    expect(use).toHaveBeenCalledTimes(1);
   });
 
   it('checks a library pick before the dialog, then pulls the reviewed tag', async () => {
@@ -1153,6 +1206,40 @@ describe('ModelsScreen installed', () => {
     expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', undefined);
   });
 
+  it('offers Use in chat only for the models chat lists', async () => {
+    const entry = (name: string) => ({
+      name,
+      sizeBytes: 1,
+      quantization: null,
+      family: null,
+      parameterSize: null,
+      modifiedAt: null,
+      capabilities,
+      loaded: false,
+      fit: null,
+    });
+    bridge.installed = { ok: true, models: [entry('qwen2.5:0.5b'), entry('nomic-embed-text:latest')] };
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>((_serverId, name) => (name === 'qwen2.5:0.5b' ? use : null));
+    await mount(undefined, 'installed', chatWith);
+    const rows = all('models-installed-row');
+    expect(rows.map(row => row.querySelector('[data-testid="models-installed-use-btn"]') !== null)).toEqual([
+      true,
+      false,
+    ]);
+    await click(rows[0].querySelector<HTMLElement>('[data-testid="models-installed-use-btn"]'));
+    expect(use).toHaveBeenCalledTimes(1);
+    expect(chatWith).toHaveBeenCalledWith('local', 'qwen2.5:0.5b');
+  });
+
+  it('shows why Use in chat did not open a conversation, until dismissed', async () => {
+    const onDismiss = vi.fn();
+    await mount(undefined, 'installed', undefined, { message: 'Desktop could not start a conversation.', onDismiss });
+    expect(q('models-chat-error')?.textContent).toContain('Desktop could not start a conversation.');
+    await click(q('models-chat-error-dismiss-btn'));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
   const onComputer = (name: string) => ({ serverId: 'local', name });
   it.each([
     [{ active: onComputer('qwen2.5:0.5b'), conversations: [onComputer('qwen2.5:0.5b')] }, 'The open conversation'],
@@ -1323,6 +1410,34 @@ describe('ModelsScreen explore', () => {
     }
   );
 
+  it('offers Use in chat on an installed build under the name Ollama lists it by', async () => {
+    bridge.installed = {
+      ok: true,
+      models: [
+        {
+          name: `hf.co/${REPO}:Q4_K_M`,
+          sizeBytes: 397_000_000,
+          quantization: 'Q4_K_M',
+          family: 'qwen2',
+          parameterSize: '494M',
+          modifiedAt: null,
+          capabilities,
+          loaded: false,
+          fit: null,
+        },
+      ],
+    };
+    const use = vi.fn();
+    const chatWith = vi.fn<ChatWith>(() => use);
+    await mount(undefined, 'installed', chatWith);
+    await openExplore();
+    await click(q('models-explore-result-row'));
+
+    expect(chatWith).toHaveBeenCalledWith('local', `hf.co/${REPO}:q4_k_m`.toLowerCase());
+    await click(q('models-build-use-btn'));
+    expect(use).toHaveBeenCalledTimes(1);
+  });
+
   it('hides abliterated results until the toggle is on, then labels them', async () => {
     bridge.search = {
       ok: true,
@@ -1385,6 +1500,9 @@ describe('ModelsScreen explore', () => {
 
     await click(button);
     expect(q('models-pull-dialog-size')?.textContent).toContain('491 MB download');
+    expect(q('models-pull-dialog-path')?.dataset.state).toBe('confirmed');
+    expect(q('models-pull-dialog-path')?.textContent).toBe('Saved to /home/me/.ollama/models. 214.7 GB free.');
+    expect(calls.getStoreLocation).toHaveBeenCalledWith(undefined);
     await click(q('models-pull-dialog-cancel-btn'));
     expect(q('models-pull-dialog')).toBeNull();
     expect(calls.pull).not.toHaveBeenCalled();
@@ -1753,8 +1871,50 @@ describe('ModelsScreen servers', () => {
     await click(q('models-explore-result-row'));
     await click(q('models-build-pull-btn'));
     expect(q('models-pull-dialog-server')?.textContent).toContain('Desktop cannot see how much free space gpu box has');
+    expect(calls.getStoreLocation).toHaveBeenLastCalledWith('gpu');
     await click(q('models-pull-dialog-confirm-btn'));
     expect(calls.pull).toHaveBeenCalledWith(expect.objectContaining({ repo: REPO, serverId: 'gpu' }));
+  });
+
+  it("names a saved server's model folder when its Ollama shows it, and says so plainly when not", async () => {
+    bridge.store = { path: '/var/lib/ollama/models', source: 'runtime', freeBytes: null };
+    await mount();
+    await pickServer('gpu');
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-path')?.textContent).toBe('Saved on gpu box in /var/lib/ollama/models.');
+    await click(q('models-pull-dialog-cancel-btn'));
+
+    bridge.store = { path: null, source: null, freeBytes: null };
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-path')?.textContent).toBe('Saved with the other models on gpu box.');
+    expect(calls.pull).not.toHaveBeenCalled();
+  });
+
+  it("marks Ollama's default folder as a default, and warns when this computer is short of space", async () => {
+    bridge.store = { path: '/home/me/.ollama/models', source: 'default', freeBytes: 100_000_000 };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    const line = q('models-pull-dialog-path');
+    expect(line?.dataset.state).toBe('default');
+    expect(line?.textContent).toBe(
+      "Saved to Ollama's model folder, /home/me/.ollama/models unless Ollama is set to use another one. 100 MB free, which is not enough for this download."
+    );
+  });
+
+  it("says so when this computer's Ollama keeps its models somewhere this disk does not have", async () => {
+    bridge.store = { path: '/root/.ollama/models', source: 'elsewhere', freeBytes: null };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    const line = q('models-pull-dialog-path');
+    expect(line?.dataset.state).toBe('elsewhere');
+    expect(line?.textContent).toContain('/root/.ollama/models as Ollama reports it');
+    expect(line?.textContent).not.toContain('free');
   });
 
   it('shows no pull or remove controls for a Chat only server', async () => {

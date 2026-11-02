@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HUB_MAX_SEQUENCE } from '@bike4mind/common';
+import { HUB_MAX_SEQUENCE } from '@bike4mind/common/modelHub';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadCuratedManifest } from '../curated';
 import {
@@ -94,7 +94,13 @@ afterEach(async () => {
 });
 
 function source(
-  options: { keys?: CuratedKey[]; url?: string | null; bundledText?: string; store?: CuratedStore } = {}
+  options: {
+    keys?: CuratedKey[];
+    url?: string | null;
+    bundledText?: string;
+    store?: CuratedStore;
+    network?: boolean;
+  } = {}
 ) {
   const onChange = vi.fn();
   const created = new CuratedListSource({
@@ -104,6 +110,7 @@ function source(
     bundledText: options.bundledText ?? BUNDLED_CURATED_TEXT,
     load: json => loadCuratedManifest(message => logs.push(message), json),
     allowLoopbackHttp: false,
+    network: options.network,
     userAgent: 'Bike4Mind-Test',
     fetch: server.fetch,
     timeoutMs: 200,
@@ -130,6 +137,21 @@ describe('CuratedListSource', () => {
       expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'off' });
     }
     expect(server.requests).toEqual([]);
+  });
+
+  it('does not warn when the list served at the bundled sequence is the bundled content in other formatting', async () => {
+    const served = `${JSON.stringify(JSON.parse(BUNDLED_CURATED_TEXT), null, 4)}\n`;
+    server.publish(1, served, sigText(served, [signing], 1));
+    const s = source({ bundledText: JSON.stringify(JSON.parse(BUNDLED_CURATED_TEXT)) });
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'up-to-date' });
+    expect(logs.some(line => /differs from the current list/.test(line))).toBe(false);
+
+    const other = listText(1, list => (list.updatedAt = '2026-10-29T00:00:00Z'));
+    server.publish(1, other, sigText(other, [signing], 1));
+    clock += 1000;
+    await s.checkNow();
+    logged(/warning: curated list 1 differs from the current list with that sequence; kept it/);
   });
 
   it('accepts a newer signed list, caches it, and shows it again after a restart without fetching', async () => {
@@ -758,6 +780,86 @@ describe('CuratedListSource', () => {
     expect(restarted.settings().enabled).toBe(false);
     await restarted.setEnabled(true);
     expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3 });
+  });
+
+  it('keeps a cache signed by a key this build does not know, and a build that knows the key uses it', async () => {
+    const newer = signer('signing');
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [newer], 3));
+    await source({ keys: [newer.key, recovery.key] }).checkNow();
+    const sourceDir = join(dir, CuratedStore.sourceKey(LATEST));
+
+    server.requests = [];
+    const older = source();
+    await older.loaded();
+    await older.checkIfDue();
+    expect(older.view()).toMatchObject({ origin: 'bundled', sequence: 1 });
+    logged(/ignored the cached curated list: unknown-key/);
+    await expect(readFile(join(sourceDir, 'pair.json'))).resolves.toBeTruthy();
+
+    const knowing = source({ keys: [newer.key, recovery.key] });
+    await knowing.loaded();
+    expect(knowing.view()).toMatchObject({ origin: 'updated', sequence: 3 });
+  });
+
+  it('keeps the verified cache and makes no request when the network is off', async () => {
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
+    await source().checkNow();
+    server.requests = [];
+
+    const offline = source({ network: false });
+    await offline.loaded();
+    await offline.checkNow();
+    await offline.checkIfDue();
+    expect(offline.available).toBe(true);
+    expect(offline.view()).toMatchObject({ origin: 'updated', sequence: 3 });
+    expect(server.requests).toEqual([]);
+  });
+
+  it('reports a failed last check from the saved state before any check this session', async () => {
+    const s = source();
+    await s.checkNow();
+    expect(s.view().check).toBe('failed');
+    const restarted = source();
+    await restarted.loaded();
+    expect(restarted.view().check).toBe('failed');
+  });
+
+  it('does not count a check its caller stopped as a failure, so the next caller checks at once', async () => {
+    server.fetch.mockImplementationOnce(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          if (init?.signal?.aborted) return reject(new Error('aborted'));
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        })
+    );
+    const s = source();
+    const stop = new AbortController();
+    const checking = s.checkIfDue(stop.signal);
+    stop.abort();
+    await checking;
+    expect(s.view().check).toBe('idle');
+    logged(/stopped the curated list check before it finished/);
+    expect(logs.some(line => /check failed/.test(line))).toBe(false);
+
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
+    await s.checkIfDue();
+    expect(s.view()).toMatchObject({ origin: 'updated', sequence: 3 });
+  });
+
+  it('reports a cache signed by an unknown key once, not on every start', async () => {
+    const newer = signer('signing');
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [newer], 3));
+    await source({ keys: [newer.key, recovery.key] }).checkNow();
+
+    await source().loaded();
+    logged(/ignored the cached curated list: unknown-key/);
+    logs = [];
+    await source().loaded();
+    expect(logs.some(line => /ignored the cached curated list/.test(line))).toBe(false);
   });
 
   it('reports a setting write failure without changing the effective choice', async () => {

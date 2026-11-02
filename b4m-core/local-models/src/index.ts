@@ -43,6 +43,7 @@ export {
 } from './errors';
 export { isAbliteratedModel } from './abliterated';
 export {
+  BUNDLED_CURATED_JSON_TEXT,
   configuredNumCtx,
   curatedBuildForRef,
   curatedEntryForRef,
@@ -215,9 +216,71 @@ export {
   type StartModelOptions,
 } from './llamaServerRuntime';
 export {
+  gpuQueries,
+  parseMeminfo,
+  parseNvidiaSmiUsage,
+  parseRocmSmiVram,
   probeHardware,
+  probeMemoryUsage,
   type ExecLike,
+  type GpuQueries,
+  type GpuUsage,
   type HardwareProbeOptions,
   type HardwareProfile,
+  type MemoryUsage,
   type StatfsResult,
 } from './hardware';
+export {
+  OLLAMA_ENV_KEYS,
+  OLLAMA_SETTING_DEFAULTS,
+  fitRuntimeFromOllamaSettings,
+  ollamaDefaultContext,
+  ollamaEnvValue,
+  ollamaFitConfidence,
+  type OllamaEnvironment,
+  type OllamaEnvKey,
+} from './ollamaSettings';
+export {
+  MODEL_HOST_DROP_IN,
+  OLLAMA_UNIT,
+  attributeSystemdEnvironment,
+  detectOllamaInstall,
+  findOllamaProcesses,
+  parseEnvironmentFile,
+  parseOllamaHost,
+  parseSystemctlShow,
+  parseUnitEnvironment,
+  readOllamaSettings,
+  servesUrl,
+  splitSystemctlWords,
+  splitSystemdWords,
+  type Attribution,
+  type OllamaHost,
+  type OllamaInstallOptions,
+  type OllamaInstallProbe,
+  type OllamaProcess,
+  type OllamaSettingsRead,
+  type ReadOllamaSettingsOptions,
+  type SystemdUnit,
+  type UnitEnvironmentEvent,
+} from './ollamaInstall';
+export {
+  mountFor,
+  parseMountinfo,
+  passwdHome,
+  resolveStorePath,
+  serviceHome,
+  storeDisk,
+  type MountEntry,
+  type StoreDisk,
+  type StoreDiskOptions,
+  type StorePathInput,
+  type StorePathSource,
+} from './storeDisk';
+export {
+  parseCpuinfo,
+  parseOsRelease,
+  probeModelHost,
+  type ModelHostProbe,
+  type ModelHostProbeOptions,
+} from './hostFacts';

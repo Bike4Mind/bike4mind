@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
@@ -17,7 +18,7 @@ import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/l
 import { CuratedTab } from './CuratedTab';
 import { ExploreTab, rememberExploreRepo } from './ExploreTab';
 import { InstalledTab, type ModelsInUse } from './InstalledTab';
-import { manageNote, type ModelTarget } from './modelTarget';
+import { manageNote, type ChatWith, type ModelTarget } from './modelTarget';
 import { pullLabel, pullPercent } from './pullDisplay';
 import { ServerSwitcher } from './ServerSwitcher';
 import { useModelHub, useModelServers } from './useModelHub';
@@ -264,11 +265,18 @@ export function ModelsScreen({
   onClose,
   inUse,
   onOpenModelServers,
+  chatWith,
+  chatError,
+  onDismissChatError,
 }: {
   onClose: () => void;
   inUse?: ModelsInUse;
   /** Settings, Model servers: where a server on another machine is added. */
   onOpenModelServers?: () => void;
+  chatWith?: ChatWith;
+  /** Why the last Use in chat did not open a conversation. */
+  chatError?: string | null;
+  onDismissChatError?: () => void;
 }) {
   const servers = useModelServers();
   const [chosenServer, setChosenServer] = useState(rememberedServer);
@@ -294,6 +302,7 @@ export function ModelsScreen({
   }, [statusManagement, target.management, refresh]);
   const installedCount = status && hub.installed?.ok ? hub.installed.models.length : null;
   const note = manageNote(target);
+  const chatOn = (name: string) => chatWith?.(serverId, name) ?? null;
 
   return (
     <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }} data-testid="models-screen">
@@ -364,6 +373,28 @@ export function ModelsScreen({
               {note}
             </Typography>
           )}
+          {chatError && (
+            <Alert
+              color="danger"
+              variant="soft"
+              data-testid="models-chat-error"
+              endDecorator={
+                onDismissChatError && (
+                  <Button
+                    size="sm"
+                    variant="plain"
+                    color="danger"
+                    onClick={onDismissChatError}
+                    data-testid="models-chat-error-dismiss-btn"
+                  >
+                    Dismiss
+                  </Button>
+                )
+              }
+            >
+              {chatError}
+            </Alert>
+          )}
           {hub.pulls.length > 0 && (
             <Stack spacing={1} data-testid="models-pull-list">
               {hub.pulls.map(pull => (
@@ -380,6 +411,7 @@ export function ModelsScreen({
               target={target}
               installed={status ? hub.installed : null}
               pulls={hub.pulls}
+              chatOn={chatOn}
               onRecheck={() => void hub.refresh()}
               onOpenInExplore={repo => {
                 rememberExploreRepo(repo);
@@ -396,6 +428,7 @@ export function ModelsScreen({
               target={target}
               installed={status ? hub.installed : null}
               inUse={inUse}
+              chatOn={chatOn}
               onRetry={() => void hub.refresh()}
               onExplore={() => choose('explore')}
             />
@@ -408,6 +441,7 @@ export function ModelsScreen({
               target={target}
               installed={status ? hub.installed : null}
               pulls={hub.pulls}
+              chatOn={chatOn}
               onRecheck={() => void hub.refresh()}
             />
           </Box>

@@ -45,8 +45,14 @@ type Lookup = (hostname: string, options: LookupOneOptions | LookupAllOptions, c
 export interface ServerFetchDeps {
   /** Defaults to `dns.lookup`, read at call time. */
   lookup?: Lookup;
+  /** How long a reply may go without a byte once its body started (ms); defaults to 5 minutes. */
+  bodyIdleTimeoutMs?: number;
 }
 
+const BODY_IDLE_TIMEOUT_MS = 5 * 60_000;
+const KEEPALIVE_DELAY_MS = 30_000;
+// Ollama sends nothing while it verifies a pulled model's digest, which a large model on a slow disk can stretch past the idle limit.
+const NO_IDLE_LIMIT_PATHS = new Set(['/api/pull']);
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const NO_BODY = new Set([204, 205, 304]);
 const responseRedactors = new WeakMap<Response, CredentialRedactor>();
@@ -58,9 +64,11 @@ export function redactServerResponse(text: string, response: Response): string {
 
 /**
  * Fetch for one saved server, on Node's http/https rather than Chromium's network stack: certificates
- * are checked against the system and NODE_EXTRA_CA_CERTS roots, there is no header deadline (a
- * CPU-only server can take minutes to prefill), and the address a name resolves to is checked against
- * the transport rules before the socket opens, so no byte of a credential leaves for a refused address.
+ * are checked against the system and NODE_EXTRA_CA_CERTS roots, and the address a name resolves to is
+ * checked against the transport rules before the socket opens, so no byte of a credential leaves for a
+ * refused address. A CPU-only server can take minutes to prefill, and some send their headers before
+ * it, so neither the headers nor the first body byte have a deadline; a body that goes silent after
+ * that is dropped (except a pull, see NO_IDLE_LIMIT_PATHS).
  *
  * Credentials are added here and nowhere else, only to requests for `endpoint.origin`, and no
  * redirect is followed. Connection failures reject with `TypeError('fetch failed', { cause })` like fetch.
@@ -108,6 +116,8 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
         ...(connect ? { createConnection: () => connect() } : { agent: false }),
         ...(init.signal ? { signal: init.signal } : {}),
       });
+      // Keepalive probes notice a peer that vanished while a long prefill holds the socket silent.
+      request.once('socket', socket => socket.setKeepAlive(true, KEEPALIVE_DELAY_MS));
       request.once('response', resolve);
       request.once('error', error => reject(wrapError(error, init.signal, endpoint.label)));
       request.end(body);
@@ -143,9 +153,11 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
     // Encoded error bodies cannot be safely scrubbed without decoding; omit them rather than trust
     // a server-controlled content-encoding header to describe what consumers will actually parse.
     const encoding = (response.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
+    const idleMs = NO_IDLE_LIMIT_PATHS.has(url.pathname) ? null : (deps.bodyIdleTimeoutMs ?? BODY_IDLE_TIMEOUT_MS);
     if (status >= 300 && redactor) {
       let text: string | null = null;
       if (!empty && encoding === 'identity') {
+        if (idleMs !== null) response.setTimeout(idleMs, () => response.destroy());
         const read = await readCapped(response, ERROR_BODY_LIMIT);
         text = redactor.redact(read.text);
         // A credential cut at the limit could leave its start behind.
@@ -158,7 +170,14 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
       responseHeaders.delete('content-encoding');
       return new Response(text, { status, statusText: scrub(response.statusMessage ?? ''), headers: responseHeaders });
     }
-    const result = new Response(empty ? null : (Readable.toWeb(response) as ReadableStream<Uint8Array>), {
+    const armIdleLimit = () =>
+      idleMs !== null &&
+      response.setTimeout(idleMs, () =>
+        response.destroy(
+          new Error(`${endpoint.label} stopped sending its reply for ${idleText(idleMs)}. ${app} stopped waiting.`)
+        )
+      );
+    const result = new Response(empty ? null : idleLimitedBody(response, armIdleLimit), {
       status,
       statusText: scrub(response.statusMessage ?? ''),
       headers: responseHeaders,
@@ -169,6 +188,27 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
 }
 
 const ERROR_BODY_LIMIT = 1024 * 1024;
+
+/** Arms the idle limit on the first body chunk, so a server still prefilling is not cut off. */
+function idleLimitedBody(response: IncomingMessage, armIdleLimit: () => void): ReadableStream<Uint8Array> {
+  let armed = false;
+  return (Readable.toWeb(response) as ReadableStream<Uint8Array>).pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        if (!armed) {
+          armed = true;
+          armIdleLimit();
+        }
+        controller.enqueue(chunk);
+      },
+    })
+  );
+}
+
+function idleText(ms: number): string {
+  if (ms >= 60_000 && ms % 60_000 === 0) return `${ms / 60_000} minute${ms === 60_000 ? '' : 's'}`;
+  return `${ms / 1000} s`;
+}
 
 async function readCapped(response: IncomingMessage, limit: number): Promise<{ text: string; capped: boolean }> {
   const chunks: Buffer[] = [];

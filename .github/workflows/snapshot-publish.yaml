@@ -192,9 +192,16 @@ jobs:
         env:
           B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
           B4M_CREDITS_URL: ${{ vars.B4M_CREDITS_URL }}
+          B4M_CURATED_MANIFEST_URL: ${{ vars.B4M_CURATED_MANIFEST_URL }}
         run: |
           pnpm core:build
           pnpm --filter "@bike4mind/cli" build
+
+      - name: Check the CLI build for curated test keys
+        if: steps.changes.outputs.has-changes == 'true' && steps.generate.outputs.has-publishable-packages != 'false'
+        env:
+          CURATED_PUBLIC_URL: ${{ vars.CURATED_PUBLIC_URL }}
+        run: pnpm --filter @bike4mind/scripts curated:check-build packages/cli/dist --expect-url "$CURATED_PUBLIC_URL"
 
       - name: Version with snapshot
         if: steps.changes.outputs.has-changes == 'true' && steps.generate.outputs.has-publishable-packages != 'false'

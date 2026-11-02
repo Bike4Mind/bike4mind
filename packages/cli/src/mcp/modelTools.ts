@@ -4,7 +4,6 @@ import {
   HuggingFaceHub,
   curatedRunner,
   isAbliteratedModel,
-  loadCuratedManifest,
   ollamaLibraryLayers,
   type PullOptions,
 } from '@bike4mind/local-models';
@@ -17,6 +16,7 @@ import type {
   ServerRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import { readOllamaManifest } from '../commands/ollamaRegistry.js';
+import { createCliCuratedList } from '../models/curatedList.js';
 import {
   CancelledError,
   NO_LICENSE,
@@ -271,6 +271,7 @@ function pullProgress(extra: Extra, redact?: (text: string) => string): PullOpti
 
 export function localModelToolsDeps(configStore: ConfigStore | undefined): ModelToolsDeps {
   let hub: HubClient | undefined;
+  const curatedList = createCliCuratedList({ offline: false });
   return {
     hub: () => (hub ??= new HuggingFaceHub({ token: process.env.HF_TOKEN })),
     ollamaRegistry: (name, signal) => readOllamaManifest(name, signal),
@@ -279,7 +280,7 @@ export function localModelToolsDeps(configStore: ConfigStore | undefined): Model
       resolveRuntimeTarget({ env: process.env.B4M_OLLAMA_HOST, config: (await configStore?.load())?.ollamaHost }),
     defaultModel: async () => (await configStore?.load())?.defaultModel,
     machine: machineReader(),
-    curated: () => loadCuratedManifest(message => console.error(message)),
+    curated: () => curatedList.manifest(),
     servers: {
       load: () => loadModelServers(),
       secret: async () => {

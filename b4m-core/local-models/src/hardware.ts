@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
-import { statfs as nodeStatfs } from 'node:fs/promises';
+import { readFile, statfs as nodeStatfs } from 'node:fs/promises';
 import nodeOs from 'node:os';
+import { join } from 'node:path';
 import { parseWindowsGpus, scanLinuxGpus, windowsGpuCommand, type DetectedGpu, type GpuVendor } from './gpus';
 
 export interface HardwareProfile {
@@ -45,6 +46,14 @@ export interface HardwareProbeOptions {
   rootDir?: string;
   /** Checked for WSL and `SystemRoot`; defaults to `process.env`. */
   env?: Environment;
+  /** Shares one nvidia-smi run and one sysfs scan between probes; see `gpuQueries`. */
+  gpuQueries?: GpuQueries;
+}
+
+export interface GpuQueries {
+  /** stdout of `nvidia-smi --query-gpu=name,memory.total,memory.used`; null when it failed. */
+  nvidiaSmi(): Promise<string | null>;
+  linuxGpus(): Promise<DetectedGpu[] | null>;
 }
 
 type Environment = Record<string, string | undefined>;
@@ -52,7 +61,7 @@ type Environment = Record<string, string | undefined>;
 const EXEC_TIMEOUT_MS = 5_000;
 const MIB = 1024 * 1024;
 
-const defaultExec: ExecLike = (command, args) =>
+export const defaultExec: ExecLike = (command, args) =>
   new Promise((resolve, reject) => {
     execFile(command, args, { timeout: EXEC_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
       if (error) reject(error);
@@ -99,6 +108,30 @@ async function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | null> {
     clearTimeout(timer);
   }
 }
+
+const NVIDIA_USAGE_ARGS = ['--query-gpu=name,memory.total,memory.used', '--format=csv,noheader,nounits'];
+
+/** Runs each GPU query at most once, for probeHardware and probeMemoryUsage called with the same options. */
+export function gpuQueries(options: Pick<HardwareProbeOptions, 'exec' | 'rootDir' | 'env'> = {}): GpuQueries {
+  const exec = options.exec ?? defaultExec;
+  let smi: Promise<string | null> | undefined;
+  let scan: Promise<DetectedGpu[] | null> | undefined;
+  return {
+    nvidiaSmi: () =>
+      (smi ??= attempt(() => exec('nvidia-smi', NVIDIA_USAGE_ARGS)).then(result => result?.stdout ?? null)),
+    linuxGpus: () =>
+      (scan ??= attempt(() =>
+        withTimeout(scanLinuxGpus(options.rootDir, options.env ?? process.env), EXEC_TIMEOUT_MS)
+      )),
+  };
+}
+
+/** Drops the trailing memory.used column, leaving what parseNvidiaSmi reads. */
+const withoutUsedColumn = (stdout: string) =>
+  stdout
+    .split(/\r?\n/)
+    .map(line => (line.includes(',') ? line.slice(0, line.lastIndexOf(',')) : line))
+    .join('\n');
 
 let cachedWindowsGpus: DetectedGpu[] | undefined;
 
@@ -153,10 +186,12 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
     return { ...base, ...NO_GPU, confidence: 'high' };
   }
 
-  const smi = await attempt(() =>
-    exec('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader,nounits'])
-  );
-  const nvidia = smi ? parseNvidiaSmi(smi.stdout) : [];
+  const { gpuQueries: queries } = options;
+  const smi = queries
+    ? await queries.nvidiaSmi().then(stdout => (stdout === null ? null : withoutUsedColumn(stdout)))
+    : (await attempt(() => exec('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader,nounits'])))
+        ?.stdout;
+  const nvidia = smi ? parseNvidiaSmi(smi) : [];
   if (nvidia.some(gpu => gpu.memoryBytes === null)) {
     return {
       ...base,
@@ -174,7 +209,7 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
   // Runs beside nvidia-smi too, to find a Strix Halo APU; on Windows only with an AMD CPU, sparing others PowerShell.
   const scanned =
     platform === 'linux'
-      ? await attempt(() => withTimeout(scanLinuxGpus(options.rootDir, env), EXEC_TIMEOUT_MS))
+      ? await (queries?.linuxGpus() ?? attempt(() => withTimeout(scanLinuxGpus(options.rootDir, env), EXEC_TIMEOUT_MS)))
       : platform === 'win32' && (nvidia.length === 0 || /AuthenticAMD/i.test(env.PROCESSOR_IDENTIFIER ?? ''))
         ? await attempt(() => windowsGpus(exec, env, !options.exec))
         : null;
@@ -213,6 +248,121 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
     chip: null,
     confidence: totalMemoryBytes > 0 && apuBytes !== null && !unconfirmed ? 'high' : 'low',
   };
+}
+
+export interface GpuUsage {
+  vendor: GpuVendor;
+  name: string | null;
+  memoryBytes: number | null;
+  memoryUsedBytes: number | null;
+}
+
+export interface MemoryUsage {
+  /** MemAvailable from `/proc/meminfo`; null off Linux or when unreadable. */
+  availableMemoryBytes: number | null;
+  gpus: GpuUsage[];
+}
+
+const KIB = 1024;
+
+/** MemTotal and MemAvailable from `/proc/meminfo`, in bytes. */
+export function parseMeminfo(text: string): { totalBytes: number | null; availableBytes: number | null } {
+  const field = (name: string) => {
+    const match = new RegExp(`^${name}:\\s+(\\d+)\\s*kB\\s*$`, 'm').exec(text);
+    return match ? Number(match[1]) * KIB : null;
+  };
+  return { totalBytes: field('MemTotal'), availableBytes: field('MemAvailable') };
+}
+
+/** Parses `nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv,noheader,nounits` (MiB). */
+export function parseNvidiaSmiUsage(stdout: string): GpuUsage[] {
+  const mib = (text: string) => {
+    const value = Number(text.trim());
+    return text.trim() && Number.isFinite(value) && value >= 0 ? Math.round(value * MIB) : null;
+  };
+  return stdout.split(/\r?\n/).flatMap((line): GpuUsage[] => {
+    const match = /^(.*),([^,]*),([^,]*)$/.exec(line);
+    const name = match?.[1].trim();
+    if (!match || !name) return [];
+    const total = mib(match[2]);
+    return [{ vendor: 'nvidia', name, memoryBytes: total || null, memoryUsedBytes: mib(match[3]) }];
+  });
+}
+
+/** Per-card VRAM from `rocm-smi --showmeminfo vram --json`, in card order. */
+export function parseRocmSmiVram(stdout: string): Array<{ totalBytes: number | null; usedBytes: number | null }> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== 'object') return [];
+  const bytes = (value: unknown) =>
+    typeof value === 'string' && /^\d+$/.test(value.trim()) && Number.isSafeInteger(Number(value))
+      ? Number(value)
+      : null;
+  return Object.entries(parsed)
+    .flatMap(([key, value]) => {
+      const card = /^card(\d+)$/.exec(key);
+      if (!card || !value || typeof value !== 'object') return [];
+      const fields = value as Record<string, unknown>;
+      return [
+        {
+          index: Number(card[1]),
+          totalBytes: bytes(fields['VRAM Total Memory (B)']),
+          usedBytes: bytes(fields['VRAM Total Used Memory (B)']),
+        },
+      ];
+    })
+    .sort((a, b) => a.index - b.index)
+    .map(({ totalBytes, usedBytes }) => ({ totalBytes, usedBytes }));
+}
+
+/** Memory and GPU memory in use right now, for a model host's status. Never throws. */
+export async function probeMemoryUsage(options: HardwareProbeOptions = {}): Promise<MemoryUsage> {
+  const exec = options.exec ?? defaultExec;
+  const platform = options.platform ?? process.platform;
+  const root = options.rootDir ?? '/';
+  if (platform !== 'linux' && platform !== 'win32') return { availableMemoryBytes: null, gpus: [] };
+
+  const queries = options.gpuQueries ?? gpuQueries(options);
+  const smi = await queries.nvidiaSmi();
+  const nvidia = smi ? parseNvidiaSmiUsage(smi) : [];
+  if (platform === 'win32') return { availableMemoryBytes: null, gpus: nvidia };
+
+  const meminfo = await attempt(() => readFile(join(root, 'proc/meminfo'), 'utf8'));
+  const availableMemoryBytes = meminfo ? parseMeminfo(meminfo).availableBytes : null;
+  const scanned = await queries.linuxGpus();
+  const others: GpuUsage[] = (scanned ?? [])
+    .filter(gpu => gpu.vendor !== 'nvidia' || nvidia.length === 0)
+    .map(gpu => ({
+      vendor: gpu.vendor,
+      name: gpu.name,
+      memoryBytes: gpu.memoryBytes,
+      memoryUsedBytes: gpu.memoryUsedBytes ?? null,
+    }));
+  const amd = others.filter(gpu => gpu.vendor === 'amd');
+  // rocm-smi sees cards that a container's sysfs hides, and fills in counters older kernels leave out.
+  if (scanned === null || amd.some(gpu => gpu.memoryUsedBytes === null)) {
+    const rocm = await attempt(() => exec('rocm-smi', ['--showmeminfo', 'vram', '--json']));
+    const cards = rocm ? parseRocmSmiVram(rocm.stdout) : [];
+    if (scanned === null) {
+      others.push(
+        ...cards.map(card => ({
+          vendor: 'amd' as const,
+          name: null,
+          memoryBytes: card.totalBytes,
+          memoryUsedBytes: card.usedBytes,
+        }))
+      );
+    } else if (cards.length === amd.length) {
+      amd.forEach((gpu, index) => {
+        gpu.memoryUsedBytes ??= cards[index].usedBytes;
+      });
+    }
+  }
+  return { availableMemoryBytes, gpus: [...nvidia, ...others] };
 }
 
 type GpuFields = Omit<HardwareProfile, 'platform' | 'arch' | 'totalMemoryBytes' | 'diskFreeBytes'>;

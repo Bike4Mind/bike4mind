@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
 import DialogActions from '@mui/joy/DialogActions';
@@ -8,7 +8,7 @@ import Modal from '@mui/joy/Modal';
 import ModalDialog from '@mui/joy/ModalDialog';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { formatBytes, type HubBuildView, type HubModelView } from '@shared/models';
+import { formatBytes, type HubBuildView, type HubModelView, type ModelStoreLocation } from '@shared/models';
 import { ExternalLink } from '../chat/ExternalLink';
 import { AccessSteps } from './AccessSteps';
 import { FitBadge } from './FitBadge';
@@ -21,6 +21,75 @@ export interface PullConsent {
 
 function joinNames(names: readonly string[]): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : (names[0] ?? '');
+}
+
+function useStoreLocation(target: ModelTarget): ModelStoreLocation | null | 'failed' {
+  const [location, setLocation] = useState<ModelStoreLocation | null | 'failed'>(null);
+  const serverId = target.local ? undefined : target.id;
+  useEffect(() => {
+    let live = true;
+    window.b4m.models.getStoreLocation(serverId).then(
+      next => live && setLocation(next),
+      () => live && setLocation('failed')
+    );
+    return () => {
+      live = false;
+    };
+  }, [serverId]);
+  return location;
+}
+
+/** Where the download lands; Ollama has no setting Desktop can read, so an unconfirmed folder says so. */
+function StoreLine({
+  location,
+  server,
+  needed,
+}: {
+  location: ModelStoreLocation | null | 'failed';
+  server: string | null;
+  needed: number;
+}) {
+  if (location === null)
+    return (
+      <Typography level="body-sm" textColor="text.tertiary" data-testid="models-pull-dialog-path" data-state="checking">
+        Checking where {server ? `${server} keeps` : 'Ollama keeps'} models...
+      </Typography>
+    );
+  const path = location === 'failed' ? null : location.path;
+  const source = (path && location !== 'failed' && location.source) || null;
+  const free = location === 'failed' ? null : location.freeBytes;
+  const short = free !== null && free < needed;
+  const folder = path && <Typography fontFamily="code">{path}</Typography>;
+  return (
+    <Typography
+      level="body-sm"
+      color={short ? 'danger' : undefined}
+      data-testid="models-pull-dialog-path"
+      data-state={source === 'runtime' ? 'confirmed' : (source ?? 'unknown')}
+    >
+      {server ? (
+        path ? (
+          <>
+            Saved on {server} in {folder}.
+          </>
+        ) : (
+          <>Saved with the other models on {server}.</>
+        )
+      ) : source === 'runtime' ? (
+        <>Saved to {folder}.</>
+      ) : source === 'elsewhere' ? (
+        <>
+          Saved where Ollama keeps its models, {folder} as Ollama reports it. That folder is not on this computer&apos;s
+          disk, so Ollama may be running in a container or on another machine.
+        </>
+      ) : source === 'default' ? (
+        <>Saved to Ollama&apos;s model folder, {folder} unless Ollama is set to use another one.</>
+      ) : (
+        <>Saved to Ollama&apos;s model folder.</>
+      )}
+      {free !== null && ` ${formatBytes(free)} free${short ? ', which is not enough for this download' : ''}.`}
+    </Typography>
+  );
 }
 
 /**
@@ -41,6 +110,7 @@ export function PullDialog({
   onClose: () => void;
 }) {
   const server = target.local ? null : target.name;
+  const location = useStoreLocation(target);
   const [acceptLicense, setAcceptLicense] = useState(false);
   const [confirmAccess, setConfirmAccess] = useState(false);
   const [overrideFit, setOverrideFit] = useState(false);
@@ -68,9 +138,10 @@ export function PullDialog({
               {formatBytes(build.sizeBytes)} download
               {model.projectorBytes ? `, plus a vision projector of up to ${formatBytes(model.projectorBytes)}` : ''}.
               {server
-                ? ` ${server} downloads it straight from Hugging Face and keeps it with its other models; you can remove it from Installed at any time.`
-                : ' Ollama stores it with your other local models; you can remove it from Installed at any time.'}
+                ? ` ${server} downloads it straight from Hugging Face; you can remove it from Installed at any time.`
+                : ' Ollama downloads it; you can remove it from Installed at any time.'}
             </Typography>
+            <StoreLine location={location} server={server} needed={build.sizeBytes + (model.projectorBytes ?? 0)} />
             {server && (
               <Typography level="body-sm" data-testid="models-pull-dialog-server">
                 Desktop cannot see how much free space {server} has. Keep Bike4Mind open until the download finishes.

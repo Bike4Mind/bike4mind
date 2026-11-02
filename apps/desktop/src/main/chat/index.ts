@@ -289,6 +289,8 @@ export interface RegisteredChat {
   modelServers: ModelServerRegistry;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
+  /** The capability ledger, which the Models screen records approved downloads in. */
+  capabilityLedger: CapabilityLedger;
 }
 
 /**
@@ -367,6 +369,8 @@ export function registerChat(
   auth: AuthService,
   hooks: Pick<ChatServiceDeps, 'sessionClosed' | 'releaseSessionTerminals'> & {
     observeStream?(event: ChatStreamEvent): void;
+    /** Revoking a model-pull grant in Settings stops that download; true once it no longer runs. */
+    cancelModelPull?(key: string): Promise<boolean>;
   } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
@@ -847,6 +851,7 @@ export function registerChat(
         return true;
       },
       revokeAllow: (scope, rule) => permissions.revokeAllow(scope, rule),
+      cancelModelPull: key => hooks.cancelModelPull?.(key) ?? Promise.resolve(false),
     },
   });
   ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, () => capabilityIpc.getState());
@@ -1311,7 +1316,18 @@ export function registerChat(
     logger,
   });
 
-  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, modelServers, localContext };
+  return {
+    service,
+    background,
+    mcp,
+    browser,
+    pullRequests,
+    claudeImport,
+    spareWorktrees,
+    modelServers,
+    localContext,
+    capabilityLedger,
+  };
 }
 
 export { ChatService } from './ChatService';
