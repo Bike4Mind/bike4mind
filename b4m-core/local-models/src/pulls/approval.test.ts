@@ -1,4 +1,4 @@
-import type { HubBuild, HubEntry } from '@bike4mind/common';
+import type { HubBuild, HubEntry } from '@bike4mind/common/modelHub';
 import { describe, expect, it, vi } from 'vitest';
 import { curatedLibrary } from '../curated';
 import type { HubModelDetail } from '../huggingface';

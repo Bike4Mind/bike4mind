@@ -1,4 +1,4 @@
-import type { HubBuild, HubEntry } from '@bike4mind/common';
+import type { HubBuild, HubEntry } from '@bike4mind/common/modelHub';
 import { isAbliteratedModel } from '../abliterated';
 import { curatedLibrary, isPermissiveEntry } from '../curated';
 import type { HubGgufBuild, HubModelDetail } from '../huggingface';

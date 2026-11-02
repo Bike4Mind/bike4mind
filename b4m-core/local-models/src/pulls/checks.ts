@@ -1,4 +1,4 @@
-import type { HubBuild } from '@bike4mind/common';
+import type { HubBuild } from '@bike4mind/common/modelHub';
 import { curatedLibrary, curatedOllamaBlocked, installedReviewed, servesReviewed } from '../curated';
 import type { ModelInspection, OllamaRegistryLayers, RuntimeHealth } from '../types';
 
