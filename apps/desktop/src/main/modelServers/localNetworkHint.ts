@@ -8,8 +8,9 @@ import type { AddressScope } from '@bike4mind/local-models/servers';
  */
 const DECLINED_CODES = new Set(['EHOSTUNREACH', 'ENETUNREACH']);
 
+// macOS files every ad-hoc-signed build under "Electron"; drop the parenthetical once builds are Developer ID signed.
 export const LOCAL_NETWORK_HINT =
-  'If macOS is blocking local network access, allow Bike4Mind in System Settings > Privacy & Security > Local Network.';
+  'If macOS is blocking local network access, allow Bike4Mind (listed as "Electron" in beta builds) in System Settings > Privacy & Security > Local Network.';
 
 /** The hint for a failed connection, or null when it cannot be the macOS Local Network permission. */
 export function localNetworkHint(

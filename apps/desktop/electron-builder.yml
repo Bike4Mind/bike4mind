@@ -56,9 +56,7 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
-  # macOS asks before an app reaches a LAN address (model servers on another machine); this is the
-  # text that prompt shows. The hint shown when the user declines is in
-  # src/main/modelServers/localNetworkHint.ts.
+  # Text of the macOS Local Network prompt; the declined-permission hint is in src/main/modelServers/localNetworkHint.ts.
   extendInfo:
     NSLocalNetworkUsageDescription: Bike4Mind connects to model servers on your local network.
   # Signing turns on by itself once a "Developer ID Application" identity is reachable -
