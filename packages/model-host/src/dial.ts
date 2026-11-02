@@ -66,7 +66,8 @@ function notRunningMessage(): string {
 function noAccessMessage(path: string): string {
   return (
     `No permission to use ${path}. Ask an administrator to run: sudo usermod -aG b4m-host ${login()} ` +
-    '(then sign in again so the new group applies)'
+    '(then sign in again so the new group applies). If the b4m-host group does not exist yet, create it first with ' +
+    'sudo groupadd b4m-host and restart b4m-host so its sockets take the group.'
   );
 }
 

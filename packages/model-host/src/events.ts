@@ -10,6 +10,8 @@ export interface HostEventsOptions {
   maxStreams: number;
   /** A stream whose client stopped reading is dropped past this much unsent data. */
   maxBufferedBytes: number;
+  /** Told once when facts reads start failing; listeners only see keepalives meanwhile. */
+  log?: (line: string) => void;
 }
 
 /** `GET /v1/events`: server-sent `host` events, the current facts first and then whenever they change. */
@@ -17,6 +19,7 @@ export class HostEvents {
   /** Each stream with its subscriber key and the facts it was last sent. */
   #streams = new Map<ServerResponse, { key: string; sent: string | null }>();
   #timer: NodeJS.Timeout | null = null;
+  #failing = false;
 
   constructor(private readonly options: HostEventsOptions) {}
 
@@ -26,8 +29,16 @@ export class HostEvents {
 
   async #read(): Promise<string | null> {
     try {
-      return JSON.stringify(await this.options.facts());
-    } catch {
+      const data = JSON.stringify(await this.options.facts());
+      this.#failing = false;
+      return data;
+    } catch (error) {
+      if (!this.#failing) {
+        this.#failing = true;
+        this.options.log?.(
+          `reading host facts for events failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
       return null;
     }
   }

@@ -163,7 +163,7 @@ export const HostFactsSchema = z.object({
 });
 export type HostFacts = z.infer<typeof HostFactsSchema>;
 
-/** The model host API version; a host refuses nothing older than its `minClientProtocol`. */
+/** The model host API version. A client older than a host's `minClientProtocol` must not use that host; clients check it. */
 export const MODEL_HOST_PROTOCOL = 1;
 /** Ordered: each role can do everything the ones before it can. */
 export const MODEL_HOST_ROLES = ['chat', 'manage', 'admin'] as const;

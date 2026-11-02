@@ -198,7 +198,8 @@ export class HostServer {
     );
     this.#http.timeout = this.limits.idleTimeoutMs;
     this.#http.keepAliveTimeout = this.limits.keepAliveTimeoutMs;
-    // dial-stdio passes on stdin's EOF before the reply exists; without this Node ends the socket at once.
+    // dial-stdio passes on stdin's EOF before the reply exists; without this Node ends the socket at once. Not a
+    // documented option: server.test.ts "answers a request whose client already half-closed" fails if Node drops it.
     Object.assign(this.#http, { httpAllowHalfOpen: true });
   }
 
@@ -255,6 +256,8 @@ export class HostServer {
       bucket: new TokenBucket(this.limits.rateBurst, this.limits.ratePerSecond),
     };
     server.on('connection', socket => void this.#accept(socket, listener));
+    // The socket must never exist with group access before its chown. umask is process-wide, so a file anything else
+    // creates during this await gets 0600 too; sockets listen one at a time to keep that window to this call.
     const previous = process.umask(0o177);
     try {
       await new Promise<void>((resolve, reject) => {

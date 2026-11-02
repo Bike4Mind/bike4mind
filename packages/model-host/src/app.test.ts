@@ -144,15 +144,21 @@ describe('model host routes', () => {
     expect(await openStream(admin)).toBe(200);
   });
 
-  it('answers 503 when reading facts hangs, and reads afresh on the next request', async () => {
+  it('answers 503 while reading facts hangs, without stacking reads, and reads afresh once it ends', async () => {
     let calls = 0;
+    let fail: (error: Error) => void = () => {};
     const { manage } = await start({
-      probe: () => (++calls === 1 ? new Promise(() => {}) : probe()),
+      probe: () => (++calls === 1 ? new Promise((_, reject) => (fail = reject)) : probe()),
       factsTimeoutMs: 50,
     });
     const hung = await get(manage, '/v1/host');
     expect(hung.status).toBe(503);
     expect(ModelHostErrorSchema.parse(JSON.parse(hung.body)).code).toBe('facts-timeout');
+    expect((await get(manage, '/v1/settings')).status).toBe(503);
+    expect(calls).toBe(1);
+    fail(new Error('statfs gave up'));
+    await new Promise(resolve => setImmediate(resolve));
     expect((await get(manage, '/v1/settings')).status).toBe(200);
+    expect(calls).toBe(2);
   });
 });
