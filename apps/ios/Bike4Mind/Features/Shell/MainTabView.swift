@@ -40,7 +40,8 @@ struct MainTabView: View {
         get: { navigator.newConversationRequest != nil },
         set: { if !$0 { navigator.dismissNewConversation() } })
     ) {
-      NewConversationView(draft: navigator.newConversationRequest?.draft ?? "", api: services.api)
+      NewConversationView(
+        draft: navigator.newConversationRequest?.draft ?? "", api: services.api, activities: services.questActivities)
     }
     .onChange(of: navigator.externalURL) { _, url in
       guard let url else { return }

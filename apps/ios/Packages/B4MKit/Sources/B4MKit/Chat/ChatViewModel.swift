@@ -20,12 +20,18 @@ public final class ChatViewModel {
   public private(set) var isSending = false
   public private(set) var isRealtimeConnected = false
   public private(set) var hapticTrigger: HapticTrigger?
+  /// When on, the next send starts a fire-and-forget agent run instead of a chat turn; it resets once a run
+  /// starts, and stays on when the start failed so a retry is still a run.
+  public var sendsAsAgentRun = false
 
   @ObservationIgnored private let api: any B4MAPI
   @ObservationIgnored private let realtime: (any RealtimeClient)?
   @ObservationIgnored private let polling: PollingPolicy
   @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
   @ObservationIgnored private let now: @Sendable () -> Date
+  @ObservationIgnored private let title: String
+  @ObservationIgnored private let activities: (any QuestActivityTracking)?
+  @ObservationIgnored private let agentRuns: (any AgentRunStarting)?
   @ObservationIgnored private var hapticSequence = 0
   /// Optimistic turns whose quest id is not known yet, oldest first.
   @ObservationIgnored private var awaitingReceipt: [String] = []
@@ -48,9 +54,15 @@ public final class ChatViewModel {
     realtime: (any RealtimeClient)?,
     polling: PollingPolicy = PollingPolicy(),
     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-    now: @escaping @Sendable () -> Date = Date.init
+    now: @escaping @Sendable () -> Date = Date.init,
+    title: String = "",
+    activities: (any QuestActivityTracking)? = nil,
+    agentRuns: (any AgentRunStarting)? = nil
   ) {
     self.sessionID = sessionID
+    self.title = title
+    self.activities = activities
+    self.agentRuns = agentRuns
     self.api = api
     self.realtime = realtime
     self.polling = polling
@@ -72,6 +84,9 @@ public final class ChatViewModel {
   public var messages: [TranscriptMessage] {
     TranscriptMapper.messages(from: turns)
   }
+
+  /// Whether the composer can offer "run as agent": only when this build wires a run service.
+  public var canRunAgent: Bool { agentRuns != nil }
 
   public var canSend: Bool {
     !isSending && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -140,8 +155,15 @@ public final class ChatViewModel {
   private func submit(_ text: String, localID: String) async {
     isSending = true
     defer { isSending = false }
-    awaitingReceipt.append(localID)
     do {
+      if sendsAsAgentRun, let agentRuns {
+        let receipt = try await agentRuns.startRun(sessionID: sessionID, title: activityTitle(for: text), message: text)
+        acceptRun(receipt, localID: localID)
+        // An agent run is a deliberate, costly choice: the next message is a plain chat turn again.
+        sendsAsAgentRun = false
+        return
+      }
+      awaitingReceipt.append(localID)
       let receipt = try await api.sendChatMessage(ChatSendRequest(message: text, target: .session(sessionID)))
       accept(receipt, localID: localID)
     } catch {
@@ -177,7 +199,33 @@ public final class ChatViewModel {
 
     if let turn = liveTurns.first(where: { $0.id == receipt.questID }), !(turn.status?.isTerminal ?? false) {
       startPolling(receipt.questID)
+      if !receipt.isRefused { startActivity(for: turn, prompt: turn.prompt) }
     }
+  }
+
+  /// The server accepted an agent run. The run is headless (no realtime frames), so its quest, the row
+  /// that gains the reply, is followed by the fallback poll; the run's Live Activity is the run service's.
+  private func acceptRun(_ receipt: AgentRunReceipt, localID: String) {
+    guard let questID = receipt.questID,
+      let localIndex = liveTurns.firstIndex(where: { $0.id == localID })
+    else { return }
+    lastHeardAt[questID] = lastHeardAt[questID] ?? now()
+    liveTurns[localIndex] = liveTurns[localIndex].updating(id: questID)
+    startPolling(questID)
+  }
+
+  private func startActivity(for turn: QuestTurn, prompt: String?) {
+    activities?.questStarted(
+      QuestActivityStart(
+        questID: turn.id, sessionID: sessionID, title: activityTitle(for: prompt ?? ""), startedAt: now(),
+        initialState: QuestActivityMapping.state(from: turn)))
+  }
+
+  /// The session's name, or the opening of the prompt for a session that has none yet.
+  private func activityTitle(for prompt: String) -> String {
+    let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !name.isEmpty { return name }
+    return QuestActivityTitle.fromPrompt(prompt)
   }
 
   // MARK: - Streaming
@@ -185,6 +233,7 @@ public final class ChatViewModel {
   /// Applies one frame for this session. Internal so tests can drive it without a socket.
   func apply(_ frame: ChatQuestFrame) {
     lastHeardAt[frame.questID] = now()
+    activities?.questChanged(questID: frame.questID, to: QuestActivityMapping.state(from: frame))
     let frameIsTerminal = frame.status?.isTerminal ?? false
 
     if let index = liveTurns.firstIndex(where: { $0.id == frame.questID }) {
@@ -281,6 +330,7 @@ public final class ChatViewModel {
     if old.status?.isTerminal ?? false { return }
     let new = old.applying(polled: polled)
     liveTurns[index] = new
+    activities?.questChanged(questID: new.id, to: QuestActivityMapping.state(from: new))
     play(ChatHaptic.transition(from: old, to: new))
   }
 

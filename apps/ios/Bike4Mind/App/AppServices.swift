@@ -28,6 +28,12 @@ final class AppServices {
   let events: IncomingEventHandler
   /// Writes what the widgets show into the shared app-group snapshot (see `WidgetSnapshot`).
   let widgets: WidgetSnapshotRecorder
+  /// Every Live Activity the app has running, one per quest.
+  let questActivities: QuestActivityManager
+  /// Follows started agent runs so their Live Activity stays current while the app is open.
+  let agentRunMonitor: AgentRunMonitor
+  /// Starts a fire-and-forget agent run with its own Live Activity.
+  let agentRuns: any AgentRunStarting
 
   init(auth: AuthController) {
     self.auth = auth
@@ -37,7 +43,7 @@ final class AppServices {
     notificationPrefs = LocalNotificationPrefsService()
 
     // Fixture runs (UI work, screenshots) have no session, so they must never call the push endpoints.
-    var makeAPI: @MainActor () -> any PushTokenAPI = {
+    var makeAPI: PushTokenAPIProvider = {
       PushTokenClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     #if DEBUG
@@ -46,6 +52,22 @@ final class AppServices {
     widgets = WidgetSnapshotRecorder(
       store: FileWidgetSnapshotStore.appGroup(), reloader: SystemWidgetTimelineReloader())
     push = PushRegistrationCoordinator(center: SystemNotificationCenter(), remote: registrar, makeAPI: makeAPI)
+
+    let activities = QuestActivityManager(host: ActivityKitHost(), makeTokenAPI: makeAPI)
+    questActivities = activities
+    var monitorPolicy = AgentRunMonitor.Policy()
+    #if DEBUG
+      if FixtureServices.isEnabled { monitorPolicy.interval = .seconds(2) }
+    #endif
+    let agentRunAPI = ForwardingAgentRunAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.agentRunAPI }
+      #endif
+      return AgentRunClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
+    let monitor = AgentRunMonitor(api: agentRunAPI, tracker: activities, policy: monitorPolicy)
+    agentRunMonitor = monitor
+    agentRuns = AgentRunService(api: agentRunAPI, tracker: activities, monitor: monitor)
 
     let navigator = navigator
     events = IncomingEventHandler(
@@ -138,5 +160,19 @@ final class AppServices {
 struct SystemWidgetTimelineReloader: WidgetTimelineReloading {
   func reload(kinds: [String]) {
     for kind in kinds { WidgetCenter.shared.reloadTimelines(ofKind: kind) }
+  }
+}
+
+/// Routes agent-run calls to whichever server the app currently points at (it can change in debug builds),
+/// so the long-lived run service and monitor never hold a client for a stale deployment.
+struct ForwardingAgentRunAPI: AgentRunAPI {
+  let provider: @MainActor @Sendable () -> any AgentRunAPI
+
+  func startRun(sessionID: String, message: String) async throws -> AgentRunReceipt {
+    try await provider().startRun(sessionID: sessionID, message: message)
+  }
+
+  func run(id: String) async throws -> AgentRunStatus {
+    try await provider().run(id: id)
   }
 }

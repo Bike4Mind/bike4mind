@@ -8,8 +8,8 @@ struct NewConversationView: View {
   @State private var model: NewConversationViewModel
   @FocusState private var focused: Bool
 
-  init(draft: String, api: any B4MAPI) {
-    _model = State(initialValue: NewConversationViewModel(draft: draft, api: api))
+  init(draft: String, api: any B4MAPI, activities: any QuestActivityTracking) {
+    _model = State(initialValue: NewConversationViewModel(draft: draft, api: api, activities: activities))
   }
 
   var body: some View {

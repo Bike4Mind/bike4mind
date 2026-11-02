@@ -13,10 +13,17 @@ public final class NewConversationViewModel {
   public private(set) var refusal: String?
 
   @ObservationIgnored private let api: any B4MAPI
+  @ObservationIgnored private let activities: (any QuestActivityTracking)?
+  @ObservationIgnored private let now: @Sendable () -> Date
 
-  public init(draft: String = "", api: any B4MAPI) {
+  public init(
+    draft: String = "", api: any B4MAPI, activities: (any QuestActivityTracking)? = nil,
+    now: @escaping @Sendable () -> Date = Date.init
+  ) {
     self.draft = draft
     self.api = api
+    self.activities = activities
+    self.now = now
   }
 
   public var canSend: Bool {
@@ -43,6 +50,10 @@ public final class NewConversationViewModel {
         return nil
       }
       draft = ""
+      activities?.questStarted(
+        QuestActivityStart(
+          questID: receipt.questID, sessionID: sessionID, title: QuestActivityTitle.fromPrompt(text),
+          startedAt: now(), initialState: QuestActivityContentState(phase: .running)))
       return sessionID
     } catch {
       failure = (error as? APIError) ?? .malformedResponse

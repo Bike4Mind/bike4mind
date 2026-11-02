@@ -1,9 +1,20 @@
+import B4MKit
 import SwiftUI
 import WidgetKit
 
-/// Visual constants shared by the home-screen widgets (and, with M5, the Live Activity views).
+/// Visual constants shared by the home-screen widgets and the Live Activity views.
 enum WidgetStyle {
   static let placeholderMessage = "Open Bike4Mind to get started"
+
+  static func color(for tone: QuestActivityPresentation.Tone) -> Color {
+    switch tone {
+    case .active: .accentColor
+    case .attention: .orange
+    case .success: .green
+    case .failure: .red
+    case .neutral: .secondary
+    }
+  }
 
   static func title(_ text: String) -> some View {
     Text(text).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
