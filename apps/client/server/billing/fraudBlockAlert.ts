@@ -1,7 +1,7 @@
 import { paymentRiskActionRepository, userRepository } from '@bike4mind/database';
 import { escapeSlackText } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { adminUserSlackRef, stripeCustomerSlackLink } from '@server/integrations/slack/accountLinks';
 import { Resource } from 'sst';
 

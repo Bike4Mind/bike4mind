@@ -11,7 +11,7 @@ vi.mock('@bike4mind/database', () => ({
   paymentRiskActionRepository: { claimStep: mocks.claimStep },
   userRepository: { findById: mocks.findById },
 }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'production' } } }));
 
 import {
