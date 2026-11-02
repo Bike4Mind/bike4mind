@@ -1,5 +1,6 @@
 /** The Models screen's IPC types and the pure rules main and the renderer share. */
 
+import type { LicenseKind } from '@bike4mind/local-models/licenses';
 import { LOCAL_SERVER_ID, type ModelServerManagement } from './modelServers';
 
 export type { ModelServerManagement };
@@ -121,8 +122,6 @@ export interface HubSearchRequest {
 
 export type HubSearchResult =
   { ok: true; models: HubModelCard[]; nextCursor: string | null } | { ok: false; error: ModelHubError };
-
-export type LicenseKind = 'permissive' | 'restricted';
 
 export interface HubBuildView {
   id: string;
@@ -329,22 +328,7 @@ export function pullKey(repo: string, buildId: string, serverId: string = LOCAL_
   return serverId === LOCAL_SERVER_ID ? id : `${serverId}/${id}`;
 }
 
-const PERMISSIVE_LICENSES = new Set([
-  'apache-2.0',
-  'mit',
-  'bsd',
-  'bsd-2-clause',
-  'bsd-3-clause',
-  'bsd-3-clause-clear',
-  'isc',
-]);
-
-/** Permissive only when every declared license is; none at all needs the user to accept the card's terms. */
-export function licenseKind(licenses: readonly string[]): LicenseKind {
-  return licenses.length > 0 && licenses.every(license => PERMISSIVE_LICENSES.has(license.trim().toLowerCase()))
-    ? 'permissive'
-    : 'restricted';
-}
+export { licenseKind, type LicenseKind } from '@bike4mind/local-models/licenses';
 
 export function formatBytes(bytes: number | null): string {
   if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return 'unknown size';
