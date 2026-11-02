@@ -976,6 +976,10 @@ jobs:
       - name: Build CLI (for e2e bundle baseline)
         run: pnpm --filter @bike4mind/cli build
 
+      # The b4m-host build fails on its own bundle check: one file, node:* imports only, within its size budget.
+      - name: Build b4m-host (bundle check)
+        run: pnpm --filter @bike4mind/model-host build
+
       - name: Run CLI e2e harness
         run: pnpm --filter @bike4mind/cli test:e2e
         env:

@@ -96,6 +96,7 @@ export default defineConfig({
     'src/commands/acpCommand.ts',
     'src/commands/apiCommand.ts',
     'src/commands/envCommand.ts',
+    'src/commands/hostCommand.ts',
   ],
   format: ['esm'],
   target: 'node24',

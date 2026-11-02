@@ -65,6 +65,8 @@ export interface LockOptions {
   force?: boolean;
   refreshMs?: number;
   staleMs?: number;
+  /** Recorded in the lock as `machine`, for a holder that must tell machines apart better than `hostname()` can. */
+  machine?: string;
 }
 
 interface Holder {
@@ -326,10 +328,12 @@ export async function lockFile(path: string, runtimeId: string, options: LockOpt
       if (!removed) throw new ModelFileBusyError(runtimeId, path, holder.pid);
       continue;
     }
-    const failed = await handle.writeFile(JSON.stringify({ pid: process.pid, host: hostname(), nonce })).then(
-      () => null,
-      (error: unknown) => ({ error })
-    );
+    const failed = await handle
+      .writeFile(JSON.stringify({ pid: process.pid, host: hostname(), machine: options.machine, nonce }))
+      .then(
+        () => null,
+        (error: unknown) => ({ error })
+      );
     await handle.close();
     if (failed) {
       await rm(lockPath, { force: true });
