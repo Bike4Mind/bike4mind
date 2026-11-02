@@ -110,7 +110,13 @@ function RuntimeStatusBar({
         {target.local ? 'Checking for Ollama...' : `Checking ${target.name}...`}
       </Typography>
     );
-  const address = <Typography fontFamily="code">{status.url.replace(/^https?:\/\//, '')}</Typography>;
+  const ssh = status.url.startsWith('ssh://');
+  const address = (
+    <>
+      <Typography fontFamily="code">{status.url.replace(/^(https?|ssh):\/\//, '')}</Typography>
+      {ssh && ' over SSH'}
+    </>
+  );
   if (status.reachable)
     return (
       <Stack direction="row" alignItems="center" spacing={1} data-testid="models-runtime-status" data-state="running">

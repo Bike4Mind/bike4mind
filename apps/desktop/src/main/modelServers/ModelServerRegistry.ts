@@ -13,6 +13,7 @@ import {
 import {
   answersWithoutCredentials,
   createServerFetch,
+  createSshFetch,
   describeFailure,
   DROP_CODES,
   errorCode,
@@ -21,13 +22,19 @@ import {
   probeServer,
   redactServerResponse,
   scopeOfIp,
+  parseSshDestination,
   ServerRedirectError,
   ServerTransportError,
+  SSH_OLLAMA_URL,
+  SSH_PROBE_TIMEOUT_MS,
+  sshDestinationProblem,
   suggestServerName,
+  suggestSshName,
   transportVerdict,
   type AddressScope,
   type ParsedAddress,
   type ServerEndpoint,
+  type SshEndpoint,
 } from '@bike4mind/local-models/servers';
 import { localBackend, localModelId, type ChatModelOption } from '@shared/chat';
 import {
@@ -69,7 +76,10 @@ interface ServerClient extends LocalChat {
 
 interface Entry {
   record: ModelServerRecord;
+  /** For an SSH server, the far end's loopback Ollama. */
   parsed: ParsedAddress;
+  /** The SSH destination; null for a server reached by address. */
+  ssh: string | null;
   scope: AddressScope | null;
   fetch: FetchLike;
   client: ServerClient;
@@ -89,6 +99,8 @@ export interface ModelServerRegistryDeps {
   /** Resolves a host name to its addresses; defaults to `dns.lookup` with `all: true`. */
   resolve?(host: string): Promise<string[]>;
   fetchFor?(endpoint: ServerEndpoint): FetchLike;
+  /** For servers reached over SSH; defaults to the system ssh (createSshFetch). */
+  sshFetchFor?(endpoint: SshEndpoint): FetchLike;
   /** For "This computer"; defaults to the global fetch. */
   localFetch?: FetchLike;
   now?(): number;
@@ -147,6 +159,7 @@ export class ModelServerRegistry {
       name: LOCAL_SERVER_NAME,
       local: true,
       kind: 'ollama',
+      transport: 'http',
       address: LOCAL_OLLAMA_URL,
       access: 'manage',
       auth: { type: 'none' },
@@ -166,24 +179,17 @@ export class ModelServerRegistry {
     return this.entries.get(id)?.record.specs ?? null;
   }
 
-  /** Tests an address without saving it. */
+  /** Tests an address or SSH destination without saving it. */
   async probe(input: ModelServerProbeInput): Promise<ModelServerProbeResult> {
-    const failed = (error: string, extra: Partial<ModelServerProbeResult> = {}): ModelServerProbeResult => ({
-      ok: false,
-      address: null,
-      kind: null,
-      version: null,
-      latencyMs: null,
-      models: null,
-      needsCredentials: false,
-      unencrypted: false,
-      openToAnyone: false,
-      suggestedName: null,
-      error,
-      ...extra,
-    });
+    if (input.transport === 'ssh') return this.probeSsh(input.address);
     const parsed = parseServerAddress(input.address);
-    if (!parsed) return failed('Enter an address like https://host, http://192.168.1.5:11434 or host:port.');
+    if (!parsed) {
+      return failed(
+        parseSshDestination(input.address)?.includes('@')
+          ? 'This looks like an SSH destination. Choose SSH above, then test again.'
+          : 'Enter an address like https://host, http://192.168.1.5:11434 or host:port.'
+      );
+    }
     if (isLocalOllama(parsed)) {
       return failed(
         `${new URL(parsed.baseUrl).host} is ${LOCAL_SERVER_NAME}, which is already listed. To reach another machine through an SSH tunnel, forward a different local port, such as 21434.`
@@ -245,6 +251,31 @@ export class ModelServerRegistry {
     };
   }
 
+  /** An SSH server is always Ollama on the far end's loopback, so only the connection is in question. */
+  private async probeSsh(address: string): Promise<ModelServerProbeResult> {
+    const problem = sshDestinationProblem(address);
+    if (problem) return failed(problem);
+    const destination = address.trim();
+    const base = { address: destination, suggestedName: suggestSshName(destination) };
+    const fetch = this.sshFetchFor({ destination, label: destination, app: 'Desktop' });
+    const outcome = await probeServer(fetch, SSH_OLLAMA_URL, destination, this.now, 'ollama', SSH_PROBE_TIMEOUT_MS);
+    if (outcome.kind !== 'ollama') {
+      return failed(outcome.error ?? `${destination} did not answer as Ollama at 127.0.0.1:11434.`, base);
+    }
+    return {
+      ok: true,
+      ...base,
+      kind: 'ollama',
+      version: outcome.version,
+      latencyMs: outcome.latencyMs,
+      models: outcome.models,
+      needsCredentials: false,
+      unencrypted: false,
+      openToAnyone: false,
+      error: null,
+    };
+  }
+
   async add(input: ModelServerAddInput): Promise<ModelServerView[]> {
     await this.load();
     const probe = await this.probe(input);
@@ -252,9 +283,15 @@ export class ModelServerRegistry {
     if (probe.openToAnyone && !input.acceptOpen) {
       throw new Error('This server answers anyone on the internet. Confirm that before saving it.');
     }
+    const ssh = input.transport === 'ssh';
     const record = await this.deps.store.add(
-      { name: input.name, kind: input.kind, transport: { type: 'http', baseUrl: probe.address }, access: input.access },
-      input.credential
+      {
+        name: input.name,
+        kind: ssh ? 'ollama' : input.kind,
+        transport: ssh ? { type: 'ssh', destination: probe.address } : { type: 'http', baseUrl: probe.address },
+        access: input.access,
+      },
+      ssh ? { type: 'none' } : input.credential
     );
     const entry = this.build(record);
     this.entries.set(record.id, entry);
@@ -274,6 +311,12 @@ export class ModelServerRegistry {
     }
     const entry = this.entries.get(id);
     if (!entry) throw new Error('That model server is no longer saved.');
+    if (entry.ssh && input.kind && input.kind !== 'ollama') {
+      throw new Error('An SSH server reaches Ollama on that machine, so its kind stays Ollama.');
+    }
+    if (entry.ssh && input.credential && input.credential.type !== 'none') {
+      throw new Error('An SSH server signs in with your SSH keys and takes no token or header.');
+    }
     if (input.credential) {
       const hasCredentials = !!credentialHeaders(input.credential);
       entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
@@ -397,7 +440,7 @@ export class ModelServerRegistry {
       name: record.name,
       management: serverManagement({ local: false, kind: record.kind, access: record.access }),
       runtime: {
-        baseUrl: record.transport.baseUrl,
+        baseUrl: entry.ssh ? `ssh://${entry.ssh}` : entry.parsed.baseUrl,
         health: async () => {
           const health = (await this.check(id)).find(server => server.id === id)?.health;
           return health?.state === 'online'
@@ -499,10 +542,11 @@ export class ModelServerRegistry {
     }
     const outcome = await probeServer(
       entry.fetch,
-      entry.record.transport.baseUrl,
+      entry.parsed.baseUrl,
       entry.record.name,
       this.now,
-      entry.record.kind
+      entry.record.kind,
+      entry.ssh ? SSH_PROBE_TIMEOUT_MS : undefined
     );
     const checkedAt = new Date().toISOString();
     if (outcome.auth) {
@@ -577,14 +621,18 @@ export class ModelServerRegistry {
   }
 
   private build(record: ModelServerRecord, previous?: Entry): Entry {
-    const parsed = parseServerAddress(record.transport.baseUrl) as ParsedAddress;
-    const endpoint: ServerEndpoint = {
-      origin: parsed.origin,
-      label: record.name,
-      app: 'Desktop',
-      credentialHeaders: () => this.deps.store.headers(record),
-    };
-    const fetch = this.fetchFor(endpoint);
+    const ssh = record.transport.type === 'ssh' ? record.transport.destination : null;
+    const parsed = parseServerAddress(
+      record.transport.type === 'ssh' ? SSH_OLLAMA_URL : record.transport.baseUrl
+    ) as ParsedAddress;
+    const fetch = ssh
+      ? this.sshFetchFor({ destination: ssh, label: record.name, app: 'Desktop' })
+      : this.fetchFor({
+          origin: parsed.origin,
+          label: record.name,
+          app: 'Desktop',
+          credentialHeaders: () => this.deps.store.headers(record),
+        });
     const runtimeId = serverRuntimeId(record.id);
     const hasCredentials = () => !!this.deps.store.headers(record);
     const product = previous?.record.kind === record.kind ? previous.product : null;
@@ -615,6 +663,7 @@ export class ModelServerRegistry {
     return {
       record,
       parsed,
+      ssh,
       scope: previous?.scope ?? (isIP(parsed.host) ? scopeOfIp(parsed.host) : null),
       fetch,
       client,
@@ -634,7 +683,8 @@ export class ModelServerRegistry {
       name: record.name,
       local: false,
       kind: record.kind,
-      address: record.transport.baseUrl,
+      transport: record.transport.type,
+      address: entry.ssh ?? entry.parsed.baseUrl,
       access: record.access,
       auth:
         record.auth.type === 'header' ? { type: 'header', headerName: record.auth.name } : { type: record.auth.type },
@@ -650,7 +700,9 @@ export class ModelServerRegistry {
   private load(): Promise<void> {
     this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs()]).then(([records, specs]) => {
       for (const record of records) {
-        if (parseServerAddress(record.transport.baseUrl)) this.entries.set(record.id, this.build(record));
+        if (record.transport.type === 'ssh' || parseServerAddress(record.transport.baseUrl)) {
+          this.entries.set(record.id, this.build(record));
+        }
       }
       this.localSpecs = specs;
       if (specs) this.deps.localSpecsChanged?.();
@@ -669,6 +721,10 @@ export class ModelServerRegistry {
 
   private fetchFor(endpoint: ServerEndpoint): FetchLike {
     return (this.deps.fetchFor ?? createServerFetch)(endpoint);
+  }
+
+  private sshFetchFor(endpoint: SshEndpoint): FetchLike {
+    return this.deps.sshFetchFor ? this.deps.sshFetchFor(endpoint) : createSshFetch(endpoint);
   }
 
   private readonly now = () => (this.deps.now ?? performance.now.bind(performance))();
@@ -695,6 +751,23 @@ function isLocalOllama(parsed: ParsedAddress): boolean {
     LOOPBACK_NAMES.has(parsed.host.toLowerCase().replace(/\.$/, '')) &&
     new URL(parsed.origin).port === LOCAL_OLLAMA_PORT
   );
+}
+
+function failed(error: string, extra: Partial<ModelServerProbeResult> = {}): ModelServerProbeResult {
+  return {
+    ok: false,
+    address: null,
+    kind: null,
+    version: null,
+    latencyMs: null,
+    models: null,
+    needsCredentials: false,
+    unencrypted: false,
+    openToAnyone: false,
+    suggestedName: null,
+    error,
+    ...extra,
+  };
 }
 
 async function resolveAll(host: string): Promise<string[]> {

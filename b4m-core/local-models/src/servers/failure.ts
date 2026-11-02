@@ -1,5 +1,6 @@
 import { PullIdleTimeoutError } from '../errors';
 import { ServerRedirectError, ServerTransportError } from './serverFetch';
+import { SshConnectionError } from './ssh';
 
 /** The system error code on the error itself (Node http mid-body drops) or on its cause (fetch). */
 export function errorCode(err: unknown): string | undefined {
@@ -15,6 +16,8 @@ export const DROP_CODES = new Set(['ECONNRESET', 'UND_ERR_SOCKET', 'ERR_STREAM_P
 /** One line for a failed request; never includes a header or credential. */
 export function describeFailure(err: unknown): string {
   if (err instanceof ServerTransportError || err instanceof ServerRedirectError) return err.message;
+  if (err instanceof SshConnectionError) return err.message;
+  if (err instanceof Error && err.cause instanceof SshConnectionError) return err.cause.message;
   if (err instanceof DOMException && err.name === 'TimeoutError') return 'it did not answer in time';
   if (err instanceof Error && err.name === 'TimeoutError') return 'it did not answer in time';
   if (err instanceof PullIdleTimeoutError) return 'it stopped sending data';

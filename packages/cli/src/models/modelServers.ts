@@ -19,6 +19,7 @@ import {
   serverRuntimeId,
   type CredentialRedactor,
   type DesktopModelServers,
+  type DesktopOnlyServer,
   type FetchLike,
   type OpenAICompatibleProduct,
   type SharedServerRecord,
@@ -30,6 +31,8 @@ export type CliModelServer = SharedServerRecord & { source: 'desktop' | 'cli' };
 
 export interface LoadedModelServers {
   servers: CliModelServer[];
+  /** Desktop's SSH servers: listed so they are not silently missing, but the CLI cannot reach them. */
+  desktopOnly?: DesktopOnlyServer[];
   /** Why Desktop's list could not be read, when it could not. */
   problem: string | null;
 }
@@ -40,9 +43,12 @@ export type SecretFor = (serverId: string) => string | undefined;
 export async function loadModelServers(
   read: () => Promise<DesktopModelServers> = readDesktopModelServers
 ): Promise<LoadedModelServers> {
-  const { servers, problem } = await read();
-  return { servers: servers.map(server => ({ ...server, source: 'desktop' as const })), problem };
+  const { servers, desktopOnly = [], problem } = await read();
+  return { servers: servers.map(server => ({ ...server, source: 'desktop' as const })), desktopOnly, problem };
 }
+
+/** How `b4m models servers` shows a server only Desktop can reach. */
+export const DESKTOP_ONLY_STATUS = 'SSH, Desktop only';
 
 export function findModelServer(servers: CliModelServer[], name: string): CliModelServer | undefined {
   const wanted = name.trim().toLowerCase();
@@ -50,6 +56,11 @@ export function findModelServer(servers: CliModelServer[], name: string): CliMod
 }
 
 export function noSuchServer(loaded: LoadedModelServers, name: string): Error {
+  const wanted = name.trim().toLowerCase();
+  const ssh = loaded.desktopOnly?.find(server => server.name.toLowerCase() === wanted);
+  if (ssh) {
+    return new Error(`${clean(ssh.name)} connects over SSH, which only Desktop supports. The CLI cannot use it yet.`);
+  }
   const known = loaded.servers.map(server => clean(server.name)).join(', ');
   const detail = loaded.problem ?? (known ? `Saved servers: ${known}.` : 'No model servers are saved in Desktop.');
   return new Error(`No model server named ${clean(name)}. ${detail} See: b4m models servers`);
