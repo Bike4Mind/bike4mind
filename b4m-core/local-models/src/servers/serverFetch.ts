@@ -153,9 +153,11 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
     // Encoded error bodies cannot be safely scrubbed without decoding; omit them rather than trust
     // a server-controlled content-encoding header to describe what consumers will actually parse.
     const encoding = (response.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
+    const idleMs = NO_IDLE_LIMIT_PATHS.has(url.pathname) ? null : (deps.bodyIdleTimeoutMs ?? BODY_IDLE_TIMEOUT_MS);
     if (status >= 300 && redactor) {
       let text: string | null = null;
       if (!empty && encoding === 'identity') {
+        if (idleMs !== null) response.setTimeout(idleMs, () => response.destroy());
         const read = await readCapped(response, ERROR_BODY_LIMIT);
         text = redactor.redact(read.text);
         // A credential cut at the limit could leave its start behind.
@@ -168,7 +170,6 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
       responseHeaders.delete('content-encoding');
       return new Response(text, { status, statusText: scrub(response.statusMessage ?? ''), headers: responseHeaders });
     }
-    const idleMs = NO_IDLE_LIMIT_PATHS.has(url.pathname) ? null : (deps.bodyIdleTimeoutMs ?? BODY_IDLE_TIMEOUT_MS);
     const armIdleLimit = () =>
       idleMs !== null &&
       response.setTimeout(idleMs, () =>

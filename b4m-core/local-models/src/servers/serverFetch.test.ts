@@ -199,6 +199,20 @@ describe('createServerFetch', () => {
     await vi.waitFor(() => expect(closed).toBe(true));
   });
 
+  it('cuts off a credentialed error body that stalls after its headers', async () => {
+    let closed = false;
+    const target = await serve((_req, res) => {
+      res.on('close', () => (closed = true));
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.write('{"error":"par');
+    });
+    const fetch = createServerFetch(endpoint(target.origin), { bodyIdleTimeoutMs: 100 });
+    const response = await fetch(`${target.origin}/v1/chat/completions`);
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe('{"error":"par');
+    await vi.waitFor(() => expect(closed).toBe(true));
+  });
+
   it('waits through a prefill that starts after the headers were sent', async () => {
     const target = await serve((_req, res) => {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
