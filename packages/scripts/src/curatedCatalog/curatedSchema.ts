@@ -27,7 +27,10 @@ export function curatedJsonSchemaText(): string {
 
 /** Null when the committed file matches the generated schema, else a message naming the fix. */
 export async function checkCuratedSchema(root: string = REPO_ROOT): Promise<string | null> {
-  const committed = await readFile(path.join(root, SCHEMA_PATH), 'utf8').catch(() => null);
+  const committed = await readFile(path.join(root, SCHEMA_PATH), 'utf8').catch((error: unknown) => {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+    throw error;
+  });
   if (committed === curatedJsonSchemaText()) return null;
   return `${SCHEMA_PATH} is ${committed === null ? 'missing' : 'stale'}; run pnpm --filter @bike4mind/scripts curated:schema`;
 }

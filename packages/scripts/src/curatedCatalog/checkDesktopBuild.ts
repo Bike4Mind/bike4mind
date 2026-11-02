@@ -100,9 +100,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, log = console
         findings.push(finding);
         log(`${path.join(extraDir, finding.file)}: contains the curated ${finding.marker}`);
       }
-    } catch {
+    } catch (error) {
       scanFailed = true;
-      log(`${extraDir} cannot be scanned; was it built?`);
+      log(`${extraDir} cannot be scanned; was it built? (${error instanceof Error ? error.message : String(error)})`);
     }
   }
   const problems = await buildInfoProblems(dir, parsed.values['expect-url']);
