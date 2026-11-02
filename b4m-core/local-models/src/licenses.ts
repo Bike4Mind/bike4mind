@@ -1,5 +1,6 @@
 export type LicenseKind = 'permissive' | 'restricted';
 
+// The CLI keeps its own, wider list in packages/cli/src/models/localModels.ts.
 const PERMISSIVE_LICENSES = new Set([
   'apache-2.0',
   'mit',

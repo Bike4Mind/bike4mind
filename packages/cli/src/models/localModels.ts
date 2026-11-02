@@ -175,6 +175,7 @@ export const DEFAULT_QUANT = 'Q4_K_M';
 export const NO_LICENSE = 'none declared';
 const HF_HOSTS: ReadonlySet<string> = new Set(['hf.co', 'huggingface.co']);
 
+// Wider than @bike4mind/local-models/licenses, which Desktop and checkApproval use; kept apart so CLI prompts stay as they were.
 const PERMISSIVE_LICENSES = new Set([
   '0bsd',
   'apache-2.0',

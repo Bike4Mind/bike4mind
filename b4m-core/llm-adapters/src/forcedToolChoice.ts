@@ -117,6 +117,26 @@ export function isStrictCompatibleSchema(schema: unknown): boolean {
   return children.every(isStrictCompatibleSchema);
 }
 
+/**
+ * Whether any object in the schema explicitly allows keys beyond `properties` (`additionalProperties`
+ * set to anything but false). buildStructuredOutputFormat closes those objects, so a caller relying on
+ * the extra keys would silently lose them.
+ */
+export function declaresOpenObject(schema: unknown): boolean {
+  if (!isRecord(schema)) return false;
+  if ('additionalProperties' in schema && schema.additionalProperties !== false) return true;
+  const children: unknown[] = [schema.items];
+  for (const key of ['properties', '$defs', 'definitions'] as const) {
+    const named = schema[key];
+    if (isRecord(named)) children.push(...Object.values(named));
+  }
+  for (const key of ['anyOf', 'oneOf', 'allOf'] as const) {
+    const variants = schema[key];
+    if (Array.isArray(variants)) children.push(...variants);
+  }
+  return children.some(declaresOpenObject);
+}
+
 const STRUCTURED_OUTPUT_KEPT_KEYWORDS = new Set(['type', 'description', 'title', 'enum', 'const', 'required']);
 
 const LOCAL_DEF_REF = /^#\/(?:\$defs|definitions)\/[^/]+$/;
@@ -190,6 +210,8 @@ function toStructuredOutputNode(node: unknown): Record<string, unknown> | null {
   return out;
 }
 
+const DEFINITION_KEYS = ['$defs', 'definitions'] as const;
+
 function collectRefNames(node: unknown, names: Set<string>): void {
   if (Array.isArray(node)) {
     for (const child of node) collectRefNames(child, names);
@@ -204,7 +226,7 @@ function collectRefNames(node: unknown, names: Set<string>): void {
 // Structured outputs reject recursive schemas: a definition whose $ref chain leads back to itself.
 function hasRecursiveRef(schema: Record<string, unknown>): boolean {
   const edges = new Map<string, Set<string>>();
-  for (const key of ['$defs', 'definitions'] as const) {
+  for (const key of DEFINITION_KEYS) {
     const defs = schema[key];
     if (!isRecord(defs)) continue;
     for (const [name, def] of Object.entries(defs)) {
@@ -226,17 +248,90 @@ function hasRecursiveRef(schema: Record<string, unknown>): boolean {
   return [...edges.keys()].some(name => visit(name, new Set()));
 }
 
+// Structured outputs reject a schema past an undocumented compiled-grammar size, and an inlined schema
+// (zod's default output) repeats one object per use. An object that appears more than once moves to
+// $defs behind a $ref. allOf members stay inline: the API rejects allOf with $ref. Existing $defs /
+// definitions bodies are scanned too, since zod's `reused: 'ref'` output keeps its bulk there.
+function hoistRepeatedObjects(schema: Record<string, unknown>): Record<string, unknown> {
+  const counts = new Map<string, number>();
+  const countObjects = (node: unknown, hoistable: boolean): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) countObjects(child, hoistable);
+      return;
+    }
+    if (!isRecord(node)) return;
+    if (isRecord(node.properties)) {
+      if (hoistable) {
+        const key = JSON.stringify(node);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      for (const child of Object.values(node.properties)) countObjects(child, true);
+    }
+    if (node.items !== undefined) countObjects(node.items, true);
+    if (node.anyOf !== undefined) countObjects(node.anyOf, true);
+    if (node.allOf !== undefined) countObjects(node.allOf, false);
+  };
+  countObjects(schema, false);
+  for (const key of DEFINITION_KEYS) {
+    if (isRecord(schema[key])) countObjects(Object.values(schema[key]), false);
+  }
+  const repeated = new Set([...counts].filter(([, n]) => n > 1).map(([key]) => key));
+  if (repeated.size === 0) return schema;
+
+  const defs: Record<string, unknown> = isRecord(schema.$defs) ? { ...schema.$defs } : {};
+  const names = new Map<string, string>();
+  let next = 0;
+  const rewrite = (node: unknown, hoistable: boolean): unknown => {
+    if (Array.isArray(node)) return node.map(child => rewrite(child, hoistable));
+    if (!isRecord(node)) return node;
+    const key = hoistable && isRecord(node.properties) ? JSON.stringify(node) : null;
+    if (key && repeated.has(key)) {
+      let name = names.get(key);
+      if (!name) {
+        do {
+          name = `shared${++next}`;
+        } while (name in defs);
+        names.set(key, name);
+        defs[name] = rewrite(node, false);
+      }
+      return { $ref: `#/$defs/${name}` };
+    }
+    const out: Record<string, unknown> = { ...node };
+    if (isRecord(node.properties)) {
+      out.properties = Object.fromEntries(
+        Object.entries(node.properties).map(([prop, child]) => [prop, rewrite(child, true)])
+      );
+    }
+    if (node.items !== undefined) out.items = rewrite(node.items, true);
+    if (node.anyOf !== undefined) out.anyOf = rewrite(node.anyOf, true);
+    if (node.allOf !== undefined) out.allOf = rewrite(node.allOf, false);
+    return out;
+  };
+  const root = rewrite(schema, false) as Record<string, unknown>;
+  const definitions = isRecord(schema.definitions) ? schema.definitions : null;
+  if (definitions) {
+    root.definitions = Object.fromEntries(
+      Object.entries(definitions).map(([name, def]) => [name, rewrite(def, false)])
+    );
+  }
+  if (isRecord(schema.$defs)) {
+    for (const [name, def] of Object.entries(schema.$defs)) defs[name] = rewrite(def, false);
+  }
+  return { ...root, $defs: defs };
+}
+
 /**
  * `output_config.format` for a json_schema response_format, or null when the schema needs something
  * structured outputs reject (recursion, a free-form object, a typeless node) and the caller should
  * fall back to the prompt instruction. Objects are closed with `additionalProperties: false`,
- * unsupported constraints move into descriptions, and `enum` / `const` / `$defs` are kept (the SDK's
- * transformJSONSchema drops the first two and dangles `definitions` refs). Never mutates `schema`.
+ * unsupported constraints move into descriptions, `enum` / `const` / `$defs` are kept (the SDK's
+ * transformJSONSchema drops the first two and dangles `definitions` refs), and an object repeated
+ * inline moves to `$defs` once. Never mutates `schema`.
  */
 export function buildStructuredOutputFormat(schema: Record<string, unknown>): JSONOutputFormat | null {
   const converted = toStructuredOutputNode(schema);
   if (!converted || hasRecursiveRef(converted)) return null;
-  return { type: 'json_schema', schema: converted };
+  return { type: 'json_schema', schema: hoistRepeatedObjects(converted) };
 }
 
 /** Whether any document block asks for citations, which the API refuses alongside output_config.format. */

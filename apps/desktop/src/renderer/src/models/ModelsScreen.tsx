@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -37,10 +37,12 @@ const dot = (color: string) => <Box sx={{ width: 8, height: 8, borderRadius: '50
 /** No Ollama answers on this computer: the two ways forward, neither of which installs anything by itself. */
 function NoLocalRuntime({
   status,
+  address,
   onRetry,
   onOpenModelServers,
 }: {
   status: ModelRuntimeStatus;
+  address: ReactNode;
   onRetry: () => void;
   onOpenModelServers?: () => void;
 }) {
@@ -56,10 +58,9 @@ function NoLocalRuntime({
         <Typography level="title-sm">Ollama did not answer on this computer</Typography>
       </Stack>
       <Typography level="body-sm" sx={{ mt: 0.5 }} data-testid="models-no-runtime-text">
-        Local models run in Ollama, and Desktop got no answer from{' '}
-        <Typography fontFamily="code">{status.url.replace(/^https?:\/\//, '')}</Typography>. If it is not installed,
-        install it; if it is, start it or give it a moment. This checks again every few seconds. To use models on
-        another machine instead, point Desktop at its server.
+        Local models run in Ollama, and Desktop got no answer from {address}. If it is not installed, install it; if it
+        is, start it or give it a moment. This checks again every few seconds. To use models on another machine instead,
+        point Desktop at its server.
       </Typography>
       {status.error && (
         <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }} data-testid="models-no-runtime-error">
@@ -110,7 +111,13 @@ function RuntimeStatusBar({
         {target.local ? 'Checking for Ollama...' : `Checking ${target.name}...`}
       </Typography>
     );
-  const address = <Typography fontFamily="code">{status.url.replace(/^https?:\/\//, '')}</Typography>;
+  const ssh = status.url.startsWith('ssh://');
+  const address = (
+    <>
+      <Typography fontFamily="code">{status.url.replace(/^(https?|ssh):\/\//, '')}</Typography>
+      {ssh && ' over SSH'}
+    </>
+  );
   if (status.reachable)
     return (
       <Stack direction="row" alignItems="center" spacing={1} data-testid="models-runtime-status" data-state="running">
@@ -129,7 +136,10 @@ function RuntimeStatusBar({
         </Typography>
       </Stack>
     );
-  if (target.local) return <NoLocalRuntime status={status} onRetry={onRetry} onOpenModelServers={onOpenModelServers} />;
+  if (target.local)
+    return (
+      <NoLocalRuntime status={status} address={address} onRetry={onRetry} onOpenModelServers={onOpenModelServers} />
+    );
   return (
     <Stack direction="row" alignItems="center" spacing={1} data-testid="models-runtime-status" data-state="down">
       {dot('danger.500')}

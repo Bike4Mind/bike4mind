@@ -45,9 +45,11 @@ export type OllamaInstallType = (typeof OLLAMA_INSTALL_TYPES)[number];
 /**
  * `unattributed`: systemd reports the value but no readable unit file, drop-in or environment file sets it.
  * `config`: Ollama's own `~/.ollama/server.json` for its service user (`disable_ollama_cloud`).
+ * `manager`: the systemd service manager's own environment (`systemctl show-environment`), below any unit setting.
  */
 export const OLLAMA_SETTING_SOURCE_KINDS = [
   'default',
+  'manager',
   'unit',
   'dropin',
   'override',

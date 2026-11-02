@@ -14,7 +14,6 @@ import {
   type PullCheckHub,
 } from './approval';
 
-const PERMISSIVE = new Set(['apache-2.0', 'mit']);
 const UP: RuntimeHealth = { ok: true, version: '9.0.0', error: null };
 
 function fakeHub(detail: HubModelDetail, overrides: Partial<PullCheckHub> = {}): PullCheckHub {
@@ -31,7 +30,6 @@ function deps(hub: PullCheckHub, overrides: Partial<ApprovalDeps> = {}): Approva
     hub: () => hub,
     libraryLayers: vi.fn(async () => null),
     health: vi.fn(async () => UP),
-    isPermissive: licenses => licenses.length > 0 && licenses.every(id => PERMISSIVE.has(id)),
     signal: new AbortController().signal,
     ...overrides,
   };
@@ -256,7 +254,7 @@ describe('checkApproval for a curated Hugging Face build', () => {
     const { hub, approval } = setup(({ entry }) => {
       entry.license.base.class = 'non-commercial';
     });
-    const d = deps(hub, { isPermissive: () => true });
+    const d = deps(hub);
     expect(await checkApproval(approval, d)).toEqual({ ok: false, reason: 'license-required' });
     expect(await checkApproval({ ...approval, licenseAccepted: true }, d)).toMatchObject({ ok: true });
   });

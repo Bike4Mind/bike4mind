@@ -1,5 +1,6 @@
 /** The Models screen's IPC types and the pure rules main and the renderer share. */
 
+import type { LicenseKind } from '@bike4mind/local-models/licenses';
 import { LOCAL_SERVER_ID, type ModelServerManagement } from './modelServers';
 
 export type { ModelServerManagement };
@@ -121,8 +122,6 @@ export interface HubSearchRequest {
 
 export type HubSearchResult =
   { ok: true; models: HubModelCard[]; nextCursor: string | null } | { ok: false; error: ModelHubError };
-
-export type LicenseKind = 'permissive' | 'restricted';
 
 export interface HubBuildView {
   id: string;
@@ -328,7 +327,7 @@ export function pullKey(repo: string, buildId: string, serverId: string = LOCAL_
   return serverId === LOCAL_SERVER_ID ? id : `${serverId}/${id}`;
 }
 
-export { licenseKind } from '@bike4mind/local-models/licenses';
+export { licenseKind, type LicenseKind } from '@bike4mind/local-models/licenses';
 
 export function formatBytes(bytes: number | null): string {
   if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return 'unknown size';
