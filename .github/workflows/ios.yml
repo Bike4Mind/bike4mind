@@ -1,0 +1,59 @@
+name: iOS
+
+on:
+  pull_request:
+    paths:
+      - 'apps/ios/**'
+      - 'apps/client/public/openapi.json'
+      - '.github/workflows/ios.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/ios/**'
+      - 'apps/client/public/openapi.json'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    name: Lint, test, generated-client check
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apps/ios
+    steps:
+      - uses: actions/checkout@v6
+
+      # Swift packages resolve and compile the OpenAPI generator once; later runs reuse them.
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: |
+            apps/ios/build/DerivedData/SourcePackages
+            apps/ios/Packages/B4MKit/.build
+            apps/ios/Packages/B4MClient/.build
+            apps/ios/Tools/Generator/.build
+          key: ios-spm-${{ runner.os }}-${{ hashFiles('apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
+          restore-keys: ios-spm-${{ runner.os }}-
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      # The generated client is committed; regenerating from the committed snapshot must be a no-op.
+      - name: Generated client is reproducible
+        run: |
+          make generate-client
+          git diff --exit-code -- .
+
+      - name: Build
+        run: make build

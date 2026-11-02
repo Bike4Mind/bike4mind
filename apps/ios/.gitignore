@@ -21,3 +21,9 @@ Package.resolved
 # Test output
 *.xcresult
 Tools/Generator/.build/
+
+# fastlane
+fastlane/report.xml
+fastlane/test_output/
+fastlane/README.md
+Gemfile.lock

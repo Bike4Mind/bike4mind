@@ -1,0 +1,44 @@
+# Bike4Mind iOS lanes. Run from apps/ios: `bundle exec fastlane <lane>`.
+# The Makefile stays the source of truth for build and test; lanes only call it.
+
+default_platform(:ios)
+
+IOS_ROOT = File.expand_path("..", __dir__)
+
+platform :ios do
+  desc "Run the unit suites (what `make test` does)"
+  lane :test do
+    sh("make -C #{IOS_ROOT} test")
+  end
+
+  desc "Simulator build (what `make build` does); no signing needed"
+  lane :build do
+    sh("make -C #{IOS_ROOT} build")
+  end
+
+  # NOT RUNNABLE YET: there is no Apple Developer team, App Store Connect app record or signing
+  # setup. The lane refuses to start until every variable below is present, so it cannot half-run.
+  # When signing exists: enable automatic signing for the team, create an App Store Connect API key
+  # (App Manager role), and export the variables in CI secrets. No certificate or key lives in the repo.
+  desc "Archive and upload to TestFlight (needs signing; see comments)"
+  lane :beta do
+    required = %w[IOS_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_CONTENT_BASE64]
+    missing = required.select { |name| ENV[name].to_s.empty? }
+    UI.user_error!("beta needs signing: missing #{missing.join(', ')}. See apps/ios/DEVICE_TESTING.md.") unless missing.empty?
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_content: ENV["ASC_KEY_CONTENT_BASE64"],
+      is_key_content_base64: true
+    )
+
+    build_app(
+      project: "Bike4Mind.xcodeproj",
+      scheme: "Bike4Mind",
+      export_method: "app-store",
+      xcargs: "DEVELOPMENT_TEAM=#{ENV['IOS_TEAM_ID']} -allowProvisioningUpdates"
+    )
+    upload_to_testflight(api_key: api_key, skip_waiting_for_build_processing: true)
+  end
+end
