@@ -30,6 +30,33 @@ const require = createRequire(import.meta.url);
 // whichever package.json it discovers first, which is not necessarily ours.
 const { version: cliVersion } = require('../package.json');
 
+// Auto-detect environment: prefer production mode when dist exists
+const distPath = join(__dirname, '../dist/index.mjs');
+const srcPath = join(__dirname, '../src/index.tsx');
+const hasSource = existsSync(srcPath);
+const hasDist = existsSync(distPath);
+
+// Development mode ONLY when:
+// 1. NODE_ENV is explicitly 'development', OR
+// 2. dist doesn't exist but source does (fallback)
+// Otherwise: use production mode (this is what npm users will run)
+const isDev = process.env.NODE_ENV === 'development' ||
+              (!hasDist && hasSource);
+
+// `b4m host ...` is b4m-host: its arguments go through untouched, before yargs or the env flags see them,
+// and dial-stdio's stdout must carry nothing but the bridged bytes.
+if (process.argv[2] === 'host') {
+  let handleHostCommand;
+  if (isDev) {
+    const { register } = require('tsx/esm/api');
+    register();
+    ({ handleHostCommand } = await import('../src/commands/hostCommand.ts'));
+  } else {
+    ({ handleHostCommand } = await import('../dist/commands/hostCommand.mjs'));
+  }
+  process.exit(await handleHostCommand(process.argv.slice(3)));
+}
+
 // --- API environment flags (--dev / --prod) ---
 // Intercept these BEFORE yargs parses argv (see envFlags.mjs) and strip them so
 // yargs sees a clean argv.
@@ -297,6 +324,11 @@ const argv = await yargs(hideBin(process.argv))
       })
       .demandCommand(1, 'You must provide a subcommand (push)');
   })
+  .command('host', 'Run b4m-host, which reports this machine\'s hardware and Ollama to Bike4Mind (see: b4m host --help)', {}, () => {
+    // `host` as the first argument is handled at the top of this file; reaching here means a flag came before it.
+    process.stderr.write('b4m host must be the first argument: b4m host <command> (see: b4m host --help)\n');
+    process.exit(2);
+  })
   .command('models', 'Find, download and use local models (Ollama, Hugging Face GGUF)', (yargs) => {
     return yargs
       .option('server', {
@@ -452,23 +484,10 @@ if (argv.resume) {
 }
 // Positional task (claude `<prompt>` form): seeds AND submits turn 1, stays interactive.
 // Only when it's not a known subcommand and headless -p wasn't used.
-const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'models', 'update', 'doctor', 'acp']);
+const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'models', 'update', 'doctor', 'acp', 'host']);
 if (argv.prompt === undefined && argv._.length > 0 && !KNOWN_SUBCOMMANDS.has(String(argv._[0]))) {
   process.env.B4M_INITIAL_PROMPT = String(argv._[0]);
 }
-
-// Auto-detect environment: prefer production mode when dist exists
-const distPath = join(__dirname, '../dist/index.mjs');
-const srcPath = join(__dirname, '../src/index.tsx');
-const hasSource = existsSync(srcPath);
-const hasDist = existsSync(distPath);
-
-// Development mode ONLY when:
-// 1. NODE_ENV is explicitly 'development', OR
-// 2. dist doesn't exist but source does (fallback)
-// Otherwise: use production mode (this is what npm users will run)
-const isDev = process.env.NODE_ENV === 'development' ||
-              (!hasDist && hasSource);
 
 // Signal source mode to the app so endpoint resolution can default an
 // otherwise-unconfigured run to the local dev server (build-time brand

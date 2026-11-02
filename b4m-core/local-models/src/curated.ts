@@ -10,7 +10,7 @@ import {
   type HubManifest,
   type HubTier,
   type HubTierPick,
-} from '@bike4mind/common';
+} from '@bike4mind/common/modelHub';
 // The repo's one curated list, bundled at build time; the hub schema validates it in loadCuratedManifest.test.ts.
 import bundled from '../../../catalog/model-hub/curated-v2.json';
 import { isAbliteratedModel } from './abliterated';

@@ -41,6 +41,7 @@ export {
   RuntimeStorageError,
   RuntimeUnsupportedError,
 } from './errors';
+export { lockFile, type FileLock, type LockOptions } from './fileLock';
 export { isAbliteratedModel } from './abliterated';
 export {
   configuredNumCtx,
