@@ -420,6 +420,19 @@ describe('pickForMachine runtimes', () => {
     expect(hybrid.fit.memory.recurrentBytes).toBe(150 * 1024 ** 2);
   });
 
+  it('keeps one Ollama slot for every architecture current Ollama restricts to one', () => {
+    const twoSlots = { ollama: { version: '0.40.11', numParallel: 2 } };
+    const oneSlot = { ollama: { version: '0.40.11' } };
+    for (const arch of ['mllama', 'qwen3vl', 'qwen3vlmoe', 'lfm2moe', 'nemotron_h_moe', 'nemotron_h_omni']) {
+      const manifest = withManifest(m => {
+        m.families.gemma.ggufArch = arch;
+      });
+      const kvBytes = (runtimes: PickOptions['runtimes']) =>
+        pick('mac-64', 'vision', { manifest, runtimes }).best!.fit.memory.kvBytes;
+      expect(kvBytes(twoSlots)).toBe(kvBytes(oneSlot));
+    }
+  });
+
   it('keeps an f16 cache on Ollama when its flash attention is off', () => {
     const runtimes = { ollama: { version: '0.40.11', kvType: 'q8_0' as const, flashAttention: false } };
     expect(pick('mac-64', 'vision', { runtimes }).best!.fit.kv).toEqual({ k: 'f16', v: 'f16' });
