@@ -10,6 +10,7 @@ struct SignInView: View {
   @State private var isSigningIn = false
   @State private var errorMessage: String?
   @State private var isShowingDebugSettings = false
+  @State private var hasAttemptedSignIn = false
 
   var body: some View {
     VStack(spacing: Tokens.Spacing.l) {
@@ -22,11 +23,6 @@ struct SignInView: View {
     .frame(maxWidth: Tokens.Layout.readableWidth)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Tokens.Palette.background)
-    .onAppear {
-      if signOutReason == .sessionEnded {
-        errorMessage = AuthError.refreshRejected.userMessage
-      }
-    }
     #if DEBUG
       .sheet(isPresented: $isShowingDebugSettings) {
         NavigationStack { DebugServerView() }
@@ -51,8 +47,18 @@ struct SignInView: View {
 
   private var footer: some View {
     VStack(spacing: Tokens.Spacing.m) {
-      if let errorMessage {
-        Text(errorMessage)
+      if errorMessage == nil, !hasAttemptedSignIn, signOutReason == .accountDeletionRequested {
+        Text(
+          "Your account is scheduled for deletion. Sign in within 30 days to restore it, or do nothing and it will be permanently deleted."
+        )
+        .font(Tokens.Typography.caption)
+        .foregroundStyle(Tokens.Palette.secondaryText)
+        .multilineTextAlignment(.center)
+        .accessibilityIdentifier("signin-deletion-note")
+      }
+
+      if let message = errorMessage ?? sessionEndedMessage {
+        Text(message)
           .font(Tokens.Typography.caption)
           .foregroundStyle(Tokens.Palette.destructive)
           .multilineTextAlignment(.center)
@@ -80,8 +86,14 @@ struct SignInView: View {
     }
   }
 
+  /// Computed from the reason (not set on appear) so a reason that changes while the screen is up still shows.
+  private var sessionEndedMessage: String? {
+    !hasAttemptedSignIn && signOutReason == .sessionEnded ? AuthError.refreshRejected.userMessage : nil
+  }
+
   private func signIn() {
     isSigningIn = true
+    hasAttemptedSignIn = true
     errorMessage = nil
     Task {
       defer { isSigningIn = false }

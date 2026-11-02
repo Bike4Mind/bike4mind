@@ -17,6 +17,7 @@ final class AppServices {
     let cache: FileSessionListCache
     let media: MediaClient
     let capture: CaptureStack
+    let account: AccountClient
   }
 
   @ObservationIgnored private let auth: AuthController
@@ -35,6 +36,8 @@ final class AppServices {
   let agentRunMonitor: AgentRunMonitor
   /// Starts a fire-and-forget agent run with its own Live Activity.
   let agentRuns: any AgentRunStarting
+  /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
+  let accountStatus = AccountStatus()
 
   init(auth: AuthController) {
     self.auth = auth
@@ -70,6 +73,12 @@ final class AppServices {
     agentRunMonitor = monitor
     agentRuns = AgentRunService(api: agentRunAPI, tracker: activities, monitor: monitor)
 
+    #if DEBUG
+      if FixtureServices.isEnabled, FixtureServices.accountScenario == .pending {
+        accountStatus.receive(AccountDeletionNotice(scheduledFor: Date().addingTimeInterval(29 * 86_400)))
+      }
+    #endif
+
     let navigator = navigator
     events = IncomingEventHandler(
       navigator: navigator,
@@ -90,6 +99,22 @@ final class AppServices {
       if FixtureServices.isEnabled { return FixtureServices.realtime }
     #endif
     return current.realtime
+  }
+
+  var account: any AccountAPI {
+    #if DEBUG
+      if FixtureServices.isEnabled { return FixtureServices.account }
+    #endif
+    return current.account
+  }
+
+  /// Ends the session everywhere the app can reach: Live Activities, agent run polling, the push token and
+  /// finally the tokens. The unregister call needs a live session, so it runs before the session is torn down.
+  func signOutEverywhere(reason: AuthController.SignOutReason = .userInitiated) async {
+    await questActivities.sessionWillEnd()
+    await agentRunMonitor.stopAll()
+    await push.unregisterBeforeSignOut()
+    await auth.signOut(reason: reason)
   }
 
   var sessionListCache: any SessionListCache { current.cache }
@@ -174,7 +199,8 @@ final class AppServices {
         tokenRotations: { await auth.accessTokenRotations() }),
       cache: FileSessionListCache(directory: FileSessionListCache.defaultDirectory(), environment: environment),
       media: MediaClient(baseURL: environment.baseURL, tokens: auth),
-      capture: .live(baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app)
+      capture: .live(baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app),
+      account: AccountClient(baseURL: environment.baseURL, tokens: auth)
     )
     built = fresh
     return fresh

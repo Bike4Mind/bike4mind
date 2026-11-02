@@ -36,17 +36,19 @@ struct SettingsView: View {
         Button("Sign Out", role: .destructive) { isConfirmingSignOut = true }
           .accessibilityIdentifier("settings-signout-btn")
       }
+
+      Section {
+        NavigationLink("Delete Account") { DeleteAccountView() }
+          .foregroundStyle(Tokens.Palette.destructive)
+          .accessibilityIdentifier("settings-delete-account-link")
+      } footer: {
+        Text("Permanently deletes your account after a 30-day grace period.")
+      }
     }
     .navigationTitle("Settings")
     .confirmationDialog("Sign out of Bike4Mind?", isPresented: $isConfirmingSignOut, titleVisibility: .visible) {
       Button("Sign Out", role: .destructive) {
-        Task {
-          // The unregister call needs a live session, so it runs before the session is torn down.
-          await services.questActivities.sessionWillEnd()
-          await services.agentRunMonitor.stopAll()
-          await services.push.unregisterBeforeSignOut()
-          await auth.signOut()
-        }
+        Task { await services.signOutEverywhere() }
       }
     }
   }

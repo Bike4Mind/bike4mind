@@ -12,6 +12,31 @@
     static let realtime = FixtureRealtime()
     static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
     static let agentRunAPI: any AgentRunAPI = FixtureAgentRunAPI()
+    static let account: any AccountAPI = FixtureAccountAPI()
+
+    /// `B4M_UI_FIXTURE_ACCOUNT` picks the account-deletion story: `org-transfer` (the 409 list),
+    /// `pending` (launch on the restore screen) or the default (deletion succeeds and signs out).
+    enum AccountScenario: String {
+      case success, orgTransfer = "org-transfer", pending
+    }
+
+    static var accountScenario: AccountScenario {
+      AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
+    }
+
+    private struct FixtureAccountAPI: AccountAPI {
+      func requestDeletion() async throws -> AccountDeletionReceipt {
+        if FixtureServices.accountScenario == .orgTransfer {
+          throw AccountDeletionFailure.organizationTransferRequired([
+            AccountOrganization(id: "fixture-org-1", name: "Acme Analytics"),
+            AccountOrganization(id: "fixture-org-2", name: "Weekend Projects"),
+          ])
+        }
+        return AccountDeletionReceipt(scheduledFor: Date().addingTimeInterval(30 * 86_400))
+      }
+
+      func restoreDeletion() async throws {}
+    }
 
     private struct NoopPushTokenAPI: PushTokenAPI {
       func registerPushToken(_ token: String, environment: PushEnvironment, appVersion: String?) async throws {}

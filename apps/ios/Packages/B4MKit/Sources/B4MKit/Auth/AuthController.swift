@@ -22,6 +22,8 @@ public final class AuthController: AccessTokenProviding {
     case userInitiated
     /// The server ended the session (revoked, expired, or a refresh token replayed past the grace window).
     case sessionEnded
+    /// The user asked to delete the account; the server revoked every session and holds the account for a grace period.
+    case accountDeletionRequested
   }
 
   public private(set) var state: State = .restoring
@@ -111,10 +113,10 @@ public final class AuthController: AccessTokenProviding {
 
   /// Ends the session locally first, then revokes it on the server best-effort, so sign-out never
   /// hangs on (or is undone by) a flaky network.
-  public func signOut() async {
+  public func signOut(reason: SignOutReason = .userInitiated) async {
     let refreshToken = try? tokenStore.refreshToken()
     let accessToken = cachedAccessToken.flatMap { $0.isUsable(at: now()) ? $0.value : nil }
-    endSession(.userInitiated)
+    endSession(reason)
     await revokeRemoteSession(accessToken: accessToken, refreshToken: refreshToken)
   }
 

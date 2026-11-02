@@ -16,8 +16,13 @@ struct RootView: View {
       case .signedOut(let reason):
         SignInView(signOutReason: reason)
       case .signedIn:
-        MainTabView()
-          .task { await services.realtime.start() }
+        switch services.accountStatus.state {
+        case .active:
+          MainTabView()
+            .task { await services.realtime.start() }
+        case .deletionPending(let scheduledFor):
+          AccountRestoreView(scheduledFor: scheduledFor)
+        }
       case .locked:
         LockedView()
       }
@@ -52,6 +57,7 @@ struct RootView: View {
         services.prepareWidgets()
       }
     case .signedOut:
+      services.accountStatus.reset()
       // Cached rows belong to the account that fetched them.
       let realtime = services.realtime
       Task { await realtime.stop() }
