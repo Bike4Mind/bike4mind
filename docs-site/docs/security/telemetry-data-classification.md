@@ -78,15 +78,24 @@ none of them. While a visitor in the opt-in region has not answered the banner, 
 event is held, marked by the `b4m_vid_pending` cookie, and sent once they answer, or
 without a source if the page is hidden or closed first.
 
-When the app moves to another page without a page load, it sends a `page_view`
-event with the same visit id and the page's path, and nothing else. It is sent only
-while consent is granted, never while it is declined or not yet given, and pages
-passed without consent are not sent later. A grant sends the page the visitor is on
-if it is not the landing. The landing itself and a change of query string or
-fragment alone send nothing, and one page load sends at most 100. The server
-records a page only on a visit whose `visit` event was already sent: with no visit
-cookie, while the visit is held for consent, or after the visit has lapsed, the page
-is dropped. Recording a page never sets or refreshes a cookie.
+Every page of a visit after its landing sends a `page_view` event with the same
+visit id and the page's path, and nothing else. That covers a page the app moves to
+without a page load, and a later page load in the same visit: a new tab, a typed
+URL, a bookmark, a link or a reload. A reload sends its page again, so a visit's
+`page_view` events can repeat a path. A `page_view` is sent only while consent is
+granted, never while it is declined or not yet given, and pages passed without
+consent are not sent later. A grant sends the page the visitor is on unless this
+page load has already sent it. So a visitor who declines at first, or leaves the
+banner unanswered until the page is hidden, and then grants on the page they landed
+on, records that page as a `page_view`. Within one page load, a change of query
+string or fragment alone, or the page just sent again, sends nothing, and the app
+sends at most 100.
+
+The server records a `page_view` only on a visit whose `visit` event was already
+sent. A page the app moves to is dropped when there is no visit cookie, while the
+visit is held for consent, or after the visit has lapsed, and recording one never
+sets or refreshes a cookie. A page load with no live visit starts a new visit
+instead, and its page is that visit's landing.
 
 The browser sends only the path, cut to 200 characters at a `/`. The server checks
 it again, because anyone can post to these routes: it keeps the path alone, cut at
