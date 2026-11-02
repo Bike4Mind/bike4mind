@@ -89,7 +89,8 @@ websocketApi.route('voice_session_ended', {
 });
 
 // CLI Completions — streaming, long-running (bypasses CloudFront 20s timeout)
-websocketApi.route('cli_completion_request', {
+// Its log group carries the same spend and overdraft lines as ChatCompletion; llmSpend.ts filters both.
+const cliCompletionRoute = websocketApi.route('cli_completion_request', {
   handler: 'apps/client/server/websocket/cliCompletion.func',
   runtime: 'nodejs24.x',
   timeout: '10 minutes',
@@ -246,4 +247,4 @@ websocketApi.route('cc_agent_disconnect', {
 // NOTE: The agent_execute route is defined in infra/agentExecutor.ts to avoid
 // a circular dependency (websocket.ts ↔ agentExecutor.ts both need each other).
 
-export { websocketApi };
+export { websocketApi, cliCompletionRoute };

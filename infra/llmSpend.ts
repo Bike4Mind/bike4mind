@@ -1,6 +1,7 @@
 /**
- * Estimated upstream LLM spend from the ChatCompletion service's `llm-usage-settled` log line
- * (b4m-core/services/src/llm/llmUsageSettledLog.ts): metric filters, a dashboard, and a
+ * Estimated upstream LLM spend from the `llm-usage-settled` log line
+ * (b4m-core/services/src/llm/llmUsageSettledLog.ts) of the ChatCompletion service and the
+ * `cli_completion_request` WebSocket route: metric filters, a dashboard, and a
  * 5-minute spend-rate alarm and an hourly spend alarm per provider (LLM_SPEND_ALARM_USD_PER_5MIN,
  * LLM_SPEND_ALARM_USD_PER_HOUR, LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC) plus hourly and 5-minute
  * ceilings on young-account spend, and a count of completions that cost more than the balance could pay.
@@ -10,6 +11,7 @@
 import { chatCompletionLogGroupName } from './chatCompletionLogGroup';
 import { dlqAlarmTopic } from './dlqAlarms';
 import { parseAlarmThreshold } from './signupAlarmThreshold';
+import { cliCompletionRoute } from './websocket';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
@@ -67,6 +69,101 @@ const youngAccountSpendBurstThreshold = parseAlarmThreshold(
   LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN_DEFAULT
 );
 
+type LlmSpendLogSource = {
+  /** Appended to logical and physical filter names; empty keeps the original ChatCompletion resources. */
+  key: string;
+  logGroupName: $util.Output<string>;
+};
+
+/**
+ * Every log group that emits `llm-usage-settled` and the overdraft line, i.e. every runtime of
+ * executeCompletion (b4m-core/services/src/cliCompletions.ts). Each gets the same filters into the
+ * same metrics, so the alarms and dashboard below sum all sources unchanged.
+ */
+function llmSpendLogSources(): LlmSpendLogSource[] {
+  const cliCompletionLogGroupName = cliCompletionRoute.nodes.function
+    .apply(fn => fn.nodes.logGroup)
+    .apply(logGroup => {
+      if (!logGroup) throw new Error('cli_completion_request function is missing its CloudWatch log group');
+      return logGroup.name;
+    });
+  return [
+    { key: '', logGroupName: chatCompletionLogGroupName },
+    { key: 'cli-completion', logGroupName: cliCompletionLogGroupName },
+  ];
+}
+
+function createLlmSpendFilters({ key, logGroupName }: LlmSpendLogSource, prefix: string, namespace: string): void {
+  const logicalName = (base: string) => (key ? `${base}-${key}` : base);
+  const name = (suffix: string) => (key ? `${prefix}-${key}-${suffix}` : `${prefix}-${suffix}`);
+
+  // One filter per metric: the Provider dimension is read from the log line, so every provider
+  // lands in the same series set without a filter each.
+  new aws.cloudwatch.LogMetricFilter(logicalName('llmSpendUsdFilter'), {
+    name: name('llm-spend-usd'),
+    logGroupName,
+    pattern: llmSpendFilterPattern('usd'),
+    metricTransformation: {
+      name: 'EstimatedUsd',
+      namespace,
+      value: '$.usd',
+      unit: 'None',
+      dimensions: { Provider: '$.provider' },
+    },
+  });
+
+  new aws.cloudwatch.LogMetricFilter(logicalName('llmSpendTokensFilter'), {
+    name: name('llm-spend-output-tokens'),
+    logGroupName,
+    pattern: llmSpendFilterPattern('outputTokens'),
+    metricTransformation: {
+      name: 'TokensOutput',
+      namespace,
+      value: '$.outputTokens',
+      unit: 'Count',
+      dimensions: { Provider: '$.provider' },
+    },
+  });
+
+  // Model ids come from the model catalog, not the request, so this dimension stays bounded.
+  new aws.cloudwatch.LogMetricFilter(logicalName('llmSpendUsdByModelFilter'), {
+    name: name('llm-spend-usd-by-model'),
+    logGroupName,
+    pattern: llmSpendFilterPattern('usd', true),
+    metricTransformation: {
+      name: 'EstimatedUsdByModel',
+      namespace,
+      value: '$.usd',
+      unit: 'None',
+      dimensions: { Provider: '$.provider', Model: '$.model' },
+    },
+  });
+
+  new aws.cloudwatch.LogMetricFilter(logicalName('llmSpendYoungAccountUsdFilter'), {
+    name: name('llm-spend-usd-young-accounts'),
+    logGroupName,
+    pattern: LLM_SPEND_YOUNG_ACCOUNT_FILTER_PATTERN,
+    metricTransformation: {
+      name: 'EstimatedUsdYoungAccounts',
+      namespace,
+      value: '$.usd',
+      unit: 'None',
+    },
+  });
+
+  new aws.cloudwatch.LogMetricFilter(logicalName('completionCreditOverdraftFilter'), {
+    name: name('completion-credit-overdraft'),
+    logGroupName,
+    pattern: COMPLETION_CREDIT_OVERDRAFT_FILTER_PATTERN,
+    metricTransformation: {
+      name: 'CompletionCreditOverdrafts',
+      namespace,
+      value: '1',
+      unit: 'Count',
+    },
+  });
+}
+
 let llmSpendDashboard: aws.cloudwatch.Dashboard | undefined;
 
 if (isMonitoredStage) {
@@ -74,40 +171,14 @@ if (isMonitoredStage) {
     throw new Error('alarm routing requires dlqAlarmTopic');
   }
 
-  const logGroupName = chatCompletionLogGroupName;
-
   const actions = [dlqAlarmTopic.arn];
   const spendAlarms: aws.cloudwatch.MetricAlarm[] = [];
   const prefix = `${$app.name}-${$app.stage}`;
   const LLM_SPEND_NAMESPACE = llmSpendNamespace();
 
-  // One filter per metric: the Provider dimension is read from the log line, so every provider
-  // lands in the same series set without a filter each.
-  new aws.cloudwatch.LogMetricFilter('llmSpendUsdFilter', {
-    name: `${prefix}-llm-spend-usd`,
-    logGroupName,
-    pattern: llmSpendFilterPattern('usd'),
-    metricTransformation: {
-      name: 'EstimatedUsd',
-      namespace: LLM_SPEND_NAMESPACE,
-      value: '$.usd',
-      unit: 'None',
-      dimensions: { Provider: '$.provider' },
-    },
-  });
-
-  new aws.cloudwatch.LogMetricFilter('llmSpendTokensFilter', {
-    name: `${prefix}-llm-spend-output-tokens`,
-    logGroupName,
-    pattern: llmSpendFilterPattern('outputTokens'),
-    metricTransformation: {
-      name: 'TokensOutput',
-      namespace: LLM_SPEND_NAMESPACE,
-      value: '$.outputTokens',
-      unit: 'Count',
-      dimensions: { Provider: '$.provider' },
-    },
-  });
+  for (const source of llmSpendLogSources()) {
+    createLlmSpendFilters(source, prefix, LLM_SPEND_NAMESPACE);
+  }
 
   // Two windows: the 5-minute alarm catches a runaway burst; the hourly one catches a sustained
   // drain that stays under the burst ceiling.
@@ -150,32 +221,6 @@ if (isMonitoredStage) {
     );
   }
 
-  // Model ids come from the model catalog, not the request, so this dimension stays bounded.
-  new aws.cloudwatch.LogMetricFilter('llmSpendUsdByModelFilter', {
-    name: `${prefix}-llm-spend-usd-by-model`,
-    logGroupName,
-    pattern: llmSpendFilterPattern('usd', true),
-    metricTransformation: {
-      name: 'EstimatedUsdByModel',
-      namespace: LLM_SPEND_NAMESPACE,
-      value: '$.usd',
-      unit: 'None',
-      dimensions: { Provider: '$.provider', Model: '$.model' },
-    },
-  });
-
-  new aws.cloudwatch.LogMetricFilter('llmSpendYoungAccountUsdFilter', {
-    name: `${prefix}-llm-spend-usd-young-accounts`,
-    logGroupName,
-    pattern: LLM_SPEND_YOUNG_ACCOUNT_FILTER_PATTERN,
-    metricTransformation: {
-      name: 'EstimatedUsdYoungAccounts',
-      namespace: LLM_SPEND_NAMESPACE,
-      value: '$.usd',
-      unit: 'None',
-    },
-  });
-
   new aws.cloudwatch.MetricAlarm('youngAccountSpendRate', {
     name: `${prefix}-young-account-spend-rate`,
     alarmDescription:
@@ -208,18 +253,6 @@ if (isMonitoredStage) {
     alarmActions: actions,
     okActions: actions,
     tags: { Application: 'LLMSpend', Severity: 'High' },
-  });
-
-  new aws.cloudwatch.LogMetricFilter('completionCreditOverdraftFilter', {
-    name: `${prefix}-completion-credit-overdraft`,
-    logGroupName,
-    pattern: COMPLETION_CREDIT_OVERDRAFT_FILTER_PATTERN,
-    metricTransformation: {
-      name: 'CompletionCreditOverdrafts',
-      namespace: LLM_SPEND_NAMESPACE,
-      value: '1',
-      unit: 'Count',
-    },
   });
 
   new aws.cloudwatch.MetricAlarm('completionCreditOverdraft', {
