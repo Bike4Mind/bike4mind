@@ -1,5 +1,5 @@
 import type { FetchLike, OpenAICompatibleProduct } from '../types';
-import { describeFailure } from './failure';
+import { describeFailure, errorCode } from './failure';
 import type { ModelServerKind } from './modelServerFile';
 import { ServerRedirectError, ServerTransportError } from './serverFetch';
 
@@ -13,6 +13,8 @@ export interface ProbeOutcome {
   /** A 403 with no 401: the request was refused, not asked for credentials. */
   forbidden: boolean;
   error: string | null;
+  /** The system error code of a failed connection (e.g. `EHOSTUNREACH`), when there was one. */
+  code: string | null;
   refused: boolean;
 }
 
@@ -64,6 +66,7 @@ export async function probeServer(
       auth: false,
       forbidden: false,
       error: null,
+      code: null,
       refused: false,
     };
   }
@@ -82,6 +85,7 @@ export async function probeServer(
       auth: false,
       forbidden: false,
       error: null,
+      code: null,
       refused: false,
     };
   }
@@ -107,6 +111,7 @@ export async function probeServer(
         : status
           ? `${label} answered HTTP ${status}, not as Ollama or an OpenAI-compatible server.`
           : null,
+    code: errorCode(failure) ?? null,
   };
 }
 

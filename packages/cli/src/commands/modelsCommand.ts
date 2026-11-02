@@ -43,6 +43,7 @@ import {
 import { ConfigStore } from '../storage/ConfigStore.js';
 import {
   defaultOn,
+  DESKTOP_ONLY_STATUS,
   findModelServer,
   loadModelServers,
   loginHint,
@@ -918,24 +919,39 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
     Promise.all(loaded.servers.map(server => describeServer(server, ctx, Boolean(opts.checkTools)))),
     deps.signal
   );
+  const desktopOnly = loaded.desktopOnly ?? [];
   if (opts.json) {
     deps.log(
       JSON.stringify(
         {
           problem: loaded.problem,
           toolsChecked: Boolean(opts.checkTools),
-          servers: rows.map(({ server, product, credentials, status, notes }) => ({
-            id: server.id,
-            name: server.name,
-            kind: server.kind,
-            product,
-            address: serverAddressLabel(server),
-            access: server.access,
-            source: server.source,
-            credentials,
-            status,
-            notes,
-          })),
+          servers: [
+            ...rows.map(({ server, product, credentials, status, notes }) => ({
+              id: server.id,
+              name: server.name,
+              kind: server.kind,
+              product,
+              address: serverAddressLabel(server),
+              access: server.access,
+              source: server.source,
+              credentials,
+              status,
+              notes,
+            })),
+            ...desktopOnly.map(server => ({
+              id: server.id,
+              name: server.name,
+              kind: server.kind,
+              product: productLabel(server.kind, null),
+              address: `ssh ${server.transport.destination}`,
+              access: server.access,
+              source: 'desktop',
+              credentials: 'none',
+              status: { state: 'desktop-only', latencyMs: null, text: DESKTOP_ONLY_STATUS },
+              notes: [],
+            })),
+          ],
         },
         null,
         2
@@ -943,7 +959,7 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
     );
     return 0;
   }
-  if (rows.length === 0) {
+  if (rows.length === 0 && desktopOnly.length === 0) {
     deps.log(loaded.problem ?? 'No model servers are saved in Desktop. Add one in Desktop under Settings.');
     return 0;
   }
@@ -958,6 +974,15 @@ export async function listServers(deps: ModelsDeps, opts: ModelsOptions): Promis
       credentials === 'needed' ? `needed: ${loginHint(server)}` : credentials,
       status.text,
       notes.map(clean).join(' '),
+    ]),
+    ...desktopOnly.map(server => [
+      clean(server.name),
+      productLabel(server.kind, null),
+      clean(`ssh ${server.transport.destination}`),
+      server.access === 'manage' ? 'Manage' : 'Chat only',
+      'none',
+      DESKTOP_ONLY_STATUS,
+      '',
     ]),
   ]);
   for (const line of lines) deps.log(line);

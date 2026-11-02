@@ -2,7 +2,7 @@ import dns, { type LookupAddress, type LookupAllOptions, type LookupOneOptions }
 import http, { type IncomingMessage } from 'node:http';
 import https from 'node:https';
 import { isIP } from 'node:net';
-import { Readable } from 'node:stream';
+import { Readable, type Duplex } from 'node:stream';
 import type { FetchLike } from '../types';
 import { scopeOfIp, transportVerdict } from './addressPolicy';
 import { credentialRedactor, type CredentialRedactor } from './redact';
@@ -35,6 +35,8 @@ export interface ServerEndpoint {
   app?: string;
   /** Read per request so a credential change applies at once. Null for none. */
   credentialHeaders(): Record<string, string> | null;
+  /** Opens each request's connection in place of a TCP socket to `origin`, as an SSH forward does (see ssh.ts). */
+  connect?(): Duplex;
 }
 
 type LookupCallback = (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void;
@@ -73,6 +75,7 @@ export function redactServerResponse(text: string, response: Response): string {
  */
 export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDeps = {}): FetchLike {
   const app = endpoint.app ?? 'Desktop';
+  const connect = endpoint.connect?.bind(endpoint);
   return async (input, init = {}) => {
     const url = new URL(input);
     if (url.origin !== endpoint.origin) {
@@ -109,7 +112,8 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
         headers,
         lookup: lookup as never,
         // The shared agent pools sockets by host and port, so a reused one would skip the lookup check.
-        agent: false,
+        // Node ignores createConnection when given any agent, including `false`.
+        ...(connect ? { createConnection: () => connect() } : { agent: false }),
         ...(init.signal ? { signal: init.signal } : {}),
       });
       // Keepalive probes notice a peer that vanished while a long prefill holds the socket silent.
