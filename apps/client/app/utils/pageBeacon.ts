@@ -39,7 +39,8 @@ export function beaconPage(): void {
   if (lastSent === undefined || typeof fetch !== 'function') return;
   if (resolveConsent() !== 'granted') return;
   const path = capPagePath(window.location.pathname);
-  if (path === lastSent || sentCount >= MAX_PAGE_BEACONS) return;
+  // Empty when one segment runs past the cap; the server records no such path, so nothing is sent.
+  if (path === '' || path === lastSent || sentCount >= MAX_PAGE_BEACONS) return;
   lastSent = path;
   sentCount += 1;
   // After the visit beacon's response: on a first visit the router's redirect, or a grant's

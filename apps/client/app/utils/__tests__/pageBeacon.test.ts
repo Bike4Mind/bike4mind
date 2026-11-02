@@ -90,6 +90,12 @@ describe('beaconPage', () => {
     expect(sentPaths()).toEqual([`/${'page-'.repeat(38)}`]);
   });
 
+  it('sends nothing for a path the cut leaves empty, which the server could only drop', async () => {
+    await land('/', `/${'x'.repeat(250)}`);
+
+    expect(pageCalls()).toHaveLength(0);
+  });
+
   it('sends nothing once consent is declined', async () => {
     mockResolveConsent.mockReturnValue('denied');
 
@@ -171,6 +177,12 @@ describe('beaconPage', () => {
 
     expect(() => beaconPage()).not.toThrow();
     await settle();
+
+    // Nothing was counted as sent, so the page still goes once a request can be made.
+    vi.stubGlobal('fetch', fetchMock);
+    beaconPage();
+    await settle();
+    expect(sentPaths()).toEqual(['/a']);
   });
 
   it('does nothing before the landing is known', async () => {
