@@ -1,8 +1,10 @@
 /**
- * Verifies a signed curated list and publishes it to the catalog bucket; the merge workflow and an out-of-band
- * publish both run this. Exit 3 means the repo is behind live, which the workflow reports as a warning.
+ * Verifies a signed curated list and publishes it to the catalog bucket, or with `--target api` imports it into a
+ * Bike4Mind app, which verifies it against its own keyring. Exit 3 means the list is not above live.
  *
  *   pnpm --filter @bike4mind/scripts curated:publish --manifest <path> --sig <path> [--verify-only] [--dry-run]
+ *   B4M_API_KEY=... pnpm --filter @bike4mind/scripts curated:publish --target api --api-url <origin> \
+ *     --manifest <path> --sig <path> --reason <text>
  */
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
@@ -183,6 +185,67 @@ export async function publishCandidate(candidate: CuratedCandidate, deps: Publis
   return EXIT.ok;
 }
 
+export const CURATED_IMPORT_PATH = '/api/admin/model-hub/curated/versions';
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const API_TIMEOUT_MS = 60_000;
+
+export interface ApiPublishInput {
+  apiUrl: string;
+  apiKey: string;
+  manifest: Uint8Array;
+  sig: Uint8Array;
+  reason: string;
+  log: (line: string) => void;
+  fetch?: typeof fetch;
+}
+
+/** POSTs the exact pair to the app's import endpoint (https, or http to loopback); returns the exit code. */
+export async function publishToApi(input: ApiPublishInput): Promise<number> {
+  const { log } = input;
+  const base = URL.canParse(input.apiUrl) ? new URL(input.apiUrl) : null;
+  if (!base || !(base.protocol === 'https:' || (base.protocol === 'http:' && LOOPBACK_HOSTS.has(base.hostname)))) {
+    log('--api-url must be an https origin, or http on a loopback host');
+    return EXIT.usage;
+  }
+  const decode = (bytes: Uint8Array) => new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  let manifest: string;
+  let signature: string;
+  try {
+    manifest = decode(input.manifest);
+    signature = decode(input.sig);
+  } catch {
+    log('refused: the list and its signature file must be UTF-8 text');
+    return EXIT.failed;
+  }
+  const url = new URL(CURATED_IMPORT_PATH, base);
+  const response = await (input.fetch ?? fetch)(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': input.apiKey },
+    body: JSON.stringify({ manifest, signature, reason: input.reason }),
+    redirect: 'error',
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  let body: { sequence?: unknown; sha256?: unknown; keyIds?: unknown; error?: unknown; alreadyLive?: unknown } = {};
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // A non-JSON error page is reported by status alone.
+  }
+  if (response.status === 200 && body.alreadyLive === true) {
+    log(`${url.origin} already serves sequence ${String(body.sequence)} with these bytes; nothing to do`);
+    return EXIT.ok;
+  }
+  if (response.status === 201) {
+    const keyIds = Array.isArray(body.keyIds) ? body.keyIds.join(', ') : '?';
+    log(`${url.origin} stored sequence ${String(body.sequence)} (sha256 ${String(body.sha256)}, signed by ${keyIds})`);
+    return EXIT.ok;
+  }
+  const detail = typeof body.error === 'string' && body.error.trim() ? body.error.trim() : 'no detail';
+  log(`${url.origin} refused the list (HTTP ${response.status}): ${detail}`);
+  return response.status === 409 ? EXIT.behindLive : EXIT.failed;
+}
+
 export interface MainDeps {
   log?: (line: string) => void;
   readKeyring?: () => Promise<CuratedKey[]>;
@@ -202,14 +265,27 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, deps: MainDep
         sig: { type: 'string' },
         'verify-only': { type: 'boolean', default: false },
         'dry-run': { type: 'boolean', default: false },
+        target: { type: 'string', default: 'bucket' },
+        'api-url': { type: 'string' },
+        reason: { type: 'string' },
       },
     }));
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
     return EXIT.usage;
   }
-  if (!values.manifest || !values.sig) {
+  const toApi = values.target === 'api';
+  if (!values.manifest || !values.sig || (values.target !== 'bucket' && !toApi)) {
     log('usage: curated:publish --manifest <path> --sig <path> [--verify-only] [--dry-run]');
+    log('       curated:publish --target api --api-url <origin> --manifest <path> --sig <path> --reason <text>');
+    return EXIT.usage;
+  }
+  if (toApi && (values['dry-run'] || values['verify-only'])) {
+    log('--target api takes neither --dry-run nor --verify-only: the app verifies the pair and stores it in one step');
+    return EXIT.usage;
+  }
+  if (toApi && (!values['api-url'] || !values.reason || !env.B4M_API_KEY)) {
+    log('--target api needs --api-url, --reason and an admin API key with models:curate in B4M_API_KEY');
     return EXIT.usage;
   }
   try {
@@ -217,6 +293,17 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, deps: MainDep
       readFile(cliPath(values.manifest, env)),
       readFile(cliPath(values.sig, env)),
     ]);
+    // The app verifies against the keyring it was built with, which may hold keys main does not (dev keys).
+    if (toApi)
+      return await publishToApi({
+        apiUrl: values['api-url']!,
+        apiKey: env.B4M_API_KEY!,
+        manifest: new Uint8Array(manifest),
+        sig: new Uint8Array(sig),
+        reason: values.reason!,
+        log,
+        fetch: deps.fetch,
+      });
     const keyring = await (deps.readKeyring ?? readMainKeyring)();
     const checked = verifyCandidate(new Uint8Array(manifest), new Uint8Array(sig), keyring);
     if (!checked.ok) {

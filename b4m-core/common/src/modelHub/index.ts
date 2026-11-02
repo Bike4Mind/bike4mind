@@ -1,3 +1,4 @@
+export * from './curatedJsonSchema';
 export * from './fit';
 export * from './grade';
 export * from './select';
