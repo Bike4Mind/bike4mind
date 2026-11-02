@@ -148,6 +148,11 @@ describe('SessionToolbar - Send button blocked reason', () => {
     expect(screen.getByTestId('send-message-btn')).not.toBeDisabled();
     expect(screen.getByTestId('send-message-btn-wrapper')).not.toHaveAttribute('data-blocked-reason');
   });
+
+  it('gives Send an accessible name, since its tooltip hangs off the wrapper', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: Wrapper });
+    expect(screen.getByTestId('send-message-btn')).toHaveAccessibleName(/send/i);
+  });
 });
 
 describe('SessionToolbar - optimize prompt', () => {

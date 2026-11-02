@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
 import type { CapabilityScope } from '@shared/capabilities';
@@ -153,6 +156,13 @@ describe('registerModels', () => {
       vi.unstubAllEnvs();
     }
   );
+
+  it('measures free space for a model folder Ollama has not made yet on the disk that will hold it', async () => {
+    const { deps } = setup();
+    const missing = join(tmpdir(), `b4m-no-models-${process.pid}`, '.ollama', 'models');
+    expect(existsSync(missing)).toBe(false);
+    await expect(deps.freeSpace?.(missing)).resolves.toBeGreaterThan(0);
+  });
 
   it('tells the service when Settings saves or removes a server', () => {
     const { saved } = setup();

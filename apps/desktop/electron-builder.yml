@@ -56,6 +56,9 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
+  # Text of the macOS Local Network prompt; the declined-permission hint is in src/main/modelServers/localNetworkHint.ts.
+  extendInfo:
+    NSLocalNetworkUsageDescription: Bike4Mind connects to model servers on your local network.
   # Signing turns on by itself once a "Developer ID Application" identity is reachable -
   # either in the login keychain or via CSC_LINK + CSC_KEY_PASSWORD. With neither,
   # electron-builder logs that it skipped signing and ad-hoc signs the bundle, which is

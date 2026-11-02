@@ -7,7 +7,9 @@ import {
   attributeSystemdEnvironment,
   detectOllamaInstall,
   findOllamaProcesses,
+  isLocalHost,
   parseEnvironmentFile,
+  parseManagerEnvironment,
   parseOllamaHost,
   parseSystemctlShow,
   parseUnitEnvironment,
@@ -70,10 +72,18 @@ function proc(root: string, processes: ProcFixture[]) {
   }
 }
 
-function systemctl(outputs: { system?: string; user?: string }): ExecLike {
+function systemctl(outputs: {
+  system?: string;
+  user?: string;
+  environment?: { system?: string; user?: string };
+}): ExecLike {
   return async (command, args) => {
     if (command !== 'systemctl') throw new Error(`unexpected ${command}`);
-    const output = args[0] === '--user' ? outputs.user : outputs.system;
+    const user = args[0] === '--user';
+    if (args.includes('show-environment')) {
+      return { stdout: (user ? outputs.environment?.user : outputs.environment?.system) ?? '' };
+    }
+    const output = user ? outputs.user : outputs.system;
     if (output === undefined) throw new Error('Failed to connect to bus');
     return { stdout: output };
   };
@@ -232,6 +242,43 @@ describe('parseEnvironmentFile', () => {
       ['HOME', '/srv'],
     ]);
   });
+
+  it.each([
+    ['a quote opening mid-value', 'OLLAMA_HOST="0.0.0.0":11500', '0.0.0.0:11500'],
+    ['an unquoted backslash escape', 'OLLAMA_MODELS=/data/my\\ models', '/data/my models'],
+    ['a backslash-newline in single quotes, literally', "OLLAMA_ORIGINS='a\\\nb'", 'a\\\nb'],
+    ['an unquoted continuation', 'OLLAMA_ORIGINS=a\\\nb', 'ab'],
+    ['an escape double quotes do not need, backslash kept', 'OLLAMA_ORIGINS="a\\nb"', 'a\\nb'],
+    ['a continuation inside double quotes', 'OLLAMA_ORIGINS="a\\\nb"', 'ab'],
+    ['trailing whitespace, chomped', 'OLLAMA_KEEP_ALIVE=10m  \t', '10m'],
+    ['a # mid-value, kept', 'OLLAMA_NUM_PARALLEL=4 # four', '4 # four'],
+    ['whitespace around the key and before the value', '  OLLAMA_KEEP_ALIVE =  1h', '1h'],
+    ['quoted whitespace, kept', 'OLLAMA_ORIGINS=" a "', ' a '],
+    ['an empty value', 'OLLAMA_ORIGINS=', ''],
+    ['a CRLF line end', 'OLLAMA_KEEP_ALIVE=1h\r\n', '1h'],
+  ])('reads %s as systemd does', (_, text, value) => {
+    expect(parseEnvironmentFile(text)).toEqual([[text.trim().split(/\s*=/)[0], value]]);
+  });
+
+  it('drops an export prefix, which systemd reads as part of an invalid name', () => {
+    expect(parseEnvironmentFile('export OLLAMA_HOST=0.0.0.0\nOLLAMA_KEEP_ALIVE=1h\n')).toEqual([
+      ['OLLAMA_KEEP_ALIVE', '1h'],
+    ]);
+  });
+
+  it('reads the line after a comment ending in a backslash, as systemd 254 and later do', () => {
+    expect(parseEnvironmentFile('# note \\\nOLLAMA_KEEP_ALIVE=1h\n')).toEqual([['OLLAMA_KEEP_ALIVE', '1h']]);
+  });
+});
+
+describe('parseManagerEnvironment', () => {
+  it("reads show-environment's plain and $'...' values, keeping allowlisted variables only", () => {
+    expect(
+      parseManagerEnvironment(
+        "LANG=C.UTF-8\nPATH=/usr/bin\nOLLAMA_MODELS=$'/data/my models'\nOLLAMA_ORIGINS=$'a\\'b\\\\c\\nd'\nOLLAMA_HOST=$'bad\\q'\nOLLAMA_KEEP_ALIVE=1h\n"
+      )
+    ).toEqual({ OLLAMA_MODELS: '/data/my models', OLLAMA_ORIGINS: "a'b\\c\nd", OLLAMA_KEEP_ALIVE: '1h' });
+  });
 });
 
 describe('parseSystemctlShow', () => {
@@ -336,6 +383,27 @@ describe('findOllamaProcesses', () => {
 
   it('returns nothing without /proc', async () => {
     expect(await findOllamaProcesses(join(tree({}), 'missing'))).toEqual([]);
+  });
+});
+
+describe('isLocalHost', () => {
+  it('takes loopback, wildcards and the given addresses and names as this machine', () => {
+    for (const host of [
+      'localhost',
+      'LOCALHOST',
+      '127.0.0.1',
+      '127.1.2.3',
+      '::1',
+      '0.0.0.0',
+      '::',
+      '10.0.0.5',
+      'box',
+    ]) {
+      expect(isLocalHost(host, ['10.0.0.5', 'box'])).toBe(true);
+    }
+    for (const host of ['10.0.0.6', 'ollama.lan', '128.0.0.1', '::2']) {
+      expect(isLocalHost(host, ['10.0.0.5', 'box'])).toBe(false);
+    }
   });
 });
 
@@ -445,7 +513,93 @@ describe('detectOllamaInstall', () => {
     ]);
     const exec = systemctl({});
     expect((await detectOllamaInstall({ url: 'not a url', rootDir: root, exec })).install.type).toBe('unknown');
-    expect((await detectOllamaInstall({ url: 'https://ollama.lan', rootDir: root, exec })).install.type).toBe('docker');
+    expect((await detectOllamaInstall({ url: 'https://localhost', rootDir: root, exec })).install.type).toBe('docker');
+  });
+
+  it('lets a unit whose environment file it cannot read claim its hidden process', async () => {
+    const root = tree({ 'etc/default/ollama': 'OLLAMA_HOST=127.0.0.1:11500\n' });
+    lock(root, 'etc/default/ollama');
+    proc(root, [{ pid: 812, comm: 'ollama', argv: ['/usr/local/bin/ollama', 'serve'], env: null }]);
+    const exec = systemctl({ system: OFFICIAL_SHOW });
+    const probe = await detectOllamaInstall({ url: 'http://127.0.0.1:11500', rootDir: root, exec });
+    expect(probe.install).toEqual({
+      type: 'official',
+      unit: '/etc/systemd/system/ollama.service',
+      binary: '/usr/local/bin/ollama',
+    });
+    expect(probe.process?.pid).toBe(812);
+  });
+
+  it('rules out a hidden process whose unit was read in full and listens elsewhere', async () => {
+    const root = tree({ 'etc/default/ollama': 'OLLAMA_HOST=127.0.0.1:11500\n' });
+    proc(root, [{ pid: 812, comm: 'ollama', argv: ['/usr/local/bin/ollama', 'serve'], env: null }]);
+    const probe = await detectOllamaInstall({ url, rootDir: root, exec: systemctl({ system: OFFICIAL_SHOW }) });
+    expect(probe).toEqual({ install: { type: 'unknown', unit: null, binary: null }, unit: null, process: null });
+  });
+
+  it('attributes no hidden process or Docker proxy here to a URL on another machine', async () => {
+    const root = tree({});
+    proc(root, [
+      { pid: 812, comm: 'ollama', argv: ['/usr/local/bin/ollama', 'serve'], env: null },
+      {
+        pid: 40,
+        comm: 'docker-proxy',
+        argv: ['/usr/bin/docker-proxy', '-proto', 'tcp', '-host-ip', '0.0.0.0', '-host-port', '11434'],
+      },
+    ]);
+    const remote = 'http://10.0.0.5:11434';
+    const localAddresses = ['127.0.0.1', '192.168.1.20', 'workstation'];
+    for (const exec of [systemctl({ system: OFFICIAL_SHOW }), systemctl({})]) {
+      expect((await detectOllamaInstall({ url: remote, rootDir: root, exec, localAddresses })).install).toEqual({
+        type: 'unknown',
+        unit: null,
+        binary: null,
+      });
+    }
+    const here = await detectOllamaInstall({
+      url: remote,
+      rootDir: root,
+      exec: systemctl({}),
+      localAddresses: ['10.0.0.5'],
+    });
+    expect(here.install).toEqual({ type: 'manual', unit: null, binary: '/usr/local/bin/ollama' });
+  });
+
+  it('attributes no wildcard unit or process here to a URL on another machine', async () => {
+    const root = tree({});
+    proc(root, [
+      { pid: 812, comm: 'ollama', argv: ['/usr/local/bin/ollama', 'serve'], env: { OLLAMA_HOST: '0.0.0.0:11434' } },
+    ]);
+    const show = OFFICIAL_SHOW.replace(/^Environment=.*$/m, 'Environment=OLLAMA_HOST=0.0.0.0:11434');
+    const remote = 'http://10.0.0.5:11434';
+    const localAddresses = ['127.0.0.1', '192.168.1.20'];
+    for (const exec of [systemctl({ system: show }), systemctl({})]) {
+      expect(await detectOllamaInstall({ url: remote, rootDir: root, exec, localAddresses })).toEqual({
+        install: { type: 'unknown', unit: null, binary: null },
+        unit: null,
+        process: null,
+      });
+    }
+    const here = await detectOllamaInstall({
+      url: remote,
+      rootDir: root,
+      exec: systemctl({ system: show }),
+      localAddresses: ['10.0.0.5'],
+    });
+    expect(here.install.type).toBe('official');
+  });
+
+  it("reads the service manager's environment for an active unit, OLLAMA_HOST included", async () => {
+    const exec = systemctl({
+      system: OFFICIAL_SHOW,
+      environment: { system: "LANG=C.UTF-8\nOLLAMA_HOST=127.0.0.1:11600\nOLLAMA_MODELS=$'/data/my models'\n" },
+    });
+    const probe = await detectOllamaInstall({ url: 'http://127.0.0.1:11600', rootDir: tree({}), exec });
+    expect(probe.install.type).toBe('official');
+    expect(probe.unit?.managerEnvironment).toEqual({
+      OLLAMA_HOST: '127.0.0.1:11600',
+      OLLAMA_MODELS: '/data/my models',
+    });
   });
 
   it('passes the unit name after -- and refuses names that are not plain .service units', async () => {
@@ -722,6 +876,54 @@ describe('readOllamaSettings', () => {
       pendingRestart: true,
     });
     expect(env).toEqual(probe.process?.env);
+  });
+
+  it("attributes what only the service manager's environment sets to it, with no restart pending", async () => {
+    const show = OFFICIAL_SHOW.replace('User=ollama', 'User=')
+      .replace(/^Environment=.*$/m, 'Environment="PATH=/usr/bin" OLLAMA_NUM_PARALLEL=2')
+      .replace(/^EnvironmentFiles=.*$/m, '')
+      .replace(/^DropInPaths=.*$/m, 'DropInPaths=')
+      .replace(
+        'FragmentPath=/etc/systemd/system/ollama.service',
+        'FragmentPath=/home/me/.config/systemd/user/ollama.service'
+      );
+    const unit = {
+      ...parseSystemctlShow(show, 'user'),
+      managerEnvironment: { OLLAMA_MODELS: '/data/models', OLLAMA_KEEP_ALIVE: '1h', OLLAMA_NUM_PARALLEL: '8' },
+    };
+    const root = tree({
+      'home/me/.config/systemd/user/ollama.service': OFFICIAL_UNIT.replace(
+        'Environment="PATH=/usr/local/bin:/usr/bin"',
+        'Environment="PATH=/usr/bin" OLLAMA_NUM_PARALLEL=2'
+      ),
+    });
+    const probe: OllamaInstallProbe = {
+      install: { type: 'user-systemd', unit: unit.fragmentPath, binary: '/usr/local/bin/ollama' },
+      unit,
+      process: {
+        pid: 812,
+        argv: ['/usr/local/bin/ollama', 'serve'],
+        exe: '/usr/local/bin/ollama',
+        env: { OLLAMA_MODELS: '/data/models', OLLAMA_KEEP_ALIVE: '1h', OLLAMA_NUM_PARALLEL: '2' },
+        containerized: false,
+      },
+    };
+    const { settings } = await readOllamaSettings(probe, { rootDir: root, homeDir: '/home/me' });
+    const byKey = Object.fromEntries(settings.settings.map(s => [s.key, s]));
+    expect(byKey.OLLAMA_MODELS).toEqual({
+      key: 'OLLAMA_MODELS',
+      value: '/data/models',
+      source: { kind: 'manager', path: null },
+      writable: false,
+    });
+    expect(byKey.OLLAMA_KEEP_ALIVE).toEqual({
+      key: 'OLLAMA_KEEP_ALIVE',
+      value: '1h',
+      source: { kind: 'manager', path: null },
+      writable: true,
+    });
+    expect(byKey.OLLAMA_NUM_PARALLEL).toMatchObject({ value: '2', source: { kind: 'unit' }, writable: true });
+    expect(byKey.OLLAMA_NUM_PARALLEL.pendingRestart).toBeUndefined();
   });
 
   it("reports disable_ollama_cloud from the service user's server.json unless OLLAMA_NO_CLOUD already disables it", async () => {

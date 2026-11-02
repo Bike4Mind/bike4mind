@@ -286,7 +286,19 @@ export function findSelectFromTable(code: string): string | null {
   // gapAt[i]: first index >= i opening a whitespace run that leads into FROM <table>, else -1.
   const gapAt = new Int32Array(n + 1).fill(-1);
   const nextBreak = new Int32Array(n + 1).fill(n);
-  const tableAfterRun = new Map<number, string | null>();
+  // The table FROM_TABLE reads at an index, cached as [start, end) per run end (-2 = unread, -1 = none).
+  // Typed arrays rather than a Map keep this allocation-free, so time stays linear in the input.
+  const tableStart = new Int32Array(n + 1).fill(-2);
+  const tableEnd = new Int32Array(n + 1);
+  const hasTableAt = (at: number): boolean => {
+    if (tableStart[at] === -2) {
+      FROM_TABLE.lastIndex = at;
+      const match = FROM_TABLE.exec(code);
+      tableStart[at] = match ? FROM_TABLE.lastIndex - match[1].length : -1;
+      tableEnd[at] = FROM_TABLE.lastIndex;
+    }
+    return tableStart[at] !== -1;
+  };
   let runEnd = n;
   for (let i = n - 1; i >= 0; i--) {
     nextBreak[i] = LINE_TERMINATOR.test(code[i]) ? i : nextBreak[i + 1];
@@ -295,11 +307,7 @@ export function findSelectFromTable(code: string): string | null {
       gapAt[i] = gapAt[i + 1];
       continue;
     }
-    if (!tableAfterRun.has(runEnd)) {
-      FROM_TABLE.lastIndex = runEnd;
-      tableAfterRun.set(runEnd, FROM_TABLE.exec(code)?.[1] ?? null);
-    }
-    gapAt[i] = tableAfterRun.get(runEnd) ? i : gapAt[i + 1];
+    gapAt[i] = hasTableAt(runEnd) ? i : gapAt[i + 1];
   }
   for (const select of code.matchAll(/SELECT/gi)) {
     const afterSelect = select.index + 6;
@@ -315,7 +323,7 @@ export function findSelectFromTable(code: string): string | null {
       if (gap === -1 || gap > nextBreak[body]) continue;
       let end = gap;
       while (WS.test(code[end])) end++;
-      return tableAfterRun.get(end) ?? null;
+      return hasTableAt(end) ? code.slice(tableStart[end], tableEnd[end]) : null;
     }
   }
   return null;

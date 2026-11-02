@@ -121,6 +121,15 @@ describe('PullLedger', () => {
     expect(audit[0]).toMatchObject({ type: 'revoke', grantId: grants[0].id });
   });
 
+  it('revokes the grant of a download that ended while an earlier revoke was still being written', async () => {
+    const { ledger, recorder } = await setup();
+    await recorder.started(STARTED, null);
+    const first = recorder.settled([pull('downloading')]);
+    const second = recorder.settled([]);
+    await Promise.all([first, second]);
+    expect((await ledger.state()).grants[0].revokedAt).toBeDefined();
+  });
+
   it('revokes a grant written after its download already ended', async () => {
     const { ledger, recorder, setPulls } = await setup();
     setPulls([]);

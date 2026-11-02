@@ -1,4 +1,5 @@
 import { readdir, readFile, readlink } from 'node:fs/promises';
+import { hostname, networkInterfaces } from 'node:os';
 import { basename, join } from 'node:path';
 import {
   MODEL_HOST_LIMITS,
@@ -11,12 +12,14 @@ import {
   type OllamaSettingSourceKind,
 } from '@bike4mind/common/modelHub';
 import { defaultExec, type ExecLike } from './hardware';
+import { mapConcurrent } from './mapConcurrent';
 import {
-  OLLAMA_ENV_KEYS,
   OLLAMA_SETTING_DEFAULTS,
+  isOllamaEnvKey,
   ollamaBool,
   ollamaEnvValue,
   type OllamaEnvironment,
+  type OllamaEnvKey,
 } from './ollamaSettings';
 import { serviceHome } from './storeDisk';
 
@@ -37,7 +40,6 @@ const SYSTEMCTL_PROPERTIES = [
 ];
 const ACTIVE_STATES = new Set(['active', 'activating', 'reloading']);
 const UNIT_NAME = /^[A-Za-z0-9@_.:-]+\.service$/;
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SEPARATORS = ' \t\n\r';
 const UNPRINTABLE = '[unprintable]';
 
@@ -138,15 +140,15 @@ export function splitSystemctlWords(text: string): string[] {
 }
 
 /** `KEY=VALUE` words with a valid name and an allowlisted key; anything else is never held. */
-function assignments(words: string[]): Array<[string, string]> {
-  return words.flatMap((word): Array<[string, string]> => {
+function assignments(words: string[]): Array<[OllamaEnvKey, string]> {
+  return words.flatMap((word): Array<[OllamaEnvKey, string]> => {
     const separator = word.indexOf('=');
     const key = word.slice(0, separator);
-    return separator > 0 && ENV_NAME.test(key) && OLLAMA_ENV_KEYS.has(key) ? [[key, word.slice(separator + 1)]] : [];
+    return separator > 0 && isOllamaEnvKey(key) ? [[key, word.slice(separator + 1)]] : [];
   });
 }
 
-export type UnitEnvironmentEvent = { kind: 'set'; key: string; value: string } | { kind: 'reset' };
+export type UnitEnvironmentEvent = { kind: 'set'; key: OllamaEnvKey; value: string } | { kind: 'reset' };
 
 const trailingBackslashes = (line: string) => line.length - line.replace(/\\+$/, '').length;
 
@@ -185,22 +187,121 @@ export function parseUnitEnvironment(text: string): UnitEnvironmentEvent[] {
   return events;
 }
 
-/** Allowlisted `KEY=VALUE` lines of an `EnvironmentFile=`; `#` and `;` start comments, quotes are removed. */
-export function parseEnvironmentFile(text: string): Array<[string, string]> {
-  return text
-    .replace(/\\\r?\n/g, '')
-    .split(/\r?\n/)
-    .flatMap((raw): Array<[string, string]> => {
-      const line = raw.trim();
-      if (!line || line.startsWith('#') || line.startsWith(';')) return [];
-      const separator = line.indexOf('=');
-      const key = line.slice(0, separator).trim();
-      if (separator <= 0 || !ENV_NAME.test(key) || !OLLAMA_ENV_KEYS.has(key)) return [];
-      const value = line.slice(separator + 1).trim();
-      const quoted = /^(["'])(.*)\1$/.exec(value);
-      if (!quoted) return [[key, value]];
-      return [[key, quoted[1] === '"' ? quoted[2].replace(/\\(["\\$`])/g, '$1') : quoted[2]]];
-    });
+const ENV_FILE_WHITESPACE = ' \t\n\r';
+const ENV_FILE_NEWLINE = '\n\r';
+const ENV_FILE_COMMENTS = '#;';
+const SHELL_NEED_ESCAPE = '"\\`$';
+
+type EnvFileState =
+  | 'pre-key'
+  | 'key'
+  | 'pre-value'
+  | 'value'
+  | 'value-escape'
+  | 'single-quote'
+  | 'double-quote'
+  | 'double-quote-escape'
+  | 'comment'
+  | 'comment-escape';
+
+/**
+ * Allowlisted assignments of an `EnvironmentFile=`, in order, by systemd's parse_env_file_internal
+ * (src/basic/env-file.c): quotes may open mid-value, an unquoted backslash escapes any character, one inside double
+ * quotes only `"\`$`, single quotes keep everything. There is no `export ` prefix: `export KEY` is an invalid name.
+ */
+export function parseEnvironmentFile(text: string): Array<[OllamaEnvKey, string]> {
+  const found: Array<[OllamaEnvKey, string]> = [];
+  let state: EnvFileState = 'pre-key';
+  let key = '';
+  let value = '';
+  // last_key_whitespace / last_value_whitespace: where a trailing run of whitespace starts, or null.
+  let keyEnd: number | null = null;
+  let valueEnd: number | null = null;
+  const push = (chompValue: boolean) => {
+    const name = keyEnd === null ? key : key.slice(0, keyEnd);
+    const assigned = chompValue && valueEnd !== null ? value.slice(0, valueEnd) : value;
+    if (isOllamaEnvKey(name)) found.push([name, assigned]);
+    key = '';
+    value = '';
+  };
+
+  for (const char of text) {
+    switch (state) {
+      case 'pre-key':
+        if (ENV_FILE_COMMENTS.includes(char)) state = 'comment';
+        else if (!ENV_FILE_WHITESPACE.includes(char)) {
+          state = 'key';
+          keyEnd = null;
+          key += char;
+        }
+        break;
+      case 'key':
+        if (ENV_FILE_NEWLINE.includes(char)) {
+          state = 'pre-key';
+          key = '';
+        } else if (char === '=') {
+          state = 'pre-value';
+          valueEnd = null;
+        } else {
+          if (!ENV_FILE_WHITESPACE.includes(char)) keyEnd = null;
+          else keyEnd ??= key.length;
+          key += char;
+        }
+        break;
+      case 'pre-value':
+        if (ENV_FILE_NEWLINE.includes(char)) {
+          state = 'pre-key';
+          push(false);
+        } else if (char === "'") state = 'single-quote';
+        else if (char === '"') state = 'double-quote';
+        else if (char === '\\') state = 'value-escape';
+        else if (!ENV_FILE_WHITESPACE.includes(char)) {
+          state = 'value';
+          value += char;
+        }
+        break;
+      case 'value':
+        if (ENV_FILE_NEWLINE.includes(char)) {
+          state = 'pre-key';
+          push(true);
+        } else if (char === '\\') {
+          state = 'value-escape';
+          valueEnd = null;
+        } else {
+          if (!ENV_FILE_WHITESPACE.includes(char)) valueEnd = null;
+          else valueEnd ??= value.length;
+          value += char;
+        }
+        break;
+      case 'value-escape':
+        state = 'value';
+        if (!ENV_FILE_NEWLINE.includes(char)) value += char;
+        break;
+      case 'single-quote':
+        if (char === "'") state = 'pre-value';
+        else value += char;
+        break;
+      case 'double-quote':
+        if (char === '"') state = 'pre-value';
+        else if (char === '\\') state = 'double-quote-escape';
+        else value += char;
+        break;
+      case 'double-quote-escape':
+        state = 'double-quote';
+        if (SHELL_NEED_ESCAPE.includes(char)) value += char;
+        else if (char !== '\n') value += `\\${char}`;
+        break;
+      case 'comment':
+        if (char === '\\') state = 'comment-escape';
+        else if (ENV_FILE_NEWLINE.includes(char)) state = 'pre-key';
+        break;
+      case 'comment-escape':
+        state = ENV_FILE_NEWLINE.includes(char) ? 'pre-key' : 'comment';
+        break;
+    }
+  }
+  if (!['pre-key', 'key', 'comment', 'comment-escape'].includes(state)) push(state === 'value');
+  return found;
 }
 
 export interface SystemdUnit {
@@ -217,6 +318,11 @@ export interface SystemdUnit {
   environment: OllamaEnvironment | null;
   /** systemd 245 and older print `[unprintable]` for a value with a space or newline, so it is missing above. */
   environmentUnprintable: boolean;
+  /**
+   * The allowlisted part of the service manager's own environment (`systemctl show-environment`), which every unit
+   * inherits below its `Environment=`; absent when it was not read.
+   */
+  managerEnvironment?: OllamaEnvironment;
 }
 
 /** Parses `systemctl show -p ...` output for the properties in SYSTEMCTL_PROPERTIES. */
@@ -303,6 +409,19 @@ export function servesUrl(listen: OllamaHost, url: string): boolean {
   return isAnyHost(listen.host) || canonicalHost(listen.host) === canonicalHost(target.host);
 }
 
+/** This machine's interface addresses and host name. */
+function localAddresses(): string[] {
+  const interfaces = Object.values(networkInterfaces()).flatMap(entries => entries ?? []);
+  return [...interfaces.map(entry => entry.address), hostname()];
+}
+
+/** Whether a URL's host is this machine: loopback, a wildcard, or one of `local` (its addresses and host name). */
+export function isLocalHost(host: string, local: readonly string[]): boolean {
+  const name = host.toLowerCase();
+  if (name === 'localhost' || name === '::1' || isAnyHost(name) || /^127\.\d+\.\d+\.\d+$/.test(name)) return true;
+  return local.some(address => address.toLowerCase() === name);
+}
+
 export interface OllamaProcess {
   pid: number;
   argv: string[];
@@ -323,40 +442,52 @@ async function readProcText(path: string): Promise<string | null> {
   }
 }
 
-async function procCommands(root: string, comm: string): Promise<Array<{ pid: number; argv: string[] }>> {
+export interface ProcCommand {
+  pid: number;
+  comm: string;
+  argv: string[];
+}
+
+// Bounds open file descriptors: a host has thousands of PIDs, and an EMFILE would read as a missing process.
+const PROC_READ_CONCURRENCY = 64;
+const SCANNED_COMMANDS = new Set(['ollama', 'docker-proxy']);
+
+/** One pass over `/proc` for the commands detection looks at: `ollama` servers and Docker's port proxies. */
+export async function scanProcCommands(root = '/'): Promise<ProcCommand[]> {
   const proc = join(root, 'proc');
   const pids = (await readdir(proc).catch((): string[] => [])).filter(entry => /^\d+$/.test(entry));
-  const found = await Promise.all(
-    pids.map(async pid => {
-      if ((await readProcText(join(proc, pid, 'comm')))?.trim() !== comm) return null;
-      const argv = ((await readProcText(join(proc, pid, 'cmdline'))) ?? '').split('\0').filter(Boolean);
-      return { pid: Number(pid), argv };
-    })
-  );
+  const found = await mapConcurrent(pids, PROC_READ_CONCURRENCY, async pid => {
+    const comm = (await readProcText(join(proc, pid, 'comm')))?.trim() ?? '';
+    if (!SCANNED_COMMANDS.has(comm)) return null;
+    const argv = ((await readProcText(join(proc, pid, 'cmdline'))) ?? '').split('\0').filter(Boolean);
+    return { pid: Number(pid), comm, argv };
+  });
   return found.filter(entry => entry !== null);
 }
 
 /** Running `ollama serve` processes this user can see; runners Ollama spawns are left out. */
-export async function findOllamaProcesses(root = '/'): Promise<OllamaProcess[]> {
-  const servers = (await procCommands(root, 'ollama')).filter(({ argv }) => argv[1] === 'serve' || argv[1] === 'start');
-  return Promise.all(
-    servers.map(async ({ pid, argv }) => {
-      const dir = join(root, 'proc', String(pid));
-      const [environ, exe, cgroup] = await Promise.all([
-        readProcText(join(dir, 'environ')),
-        readlink(join(dir, 'exe')).catch(() => null),
-        readProcText(join(dir, 'cgroup')),
-      ]);
-      const env = environ === null ? null : Object.fromEntries(assignments(environ.split('\0')));
-      return { pid, argv, exe: exe ?? argv[0] ?? null, env, containerized: CONTAINER_CGROUP.test(cgroup ?? '') };
-    })
+export async function findOllamaProcesses(root = '/', commands?: ProcCommand[]): Promise<OllamaProcess[]> {
+  const servers = (commands ?? (await scanProcCommands(root))).filter(
+    ({ comm, argv }) => comm === 'ollama' && (argv[1] === 'serve' || argv[1] === 'start')
   );
+  return mapConcurrent(servers, PROC_READ_CONCURRENCY, async ({ pid, argv }) => {
+    const dir = join(root, 'proc', String(pid));
+    const [environ, exe, cgroup] = await Promise.all([
+      readProcText(join(dir, 'environ')),
+      readlink(join(dir, 'exe')).catch(() => null),
+      readProcText(join(dir, 'cgroup')),
+    ]);
+    const env = environ === null ? null : Object.fromEntries(assignments(environ.split('\0')));
+    return { pid, argv, exe: exe ?? argv[0] ?? null, env, containerized: CONTAINER_CGROUP.test(cgroup ?? '') };
+  });
 }
 
 /** Whether Docker publishes a container port on `port`, as its userland proxy shows. */
-async function dockerPublishes(root: string, port: number): Promise<boolean> {
-  const proxies = await procCommands(root, 'docker-proxy');
-  return proxies.some(({ argv }) => argv.some((arg, i) => arg === '-host-port' && argv[i + 1] === String(port)));
+function dockerPublishes(commands: ProcCommand[], port: number): boolean {
+  return commands.some(
+    ({ comm, argv }) =>
+      comm === 'docker-proxy' && argv.some((arg, i) => arg === '-host-port' && argv[i + 1] === String(port))
+  );
 }
 
 export interface OllamaInstallProbe {
@@ -373,6 +504,8 @@ export interface OllamaInstallOptions {
   rootDir?: string;
   /** A `.service` unit name; anything else finds no unit. */
   unitName?: string;
+  /** This machine's addresses and host name; default from os.networkInterfaces() and os.hostname(). */
+  localAddresses?: readonly string[];
 }
 
 async function attempt<T>(task: () => Promise<T>): Promise<T | null> {
@@ -383,64 +516,117 @@ async function attempt<T>(task: () => Promise<T>): Promise<T | null> {
   }
 }
 
+/** `systemctl show-environment`: a `KEY=VALUE` a line, newer systemd writing a value as `$'...'` with C escapes. */
+export function parseManagerEnvironment(stdout: string): OllamaEnvironment {
+  const words = stdout.split(/\r?\n/).flatMap((line): string[] => {
+    const quoted = /^([^=]+)=\$'(.*)'$/.exec(line);
+    if (!quoted) return [line];
+    let value = '';
+    for (let i = 0; i < quoted[2].length; i++) {
+      if (quoted[2][i] !== '\\') {
+        value += quoted[2][i];
+        continue;
+      }
+      const escape = cunescapeOne(quoted[2].slice(i + 1, i + 10));
+      if (!escape) return [];
+      value += escape[0];
+      i += escape[1];
+    }
+    return [`${quoted[1]}=${value}`];
+  });
+  return Object.fromEntries(assignments(words));
+}
+
 async function systemdUnits(exec: ExecLike, unitName: string): Promise<SystemdUnit[]> {
   if (!UNIT_NAME.test(unitName) || unitName.startsWith('-')) return [];
   const args = ['show', ...SYSTEMCTL_PROPERTIES.map(property => `--property=${property}`), '--', unitName];
   const shown = await Promise.all(
     (['system', 'user'] as const).map(async scope => {
-      const result = await attempt(() => exec('systemctl', scope === 'user' ? ['--user', ...args] : args));
-      return result ? parseSystemctlShow(result.stdout, scope) : null;
+      const scoped = (rest: string[]) => (scope === 'user' ? ['--user', ...rest] : rest);
+      const result = await attempt(() => exec('systemctl', scoped(args)));
+      const unit = result ? parseSystemctlShow(result.stdout, scope) : null;
+      if (!unit || unit.loadState !== 'loaded' || !ACTIVE_STATES.has(unit.activeState ?? '')) return null;
+      const manager = await attempt(() => exec('systemctl', scoped(['show-environment'])));
+      return manager ? { ...unit, managerEnvironment: parseManagerEnvironment(manager.stdout) } : unit;
     })
   );
-  return shown.filter(
-    (unit): unit is SystemdUnit =>
-      unit !== null && unit.loadState === 'loaded' && ACTIVE_STATES.has(unit.activeState ?? '')
-  );
+  return shown.filter((unit): unit is SystemdUnit => unit !== null);
 }
 
-async function unitHost(unit: SystemdUnit, root: string): Promise<OllamaHost> {
-  let host = unit.environment?.OLLAMA_HOST;
+/** Where a unit's Ollama listens, and whether every source of OLLAMA_HOST could be read. */
+async function unitHost(unit: SystemdUnit, root: string): Promise<{ listen: OllamaHost; complete: boolean }> {
+  let host = unit.environment?.OLLAMA_HOST ?? unit.managerEnvironment?.OLLAMA_HOST;
+  let complete = !unit.environmentUnprintable;
   for (const file of unit.environmentFiles) {
-    const text = await readProcText(join(root, file.path));
-    const assigned = text === null ? undefined : parseEnvironmentFile(text).findLast(([key]) => key === 'OLLAMA_HOST');
+    const read = await readUnitFile(join(root, file.path));
+    if (!('text' in read)) {
+      complete &&= read.missing;
+      continue;
+    }
+    const assigned = parseEnvironmentFile(read.text).findLast(([key]) => key === 'OLLAMA_HOST');
     if (assigned) host = assigned[1];
   }
-  return parseOllamaHost(host);
+  return { listen: parseOllamaHost(host), complete };
 }
 
 const isSnap = (path: string | null) => path?.startsWith('/snap/') ?? false;
+
+function unitProbe(unit: SystemdUnit, processes: OllamaProcess[]): OllamaInstallProbe {
+  const type = isSnap(unit.execPath) ? 'snap' : unit.scope === 'system' ? 'official' : 'user-systemd';
+  return {
+    install: { type, unit: unit.fragmentPath, binary: unit.execPath },
+    unit,
+    process: processes.find(p => p.pid === unit.mainPid) ?? null,
+  };
+}
+
+function processProbe(process: OllamaProcess): OllamaInstallProbe {
+  const type = process.containerized ? 'docker' : isSnap(process.exe) ? 'snap' : 'manual';
+  return { install: { type, unit: null, binary: process.exe }, unit: null, process };
+}
 
 /** How the Ollama at `url` is installed and run, and the unit or process behind it. Never throws. */
 export async function detectOllamaInstall(options: OllamaInstallOptions = {}): Promise<OllamaInstallProbe> {
   const url = options.url ?? 'http://127.0.0.1:11434';
   const root = options.rootDir ?? '/';
-  const [processes, units] = await Promise.all([
-    findOllamaProcesses(root).catch((): OllamaProcess[] => []),
+  const unknown: OllamaInstallProbe = {
+    install: { type: 'unknown', unit: null, binary: null },
+    unit: null,
+    process: null,
+  };
+  // Nothing seen here serves another machine's address, a wildcard listener included.
+  const target = urlTarget(url);
+  if (!target || !isLocalHost(target.host, options.localAddresses ?? localAddresses())) return unknown;
+
+  const [commands, units] = await Promise.all([
+    scanProcCommands(root).catch((): ProcCommand[] => []),
     systemdUnits(options.exec ?? defaultExec, options.unitName ?? OLLAMA_UNIT),
   ]);
+  const processes = await findOllamaProcesses(root, commands).catch((): OllamaProcess[] => []);
   const listening = processes.filter(p => p.env !== null && servesUrl(parseOllamaHost(p.env.OLLAMA_HOST), url));
 
+  const unmatched: Array<{ unit: SystemdUnit; complete: boolean }> = [];
   for (const unit of units) {
-    const ownsProcess = unit.mainPid !== null && listening.some(p => p.pid === unit.mainPid);
-    if (!ownsProcess && !servesUrl(await unitHost(unit, root), url)) continue;
-    const type = isSnap(unit.execPath) ? 'snap' : unit.scope === 'system' ? 'official' : 'user-systemd';
-    return {
-      install: { type, unit: unit.fragmentPath, binary: unit.execPath },
-      unit,
-      process: processes.find(p => p.pid === unit.mainPid) ?? null,
-    };
+    if (unit.mainPid !== null && listening.some(p => p.pid === unit.mainPid)) return unitProbe(unit, processes);
+    const { listen, complete } = await unitHost(unit, root);
+    if (servesUrl(listen, url)) return unitProbe(unit, processes);
+    unmatched.push({ unit, complete });
   }
+  if (listening[0]) return processProbe(listening[0]);
 
-  // Another user's process hides its environment; take it when it is the only candidate left.
-  const hidden = processes.filter(p => p.env === null);
-  const process = listening[0] ?? (hidden.length === 1 ? hidden[0] : null);
-  if (process) {
-    const type = process.containerized ? 'docker' : isSnap(process.exe) ? 'snap' : 'manual';
-    return { install: { type, unit: null, binary: process.exe }, unit: null, process };
+  // Another user's process hides its environment. Its unit claims it when that unit's OLLAMA_HOST is partly
+  // unreadable; one whose host was read in full and listens elsewhere rules it out. A sole remaining one is taken.
+  let hidden = processes.filter(p => p.env === null);
+  for (const { unit, complete } of unmatched) {
+    if (!hidden.some(p => p.pid === unit.mainPid)) continue;
+    if (!complete) return unitProbe(unit, processes);
+    hidden = hidden.filter(p => p.pid !== unit.mainPid);
   }
-  const port = urlTarget(url)?.port;
-  const docker = port !== undefined && (await dockerPublishes(root, port).catch(() => false));
-  return { install: { type: docker ? 'docker' : 'unknown', unit: null, binary: null }, unit: null, process: null };
+  if (hidden.length === 1) return processProbe(hidden[0]);
+  if (dockerPublishes(commands, target.port)) {
+    return { ...unknown, install: { ...unknown.install, type: 'docker' } };
+  }
+  return unknown;
 }
 
 interface Attributed {
@@ -474,7 +660,10 @@ async function readUnitFile(path: string): Promise<{ text: string } | { missing:
   }
 }
 
-/** Attributes each allowlisted variable systemd gives the unit to the file that sets it, in systemd's order. */
+/**
+ * Attributes each allowlisted variable systemd gives the unit to the file that sets it, in systemd's order, or to the
+ * service manager's environment when only that sets it.
+ */
 export async function attributeSystemdEnvironment(unit: SystemdUnit, root = '/'): Promise<Attribution> {
   const unreadablePaths: string[] = [];
   let resetAfterHostDropIn = false;
@@ -505,7 +694,11 @@ export async function attributeSystemdEnvironment(unit: SystemdUnit, root = '/')
       ? { ...fromFiles, ...unit.environment }
       : unit.environment
     : fromFiles;
+  // The manager's environment sits below every unit's Environment=.
   const values = new Map<string, Attributed>();
+  for (const [key, value] of Object.entries(unit.managerEnvironment ?? {})) {
+    if (value !== undefined) values.set(key, { value, kind: 'manager', path: null });
+  }
   for (const [key, value] of Object.entries(effective)) {
     if (value === undefined) continue;
     const file = assigned.get(key);
@@ -535,11 +728,14 @@ export async function attributeSystemdEnvironment(unit: SystemdUnit, root = '/')
 
 const WRITABLE = new Set<string>(OLLAMA_WRITABLE_SETTING_KEYS);
 
-/** A model host's drop-in only changes a value it would win over: defaults, the unit, drop-ins sorting before it. */
+/**
+ * A model host's drop-in only changes a value it would win over: defaults, the manager's environment, the unit and
+ * drop-ins sorting before it.
+ */
 function isWritable(key: OllamaSettingKey, install: OllamaInstall, source: Attributed | null, from: Attribution) {
   if (!WRITABLE.has(key) || (install.type !== 'official' && install.type !== 'user-systemd')) return false;
   if (from.resetAfterHostDropIn || from.unreadableAfterHostDropIn) return false;
-  if (!source || source.kind === 'unit') return true;
+  if (!source || source.kind === 'unit' || source.kind === 'manager') return true;
   return source.kind === 'dropin' && source.path !== null && basename(source.path) <= MODEL_HOST_DROP_IN;
 }
 

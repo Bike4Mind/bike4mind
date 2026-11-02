@@ -1,4 +1,4 @@
-import type { HubBuild, HubEntry } from '@bike4mind/common';
+import type { HubBuild, HubEntry } from '@bike4mind/common/modelHub';
 import { isAbliteratedModel } from '../abliterated';
 import { curatedLibrary, isPermissiveEntry } from '../curated';
 import { ollamaPullRef, type HubGgufBuild, type HubModelDetail } from '../huggingface';
@@ -109,8 +109,6 @@ export interface ApprovalDeps {
   libraryLayers: LayerSources['libraryLayers'];
   /** The target runtime's health, read once the approval itself checks out. */
   health: () => Promise<RuntimeHealth>;
-  /** Whether declared Hugging Face license ids are all permissive; anything else needs `licenseAccepted`. */
-  isPermissive?: (licenses: readonly string[]) => boolean;
   signal: AbortSignal;
   /** Called once the build is known and approved, before the runtime is asked. */
   onReviewed?: (build: { label: string; sizeBytes: number }) => void;
@@ -157,8 +155,7 @@ async function checkHub(approval: HubPullApproval, deps: ApprovalDeps): Promise<
   const block = pullBlock(detail, build);
   const deferred = block === 'needs-access' && !curated && deps.checkAfterPull === true ? build.ollamaRef : null;
   if (block && !deferred) return { ok: false, reason: 'blocked', block };
-  const isPermissive = deps.isPermissive ?? (licenses => licenseKind(licenses) === 'permissive');
-  const restricted = !isPermissive(detail.licenses) || (curated && !isPermissiveEntry(curated.entry));
+  const restricted = licenseKind(detail.licenses) !== 'permissive' || (curated && !isPermissiveEntry(curated.entry));
   if (restricted && !approval.licenseAccepted) return { ok: false, reason: 'license-required' };
   if (detail.ollamaNeedsSshKey && !approval.accessConfirmed) return { ok: false, reason: 'access-required' };
   deps.onReviewed?.({ label: build.label, sizeBytes: build.sizeBytes });
