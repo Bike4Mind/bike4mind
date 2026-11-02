@@ -9,6 +9,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
+import { signupNetworkMetadata } from '@server/integrations/stripe/riskMetadata';
 import { z } from 'zod';
 
 const stripePortalSchema = z.object({
@@ -103,6 +104,7 @@ const handler = baseApi()
           email: user.email!,
           name: user.name,
           type: CustomerType.User,
+          metadata: signupNetworkMetadata(user),
         });
         // Conditional update - same race-protection as the org path above.
         const won = await User.findOneAndUpdate(

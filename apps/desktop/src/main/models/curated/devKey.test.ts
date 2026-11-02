@@ -1,3 +1,4 @@
+import { PRODUCTION_CURATED_KEYS } from '@bike4mind/local-models';
 import { describe, expect, it } from 'vitest';
 import { curatedDevKey, curatedDevOverrides } from './devKey';
 
@@ -14,6 +15,11 @@ describe('the curated test keys', () => {
       spki: 'MCowBQYDK2VwAyEAoSzeSXfg787PWFohPkJRKanpfh/Wh2K3MlnQp3OobBM=',
       role: 'recovery',
     });
+  });
+
+  it('is never in the production keyring', () => {
+    for (const dev of [curatedDevKey('signing'), curatedDevKey('recovery')])
+      expect(PRODUCTION_CURATED_KEYS.some(key => key.keyId === dev.keyId || key.spki === dev.spki)).toBe(false);
   });
 
   it('is never offered to a packaged app', () => {

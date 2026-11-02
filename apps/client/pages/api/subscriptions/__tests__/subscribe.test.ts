@@ -68,12 +68,16 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'test'
 const mockSessionsCreate = vi.fn();
 const mockPricesRetrieve = vi.fn();
 const mockCustomersRetrieve = vi.fn();
+const mockCustomersUpdate = vi.fn();
 const mockCreateCustomer = vi.fn();
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   createCustomer: (...args: unknown[]) => mockCreateCustomer(...args),
   CustomerType: { User: 'User' },
   stripe: {
-    customers: { retrieve: (...args: unknown[]) => mockCustomersRetrieve(...args) },
+    customers: {
+      retrieve: (...args: unknown[]) => mockCustomersRetrieve(...args),
+      update: (...args: unknown[]) => mockCustomersUpdate(...args),
+    },
     prices: { retrieve: (...args: unknown[]) => mockPricesRetrieve(...args) },
     checkout: { sessions: { create: (...args: unknown[]) => mockSessionsCreate(...args) } },
   },
@@ -109,6 +113,7 @@ function makeReq(priceId: string, callbackUrl = CALLBACK_URL, userOverrides: Rec
     stripeCustomerId: 'cus_existing',
     ...userOverrides,
   };
+  (req as Record<string, unknown>).logger = { warn: vi.fn() };
   return { req, res };
 }
 
@@ -153,7 +158,7 @@ describe('POST /api/subscriptions/subscribe — launch/availability gate', () =>
     expect(mockAssertCheckoutAllowed).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user_1' }),
       { ip: '203.0.113.7' },
-      undefined,
+      expect.anything(),
       'subscription'
     );
     expect(mockSessionsCreate).not.toHaveBeenCalled();
@@ -342,6 +347,57 @@ describe('POST /api/subscriptions/subscribe - Stripe customer writes', () => {
     expect(mockUserUpdate).toHaveBeenCalledTimes(1);
     expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'user_1', stripeCustomerId: 'cus_new' });
     expect(res.statusCode).toBe(200);
+  });
+
+  describe('signup network on the customer, for Radar rules on renewal charges', () => {
+    const signupMeta = {
+      ip: '203.0.113.7',
+      userAgent: 'agent',
+      asn: 16509,
+      asnOrg: 'hosting',
+      country: 'DE',
+      isDatacenter: true,
+      capturedAt: new Date('2026-10-01T00:00:00Z'),
+    };
+    const signupFields = { signup_asn: '16509', signup_is_datacenter: 'true', signup_country: 'DE' };
+
+    it('creates the customer with the signup fields', async () => {
+      const { req, res } = makeReq('price_open', CALLBACK_URL, { stripeCustomerId: null, signupMeta });
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCreateCustomer).toHaveBeenCalledWith(expect.objectContaining({ metadata: signupFields }));
+      expect(JSON.stringify(mockCreateCustomer.mock.calls[0][0])).not.toContain('203.0.113.7');
+      expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('backfills an existing customer that lacks the fields', async () => {
+      mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing', metadata: { type: 'User' } });
+      const { req, res } = makeReq('price_open', CALLBACK_URL, { signupMeta });
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCustomersUpdate).toHaveBeenCalledWith('cus_existing', { metadata: signupFields });
+      expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves an existing customer alone once it carries the fields', async () => {
+      mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing', metadata: { type: 'User', ...signupFields } });
+      const { req, res } = makeReq('price_open', CALLBACK_URL, { signupMeta });
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('makes no customer write for an account with no signup capture', async () => {
+      mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing', metadata: { type: 'User' } });
+      const { req, res } = makeReq('price_open');
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -40,7 +40,7 @@ import {
 } from '../models/localModels.js';
 import { machineReader, type MachineReader } from '../models/fit.js';
 import type { OllamaManifestInfo } from './ollamaRegistry.js';
-import type { HubBuild } from '@bike4mind/common';
+import type { HubBuild, HubManifest } from '@bike4mind/common';
 import { curatedBuilds, reviewable, reviewedInspection, reviewedLayers } from '../test-utils/curatedReviewed.js';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
@@ -239,7 +239,7 @@ function harness(
     libraryLayers?: ModelsDeps['libraryLayers'];
     resolveRuntime?: ModelsDeps['resolveRuntime'];
     confirm?: ModelsDeps['confirm'];
-    curated?: ModelsDeps['curated'];
+    curated?: () => HubManifest;
     hardware?: ModelsDeps['hardware'];
     answers?: boolean[];
     isTTY?: boolean;
@@ -747,6 +747,65 @@ describe('models curated', () => {
     const getModel = vi.fn();
     return { resolveRuntime, getModel, h: harness({ resolveRuntime, hub: fakeHub({ getModel }) }) };
   };
+
+  it('names where the list came from only when the CLI can fetch one, and checks first on --refresh', async () => {
+    const plain = harness();
+    await runModelsCommand('curated', { _: [], refresh: true }, plain.deps);
+    expect(plain.lines.some(line => /Bundled with this CLI|Updated online/.test(line))).toBe(false);
+    expect(JSON.parse((await jsonLines(plain.deps)).join('\n'))).not.toHaveProperty('source');
+
+    const order: string[] = [];
+    const curatedSource = {
+      refresh: vi.fn(async () => void order.push('refresh')),
+      origin: () => ({
+        text: 'Updated online, sequence 7',
+        origin: 'updated' as const,
+        sequence: 7,
+        check: 'updated' as const,
+        stale: false,
+        checkedAt: '2026-10-28T12:00:00.000Z',
+      }),
+    };
+    const text = harness({ curated: () => (order.push('list'), bundled()) });
+    await runModelsCommand('curated', { _: [], refresh: true }, { ...text.deps, curatedSource });
+    expect(order).toEqual(['refresh', 'list']);
+    expect(text.lines[0]).toMatch(/^Curated list from /);
+    expect(text.lines[1]).toBe('Updated online, sequence 7');
+
+    await runModelsCommand('curated', { _: [] }, { ...text.deps, curatedSource });
+    expect(curatedSource.refresh).toHaveBeenCalledTimes(1);
+
+    const json = await jsonLines({ ...text.deps, curatedSource });
+    expect(JSON.parse(json.join('\n')).source).toEqual({
+      origin: 'updated',
+      sequence: 7,
+      check: 'updated',
+      stale: false,
+      checkedAt: '2026-10-28T12:00:00.000Z',
+    });
+  });
+
+  it('says so on --refresh when this CLI has no online curated list, in text only', async () => {
+    const plain = harness();
+    await runModelsCommand('curated', { _: [], refresh: true }, plain.deps);
+    expect(plain.lines).toContain('This CLI has no online curated list; showing the bundled one.');
+    const quiet = harness();
+    await runModelsCommand('curated', { _: [] }, quiet.deps);
+    expect(quiet.lines.some(line => /no online curated list/.test(line))).toBe(false);
+    const lines: string[] = [];
+    await runModelsCommand(
+      'curated',
+      { _: [], refresh: true, 'output-format': 'json' },
+      { ...plain.deps, log: line => lines.push(line) }
+    );
+    expect(lines.join('\n')).not.toMatch(/no online curated list/);
+  });
+
+  async function jsonLines(deps: ModelsDeps): Promise<string[]> {
+    const lines: string[] = [];
+    await runModelsCommand('curated', { _: [], 'output-format': 'json' }, { ...deps, log: line => lines.push(line) });
+    return lines;
+  }
 
   it("lists this computer's picks in slot order, then every build, without contacting a runtime", async () => {
     const { resolveRuntime, getModel, h } = offline();

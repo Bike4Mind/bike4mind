@@ -5,25 +5,12 @@
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CuratedCatalogSchema } from '@bike4mind/common';
-import { z } from 'zod';
+import { CURATED_SCHEMA_ID, curatedJsonSchemaText } from '@bike4mind/common';
 import { isEntry, REPO_ROOT } from './cli';
 
+export { curatedJsonSchemaText };
 export const SCHEMA_PATH = 'catalog/model-hub/schema/curated-v2.schema.json';
-export const SCHEMA_ID = 'https://app.bike4mind.com/api/model-hub/curated/v2/schema.json';
-
-const DESCRIPTION =
-  'Structure of a curated local-model list (schemaVersion 2). This checks shape only: link safety (https on a ' +
-  'public host, no credentials), per-entry and per-build consistency, and cross-references (tier picks, families, ' +
-  'rankings, unique ids, sequence and changelog) are enforced by the Zod schema when a list is published.';
-
-/** The schema of a list as authors write it (defaults optional), as the text committed at SCHEMA_PATH. */
-export function curatedJsonSchemaText(): string {
-  const generated = z.toJSONSchema(CuratedCatalogSchema, { target: 'draft-2020-12', io: 'input' });
-  const { $schema, ...rest } = generated;
-  const schema = { $schema, $id: SCHEMA_ID, title: 'Bike4Mind curated model list', description: DESCRIPTION, ...rest };
-  return `${JSON.stringify(schema, null, 2)}\n`;
-}
+export const SCHEMA_ID = CURATED_SCHEMA_ID;
 
 /** Null when the committed file matches the generated schema, else a message naming the fix. */
 export async function checkCuratedSchema(root: string = REPO_ROOT): Promise<string | null> {

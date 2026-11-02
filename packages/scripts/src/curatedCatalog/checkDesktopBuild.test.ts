@@ -2,7 +2,14 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BUILD_INFO_PATH, buildInfoProblems, findDevKey, main, manifestUrlProblem } from './checkDesktopBuild';
+import {
+  BUILD_INFO_PATH,
+  CLI_BUILD_INFO_PATH,
+  buildInfoProblems,
+  findDevKey,
+  main,
+  manifestUrlProblem,
+} from './checkDesktopBuild';
 import { CURATED_DEV_SEED_TEXTS, curatedDevKey } from './devKey';
 
 describe('the curated test keys', () => {
@@ -59,6 +66,22 @@ describe('curated:check-build', () => {
     expect(await main([dir], {}, log)).toBe(1);
   });
 
+  it('scans each --also-scan dir for the test keys and fails on one that is missing', async () => {
+    const extra = await mkdtemp(path.join(tmpdir(), 'curated-extra-'));
+    try {
+      await writeFile(path.join(extra, 'index.mjs'), 'export const keys = [];');
+      expect(await main([dir, '--also-scan', extra], {}, log)).toBe(0);
+      await writeFile(path.join(extra, 'index.mjs'), `export const id = "${curatedDevKey().keyId}";`);
+      expect(await main([dir, '--also-scan', extra], {}, log)).toBe(1);
+      expect(lines).toContain(`${path.join(extra, 'index.mjs')}: contains the curated signing test key id`);
+      expect(await main([dir], {}, log)).toBe(0);
+      expect(await main([dir, '--also-scan', path.join(extra, 'missing')], {}, log)).toBe(1);
+      expect(lines.at(-1)).toMatch(/cannot be scanned/);
+    } finally {
+      await rm(extra, { recursive: true, force: true });
+    }
+  });
+
   it('fails a flagged build, a non-https baked URL, and a build without its build info', async () => {
     await info({ devKeys: true, manifestUrl: 'http://127.0.0.1:4321/latest.json' });
     expect(await buildInfoProblems(dir)).toEqual([
@@ -67,9 +90,48 @@ describe('curated:check-build', () => {
     ]);
     expect(await main([dir], {}, log)).toBe(1);
     await rm(path.join(dir, BUILD_INFO_PATH));
-    expect(await buildInfoProblems(dir)).toEqual([expect.stringMatching(/is missing or unreadable/)]);
+    expect(await buildInfoProblems(dir)).toEqual([expect.stringMatching(/is missing;/)]);
     await info({ devKeys: false });
     expect(await buildInfoProblems(dir)).toEqual([expect.stringMatching(/is malformed/)]);
+  });
+
+  it('reports a build info file that is not JSON or cannot be read, instead of looking for the other one', async () => {
+    await writeFile(path.join(dir, BUILD_INFO_PATH), '{ not json');
+    expect(await buildInfoProblems(dir)).toEqual([`${BUILD_INFO_PATH} is malformed`]);
+    await rm(path.join(dir, BUILD_INFO_PATH));
+    await mkdir(path.join(dir, BUILD_INFO_PATH));
+    expect(await buildInfoProblems(dir)).toEqual([expect.stringMatching(/curated-build\.json is unreadable \(/)]);
+  });
+
+  it('checks a CLI build by the build info at the root of its dist', async () => {
+    const cli = await mkdtemp(path.join(tmpdir(), 'curated-cli-build-'));
+    try {
+      await writeFile(path.join(cli, 'index.mjs'), 'console.log("cli")');
+      await writeFile(path.join(cli, CLI_BUILD_INFO_PATH), JSON.stringify({ devKeys: false, manifestUrl: '' }));
+      expect(await main([cli], {}, log)).toBe(0);
+      await writeFile(path.join(cli, CLI_BUILD_INFO_PATH), JSON.stringify({ devKeys: true, manifestUrl: '' }));
+      expect(await buildInfoProblems(cli)).toEqual(['the build was made with B4M_CURATED_DEV_KEYS=1']);
+      await writeFile(path.join(cli, 'chunk.mjs'), `const id = "${curatedDevKey().keyId}";`);
+      expect(await main([cli], {}, log)).toBe(1);
+    } finally {
+      await rm(cli, { recursive: true, force: true });
+    }
+  });
+
+  it('fails a CLI build that still reads a curated variable from the environment', async () => {
+    const cli = await mkdtemp(path.join(tmpdir(), 'curated-cli-build-'));
+    try {
+      await writeFile(path.join(cli, CLI_BUILD_INFO_PATH), JSON.stringify({ devKeys: false, manifestUrl: '' }));
+      await writeFile(path.join(cli, 'index.mjs'), 'const url = "" || "";');
+      expect(await main([cli], {}, log)).toBe(0);
+      await writeFile(path.join(cli, 'index.mjs'), 'const url = process.env.B4M_CURATED_MANIFEST_URL;');
+      expect(await main([cli], {}, log)).toBe(1);
+      expect(lines.at(-1)).toBe('index.mjs: still reads process.env.B4M_CURATED_MANIFEST_URL at runtime');
+      await writeFile(path.join(cli, 'index.mjs'), 'const dev = process.env.B4M_CURATED_DEV_KEYS === "1";');
+      expect(await main([cli], {}, log)).toBe(1);
+    } finally {
+      await rm(cli, { recursive: true, force: true });
+    }
   });
 
   it('reads an http or unparsable URL as a problem and an empty one as off', () => {

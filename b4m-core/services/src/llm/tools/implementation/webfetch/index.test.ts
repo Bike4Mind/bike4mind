@@ -14,7 +14,8 @@ vi.mock('./firecrawlApp', () => ({
 }));
 
 // Keyless fallback reader, exercised when createFirecrawlApp returns null.
-vi.mock('./plainFetch', () => ({
+vi.mock('./plainFetch', async importOriginal => ({
+  ...(await importOriginal<typeof import('./plainFetch')>()),
   plainFetchScrape: vi.fn(async () => ({ markdown: 'plain-markdown-content', title: 'Plain Title' })),
 }));
 
@@ -34,7 +35,7 @@ import {
 } from './index';
 import { UnsafeScrapeTargetError } from './errors';
 import { createFirecrawlApp } from './firecrawlApp';
-import { plainFetchScrape } from './plainFetch';
+import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
 
 const mockCreateApp = vi.mocked(createFirecrawlApp);
 const mockPlainFetch = vi.mocked(plainFetchScrape);
@@ -586,6 +587,56 @@ describe('firecrawlFetch keyless plain-fetch fallback', () => {
     mockPlainFetch.mockRejectedValueOnce(new Error('totally unexpected parse failure'));
 
     await expect(runTool('https://example.com/doc')).rejects.toThrow('totally unexpected parse failure');
+  });
+});
+
+describe('web_fetch on a page with no extractable content', () => {
+  async function runWithLogger(url = 'https://example.com/empty') {
+    const context = makeContext(vi.fn(async () => {}));
+    const result = await webFetchTool.implementation(context, {}).toolFn({ url });
+    return { result: result as string, logger: context.logger as unknown as Record<string, ReturnType<typeof vi.fn>> };
+  }
+
+  it('throws a 422 NoExtractableContentError when Firecrawl returns no markdown', async () => {
+    scrapeMarkdown = '';
+
+    const error = await firecrawlFetch(adapters, 'https://example.com/empty').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(NoExtractableContentError);
+    expect(error).toMatchObject({ statusCode: 422, message: 'No content could be extracted from the URL' });
+  });
+
+  it.each([
+    ['Firecrawl', () => (scrapeMarkdown = '')],
+    [
+      'the keyless plain fetch',
+      () => {
+        mockCreateApp.mockReturnValueOnce(null);
+        mockPlainFetch.mockRejectedValueOnce(new NoExtractableContentError());
+      },
+    ],
+  ])('returns a hint to the model and logs once at warn via %s', async (_label, arrange) => {
+    arrange();
+
+    const { result, logger } = await runWithLogger();
+
+    expect(result).toContain('No readable content could be extracted from this page');
+    expect(result).toContain('web_search');
+    expect(validateWebFetchResult(result)).toEqual({ confidence: 0.1, source: 'deterministic' });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith('WebFetch no extractable content', { url: 'https://example.com/empty' });
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still logs a Firecrawl auth failure at error and rethrows it', async () => {
+    const failure = new FirecrawlError('Status code: 401', 401);
+    scrapeUrl.mockRejectedValueOnce(failure);
+
+    const context = makeContext(vi.fn(async () => {}));
+    await expect(webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/doc' })).rejects.toBe(
+      failure
+    );
+    expect(context.logger.error).toHaveBeenCalledWith('WebFetch error:', failure);
   });
 });
 

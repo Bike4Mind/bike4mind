@@ -7,6 +7,8 @@ import type {
 } from '@bike4mind/llm-adapters';
 import { logger } from '../utils/Logger';
 
+const SERVER_MODEL_PREFIX = 'local:srv-';
+
 /**
  * LLM backend decorator that provides model-level fallback routing.
  *
@@ -47,8 +49,9 @@ export class FallbackLlmBackend implements ICompletionBackend {
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>
   ): Promise<void> {
-    // Never fall back on an explicit abort - respect the user's intent
-    if (options.abortSignal?.aborted) {
+    // Never fall back on an explicit abort, nor from a model on the user's own server: a hosted fallback
+    // would send the conversation off a machine the user chose to keep it on.
+    if (options.abortSignal?.aborted || model.startsWith(SERVER_MODEL_PREFIX)) {
       return this.inner.complete(model, messages, options, callback);
     }
 
