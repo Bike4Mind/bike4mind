@@ -190,6 +190,8 @@ function toStructuredOutputNode(node: unknown): Record<string, unknown> | null {
   return out;
 }
 
+const DEFINITION_KEYS = ['$defs', 'definitions'] as const;
+
 function collectRefNames(node: unknown, names: Set<string>): void {
   if (Array.isArray(node)) {
     for (const child of node) collectRefNames(child, names);
@@ -204,7 +206,7 @@ function collectRefNames(node: unknown, names: Set<string>): void {
 // Structured outputs reject recursive schemas: a definition whose $ref chain leads back to itself.
 function hasRecursiveRef(schema: Record<string, unknown>): boolean {
   const edges = new Map<string, Set<string>>();
-  for (const key of ['$defs', 'definitions'] as const) {
+  for (const key of DEFINITION_KEYS) {
     const defs = schema[key];
     if (!isRecord(defs)) continue;
     for (const [name, def] of Object.entries(defs)) {
@@ -228,7 +230,8 @@ function hasRecursiveRef(schema: Record<string, unknown>): boolean {
 
 // Structured outputs reject a schema past an undocumented compiled-grammar size, and an inlined schema
 // (zod's default output) repeats one object per use. An object that appears more than once moves to
-// $defs behind a $ref. allOf members stay inline: the API rejects allOf with $ref.
+// $defs behind a $ref. allOf members stay inline: the API rejects allOf with $ref. Existing $defs /
+// definitions bodies are scanned too, since zod's `reused: 'ref'` output keeps its bulk there.
 function hoistRepeatedObjects(schema: Record<string, unknown>): Record<string, unknown> {
   const counts = new Map<string, number>();
   const countObjects = (node: unknown, hoistable: boolean): void => {
@@ -249,6 +252,9 @@ function hoistRepeatedObjects(schema: Record<string, unknown>): Record<string, u
     if (node.allOf !== undefined) countObjects(node.allOf, false);
   };
   countObjects(schema, false);
+  for (const key of DEFINITION_KEYS) {
+    if (isRecord(schema[key])) countObjects(Object.values(schema[key]), false);
+  }
   const repeated = new Set([...counts].filter(([, n]) => n > 1).map(([key]) => key));
   if (repeated.size === 0) return schema;
 
@@ -281,7 +287,17 @@ function hoistRepeatedObjects(schema: Record<string, unknown>): Record<string, u
     if (node.allOf !== undefined) out.allOf = rewrite(node.allOf, false);
     return out;
   };
-  return { ...(rewrite(schema, false) as Record<string, unknown>), $defs: defs };
+  const root = rewrite(schema, false) as Record<string, unknown>;
+  const definitions = isRecord(schema.definitions) ? schema.definitions : null;
+  if (definitions) {
+    root.definitions = Object.fromEntries(
+      Object.entries(definitions).map(([name, def]) => [name, rewrite(def, false)])
+    );
+  }
+  if (isRecord(schema.$defs)) {
+    for (const [name, def] of Object.entries(schema.$defs)) defs[name] = rewrite(def, false);
+  }
+  return { ...root, $defs: defs };
 }
 
 /**

@@ -485,6 +485,54 @@ describe('buildStructuredOutputFormat', () => {
       w: { allOf: [{ type: 'object', properties: { a: { type: 'string' } } }] },
     });
   });
+
+  it('gives an object nested in a repeated object its own $defs entry', () => {
+    const inner = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
+    const outer = { type: 'object', properties: { inner }, required: ['inner'] };
+    const format = buildStructuredOutputFormat({
+      type: 'object',
+      properties: { a: outer, b: outer },
+      required: ['a', 'b'],
+    });
+
+    expect(format?.schema).toEqual({
+      type: 'object',
+      properties: { a: { $ref: '#/$defs/shared1' }, b: { $ref: '#/$defs/shared1' } },
+      required: ['a', 'b'],
+      additionalProperties: false,
+      $defs: {
+        shared1: {
+          type: 'object',
+          properties: { inner: { $ref: '#/$defs/shared2' } },
+          required: ['inner'],
+          additionalProperties: false,
+        },
+        shared2: { ...inner, additionalProperties: false },
+      },
+    });
+  });
+
+  it('hoists objects repeated inside existing $defs and definitions bodies', () => {
+    const item = { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] };
+    const format = buildStructuredOutputFormat({
+      type: 'object',
+      properties: { p: { $ref: '#/$defs/pair' }, q: { $ref: '#/definitions/list' } },
+      required: ['p', 'q'],
+      $defs: { pair: { type: 'object', properties: { x: item, y: item }, required: ['x', 'y'] } },
+      definitions: { list: { type: 'array', items: item } },
+    });
+
+    expect(format?.schema.$defs).toEqual({
+      pair: {
+        type: 'object',
+        properties: { x: { $ref: '#/$defs/shared1' }, y: { $ref: '#/$defs/shared1' } },
+        required: ['x', 'y'],
+        additionalProperties: false,
+      },
+      shared1: { ...item, additionalProperties: false },
+    });
+    expect(format?.schema.definitions).toEqual({ list: { type: 'array', items: { $ref: '#/$defs/shared1' } } });
+  });
 });
 
 describe('AnthropicBackend caller tool_choice on models without forced tool use', () => {
