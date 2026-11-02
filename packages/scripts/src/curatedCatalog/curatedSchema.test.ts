@@ -126,4 +126,11 @@ describe('checkCuratedSchema', () => {
     await writeFile(path.join(root, SCHEMA_PATH), curatedJsonSchemaText());
     expect(await checkCuratedSchema(root)).toBeNull();
   });
+
+  it('rethrows a read failure other than a missing file', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'curated-schema-'));
+    dirs.push(root);
+    await mkdir(path.join(root, SCHEMA_PATH), { recursive: true });
+    await expect(checkCuratedSchema(root)).rejects.toMatchObject({ code: 'EISDIR' });
+  });
 });
