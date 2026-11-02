@@ -205,4 +205,20 @@ describe('Use in chat', () => {
     expect(shownError).toContain('disk full');
     expect(document.querySelector('[data-testid="models-screen"]')).not.toBeNull();
   });
+
+  it('drops the error when Models is left by any route, so reopening it starts clean', async () => {
+    setSessionModel.mockResolvedValueOnce(null as never);
+    await openModels();
+    await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
+    await act(async () => undefined);
+    expect(shownError).toContain('could not start a conversation on that model');
+
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-artifacts-btn"]')?.click());
+    expect(document.querySelector('[data-testid="models-screen"]')).toBeNull();
+    shownError = undefined;
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-models-btn"]')?.click());
+    await act(async () => undefined);
+    expect(document.querySelector('[data-testid="models-screen"]')).not.toBeNull();
+    expect(shownError).toBeNull();
+  });
 });
