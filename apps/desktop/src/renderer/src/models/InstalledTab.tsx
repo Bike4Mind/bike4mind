@@ -12,14 +12,7 @@ import ModalDialog from '@mui/joy/ModalDialog';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import {
-  OLLAMA_DOWNLOAD_URL,
-  formatBytes,
-  type InstalledModelsResult,
-  type LocalModelEntry,
-  type ModelRuntimeStatus,
-} from '@shared/models';
-import { ExternalLink } from '../chat/ExternalLink';
+import { formatBytes, type InstalledModelsResult, type LocalModelEntry, type ModelRuntimeStatus } from '@shared/models';
 import { TrashIcon } from '../chat/icons';
 import { FitBadge } from './FitBadge';
 import type { ModelTarget } from './modelTarget';
@@ -200,15 +193,8 @@ export function InstalledTab({
       >
         <Typography level="title-md">Ollama is not running</Typography>
         <Typography level="body-sm" sx={{ maxWidth: 440 }}>
-          Local models run in Ollama. Start it if it is installed, or download it from{' '}
-          <ExternalLink href={OLLAMA_DOWNLOAD_URL} testId="models-installed-download-link">
-            ollama.com/download
-          </ExternalLink>
-          , then check again.
+          Your Ollama models show here once it is running.
         </Typography>
-        <Button size="sm" variant="outlined" color="neutral" onClick={onRetry}>
-          Check again
-        </Button>
       </Stack>
     );
   if (!installed)

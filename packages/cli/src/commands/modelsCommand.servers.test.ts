@@ -253,6 +253,35 @@ describe('b4m models servers', () => {
     expect(output()).toMatch(/No model servers are saved in Desktop/);
   });
 
+  it('lists a Desktop SSH server as Desktop only, without connecting to it', async () => {
+    const ollama = await plainOllama();
+    open.push(ollama);
+    await writeServers([
+      record({ id: 'aaa', name: 'shared', transport: { type: 'http', baseUrl: ollama.baseUrl } }),
+      record({ id: 'sss', name: 'lab', access: 'chat', transport: { type: 'ssh', destination: 'me@lab' } }),
+    ]);
+    expect(await run('servers', {})).toBe(0);
+    expect(output()).toMatch(/shared\s+Ollama\s+http:\/\/127\.0\.0\.1:\d+\s+Manage\s+none\s+online/);
+    expect(output()).toMatch(/lab\s+Ollama\s+ssh me@lab\s+Chat only\s+none\s+SSH, Desktop only/);
+
+    lines.length = 0;
+    await run('servers', { 'output-format': 'json' });
+    const parsed = JSON.parse(output()) as { servers: { name: string; address: string; status: { state: string } }[] };
+    expect(parsed.servers.find(server => server.name === 'lab')).toMatchObject({
+      address: 'ssh me@lab',
+      status: { state: 'desktop-only' },
+    });
+
+    await expect(run('ls', { server: 'lab' })).rejects.toThrow(/lab connects over SSH, which only Desktop supports/);
+  });
+
+  it('lists only Desktop SSH servers without saying there are none', async () => {
+    await writeServers([record({ id: 'sss', name: 'lab', transport: { type: 'ssh', destination: 'lab' } })]);
+    await run('servers', {});
+    expect(output()).not.toMatch(/No model servers/);
+    expect(output()).toContain('SSH, Desktop only');
+  });
+
   it('reports an unreachable server as offline', async () => {
     await writeServers([record({ name: 'gone' })]);
     await run('servers', {});
