@@ -266,6 +266,28 @@ describe('AnthropicBackend json_schema on models without forced tool use', () =>
     expect(JSON.stringify(format.schema)).not.toContain('"minLength"');
   });
 
+  it('sends a nullable enum through output_config.format in anyOf form', async () => {
+    const { backend, captured } = buildBackend(() => textResponse('{"tier":null}'));
+    const schema = {
+      type: 'object',
+      properties: { tier: { type: ['string', 'null'], enum: ['free', 'pro', null] } },
+      required: ['tier'],
+      additionalProperties: false,
+    };
+    await run(backend, 'claude-sonnet-5-5', {
+      stream: false,
+      responseFormat: { type: 'json_schema', json_schema: { name: 'n', schema } },
+    });
+
+    expect(captured[0].output_config?.format).toEqual({
+      type: 'json_schema',
+      schema: {
+        ...schema,
+        properties: { tier: { anyOf: [{ type: 'string', enum: ['free', 'pro'] }, { type: 'null' }] } },
+      },
+    });
+  });
+
   it('merges effort into output_config instead of overwriting the format', async () => {
     const { backend, captured } = buildBackend(() => textResponse(JSON.stringify(RESULT)));
     const record: ModelInfo = {
@@ -399,13 +421,85 @@ describe('buildStructuredOutputFormat', () => {
     });
   });
 
-  it('closes a nullable object type', () => {
-    const format = buildStructuredOutputFormat({ type: ['object', 'null'], properties: { a: { type: 'string' } } });
-    expect(format?.schema).toEqual({
+  it('closes a nullable object type and writes it as anyOf', () => {
+    const format = buildStructuredOutputFormat({
       type: ['object', 'null'],
       properties: { a: { type: 'string' } },
+      description: 'maybe',
+    });
+    expect(format?.schema).toEqual({
+      anyOf: [{ type: 'object', properties: { a: { type: 'string' } }, additionalProperties: false }, { type: 'null' }],
+      description: 'maybe',
+    });
+  });
+
+  it('rewrites a nullable enum type array as anyOf', () => {
+    const schema = {
+      type: 'object',
+      properties: { status: { type: ['string', 'null'], enum: ['a', 'b', null], description: 'state' } },
+      required: ['status'],
+      additionalProperties: false,
+    };
+    const before = structuredClone(schema);
+
+    const format = buildStructuredOutputFormat(schema);
+
+    expect(schema).toEqual(before);
+    expect(format?.schema).toEqual({
+      type: 'object',
+      properties: {
+        status: { anyOf: [{ type: 'string', enum: ['a', 'b'] }, { type: 'null' }], description: 'state' },
+      },
+      required: ['status'],
       additionalProperties: false,
     });
+  });
+
+  it.each([
+    ['a nullable string', { type: ['string', 'null'] }, { anyOf: [{ type: 'string' }, { type: 'null' }] }],
+    [
+      'an enum that leaves out null',
+      { type: ['string', 'null'], enum: ['a', 'b'] },
+      { type: 'string', enum: ['a', 'b'] },
+    ],
+    ['a one-type array', { type: ['string'] }, { type: 'string' }],
+    [
+      'a nullable string with a format and a moved constraint',
+      { type: ['string', 'null'], format: 'date', minLength: 1 },
+      { anyOf: [{ type: 'string', format: 'date' }, { type: 'null' }], description: '{minLength: 1}' },
+    ],
+    [
+      'a nullable array',
+      { type: ['array', 'null'], items: { type: ['integer', 'null'] }, minItems: 1 },
+      {
+        anyOf: [
+          { type: 'array', items: { anyOf: [{ type: 'integer' }, { type: 'null' }] }, minItems: 1 },
+          { type: 'null' },
+        ],
+      },
+    ],
+    [
+      'a mixed-type enum',
+      { type: ['integer', 'string'], enum: [1, 'one'] },
+      {
+        anyOf: [
+          { type: 'integer', enum: [1] },
+          { type: 'string', enum: ['one'] },
+        ],
+      },
+    ],
+    ['a nullable const', { type: ['boolean', 'null'], const: true }, { type: 'boolean', const: true }],
+  ])('rewrites %s', (_label, schema, expected) => {
+    expect(buildStructuredOutputFormat(schema)?.schema).toEqual(expected);
+  });
+
+  it.each([
+    ['an enum with an object value', { type: 'object', properties: { p: { enum: [{ a: 1 }, 'x'] } } }],
+    ['an allOf member that is a $ref', { allOf: [{ $ref: '#/$defs/a' }], $defs: { a: { type: 'string' } } }],
+    ['a type array no enum value fits', { type: ['string', 'null'], enum: [1] }],
+    ['a type array beside anyOf', { type: ['string', 'null'], anyOf: [{ type: 'string' }, { type: 'null' }] }],
+  ])('returns null for %s', (_label, schema) => {
+    expect(buildStructuredOutputFormat(schema)).toBeNull();
   });
 
   it('moves an object repeated inline to one $defs entry', () => {
@@ -654,6 +748,51 @@ describe('AnthropicBackend on models with forced tool use', () => {
     });
   });
 
+  it('sends a nullable enum to the strict tool in anyOf form, never as a type array', async () => {
+    const schema = {
+      type: 'object',
+      properties: { name: { type: 'string' }, tier: { type: ['string', 'null'], enum: ['free', 'pro', null] } },
+      required: ['name', 'tier'],
+      additionalProperties: false,
+    };
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
+      stream: false,
+      responseFormat: { type: 'json_schema', json_schema: { name: 'extract_user', schema } },
+    });
+
+    const tool = captured[0].tools?.[0];
+    expect(tool?.strict).toBe(true);
+    expect(tool?.input_schema).toEqual({
+      ...schema,
+      properties: {
+        name: { type: 'string' },
+        tier: { anyOf: [{ type: 'string', enum: ['free', 'pro'] }, { type: 'null' }] },
+      },
+    });
+  });
+
+  it('sends a schema already in strict form unchanged', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        tier: { anyOf: [{ type: 'string', enum: ['free', 'pro'] }, { type: 'null' }] },
+        tags: { type: 'array', items: { type: 'string', enum: ['a', 'b'] } },
+      },
+      required: ['name', 'tier', 'tags'],
+      additionalProperties: false,
+    };
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
+      stream: false,
+      responseFormat: { type: 'json_schema', json_schema: { name: 'extract_user', schema } },
+    });
+
+    expect(captured[0].tools).toEqual([{ name: 'extract_user', input_schema: schema, strict: true }]);
+    expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+  });
+
   it.each([
     ['a free-form object', { type: 'object' }],
     [
@@ -861,7 +1000,33 @@ describe('isStrictCompatibleSchema', () => {
     ).toBe(true);
   });
 
+  it('accepts a nullable enum written as anyOf', () => {
+    expect(
+      isStrictCompatibleSchema({
+        type: 'object',
+        properties: { tier: { anyOf: [{ type: 'string', enum: ['free', 'pro'] }, { type: 'null' }] } },
+        required: ['tier'],
+        additionalProperties: false,
+      })
+    ).toBe(true);
+  });
+
   it.each([
+    [
+      'a nullable enum type array',
+      {
+        type: 'object',
+        properties: { tier: { type: ['string', 'null'], enum: ['free', 'pro', null] } },
+        required: ['tier'],
+        additionalProperties: false,
+      },
+    ],
+    ['a nullable type array', { type: ['string', 'null'] }],
+    ['an enum with an object value', { enum: [{ a: 1 }] }],
+    [
+      'a typeless property',
+      { type: 'object', properties: { anything: {} }, required: ['anything'], additionalProperties: false },
+    ],
     ['an open object', { type: 'object', properties: {}, required: [] }],
     ['an object with no required list', { type: 'object', properties: {}, additionalProperties: false }],
     [
