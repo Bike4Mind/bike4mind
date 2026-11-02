@@ -485,6 +485,36 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     });
   });
 
+  describe('the visit handed to the queued turn (its first_value names it)', () => {
+    const visitId = 'a'.repeat(32);
+    const invokedVisit = () => (mockInvoke.mock.calls[0][0] as { visitId?: string }).visitId;
+
+    it("hands invoke() a browser caller's visit cookie", async () => {
+      const { req, res } = fire({ apiKey: null, headers: { cookie: `b4m_vid=${visitId}` } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedVisit()).toBe(visitId);
+    });
+
+    it.each([
+      ['no visit cookie', null, undefined],
+      ['a visit cookie this server did not mint', null, 'b4m_vid=not-a-visit'],
+      ['an API key, even with a visit cookie', VALID_KEY, `b4m_vid=${visitId}`],
+    ])('hands it no visit for %s', async (_, apiKey, cookie) => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ apiKey, headers: cookie ? { cookie } : {} });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedVisit()).toBeUndefined();
+    });
+
+    it('ignores a client-supplied visitId in the body', async () => {
+      const { req, res } = fire({ apiKey: null, body: { visitId } });
+      await handler(req, res);
+      expect(invokedVisit()).toBeUndefined();
+    });
+  });
+
   describe('per-user tier rate limit', () => {
     it('blocks a caller whose tier limit is 0 (429) with no bucket write, session, or completion', async () => {
       mockResolveUserRateLimitPerMin.mockResolvedValue(0);
