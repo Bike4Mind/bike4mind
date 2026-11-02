@@ -109,11 +109,19 @@ describe('ssh arguments', () => {
       'ForwardAgent=no',
       'ForwardX11=no',
       'PermitLocalCommand=no',
+      'ClearAllForwardings=yes',
     ]) {
       expect(args[args.indexOf(option) - 1], option).toBe('-o');
     }
     expect(args.slice(-4)).toEqual(['-W', '127.0.0.1:11434', '--', 'user@gpu']);
     expect(args.filter(arg => arg.startsWith('Control'))).toEqual(['ControlMaster=no']);
+  });
+
+  it('turn connection sharing off outright on Windows', () => {
+    expect(sshArgs('gpu', null, 'win32').filter(arg => arg.startsWith('Control'))).toEqual([
+      'ControlMaster=no',
+      'ControlPath=none',
+    ]);
   });
 
   it('add connection sharing only when given a control path', () => {
@@ -204,6 +212,18 @@ describe('ssh failures', () => {
     expect(err.message).toMatch(/refused the forward to 127\.0\.0\.1:11434.*Ollama is running.*AllowTcpForwarding/);
   });
 
+  it('reads a refused forward as a stopped Ollama even when a key file or banner mentions permission', () => {
+    const refused = 'channel 0: open failed: connect failed: Connection refused';
+    for (const prefix of [
+      'Load key "/home/me/.ssh/id_old": Permission denied',
+      'Banner: permission denied for guests, see policy',
+    ]) {
+      const err = describeSshFailure(`${prefix}\n${refused}\n`, 255, 'gpu');
+      expect(err, prefix).toBeInstanceOf(SshConnectionError);
+      expect(err.message).toContain('Start Ollama on that machine.');
+    }
+  });
+
   it('keeps the last useful line otherwise, without control characters', () => {
     const err = describeSshFailure(
       'Warning: Permanently added x\nssh: connect to host gpu port 22: Connection timed out\x1b[0m\n',
@@ -267,15 +287,38 @@ async function ollama(): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
+const CHAT_LINES = Array.from({ length: 5 }, (_, index) => `{"message":{"content":"t${index}"},"done":false}\n`);
+
+/** An Ollama that streams `CHAT_LINES` chunked, one per `delayMs`, and stops writing once the client is gone. */
+async function streamingOllama(delayMs: number): Promise<number> {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    let sent = 0;
+    const timer = setInterval(() => {
+      if (sent < CHAT_LINES.length) res.write(CHAT_LINES[sent++]);
+      else {
+        clearInterval(timer);
+        res.end();
+      }
+    }, delayMs);
+    res.on('close', () => clearInterval(timer));
+  });
+  servers.push(server);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  return (server.address() as AddressInfo).port;
+}
+
 /**
  * A stand-in for the ssh binary: `-G` prints `config`, and `-W` pipes stdio to a local port the way the
  * real forward reaches the far end's Ollama, or fails with `stderr` when it is set.
  */
 function fakeSsh(port: number, opts: { config?: string; stderr?: string } = {}) {
   const spawned: Spawned[] = [];
+  const children: FakeChild[] = [];
   const spawn: SshDeps['spawn'] = (command, args, options) => {
     spawned.push({ command, args, env: options.env, detached: options.detached });
     const child = fakeChild();
+    children.push(child);
     if (args[0] === '-G') {
       setImmediate(() => {
         child.stdout.write(opts.config ?? 'user me\ncontrolmaster false\n');
@@ -298,7 +341,7 @@ function fakeSsh(port: number, opts: { config?: string; stderr?: string } = {}) 
     child.on('close', () => socket.destroy());
     return child;
   };
-  return { spawn, spawned };
+  return { spawn, spawned, children };
 }
 
 const SECRET_ENV = {
@@ -419,6 +462,43 @@ describe('createSshFetch', () => {
     await expect(fetch(`${SSH_OLLAMA_URL}/api/version`)).rejects.toThrow(
       'Desktop could not find the ssh command. Install the OpenSSH client.'
     );
+  });
+
+  describe('streaming a chat response', () => {
+    const chat = (fetch: ReturnType<typeof createSshFetch>, signal?: AbortSignal) =>
+      fetch(`${SSH_OLLAMA_URL}/api/chat`, { method: 'POST', body: '{}', signal });
+    const forwardOf = (ssh: ReturnType<typeof fakeSsh>) =>
+      ssh.children[ssh.spawned.findIndex(c => c.args.includes('-W'))];
+
+    it('delivers every streamed line and ends the ssh process once the body is read', async () => {
+      const ssh = fakeSsh(await streamingOllama(10));
+      const fetch = createSshFetch({ destination: 'gpu', label: 'gpu' }, { spawn: ssh.spawn, platform: 'win32' });
+      const response = await chat(fetch);
+      expect(await response.text()).toBe(CHAT_LINES.join(''));
+      await vi.waitFor(() => expect(forwardOf(ssh).exitCode !== null || forwardOf(ssh).signalCode !== null).toBe(true));
+    });
+
+    it('kills the ssh process when the reader cancels mid-stream', async () => {
+      const ssh = fakeSsh(await streamingOllama(40));
+      const fetch = createSshFetch({ destination: 'gpu', label: 'gpu' }, { spawn: ssh.spawn, platform: 'win32' });
+      const response = await chat(fetch);
+      const reader = response.body!.getReader();
+      expect((await reader.read()).done).toBe(false);
+      await reader.cancel();
+      await vi.waitFor(() => expect(forwardOf(ssh).kill).toHaveBeenCalled());
+    });
+
+    it('kills the ssh process when the request is aborted mid-stream', async () => {
+      const ssh = fakeSsh(await streamingOllama(40));
+      const fetch = createSshFetch({ destination: 'gpu', label: 'gpu' }, { spawn: ssh.spawn, platform: 'win32' });
+      const controller = new AbortController();
+      const response = await chat(fetch, controller.signal);
+      const reader = response.body!.getReader();
+      expect((await reader.read()).done).toBe(false);
+      controller.abort();
+      await expect(reader.read()).rejects.toThrow();
+      await vi.waitFor(() => expect(forwardOf(ssh).kill).toHaveBeenCalled());
+    });
   });
 
   it('kills the ssh process when the request is aborted', async () => {

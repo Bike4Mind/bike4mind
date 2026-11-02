@@ -92,7 +92,11 @@ export function sshChildEnv(
  * Without our own `controlPath` the forward may reuse the user's master but never becomes one: a master
  * started here would end the user's sessions when it exits, or persist with this stripped environment.
  */
-export function sshArgs(destination: string, controlPath: string | null = null): string[] {
+export function sshArgs(
+  destination: string,
+  controlPath: string | null = null,
+  platform: NodeJS.Platform = process.platform
+): string[] {
   const option = (value: string) => ['-o', value];
   return [
     ...option('BatchMode=yes'),
@@ -101,12 +105,14 @@ export function sshArgs(destination: string, controlPath: string | null = null):
     ...option('StrictHostKeyChecking=yes'),
     ...option('ForwardAgent=no'),
     ...option('ForwardX11=no'),
+    // -W implies this, but a config can override it; a LocalForward must never ride on our master.
+    ...option('ClearAllForwardings=yes'),
     ...option('PermitLocalCommand=no'),
     ...option('ServerAliveInterval=15'),
     ...option('ServerAliveCountMax=3'),
     ...(controlPath
       ? [...option('ControlMaster=auto'), ...option(`ControlPath=${controlPath}`), ...option('ControlPersist=120')]
-      : option('ControlMaster=no')),
+      : [...option('ControlMaster=no'), ...(platform === 'win32' ? option('ControlPath=none') : [])]),
     '-W',
     FORWARD_TARGET,
     '--',
@@ -179,11 +185,6 @@ export function describeSshFailure(stderr: string, code: number | null, destinat
   if (/Host key verification failed|host key is known|No .* host key is known/i.test(stderr)) {
     return new SshRefusedError(`Connect once from a terminal with ${terminal} to trust this server's host key.`);
   }
-  if (/Permission denied|Too many authentication failures|no more authentication methods/i.test(stderr)) {
-    return new SshRefusedError(
-      `${destination} refused the SSH login. Check that ${terminal} works in a terminal. ${app} cannot ask for a password or passphrase, so load a key that has one into ssh-agent with ssh-add.`
-    );
-  }
   if (/open failed: connect failed/i.test(stderr)) {
     return new SshConnectionError(
       `SSH to ${destination} works, but nothing answers at ${FORWARD_TARGET} there. Start Ollama on that machine.`
@@ -192,6 +193,11 @@ export function describeSshFailure(stderr: string, code: number | null, destinat
   if (/administratively prohibited/i.test(stderr)) {
     return new SshRefusedError(
       `${destination} does not allow SSH port forwarding, which ${app} needs to reach Ollama there. Set AllowTcpForwarding to yes or local in its sshd_config.`
+    );
+  }
+  if (/: Permission denied \(|Too many authentication failures|no more authentication methods/i.test(stderr)) {
+    return new SshRefusedError(
+      `${destination} refused the SSH login. Check that ${terminal} works in a terminal. ${app} cannot ask for a password or passphrase, so load a key that has one into ssh-agent with ssh-add.`
     );
   }
   // Over a shared connection ssh reports every refused forward the same way, so name both causes.
@@ -267,6 +273,8 @@ class SshForward extends Duplex {
     stderr?.on('data', (chunk: Buffer) => {
       this.stderr = (this.stderr + chunk.toString('utf8')).slice(-STDERR_LIMIT);
     });
+    stdout?.on('error', error => this.destroy(error));
+    stderr?.on('error', () => undefined);
     // EPIPE when ssh exits first; the close handler reports why it exited.
     stdin?.on('error', () => undefined);
     child.once('error', error => this.destroy(spawnFailed(error)));
@@ -361,7 +369,7 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
   const spawn = deps.spawn ?? defaultSpawn;
   const platform = deps.platform ?? process.platform;
   const env = sshChildEnv(deps.env, platform);
-  let args: string[] = destination ? sshArgs(destination) : [];
+  let args: string[] = destination ? sshArgs(destination, null, platform) : [];
   let prepared: Promise<void> | null = null;
 
   const spawnFailed = (error: NodeJS.ErrnoException) =>
@@ -380,7 +388,7 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
     } catch {
       return;
     }
-    args = sshArgs(destination, shared.option);
+    args = sshArgs(destination, shared.option, platform);
   };
 
   // `ssh -G` prints the configuration ssh would use, without connecting.
@@ -398,6 +406,8 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
         if (out.length < CONFIG_LIMIT) out += chunk.toString('utf8');
       });
       child.stderr?.resume();
+      child.stdout?.on('error', () => undefined);
+      child.stderr?.on('error', () => undefined);
       child.once('error', () => {
         clearTimeout(timer);
         resolve(null);

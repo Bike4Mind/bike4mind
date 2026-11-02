@@ -137,6 +137,8 @@ How Desktop runs `ssh`:
 - It checks host keys strictly. A server whose host key you have not trusted yet fails with "Connect once from a terminal with `ssh <destination>` to trust this server's host key." A host key that changed fails too.
 - On a `ProxyJump` host, host key checks and sign-in follow your SSH config, not the settings above. Connect once from a terminal so that host's key is trusted too.
 - It passes `ssh` a minimal environment: your user and home, `PATH`, locale settings and `SSH_AUTH_SOCK` for your agent. API keys and other variables in Desktop's environment are not passed on, so a `ProxyCommand` that needs another variable, such as `AWS_PROFILE` for `aws ssm`, does not work.
+- On macOS, Desktop opened from Finder or the Dock does not see your shell's `PATH`, so write a `ProxyCommand` helper such as `cloudflared` or `tailscale` with its absolute path.
+- If your key needs an approval, such as an agent prompt or a security-key touch, approve it within about 20 seconds, or the check reports the server as unreachable.
 - It shares one SSH connection between requests when your SSH config sets no `ControlPath`, through a socket in `~/.ssh/b4m` that closes two minutes after the last request. If your config sets a `ControlPath`, Desktop uses a shared connection you already have open but never opens one there itself. On Windows, and when your home folder path is too long for a socket path, each request opens its own SSH connection, which is slower but otherwise the same.
 
 The `b4m` CLI lists an SSH server under `b4m models servers` as SSH, Desktop only. The CLI cannot use it yet; save a local port forward in Desktop for CLI access.
