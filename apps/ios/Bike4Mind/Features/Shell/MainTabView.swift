@@ -17,8 +17,7 @@ struct MainTabView: View {
       .tag(AppTab.sessions)
 
       NavigationStack {
-        PlaceholderScreen(
-          title: "Lakes", systemImage: "drop", message: "Your data lakes will appear here.")
+        LakesPlaceholderScreen()
       }
       .tabItem { Label("Lakes", systemImage: "drop") }
       .tag(AppTab.lakes)
@@ -51,13 +50,21 @@ struct MainTabView: View {
   }
 }
 
-struct PlaceholderScreen: View {
-  let title: String
-  let systemImage: String
-  let message: String
+/// The Lakes tab has no native screen yet, so it points at the web app instead of promising one.
+struct LakesPlaceholderScreen: View {
+  @Environment(AuthController.self) private var auth
+  @Environment(\.openURL) private var openURL
 
   var body: some View {
-    ContentUnavailableView(title, systemImage: systemImage, description: Text(message))
-      .navigationTitle(title)
+    ContentUnavailableView {
+      Label("Data Lakes", systemImage: "drop")
+    } description: {
+      Text("Browsing data lakes isn't in the app yet. Open Bike4Mind on the web to work with them.")
+    } actions: {
+      Button("Open Bike4Mind on the Web") { openURL(auth.environment.baseURL) }
+        .buttonStyle(.borderedProminent)
+        .accessibilityIdentifier("lakes-open-web-btn")
+    }
+    .navigationTitle("Lakes")
   }
 }

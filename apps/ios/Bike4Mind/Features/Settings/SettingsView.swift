@@ -26,6 +26,13 @@ struct SettingsView: View {
         Text("Require Face ID, Touch ID or your passcode when returning to Bike4Mind.")
       }
 
+      Section("About") {
+        LabeledContent("Version", value: AppInfo.versionDescription)
+          .accessibilityIdentifier("settings-version-row")
+        Link("Terms of Service", destination: AppLinks.terms)
+        Link("Privacy Policy", destination: AppLinks.privacy)
+      }
+
       #if DEBUG
         Section("Developer") {
           NavigationLink("Server: \(auth.environment.displayName)") { DebugServerView() }

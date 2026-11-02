@@ -18,6 +18,7 @@ struct SessionsView: View {
 
 private struct SessionsListScreen: View {
   @State private var model: SessionsViewModel
+  @Environment(AppServices.self) private var services
 
   init(api: any B4MAPI, cache: any SessionListCache) {
     _model = State(initialValue: SessionsViewModel(api: api, cache: cache))
@@ -26,7 +27,10 @@ private struct SessionsListScreen: View {
   var body: some View {
     content
       .navigationTitle("Sessions")
-      .toolbar { ToolbarItem(placement: .primaryAction) { CaptureMenu() } }
+      .toolbar {
+        ToolbarItem(placement: .primaryAction) { CaptureMenu() }
+        ToolbarItem(placement: .primaryAction) { newConversationButton }
+      }
       .task { await model.load() }
       .refreshable { await model.refresh() }
   }
@@ -49,12 +53,29 @@ private struct SessionsListScreen: View {
           .accessibilityIdentifier("sessions-retry-btn")
       }
     case (.loaded, true):
-      ContentUnavailableView(
-        "No sessions yet", systemImage: "bubble.left.and.bubble.right",
-        description: Text("Conversations you start in Bike4Mind will appear here."))
+      ContentUnavailableView {
+        Label("No sessions yet", systemImage: "bubble.left.and.bubble.right")
+      } description: {
+        Text("Conversations you start in Bike4Mind will appear here.")
+      } actions: {
+        Button("New Conversation", action: startConversation)
+          .buttonStyle(.borderedProminent)
+          .accessibilityIdentifier("sessions-empty-new-btn")
+      }
     default:
       sessionList
     }
+  }
+
+  private var newConversationButton: some View {
+    Button(action: startConversation) {
+      Label("New Conversation", systemImage: "square.and.pencil")
+    }
+    .accessibilityIdentifier("sessions-new-conversation-btn")
+  }
+
+  private func startConversation() {
+    services.navigator.apply(.compose(ComposeRequest(target: .newConversation)))
   }
 
   private var sessionList: some View {

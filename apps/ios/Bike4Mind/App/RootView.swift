@@ -6,6 +6,7 @@ struct RootView: View {
   @Environment(AuthController.self) private var auth
   @Environment(AppServices.self) private var services
   @Environment(\.scenePhase) private var scenePhase
+  @AppStorage(Onboarding.completedKey) private var isOnboardingCompleted = false
 
   var body: some View {
     Group {
@@ -14,7 +15,11 @@ struct RootView: View {
         ProgressView()
           .task { auth.restore() }
       case .signedOut(let reason):
-        SignInView(signOutReason: reason)
+        if Onboarding.shouldShow(isCompleted: isOnboardingCompleted, signOutReason: reason) {
+          OnboardingView { isOnboardingCompleted = true }
+        } else {
+          SignInView(signOutReason: reason)
+        }
       case .signedIn:
         switch services.accountStatus.state {
         case .active:
@@ -49,6 +54,8 @@ struct RootView: View {
   private func handleAuthState(_ state: AuthController.State) {
     switch state {
     case .signedIn, .locked:
+      // Someone who got this far never needs the welcome, e.g. a session restored after a reinstall.
+      isOnboardingCompleted = true
       // First sign-in (or a restored launch) is the moment to ask for quiet push authorization.
       Task { await services.push.sessionDidStart() }
       services.questActivities.sessionDidStart()
