@@ -5,7 +5,12 @@ vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
   isPushDeliveryConfigured: () => pushDelivery.configured,
 }));
 
-import { publishAgentTerminalPush, withAgentTerminalPush, type AgentPushDeps } from './agentExecutor.push';
+import {
+  endAgentLiveActivity,
+  publishAgentTerminalPush,
+  withAgentTerminalPush,
+  type AgentPushDeps,
+} from './agentExecutor.push';
 
 const EXECUTION = {
   userId: 'user-1',
@@ -121,5 +126,135 @@ describe('publishAgentTerminalPush', () => {
     deps.findSessionName.mockResolvedValue(undefined as never);
     await publishAgentTerminalPush({ executionId: 'exec-1', outcome: 'completed' }, deps, logger);
     expect(deps.publish).toHaveBeenCalledWith(expect.objectContaining({ body: 'Your agent finished its task.' }));
+  });
+});
+
+describe('withAgentTerminalPush live activity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pushDelivery.configured = true;
+  });
+
+  function makeLiveDeps(execution: Awaited<ReturnType<AgentPushDeps['findExecution']>> = EXECUTION) {
+    return { ...makeDeps(execution), publishLiveActivity: vi.fn(async () => undefined) };
+  }
+
+  it('reads and publishes nothing for any frame while push delivery is unconfigured', async () => {
+    pushDelivery.configured = false;
+    const deps = makeLiveDeps();
+    const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+
+    await sendWs('progress', { executionId: 'exec-1', status: 'Searching' });
+    await sendWs('completed', { executionId: 'exec-1' });
+    await endAgentLiveActivity({ executionId: 'exec-1', outcome: 'failed' }, deps, logger);
+
+    expect(deps.findExecution).not.toHaveBeenCalled();
+    expect(deps.publishLiveActivity).not.toHaveBeenCalled();
+    expect(deps.publish).not.toHaveBeenCalled();
+  });
+
+  const sentEvents = (deps: ReturnType<typeof makeLiveDeps>) =>
+    deps.publishLiveActivity.mock.calls.map(([event]) => event);
+
+  it('does nothing without a publishLiveActivity dependency', async () => {
+    const deps = makeDeps();
+    const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+    await sendWs('progress', { executionId: 'exec-1', status: 'Searching' });
+    expect(deps.findExecution).not.toHaveBeenCalled();
+  });
+
+  it('turns a status line into a running update keyed by the run quest', async () => {
+    const deps = makeLiveDeps();
+    const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+
+    await sendWs('progress', { executionId: 'exec-1', status: 'Searching the web' });
+
+    expect(sentEvents(deps)).toEqual([
+      {
+        userId: 'user-1',
+        questId: 'quest-1',
+        event: 'update',
+        contentState: { status: 'running', stageLabel: 'Searching the web' },
+      },
+    ]);
+  });
+
+  it('labels tool steps and ignores thoughts', async () => {
+    const deps = makeLiveDeps();
+    const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+
+    await sendWs('iteration_step', { executionId: 'exec-1', step: { type: 'thought', content: 'hm' } });
+    await sendWs('iteration_step', {
+      executionId: 'exec-1',
+      step: { type: 'action', content: 'x', metadata: { toolName: 'web_search', timestamp: 1 } },
+    });
+
+    expect(sentEvents(deps).map(e => e.contentState.stageLabel)).toEqual(['Using web_search']);
+  });
+
+  it('sends approval and confidence-gate pauses immediately, inside the throttle window', async () => {
+    const deps = makeLiveDeps();
+    const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+
+    await sendWs('progress', { executionId: 'exec-1', status: 'Searching' });
+    await sendWs('progress', { executionId: 'exec-1', questId: 'quest-1', pendingAction: { tool: 'create_issue' } });
+    await sendWs('progress', { executionId: 'exec-1', status: 'paused' });
+
+    expect(sentEvents(deps).map(e => e.contentState.status)).toEqual(['running', 'approval_needed', 'paused']);
+  });
+
+  it('ends the activity on completed, failed and a user abort', async () => {
+    const outcomes: Array<[string, Record<string, unknown>, unknown]> = [
+      ['completed', {}, { status: 'completed' }],
+      ['failed', { reason: 'error' }, { status: 'failed', errored: true }],
+      ['failed', { reason: 'aborted' }, { status: 'stopped' }],
+    ];
+    for (const [action, extra, contentState] of outcomes) {
+      const deps = makeLiveDeps();
+      const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+      await sendWs(action, { executionId: 'exec-1', ...extra });
+      expect(sentEvents(deps)).toEqual([{ userId: 'user-1', questId: 'quest-1', event: 'end', contentState }]);
+    }
+  });
+
+  it('skips child runs and runs without a quest', async () => {
+    for (const execution of [
+      { ...EXECUTION, parentExecutionId: 'p' },
+      { ...EXECUTION, dagNodeId: 'n' },
+      { ...EXECUTION, linkedQuestId: undefined },
+    ]) {
+      const deps = makeLiveDeps(execution);
+      const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+      await sendWs('progress', { executionId: 'exec-1', status: 'Working' });
+      expect(deps.publishLiveActivity).not.toHaveBeenCalled();
+    }
+  });
+
+  it('never lets a live activity failure break the frame or the terminal push', async () => {
+    const deps = makeLiveDeps();
+    deps.findExecution.mockRejectedValueOnce(new Error('db down'));
+    const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+
+    await expect(sendWs('progress', { executionId: 'exec-1', status: 'Working' })).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith('[LiveActivity] agent progress frame failed', expect.anything());
+    await sendWs('completed', { executionId: 'exec-1' });
+    expect(deps.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('throttles status lines to one per window with the latest flushed after it', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeLiveDeps();
+      const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+      await sendWs('progress', { executionId: 'exec-1', status: 'one' });
+      await sendWs('progress', { executionId: 'exec-1', status: 'two' });
+      await sendWs('progress', { executionId: 'exec-1', status: 'three' });
+      expect(deps.publishLiveActivity).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(sentEvents(deps).map(e => e.contentState.stageLabel)).toEqual(['one', 'three']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

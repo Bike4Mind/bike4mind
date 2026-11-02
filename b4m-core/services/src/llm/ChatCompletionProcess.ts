@@ -1311,6 +1311,7 @@ export class ChatCompletionProcess {
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
+  private onStatusUpdate?: IChatCompletionServiceOptions['onStatusUpdate'];
   private decide?: IChatCompletionServiceOptions['decide'];
   private verbose: boolean = false;
   // Per-name queue of each tool call's reserved credits, in call order (see
@@ -1391,6 +1392,7 @@ export class ChatCompletionProcess {
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
+    this.onStatusUpdate = options.onStatusUpdate;
     this.decide = options.decide;
     this.statusManager = null;
     this.userAbility = null;
@@ -7957,6 +7959,15 @@ export class ChatCompletionProcess {
     }
   }
 
+  private notifyStatusObserver(q: IChatHistoryItemDocument, status: string | null, silent?: boolean) {
+    if (!this.onStatusUpdate || !status || silent) return;
+    try {
+      this.onStatusUpdate(String(q.id), status);
+    } catch (error) {
+      this.logger.warn('[onStatusUpdate] observer failed', { error });
+    }
+  }
+
   public async sendStatusUpdate(
     q: IChatHistoryItemDocument,
     status: string | null,
@@ -7969,6 +7980,7 @@ export class ChatCompletionProcess {
       skipPayloadOptimization?: boolean;
     } = {}
   ) {
+    this.notifyStatusObserver(q, status, options.silent);
     if (!this.statusManager) {
       // IF NOT INITIALIZED, INITIALIZE IT
       this.statusManager = new StatusManager(
@@ -7997,6 +8009,7 @@ export class ChatCompletionProcess {
       skipPayloadOptimization?: boolean;
     } = {}
   ) {
+    this.notifyStatusObserver(q, status, options.silent);
     if (!this.statusManager) {
       // IF NOT INITIALIZED, INITIALIZE IT
       this.statusManager = new StatusManager(
