@@ -162,3 +162,27 @@ export const HostFactsSchema = z.object({
   defaultContext: z.number().int().positive().max(L.context),
 });
 export type HostFacts = z.infer<typeof HostFactsSchema>;
+
+/** The model host API version; a host refuses nothing older than its `minClientProtocol`. */
+export const MODEL_HOST_PROTOCOL = 1;
+/** Ordered: each role can do everything the ones before it can. */
+export const MODEL_HOST_ROLES = ['chat', 'manage', 'admin'] as const;
+export type ModelHostRole = (typeof MODEL_HOST_ROLES)[number];
+export const MODEL_HOST_MODES = ['system', 'user'] as const;
+
+/** `GET /v1/hello`: what a client checks before any other call. `role` is the caller's. */
+export const ModelHostHelloSchema = z.object({
+  protocol: z.number().int().positive(),
+  minClientProtocol: z.number().int().positive(),
+  version: TextSchema,
+  serverId: TextSchema,
+  mode: z.enum(MODEL_HOST_MODES),
+  role: z.enum(MODEL_HOST_ROLES),
+  ollama: z.object({ url: z.string().max(L.url), reachable: z.boolean(), version: TextSchema.nullable() }),
+  features: z.array(TextSchema).max(64),
+});
+export type ModelHostHello = z.infer<typeof ModelHostHelloSchema>;
+
+/** Every non-2xx body from a model host. */
+export const ModelHostErrorSchema = z.object({ code: TextSchema, message: z.string().max(L.path) });
+export type ModelHostError = z.infer<typeof ModelHostErrorSchema>;

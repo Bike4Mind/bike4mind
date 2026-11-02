@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HostFactsSchema, MODEL_HOST_LIMITS, OllamaSettingsSchema } from './modelHost';
+import { HostFactsSchema, MODEL_HOST_LIMITS, ModelHostHelloSchema, OllamaSettingsSchema } from './modelHost';
 
 const facts = {
   os: { name: 'Ubuntu 24.04.3 LTS', kernel: '6.8.0-90-generic' },
@@ -101,5 +101,27 @@ describe('OllamaSettingsSchema', () => {
     };
     const settings = { readable: true, settings: [setting], unreadablePaths: [] };
     expect(OllamaSettingsSchema.parse(settings)).toEqual(settings);
+  });
+});
+
+describe('ModelHostHelloSchema', () => {
+  const hello = {
+    protocol: 1,
+    minClientProtocol: 1,
+    version: '0.1.0',
+    serverId: '3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f',
+    mode: 'system',
+    role: 'manage',
+    ollama: { url: 'http://127.0.0.1:11434', reachable: true, version: '0.40.11' },
+    features: ['host', 'settings', 'events'],
+  };
+
+  it('accepts a hello and keeps fields a newer host adds out of the parsed value', () => {
+    expect(ModelHostHelloSchema.parse({ ...hello, linger: true })).toEqual(hello);
+  });
+
+  it('refuses unknown roles and modes', () => {
+    expect(ModelHostHelloSchema.safeParse({ ...hello, role: 'root' }).success).toBe(false);
+    expect(ModelHostHelloSchema.safeParse({ ...hello, mode: 'cluster' }).success).toBe(false);
   });
 });
