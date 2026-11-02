@@ -348,6 +348,16 @@ describe('parseOllamaHost and servesUrl', () => {
     expect(servesUrl({ host: '10.0.0.5', port: 443 }, 'https://10.0.0.5')).toBe(true);
     expect(servesUrl({ host: '127.0.0.1', port: 11434 }, 'not a url')).toBe(false);
   });
+
+  it('matches a mapped IPv6 URL host to the IPv4 listener, and a name to the address it resolves to', () => {
+    expect(servesUrl({ host: '127.0.0.1', port: 11434 }, 'http://[::ffff:127.0.0.1]:11434')).toBe(true);
+    expect(servesUrl({ host: '::ffff:7f00:1', port: 11434 }, 'http://127.0.0.1:11434')).toBe(true);
+    expect(servesUrl({ host: '127.0.0.1', port: 11434 }, 'http://[::ffff:127.0.0.2]:11434')).toBe(false);
+    expect(servesUrl({ host: '192.168.1.20', port: 11434 }, 'http://box.lan:11434', ['192.168.1.20'])).toBe(true);
+    expect(servesUrl({ host: 'fe80:0:0:0:0:0:0:1', port: 11434 }, 'http://box.lan:11434', ['fe80::1%eth0'])).toBe(true);
+    expect(servesUrl({ host: '127.0.0.1', port: 11434 }, 'http://box.lan:11434', ['192.168.1.20'])).toBe(false);
+    expect(servesUrl({ host: '127.0.0.1', port: 11434 }, 'http://box.lan:11434')).toBe(false);
+  });
 });
 
 describe('findOllamaProcesses', () => {
@@ -641,6 +651,24 @@ describe('detectOllamaInstall', () => {
       lookup: async () => Promise.reject(new Error('ENOTFOUND')),
     });
     expect(gone.install.type).toBe('unknown');
+  });
+
+  it('matches a listener to a URL by mapped loopback or by what its name resolves to', async () => {
+    const processFor = (host: string) => {
+      const root = tree({});
+      proc(root, [{ pid: 812, comm: 'ollama', argv: ['/usr/local/bin/ollama', 'serve'], env: { OLLAMA_HOST: host } }]);
+      return root;
+    };
+    const base = { exec: systemctl({}), localAddresses: ['192.168.1.20', 'box'] };
+    const probe = (host: string, url: string, resolved: string[]) =>
+      detectOllamaInstall({ ...base, rootDir: processFor(host), url, lookup: async () => resolved });
+    const manual = { type: 'manual', unit: null, binary: '/usr/local/bin/ollama' };
+
+    expect((await probe('127.0.0.1:11434', 'http://[::ffff:127.0.0.1]:11434', [])).install).toEqual(manual);
+    expect((await probe('192.168.1.20:11434', 'http://box.lan:11434', ['192.168.1.20'])).install).toEqual(manual);
+    expect((await probe('0.0.0.0:11434', 'http://box.lan:11434', ['192.168.1.20'])).install).toEqual(manual);
+    // box.lan only reaches the LAN address, which a loopback listener does not serve.
+    expect((await probe('127.0.0.1:11434', 'http://box.lan:11434', ['192.168.1.20'])).install.type).toBe('unknown');
   });
 
   it("reads the service manager's environment for an active unit, OLLAMA_HOST included", async () => {

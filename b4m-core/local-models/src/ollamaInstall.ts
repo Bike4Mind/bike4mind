@@ -402,13 +402,22 @@ function urlTarget(url: string): OllamaHost | null {
 
 const isAnyHost = (host: string) => host === '' || host === '0.0.0.0' || host === '::';
 // Go's net.Listen binds "localhost" to 127.0.0.1.
-const canonicalHost = (host: string) => (host.toLowerCase() === 'localhost' ? '127.0.0.1' : host.toLowerCase());
+function canonicalHost(host: string): string {
+  const name = host.toLowerCase().replace(/%.*$/, '');
+  if (name === 'localhost') return '127.0.0.1';
+  return unmapIpv4(isIP(name) === 6 ? new URL(`http://[${name}]`).hostname.slice(1, -1) : name);
+}
 
-/** Whether an Ollama listening on `listen` answers at `url`. */
-export function servesUrl(listen: OllamaHost, url: string): boolean {
+/**
+ * Whether an Ollama listening on `listen` answers at `url`. `resolved` is what a name in `url` resolves to; a listener
+ * bound to one of those addresses serves the name.
+ */
+export function servesUrl(listen: OllamaHost, url: string, resolved: readonly string[] = []): boolean {
   const target = urlTarget(url);
   if (!target || listen.port !== target.port) return false;
-  return isAnyHost(listen.host) || canonicalHost(listen.host) === canonicalHost(target.host);
+  if (isAnyHost(listen.host)) return true;
+  const bound = canonicalHost(listen.host);
+  return bound === canonicalHost(target.host) || resolved.some(address => canonicalHost(address) === bound);
 }
 
 /** This machine's interface addresses and host name. */
@@ -455,10 +464,17 @@ export async function isLocalHostResolved(
   resolve: HostLookup = resolveAll
 ): Promise<boolean> {
   if (isLocalHost(host, local)) return true;
-  if (isIP(host)) return false;
-  const addresses = await resolve(host).catch((): string[] => []);
-  return addresses.some(address => isLocalHost(address.replace(/%.*$/, ''), local) && !isAnyHost(address));
+  return anyLocalAddress(await resolveName(host, resolve), local);
 }
+
+/** What a host name resolves to; empty for an IP literal, `localhost` or an unresolvable name. */
+async function resolveName(host: string, resolve: HostLookup): Promise<string[]> {
+  if (isIP(host) || host.toLowerCase() === 'localhost') return [];
+  return resolve(host).catch((): string[] => []);
+}
+
+const anyLocalAddress = (addresses: readonly string[], local: readonly string[]) =>
+  addresses.some(address => isLocalHost(address.replace(/%.*$/, ''), local) && !isAnyHost(address));
 
 export interface OllamaProcess {
   pid: number;
@@ -636,25 +652,25 @@ export async function detectOllamaInstall(options: OllamaInstallOptions = {}): P
   };
   // Nothing seen here serves another machine's address, a wildcard listener included.
   const target = urlTarget(url);
-  if (
-    !target ||
-    !(await isLocalHostResolved(target.host, options.localAddresses ?? localAddresses(), options.lookup))
-  ) {
-    return unknown;
-  }
+  if (!target) return unknown;
+  const local = options.localAddresses ?? localAddresses();
+  const resolved = await resolveName(target.host, options.lookup ?? resolveAll);
+  if (!isLocalHost(target.host, local) && !anyLocalAddress(resolved, local)) return unknown;
 
   const [commands, units] = await Promise.all([
     scanProcCommands(root).catch((): ProcCommand[] => []),
     systemdUnits(options.exec ?? defaultExec, options.unitName ?? OLLAMA_UNIT),
   ]);
   const processes = await findOllamaProcesses(root, commands).catch((): OllamaProcess[] => []);
-  const listening = processes.filter(p => p.env !== null && servesUrl(parseOllamaHost(p.env.OLLAMA_HOST), url));
+  const listening = processes.filter(
+    p => p.env !== null && servesUrl(parseOllamaHost(p.env.OLLAMA_HOST), url, resolved)
+  );
 
   const unmatched: Array<{ unit: SystemdUnit; complete: boolean }> = [];
   for (const unit of units) {
     if (unit.mainPid !== null && listening.some(p => p.pid === unit.mainPid)) return unitProbe(unit, processes);
     const { listen, complete } = await unitHost(unit, root);
-    if (servesUrl(listen, url)) return unitProbe(unit, processes);
+    if (servesUrl(listen, url, resolved)) return unitProbe(unit, processes);
     unmatched.push({ unit, complete });
   }
   if (listening[0]) return processProbe(listening[0]);
