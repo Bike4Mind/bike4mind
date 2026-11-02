@@ -26,7 +26,13 @@ enum Tokens {
     static let secondaryText = Color.secondary
     static let destructive = Color.red
     /// A tint of the brand colour with primary text on top; stays legible where the dark-mode accent is too light for white text.
-    static let userBubble = Color.accentColor.opacity(0.16)
+    /// Dark mode needs a much stronger tint: 16% of the accent over near-black reads as black.
+    static let userBubble = Color(
+      uiColor: UIColor { traits in
+        let accent = UIColor(named: "AccentColor") ?? .tintColor
+        let isDark = traits.userInterfaceStyle == .dark
+        return accent.resolvedColor(with: traits).withAlphaComponent(isDark ? 0.42 : 0.16)
+      })
     static let assistantBubble = Color(uiColor: .secondarySystemBackground)
     static let warning = Color.orange
   }
