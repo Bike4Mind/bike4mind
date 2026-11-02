@@ -8,7 +8,7 @@ import {
   CURATED_MAX_MANIFEST_BYTES,
   CURATED_MAX_SIGNATURE_BYTES,
   PRODUCTION_CURATED_KEYS,
-} from '@bike4mind/local-models';
+} from '@bike4mind/local-models/curated-signing';
 import { curatedDevKeys as cliDevKeys } from '../../../cli/src/models/curatedDevKey';
 import { curatedDevKeys as scriptsDevKeys } from '../../../scripts/src/curatedCatalog/devKey';
 import {

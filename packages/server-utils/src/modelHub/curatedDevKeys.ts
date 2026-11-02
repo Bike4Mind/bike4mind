@@ -1,5 +1,5 @@
 import { createHash, type KeyObject } from 'node:crypto';
-import { curatedKeyFromSeed, type CuratedKey, type CuratedKeyRole } from '@bike4mind/local-models';
+import { curatedKeyFromSeed, type CuratedKey, type CuratedKeyRole } from '@bike4mind/local-models/curated-signing';
 
 // The seeds are public on purpose, so these keys prove nothing. Must stay in sync with
 // packages/scripts/src/curatedCatalog/devKey.ts, apps/desktop/src/main/models/curated/devKey.ts and

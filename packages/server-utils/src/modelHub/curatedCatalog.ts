@@ -15,7 +15,7 @@ import {
   parseCuratedSignatureFile,
   verifyCurated,
   type CuratedKey,
-} from '@bike4mind/local-models';
+} from '@bike4mind/local-models/curated-signing';
 import { curatedDevKeys } from './curatedDevKeys';
 
 export const CURATED_CHANNEL = 'curated-v2';

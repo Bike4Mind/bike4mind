@@ -2,7 +2,12 @@ import { generateKeyPairSync, type KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { curatedPublicKey, signCurated, type CuratedKey, type CuratedKeyRole } from '@bike4mind/local-models';
+import {
+  curatedPublicKey,
+  signCurated,
+  type CuratedKey,
+  type CuratedKeyRole,
+} from '@bike4mind/local-models/curated-signing';
 
 /** Test-only: the repo's curated catalog re-published at any sequence, signed with throwaway keys. */
 export interface TestSigner {
