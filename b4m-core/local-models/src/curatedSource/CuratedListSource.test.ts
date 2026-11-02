@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HUB_MAX_SEQUENCE } from '@bike4mind/common';
+import { HUB_MAX_SEQUENCE } from '@bike4mind/common/modelHub';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadCuratedManifest } from '../curated';
 import {
