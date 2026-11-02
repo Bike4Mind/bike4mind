@@ -363,12 +363,15 @@ export const GetFileIcon: FC<GetFileIconProps> = ({ file, size = 48, previewSize
           [SupportedFabFileMimeTypes.XML]: TagIcon,
           // Data
           [SupportedFabFileMimeTypes.JSON]: Description,
-          [SupportedFabFileMimeTypes.CSV]: DataObjectIcon,
+          [SupportedFabFileMimeTypes.CSV]: TableChartIcon,
           [SupportedFabFileMimeTypes.YAML]: DataObjectIcon,
           [SupportedFabFileMimeTypes.TOML]: DataObjectIcon,
         }[file.mimeType] || InsertDriveFileIcon;
+  // Browsers label CSV uploads inconsistently (application/csv, application/octet-stream), so trust the extension.
+  const Icon =
+    file.type !== KnowledgeType.URL && file.fileName?.toLowerCase().endsWith('.csv') ? TableChartIcon : IconComponent;
 
-  return <IconComponent sx={{ fontSize: size, fill: color }} />;
+  return <Icon sx={{ fontSize: size, fill: color }} />;
 };
 
 export const saveToFileAndWorkbench = async (

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { HubBuild, HubEntry, HubManifest } from '@bike4mind/common';
+import type { HubBuild, HubEntry, HubManifest } from '@bike4mind/common/modelHub';
 import { curatedLibrary, curatedPins, loadCuratedManifest } from '../curated';
 import type { HubGgufBuild, HubModelDetail } from '../huggingface';
 import type { ModelInspection, OllamaRegistryLayers } from '../types';

@@ -630,8 +630,15 @@ export function ChatShell({
         const updated = await window.b4m.chat.setSessionModel(created, modelId).catch(() => null);
         if (!updated) {
           // Opening it anyway would send the first message to the default model, which can be a hosted one.
-          await remove(created).catch(() => undefined);
-          setChatOnError('Desktop could not start a conversation on that model. Try again, or pick it in a chat.');
+          const removed = await remove(created).then(
+            () => true,
+            () => false
+          );
+          setChatOnError(
+            removed
+              ? 'Desktop could not start a conversation on that model. Try again, or pick it in a chat.'
+              : 'Desktop could not start a conversation on that model, and could not remove the empty one it made. Delete it from the sidebar before chatting in it.'
+          );
           return;
         }
         apply(updated);
@@ -805,7 +812,10 @@ export function ChatShell({
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'models' ? (
         <ModelsScreen
-          onClose={() => setScreen('conversation')}
+          onClose={() => {
+            setChatOnError(null);
+            setScreen('conversation');
+          }}
           inUse={modelsInUse}
           onOpenModelServers={onOpenModelServers}
           chatWith={chatWith}

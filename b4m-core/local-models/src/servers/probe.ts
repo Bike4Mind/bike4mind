@@ -1,5 +1,5 @@
 import type { FetchLike, OpenAICompatibleProduct } from '../types';
-import { describeFailure } from './failure';
+import { describeFailure, errorCode } from './failure';
 import type { ModelServerKind } from './modelServerFile';
 import { ServerRedirectError, ServerTransportError } from './serverFetch';
 
@@ -13,24 +13,27 @@ export interface ProbeOutcome {
   /** A 403 with no 401: the request was refused, not asked for credentials. */
   forbidden: boolean;
   error: string | null;
+  /** The system error code of a failed connection (e.g. `EHOSTUNREACH`), when there was one. */
+  code: string | null;
   refused: boolean;
 }
 
 const PROBE_TIMEOUT_MS = 5_000;
 const OWNER_PRODUCT: Record<string, OpenAICompatibleProduct> = { llamacpp: 'llama-server', vllm: 'vllm' };
 
-/** Identifies the server by what it answers, never by port, and times the answer. */
+/** Identifies the server by what it answers, never by port, and times the answer. `timeoutMs` applies per request. */
 export async function probeServer(
   fetch: FetchLike,
   baseUrl: string,
   label: string,
   now: () => number,
-  expected?: ModelServerKind
+  expected?: ModelServerKind,
+  timeoutMs = PROBE_TIMEOUT_MS
 ): Promise<ProbeOutcome> {
   const get = async (path: string) => {
     const started = now();
     try {
-      const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+      const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
       const latencyMs = Math.round(now() - started);
       const body: unknown = response.ok
         ? await response.json().catch(() => null)
@@ -58,6 +61,7 @@ export async function probeServer(
       auth: false,
       forbidden: false,
       error: null,
+      code: null,
       refused: false,
     };
   }
@@ -76,6 +80,7 @@ export async function probeServer(
       auth: false,
       forbidden: false,
       error: null,
+      code: null,
       refused: false,
     };
   }
@@ -101,6 +106,7 @@ export async function probeServer(
         : status
           ? `${label} answered HTTP ${status}, not as Ollama or an OpenAI-compatible server.`
           : null,
+    code: errorCode(failure) ?? null,
   };
 }
 

@@ -91,6 +91,17 @@ describe('OllamaSettingsSchema', () => {
     };
     expect(OllamaSettingsSchema.safeParse(tooMany).success).toBe(false);
   });
+
+  it("accepts the service manager's environment as a source", () => {
+    const setting = {
+      key: 'OLLAMA_MODELS',
+      value: '/data/models',
+      source: { kind: 'manager', path: null },
+      writable: false,
+    };
+    const settings = { readable: true, settings: [setting], unreadablePaths: [] };
+    expect(OllamaSettingsSchema.parse(settings)).toEqual(settings);
+  });
 });
 
 describe('ModelHostHelloSchema', () => {

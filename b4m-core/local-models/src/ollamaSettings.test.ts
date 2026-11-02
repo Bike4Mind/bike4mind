@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
+  OLLAMA_ENV_KEYS,
   fitRuntimeFromOllamaSettings,
+  isOllamaEnvKey,
   ollamaDefaultContext,
   ollamaEnvValue,
   ollamaFitConfidence,
+  type OllamaEnvironment,
 } from './ollamaSettings';
 
 const GiB = 1024 ** 3;
@@ -17,8 +20,31 @@ const cpu = { memoryKind: 'cpu' as const, totalMemoryBytes: 64 * GiB, gpuMemoryB
 
 describe('ollamaEnvValue', () => {
   it('strips spaces and quotes as envconfig.Var does', () => {
-    expect(ollamaEnvValue({ K: ' "q8_0" ' }, 'K')).toBe('q8_0');
-    expect(ollamaEnvValue({}, 'K')).toBe('');
+    expect(ollamaEnvValue({ OLLAMA_KV_CACHE_TYPE: ' "q8_0" ' }, 'OLLAMA_KV_CACHE_TYPE')).toBe('q8_0');
+    expect(ollamaEnvValue({}, 'OLLAMA_KV_CACHE_TYPE')).toBe('');
+  });
+});
+
+describe('the Ollama environment allowlist', () => {
+  it('admits the settings, the GPU overhead and HOME, and nothing else', () => {
+    expect(OLLAMA_ENV_KEYS.size).toBe(12);
+    for (const key of ['OLLAMA_HOST', 'OLLAMA_MODELS', 'OLLAMA_GPU_OVERHEAD', 'HOME'])
+      expect(isOllamaEnvKey(key)).toBe(true);
+    for (const key of ['PATH', 'OLLAMA_API_KEY', 'HTTPS_PROXY', 'constructor']) expect(isOllamaEnvKey(key)).toBe(false);
+    expectTypeOf<keyof OllamaEnvironment>().toEqualTypeOf<
+      | 'HOME'
+      | 'OLLAMA_GPU_OVERHEAD'
+      | 'OLLAMA_HOST'
+      | 'OLLAMA_CONTEXT_LENGTH'
+      | 'OLLAMA_KEEP_ALIVE'
+      | 'OLLAMA_NUM_PARALLEL'
+      | 'OLLAMA_MAX_LOADED_MODELS'
+      | 'OLLAMA_FLASH_ATTENTION'
+      | 'OLLAMA_KV_CACHE_TYPE'
+      | 'OLLAMA_NO_CLOUD'
+      | 'OLLAMA_MODELS'
+      | 'OLLAMA_ORIGINS'
+    >();
   });
 });
 

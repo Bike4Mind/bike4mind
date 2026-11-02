@@ -1445,7 +1445,10 @@ export class ModelHubService {
     return { ok: true, ref };
   }
 
-  /** A library build has no Hugging Face repo: the reviewed manifest digest is sent as its revision. */
+  /**
+   * Re-checks the dialog's request through the shared approval and words any refusal for the pull dialog. A library
+   * build has no Hugging Face repo: the reviewed manifest digest is sent as its revision.
+   */
   async #prepare(
     request: ModelPullRequest,
     curated: { entry: HubEntry; build: HubBuild } | null,

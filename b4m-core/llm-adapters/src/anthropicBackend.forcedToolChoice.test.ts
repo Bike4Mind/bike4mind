@@ -9,7 +9,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { ChatModels, supportsForcedToolChoice, type ModelInfo, type ResponseFormat } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 import type { CompletionInfo, ICompletionOptions, ICompletionOptionTools } from './backend';
-import { buildStructuredOutputFormat, buildToolUseInstruction, isStrictCompatibleSchema } from './forcedToolChoice';
+import {
+  buildStructuredOutputFormat,
+  buildToolUseInstruction,
+  declaresOpenObject,
+  isStrictCompatibleSchema,
+} from './forcedToolChoice';
 
 type Params = Record<string, unknown> & {
   tools?: Array<Record<string, unknown>>;
@@ -402,6 +407,137 @@ describe('buildStructuredOutputFormat', () => {
       additionalProperties: false,
     });
   });
+
+  it('moves an object repeated inline to one $defs entry', () => {
+    const claim = {
+      type: 'object',
+      properties: {
+        text: { type: 'string', maxLength: 280 },
+        cites: { type: 'array', items: { type: 'string' }, minItems: 1 },
+      },
+      required: ['text', 'cites'],
+    };
+    const schema = {
+      type: 'object',
+      properties: {
+        headline: claim,
+        bull: { type: 'array', items: claim },
+        bear: { type: 'array', items: claim },
+        refusal: {
+          anyOf: [
+            { type: 'object', properties: { reason: { type: 'string' } }, required: ['reason'] },
+            { type: 'null' },
+          ],
+        },
+      },
+      required: ['headline', 'bull', 'bear', 'refusal'],
+    };
+    const before = structuredClone(schema);
+
+    const format = buildStructuredOutputFormat(schema);
+
+    expect(schema).toEqual(before);
+    expect(format?.schema).toEqual({
+      type: 'object',
+      properties: {
+        headline: { $ref: '#/$defs/shared1' },
+        bull: { type: 'array', items: { $ref: '#/$defs/shared1' } },
+        bear: { type: 'array', items: { $ref: '#/$defs/shared1' } },
+        refusal: {
+          anyOf: [
+            {
+              type: 'object',
+              properties: { reason: { type: 'string' } },
+              required: ['reason'],
+              additionalProperties: false,
+            },
+            { type: 'null' },
+          ],
+        },
+      },
+      required: ['headline', 'bull', 'bear', 'refusal'],
+      additionalProperties: false,
+      $defs: {
+        shared1: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: '{maxLength: 280}' },
+            cites: { type: 'array', items: { type: 'string' }, minItems: 1 },
+          },
+          required: ['text', 'cites'],
+          additionalProperties: false,
+        },
+      },
+    });
+  });
+
+  it('keeps existing $defs, skips a taken name and leaves allOf members inline', () => {
+    const item = { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] };
+    const format = buildStructuredOutputFormat({
+      type: 'object',
+      properties: { x: item, y: item, z: { $ref: '#/$defs/shared1' }, w: { allOf: [item] } },
+      required: ['x', 'y', 'z', 'w'],
+      $defs: { shared1: { type: 'string' } },
+    });
+
+    expect(format?.schema.$defs).toEqual({
+      shared1: { type: 'string' },
+      shared2: { type: 'object', properties: { a: { type: 'string' } }, required: ['a'], additionalProperties: false },
+    });
+    expect(format?.schema.properties).toMatchObject({
+      x: { $ref: '#/$defs/shared2' },
+      y: { $ref: '#/$defs/shared2' },
+      w: { allOf: [{ type: 'object', properties: { a: { type: 'string' } } }] },
+    });
+  });
+
+  it('gives an object nested in a repeated object its own $defs entry', () => {
+    const inner = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
+    const outer = { type: 'object', properties: { inner }, required: ['inner'] };
+    const format = buildStructuredOutputFormat({
+      type: 'object',
+      properties: { a: outer, b: outer },
+      required: ['a', 'b'],
+    });
+
+    expect(format?.schema).toEqual({
+      type: 'object',
+      properties: { a: { $ref: '#/$defs/shared1' }, b: { $ref: '#/$defs/shared1' } },
+      required: ['a', 'b'],
+      additionalProperties: false,
+      $defs: {
+        shared1: {
+          type: 'object',
+          properties: { inner: { $ref: '#/$defs/shared2' } },
+          required: ['inner'],
+          additionalProperties: false,
+        },
+        shared2: { ...inner, additionalProperties: false },
+      },
+    });
+  });
+
+  it('hoists objects repeated inside existing $defs and definitions bodies', () => {
+    const item = { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] };
+    const format = buildStructuredOutputFormat({
+      type: 'object',
+      properties: { p: { $ref: '#/$defs/pair' }, q: { $ref: '#/definitions/list' } },
+      required: ['p', 'q'],
+      $defs: { pair: { type: 'object', properties: { x: item, y: item }, required: ['x', 'y'] } },
+      definitions: { list: { type: 'array', items: item } },
+    });
+
+    expect(format?.schema.$defs).toEqual({
+      pair: {
+        type: 'object',
+        properties: { x: { $ref: '#/$defs/shared1' }, y: { $ref: '#/$defs/shared1' } },
+        required: ['x', 'y'],
+        additionalProperties: false,
+      },
+      shared1: { ...item, additionalProperties: false },
+    });
+    expect(format?.schema.definitions).toEqual({ list: { type: 'array', items: { $ref: '#/$defs/shared1' } } });
+  });
 });
 
 describe('AnthropicBackend caller tool_choice on models without forced tool use', () => {
@@ -477,18 +613,121 @@ describe('AnthropicBackend caller tool_choice on models without forced tool use'
   });
 });
 
-describe('AnthropicBackend on models with forced tool use (unchanged)', () => {
+describe('AnthropicBackend on models with forced tool use', () => {
   it.each(FORCED_MODELS)('synthesizes the forced json_schema tool for %s', async model => {
     const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
     const out = capture();
     await run(backend, model, { stream: false, responseFormat: RESPONSE_FORMAT }, out.cb);
 
     const params = captured[0];
-    expect(params.tools).toEqual([{ name: 'extract_user', description: 'Extract user info', input_schema: SCHEMA }]);
-    expect(params.tool_choice).toEqual({ type: 'tool', name: 'extract_user' });
+    expect(params.tools).toEqual([
+      { name: 'extract_user', description: 'Extract user info', input_schema: SCHEMA, strict: true },
+    ]);
+    expect(params.tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
     expect(params).not.toHaveProperty('output_config');
     expect(JSON.parse(out.text())).toEqual(RESULT);
     expect(out.mode()).toBe('tool_use');
+  });
+
+  it('closes an open schema into its structured-outputs form and sends the tool strict', async () => {
+    const openSchema = {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        address: { type: 'object', properties: { city: { type: 'string' } } },
+        age: { type: 'integer', minimum: 0 },
+      },
+      required: ['name'],
+    };
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
+      stream: false,
+      responseFormat: { type: 'json_schema', json_schema: { name: 'extract_user', schema: openSchema } },
+    });
+
+    const tool = captured[0].tools?.[0];
+    expect(tool?.strict).toBe(true);
+    expect(tool?.input_schema).toEqual(buildStructuredOutputFormat(openSchema)?.schema);
+    expect(tool?.input_schema).toMatchObject({
+      additionalProperties: false,
+      properties: { address: { additionalProperties: false } },
+    });
+  });
+
+  it.each([
+    ['a free-form object', { type: 'object' }],
+    [
+      'a recursive schema',
+      {
+        type: 'object',
+        properties: { root: { $ref: '#/$defs/node' } },
+        $defs: {
+          node: {
+            type: 'object',
+            properties: { children: { type: 'array', items: { $ref: '#/$defs/node' } } },
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
+      },
+    ],
+    [
+      'a schema that declares an open object',
+      { type: 'object', properties: { name: { type: 'string' } }, additionalProperties: { type: 'number' } },
+    ],
+  ])('sends %s as-is and not strict', async (_label, schema) => {
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
+      stream: false,
+      responseFormat: { type: 'json_schema', json_schema: { name: 'extract_user', schema } },
+    });
+
+    expect(captured[0].tools).toEqual([{ name: 'extract_user', input_schema: schema }]);
+    expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+  });
+
+  it('streams only the first synthesized tool block when the model emits two', async () => {
+    const { backend } = buildBackend(() =>
+      asyncIterable([
+        { type: 'message_start' },
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'tu_1', name: 'extract_user' },
+        },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"name":"Erik",' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '"age":42}' } },
+        { type: 'content_block_stop', index: 0 },
+        {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'tool_use', id: 'tu_2', name: 'extract_user' },
+        },
+        { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"name":"Ada"}' } },
+        { type: 'content_block_stop', index: 1 },
+        { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } },
+        { type: 'message_stop' },
+      ])
+    );
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: true, responseFormat: RESPONSE_FORMAT }, out.cb);
+
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('tool_use');
+  });
+
+  it('keeps only the first synthesized tool block on the non-streaming path', async () => {
+    const { backend } = buildBackend(() => ({
+      content: [
+        { type: 'tool_use', id: 'tu_1', name: 'extract_user', input: RESULT },
+        { type: 'tool_use', id: 'tu_2', name: 'extract_user', input: { name: 'Ada' } },
+      ],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }));
+    const out = capture();
+    await run(backend, ChatModels.CLAUDE_5_5_HAIKU, { stream: false, responseFormat: RESPONSE_FORMAT }, out.cb);
+
+    expect(JSON.parse(out.text())).toEqual(RESULT);
   });
 
   it.each(FORCED_MODELS)('forwards required and named choices as any / tool for %s', async model => {
@@ -541,6 +780,62 @@ describe('AnthropicBackend json_schema with document citations', () => {
     expect(systemText(captured[0].system)).toContain('Schema name: extract_user');
     expect(JSON.parse(out.text())).toEqual(RESULT);
     expect(out.mode()).toBe('best-effort');
+  });
+
+  it('keeps the forced tool, without thinking, when caller thinking would otherwise move it native', async () => {
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    const out = capture();
+    await backend.complete(
+      ChatModels.CLAUDE_5_5_HAIKU,
+      [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'document',
+              source: { type: 'text', media_type: 'text/plain', data: 'Erik is 42.' },
+              citations: { enabled: true },
+            },
+            { type: 'text', text: 'extract the user' },
+          ] as unknown as string,
+        },
+      ],
+      { stream: false, responseFormat: RESPONSE_FORMAT, reasoningEffort: 'high', explicitReasoning: true },
+      out.cb
+    );
+
+    expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+    expect(captured[0]).not.toHaveProperty('output_config');
+    expect(captured[0]).not.toHaveProperty('thinking');
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('tool_use');
+  });
+});
+
+describe('declaresOpenObject', () => {
+  it.each([
+    ['a closed schema', SCHEMA, false],
+    ['a schema that omits additionalProperties', { type: 'object', properties: { a: { type: 'string' } } }, false],
+    [
+      'a property named additionalProperties',
+      { type: 'object', properties: { additionalProperties: { type: 'string' } } },
+      false,
+    ],
+    ['additionalProperties: true', { type: 'object', additionalProperties: true }, true],
+    [
+      'an additionalProperties schema',
+      { type: 'object', properties: {}, additionalProperties: { type: 'number' } },
+      true,
+    ],
+    ['an open object nested in items', { type: 'array', items: { type: 'object', additionalProperties: {} } }, true],
+    ['an open object in $defs', { $defs: { meta: { type: 'object', additionalProperties: true } } }, true],
+    [
+      'an open object in an anyOf variant',
+      { anyOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] },
+      true,
+    ],
+  ])('%s -> %s', (_label, schema, expected) => {
+    expect(declaresOpenObject(schema)).toBe(expected);
   });
 });
 
