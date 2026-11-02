@@ -1542,7 +1542,7 @@ describe('models pull fit check', () => {
     expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).toBe(0);
     const fit = h.lines.find(line => line.startsWith('Fit:'));
     expect(fit).toMatch(/^Fit: {6}fits\. Rough estimate from the file size: about \d+ MB before context memory/);
-    expect(fit).toContain('at the 32K context the CLI requests, of the 51.5 GB a model can use in RAM here.');
+    expect(fit).toContain('at the 32K context the CLI requests, of the 51.3 GB a model can use in RAM here.');
   });
 
   it('refuses a too-large build before asking anything unless --force', async () => {
@@ -1550,7 +1550,9 @@ describe('models pull fit check', () => {
     await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).rejects.toThrow(
       `Nothing was downloaded: this build is rated too large for this machine. Pick a smaller quant from: b4m models show ${REPO}, or re-run with --force to download it anyway.`
     );
-    expect(h.lines.find(line => line.startsWith('Fit:'))).toMatch(/^Fit: {6}too large\. .*exceeds the 51\.5 GB/);
+    expect(h.lines.find(line => line.startsWith('Fit:'))).toMatch(
+      /^Fit: {6}too large\. .*more than the 51\.3 GB this computer can hold for a model\.$/
+    );
     expect(h.questions).toEqual([]);
     expect(h.runtime.pull).not.toHaveBeenCalled();
   });

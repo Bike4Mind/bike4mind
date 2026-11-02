@@ -445,6 +445,14 @@ class Planner {
     return this.plan(context, this.preferredKv, 'gpu');
   }
 
+  /** The unfit plan, or the layer split when only the RAM pool refused it, so its total is what was too large. */
+  refused(context: number): FitPlan {
+    const unfit = this.unfit(context);
+    if (this.budgets.cpuOnly || this.budgets.ramPool === 0 || this.fixedMoe) return unfit;
+    const split = this.plan(context, this.preferredKv, 'layer-offload');
+    return split.memory.offloadedBytes <= this.input.model.weightsBytes ? split : unfit;
+  }
+
   private ubatch(context: number): number {
     const { model, runtime, hardware } = this.input;
     if (runtime.ubatch) return runtime.ubatch;
@@ -600,7 +608,7 @@ export function estimateFit(input: FitInput): FitResult {
   if (input.context === undefined) return result;
 
   const atRequested = planner.best(input.context);
-  const requested = atRequested ? { ...atRequested, fits: true } : { ...planner.unfit(input.context), fits: false };
+  const requested = atRequested ? { ...atRequested, fits: true } : { ...planner.refused(input.context), fits: false };
   return { ...result, requested };
 }
 
@@ -714,9 +722,10 @@ export function estimateFitFromSize(sizeBytes: number, hardware: HardwareProfile
   const plannedBytes = needBytes + fitMarginBytes(hardware);
   const over = plannedBytes - budgetBytes;
   const base = { needBytes, budgetBytes, offloadBytes: Math.max(0, over), cpuOnly, context: tokens };
-  // Only weights move to RAM in a layer split.
+  // Only weights move to RAM in a layer split, and the context room a resident fit keeps must still be free.
   if (over > 0) {
-    const level = cpuOnly || over > ramPool || over > sizeBytes ? 'too-large' : 'tight';
+    const roomy = over <= ramPool - budgetBytes * (1 - SIZE_HEADROOM);
+    const level = cpuOnly || over > sizeBytes || !roomy ? 'too-large' : 'tight';
     return { ...base, level };
   }
   return { ...base, level: plannedBytes > budgetBytes * SIZE_HEADROOM ? 'tight' : 'fits' };

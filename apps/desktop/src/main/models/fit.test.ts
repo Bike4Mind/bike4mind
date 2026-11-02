@@ -52,7 +52,15 @@ const gpu = (vramGiB: number, ramGiB: number): HardwareProfile => ({
 });
 
 /** A stubbed estimate: `totalGiB` allocated plus a 1 GiB margin beside it, against a 12 GiB budget. */
-function stub(totalGiB: number, options: { fits?: boolean; placement?: FitPlacement; context?: number } = {}) {
+function stub(
+  totalGiB: number,
+  options: {
+    fits?: boolean;
+    placement?: FitPlacement;
+    context?: number;
+    memory?: { weightsBytes?: number; offloadedBytes?: number };
+  } = {}
+) {
   const context = options.context ?? 16384;
   const requested = {
     context,
@@ -73,6 +81,7 @@ function stub(totalGiB: number, options: { fits?: boolean; placement?: FitPlacem
       totalBytes: totalGiB * GIB,
       budgetBytes: 12 * GIB,
       ramPoolBytes: 0,
+      ...options.memory,
     },
   } as const;
   vi.mocked(estimateFit).mockReturnValue({ requested } as unknown as FitResult);
@@ -139,6 +148,56 @@ describe('fitFromArch', () => {
     else expect(fit.detail).not.toContain('Close other apps');
   });
 
+  it('shows one more decimal when the need and the limit it is past would read the same', () => {
+    stub(11.04, { fits: false });
+    const fit = fitFromArch(DENSE, 4 * GIB, cpu(16), 16384);
+    expect(fit.detail).toContain('Needs about 11.04 GiB');
+    expect(fit.detail).toContain('more than the 11 GiB this computer can hold');
+  });
+
+  it("names a saved server's memory, not this computer's, when rating its entered specs", () => {
+    stub(10.5);
+    expect(fitFromArch(DENSE, 4 * GIB, cpu(16), 16384, { where: 'server' }).detail).toMatch(
+      /: about 10\.5 GiB of the 11 GiB a model can use on that server\. .* Close other apps on that server first, or it may slow down\.$/
+    );
+    stub(13, { fits: false });
+    const tooLarge = fitFromArch(DENSE, 4 * GIB, cpu(16), 16384, { where: 'server' }).detail;
+    expect(tooLarge).toContain('more than the 11 GiB that server can hold for a model');
+    expect(tooLarge).not.toContain('this computer');
+  });
+
+  it('names GPU memory and the right place when a machine with a GPU is rated', () => {
+    const hardware = gpu(12, 32);
+    stub(5);
+    expect(fitFromArch(DENSE, 4 * GIB, hardware, 16384).detail).toMatch(
+      /of the [\d.]+ GiB of GPU memory a model can use here\.$/
+    );
+    for (const total of [5, 10.5]) {
+      stub(total);
+      const server = fitFromArch(DENSE, 4 * GIB, hardware, 16384, { where: 'server' }).detail;
+      expect(server).toContain('of GPU memory a model can use on that server');
+      expect(server).not.toMatch(/\bhere\b|this computer/);
+    }
+    stub(20, { fits: false });
+    const tooLarge = fitFromArch(DENSE, 4 * GIB, hardware, 16384, { where: 'server' }).detail;
+    expect(tooLarge).not.toMatch(/\bhere\b|this computer/);
+  });
+
+  it('says most of it runs on the CPU when most of the weights are in system RAM', () => {
+    const memory = (offloadedGiB: number) => ({
+      weightsBytes: (8 - offloadedGiB) * GIB,
+      offloadedBytes: offloadedGiB * GIB,
+    });
+    stub(10, { placement: 'layer-offload', memory: memory(5) });
+    const most = fitFromArch(DENSE, 8 * GIB, gpu(8, 32), 16384);
+    expect(most.level).toBe('tight');
+    expect(most.detail).toContain(
+      'only with most of it in system RAM, so most of it runs on the CPU and replies will be slow'
+    );
+    stub(10, { placement: 'layer-offload', memory: memory(3) });
+    expect(fitFromArch(DENSE, 8 * GIB, gpu(8, 32), 16384).detail).toContain('only with part of it in system RAM');
+  });
+
   it.each(['layer-offload', 'expert-offload'] as const)('is tight when the plan is %s', placement => {
     stub(10, { placement });
     const fit = fitFromArch(DENSE, 4 * GIB, gpu(8, 32), 16384);
@@ -167,7 +226,8 @@ describe('fitFromSize', () => {
           const machine = usable + actualCommon.memoryBudgets(hardware).ramPool;
           expect(fit).toMatchObject({ level: shared.level, basis: 'size', context });
           expect(fit.detail).toContain(`about ${formatMemory(shared.needBytes)} before`);
-          if (shared.level === 'too-large' && shared.needBytes > machine)
+          const roomOnly = shared.needBytes <= machine && shared.offloadBytes <= size;
+          if (shared.level === 'too-large' && (shared.needBytes > machine || roomOnly))
             expect(fit.detail).toContain(`the ${formatMemory(machine)} this computer can hold for a model`);
           else expect(fit.detail).toContain(`the ${formatMemory(usable)} `);
           expect(fit.detail.includes('Close other apps')).toBe(shared.level === 'tight');
@@ -190,7 +250,13 @@ describe('fitFromSize', () => {
     ['fits', ', of the 10 GiB', sized({})],
     ['tight', ', close to the 10 GiB', sized({ level: 'tight' })],
     ['tight', 'part of it runs from system RAM', sized({ level: 'tight', offloadBytes: GIB })],
-    ['too-large', ', more than the 10 GiB of GPU memory', sized({ level: 'too-large', offloadBytes: GIB })],
+    ['tight', 'most of it runs on the CPU', sized({ level: 'tight', offloadBytes: 2 * GIB })],
+    ['too-large', ', more than the 10 GiB of GPU memory', sized({ level: 'too-large', offloadBytes: 4 * GIB })],
+    [
+      'too-large',
+      ', too much of the 32.4 GiB this computer can hold for a model to leave room',
+      sized({ level: 'too-large', offloadBytes: GIB }),
+    ],
   ])('words a %s verdict with "%s"', (level, phrase, verdict) => {
     vi.mocked(estimateFitFromSize).mockReturnValue(verdict);
     const fit = fitFromSize(3 * GIB, gpu(12, 32), 16384);
@@ -211,6 +277,28 @@ describe('fitFromSize', () => {
     expect(offload.level).toBe('tight');
     expect(offload.detail).toContain('system RAM');
     expect(fitFromSize(30 * GIB, gpu(8, 32), 16384).level).toBe('too-large');
+  });
+
+  it("names a saved server's memory, not this computer's, when rating its entered specs", () => {
+    vi.mocked(estimateFitFromSize).mockReturnValueOnce(sized({ level: 'tight' }));
+    expect(fitFromSize(3 * GIB, gpu(12, 32), 16384, { where: 'server' }).detail).toMatch(
+      / Close other apps on that server first, or it may slow down\.$/
+    );
+    vi.mocked(estimateFitFromSize).mockReturnValueOnce(sized({ level: 'too-large', needBytes: 40 * GIB }));
+    const tooLarge = fitFromSize(3 * GIB, gpu(12, 32), 16384, { where: 'server' }).detail;
+    expect(tooLarge).toContain('more than the 32.4 GiB that server can hold for a model');
+    expect(tooLarge).not.toContain('this computer');
+  });
+
+  it('names GPU memory and the right place in the size-only budget', () => {
+    const gpuWording = fitFromSize(3 * GIB, gpu(12, 32), 16384, { where: 'server' }).detail;
+    vi.mocked(estimateFitFromSize).mockReturnValueOnce(sized({ level: 'fits' }));
+    const fits = fitFromSize(3 * GIB, gpu(12, 32), 16384, { where: 'server' }).detail;
+    expect(fits).toContain('of GPU memory a model can use on that server');
+    expect(fits).not.toMatch(/\bhere\b|this computer/);
+    expect(gpuWording).not.toMatch(/\bhere\b|this computer/);
+    vi.mocked(estimateFitFromSize).mockReturnValueOnce(sized({ level: 'fits' }));
+    expect(fitFromSize(3 * GIB, gpu(12, 32), 16384).detail).toContain('of GPU memory a model can use here');
   });
 
   it('says the context is an upper bound when the model limit is unknown', () => {
@@ -301,6 +389,59 @@ describe('on a 16 GB unified-memory Mac', () => {
     expect(limit).toBe(11);
     expect(need).toBeGreaterThan(limit);
     expect(fit.detail).not.toContain('Close other apps');
+  });
+
+  it.each([9.48, 9.52, 9.56])(
+    'names the limit a %d GiB load is past when only its layer split runs out of room',
+    weightsGiB => {
+      const fit = fitFromArch(QWEN38_27B, weightsGiB * GIB, MAC16, 16384);
+      expect(fit.level).toBe('too-large');
+      expect(fit.detail).toContain('this computer can hold for a model');
+      expect(fit.detail).not.toContain('of GPU memory');
+      const [need, limit] = shown(fit.detail);
+      expect(need).toBeGreaterThan(limit);
+    }
+  );
+});
+
+describe('on AMD unified memory', () => {
+  const amd = (ramGiB: number, deviceGiB: number): HardwareProfile => ({
+    platform: 'linux',
+    arch: 'x64',
+    memoryKind: 'unified',
+    totalMemoryBytes: ramGiB * GIB,
+    gpuMemoryBytes: deviceGiB * GIB,
+    gpuName: 'Radeon 8060S',
+    gpuCount: 1,
+    gpuVendor: 'amd',
+    chip: null,
+    diskFreeBytes: null,
+    confidence: 'high',
+  });
+  const DENSE_70B: ModelArch = {
+    contextMax: 131072,
+    blockCount: 80,
+    headCount: 64,
+    embeddingLength: 8192,
+    activeFeedForwardLength: 28672,
+    full: { layers: 80, kvHeads: 8, keyLength: 128, valueLength: 128 },
+    mtpLayers: 0,
+  };
+
+  beforeEach(() => {
+    vi.mocked(estimateFit).mockImplementation(actualCommon.estimateFit);
+  });
+
+  it('says most of it runs on the CPU when a small GPU carve-out leaves most weights in system RAM', () => {
+    const fit = fitFromArch(DENSE_70B, 40 * GIB, amd(64, 16), 16384);
+    expect(fit.level).toBe('tight');
+    expect(fit.detail).toContain('most of it runs on the CPU and replies will be slow');
+  });
+
+  it('keeps the part-of-it wording while most weights stay on the GPU', () => {
+    const fit = fitFromArch(DENSE_70B, 80 * GIB, amd(125, 62), 16384);
+    expect(fit.level).toBe('tight');
+    expect(fit.detail).toContain('only with part of it in system RAM');
   });
 });
 

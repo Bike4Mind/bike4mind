@@ -696,6 +696,35 @@ describe('contextOptions', () => {
   });
 });
 
+describe('estimateFit requested past the RAM pool', () => {
+  it('reports the layer split it refused, whose host copy can put it past the pool when the GPU plan is not', () => {
+    const mac16 = machine('unified', 16);
+    const { gpu, ramPool } = memoryBudgets(mac16);
+    const machineBytes = gpu + ramPool - fitMarginBytes(mac16);
+    const requested = estimateFit({
+      model: { arch: QWEN38_27B, weightsBytes: 9.5 * GIB },
+      hardware: mac16,
+      mode: 'chat',
+      runtime: OLLAMA,
+      context: 16384,
+    }).requested!;
+    expect(requested).toMatchObject({ fits: false, placement: 'layer-offload' });
+    expect(requested.memory.totalBytes).toBeGreaterThan(machineBytes);
+    expect(requested.memory.offloadedBytes).toBeGreaterThan(ramPool);
+  });
+
+  it('keeps the GPU plan when a split would need more than the weights in RAM', () => {
+    const requested = estimateFit({
+      model: { arch: ARCH_64K, weightsBytes: GIB },
+      hardware: machine('discrete', 64, 4),
+      mode: 'chat',
+      runtime: OLLAMA,
+      context: 131072,
+    }).requested!;
+    expect(requested).toMatchObject({ fits: false, placement: 'gpu' });
+  });
+});
+
 describe('memoryBudgets', () => {
   it('gives a CPU-only machine a share of its RAM and a discrete GPU its VRAM plus a RAM pool', () => {
     expect(memoryBudgets(machine('cpu', 128))).toEqual({ gpu: 96 * GIB, ramPool: 0, cpuOnly: true });
@@ -750,6 +779,43 @@ describe('estimateFitFromSize', () => {
     expect(split.offloadBytes).toBeGreaterThan(6 * GIB);
     expect(estimateFitFromSize(100 * GIB, rig, 16384).level).toBe('too-large');
   });
+
+  it('keeps the context room a resident fit keeps when it splits into system RAM', () => {
+    const rig = machine('discrete', 64, 24);
+    expect(estimateFitFromSize(55 * GIB, rig, 16384).level).toBe('tight');
+    // Within the 44.8 GiB pool, but not with a fifth of the GPU left for the cache.
+    const near = estimateFitFromSize(60 * GIB, rig, 16384);
+    expect(near.offloadBytes).toBeLessThan(memoryBudgets(rig).ramPool);
+    expect(near.level).toBe('too-large');
+  });
+
+  // A dense 14B: 48 layers of 8 KV heads at 128, so 16K of f16 cache is 3 GiB the size alone cannot see.
+  const DENSE_14B = arch({
+    contextMax: 131072,
+    blockCount: 48,
+    headCount: 40,
+    embeddingLength: 5120,
+    activeFeedForwardLength: 13824,
+    full: { layers: 48, kvHeads: 8, keyLength: 128, valueLength: 128 },
+  });
+
+  it.each([16384, 32768])(
+    'does not call a file past the GPU part of a 16 GB Mac tight when its arch says it will not load (%i)',
+    context => {
+      const mac16 = machine('unified', 16);
+      const sizeOnly = estimateFitFromSize(9 * GIB, mac16, context);
+      const withArch = estimateFit({
+        model: { arch: DENSE_14B, weightsBytes: 9 * GIB },
+        hardware: mac16,
+        mode: 'chat',
+        runtime: OLLAMA,
+        context,
+      }).requested!;
+      expect(sizeOnly.offloadBytes).toBeGreaterThan(0);
+      expect(withArch.fits).toBe(false);
+      expect(sizeOnly.level).toBe('too-large');
+    }
+  );
 
   it('needs more at a longer context', () => {
     const short = estimateFitFromSize(4 * GIB, cpu128, 8192);
