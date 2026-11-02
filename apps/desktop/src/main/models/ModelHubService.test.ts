@@ -1086,7 +1086,8 @@ describe('ModelHubService entered hardware', () => {
     expect(remote.runtime.inspect).toHaveBeenCalledWith('small:latest', { tags: false });
     expect(local.runtime.inspect).not.toHaveBeenCalled();
     const detailed = await service.detail(REPO, 'a');
-    expect(detailed.ok && detailed.model.builds[0].fit?.detail).toContain('16 GiB');
+    // The 16 GiB GPU less its 2 GiB margin.
+    expect(detailed.ok && detailed.model.builds[0].fit?.detail).toContain('14 GiB');
   });
 
   it("puts this computer's entered memory in place of its probe", async () => {

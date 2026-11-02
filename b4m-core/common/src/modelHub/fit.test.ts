@@ -84,8 +84,9 @@ const MOE_64K = arch({ ...ARCH_64K, blockCount: 40, moe: { experts: 128, used: 8
 
 const LS = { kind: 'llama-server', flashAttn: 'on' } as const;
 const OLLAMA = { kind: 'ollama' } as const;
+/** A working set as large as the OS reserve allows, so nothing can load past it. */
 const mac = (budgetGiB: number): HardwareProfile => ({
-  ...machine('unified', 128),
+  ...machine('unified', budgetGiB / FIT_CONSTANTS.cpuFraction),
   gpuWorkingSetBytes: budgetGiB * GIB,
 });
 /** Strix Halo: RAM the OS sees and the device memory ROCm reports. */
@@ -534,7 +535,30 @@ describe('estimateFit', () => {
     expect(fit({ hardware: strix(31, 96) }).memory.budgetBytes).toBe(96 * GIB);
     expect(fit({ hardware: strix(125, 62) }).memory.budgetBytes).toBe(62 * GIB);
     expect(fit({ hardware: strix(31, 96), weightsGiB: 60, runtime: OLLAMA })).toMatchObject({ verdict: 'fast' });
-    expect(fit({ hardware: strix(125, 62), weightsGiB: 70, runtime: OLLAMA })).toMatchObject({ verdict: 'too-large' });
+    // Past the 62 GiB device, layers load on the CPU up to 3/4 of the RAM the OS sees.
+    expect(fit({ hardware: strix(125, 62), weightsGiB: 70, runtime: OLLAMA })).toMatchObject({
+      verdict: 'slow',
+      reason: 'layer-offload',
+    });
+    expect(fit({ hardware: strix(125, 62), weightsGiB: 100, runtime: OLLAMA })).toMatchObject({ verdict: 'too-large' });
+  });
+
+  it('loads past the GPU part of unified memory only when nothing fits all on the GPU, within the OS reserve', () => {
+    const m16 = machine('unified', 16);
+    expect(memoryBudgets(m16)).toEqual({ gpu: 16 * GIB * 0.66, ramPool: 16 * GIB * (0.75 - 0.66), cpuOnly: false });
+    expect(memoryBudgets(machine('unified', 64))).toMatchObject({ gpu: 48 * GIB, ramPool: 0 });
+    // 8.5 GiB of weights stays all-GPU below the floor rather than offloading at the target.
+    expect(fit({ hardware: m16, weightsGiB: 8.5, runtime: OLLAMA })).toMatchObject({
+      verdict: 'slow',
+      reason: 'below-floor',
+      placement: 'gpu',
+    });
+    const near = fit({ hardware: m16, weightsGiB: 9.5, runtime: OLLAMA, context: 8192 }).requested;
+    expect(near).toMatchObject({ fits: true, placement: 'layer-offload' });
+    expect(near!.memory.totalBytes + near!.memory.marginBytes).toBeLessThanOrEqual(12 * GIB);
+    expect(fit({ hardware: m16, weightsGiB: 11, runtime: OLLAMA, context: 8192 }).requested).toMatchObject({
+      fits: false,
+    });
   });
 
   it('plans a Windows Strix Halo carve-out machine from RAM, since its reported bytes are not the usable pool', () => {

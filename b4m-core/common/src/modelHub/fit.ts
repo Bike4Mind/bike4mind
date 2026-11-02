@@ -72,7 +72,11 @@ export const FIT_CONSTANTS = {
   unifiedSmallFraction: 0.66,
   // Tuned to the SELF_HOST.md RAM tiers, so partly circular until measured offload runs replace it.
   discreteOffloadRamFraction: 0.7,
+  // Of all RAM on a CPU-only machine; on unified memory, of the GPU part and the layers past it together.
   cpuFraction: 0.75,
+  // The vision encoder's compute buffer, a share of its projector: measured 0.43 on gemma4's and 0.28 on qwen3.8's
+  // (Ollama 0.40.11, CPU); a 16 GB M4 load of qwen3.8 implies about 0.36.
+  projectorComputeFraction: 0.45,
   // Query heads assumed for flash attention off when the arch has no headCount; at or above current families.
   faOffAssumedHeads: 128,
 } as const;
@@ -357,7 +361,7 @@ export function contextFloor(arch: ModelArch, mode: FitMode, contextCap?: number
 export interface MemoryBudgets {
   /** Bytes a model may use on the GPU, or in RAM on a CPU-only machine. */
   gpu: number;
-  /** System RAM layer or expert offload may spill into on a discrete GPU; 0 elsewhere. */
+  /** System RAM layer or expert offload may spill into: beside a discrete GPU, or past the GPU part of unified memory. */
   ramPool: number;
   cpuOnly: boolean;
 }
@@ -366,12 +370,14 @@ export function memoryBudgets(hw: HardwareProfile): MemoryBudgets {
   if (hw.memoryKind === 'unified') {
     // AMD reports what ROCm can allocate, which a firmware carve-out keeps outside totalMemoryBytes. hardwareClass in
     // tiers.ts classes the Curated tier by the same pool.
-    if (hw.gpuMemoryBytes) return { gpu: hw.gpuMemoryBytes, ramPool: 0, cpuOnly: false };
     const fraction =
       hw.totalMemoryBytes >= FIT_CONSTANTS.unifiedLargeMinBytes
         ? FIT_CONSTANTS.unifiedLargeFraction
         : FIT_CONSTANTS.unifiedSmallFraction;
-    return { gpu: hw.gpuWorkingSetBytes || hw.totalMemoryBytes * fraction, ramPool: 0, cpuOnly: false };
+    const gpu = hw.gpuMemoryBytes || hw.gpuWorkingSetBytes || hw.totalMemoryBytes * fraction;
+    // Layers past the GPU part load on the CPU from the same RAM, which keeps a CPU-only machine's OS reserve.
+    const ramPool = Math.max(0, hw.totalMemoryBytes * FIT_CONSTANTS.cpuFraction - gpu);
+    return { gpu, ramPool, cpuOnly: false };
   }
   if (hw.memoryKind === 'discrete' && hw.gpuMemoryBytes) {
     return {
@@ -428,6 +434,10 @@ class Planner {
     return this.budgets.cpuOnly;
   }
 
+  get unified(): boolean {
+    return this.input.hardware.memoryKind === 'unified';
+  }
+
   /** The plan as the runtime would load it at this context, for reporting when nothing fits. */
   unfit(context: number): FitPlan {
     if (this.budgets.cpuOnly) return this.plan(context, this.preferredKv, 'cpu');
@@ -463,14 +473,16 @@ class Planner {
     const ubatch = this.ubatch(context);
     const kvBytes = kvCacheBytes(model.arch, context, kv, this.slots, ubatch);
     const recurrentBytes = (model.arch.recurrent?.stateBytesPerSeq ?? 0) * this.slots * (1 + (runtime.draftMax ?? 0));
+    const mmprojBytes = model.mmprojBytes ?? 0;
     const computeBytes =
       computeBufferBytes(model, context, ubatch, {
         memoryKind: this.budgets.cpuOnly ? 'cpu' : hardware.memoryKind,
         flashAttnOff: runtime.flashAttn === 'off',
         slots: this.slots,
         devices: splitDevices(hardware),
-      }) + this.hostWeightCopyBytes(placement, nCpuMoe, ubatch);
-    const mmprojBytes = model.mmprojBytes ?? 0;
+      }) +
+      this.hostWeightCopyBytes(placement, nCpuMoe, ubatch) +
+      Math.ceil(mmprojBytes * FIT_CONSTANTS.projectorComputeFraction);
     const draftBytes = model.draftBytes ?? 0;
     const totalBytes = model.weightsBytes + mmprojBytes + draftBytes + kvBytes + recurrentBytes + computeBytes;
     let offloadedBytes = 0;
@@ -614,12 +626,17 @@ function search(planner: Planner, contexts: number[], target: number, floor: num
       const p = planner.expertOffload(context);
       if (p) return { ...p, ...frame, verdict: 'tight', reason: 'expert-offload' };
     }
-    for (const context of contexts) {
-      const p = planner.best(context);
-      if (!p) continue;
-      const reason = p.placement === 'gpu' ? 'below-floor' : p.placement;
-      return { ...p, ...frame, verdict: 'slow', reason: reason === 'cpu' ? 'cpu-only' : reason };
-    }
+    // Layers past unified memory's GPU part run at CPU speed, so any all-GPU context comes before them there.
+    const passes = planner.unified
+      ? [(c: number) => planner.resident(c), (c: number) => planner.best(c)]
+      : [(c: number) => planner.best(c)];
+    for (const place of passes)
+      for (const context of contexts) {
+        const p = place(context);
+        if (!p) continue;
+        const reason = p.placement === 'gpu' ? 'below-floor' : p.placement;
+        return { ...p, ...frame, verdict: 'slow', reason: reason === 'cpu' ? 'cpu-only' : reason };
+      }
   }
   const smallest = contexts[contexts.length - 1];
   return {
