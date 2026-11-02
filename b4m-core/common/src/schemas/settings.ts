@@ -3488,7 +3488,7 @@ export const settingsMap = {
     max: 1000000,
     int: true,
     description:
-      'Max files a Free-tier user may start uploading per hour, counted per file across every upload route (single and batch presign, direct upload, URL import, generated-image copy, re-chunk, reprocess and the public API). Admin-restricted users get this limit too. Set to 0 to block uploads for these users.',
+      'Max files a Free-tier user may start uploading per hour, counted per file on these upload routes: single and batch presign, direct upload, URL import, generated-image copy, re-chunk, reprocess and the public API. Admin-restricted users get this limit too. Set to 0 to block uploads for these users.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 7,
@@ -3501,7 +3501,7 @@ export const settingsMap = {
     max: 1000000,
     int: true,
     description:
-      'Max files a Basic or Pro subscriber may start uploading per hour, counted per file across every upload route. Admins and developer-tagged users are not limited. Set to 0 to block uploads for these users.',
+      'Max files a Basic or Pro subscriber may start uploading per hour, counted per file on the same upload routes as the Free limit. Admins and developer-tagged users are not limited. Set to 0 to block uploads for these users.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 8,
