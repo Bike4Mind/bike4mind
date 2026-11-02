@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
@@ -12,7 +12,6 @@ import Tabs from '@mui/joy/Tabs';
 import Typography from '@mui/joy/Typography';
 import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME, serverManagement, type ModelServerView } from '@shared/modelServers';
 import { OLLAMA_DOWNLOAD_URL, type ModelPull, type ModelRuntimeStatus } from '@shared/models';
-import { ExternalLink } from '../chat/ExternalLink';
 import { CloseIcon } from '../chat/icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/layout';
 import { CuratedTab } from './CuratedTab';
@@ -34,14 +33,76 @@ let rememberedServer = LOCAL_SERVER_ID;
 
 const dot = (color: string) => <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />;
 
+/** No Ollama answers on this computer: the two ways forward, neither of which installs anything by itself. */
+function NoLocalRuntime({
+  status,
+  address,
+  onRetry,
+  onOpenModelServers,
+}: {
+  status: ModelRuntimeStatus;
+  address: ReactNode;
+  onRetry: () => void;
+  onOpenModelServers?: () => void;
+}) {
+  return (
+    <Sheet
+      variant="soft"
+      sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}
+      data-testid="models-runtime-status"
+      data-state="down"
+    >
+      <Stack direction="row" alignItems="center" spacing={1}>
+        {dot('danger.500')}
+        <Typography level="title-sm">Ollama did not answer on this computer</Typography>
+      </Stack>
+      <Typography level="body-sm" sx={{ mt: 0.5 }} data-testid="models-no-runtime-text">
+        Local models run in Ollama, and Desktop got no answer from {address}. If it is not installed, install it; if it
+        is, start it or give it a moment. This checks again every few seconds. To use models on another machine instead,
+        point Desktop at its server.
+      </Typography>
+      {status.error && (
+        <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }} data-testid="models-no-runtime-error">
+          {status.error}
+        </Typography>
+      )}
+      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+        <Button
+          size="sm"
+          onClick={() => void window.b4m.shell.openExternal(OLLAMA_DOWNLOAD_URL)}
+          data-testid="models-install-ollama-btn"
+        >
+          Install Ollama
+        </Button>
+        {onOpenModelServers && (
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            onClick={onOpenModelServers}
+            data-testid="models-point-at-server-btn"
+          >
+            Point at a server
+          </Button>
+        )}
+        <Button size="sm" variant="plain" color="neutral" onClick={onRetry} data-testid="models-runtime-retry-btn">
+          Check again
+        </Button>
+      </Stack>
+    </Sheet>
+  );
+}
+
 function RuntimeStatusBar({
   status,
   target,
   onRetry,
+  onOpenModelServers,
 }: {
   status: ModelRuntimeStatus | null;
   target: ModelTarget;
   onRetry: () => void;
+  onOpenModelServers?: () => void;
 }) {
   if (!status)
     return (
@@ -68,21 +129,15 @@ function RuntimeStatusBar({
         </Typography>
       </Stack>
     );
+  if (target.local)
+    return (
+      <NoLocalRuntime status={status} address={address} onRetry={onRetry} onOpenModelServers={onOpenModelServers} />
+    );
   return (
     <Stack direction="row" alignItems="center" spacing={1} data-testid="models-runtime-status" data-state="down">
       {dot('danger.500')}
       <Typography level="body-sm" sx={{ flex: 1 }}>
-        {target.local ? (
-          <>
-            Ollama is not running on this computer. Start it, or install it from{' '}
-            <ExternalLink href={OLLAMA_DOWNLOAD_URL} testId="models-runtime-download-link">
-              ollama.com/download
-            </ExternalLink>
-            .
-          </>
-        ) : (
-          (status.error ?? `Could not reach ${target.name}.`)
-        )}
+        {status.error ?? `Could not reach ${target.name}.`}
       </Typography>
       <Button size="sm" variant="outlined" color="neutral" onClick={onRetry} data-testid="models-runtime-retry-btn">
         Check again
@@ -199,7 +254,16 @@ function targetOf(serverId: string, servers: ModelServerView[] | null, status: M
 }
 
 /** Open models on this computer or a saved server: a curated list, what is installed, and GGUF builds to download. */
-export function ModelsScreen({ onClose, inUse }: { onClose: () => void; inUse?: ModelsInUse }) {
+export function ModelsScreen({
+  onClose,
+  inUse,
+  onOpenModelServers,
+}: {
+  onClose: () => void;
+  inUse?: ModelsInUse;
+  /** Settings, Model servers: where a server on another machine is added. */
+  onOpenModelServers?: () => void;
+}) {
   const servers = useModelServers();
   const [chosenServer, setChosenServer] = useState(rememberedServer);
   // A server removed in Settings falls back to this computer.
@@ -283,7 +347,12 @@ export function ModelsScreen({ onClose, inUse }: { onClose: () => void; inUse?: 
           </TabList>
         </Box>
         <Box sx={{ ...screenColumnSx, pb: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <RuntimeStatusBar status={status} target={target} onRetry={() => void hub.refresh()} />
+          <RuntimeStatusBar
+            status={status}
+            target={target}
+            onRetry={() => void hub.refresh()}
+            onOpenModelServers={onOpenModelServers}
+          />
           {note && (
             <Typography level="body-sm" textColor="text.tertiary" data-testid="models-manage-note">
               {note}
