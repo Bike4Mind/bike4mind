@@ -9,6 +9,12 @@
 
     static let api: any B4MAPI = FixtureAPI()
     static let realtime = FixtureRealtime()
+    static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
+
+    private struct NoopPushTokenAPI: PushTokenAPI {
+      func registerPushToken(_ token: String, environment: PushEnvironment, appVersion: String?) async throws {}
+      func unregisterPushToken(_ token: String) async throws {}
+    }
 
     private struct FixtureAPI: B4MAPI {
       private static let now = Date()

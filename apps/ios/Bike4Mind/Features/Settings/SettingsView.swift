@@ -3,12 +3,18 @@ import SwiftUI
 
 struct SettingsView: View {
   @Environment(AuthController.self) private var auth
+  @Environment(AppServices.self) private var services
   @State private var isConfirmingSignOut = false
 
   var body: some View {
     @Bindable var auth = auth
     Form {
       CreditsSection()
+
+      Section {
+        NavigationLink("Notifications") { NotificationSettingsView() }
+          .accessibilityIdentifier("settings-notifications-link")
+      }
 
       Section {
         Toggle("App Lock", isOn: $auth.isAppLockEnabled)
@@ -34,7 +40,11 @@ struct SettingsView: View {
     .navigationTitle("Settings")
     .confirmationDialog("Sign out of Bike4Mind?", isPresented: $isConfirmingSignOut, titleVisibility: .visible) {
       Button("Sign Out", role: .destructive) {
-        Task { await auth.signOut() }
+        Task {
+          // The unregister call needs a live session, so it runs before the session is torn down.
+          await services.push.unregisterBeforeSignOut()
+          await auth.signOut()
+        }
       }
     }
   }

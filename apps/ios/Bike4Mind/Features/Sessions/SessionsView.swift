@@ -9,6 +9,9 @@ struct SessionsView: View {
     SessionsListScreen(api: services.api, cache: services.sessionListCache)
       .navigationDestination(for: SessionSummary.self) { session in
         SessionDetailView(session: session)
+          // Opening a conversation is the first moment the app has shown the user value, so this is
+          // when the one-time system notification prompt appears.
+          .task { await services.push.userDidReachValueMoment() }
       }
   }
 }
