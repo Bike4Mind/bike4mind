@@ -6,7 +6,7 @@ struct SessionsView: View {
   @Environment(AppServices.self) private var services
 
   var body: some View {
-    SessionsListScreen(api: services.api, cache: services.sessionListCache)
+    SessionsListScreen(api: services.api, cache: services.sessionListCache, captureJobs: services.capture.jobs)
       .navigationDestination(for: SessionSummary.self) { session in
         SessionDetailView(session: session)
           // Opening a conversation is the first moment the app has shown the user value, so this is
@@ -18,20 +18,31 @@ struct SessionsView: View {
 
 private struct SessionsListScreen: View {
   @State private var model: SessionsViewModel
+  @State private var captureJobs: CaptureJobsViewModel
   @Environment(AppServices.self) private var services
+  @Environment(\.scenePhase) private var scenePhase
 
-  init(api: any B4MAPI, cache: any SessionListCache) {
+  init(api: any B4MAPI, cache: any SessionListCache, captureJobs: any CaptureJobTracking) {
     _model = State(initialValue: SessionsViewModel(api: api, cache: cache))
+    _captureJobs = State(initialValue: CaptureJobsViewModel(tracker: captureJobs))
   }
 
   var body: some View {
     content
       .navigationTitle("Sessions")
       .toolbar {
+        if captureJobs.isVisible {
+          ToolbarItem(placement: .topBarLeading) { CaptureJobsChip(model: captureJobs) }
+        }
         ToolbarItem(placement: .primaryAction) { CaptureMenu() }
         ToolbarItem(placement: .primaryAction) { newConversationButton }
       }
       .task { await model.load() }
+      .task { await captureJobs.observe() }
+      .onChange(of: scenePhase) { _, phase in
+        // The share extension queues jobs in another process, which the engine's stream cannot see.
+        if phase == .active { Task { await captureJobs.reload() } }
+      }
       .refreshable { await model.refresh() }
   }
 

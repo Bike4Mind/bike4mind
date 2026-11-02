@@ -5,6 +5,8 @@ import Foundation
 public struct CaptureStack: Sendable {
   /// `nil` in fixture mode: there is nothing to resume or reattach.
   public let engine: CaptureEngine?
+  /// What the upload indicator watches: the engine, or scripted jobs in fixture mode.
+  public let jobs: any CaptureJobTracking
   public let destinations: any DestinationSource
   public let submitter: any CaptureSubmitting
   public let transcription: any TranscriptionService
@@ -12,9 +14,11 @@ public struct CaptureStack: Sendable {
 
   public init(
     engine: CaptureEngine?, destinations: any DestinationSource, submitter: any CaptureSubmitting,
-    transcription: any TranscriptionService, destinationStore: any DestinationStore
+    transcription: any TranscriptionService, destinationStore: any DestinationStore,
+    jobs: any CaptureJobTracking
   ) {
     self.engine = engine
+    self.jobs = jobs
     self.destinations = destinations
     self.submitter = submitter
     self.transcription = transcription
@@ -37,14 +41,14 @@ public struct CaptureStack: Sendable {
       destinations: RemoteDestinationSource(capture: capture, api: APIClient(baseURL: baseURL, tokens: tokens)),
       submitter: engine,
       transcription: TranscriptionClient(baseURL: baseURL, tokens: tokens),
-      destinationStore: destinationStore)
+      destinationStore: destinationStore, jobs: engine)
   }
 
   /// Offline stand-ins for `B4M_UI_FIXTURES=1`.
   public static func fixture(destinationStore: any DestinationStore = InMemoryDestinationStore()) -> CaptureStack {
     CaptureStack(
       engine: nil, destinations: CaptureFixtures.destinationSource, submitter: CaptureFixtures.submitter,
-      transcription: CaptureFixtures.transcription, destinationStore: destinationStore)
+      transcription: CaptureFixtures.transcription, destinationStore: destinationStore, jobs: CaptureFixtures.jobs)
   }
 
   @MainActor

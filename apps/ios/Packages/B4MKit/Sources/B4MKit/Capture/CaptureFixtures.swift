@@ -9,7 +9,9 @@ public enum CaptureFixtures {
   ]
 
   public static let destinationSource: any DestinationSource = FixtureDestinationSource()
-  public static let submitter: any CaptureSubmitting = FixtureSubmitter()
+  /// Both the submitter and the job tracker, so a fixture send shows up in the app's upload indicator.
+  public static let jobs = FixtureCaptureJobs()
+  public static let submitter: any CaptureSubmitting = jobs
   public static let transcription: any TranscriptionService = FixtureTranscription()
   public static let recorder: any AudioRecording = FixtureRecorder()
 
@@ -22,18 +24,6 @@ public enum CaptureFixtures {
         SessionSummary(
           id: "fixture-\(index)", name: name, lastUsedModel: nil,
           firstCreated: now.addingTimeInterval(-86_400), lastUpdated: now.addingTimeInterval(-Double(index) * 3_600))
-      }
-    }
-  }
-
-  private struct FixtureSubmitter: CaptureSubmitting {
-    func submit(_ items: [ShareItem], to destination: CaptureDestination, note: String?) async throws -> [UploadJob] {
-      try? await Task.sleep(for: .milliseconds(600))
-      return items.map { item in
-        var job = UploadJob(
-          destination: destination, payload: .message(item.displayName), note: note, now: Date())
-        job.stage = .done
-        return job
       }
     }
   }
@@ -57,5 +47,82 @@ public enum CaptureFixtures {
     }
 
     func cancel() async {}
+  }
+}
+
+/// Scripted capture jobs for `B4M_UI_FIXTURES=1`: every submitted item walks `queued`, `uploading`,
+/// `registering` and `done`, one stage per `stepDelay`. The first send to the Receipts lake fails while
+/// uploading ("No connection."), so the failed state and its retry can be seen; retrying succeeds.
+public actor FixtureCaptureJobs: CaptureSubmitting, CaptureJobTracking {
+  private let submitDelay: Duration
+  private let stepDelay: Duration
+  private var stored: [UploadJob] = []
+  private var alreadyFailed: Set<UUID> = []
+  private var observers: [UUID: AsyncStream<[UploadJob]>.Continuation] = [:]
+
+  public init(submitDelay: Duration = .milliseconds(600), stepDelay: Duration = .milliseconds(2_500)) {
+    self.submitDelay = submitDelay
+    self.stepDelay = stepDelay
+  }
+
+  public func submit(
+    _ items: [ShareItem], to destination: CaptureDestination, note: String?
+  ) async throws -> [UploadJob] {
+    try? await Task.sleep(for: submitDelay)
+    let created = items.map {
+      UploadJob(destination: destination, payload: .message($0.displayName), note: note, now: Date())
+    }
+    stored += created
+    notify()
+    for job in created { Task { await run(job.id) } }
+    return created
+  }
+
+  public func jobs() -> [UploadJob] { stored }
+
+  public func updates() -> AsyncStream<[UploadJob]> {
+    let (stream, continuation) = AsyncStream<[UploadJob]>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    let id = UUID()
+    observers[id] = continuation
+    continuation.yield(stored)
+    continuation.onTermination = { [weak self] _ in
+      Task { await self?.removeObserver(id) }
+    }
+    return stream
+  }
+
+  public func retry(jobID: UUID) async {
+    guard set(jobID, stage: .queued, error: nil, onlyIf: .failed) else { return }
+    await run(jobID)
+  }
+
+  private func run(_ id: UUID) async {
+    for stage in [UploadStage.uploading, .registering, .done] {
+      try? await Task.sleep(for: stepDelay)
+      guard let job = stored.first(where: { $0.id == id }), job.stage != .failed else { return }
+      if stage == .uploading, job.destination.id == Self.flakyDestinationID, alreadyFailed.insert(id).inserted {
+        set(id, stage: .failed, error: "No connection.")
+        return
+      }
+      set(id, stage: stage, error: nil)
+    }
+  }
+
+  private static let flakyDestinationID = CaptureDestination.lake(id: "fixture-lake-receipts", name: "").id
+
+  @discardableResult
+  private func set(_ id: UUID, stage: UploadStage, error: String?, onlyIf required: UploadStage? = nil) -> Bool {
+    guard let index = stored.firstIndex(where: { $0.id == id }) else { return false }
+    if let required, stored[index].stage != required { return false }
+    stored[index].stage = stage
+    stored[index].lastError = error
+    notify()
+    return true
+  }
+
+  private func removeObserver(_ id: UUID) { observers[id] = nil }
+
+  private func notify() {
+    for continuation in observers.values { continuation.yield(stored) }
   }
 }
