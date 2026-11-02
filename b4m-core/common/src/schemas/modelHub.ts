@@ -33,7 +33,11 @@ function isPublicHttpsUrl(value: string): boolean {
   );
 }
 
-const HttpsUrlSchema = z.string().max(2048).refine(isPublicHttpsUrl, 'Invalid URL');
+const HttpsUrlSchema = z
+  .string()
+  .max(2048)
+  .regex(/^https:\/\//)
+  .refine(isPublicHttpsUrl, 'Invalid URL');
 const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const CommitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
 const ByteCountSchema = z.number().int().positive().max(MAX_BYTES);
@@ -44,22 +48,22 @@ const SlugSchema = z
 const HfRepoSchema = z
   .string()
   .max(200)
-  .regex(/^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/);
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 // One optional subdir for split ladders (UD-Q4_K_XL/) and sidecars (MTP/); no segment starts with a dot or dash.
 const RepoPathSchema = z
   .string()
   .max(200)
-  .regex(/^(?:\w[\w.-]*\/)?\w[\w.-]*\.gguf$/);
+  .regex(/^(?:[A-Za-z0-9_][A-Za-z0-9_.-]*\/)?[A-Za-z0-9_][A-Za-z0-9_.-]*\.gguf$/);
 const OllamaLibRefSchema = z
   .string()
   .max(128)
-  .regex(/^[a-z0-9][a-z0-9._-]*:[a-z0-9][\w.-]*$/);
+  .regex(/^[a-z0-9][a-z0-9._-]*:[a-z0-9][A-Za-z0-9_.-]*$/);
 // Ollama renderer/parser ids such as qwen3.5, gemma4 or nemotron-3.5-nano.
 const OllamaNameSchema = z
   .string()
   .max(32)
   .regex(/^[a-z0-9][a-z0-9.-]*$/);
-const SemverSchema = z.string().regex(/^\d{1,4}\.\d{1,4}\.\d{1,4}$/);
+const SemverSchema = z.string().regex(/^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$/);
 const RuntimeVersionSchema = z.string().min(1).max(32);
 const CountSchema = z.number().int().nonnegative().max(1e6);
 const TotalSchema = z.number().int().positive().max(1e6);
@@ -266,7 +270,7 @@ const RoutingSchema = z.object({
 const ToolCallSchema = z.object({ exact: CountSchema, nearMiss: CountSchema, malformed: CountSchema, of: TotalSchema });
 
 const OwnEvalSchema = z.object({
-  suite: z.string().regex(/^b4m-local-v\d{1,4}$/),
+  suite: z.string().regex(/^b4m-local-v[0-9]{1,4}$/),
   hardware: SlugSchema,
   runtime: HubRuntimeSchema,
   runtimeVersion: RuntimeVersionSchema,
@@ -369,7 +373,7 @@ const LineageSchema = z.object({
     .default([]),
   // Merge inputs and transplant donors.
   parents: z.array(HfRepoSchema).max(8).default([]),
-  producer: z.object({ name: z.string().regex(/^[\w.-]{1,64}$/), tier: z.enum(PRODUCER_TIERS) }),
+  producer: z.object({ name: z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/), tier: z.enum(PRODUCER_TIERS) }),
 });
 
 const SamplingSchema = z.object({

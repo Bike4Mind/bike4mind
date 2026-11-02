@@ -26,6 +26,7 @@ function saved(kind: ModelServerKind, access: ModelServerAccess): ModelServerVie
     name: 'gpu box',
     local: false,
     kind,
+    transport: 'http',
     address: 'http://192.168.1.20:11434',
     access,
     auth: { type: 'none' },
@@ -70,6 +71,7 @@ function server(overrides: Partial<ModelServerView>): ModelServerView {
     name: 'gpu box',
     local: false,
     kind: 'ollama',
+    transport: 'http',
     address: 'https://gpu.example.test',
     access: 'chat',
     auth: { type: 'none' },
@@ -176,6 +178,31 @@ describe('ModelServersSettings add form', () => {
     await type('model-servers-add-address-input', 'https://b.example.test');
     await act(async () => answer(openServer('https://a.example.test', 'a')));
     expect(document.querySelector('[data-testid="model-servers-add-name-input"]')).toBeNull();
+  });
+});
+
+describe('ModelServersSettings SSH servers', () => {
+  it('tests an SSH destination with no credential fields or kind choice', async () => {
+    const probe = vi.fn(async () => ({ ...openServer('me@gpu', 'gpu'), openToAnyone: false }));
+    await mount([], probe);
+    expect(document.querySelector('[data-testid="model-servers-add-auth-select"]')).not.toBeNull();
+    await click('model-servers-add-via-ssh');
+    expect(document.querySelector('[data-testid="model-servers-add-auth-select"]')).toBeNull();
+    await type('model-servers-add-address-input', 'me@gpu');
+    await click('model-servers-add-test-btn');
+    expect(probe).toHaveBeenCalledWith({ address: 'me@gpu', credential: { type: 'none' }, transport: 'ssh' });
+    expect(element<HTMLInputElement>('model-servers-add-name-input').value).toBe('gpu');
+    expect(document.querySelector('[data-testid="model-servers-add-kind-select"]')).toBeNull();
+    expect(element<HTMLButtonElement>('model-servers-add-save-btn').disabled).toBe(false);
+  });
+
+  it('marks a saved SSH server and offers no credentials or kind change for it', async () => {
+    await mount([server({ transport: 'ssh', address: 'me@gpu' })]);
+    expect(element('model-servers-ssh-chip').textContent).toBe('SSH');
+    expect(element('model-servers-address').textContent).toBe('me@gpu');
+    expect(document.querySelector('[data-testid="model-servers-credentials-btn"]')).toBeNull();
+    expect(document.querySelector('[data-testid="model-servers-kind-select"]')).toBeNull();
+    expect(document.querySelector('[data-testid="model-servers-access-select"]')).not.toBeNull();
   });
 });
 
