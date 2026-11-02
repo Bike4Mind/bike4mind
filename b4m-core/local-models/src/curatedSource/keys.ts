@@ -1,6 +1,6 @@
-import { parseCuratedKey, type CuratedKey } from '@bike4mind/local-models';
-// Also read as plain JSON from origin/main by packages/scripts/src/curatedCatalog/publishCurated.ts.
-import keyring from './keys.json';
+import { parseCuratedKey, type CuratedKey } from '../curatedSignature';
+// The one keyring Desktop, the CLI and packages/scripts curatedCatalog read; curated:publish reads it from main.
+import keyring from '../../../../catalog/model-hub/keys.json';
 
 /**
  * The production keys this build trusts for the Bike4Mind list. Empty until the owner generates them, which keeps

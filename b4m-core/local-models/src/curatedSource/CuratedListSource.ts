@@ -5,9 +5,7 @@ import {
   parseCuratedSignatureFile,
   verifyCurated,
   type CuratedKey,
-} from '@bike4mind/local-models';
-import type { CuratedCheckStatus, CuratedListSettings, CuratedSourceView } from '@shared/models';
-import { loadCuratedManifest } from '../loadCuratedManifest';
+} from '../curatedSignature';
 import { CuratedStore, type CuratedCheckState } from './CuratedStore';
 import { fetchCurated, type CuratedFetchResult } from './fetchCurated';
 
@@ -18,15 +16,39 @@ export const CURATED_BACKOFF_BASE_MS = 15 * 60 * 1000;
 const STALE_LIST_AGE_MS = 180 * DAY_MS;
 const STALE_CHECK_AGE_MS = 7 * DAY_MS;
 
-export interface CuratedSourceDeps {
+// apps/desktop/src/shared/models.ts mirrors these three for the renderer; keep them in sync.
+export type CuratedCheckStatus = 'off' | 'idle' | 'checking' | 'up-to-date' | 'updated' | 'failed';
+
+export interface CuratedSourceView {
+  /** The list shown: the bundled one, or a newer signed one that was downloaded. */
+  origin: 'bundled' | 'updated';
+  sequence: number | null;
+  check: CuratedCheckStatus;
+  /** The last check that reached the list, as an ISO time; null before the first. */
+  checkedAt: string | null;
+  /** The list is over 180 days old and no check has succeeded in 7 days; information only. */
+  stale: boolean;
+}
+
+export interface CuratedListSettings {
+  /** This build has a list URL and a key it trusts; without both it only has the bundled list. */
+  available: boolean;
+  /** The user lets the client check for an updated list. */
+  enabled: boolean;
+}
+
+export interface CuratedListSourceDeps {
   /** The resolved list URL (`.../latest.json`); null for a build that only has its bundled list. */
   url: string | null;
   /** Keys trusted for this source. With none, nothing is fetched. */
   keys: readonly CuratedKey[];
   store: CuratedStore;
   bundledText: string;
-  desktopVersion?: string;
+  /** Reads a list the envelope check passed, never throwing; the client's own entry filters go here. */
+  load: (json: unknown) => HubManifest;
   allowLoopbackHttp: boolean;
+  /** Sent on every request, naming the client and nothing about the install. */
+  userAgent: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
   now?: () => number;
@@ -53,11 +75,11 @@ const sameBytes = (a: Uint8Array, b: Uint8Array | null) =>
   b !== null && a.byteLength === b.byteLength && a.every((byte, i) => byte === b[i]);
 
 /**
- * The Curated tab's list: the bundled copy, or a newer verified one from the baked URL, checked when Models opens
- * and is due or on Check now. Nothing here throws: a failure keeps the current list and logs why.
+ * The curated list a client shows: the bundled copy, or a newer verified one from the baked URL, checked when due or
+ * on demand. Nothing here throws: a failure keeps the current list and logs why. Shared by Desktop and the CLI.
  */
-export class CuratedSource {
-  readonly #deps: CuratedSourceDeps;
+export class CuratedListSource {
+  readonly #deps: CuratedListSourceDeps;
   readonly #source: string | null;
   readonly #bundled: Copy;
   readonly #loaded: Promise<void>;
@@ -73,7 +95,7 @@ export class CuratedSource {
   #status: 'idle' | 'checking' | Outcome = 'idle';
   #inFlight: Promise<void> | null = null;
 
-  constructor(deps: CuratedSourceDeps) {
+  constructor(deps: CuratedListSourceDeps) {
     this.#deps = deps;
     this.#source = deps.url ? CuratedStore.sourceKey(deps.url) : null;
     let json: unknown;
@@ -167,7 +189,7 @@ export class CuratedSource {
   }
 
   #load(json: unknown): HubManifest {
-    return loadCuratedManifest(this.#deps.log, json, { desktopVersion: this.#deps.desktopVersion });
+    return this.#deps.load(json);
   }
 
   #chosen(): Copy {
@@ -330,8 +352,8 @@ export class CuratedSource {
   }
 
   async #fetch(url: string, maxBytes: number): Promise<CuratedFetchResult> {
-    const { fetch, timeoutMs, allowLoopbackHttp } = this.#deps;
-    const result = await fetchCurated(url, maxBytes, { fetch, timeoutMs, allowLoopbackHttp });
+    const { fetch, timeoutMs, allowLoopbackHttp, userAgent } = this.#deps;
+    const result = await fetchCurated(url, maxBytes, { fetch, timeoutMs, allowLoopbackHttp, userAgent });
     if (!result.ok) this.#log(`curated list check failed (${result.failure}): ${result.detail}`);
     return result;
   }

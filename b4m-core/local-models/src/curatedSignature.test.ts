@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   CURATED_MAX_MANIFEST_BYTES,
   CURATED_MAX_SEQUENCE,
+  CURATED_SIGNATURE_DOMAIN,
   curatedKeyFromSeed,
   curatedKeyId,
   curatedPublicKey,
+  curatedSignedMessage,
   parseCuratedKey,
   parseCuratedSignatureFile,
   signCurated,
@@ -73,6 +75,60 @@ describe('verifyCurated', () => {
     expect(verifyCurated(MANIFEST, sigFile([{ keyId: signing.key.keyId, sig }]), keys)).toMatchObject({
       ok: false,
       reason: 'bad-signature',
+    });
+  });
+
+  it('signs the domain and the raw sha256 of the manifest, 64 bytes whatever the list size', () => {
+    const digest = createHash('sha256').update(MANIFEST).digest();
+    const statement = curatedSignedMessage(MANIFEST);
+    expect(CURATED_SIGNATURE_DOMAIN).toBe('b4m-model-hub-curated-v2-digest\n');
+    expect(statement).toEqual(Buffer.concat([Buffer.from(CURATED_SIGNATURE_DOMAIN), digest]));
+    expect(curatedSignedMessage(new Uint8Array(CURATED_MAX_MANIFEST_BYTES))).toHaveLength(64);
+  });
+
+  it('accepts a signature any Ed25519 signer made over the statement, as a KMS key signing it raw would', () => {
+    const statement = Buffer.concat([
+      Buffer.from('b4m-model-hub-curated-v2-digest\n'),
+      createHash('sha256').update(MANIFEST).digest(),
+    ]);
+    const sig = sign(null, statement, signing.privateKey).toString('base64');
+    expect(verifyCurated(MANIFEST, sigFile([{ keyId: signing.key.keyId, sig }]), keys)).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['the raw bytes under the old domain', () => Buffer.concat([Buffer.from('b4m-model-hub-curated-v2\n'), MANIFEST])],
+    ['the raw bytes under the digest domain', () => Buffer.concat([Buffer.from(CURATED_SIGNATURE_DOMAIN), MANIFEST])],
+    ['the bare digest', () => createHash('sha256').update(MANIFEST).digest()],
+    [
+      'the digest under the old domain',
+      () => Buffer.concat([Buffer.from('b4m-model-hub-curated-v2\n'), createHash('sha256').update(MANIFEST).digest()]),
+    ],
+    [
+      'the hex digest under the digest domain',
+      () => Buffer.from(`${CURATED_SIGNATURE_DOMAIN}${createHash('sha256').update(MANIFEST).digest('hex')}`),
+    ],
+  ])('rejects a signature over %s', (_label, message) => {
+    const sig = sign(null, message(), signing.privateKey).toString('base64');
+    expect(verifyCurated(MANIFEST, sigFile([{ keyId: signing.key.keyId, sig }]), keys)).toMatchObject({
+      ok: false,
+      reason: 'bad-signature',
+    });
+  });
+
+  it('checks each entry against the key its id names, among several trusted keys', () => {
+    const second = keyPair('signing');
+    const ring = [signing.key, second.key, recovery.key];
+    expect(verifyCurated(MANIFEST, signed(MANIFEST, second), ring)).toEqual({ ok: true, keys: [second.key] });
+    const swapped = sigFile([{ keyId: signing.key.keyId, sig: signCurated(MANIFEST, second.privateKey) }]);
+    expect(verifyCurated(MANIFEST, swapped, ring)).toMatchObject({ ok: false, reason: 'bad-signature' });
+  });
+
+  it('accepts a list co-signed by a revoked and an active key under the active key only', () => {
+    const second = keyPair('signing');
+    const ring = [signing.key, second.key];
+    expect(verifyCurated(MANIFEST, signed(MANIFEST, signing, second), ring, new Set([signing.key.keyId]))).toEqual({
+      ok: true,
+      keys: [second.key],
     });
   });
 

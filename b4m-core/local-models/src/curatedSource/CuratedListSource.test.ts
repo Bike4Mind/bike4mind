@@ -1,19 +1,25 @@
-import { generateKeyPairSync, type KeyObject } from 'node:crypto';
+import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HUB_MAX_SEQUENCE } from '@bike4mind/common';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadCuratedManifest } from '../curated';
 import {
   CURATED_MAX_SEQUENCE,
   curatedPublicKey,
   signCurated,
   type CuratedKey,
   type CuratedKeyRole,
-} from '@bike4mind/local-models';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BUNDLED_CURATED_TEXT } from './bundled';
-import { CURATED_BACKOFF_BASE_MS, CURATED_CHECK_INTERVAL_MS, CuratedSource } from './CuratedSource';
+} from '../curatedSignature';
+import { CURATED_BACKOFF_BASE_MS, CURATED_CHECK_INTERVAL_MS, CuratedListSource } from './CuratedListSource';
 import { CuratedStore } from './CuratedStore';
+
+const BUNDLED_CURATED_TEXT = readFileSync(
+  new URL('../../../../catalog/model-hub/curated-v2.json', import.meta.url),
+  'utf8'
+);
 
 const URL_BASE = 'https://catalog.example.com/model-hub/curated-v2/';
 const LATEST = `${URL_BASE}latest.json`;
@@ -91,12 +97,14 @@ function source(
   options: { keys?: CuratedKey[]; url?: string | null; bundledText?: string; store?: CuratedStore } = {}
 ) {
   const onChange = vi.fn();
-  const created = new CuratedSource({
+  const created = new CuratedListSource({
     url: options.url === undefined ? LATEST : options.url,
     keys: options.keys ?? [signing.key, recovery.key],
     store: options.store ?? new CuratedStore(dir),
     bundledText: options.bundledText ?? BUNDLED_CURATED_TEXT,
+    load: json => loadCuratedManifest(message => logs.push(message), json),
     allowLoopbackHttp: false,
+    userAgent: 'Bike4Mind-Test',
     fetch: server.fetch,
     timeoutMs: 200,
     now: () => clock,
@@ -106,14 +114,14 @@ function source(
   return Object.assign(created, { onChange });
 }
 
-const why = (s: CuratedSource) => s.current().entries[0].why;
+const why = (s: CuratedListSource) => s.current().entries[0].why;
 const logged = (pattern: RegExp) =>
   expect(
     logs.some(line => pattern.test(line)),
     logs.join('\n')
   ).toBe(true);
 
-describe('CuratedSource', () => {
+describe('CuratedListSource', () => {
   it('stays on the bundled list and never fetches without a URL or a trusted key', async () => {
     for (const s of [source({ url: null }), source({ keys: [] })]) {
       await s.checkNow();
@@ -167,6 +175,38 @@ describe('CuratedSource', () => {
     expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
     expect(server.requests).toEqual([`${LATEST}.sig`, LATEST, `${URL_BASE}4.json.sig`, `${URL_BASE}4.json`]);
     logged(/rejected the curated list: (bad-signature|unknown-key)/);
+  });
+
+  it('keeps the last good list when a newer one fails its signature, and still shows it after a restart', async () => {
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
+    await source().checkNow();
+    const four = listText(4);
+    const flipped = four.replace('"sequence": 4', '"sequence": 5');
+    server.publish(4, flipped, sigText(four, [signing], 4));
+    const s = source();
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ origin: 'updated', sequence: 3, check: 'failed' });
+    logged(/rejected the curated list: bad-signature/);
+
+    const restarted = source();
+    await restarted.loaded();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3 });
+    expect(why(restarted)).toContain('List 3.');
+  });
+
+  it('rejects a list signed over the raw bytes, the format before the digest statement', async () => {
+    const manifest = listText(3);
+    const raw = Buffer.concat([Buffer.from('b4m-model-hub-curated-v2\n'), Buffer.from(manifest)]);
+    const sig = JSON.stringify({
+      sequence: 3,
+      signatures: [{ keyId: signing.key.keyId, sig: sign(null, raw, signing.privateKey).toString('base64') }],
+    });
+    server.publish(3, manifest, sig);
+    const s = source();
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
+    logged(/rejected the curated list: bad-signature/);
   });
 
   it('counts a mismatched pair with no newer hint as a failed check, so it backs off and never sets checkedAt', async () => {
