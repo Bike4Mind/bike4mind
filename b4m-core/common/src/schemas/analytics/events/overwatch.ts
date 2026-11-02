@@ -119,10 +119,11 @@ export type OverwatchLane = (typeof OVERWATCH_LANE_VALUES)[number];
 export const OVERWATCH_VISIT_EVENT = 'visit';
 
 /**
- * Event name for a later page of a visit: one per client-side change of page after the
- * landing, carrying that visit's identifier as its sessionId and the page's path as
- * metadata.path. The landing itself is on the visit event, so a visit's pages are its landing
- * followed by these, and its last event names the page it ended on.
+ * Event name for a page of a visit after its landing, whether reached in the app or by a full
+ * page load (a new tab, a typed URL, a bookmark, a link, a reload), carrying that visit's
+ * identifier as its sessionId and the page's path as metadata.path. The landing itself is on the
+ * visit event, so a visit's pages are its landing followed by these, and its last event names the
+ * page it ended on. A reload records its page again, so consecutive events can repeat a path.
  */
 export const OVERWATCH_PAGE_VIEW_EVENT = 'page_view';
 

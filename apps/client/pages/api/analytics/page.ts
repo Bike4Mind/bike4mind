@@ -7,9 +7,13 @@ import { cleanLandingPath } from '@server/analytics/visitLanding';
 /**
  * POST /api/analytics/page - the page beacon (app/utils/pageBeacon.ts).
  *
- * The visit beacon (visit.ts) runs on every page load but records a visit, and the page it landed
- * on, only on the visit's first. The app then changes page without loading one, so the browser
- * reports each later page here, and a visit's later pages, and the page it ended on, are known.
+ * The visit beacon (visit.ts) runs on every page load: a visit's first load records the visit and
+ * the page it landed on, and each later one, with consent, records the page it loaded as a
+ * page_view.
+ * The app also changes page without loading one, so the browser reports those pages here, and
+ * every page of a visit after its landing, and the page it ended on, are known. One page can come
+ * here even though it was loaded: the landing, when a grant arrives after the visit beacon went
+ * out without it (pageBeacon.ts).
  *
  * It only ever adds to a visit the visit beacon has recorded: the request must carry a visit
  * cookie and no pending mark. No visit, a visit still held for the visitor's consent answer, or a

@@ -150,9 +150,10 @@ export async function emitVisitEvent(opts: VisitEmitOptions): Promise<void> {
 }
 
 /**
- * One event per later page of a visit (pages/api/analytics/page.ts), so the pages after the
- * landing, and the page the visit ended on, are known. Anonymous for the same reason as the
- * visit event above, and on the same visit id, so it joins that visit and never adds one.
+ * One event per page of a visit after its landing, so those pages, and the page the visit ended
+ * on, are known: a page the app moves to (pages/api/analytics/page.ts) or a later page load
+ * (pages/api/analytics/visit.ts). Anonymous for the same reason as the visit event above, and on
+ * the same visit id, so it joins that visit and never adds one.
  */
 export async function emitPageViewEvent(opts: PageViewEmitOptions): Promise<void> {
   return postEvent({
