@@ -9,12 +9,15 @@ import {
 } from '@bike4mind/common';
 import {
   contextTooSmallHint,
+  conversationFullHint,
   describeFailure,
   holdsPrompt,
   isToolRefusal,
+  messageTooLongHint,
   OpenAICompatibleRuntime,
   probeToolSupport,
   promptTooLargeHint,
+  replyRoom,
   serverContextTokens,
   toolsOffHint,
   type FetchLike,
@@ -192,8 +195,9 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
 
   /**
    * Fits this turn into a context the server fixes: whether its tools fit, and `maxTokens` capped by the room the
-   * whole prompt leaves. Throws with the restart hint when the instructions alone do not fit. Unknown contexts are
-   * assumed to fit.
+   * whole prompt leaves. Throws with the restart hint when the instructions alone do not fit, and with the matching
+   * fix when the last message or the whole conversation leaves no room for a reply. Unknown contexts are assumed
+   * to fit.
    */
   private async fitContext(
     name: string,
@@ -205,13 +209,20 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     if (!context) return { toolsFit: true, maxTokens };
     const tokens = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN);
     const toolChars = tools.length ? JSON.stringify(tools.map(tool => tool.toolSchema)).length : 0;
-    const system = messages.filter(message => message.role === 'system').map(textOf);
+    const systemChars = messages
+      .filter(message => message.role === 'system')
+      .map(textOf)
+      .join('').length;
     const lastUser = messages.findLast(message => message.role === 'user');
-    const baseChars = system.join('').length + (lastUser ? textOf(lastUser).length : 0);
-    if (!holdsPrompt(context, tokens(baseChars), maxTokens)) {
+    const lastUserChars = lastUser ? textOf(lastUser).length : 0;
+    const baseChars = systemChars + lastUserChars;
+    if (!holdsPrompt(context, tokens(systemChars), maxTokens)) {
       throw new Error(
-        promptTooLargeHint(this.options.label, this.options.product, { name, context }, tokens(baseChars), this.app)
+        promptTooLargeHint(this.options.label, this.options.product, { name, context }, tokens(systemChars), this.app)
       );
+    }
+    if (!holdsPrompt(context, tokens(baseChars), maxTokens)) {
+      throw new Error(messageTooLongHint(this.options.label, { name, context }, tokens(lastUserChars)));
     }
     let toolsFit = true;
     if (tools.length && !holdsPrompt(context, tokens(baseChars + toolChars), maxTokens)) {
@@ -230,10 +241,13 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
       }
     }
     if (maxTokens === undefined) return { toolsFit, maxTokens };
-    // A reply budget past the room left makes the server refuse the request outright.
+    // A reply budget past the room left makes the server refuse the request outright, and too little
+    // room would cut the reply short without a word, so a full conversation fails with the fix instead.
     const allChars = messages.reduce((sum, message) => sum + textOf(message).length, 0) + (toolsFit ? toolChars : 0);
     const room = context - tokens(allChars);
-    return { toolsFit, maxTokens: room > 0 ? Math.min(maxTokens, room) : maxTokens };
+    if (room < replyRoom(context, maxTokens))
+      throw new Error(conversationFullHint(this.options.label, { name, context }));
+    return { toolsFit, maxTokens: Math.min(maxTokens, room) };
   }
 
   async complete(

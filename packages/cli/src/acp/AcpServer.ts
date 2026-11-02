@@ -556,7 +556,14 @@ export class AcpServer {
     await this.mergeRemoteSkills(config, apiClient);
 
     const startupLog: string[] = [];
-    const { llm, wsManager, models, modelInfo } = await buildLlmBackend({ config, apiClient, tokenGetter, startupLog });
+    // ACP runs the default model only, so other saved servers are never needed.
+    const { llm, wsManager, models, modelInfo } = await buildLlmBackend({
+      config,
+      apiClient,
+      tokenGetter,
+      startupLog,
+      servers: 'default',
+    });
 
     const permissionManager = new PermissionManager(
       new ToolCatalog(),

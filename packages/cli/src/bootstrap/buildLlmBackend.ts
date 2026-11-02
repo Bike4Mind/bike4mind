@@ -50,6 +50,8 @@ export interface BuildLlmBackendInput {
   onNotice?: (text: string) => void;
   /** Called with the full model list each time a saved model server joins after startup. */
   onModelsAdded?: (models: ModelInfo[]) => void;
+  /** Which saved model servers to attach; defaults to all. A host that never switches models only needs the default's. */
+  servers?: 'all' | 'default';
 }
 
 export const SAVED_OLLAMA_LISTING_TIMEOUT_MS = 5_000;
@@ -527,7 +529,7 @@ export async function buildLlmBackend(
     {
       ollamaHost: input.ollamaHost,
       listingTimeoutMs: input.ollamaListingTimeoutMs,
-      servers: 'all',
+      servers: input.servers ?? 'all',
       onNotice: input.onNotice ?? (text => logger.warn(`\u26a0\ufe0f  ${text}`)),
       onModelsAdded: input.onModelsAdded,
     },

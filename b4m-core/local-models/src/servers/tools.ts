@@ -128,6 +128,20 @@ export function promptTooLargeHint(
   return `${label} runs ${model.name} with a ${model.context}-token context, too small for ${app.name}'s instructions even without tools (about ${promptTokens} tokens). ${restartWithContext(product, promptTokens)}, ${app.recheck}`;
 }
 
+/** Why a turn cannot be sent: the user's message, not the app's instructions, overflows the context. */
+export function messageTooLongHint(
+  label: string,
+  model: { name: string; context: number },
+  messageTokens: number
+): string {
+  return `This message (about ${messageTokens} tokens) is too long for ${model.name}'s ${model.context}-token context on ${label}. Send a shorter message, or use a model with a larger context.`;
+}
+
+/** Why a turn cannot be sent: the conversation so far leaves no room in the context for a reply. */
+export function conversationFullHint(label: string, model: { name: string; context: number }): string {
+  return `This conversation no longer fits ${model.name}'s ${model.context}-token context on ${label} with room for a reply. Start a new conversation, or use a model with a larger context.`;
+}
+
 function restartWithContext(product: OpenAICompatibleProduct | null, promptTokens: number): string {
   const target = Math.max(16_384, 2 ** Math.ceil(Math.log2(promptTokens + replyRoom(16_384))));
   if (product === 'vllm') return `Restart vLLM with --max-model-len ${target}`;

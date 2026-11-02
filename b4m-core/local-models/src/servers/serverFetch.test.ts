@@ -194,9 +194,31 @@ describe('createServerFetch', () => {
     expect(response.status).toBe(200);
     const error = await failure(response.text());
     expect(String(error.message) + String((error.cause as Error | undefined)?.message)).toContain(
-      'gpu box stopped sending its reply for 0.1 s, so Desktop stopped waiting.'
+      'gpu box stopped sending its reply for 0.1 s. Desktop stopped waiting.'
     );
     await vi.waitFor(() => expect(closed).toBe(true));
+  });
+
+  it('waits through a prefill that starts after the headers were sent', async () => {
+    const target = await serve((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.flushHeaders();
+      setTimeout(() => res.end('data: one\n\n'), 250);
+    });
+    const fetch = createServerFetch(endpoint(target.origin), { bodyIdleTimeoutMs: 100 });
+    const response = await fetch(`${target.origin}/v1/chat/completions`);
+    expect(await response.text()).toBe('data: one\n\n');
+  });
+
+  it('lets a pull go silent while the server verifies the download', async () => {
+    const target = await serve((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      res.write('{"status":"verifying sha256 digest"}\n');
+      setTimeout(() => res.end('{"status":"success"}\n'), 250);
+    });
+    const fetch = createServerFetch(endpoint(target.origin), { bodyIdleTimeoutMs: 100 });
+    const response = await fetch(`${target.origin}/api/pull`, { method: 'POST', body: '{}' });
+    expect(await response.text()).toBe('{"status":"verifying sha256 digest"}\n{"status":"success"}\n');
   });
 
   it('turns on TCP keepalive for the request socket', async () => {
