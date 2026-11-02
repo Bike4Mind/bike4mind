@@ -164,6 +164,26 @@ final class ShareComposerModelTests: XCTestCase {
     XCTAssertEqual(store.lastDestination(), .session(id: "s1", name: "Trip"))
   }
 
+  func testTheDismissButtonReadsDoneOnceTheSendWentOut() async {
+    let model = model()
+    await model.load()
+    XCTAssertEqual(model.dismissButtonTitle, "Cancel")
+    model.choose(.lake(id: "l1", name: "Research"))
+    await model.submit()
+    XCTAssertEqual(model.phase, .sent)
+    XCTAssertEqual(model.dismissButtonTitle, "Done")
+  }
+
+  func testTheDismissButtonStaysCancelAfterAFailedSend() async {
+    let submitter = RecordingSubmitter()
+    await submitter.setResultStage(.failed)
+    let model = model(submitter: submitter)
+    await model.load()
+    model.choose(.lake(id: "l1", name: "Research"))
+    await model.submit()
+    XCTAssertEqual(model.dismissButtonTitle, "Cancel")
+  }
+
   func testSubmitWithoutADestinationDoesNothing() async {
     let submitter = RecordingSubmitter()
     let model = model(submitter: submitter)

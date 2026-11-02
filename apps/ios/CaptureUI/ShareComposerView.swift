@@ -7,6 +7,8 @@ struct ShareComposerView: View {
   @State var model: ShareComposerModel
   let onFinish: () -> Void
   let onCancel: () -> Void
+  /// Guards `onFinish`: the Done button and the automatic close after "Sent" must not both complete the host.
+  @State private var didFinish = false
 
   var body: some View {
     NavigationStack {
@@ -15,7 +17,8 @@ struct ShareComposerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
-            Button("Cancel", action: onCancel).accessibilityIdentifier("share-cancel-btn")
+            Button(model.dismissButtonTitle, action: model.phase == .sent ? finish : onCancel)
+              .accessibilityIdentifier(model.phase == .sent ? "share-done-btn" : "share-cancel-btn")
           }
           ToolbarItem(placement: .confirmationAction) {
             Button("Send") { Task { await send() } }
@@ -70,29 +73,11 @@ struct ShareComposerView: View {
         if let warning = model.loadWarning {
           Label(warning, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).font(.footnote)
         }
-        Picker("Save to", selection: $model.destination) {
-          Text("Choose").tag(CaptureDestination?.none)
-          if !model.lakes.isEmpty {
-            Section("Lakes") {
-              ForEach(model.lakes) { lake in
-                Text(lake.name).tag(CaptureDestination?.some(.lake(id: lake.id, name: lake.name)))
-              }
-            }
-          }
-          if !model.sessions.isEmpty {
-            Section("Sessions") {
-              ForEach(model.sessions) { session in
-                let name = session.name.isEmpty ? "Untitled" : session.name
-                Text(name).tag(CaptureDestination?.some(.session(id: session.id, name: name)))
-              }
-            }
-          }
-          // A remembered destination whose list failed to load must stay selectable.
-          if let current = model.destination, !isListed(current) {
-            Text(current.name).tag(CaptureDestination?.some(current))
-          }
+        NavigationLink {
+          DestinationPicker(model: model)
+        } label: {
+          LabeledContent("Save to", value: model.destination?.name ?? "Choose")
         }
-        .pickerStyle(.navigationLink)
         .accessibilityIdentifier("share-destination-picker")
         if model.destination?.isLake == false {
           Text("Sending to a session starts a chat turn for each item and uses credits.")
@@ -116,17 +101,16 @@ struct ShareComposerView: View {
     }
   }
 
-  private func isListed(_ destination: CaptureDestination) -> Bool {
-    switch destination {
-    case .lake(let id, _): model.lakes.contains { $0.id == id }
-    case .session(let id, _): model.sessions.contains { $0.id == id }
-    }
-  }
-
   private func send() async {
     await model.submit()
     guard model.phase == .sent else { return }
     try? await Task.sleep(for: .milliseconds(900))
+    finish()
+  }
+
+  private func finish() {
+    guard !didFinish else { return }
+    didFinish = true
     onFinish()
   }
 
@@ -137,6 +121,62 @@ struct ShareComposerView: View {
     case .image: "photo"
     case .pdf: "doc.richtext"
     case .file: "doc"
+    }
+  }
+}
+
+/// The destination list pushed from the composer. Choosing a row pops back at once, which the system's
+/// navigation-link `Picker` does not do reliably inside a sectioned list.
+private struct DestinationPicker: View {
+  let model: ShareComposerModel
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    List {
+      if !model.lakes.isEmpty {
+        Section("Lakes") {
+          ForEach(model.lakes) { lake in row(.lake(id: lake.id, name: lake.name)) }
+        }
+      }
+      if !model.sessions.isEmpty {
+        Section("Sessions") {
+          ForEach(model.sessions) { session in
+            row(.session(id: session.id, name: session.name.isEmpty ? "Untitled" : session.name))
+          }
+        }
+      }
+      // A remembered destination whose list failed to load must stay selectable.
+      if let current = model.destination, !isListed(current) {
+        row(current)
+      }
+    }
+    .navigationTitle("Save to")
+    .navigationBarTitleDisplayMode(.inline)
+    .accessibilityIdentifier("share-destination-list")
+  }
+
+  private func row(_ destination: CaptureDestination) -> some View {
+    Button {
+      model.choose(destination)
+      dismiss()
+    } label: {
+      HStack {
+        Text(destination.name).foregroundStyle(.primary)
+        Spacer()
+        if model.destination == destination {
+          Image(systemName: "checkmark").foregroundStyle(.tint).accessibilityHidden(true)
+        }
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(model.destination == destination ? .isSelected : [])
+  }
+
+  private func isListed(_ destination: CaptureDestination) -> Bool {
+    switch destination {
+    case .lake(let id, _): model.lakes.contains { $0.id == id }
+    case .session(let id, _): model.sessions.contains { $0.id == id }
     }
   }
 }

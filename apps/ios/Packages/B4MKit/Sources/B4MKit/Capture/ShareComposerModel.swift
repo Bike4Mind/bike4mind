@@ -86,6 +86,9 @@ public final class ShareComposerModel {
     destination != nil && !items.isEmpty && (phase == .ready || isRetryableFailure)
   }
 
+  /// The top-left button: once the send went out there is nothing left to cancel.
+  public var dismissButtonTitle: String { phase == .sent ? "Done" : "Cancel" }
+
   private var isRetryableFailure: Bool {
     if case .failed = phase { true } else { false }
   }
