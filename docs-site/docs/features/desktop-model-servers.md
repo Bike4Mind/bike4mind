@@ -183,13 +183,13 @@ The first and second calls return `401`. The third returns the Ollama version. T
 
 ### vLLM and other OpenAI-compatible servers
 
-An OpenAI-compatible server has no pull or delete calls in Desktop, so one token is enough. Desktop uses `/v1/models` for the connection test and the model list, and `/v1/chat/completions` for replies. The CLI lists models from `/v1/models` and calls `/v1/chat/completions` only for `b4m models servers --check-tools`. The connection test also reads the server version from vLLM's `/version` or llama-server's `/props`, and Desktop reads a llama-server's context size from `/props`. If you leave them out of the proxy, the server still works, but that version or figure is blank. The `Host` header does not matter to vLLM, so no `header_up` line is needed:
+An OpenAI-compatible server has no pull or delete calls in Desktop, so one token is enough. Desktop uses `/v1/models` for the connection test and the model list, and `/v1/chat/completions` for replies. The CLI lists models from `/v1/models` and calls `/v1/chat/completions` only for `b4m models servers --check-tools`. The connection test also reads the server version from vLLM's `/version` or llama-server's `/props`, and Desktop reads a llama-server's context size from `/props`. For LM Studio, Desktop and the CLI also list models from `/api/v0/models`, which adds each model's capabilities and quantization. If you leave any of these out of the proxy, the server still works, but that version, figure or detail is blank. The `Host` header does not matter to vLLM, so no `header_up` line is needed:
 
 ```text
 {$SITE_ADDRESS} {
 	@chat {
 		header Authorization "Bearer {$CHAT_TOKEN}"
-		path /v1/models /v1/chat/completions /version /props
+		path /v1/models /v1/chat/completions /version /props /api/v0/models
 	}
 	@chat_token header Authorization "Bearer {$CHAT_TOKEN}"
 
@@ -310,10 +310,8 @@ You can also enter memory bandwidth in GB/s. Desktop saves it, but it does not c
 
 - Download or Remove is missing: select an Ollama server with Access set to Chat and manage. Chat only and OpenAI-compatible servers do not offer these controls.
 - A download is paused: check the server and connection, then select Resume. If it pauses again behind a proxy, check whether the proxy allows long-running streaming responses.
-
 - Needs credentials: the server returned 401, or Desktop no longer has the saved credential. Check the token, or the header name and value. If the message says the saved credential could not be read, the secure storage lost it, for example after a keyring reset. If it says the credential was kept only until Desktop quit, it was session-only and Desktop restarted. In both cases open the server's credentials and enter the value again.
-- Refused with a correct token, behind a proxy: the proxy or Ollama answered 403. Ollama does this when the `Host` header was not rewritten, and the Caddy setup above returns it for a path your token may not use. Check the Caddy setup, and test with `curl -i` against the address.
 - Unreachable: the address, port or firewall is wrong, or the SSH forward is closed.
 - Unreachable on macOS, for a server on your local network: macOS asks the first time an app connects to a LAN address and blocks it if you decline. Open System Settings > Privacy & Security > Local Network, turn on Bike4Mind, then select Check now on the server. This applies to macOS 15 and later. Servers reached over the internet or on this computer are not affected.
-- Refused: the server redirected, a proxy answered 403, its certificate is not trusted, or the address is not allowed. Read the message under Test. If you were redirected to another address, enter the final `https` address. If the redirect stayed on the same address, check the path you entered.
+- Refused: the server redirected, a proxy or Ollama answered 403, its certificate is not trusted, or the address is not allowed. Read the message under Test. A 403 with a correct token behind a proxy means Ollama saw a `Host` header that was not rewritten, or the Caddy setup above refused a path your token may not use; check the Caddy setup and test with `curl -i` against the address. If you were redirected to another address, enter the final `https` address. If the redirect stayed on the same address, check the path you entered.
 - The certificate is not trusted: Test shows this message, and the server shows Refused, when the certificate fails verification. Use a certificate from a trusted authority or a local CA your computer already trusts. Tailscale certificates also work.
