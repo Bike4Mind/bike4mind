@@ -1414,8 +1414,8 @@ captureGitHubLakeCallbackSearch();
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
 // server reads the campaign cookie from, so it has to follow the line above.
 beaconVisit();
-// The landing is on the visit; the page beacon reports the pages after it, and needs to know the
-// landing before the router's first resolve can redirect away from it.
+// After the visit beacon, which carries this load's page when consent allows; the page beacon
+// reports the pages after it, and needs to start before the router's first resolve.
 startPageBeacon();
 
 // Create the router
@@ -1425,7 +1425,7 @@ export const router = createRouter({
   ...(typeof window !== 'undefined' && { history: createNextCompatibleHistory() }),
 });
 
-// Each page the router settles on; beaconPage() skips the landing and anything not a new path.
+// Each page the router settles on; beaconPage() skips a page the server already has from this load.
 if (typeof window !== 'undefined') router.subscribe('onResolved', beaconPage);
 
 // Register the router instance for type safety

@@ -4,7 +4,7 @@ const { mockResolveConsent } = vi.hoisted(() => ({ mockResolveConsent: vi.fn() }
 vi.mock('../consentRegion', () => ({ resolveConsent: mockResolveConsent }));
 
 import { beaconPage, startPageBeacon } from '../pageBeacon';
-import { beaconVisit } from '../visitBeacon';
+import { beaconVisit, releaseVisitBeacon } from '../visitBeacon';
 
 const PAGE_BEACON = '/api/analytics/page';
 
@@ -18,9 +18,10 @@ let fetchMock: ReturnType<typeof vi.fn>;
 const pageCalls = () => fetchMock.mock.calls.filter(([url]) => url === PAGE_BEACON) as [string, RequestInit][];
 const sentPaths = () => pageCalls().map(([, init]) => (JSON.parse(init.body as string) as { path: string }).path);
 
-/** A page load landing on `path`, then the router settling on each of `pages` in turn. */
+/** A page load landing on `path` (bootstrap, as router.tsx), then the router settling on each of `pages`. */
 async function land(path: string, ...pages: string[]) {
   goTo(path);
+  beaconVisit();
   startPageBeacon();
   for (const page of pages) {
     goTo(page);
@@ -32,6 +33,10 @@ async function land(path: string, ...pages: string[]) {
 beforeEach(() => {
   fetchMock = vi.fn().mockResolvedValue({ status: 204 });
   vi.stubGlobal('fetch', fetchMock);
+  // Drop a visit beacon an earlier case left waiting: the held landing is module state.
+  mockResolveConsent.mockReturnValue('unset');
+  releaseVisitBeacon();
+  fetchMock.mockClear();
   mockResolveConsent.mockReturnValue('granted');
 });
 afterEach(() => {
@@ -101,20 +106,62 @@ describe('beaconPage', () => {
 
     await land('/', '/a', '/b');
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(pageCalls()).toHaveLength(0);
   });
+
+  /** What the consent banner does on a grant (CookieConsentBanner.tsx activateConsent). */
+  async function grant() {
+    mockResolveConsent.mockReturnValue('granted');
+    releaseVisitBeacon();
+    beaconPage();
+    await settle();
+  }
 
   it('sends nothing while consent is not yet given, and holds none of those pages for later', async () => {
     mockResolveConsent.mockReturnValue('unset');
     await land('/pricing', '/login', '/register');
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(pageCalls()).toHaveLength(0);
 
-    // The banner calls beaconPage() on a grant: only the page the visitor is on now is sent.
-    mockResolveConsent.mockReturnValue('granted');
-    beaconPage();
-    await settle();
+    // Only the page the visitor is on now is sent; the release carries the landing.
+    await grant();
 
     expect(sentPaths()).toEqual(['/register']);
+  });
+
+  // The visit beacon carries the landing only with consent, so after a visit that went out
+  // without it, a grant on the landing is the one request that names this page.
+  describe('a grant on the landing', () => {
+    it('sends nothing more when the held visit is released with the landing', async () => {
+      mockResolveConsent.mockReturnValue('unset');
+      await land('/pricing', '/pricing');
+
+      await grant();
+
+      expect(pageCalls()).toHaveLength(0);
+    });
+
+    it('sends the landing when the held visit was released without it, the page hidden first', async () => {
+      mockResolveConsent.mockReturnValue('unset');
+      await land('/pricing', '/pricing');
+      // What the pagehide and visibilitychange listeners do before an answer.
+      releaseVisitBeacon();
+
+      await grant();
+
+      expect(sentPaths()).toEqual(['/pricing']);
+    });
+
+    it('sends the landing when consent was declined at load', async () => {
+      mockResolveConsent.mockReturnValue('denied');
+      await land('/pricing', '/pricing');
+
+      await grant();
+      // A second grant, or the router settling again, finds the page already sent.
+      beaconPage();
+      await settle();
+
+      expect(sentPaths()).toEqual(['/pricing']);
+    });
   });
 
   it('stops after 100 pages in one page load, and starts again with the next load', async () => {
@@ -152,8 +199,6 @@ describe('beaconPage', () => {
     fetchMock.mockImplementation((url: string) =>
       url === PAGE_BEACON ? Promise.resolve({ status: 204 }) : Promise.reject(new Error('offline'))
     );
-    goTo('/pricing');
-    beaconVisit();
 
     await land('/pricing', '/login');
 
@@ -171,6 +216,7 @@ describe('beaconPage', () => {
 
   it('does nothing where fetch does not exist', async () => {
     goTo('/');
+    beaconVisit();
     startPageBeacon();
     vi.stubGlobal('fetch', undefined);
     goTo('/a');
@@ -185,7 +231,7 @@ describe('beaconPage', () => {
     expect(sentPaths()).toEqual(['/a']);
   });
 
-  it('does nothing before the landing is known', async () => {
+  it('does nothing before it is started, which is after the visit beacon', async () => {
     vi.resetModules();
     const fresh = await import('../pageBeacon');
     goTo('/a');
@@ -193,6 +239,7 @@ describe('beaconPage', () => {
     fresh.beaconPage();
     await settle();
 
+    // On a later page load, a page sent now could be the landing the visit beacon then carries.
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

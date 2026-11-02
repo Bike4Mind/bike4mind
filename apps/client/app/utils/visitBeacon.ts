@@ -35,6 +35,7 @@ function visitLanding(): VisitLanding {
 }
 
 let lastRequest: Promise<unknown> = Promise.resolve();
+let sentLanding: string | undefined;
 
 /**
  * Settles, never rejects, once the latest visit beacon request has. The page beacon waits on it
@@ -43,6 +44,15 @@ let lastRequest: Promise<unknown> = Promise.resolve();
  */
 export function visitBeaconSettled(): Promise<unknown> {
   return lastRequest;
+}
+
+/**
+ * The page this load's latest visit beacon request carried, which the server records (as the
+ * visit's landing, or as a page_view on a later load); undefined while held or when sent without
+ * consent. The page beacon (pageBeacon.ts) sends the landing itself only when this is not it.
+ */
+export function visitBeaconLanding(): string | undefined {
+  return sentLanding;
 }
 
 function send(body: VisitLanding | { awaitingConsent: true }): void {
@@ -62,6 +72,7 @@ function send(body: VisitLanding | { awaitingConsent: true }): void {
       // Best-effort telemetry. A failed beacon costs one uncounted visit and must never
       // surface to the person visiting.
     });
+    sentLanding = 'landingPath' in body ? body.landingPath : undefined;
   } catch {
     // Older browsers that reject the keepalive option outright, and any environment where
     // fetch exists but is not callable this early.
@@ -79,8 +90,9 @@ let held: VisitLanding | null = null;
  * has already gone is a campaign the visit is not attributed to.
  *
  * Fires once per page load, not per route change - the server counts a visit by the cookie
- * it hands back, so repeating the call inside the SPA would add requests and no visits. The
- * pages after the landing are reported by the page beacon instead (pageBeacon.ts).
+ * it hands back, so repeating the call inside the SPA would add requests and no visits. On a
+ * later page load of a visit, the landing path it sends is recorded as one of the visit's pages;
+ * the pages the app moves to without a load are reported by the page beacon (pageBeacon.ts).
  *
  * Nothing is sent but the cookies the browser attaches, which is why `credentials` matters,
  * and, with consent, the referring site's origin and the landing path (visitLanding). Those
@@ -116,7 +128,8 @@ export function beaconVisit(): void {
  * runs when the page is hidden or unloaded first, so a visitor who never answers is still
  * counted. Hidden rather than only unloaded because mobile browsers often discard a
  * backgrounded tab without a pagehide; the cost is that an answer given after returning to
- * the tab finds the visit already recorded without a source.
+ * the tab finds the visit already recorded without a source. A grant then still records the
+ * page the visitor is on, through the page beacon (pageBeacon.ts).
  */
 export function releaseVisitBeacon(): void {
   if (held === null) return;

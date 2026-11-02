@@ -73,6 +73,8 @@ describe('CookieConsentBanner', () => {
     vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
     // What the inline tag in layout.tsx would have set; each test states its own.
     delete window.__b4mGaConsentDefault;
+    // A grant calls the page beacon, whose state outlives a case; keep any request it makes local.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 204 }));
   });
 
   afterEach(() => {
@@ -402,6 +404,8 @@ describe('CookieConsentBanner', () => {
   describe('recording the visit the beacon held for the answer', () => {
     const bodies = (fetchMock: ReturnType<typeof vi.fn>) =>
       fetchMock.mock.calls.map(c => JSON.parse((c as [string, RequestInit])[1].body as string) as unknown);
+    const urls = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.map(([url]) => url as string);
+    const settle = () => act(() => new Promise(resolve => setTimeout(resolve, 0)));
 
     beforeEach(() => {
       Object.defineProperty(document, 'referrer', { value: 'https://www.google.com/search?q=x', configurable: true });
@@ -410,8 +414,6 @@ describe('CookieConsentBanner', () => {
     afterEach(() => {
       Object.defineProperty(document, 'referrer', { value: '', configurable: true });
       window.history.replaceState({}, '', '/');
-      // Land the page beacon on `/` too, so a later case's grant has no page to send.
-      startPageBeacon();
       vi.unstubAllGlobals();
       vi.stubGlobal('gtag', mockGtag);
     });
@@ -459,8 +461,6 @@ describe('CookieConsentBanner', () => {
     // The visit names the landing; a grant that finds the visitor elsewhere (the login a
     // signed-out landing redirects to) records that page too, after the visit is recorded.
     it('then records the page the visitor is on, once the held visit is recorded, on Accept', async () => {
-      const urls = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.map(([url]) => url as string);
-      const settle = () => act(() => new Promise(resolve => setTimeout(resolve, 0)));
       let recordVisit: (value: unknown) => void = () => {};
       const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
       vi.stubGlobal('fetch', fetchMock);
@@ -499,9 +499,72 @@ describe('CookieConsentBanner', () => {
         </TestWrapper>
       );
       fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
-      await act(() => new Promise(resolve => setTimeout(resolve, 0)));
+      await settle();
 
-      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/analytics/visit', '/api/analytics/visit']);
+      expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/visit']);
+    });
+
+    // Exactly one request names the page a grant finds the visitor on: the release when it carries
+    // the landing, otherwise the page beacon, even when that page is the landing.
+    describe('when the grant finds the visitor on the landing', () => {
+      it('records no page: the release carries the landing', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+        vi.stubGlobal('fetch', fetchMock);
+        beaconVisit();
+        startPageBeacon();
+
+        render(
+          <TestWrapper>
+            <CookieConsentBanner />
+          </TestWrapper>
+        );
+        fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+        await settle();
+
+        expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/visit']);
+        expect(bodies(fetchMock)[1]).toMatchObject({ landingPath: '/pricing' });
+      });
+
+      it('records the landing as a page when the visit was released without it while hidden', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+        vi.stubGlobal('fetch', fetchMock);
+        beaconVisit();
+        startPageBeacon();
+        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Reflect.deleteProperty(document, 'visibilityState');
+
+        render(
+          <TestWrapper>
+            <CookieConsentBanner />
+          </TestWrapper>
+        );
+        fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+        await settle();
+
+        expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/visit', '/api/analytics/page']);
+        expect(bodies(fetchMock)).toEqual([{ awaitingConsent: true }, {}, { path: '/pricing' }]);
+      });
+
+      it('records the landing as a page on a grant from Cookie settings after a decline at load', async () => {
+        localStorageMock.setItem('cookie_consent', 'denied');
+        const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+        vi.stubGlobal('fetch', fetchMock);
+        beaconVisit();
+        startPageBeacon();
+
+        render(
+          <TestWrapper>
+            <CookieConsentBanner />
+          </TestWrapper>
+        );
+        act(() => useCookieSettings.getState().open());
+        fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+        await settle();
+
+        expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/page']);
+        expect(bodies(fetchMock)).toEqual([{}, { path: '/pricing' }]);
+      });
     });
   });
 
