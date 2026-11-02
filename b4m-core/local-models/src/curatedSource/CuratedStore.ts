@@ -10,6 +10,8 @@ export interface CuratedCheckState {
   failures: number;
   /** Highest accepted sequence per signer key id, so revoking a key also drops the floor its lists set. */
   floors: Record<string, number>;
+  /** Fingerprint of a cached list signed by a key this build does not know, so ignoring it is reported once. */
+  foreignCopy?: string;
 }
 
 export interface CuratedCopy {
@@ -123,15 +125,15 @@ function floors(raw: unknown): Record<string, number> {
 }
 
 /**
- * The curated files' directory. A build that trusts the public test keys gets its own, so a list signed with them
- * can never revoke a key for another build that shares this userData.
+ * The curated files' directory under a client's data directory (Desktop's userData, the CLI's `~/.bike4mind`). A build
+ * that trusts the public test keys gets its own, so a list signed with them can never revoke a key for another build.
  */
-export function curatedStoreRoot(userData: string, testKeys: boolean): string {
-  return join(userData, 'model-hub', testKeys ? 'curated-test-keys' : 'curated');
+export function curatedStoreRoot(dataDir: string, testKeys: boolean): string {
+  return join(dataDir, 'model-hub', testKeys ? 'curated-test-keys' : 'curated');
 }
 
 /**
- * The curated list's files under `userData/model-hub/curated/`: the sticky revoked-key set, the on/off setting,
+ * The curated list's files under `<data dir>/model-hub/curated/`: the sticky revoked-key set, the on/off setting,
  * and per source (`<sha256(url)[0:16]>/`) the check state and the last verified pair, behind a pointer file.
  */
 export class CuratedStore {
@@ -139,6 +141,10 @@ export class CuratedStore {
 
   static sourceKey(url: string): string {
     return createHash('sha256').update(url).digest('hex').slice(0, 16);
+  }
+
+  static fingerprint(bytes: Uint8Array): string {
+    return createHash('sha256').update(bytes).digest('hex').slice(0, 16);
   }
 
   #dir(source: string): string {
@@ -198,12 +204,13 @@ export class CuratedStore {
   async readState(source: string): Promise<CuratedCheckState> {
     const raw = await readJson(join(this.#dir(source), 'state.json'));
     if (typeof raw !== 'object' || raw === null) return { ...EMPTY_STATE, floors: {} };
-    const { lastSuccessAt, lastAttemptAt, failures } = raw as Record<string, unknown>;
+    const { lastSuccessAt, lastAttemptAt, failures, foreignCopy } = raw as Record<string, unknown>;
     return {
       lastSuccessAt: time(lastSuccessAt),
       lastAttemptAt: time(lastAttemptAt),
       failures: typeof failures === 'number' && Number.isInteger(failures) && failures > 0 ? Math.min(failures, 64) : 0,
       floors: floors((raw as Record<string, unknown>).floors),
+      ...(typeof foreignCopy === 'string' && KEY_ID.test(foreignCopy) ? { foreignCopy } : {}),
     };
   }
 
@@ -247,7 +254,7 @@ export class CuratedStore {
     return revoked;
   }
 
-  /** Whether the user lets Desktop check for an updated list; on unless turned off. */
+  /** Whether the user lets the client check for an updated list; on unless turned off. */
   async readEnabled(): Promise<boolean> {
     const raw = await readJson(join(this.root, 'settings.json'));
     return !(typeof raw === 'object' && raw !== null && (raw as { enabled?: unknown }).enabled === false);

@@ -721,12 +721,18 @@ function CliApp() {
       // multiplexing, and the resolved default model. `wsManager` comes back
       // non-null only when a WS-consuming feature (Tavern) is enabled; it
       // carries feature events, never completions (see buildLlmBackend).
+      // Saved model servers other than the default model's join the /model picker as they answer.
+      const liveModels: { current: ModelInfo[] | null } = { current: null };
       const { llm, wsManager, models, modelInfo } = await buildLlmBackend({
         config,
         apiClient,
         tokenGetter,
         startupLog,
         getSessionId: () => useCliStore.getState().session?.id,
+        onModelsAdded: next => {
+          liveModels.current = next;
+          setState((prev: CliState) => ({ ...prev, availableModels: next }));
+        },
       });
 
       // Create new session with the ACTUAL model being used.
@@ -1192,7 +1198,7 @@ function CliApp() {
         mcpManager,
         permissionManager,
         config, // Store config for synchronous access
-        availableModels: models, // Store models for ConfigEditor
+        availableModels: liveModels.current ?? models, // Store models for ConfigEditor
         orchestrator, // Store orchestrator for step handler updates
         agentStore, // Store agent store for agent management commands
         contextContent: contextResult.mergedContent, // Store raw context for compact instructions

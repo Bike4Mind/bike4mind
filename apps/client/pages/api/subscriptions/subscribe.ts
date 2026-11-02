@@ -12,6 +12,7 @@ import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkou
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { backfillCustomerSignupMetadata, signupNetworkMetadata } from '@server/integrations/stripe/riskMetadata';
 import { readNetworkMeta } from '@server/auth/networkMeta';
 import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 import { Request } from 'express';
@@ -61,24 +62,36 @@ const handler = baseApi()
       throw new BadRequestError('User is already subscribed to this plan');
     }
 
+    // Renewal charges carry none of the subscription's metadata, so the signup network rides on
+    // the Customer, where Radar reads it as `::customer:signup_is_datacenter::` (riskMetadata.ts).
     if (!req.user.stripeCustomerId) {
       const customer = await createCustomer({
         email: req.user.email!,
         name: req.user.name!,
         type: CustomerType.User,
+        metadata: signupNetworkMetadata(req.user),
       });
       req.user.stripeCustomerId = customer.id;
       await userRepository.update({ id: req.user.id, stripeCustomerId: customer.id });
     } else {
       // Recreate the customer if missing from Stripe (we recently switched Stripe accounts).
       try {
-        await stripe.customers.retrieve(req.user.stripeCustomerId);
+        const existing = await stripe.customers.retrieve(req.user.stripeCustomerId);
+        await backfillCustomerSignupMetadata(
+          {
+            customerId: req.user.stripeCustomerId,
+            user: req.user,
+            existingMetadata: existing.deleted ? null : existing.metadata,
+          },
+          req.logger
+        );
       } catch (error) {
         if (error instanceof Stripe.errors.StripeError && error.code === 'resource_missing') {
           const customer = await createCustomer({
             email: req.user.email!,
             name: req.user.name!,
             type: CustomerType.User,
+            metadata: signupNetworkMetadata(req.user),
           });
           req.user.stripeCustomerId = customer.id;
           await userRepository.update({ id: req.user.id, stripeCustomerId: customer.id });

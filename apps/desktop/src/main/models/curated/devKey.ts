@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { curatedKeyFromSeed, type CuratedKey, type CuratedKeyRole } from '@bike4mind/local-models';
 
 // The seeds are public on purpose, so these keys prove nothing. Must stay in sync with
-// packages/scripts/src/curatedCatalog/devKey.ts, which refuses lists only they signed and scans builds for them.
+// packages/scripts/src/curatedCatalog/devKey.ts, which refuses lists only they signed and scans builds for them, and
+// packages/server-utils/src/modelHub/curatedDevKeys.ts.
 const CURATED_DEV_SEED_TEXTS: Record<CuratedKeyRole, string> = {
   signing: 'b4m-model-hub-curated-test-key',
   recovery: 'b4m-model-hub-curated-test-recovery-key',

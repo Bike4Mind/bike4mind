@@ -90,8 +90,8 @@ export interface ModelSourceDeps {
   resolveRuntime: () => Promise<RuntimeTarget>;
   /** Aborted on Ctrl-C. */
   signal: AbortSignal;
-  /** The bundled Curated list; a pull of one of its refs also honors the license the list records for it. */
-  curated?: () => HubManifest;
+  /** The Curated list in use; a pull of one of its refs also honors the license the list records for it. */
+  curated?: () => HubManifest | Promise<HubManifest>;
 }
 
 export type PullTarget = { kind: 'hub'; repo: string; tag: string | null } | { kind: 'ollama'; name: string };
@@ -472,7 +472,7 @@ export async function requireUnchangedLicenses(
 async function planOllamaPull(name: string, deps: ModelSourceDeps): Promise<OllamaPullPlan> {
   const { page } = parseOllamaName(name);
   const target = await requirePullable(deps);
-  const manifest = deps.curated?.();
+  const manifest = deps.curated ? await abortable(Promise.resolve(deps.curated()), deps.signal) : undefined;
   const curated = manifest ? curatedBuildForRef(manifest, name) : null;
   await requireCuratedRuntime(target, curated, deps.signal);
   const registry = await readRegistry(name, deps);
@@ -567,7 +567,7 @@ export async function planPull(
 
   const target = await requirePullable(deps);
   const ref = `hf.co/${detail.id}:${build.quant}`;
-  const manifest = deps.curated?.();
+  const manifest = deps.curated ? await abortable(Promise.resolve(deps.curated()), deps.signal) : undefined;
   const curated = manifest ? curatedBuildForRef(manifest, ref) : null;
   await requireCuratedRuntime(target, curated, deps.signal);
   return {
