@@ -26,6 +26,7 @@ import { readVisitLanding } from '@server/analytics/visitLanding';
  * the counting: a request with no visit cookie is the start of a visit and emits exactly
  * one event; a request that already carries one emits nothing and only slides the
  * inactivity window forward. One event per visit, by construction rather than by throttle.
+ * The pages a visit moves to after its landing are reported by the page beacon (page.ts).
  *
  * One exception to "emits at the start": a visitor still being asked for consent can't send a
  * source yet, and a visit's source is read from its one event alone. So a beacon awaiting
