@@ -13,11 +13,14 @@ import { resolveUserRateTier, type RateTierUser, type UserRateTier } from '@serv
 
 /**
  * Per-user hourly allowance of files entering the upload pipeline, counted per FILE (a 100-file batch
- * spends 100) in one bucket shared by every door into the pipeline: single and batch presign (including
+ * spends 100) in one bucket shared by these upload routes: single and batch presign (including
  * POST /api/v1/files), direct upload, URL import, generated-image copy, re-chunk and reprocess. Each
  * admitted file costs moderation, extraction and embedding downstream, so a per-request limit alone
- * would let a batch door multiply it. Callers spend only after their own admission gates, so a refused
- * request costs nothing.
+ * would let a batch door multiply it. Callers spend after their own route-level gates. The direct
+ * upload, URL import and generated-image copy routes spend BEFORE fabFilesService's type, size and
+ * storage-quota checks (and the URL fetch), so a refusal there costs one unit: those checks run inside
+ * the route's transaction, and the counter must stay outside it (a transaction would abort its
+ * duplicate-key retry and turn the per-user counter into a write-conflict hotspot).
  */
 
 // ms. Long enough that a bulk data-lake upload fits in one window at the paid default.

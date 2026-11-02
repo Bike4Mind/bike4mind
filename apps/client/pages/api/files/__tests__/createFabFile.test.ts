@@ -166,6 +166,16 @@ describe('POST /api/files/createFabFile - upload allowance', () => {
     ).rejects.toThrow(/datalake:write is required/);
     expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
   });
+
+  // Deliberate: the type, size and quota checks live inside fabFilesService.createFabFile, which runs
+  // in the route's transaction, and the allowance counter must not (see fileUploadBudget.ts).
+  it('spends the allowance before the service refuses an unsupported file type', async () => {
+    await expect(run(body({ fileName: 'a.exe', mimeType: 'application/x-msdownload' }), makeRes().res)).rejects.toThrow(
+      /is not supported/
+    );
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/files/createFabFile - data-lake tags', () => {
