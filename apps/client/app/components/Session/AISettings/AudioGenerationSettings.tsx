@@ -10,6 +10,7 @@ import {
   type VoiceOutputFormat,
 } from '@bike4mind/common';
 import { useAudioGenSettings, type AudioGenMode } from '@client/app/stores/useAudioGenSettings';
+import { VoiceSampleList } from '@client/app/components/AudioStudio/VoiceSampleList';
 
 const PROVIDERS = supportedVoiceGenerationVendor.options;
 
@@ -82,8 +83,8 @@ export const AudioGenerationSettings: React.FC<{ mode?: AudioGenMode }> = ({ mod
   const handleProviderChange = (next: VoiceGenerationVendor) => {
     setTtsProvider(next);
     // A voice id belongs to one provider ("Use these settings" on a saved ElevenLabs file restores
-    // its id), and the ElevenLabs branch offers no picker to clear it, so it would reach OpenAI and
-    // be rejected there. Empty means "my preferred voice / the provider default".
+    // its id), and the settings modal's ElevenLabs branch offers no picker to clear it, so it would
+    // reach OpenAI and be rejected there. Empty means "my preferred voice / the provider default".
     setVoice('');
     // Reset a now-unsupported format back to the universally-supported mp3.
     if (!VOICE_VENDOR_SUPPORTED_FORMATS[next].includes(format)) setFormat('mp3');
@@ -107,7 +108,16 @@ export const AudioGenerationSettings: React.FC<{ mode?: AudioGenMode }> = ({ mod
         </Select>
       </FormControl>
 
-      {ttsProvider === 'openai' ? (
+      {sectioned ? null : (
+        // Studio has the room to list every voice with a sample to audition; the settings modal
+        // keeps the compact dropdown below.
+        <FormControl size="sm">
+          <FormLabel>Voice</FormLabel>
+          <VoiceSampleList provider={ttsProvider} value={voice} onChange={setVoice} />
+        </FormControl>
+      )}
+
+      {sectioned && ttsProvider === 'openai' && (
         <FormControl size="sm">
           <FormLabel>Voice</FormLabel>
           <Select
@@ -124,7 +134,8 @@ export const AudioGenerationSettings: React.FC<{ mode?: AudioGenMode }> = ({ mod
             ))}
           </Select>
         </FormControl>
-      ) : (
+      )}
+      {sectioned && ttsProvider === 'elevenlabs' && (
         <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
           ElevenLabs uses the voice configured in your account settings.
         </Typography>

@@ -1,16 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 import { AudioGenerationSettings } from './AudioGenerationSettings';
 
+const { useElevenLabsVoicesMock } = vi.hoisted(() => ({
+  useElevenLabsVoicesMock: vi.fn(() => ({ data: undefined, isLoading: false, isError: true })),
+}));
+vi.mock('@client/app/hooks/data/elevenLabsVoices', () => ({ useElevenLabsVoices: useElevenLabsVoicesMock }));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-const renderSettings = () =>
+const renderSettings = (mode?: 'tts') =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <AudioGenerationSettings mode="tts" />
+      <AudioGenerationSettings mode={mode} />
     </CssVarsProvider>
   );
 
@@ -28,8 +33,8 @@ afterEach(() => useAudioGenSettings.getState().reset());
  * file's provider AND its voice id. A voice id belongs to one vendor only, and the ElevenLabs
  * branch offers no picker to clear it, so a stale id must not survive the switch.
  *
- * OpenAI -> ElevenLabs on purpose: the voice picker is unmounted for ElevenLabs, so the store
- * value can only change because the provider switch cleared it.
+ * OpenAI -> ElevenLabs in the settings modal on purpose: its voice picker is unmounted for
+ * ElevenLabs, so the store value can only change because the provider switch cleared it.
  */
 describe('AudioGenerationSettings provider switch', () => {
   it('drops the previous provider voice id instead of carrying it over', () => {
@@ -51,5 +56,23 @@ describe('AudioGenerationSettings provider switch', () => {
     useAudioGenSettings.setState({ ttsProvider: 'openai', format: 'opus' });
     pickProvider('ElevenLabs');
     expect(useAudioGenSettings.getState().format).toBe('opus');
+  });
+});
+
+describe('AudioGenerationSettings voice picker', () => {
+  it('lists every OpenAI voice with a sample in Studio, and selecting one sets the voice', () => {
+    renderSettings('tts');
+
+    expect(screen.queryByTestId('audio-gen-voice-select')).toBeNull();
+    expect(screen.getByTestId('voice-sample-play-alloy-btn')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('voice-sample-select-cedar-btn'));
+    expect(useAudioGenSettings.getState().voice).toBe('cedar');
+  });
+
+  it('keeps the compact dropdown in the settings modal', () => {
+    renderSettings();
+
+    expect(screen.getByTestId('audio-gen-voice-select')).toBeTruthy();
+    expect(screen.queryByTestId('voice-sample-list')).toBeNull();
   });
 });
