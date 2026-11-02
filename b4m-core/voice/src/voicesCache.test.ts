@@ -59,6 +59,14 @@ describe('fetchElevenLabsVoices', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps every key cached, so alternating keys do not evict each other', async () => {
+    const fetchImpl = mockFetch({ voices: [{ voice_id: 'v1', name: 'Alice' }] });
+
+    for (const key of ['key-a', 'key-b', 'key-a', 'key-b']) await fetchElevenLabsVoices(key, { fetchImpl });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('refetches when force=true', async () => {
     const fetchImpl = mockFetch({ voices: [{ voice_id: 'v1', name: 'Alice' }] });
 

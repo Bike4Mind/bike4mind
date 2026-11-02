@@ -5,10 +5,10 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 import { AudioGenerationSettings } from './AudioGenerationSettings';
 
-const { useElevenLabsVoicesMock } = vi.hoisted(() => ({
-  useElevenLabsVoicesMock: vi.fn(() => ({ data: undefined, isLoading: false, isError: true })),
+const { useElevenLabsTtsVoicesMock } = vi.hoisted(() => ({
+  useElevenLabsTtsVoicesMock: vi.fn(() => ({ data: [], isLoading: false, isError: false })),
 }));
-vi.mock('@client/app/hooks/data/elevenLabsVoices', () => ({ useElevenLabsVoices: useElevenLabsVoicesMock }));
+vi.mock('@client/app/hooks/data/ttsVoices', () => ({ useElevenLabsTtsVoices: useElevenLabsTtsVoicesMock }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 

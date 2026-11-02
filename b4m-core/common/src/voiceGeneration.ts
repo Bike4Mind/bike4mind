@@ -199,7 +199,8 @@ export type TtsVoiceOption = {
 
 // Voices selectable for OpenAI TTS synthesis. Single source of truth reused by
 // the Settings voice audition and the in-app audio generator. These are the
-// realtime-API voices, a subset shared with the TTS API (both accept them).
+// realtime-API voices; the TTS API accepts them all only on gpt-4o-mini-tts
+// (tts-1 rejects cedar and marin), see TTS_DEFAULT_MODEL in voicePricing.ts.
 // ElevenLabs resolves its voice server-side from the user's stored voiceId, so
 // this list is OpenAI-only.
 export const AVAILABLE_TTS_VOICES: readonly TtsVoiceOption[] = [
@@ -209,3 +210,14 @@ export const AVAILABLE_TTS_VOICES: readonly TtsVoiceOption[] = [
   { value: 'marin', label: 'Marin', description: 'Natural and expressive (Female)' },
   { value: 'shimmer', label: 'Shimmer', description: 'Energetic and vibrant (Female)' },
 ] as const;
+
+/** What every pre-recorded voice sample says. */
+export const TTS_VOICE_SAMPLE_TEXT =
+  "Hello! This is how my voice sounds. I'm ready to help you with anything you need.";
+
+/**
+ * Where the client serves an OpenAI voice's pre-recorded sample (apps/client/public). OpenAI hosts
+ * no sample clips, so they are generated once by `pnpm --filter @bike4mind/scripts
+ * voice-samples:generate`; re-run it after adding a voice or changing TTS_DEFAULT_MODEL.openai.
+ */
+export const openAiVoiceSamplePath = (voice: string) => `/audio/voice-samples/openai/${voice}.mp3`;

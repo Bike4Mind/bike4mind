@@ -1,17 +1,18 @@
 import { CircularProgress, IconButton, List, ListItem, ListItemButton, ListItemContent, Typography } from '@mui/joy';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
-import { AVAILABLE_TTS_VOICES, type VoiceGenerationVendor } from '@bike4mind/common';
-import { useElevenLabsVoices, type ElevenLabsVoice } from '@client/app/hooks/data/elevenLabsVoices';
-import { getOpenAiVoiceSample } from './openAiVoiceSample';
-import { useVoiceSamplePlayer, type VoiceSampleSource } from './useVoiceSamplePlayer';
+import { AVAILABLE_TTS_VOICES, openAiVoiceSamplePath, type VoiceGenerationVendor } from '@bike4mind/common';
+import type { ElevenLabsVoice } from '@client/app/hooks/data/elevenLabsVoices';
+import { useElevenLabsTtsVoices } from '@client/app/hooks/data/ttsVoices';
+import { useVoiceSamplePlayer } from './useVoiceSamplePlayer';
 
 type VoiceRow = {
   /** '' is the "provider default" row: the user's preferred / account voice. */
   value: string;
   label: string;
   description?: string;
-  sample?: VoiceSampleSource;
+  /** URL of a pre-recorded sample clip. */
+  sample?: string;
 };
 
 type VoiceSampleListProps = {
@@ -47,13 +48,7 @@ const VoiceRows = ({ rows, value, onChange }: { rows: VoiceRow[]; value: string;
                   onClick={() => row.sample && void player.toggle(row.value, row.sample)}
                   data-testid={`voice-sample-play-${testId}-btn`}
                 >
-                  {isActive && player.isLoading ? (
-                    <CircularProgress size="sm" sx={{ '--CircularProgress-size': '16px' }} />
-                  ) : isActive ? (
-                    <StopIcon fontSize="small" />
-                  ) : (
-                    <PlayArrowIcon fontSize="small" />
-                  )}
+                  {isActive ? <StopIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
                 </IconButton>
               )
             }
@@ -87,19 +82,22 @@ const OPENAI_ROWS: VoiceRow[] = [
     value: voice.value,
     label: voice.label,
     description: voice.description,
-    sample: () => getOpenAiVoiceSample(voice.value),
+    sample: openAiVoiceSamplePath(voice.value),
   })),
 ];
 
 const describeElevenLabsVoice = ({ labels }: ElevenLabsVoice) =>
-  [labels.gender, labels.age, labels.accent, labels.description ?? labels.descriptive].filter(Boolean).join(', ') ||
-  undefined;
+  // ElevenLabs labels are snake_case ids ("middle_aged"), not display text.
+  [labels.gender, labels.age, labels.accent, labels.description ?? labels.descriptive]
+    .filter(Boolean)
+    .map(label => label.replace(/_/g, ' '))
+    .join(', ') || undefined;
 
 const ElevenLabsVoiceRows = ({ value, onChange }: Omit<VoiceSampleListProps, 'provider'>) => {
-  const { data: voices, isLoading, isError } = useElevenLabsVoices();
+  const { data: voices, isLoading, isError } = useElevenLabsTtsVoices();
 
   if (isLoading) return <CircularProgress size="sm" data-testid="voice-sample-list-loading" />;
-  // The catalog needs Voice v2 and a server ElevenLabs key; without them the account voice is used.
+  // Empty when no ElevenLabs key is configured; synthesis then uses the account voice.
   if (isError || !voices?.length) {
     return (
       <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
@@ -122,7 +120,7 @@ const ElevenLabsVoiceRows = ({ value, onChange }: Omit<VoiceSampleListProps, 'pr
 
 /**
  * Studio's voice picker: every voice the provider offers, each with a sample to audition before
- * picking it. OpenAI samples are generated on first play; ElevenLabs serves hosted clips.
+ * picking it. Every sample is pre-recorded: OpenAI's ship in apps/client/public, ElevenLabs hosts its own.
  */
 export const VoiceSampleList = ({ provider, value, onChange }: VoiceSampleListProps) =>
   provider === 'openai' ? (

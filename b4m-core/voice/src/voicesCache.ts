@@ -1,8 +1,9 @@
 /**
  * Fetches and caches the ElevenLabs workspace voices list. The list rarely
  * changes (admins occasionally add/remove voices in the dashboard) so a
- * 15-minute in-memory TTL is plenty. Keyed on the API key so per-environment
- * caches (dev/staging/prod, test fixtures) don't bleed into each other.
+ * 15-minute in-memory TTL is plenty. One entry per API key: the admin key and
+ * each user's own key (Studio's picker lists the caller's account) see
+ * different workspaces, and must not evict one another.
  */
 
 export interface ElevenLabsVoice {
@@ -15,7 +16,6 @@ export interface ElevenLabsVoice {
 }
 
 interface CacheEntry {
-  key: string;
   voices: ElevenLabsVoice[];
   expiresAt: number;
 }
@@ -23,7 +23,10 @@ interface CacheEntry {
 const VOICES_ENDPOINT = 'https://api.elevenlabs.io/v1/voices';
 const TTL_MS = 15 * 60 * 1000;
 
-let _cache: CacheEntry | null = null;
+// Bounds memory when many users bring their own key; the oldest entry is evicted first.
+const MAX_ENTRIES = 200;
+
+const _cache = new Map<string, CacheEntry>();
 
 export interface FetchElevenLabsVoicesOptions {
   /** Override fetch for tests. */
@@ -49,8 +52,9 @@ export async function fetchElevenLabsVoices(
 ): Promise<ElevenLabsVoice[]> {
   if (!apiKey) throw new Error('ElevenLabs API key is required to fetch voices');
 
-  if (!options.force && _cache && _cache.key === apiKey && Date.now() < _cache.expiresAt) {
-    return _cache.voices;
+  const cached = _cache.get(apiKey);
+  if (!options.force && cached && Date.now() < cached.expiresAt) {
+    return cached.voices;
   }
 
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -72,11 +76,14 @@ export async function fetchElevenLabsVoices(
     ...(v.preview_url ? { previewUrl: v.preview_url } : {}),
   }));
 
-  _cache = { key: apiKey, voices, expiresAt: Date.now() + TTL_MS };
+  _cache.delete(apiKey);
+  _cache.set(apiKey, { voices, expiresAt: Date.now() + TTL_MS });
+  const oldest = _cache.keys().next().value;
+  if (_cache.size > MAX_ENTRIES && oldest !== undefined) _cache.delete(oldest);
   return voices;
 }
 
 /** Test-only: drop the cache. */
 export function clearElevenLabsVoicesCache(): void {
-  _cache = null;
+  _cache.clear();
 }
