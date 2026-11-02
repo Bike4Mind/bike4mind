@@ -11,6 +11,24 @@ final class DeepLinkRouterTests: XCTestCase {
     XCTAssertEqual(route("https://app.bike4mind.com/sessions/65f0c0ffee"), .session(id: "65f0c0ffee"))
   }
 
+  func testNotebookURLRoutesToSessionDetail() {
+    XCTAssertEqual(route("https://app.bike4mind.com/notebooks/65f0c0ffee"), .session(id: "65f0c0ffee"))
+    XCTAssertEqual(route("https://app.bike4mind.com/sessions/65f0c0ffee"), .session(id: "65f0c0ffee"))
+    XCTAssertEqual(route("https://app.bike4mind.com/notebooks"), .sessions)
+  }
+
+  func testNotebookPathWithANonIDSuffixStillOpensTheSession() {
+    XCTAssertEqual(route("https://app.bike4mind.com/notebooks/abc123/files"), .session(id: "abc123"))
+    XCTAssertEqual(route("https://app.bike4mind.com/notebooks/abc123/?tab=chat"), .session(id: "abc123"))
+    let malformed = URL(string: "https://app.bike4mind.com/notebooks/..%2F..%2Fadmin")!
+    XCTAssertEqual(DeepLinkRouter.route(url: malformed), .web(malformed))
+  }
+
+  func testPayloadNotebookDeepLinkRoutes() {
+    let payload = NotificationPayload(userInfo: ["deepLink": "https://app.bike4mind.com/notebooks/s1"])
+    XCTAssertEqual(payload.route, .session(id: "s1"))
+  }
+
   func testTrailingSlashQueryAndFragmentAreIgnored() {
     XCTAssertEqual(route("https://app.bike4mind.com/sessions/abc123/"), .session(id: "abc123"))
     XCTAssertEqual(route("https://app.bike4mind.com/sessions/abc123?questId=9#top"), .session(id: "abc123"))

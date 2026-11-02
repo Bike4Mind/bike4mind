@@ -19,7 +19,8 @@ public enum DeepLinkRouter {
     let identifier = segments.dropFirst().first
 
     switch first {
-    case "sessions":
+    // The web app (and the server's push deep links) call a session a notebook.
+    case "sessions", "notebooks":
       guard let identifier else { return .sessions }
       return isValidIdentifier(identifier) ? .session(id: identifier) : .web(url)
     case "lakes":
