@@ -182,6 +182,20 @@ const UserPreferencesSchema = new Schema(
     showSplashCards: { type: Boolean },
     desktopPromoDismissed: { type: Boolean },
     promptCacheTtl: { type: String, enum: ['5m', '1h'] },
+    // Must stay in sync with PUSH_NOTIFICATION_CATEGORIES (@bike4mind/common). No defaults: absent means on.
+    pushNotifications: {
+      type: new Schema(
+        {
+          agent_completed: { type: Boolean },
+          agent_failed: { type: Boolean },
+          approval_needed: { type: Boolean },
+          chat_completed: { type: Boolean },
+          generation_ready: { type: Boolean },
+          agent_message: { type: Boolean },
+        },
+        { _id: false }
+      ),
+    },
   },
   { _id: false }
 );

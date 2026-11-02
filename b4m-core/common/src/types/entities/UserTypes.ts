@@ -3,6 +3,7 @@ import { ISessionDocument } from './SessionTypes';
 import { IRegInviteDocument } from './RegistrationInviteType';
 import { IOrganizationDocument } from './OrganizationTypes';
 import { ICounters } from './CounterTypes';
+import type { PushNotificationPreferences } from '../../schemas/pushNotification';
 import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
@@ -238,6 +239,8 @@ export interface IUserPreferences {
   desktopPromoDismissed?: boolean;
   /** Prompt-cache lifetime for web chats that haven't picked their own, on models that support both. Default: '5m'. */
   promptCacheTtl?: '5m' | '1h';
+  /** Per-category push opt-outs for first-party native clients; a missing key means on (see isPushCategoryEnabled). */
+  pushNotifications?: PushNotificationPreferences;
 }
 
 /**

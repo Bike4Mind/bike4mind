@@ -5,6 +5,7 @@ import {
   IUserDocument,
   IUserPreferences,
   IUserRepository,
+  PushNotificationPreferencesSchema,
   USERNAME_RULES_MESSAGE,
   usernameSchema,
 } from '@bike4mind/common';
@@ -102,6 +103,7 @@ export const updateUserSchema = z.object({
       showSplashCards: z.boolean().optional(),
       desktopPromoDismissed: z.boolean().optional(),
       promptCacheTtl: z.enum(['5m', '1h']).optional(),
+      pushNotifications: PushNotificationPreferencesSchema.optional(),
     })
     .nullable()
     .optional(),
@@ -194,7 +196,8 @@ export function toUserUpdatePartial(
  * `preferences` is merged onto the stored object, not replaced, so a partial write cannot
  * silently drop keys the caller omitted. An explicit `null` still clears the whole object -
  * that is the only way to remove individual keys. `experimentalFeatures` is merged one level
- * deeper (mirrors the client in UserSettingsContext); nothing else in the schema nests.
+ * deeper (mirrors the client in UserSettingsContext), and so is `pushNotifications`, so toggling one
+ * category cannot reset the others; nothing else in the schema nests.
  */
 function mergePreferences(
   stored: IUserPreferences | null | undefined,
@@ -206,6 +209,9 @@ function mergePreferences(
     ...incoming,
     ...(incoming.experimentalFeatures !== undefined && {
       experimentalFeatures: { ...base.experimentalFeatures, ...incoming.experimentalFeatures },
+    }),
+    ...(incoming.pushNotifications !== undefined && {
+      pushNotifications: { ...base.pushNotifications, ...incoming.pushNotifications },
     }),
   };
 }

@@ -165,6 +165,7 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     temperature: { type: Number, min: 0, max: 2 },
     maxTokens: { type: Number, min: 1, max: 200000 },
     maxCreditsPerMember: { type: Number, required: false },
+    redactPushContent: { type: Boolean, default: false },
   },
   {
     virtuals: true,
