@@ -193,7 +193,7 @@ export function InstalledTab({
       >
         <Typography level="title-md">Ollama is not running</Typography>
         <Typography level="body-sm" sx={{ maxWidth: 440 }}>
-          The models Ollama has show here once it is running.
+          Your Ollama models show here once it is running.
         </Typography>
       </Stack>
     );
