@@ -6,7 +6,12 @@ import {
   PullIdleTimeoutError,
   RuntimeConnectionError,
   RuntimeHttpError,
+  checkApproval,
+  checkInstalledDigest,
+  checkReviewedLayers,
+  checkRuntime,
   curatedLibrary as libraryOf,
+  curatedLicensesMatch,
   curatedListing,
   curatedOllamaBlocked as ollamaBlocked,
   curatedParamsLabel as paramsLabel,
@@ -14,7 +19,7 @@ import {
   curatedPins as pinsOf,
   curatedRunner,
   curatedSource,
-  installedReviewed,
+  hubBuildId,
   isAbliteratedModel,
   isCuratedListable as listable,
   isCuratedPullable as pullable,
@@ -23,7 +28,9 @@ import {
   type HardwareProfile,
   ollamaPullRef,
   ollamaRefAliases,
-  servesReviewed,
+  pullBlock,
+  sameRepo,
+  type ApprovalFailure,
   type HubGgufBuild,
   type HubModelDetail,
   type HubModelSummary,
@@ -34,9 +41,14 @@ import {
   type LoadedModel,
   type ModelArch,
   type ModelInspection,
+  type LayersCheck,
+  type LayerSources,
   type OllamaRegistryLayers,
+  type PullApproval,
+  type PullBlock,
   type PullOptions,
   type PullProgress,
+  type RuntimeCheck,
   type RuntimeHealth,
 } from '@bike4mind/local-models';
 import type { HubBuild, HubEntry, HubManifest } from '@bike4mind/common';
@@ -178,9 +190,6 @@ const DEFAULT_CHECK_BACKOFF_MS = [1_000, 3_000];
 const SEARCH_LIMIT = 30;
 const OLLAMA_LIBRARY_URL = 'https://ollama.com/library';
 
-const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-const hubBuildId = (path: string) => path.replace(/\.gguf$/i, '');
-
 const EXPLORE_HINT = ' You can still review the repo in Explore.';
 const LAYERS_CHANGED =
   "This model's weights, chat template, settings or license changed at its source since Bike4Mind reviewed it, " +
@@ -190,8 +199,6 @@ const LICENSE_CHANGED =
   'Curated does not offer it.' +
   EXPLORE_HINT;
 const NOW_ABLITERATED = 'Hugging Face now marks this repo as abliterated, so Curated does not offer it.';
-
-const licenseSet = (ids: readonly string[]) => [...new Set(ids.map(id => id.toLowerCase()))].sort().join(',');
 
 /** Waits `ms`; false when `signal` aborts first. */
 function pause(ms: number, signal: AbortSignal): Promise<boolean> {
@@ -240,17 +247,86 @@ const refused = (kind: ModelHubErrorKind, message: string, listed = false): Refu
 
 /** Refuses a download unless the target's Ollama is running and, for a curated build, new enough for it. */
 function runtimeRefusal(health: RuntimeHealth, build: HubBuild | null, target: Target): Refusal | null {
-  if (!health.ok)
+  const checked = checkRuntime(health, build);
+  return checked.ok ? null : runtimeCheckRefusal(checked, target);
+}
+
+function runtimeCheckRefusal(failure: Exclude<RuntimeCheck, { ok: true }>, target: Target): Refusal {
+  if (failure.reason === 'runtime-unreachable')
     return refused(
       'runtime-unavailable',
       target.local
         ? 'Ollama is not running. Start it, then retry.'
-        : (health.error ?? `Could not reach ${target.name}. Check it, then retry.`),
+        : (failure.error ?? `Could not reach ${target.name}. Check it, then retry.`),
       true
     );
-  const blocked = build && ollamaBlocked(build, health.version);
   const where = target.local ? 'Ollama' : `Ollama on ${target.name}`;
-  return blocked ? refused('cannot-pull', `${blocked}. Update ${where}, then download it.`) : null;
+  return refused('cannot-pull', `${failure.blocked}. Update ${where}, then download it.`);
+}
+
+function layersError(failure: Exclude<LayersCheck, { ok: true }>, reviewed: HubBuild): ModelHubError {
+  const library = libraryOf(reviewed);
+  const hint = library ? '' : EXPLORE_HINT;
+  if (failure.reason === 'layers-no-source')
+    return hubError('cannot-pull', 'Bike4Mind has no reviewed source for this build, so it cannot be checked.');
+  if (failure.reason === 'layers-not-served')
+    return hubError(
+      'upstream-changed',
+      library
+        ? `The Ollama library no longer serves ${library.ref}, so Curated cannot offer it.`
+        : `Hugging Face no longer serves the ${reviewed.quant.label} build of this repo to Ollama, so Curated ` +
+            `cannot offer it.${hint}`
+    );
+  return hubError('upstream-changed', LAYERS_CHANGED + hint);
+}
+
+/** Words a refused approval for the pull dialog; `listed` keeps it in the pull list as a failed download. */
+function approvalRefusal(
+  failure: ApprovalFailure,
+  approval: PullApproval,
+  tokenSent: boolean,
+  target: Target
+): Refusal {
+  switch (failure.reason) {
+    case 'not-listed':
+      return refused('not-found', 'That model is not on the list.');
+    case 'cancelled':
+      return refused('cancelled', 'Download cancelled.');
+    case 'build-missing':
+      return refused('not-found', 'That build is no longer in this repo.');
+    case 'changed':
+      return approval.source === 'library'
+        ? refused('changed', 'The curated list changed since you reviewed this model. Click Download again.')
+        : refused(
+            'changed',
+            'This repo changed since you reviewed it. Click Download again to review it as it is now.'
+          );
+    case 'abliterated':
+      return refused('upstream-changed', NOW_ABLITERATED);
+    case 'license-changed':
+      return refused('upstream-changed', LICENSE_CHANGED);
+    case 'blocked':
+      return refused('cannot-pull', blockMessage(failure.block, tokenSent));
+    case 'license-required':
+      return refused('license-required', 'Accept the license before downloading.');
+    case 'access-required':
+      return refused('access-required', 'Confirm the Hugging Face access steps before downloading.');
+    case 'unverified':
+      return refused(
+        'unverified',
+        'Hugging Face could not confirm Ollama would get this exact file, so it was not downloaded.',
+        true
+      );
+    case 'runtime-unreachable':
+    case 'runtime-too-old':
+      return runtimeCheckRefusal(failure, target);
+    case 'layers-no-source':
+    case 'layers-not-served':
+    case 'layers-changed':
+      // Only a curated approval checks layers.
+      if (!approval.curated) return refused('not-found', 'That model is not on the list.');
+      return { ok: false, error: layersError(failure, approval.curated.build), listed: false };
+  }
 }
 
 interface Target extends ModelHubServer {
@@ -406,18 +482,29 @@ function toCard(model: HubModelSummary): HubModelCard {
 }
 
 function blockedReason(detail: HubModelDetail, build: HubGgufBuild, tokenSent: boolean): string | null {
-  if (build.split) return 'Split into several files, which Ollama cannot pull from Hugging Face.';
-  if (!build.complete) return 'Some of its files are missing from the repo.';
-  if (build.ollamaRefIssue === 'no-quant-label') return 'Its file name has no quant label Ollama can pull by.';
-  if (build.ollamaRefIssue === 'unsupported-name') return "Its repo or file name breaks Ollama's naming rules.";
-  if (build.ollamaRefIssue === 'unsupported-quant') return 'Ollama cannot pull this quant from Hugging Face yet.';
-  if (!build.files[0]?.sha256)
-    return !detail.ollamaNeedsSshKey
-      ? 'Hugging Face lists no checksum for this file, so the download cannot be verified.'
-      : tokenSent
+  const block = pullBlock(detail, build);
+  return block && blockMessage(block, tokenSent);
+}
+
+function blockMessage(block: PullBlock, tokenSent: boolean): string {
+  switch (block) {
+    case 'split':
+      return 'Split into several files, which Ollama cannot pull from Hugging Face.';
+    case 'incomplete':
+      return 'Some of its files are missing from the repo.';
+    case 'no-quant-label':
+      return 'Its file name has no quant label Ollama can pull by.';
+    case 'unsupported-name':
+      return "Its repo or file name breaks Ollama's naming rules.";
+    case 'unsupported-quant':
+      return 'Ollama cannot pull this quant from Hugging Face yet.';
+    case 'no-checksum':
+      return 'Hugging Face lists no checksum for this file, so the download cannot be verified.';
+    case 'needs-access':
+      return tokenSent
         ? 'Needs access: your Hugging Face token cannot read this file yet. Request access on the repo page.'
         : 'Needs access: add a Hugging Face token from an account that has been granted access.';
-  return null;
+  }
 }
 
 function hubAccess(detail: HubModelDetail, tokenSent: boolean): HubAccess {
@@ -689,31 +776,21 @@ export class ModelHubService {
 
   /** Refuses unless the registry serves the reviewed weights and pinned layers; `tag` is the hf.co tag. */
   async #checkLayers(reviewed: HubBuild, tag: string | null, signal?: AbortSignal): Promise<ModelHubError | null> {
-    const library = libraryOf(reviewed);
-    const hint = library ? '' : EXPLORE_HINT;
-    let live: OllamaRegistryLayers | null;
-    if (library) live = await this.#deps.libraryLayers(library.ref, { signal });
-    else if (reviewed.hf && tag) live = await (await this.#hub()).hub.ollamaLayers(reviewed.hf.repo, tag, { signal });
-    else return hubError('cannot-pull', 'Bike4Mind has no reviewed source for this build, so it cannot be checked.');
-    if (!live)
-      return hubError(
-        'upstream-changed',
-        library
-          ? `The Ollama library no longer serves ${library.ref}, so Curated cannot offer it.`
-          : `Hugging Face no longer serves the ${reviewed.quant.label} build of this repo to Ollama, so Curated ` +
-              `cannot offer it.${hint}`
-      );
-    return servesReviewed(live, reviewed) ? null : hubError('upstream-changed', LAYERS_CHANGED + hint);
+    const checked = await checkReviewedLayers(reviewed, tag, this.#layerSources(), signal);
+    return checked.ok ? null : layersError(checked, reviewed);
+  }
+
+  #layerSources(): LayerSources {
+    return {
+      libraryLayers: (ref, options) => this.#deps.libraryLayers(ref, options),
+      hfLayers: async (repo, tag, options) => (await this.#hub()).hub.ollamaLayers(repo, tag, options),
+    };
   }
 
   /** Refuses unless the repo's card and its base model's card declare the reviewed licenses, no more, no fewer. */
   async #checkLicenses(entry: HubEntry, detail: HubModelDetail, signal?: AbortSignal): Promise<ModelHubError | null> {
-    if (licenseSet(detail.licenses) !== licenseSet([entry.license.cardTag ?? entry.license.id]))
-      return hubError('upstream-changed', LICENSE_CHANGED);
-    const base = await (await this.#hub()).hub.getModel(entry.lineage.base, { signal });
-    return licenseSet(base.licenses) === licenseSet([entry.license.base.id])
-      ? null
-      : hubError('upstream-changed', LICENSE_CHANGED);
+    const matches = await curatedLicensesMatch(entry, detail, async () => (await this.#hub()).hub, signal);
+    return matches ? null : hubError('upstream-changed', LICENSE_CHANGED);
   }
 
   /**
@@ -744,22 +821,23 @@ export class ModelHubService {
       return hubError('unverified', `${why} It is still installed; remove it from Installed unless you trust it.`);
     }
     this.#unverified.delete(key);
-    if (installedReviewed(inspection, reviewed)) return null;
+    const checked = await checkInstalledDigest(inspection, reviewed, {
+      hadTag,
+      remove: () => target.runtime.remove(ref),
+    });
+    if (checked.ok) return null;
     const changed = (outcome: string) =>
       hubError('upstream-changed', `${LAYERS_CHANGED} ${outcome}${libraryOf(reviewed) ? '' : EXPLORE_HINT}`);
-    if (hadTag !== false)
+    if (checked.outcome === 'left-in-place')
       return changed(
-        hadTag
+        checked.hadTag
           ? `${ref} was installed before this download, so Bike4Mind left it in place.`
           : `Bike4Mind could not tell whether ${ref} was installed before this download, so it left it in place.`
       );
-    try {
-      await target.runtime.remove(ref);
-    } catch {
+    if (checked.outcome === 'remove-failed')
       return changed(
         `Bike4Mind could not remove it, so the unreviewed model ${ref} is still installed. Remove it from Installed.`
       );
-    }
     return changed('Bike4Mind removed what Ollama downloaded.');
   }
 
@@ -1254,12 +1332,8 @@ export class ModelHubService {
     let token = false;
     let prepared: Prepared;
     try {
-      const session = await this.#hub();
-      token = session.token;
-      prepared =
-        curated && libraryOf(curated.build)
-          ? await this.#prepareLibrary(curated, request, entry, target, controller.signal)
-          : await this.#prepareHub(session, request, curated, entry, target, controller.signal);
+      token = (await this.#hub()).token;
+      prepared = await this.#prepare(request, curated, entry, target, token, controller.signal);
     } catch (error) {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       return this.#fail(key, entry, toModelHubError(error, token));
@@ -1341,89 +1415,46 @@ export class ModelHubService {
     return { ok: true, ref };
   }
 
-  async #prepareHub(
-    { hub, token }: HubSession,
+  /** A library build has no Hugging Face repo: the reviewed manifest digest is sent as its revision. */
+  async #prepare(
     request: ModelPullRequest,
     curated: { entry: HubEntry; build: HubBuild } | null,
     entry: PullEntry,
     target: Target,
+    tokenSent: boolean,
     signal: AbortSignal
   ): Promise<Prepared> {
-    if (
-      curated &&
-      (!curated.build.hf ||
-        !sameRepo(curated.build.hf.repo, request.repo) ||
-        hubBuildId(curated.build.weights[0].path) !== request.buildId)
-    )
-      return refused('not-found', 'That model is not on the list.');
-    // Read fresh: a card edit (say, a new license) is a new commit, and it must still be the one the dialog showed.
-    const detail = await hub.getModel(request.repo, { refresh: true });
-    if (signal.aborted) return refused('cancelled', 'Download cancelled.');
-    const build = detail.builds.find((candidate: HubGgufBuild) => candidate.id === request.buildId);
-    if (!build) return refused('not-found', 'That build is no longer in this repo.');
-    if (detail.revision !== request.revision || build.sizeBytes !== request.sizeBytes)
-      return refused(
-        'changed',
-        'This repo changed since you reviewed it. Click Download again to review it as it is now.'
-      );
-    if (curated) {
-      if (isAbliteratedModel(detail)) return refused('upstream-changed', NOW_ABLITERATED);
-      const licenses = await this.#checkLicenses(curated.entry, detail, signal);
-      if (licenses) return { ok: false, error: licenses, listed: false };
-    }
-    const reason = blockedReason(detail, build, token);
-    if (reason) return refused('cannot-pull', reason);
-    const restricted = licenseKind(detail.licenses) === 'restricted' || (curated && !permissive(curated.entry));
-    if (restricted && !request.acceptLicense)
-      return refused('license-required', 'Accept the license before downloading.');
-    if (detail.ollamaNeedsSshKey && !request.confirmAccess)
-      return refused('access-required', 'Confirm the Hugging Face access steps before downloading.');
-    entry.view = { ...entry.view, label: build.label, expectedBytes: build.sizeBytes };
-
-    const health = await target.runtime.health();
-    if (signal.aborted) return refused('cancelled', 'Download cancelled.');
-    const runtime = runtimeRefusal(health, curated?.build ?? null, target);
-    if (runtime) return runtime;
-    // The registry serves the first file whose name ends with the tag; only its manifest proves which one.
-    const ref = await hub.verifyOllamaRef(detail, build, { signal });
-    if (signal.aborted) return refused('cancelled', 'Download cancelled.');
-    if (!ref)
-      return refused(
-        'unverified',
-        'Hugging Face could not confirm Ollama would get this exact file, so it was not downloaded.',
-        true
-      );
-    if (curated) {
-      const layers = await this.#checkLayers(curated.build, ref.slice(ref.lastIndexOf(':') + 1), signal);
-      if (layers) return { ok: false, error: layers, listed: false };
-    }
-    return { ok: true, ref };
-  }
-
-  /** A library build has no Hugging Face repo: the reviewed manifest digest stands in for its revision. */
-  async #prepareLibrary(
-    curated: { entry: HubEntry; build: HubBuild },
-    request: ModelPullRequest,
-    entry: PullEntry,
-    target: Target,
-    signal: AbortSignal
-  ): Promise<Prepared> {
-    const library = libraryOf(curated.build);
-    if (!library || request.repo !== library.ref || request.buildId !== curated.build.id)
-      return refused('not-found', 'That model is not on the list.');
-    if (request.revision !== library.digest || request.sizeBytes !== library.sizeBytes)
-      return refused('changed', 'The curated list changed since you reviewed this model. Click Download again.');
-    if (!permissive(curated.entry) && !request.acceptLicense)
-      return refused('license-required', 'Accept the license before downloading.');
-    entry.view = { ...entry.view, label: curated.build.quant.label, expectedBytes: library.sizeBytes };
-
-    const health = await target.runtime.health();
-    if (signal.aborted) return refused('cancelled', 'Download cancelled.');
-    const runtime = runtimeRefusal(health, curated.build, target);
-    if (runtime) return runtime;
-    const layers = await this.#checkLayers(curated.build, null, signal);
-    if (layers) return { ok: false, error: layers, listed: false };
-    return { ok: true, ref: library.ref };
+    const approval: PullApproval =
+      curated && libraryOf(curated.build)
+        ? {
+            source: 'library',
+            ref: request.repo,
+            buildId: request.buildId,
+            manifestDigest: request.revision,
+            sizeBytes: request.sizeBytes,
+            licenseAccepted: request.acceptLicense,
+            curated,
+          }
+        : {
+            source: 'hf',
+            repo: request.repo,
+            buildId: request.buildId,
+            revision: request.revision,
+            sizeBytes: request.sizeBytes,
+            licenseAccepted: request.acceptLicense,
+            accessConfirmed: request.confirmAccess,
+            curated,
+          };
+    const checked = await checkApproval(approval, {
+      hub: async () => (await this.#hub()).hub,
+      libraryLayers: (ref, options) => this.#deps.libraryLayers(ref, options),
+      health: () => target.runtime.health(),
+      signal,
+      onReviewed: ({ label, sizeBytes }) => {
+        entry.view = { ...entry.view, label, expectedBytes: sizeBytes };
+      },
+    });
+    return checked.ok ? checked : approvalRefusal(checked, approval, tokenSent, target);
   }
 
   /** Cancels a running pull; a paused one has nothing running, so it is cleared. */

@@ -85,6 +85,33 @@ export {
   type CuratedVerifyFailure,
   type CuratedVerifyResult,
 } from './curatedSignature';
+export {
+  checkApproval,
+  checkInstalledDigest,
+  checkReviewedLayers,
+  checkRuntime,
+  curatedLicensesMatch,
+  hubBuildId,
+  licensesChanged,
+  manifestChange,
+  pullBlock,
+  sameRepo,
+  type ApprovalDeps,
+  type ApprovalFailure,
+  type ApprovalResult,
+  type ApprovedCurated,
+  type HubPullApproval,
+  type InstalledCheck,
+  type LayersCheck,
+  type LayerSources,
+  type LibraryPullApproval,
+  type PullApproval,
+  type PullBlock,
+  type PullCheckHub,
+  type RegistryManifestFacts,
+  type RuntimeCheck,
+} from './pulls';
+export { licenseKind, type LicenseKind } from './licenses';
 export { BodyTooLargeError, DEFAULT_REQUEST_TIMEOUT_MS, readCapped } from './http';
 export { archFromModelInfo, tensorStatsFromTensors } from './arch';
 export {

@@ -1,7 +1,8 @@
 /**
  * Local model logic shared by `b4m models` (src/commands/modelsCommand.ts) and the MCP model tools
  * (src/mcp/modelTools.ts): ref parsing, runtime resolution, build and license checks, and pull planning.
- * Each surface does its own output and asks the user its own way.
+ * Each surface does its own output and asks the user its own way. The pull checks shared with Desktop and the
+ * model host live in @bike4mind/local-models (src/pulls); this file words their refusals for the terminal.
  */
 
 import {
@@ -10,19 +11,20 @@ import {
   HuggingFaceHub,
   ModelNotFoundError,
   OllamaRuntime,
+  checkInstalledDigest,
+  checkReviewedLayers,
+  checkRuntime,
   curatedBuildForRef,
   curatedEntryForRef,
-  curatedLibrary,
-  curatedOllamaBlocked,
   detectRuntimes,
   findHubBuild,
   hubBuildTag,
-  installedReviewed,
   isAbliteratedModel,
   isHubRepoId,
+  licensesChanged,
+  manifestChange,
   ollamaModelKey,
   isPermissiveEntry,
-  servesReviewed,
   type DetectedRuntime,
   type HubGgufBuild,
   type HubModelDetail,
@@ -429,10 +431,6 @@ function changedSinceReview(subject: string, what: string): Error {
   );
 }
 
-const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((entry, index) => entry === b[index]);
-
-const sameEntries = (a: string[], b: string[]) => sameList([...a].sort(), [...b].sort());
-
 /**
  * Re-reads the manifest after the user approved it, because Ollama then pulls by tag and a tag can move.
  * Refuses when the license texts or layers differ from the ones shown.
@@ -443,8 +441,9 @@ export async function requireUnchangedManifest(
   deps: RegistryReader
 ): Promise<void> {
   const now = await readRegistry(name, deps);
-  if (!sameList(now.licenses, shown.licenses)) throw changedSinceReview(clean(name), 'its license text changed');
-  if (!sameList(now.layers, shown.layers)) {
+  const change = manifestChange(shown, now);
+  if (change === 'licenses') throw changedSinceReview(clean(name), 'its license text changed');
+  if (change === 'layers') {
     throw changedSinceReview(clean(name), `the registry now serves ${shortDigest(now.digest)}`);
   }
 }
@@ -461,7 +460,7 @@ export async function requireUnchangedLicenses(
   // The Hub may list the same ids in another order; the label is rebuilt in the order the user saw.
   const reviewed = licenseFor({ ...currentDetail, licenses: detail.licenses }, hub.endpoint);
   if (
-    !sameEntries(currentDetail.licenses, detail.licenses) ||
+    licensesChanged(detail.licenses, currentDetail.licenses) ||
     reviewed.label !== shown.label ||
     reviewed.link !== shown.link
   ) {
@@ -500,18 +499,17 @@ async function requireCuratedRuntime(
   if (!curated?.build.runtimeMin?.ollama) return;
   const health = await abortable(target.runtime.health(), signal);
   const name = clean(curated.entry.name);
+  const checked = checkRuntime(health, curated.build);
+  if (checked.ok) return;
   // Unreachable is not outdated: telling the user to update would send them the wrong way.
-  if (!health.ok) {
+  if (checked.reason === 'runtime-unreachable') {
     throw new Error(
-      `Could not read the version of ${runtimeLabel(target)} (${clean(health.error ?? 'no reply')}), which ${name} needs to be ${curated.build.runtimeMin.ollama} or newer, so nothing was downloaded.`
+      `Could not read the version of ${runtimeLabel(target)} (${clean(checked.error ?? 'no reply')}), which ${name} needs to be ${curated.build.runtimeMin.ollama} or newer, so nothing was downloaded.`
     );
   }
-  const blocked = curatedOllamaBlocked(curated.build, health.version);
-  if (blocked) {
-    throw new Error(
-      `${blocked} for ${name}, so nothing was downloaded. Update ${runtimeLabel(target)}, then pull it again.`
-    );
-  }
+  throw new Error(
+    `${checked.blocked} for ${name}, so nothing was downloaded. Update ${runtimeLabel(target)}, then pull it again.`
+  );
 }
 
 /**
@@ -596,20 +594,22 @@ export async function requireReviewedLayers(
   ref: string,
   sources: Pick<ModelSourceDeps, 'libraryLayers' | 'signal'> & { hub: () => HubClient }
 ): Promise<void> {
-  const { build } = curated;
-  const library = curatedLibrary(build);
   const { signal } = sources;
-  let live: OllamaRegistryLayers | null;
-  if (library) live = await abortable(sources.libraryLayers(library.ref, signal), signal);
-  else if (build.hf)
-    live = await abortable(
-      sources.hub().ollamaLayers(build.hf.repo, ref.slice(ref.lastIndexOf(':') + 1), { signal }),
+  const checked = await abortable(
+    checkReviewedLayers(
+      curated.build,
+      ref.slice(ref.lastIndexOf(':') + 1),
+      {
+        libraryLayers: libraryRef => sources.libraryLayers(libraryRef, signal),
+        hfLayers: (repo, tag) => sources.hub().ollamaLayers(repo, tag, { signal }),
+      },
       signal
-    );
-  else live = null;
-  if (!live)
-    throw new Error(`The registry no longer serves ${clean(ref)} as Bike4Mind reviewed it, so nothing was downloaded.`);
-  if (!servesReviewed(live, build)) throw new Error(`${LAYERS_CHANGED}, so nothing was downloaded.`);
+    ),
+    signal
+  );
+  if (checked.ok) return;
+  if (checked.reason === 'layers-changed') throw new Error(`${LAYERS_CHANGED}, so nothing was downloaded.`);
+  throw new Error(`The registry no longer serves ${clean(ref)} as Bike4Mind reviewed it, so nothing was downloaded.`);
 }
 
 /** Cancelling after the download, during the reviewed-build check, leaves the model installed but unchecked. */
@@ -660,15 +660,17 @@ export async function requireInstalledReviewed(
         `reviewed build. It is still installed; remove it with \`b4m models rm ${name}\` unless you trust it.`
     );
   }
-  if (installedReviewed(inspection, curated.build)) return;
-  if (hadTag !== false) {
+  const checked = await checkInstalledDigest(inspection, curated.build, {
+    hadTag,
+    remove: () => target.runtime.remove(ref),
+  });
+  if (checked.ok) return;
+  if (checked.outcome === 'left-in-place') {
     throw new Error(
-      `${LAYERS_CHANGED}. ${name} ${hadTag ? 'was installed before this download' : 'may have been installed before this download'}, so it was left in place.`
+      `${LAYERS_CHANGED}. ${name} ${checked.hadTag ? 'was installed before this download' : 'may have been installed before this download'}, so it was left in place.`
     );
   }
-  try {
-    await target.runtime.remove(ref);
-  } catch {
+  if (checked.outcome === 'remove-failed') {
     throw new Error(`${LAYERS_CHANGED}, and removing it failed. Remove it with \`b4m models rm ${name}\`.`);
   }
   throw new Error(`${LAYERS_CHANGED}, so what Ollama downloaded was removed.`);

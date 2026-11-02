@@ -34,6 +34,16 @@
         "default": "./dist/servers.cjs"
       }
     },
+    "./licenses": {
+      "import": {
+        "types": "./dist/licenses.d.mts",
+        "default": "./dist/licenses.mjs"
+      },
+      "require": {
+        "types": "./dist/licenses.d.cts",
+        "default": "./dist/licenses.cjs"
+      }
+    },
     "./testing": {
       "import": {
         "types": "./dist/testing.d.mts",
