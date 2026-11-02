@@ -2144,6 +2144,7 @@ async function processExecution(
       loopId: execution.loopId,
       loopsEnabled,
       userId: execution.userId,
+      executionId,
     });
     const { loopDirectiveEnabledTools, loopDirectiveExternalTools } = await resolveLoopDirectiveTools({
       loopId: execution.loopId,

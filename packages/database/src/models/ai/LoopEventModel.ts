@@ -3,6 +3,7 @@ import {
   ILoopEvent,
   ILoopEventRepository,
   LOOP_EVENT_KINDS,
+  LoopAskedFields,
   LoopAutoResumedFields,
   LoopGateOutcome,
   LoopUnsureFields,
@@ -19,7 +20,7 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     this.loopEventModel = loopEventModel;
   }
 
-  async recordUnsure(fields: LoopUnsureFields): Promise<void> {
+  async recordUnsure(fields: LoopUnsureFields | LoopAskedFields): Promise<void> {
     await this.loopEventModel.updateOne(
       { executionId: fields.executionId, requestedAt: fields.requestedAt },
       { $setOnInsert: { ...fields, kind: 'unsure' } },
@@ -60,14 +61,43 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     await this.loopEventModel.updateOne({ _id: id, foldedAt: { $exists: false } }, { $set: { foldedAt: now } });
   }
 
+  async resolveAsked(
+    id: string,
+    userId: string,
+    loopId: string,
+    resolution: NonNullable<ILoopEvent['resolution']>
+  ): Promise<ILoopEvent | null> {
+    if (!mongoose.isValidObjectId(id)) return null;
+    const doc = await this.loopEventModel.findOneAndUpdate(
+      { _id: id, userId, loopId, kind: 'unsure', source: 'asked', resolution: { $exists: false } },
+      { $set: { resolution, foldedAt: resolution.at } },
+      { new: true }
+    );
+    return doc ? doc.toJSON() : null;
+  }
+
+  async listAnsweredForTicket(userId: string, workItemId: string, limit: number): Promise<ILoopEvent[]> {
+    const results = await this.loopEventModel
+      .find({
+        userId,
+        workItemId,
+        source: 'asked',
+        'resolution.outcome': 'resumed',
+        'resolution.note': { $exists: true },
+      })
+      .sort({ createdAt: -1 })
+      .limit(limit);
+    return results.map(doc => doc.toJSON());
+  }
+
   async deleteManyForLoop(userId: string, loopId: string): Promise<number> {
     const result = await this.loopEventModel.deleteMany({ userId, loopId });
     return result.deletedCount;
   }
 }
 
-function isUnsure(this: ILoopEvent): boolean {
-  return this.kind === 'unsure';
+function isGateUnsure(this: ILoopEvent): boolean {
+  return this.kind === 'unsure' && this.source !== 'asked';
 }
 
 export const LoopEventSchema = new Schema<ILoopEvent, ILoopEventModel>(
@@ -75,11 +105,12 @@ export const LoopEventSchema = new Schema<ILoopEvent, ILoopEventModel>(
     loopId: { type: String, required: true },
     userId: { type: String, required: true },
     kind: { type: String, enum: LOOP_EVENT_KINDS, required: true },
+    source: { type: String, enum: ['gate', 'asked'] },
     executionId: { type: String, required: true },
     workItemId: { type: String },
     ticketTitle: { type: String },
-    iteration: { type: Number, required: isUnsure },
-    confidence: { type: Number, required: isUnsure },
+    iteration: { type: Number, required: isGateUnsure },
+    confidence: { type: Number, required: isGateUnsure },
     reason: { type: String, required: true },
     requestedAt: { type: Date, required: true },
     resolution: {
@@ -88,6 +119,7 @@ export const LoopEventSchema = new Schema<ILoopEvent, ILoopEventModel>(
           outcome: { type: String, enum: ['resumed', 'rejected'], required: true },
           by: { type: String },
           at: { type: Date, required: true },
+          note: { type: String },
         },
         { _id: false }
       ),
@@ -108,6 +140,7 @@ LoopEventSchema.index(
   { 'resolution.outcome': 1, foldedAt: 1 },
   { partialFilterExpression: { 'resolution.outcome': 'resumed' } }
 );
+LoopEventSchema.index({ workItemId: 1, createdAt: -1 }, { partialFilterExpression: { source: 'asked' } });
 
 export const LoopEvent: ILoopEventModel =
   (mongoose.models[ModelName] as unknown as ILoopEventModel) ??

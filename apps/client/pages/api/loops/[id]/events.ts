@@ -29,6 +29,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       ...events.map(event => ({
         id: event.id,
         kind: event.kind,
+        source: event.source,
         executionId: event.executionId,
         workItemId: event.workItemId,
         ticketTitle: event.ticketTitle,

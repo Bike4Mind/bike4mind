@@ -49,6 +49,8 @@ export const LOOP_LEASE_MS = 5 * 60 * 1000;
 export const MAX_DISPATCH_PER_TICK = 25;
 /** Open directives shown to a run, oldest first; the rest wait for a later run. */
 export const LOOP_PROMPT_DIRECTIVES = 10;
+/** Owner answers to a ticket's earlier questions shown to its next run. */
+export const LOOP_PROMPT_ANSWERS = 3;
 /** Non-credit failures in a row before a loop stops at `error`. */
 export const MAX_CONSECUTIVE_FAILURES = 3;
 /** Resumed unsure runs folded per tick; the rest wait for the next one. */
@@ -397,19 +399,28 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
   try {
     if (await pausedForBudget(loop, now, logger)) return;
     ticket = await claimNextTicket(loop);
-    const [directives, overseen] = await Promise.all([
+    const [directives, overseen, answered] = await Promise.all([
       loopDirectiveRepository.listOpenForLoop(loop.userId, loop.id, LOOP_PROMPT_DIRECTIVES),
       Promise.all((loop.oversees ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
+      ticket ? loopEventRepository.listAnsweredForTicket(loop.userId, ticket.id, LOOP_PROMPT_ANSWERS) : [],
     ]);
     result = await startAgentExecution(
       {
         userId: loop.userId,
         sessionId: loop.sessionId,
         questId: loop.sessionId,
-        query: buildLoopQuery(loop.goal, loop.memory, ticket ? { item: ticket, stages: loop.stages } : undefined, {
-          directives,
-          overseen: overseen.filter((watched): watched is ILoop => !!watched),
-        }),
+        query: buildLoopQuery(
+          loop.goal,
+          loop.memory,
+          ticket
+            ? {
+                item: ticket,
+                stages: loop.stages,
+                answers: answered.map(event => ({ question: event.reason, note: event.resolution?.note ?? '' })),
+              }
+            : undefined,
+          { directives, overseen: overseen.filter((watched): watched is ILoop => !!watched) }
+        ),
         model: loop.model,
         connectionId: HEADLESS_CONNECTION_ID,
         apiKeyInfo: undefined,
