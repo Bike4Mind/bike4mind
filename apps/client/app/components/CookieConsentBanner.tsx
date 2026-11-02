@@ -11,6 +11,7 @@ import { clearTrackingCookies } from '@client/app/utils/trackingCookies';
 import { CONSENT_KEY, publishResolvedConsent, resolveConsent } from '@client/app/utils/consentRegion';
 import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
 import { releaseVisitBeacon } from '@client/app/utils/visitBeacon';
+import { beaconPage } from '@client/app/utils/pageBeacon';
 
 type Consent = 'granted' | 'denied';
 
@@ -64,6 +65,10 @@ function activateConsent(value: Consent) {
   }
   // After the campaign flush or clear above, which decides the campaign this request carries.
   releaseVisitBeacon();
+  // Then the page the visitor is on, if a grant finds them past the landing (most often the login
+  // a signed-out landing redirects to): like recordPageOnGrant, so the visit does not appear to
+  // end on a page they have left. A no-op without a grant.
+  beaconPage();
 }
 
 /** Record the visitor's own decision, and apply it. */

@@ -23,6 +23,7 @@ import { CookieConsentBanner, useCookieSettings } from './CookieConsentBanner';
 import { CONSENT_VENDORS } from '../utils/consentVendors';
 import { captureUtmParams, flushUtmCapture } from '../utils/utmCapture';
 import { beaconVisit } from '../utils/visitBeacon';
+import { startPageBeacon } from '../utils/pageBeacon';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
 
@@ -409,6 +410,8 @@ describe('CookieConsentBanner', () => {
     afterEach(() => {
       Object.defineProperty(document, 'referrer', { value: '', configurable: true });
       window.history.replaceState({}, '', '/');
+      // Land the page beacon on `/` too, so a later case's grant has no page to send.
+      startPageBeacon();
       vi.unstubAllGlobals();
       vi.stubGlobal('gtag', mockGtag);
     });
@@ -451,6 +454,54 @@ describe('CookieConsentBanner', () => {
       fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
 
       expect(bodies(fetchMock)).toEqual([{ awaitingConsent: true }, {}]);
+    });
+
+    // The visit names the landing; a grant that finds the visitor elsewhere (the login a
+    // signed-out landing redirects to) records that page too, after the visit is recorded.
+    it('then records the page the visitor is on, once the held visit is recorded, on Accept', async () => {
+      const urls = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.map(([url]) => url as string);
+      const settle = () => act(() => new Promise(resolve => setTimeout(resolve, 0)));
+      let recordVisit: (value: unknown) => void = () => {};
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      beaconVisit();
+      startPageBeacon();
+      window.history.replaceState({}, '', '/login');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      // The release is still in flight: a page sent now would find the visit pending and be lost.
+      fetchMock.mockImplementationOnce(() => new Promise(resolve => (recordVisit = resolve)));
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+      await settle();
+      expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/visit']);
+
+      recordVisit({ status: 204 });
+      await settle();
+
+      expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/visit', '/api/analytics/page']);
+      expect(bodies(fetchMock)[2]).toEqual({ path: '/login' });
+    });
+
+    it('records no page on Decline', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      beaconVisit();
+      startPageBeacon();
+      window.history.replaceState({}, '', '/login');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+      await act(() => new Promise(resolve => setTimeout(resolve, 0)));
+
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/analytics/visit', '/api/analytics/visit']);
     });
   });
 

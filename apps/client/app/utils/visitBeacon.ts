@@ -2,8 +2,16 @@ import { resolveConsent } from './consentRegion';
 
 const VISIT_BEACON_PATH = '/api/analytics/visit';
 
-/** The server keeps at most this much of a landing path; a longer one is cut here too. */
-const MAX_LANDING_PATH = 200;
+/** The server keeps at most this much of a page path; a longer one is cut here too. */
+const MAX_PAGE_PATH = 200;
+
+/**
+ * A page path cut to the server's cap at a `/`: a token cut mid-way arrives too short for the
+ * server to recognise and redact. The page beacon (pageBeacon.ts) cuts the same way.
+ */
+export function capPagePath(path: string): string {
+  return path.length > MAX_PAGE_PATH ? path.slice(0, path.lastIndexOf('/', MAX_PAGE_PATH)) : path;
+}
 
 type VisitLanding = { referrer?: string; landingPath?: string };
 
@@ -23,15 +31,23 @@ function visitLanding(): VisitLanding {
   } catch {
     // No referrer (typed URL, bookmark, a no-referrer policy), or one that is no URL.
   }
-  const path = window.location.pathname;
-  // Cut at a `/`: a token cut mid-way arrives too short for the server to recognise and redact.
-  const landingPath = path.length > MAX_LANDING_PATH ? path.slice(0, path.lastIndexOf('/', MAX_LANDING_PATH)) : path;
-  return { ...(referrer && { referrer }), landingPath };
+  return { ...(referrer && { referrer }), landingPath: capPagePath(window.location.pathname) };
+}
+
+let lastRequest: Promise<unknown> = Promise.resolve();
+
+/**
+ * Settles, never rejects, once the latest visit beacon request has. The page beacon waits on it
+ * (pageBeacon.ts), so its request carries the visit cookie that response set and finds the visit
+ * recorded rather than still held for consent.
+ */
+export function visitBeaconSettled(): Promise<unknown> {
+  return lastRequest;
 }
 
 function send(body: VisitLanding | { awaitingConsent: true }): void {
   try {
-    void fetch(VISIT_BEACON_PATH, {
+    lastRequest = fetch(VISIT_BEACON_PATH, {
       method: 'POST',
       // The cookie is the entire mechanism: without it the server cannot tell a returning
       // browser from a new visit, and every page load would count as one.
@@ -63,7 +79,8 @@ let held: VisitLanding | null = null;
  * has already gone is a campaign the visit is not attributed to.
  *
  * Fires once per page load, not per route change - the server counts a visit by the cookie
- * it hands back, so repeating the call inside the SPA would add requests and no visits.
+ * it hands back, so repeating the call inside the SPA would add requests and no visits. The
+ * pages after the landing are reported by the page beacon instead (pageBeacon.ts).
  *
  * Nothing is sent but the cookies the browser attaches, which is why `credentials` matters,
  * and, with consent, the referring site's origin and the landing path (visitLanding). Those

@@ -1,6 +1,7 @@
 import { FC, lazy, LazyExoticComponent, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
+import { beaconPage, startPageBeacon } from '@client/app/utils/pageBeacon';
 import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
 import { captureGitHubLakeCallbackSearch, GITHUB_LAKE_CALLBACK_PATH } from '@client/app/utils/githubLakeCallbackSearch';
 import { requireGitHubLakeCallbackSession } from '@client/app/utils/githubLakeCallbackGuard';
@@ -1413,6 +1414,9 @@ captureGitHubLakeCallbackSearch();
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
 // server reads the campaign cookie from, so it has to follow the line above.
 beaconVisit();
+// The landing is on the visit; the page beacon reports the pages after it, and needs to know the
+// landing before the router's first resolve can redirect away from it.
+startPageBeacon();
 
 // Create the router
 export const router = createRouter({
@@ -1420,6 +1424,9 @@ export const router = createRouter({
   defaultNotFoundComponent: NotFound,
   ...(typeof window !== 'undefined' && { history: createNextCompatibleHistory() }),
 });
+
+// Each page the router settles on; beaconPage() skips the landing and anything not a new path.
+if (typeof window !== 'undefined') router.subscribe('onResolved', beaconPage);
 
 // Register the router instance for type safety
 declare module '@tanstack/react-router' {
