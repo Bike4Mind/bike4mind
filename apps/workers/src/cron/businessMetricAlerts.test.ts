@@ -25,13 +25,17 @@ vi.mock('./businessMetrics/deliver', async importOriginal => {
     deliverAnomalies: (
       window: Parameters<typeof original.deliverAnomalies>[0],
       anomalies: Parameters<typeof original.deliverAnomalies>[1],
-      post: (message: string) => Promise<boolean>
+      post: Parameters<typeof original.deliverAnomalies>[2],
+      _store: Parameters<typeof original.deliverAnomalies>[3],
+      options: Parameters<typeof original.deliverAnomalies>[4]
     ) =>
-      original.deliverAnomalies(window, anomalies, post, {
-        claim: async () => true,
-        complete: async () => undefined,
-        release: async () => undefined,
-      }),
+      original.deliverAnomalies(
+        window,
+        anomalies,
+        post,
+        { claim: async () => true, complete: async () => undefined, release: async () => undefined },
+        options
+      ),
   };
 });
 import { handler } from './businessMetricAlerts';
@@ -53,8 +57,18 @@ beforeEach(() => {
 
 describe('scheduled business metric alert', () => {
   it('delivers a seeded >5% anomaly to the configured staging Slack destination', async () => {
+    vi.stubEnv('SERVER_DOMAIN', 'example.com');
     expect(await handler({ time: '2026-10-26T12:05:00Z' })).toMatchObject({ anomalies: 1, delivered: 1 });
-    expect(mocks.post).toHaveBeenCalledWith('https://example.test/slack', expect.stringContaining('change 20.0%'));
+    expect(mocks.post).toHaveBeenCalledWith(
+      'https://example.test/slack',
+      expect.objectContaining({
+        text: 'Business metrics, 12:00 UTC intraday compare: 1 anomaly: API requests (third-party keys) up 20.0%',
+      })
+    );
+    const body = JSON.stringify(mocks.post.mock.calls[0][1]);
+    expect(body).toContain('Top movers: Large +120');
+    expect(body).toContain('https://app.example.com/admin?tab=analytics');
+    expect(body).toContain('category business  |  staging  |  12:00 UTC, 26 Oct');
     expect(mocks.collect).toHaveBeenCalledWith({
       end: new Date('2026-10-26T12:00:00Z'),
       duration: 12 * 3_600_000,

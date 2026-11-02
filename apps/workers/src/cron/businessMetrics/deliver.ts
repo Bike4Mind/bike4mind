@@ -7,6 +7,11 @@ import {
   type ComparisonWindow,
   type Metric,
 } from '@bike4mind/server-utils/analytics/businessMetricAnomalies';
+import {
+  formatBusinessMetricSlackMessage,
+  type BusinessMetricMessageOptions,
+  type BusinessMetricSlackMessage,
+} from '@bike4mind/server-utils/analytics/businessMetricSlackMessage';
 
 export async function subscriberMetric(window: ComparisonWindow, subscribers: number): Promise<Metric> {
   const id = `subscribers:${window.end.toISOString()}`;
@@ -68,32 +73,46 @@ export const deliveryStore: DeliveryStore = {
   },
 };
 
+/**
+ * Posts one message grouping every anomaly whose receipt this invocation could claim. Receipts
+ * stay per metric, day and direction, so a metric already announced this UTC day drops out of
+ * the group while the others still post; a run that claims nothing posts nothing.
+ */
 export async function deliverAnomalies(
   window: ComparisonWindow,
   anomalies: BusinessMetricAnomaly[],
-  post: (message: string) => Promise<boolean>,
-  store: DeliveryStore = deliveryStore
+  post: (message: BusinessMetricSlackMessage) => Promise<boolean>,
+  store: DeliveryStore = deliveryStore,
+  options: BusinessMetricMessageOptions = {}
 ) {
-  let delivered = 0;
   // The midnight close has its own receipt so an early intraday alert cannot suppress it.
   const day = new Date(window.end.getTime() - (window.mode === 'daily' ? 1 : 0)).toISOString().slice(0, 10);
+  const claimed: Array<{ anomaly: BusinessMetricAnomaly; id: string; token: string }> = [];
   for (const anomaly of anomalies) {
     const metricHash = createHash('sha256').update(anomaly.metricName).digest('hex');
     // Keep existing intraday keys valid across deployment; only daily closes use a new namespace.
     const id = `alert:${day}:${anomaly.direction}:${window.mode === 'daily' ? 'daily:' : ''}${metricHash}`;
     const token = randomUUID();
-    if (!(await store.claim(id, token, new Date()))) continue;
-    let posted = false;
-    try {
-      posted = await post(anomaly.message);
-      if (!posted) throw new Error('Slack rejected business metric alert');
-      // The alert is already in Slack: keep the lease so a retry cannot post it twice.
-      await store.complete(id, token, new Date()).catch(() => store.complete(id, token, new Date()));
-      delivered++;
-    } catch (error) {
-      if (!posted) await store.release(id, token);
-      throw error;
-    }
+    if (await store.claim(id, token, new Date())) claimed.push({ anomaly, id, token });
   }
-  return delivered;
+  if (claimed.length === 0) return 0;
+  let posted = false;
+  try {
+    posted = await post(
+      formatBusinessMetricSlackMessage(
+        window,
+        claimed.map(({ anomaly }) => anomaly),
+        options
+      )
+    );
+    if (!posted) throw new Error('Slack rejected business metric alert');
+    // The alert is already in Slack: keep the leases so a retry cannot post it twice.
+    for (const { id, token } of claimed) {
+      await store.complete(id, token, new Date()).catch(() => store.complete(id, token, new Date()));
+    }
+    return claimed.length;
+  } catch (error) {
+    if (!posted) await Promise.all(claimed.map(({ id, token }) => store.release(id, token)));
+    throw error;
+  }
 }

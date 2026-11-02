@@ -8,13 +8,20 @@ import { deliverAnomalies, type DeliveryStore } from './deliver';
 
 const window = comparisonWindow(new Date('2026-10-26T12:05:00Z'));
 const anomaly = (
-  message = 'metric\nvalue',
-  direction: BusinessMetricAnomaly['direction'] = 'increase'
+  metricName = 'credits',
+  direction: BusinessMetricAnomaly['direction'] = 'increase',
+  current = 300
 ): BusinessMetricAnomaly => ({
-  metricName: 'metric',
+  metricName,
   direction,
-  message,
+  current,
+  previous: 100,
+  delta: current - 100,
+  percent: current - 100,
+  median: 110,
+  contributors: [],
 });
+const postedText = (post: ReturnType<typeof vi.fn>, call = 0) => (post.mock.calls[call][0] as { text: string }).text;
 const store: DeliveryStore = { claim: vi.fn(), complete: vi.fn(), release: vi.fn() };
 beforeEach(() => {
   vi.resetAllMocks();
@@ -36,10 +43,10 @@ describe('anomaly Slack delivery', () => {
 
   it('deduplicates metrics per day despite changing values on retries', async () => {
     const post = vi.fn().mockResolvedValue(true);
-    await deliverAnomalies(window, [anomaly('metric\nvalue 1')], post, store);
+    await deliverAnomalies(window, [anomaly('credits', 'increase', 300)], post, store);
     const firstId = vi.mocked(store.claim).mock.calls[0][0];
     vi.mocked(store.claim).mockResolvedValue(false);
-    await deliverAnomalies(window, [anomaly('metric\nvalue 2')], post, store);
+    await deliverAnomalies(window, [anomaly('credits', 'increase', 400)], post, store);
     expect(vi.mocked(store.claim).mock.calls[1][0]).toBe(firstId);
     expect(post).toHaveBeenCalledTimes(1);
     expect(store.complete).toHaveBeenCalledWith(firstId, expect.any(String), expect.any(Date));
@@ -57,8 +64,8 @@ describe('anomaly Slack delivery', () => {
       0
     );
     const close = comparisonWindow(new Date('2026-10-27T00:05:00Z'));
-    expect(await deliverAnomalies(close, [anomaly('metric\nvalue 300%')], post, store)).toBe(1);
-    expect(await deliverAnomalies(close, [anomaly('metric\nvalue 300%')], post, store)).toBe(0);
+    expect(await deliverAnomalies(close, [anomaly('credits', 'increase', 400)], post, store)).toBe(1);
+    expect(await deliverAnomalies(close, [anomaly('credits', 'increase', 400)], post, store)).toBe(0);
     expect(post).toHaveBeenCalledTimes(2);
     expect(vi.mocked(store.claim).mock.calls[2][0]).toContain('alert:2026-10-26:increase:daily:');
   });
@@ -66,7 +73,7 @@ describe('anomaly Slack delivery', () => {
   it('allows the opposite direction and the next UTC day independently', async () => {
     const post = vi.fn().mockResolvedValue(true);
     await deliverAnomalies(window, [anomaly()], post, store);
-    await deliverAnomalies(window, [anomaly('metric down', 'decrease')], post, store);
+    await deliverAnomalies(window, [anomaly('credits', 'decrease', 50)], post, store);
     await deliverAnomalies(comparisonWindow(new Date('2026-10-27T01:05:00Z')), [anomaly()], post, store);
     const ids = vi.mocked(store.claim).mock.calls.map(([id]) => id);
     expect(new Set(ids).size).toBe(3);
@@ -109,14 +116,47 @@ describe('anomaly Slack delivery', () => {
     expect(store.release).toHaveBeenCalledTimes(1);
   });
 
-  it("skips another invocation's lease and continues with other anomalies", async () => {
-    vi.mocked(store.claim).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  it("skips another invocation's lease and posts the remaining anomalies as one message", async () => {
+    vi.mocked(store.claim).mockResolvedValueOnce(false).mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     const post = vi.fn().mockResolvedValue(true);
-    const nextAnomaly = { ...anomaly('another metric'), metricName: 'other' };
-    expect(await deliverAnomalies(window, [anomaly(), nextAnomaly], post, store)).toBe(1);
-    expect(post).toHaveBeenCalledExactlyOnceWith('another metric');
+    const others = [anomaly('verifiedSignups', 'increase', 300), anomaly('activeUsers', 'decrease', 50)];
+    expect(await deliverAnomalies(window, [anomaly(), ...others], post, store)).toBe(2);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(postedText(post)).toBe(
+      'Business metrics, 12:00 UTC intraday compare: 2 anomalies: Verified signups up 200.0%, Active users down 50.0%'
+    );
     expect(store.release).not.toHaveBeenCalled();
-    expect(store.complete).toHaveBeenCalledTimes(1);
+    expect(store.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('posts nothing when every receipt is already taken', async () => {
+    vi.mocked(store.claim).mockResolvedValue(false);
+    const post = vi.fn().mockResolvedValue(true);
+    expect(await deliverAnomalies(window, [anomaly(), anomaly('activeUsers')], post, store)).toBe(0);
+    expect(post).not.toHaveBeenCalled();
+    expect(store.complete).not.toHaveBeenCalled();
+  });
+
+  it('releases every claimed receipt when the grouped post is rejected', async () => {
+    const post = vi.fn().mockResolvedValue(false);
+    await expect(deliverAnomalies(window, [anomaly(), anomaly('activeUsers')], post, store)).rejects.toThrow(
+      'Slack rejected'
+    );
+    expect(store.release).toHaveBeenCalledTimes(2);
+    expect(store.complete).not.toHaveBeenCalled();
+  });
+
+  it('renders admin links and the stage from the formatter options', async () => {
+    const post = vi.fn().mockResolvedValue(true);
+    const withMovers = {
+      ...anomaly('credits', 'increase', 300),
+      contributors: [{ label: 'user:6818b9a95d466aaf72b2e89e', value: 150 }],
+    };
+    await deliverAnomalies(window, [withMovers], post, store, { appUrl: 'https://app.example.com', stage: 'staging' });
+    const body = JSON.stringify(post.mock.calls[0][0]);
+    expect(body).toContain('https://app.example.com/admin/users/6818b9a95d466aaf72b2e89e|user');
+    expect(body).toContain('https://app.example.com/admin?tab=analytics');
+    expect(body).toContain('category business  |  staging  |  12:00 UTC, 26 Oct');
   });
 
   it('propagates database claim failures instead of treating them as lease contention', async () => {

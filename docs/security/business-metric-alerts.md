@@ -2,10 +2,63 @@
 
 The scheduled worker reconciles the current UTC period against the same period yesterday at
 five minutes past each hour. The midnight run compares the last two complete days. Other runs
-compare midnight through the last completed hour on each day. Every alert includes the preceding
-seven comparable periods' median and, where attributable, the five largest contributor changes
-in the anomaly's direction. Contributor values are signed current-minus-previous deltas,
-including previous contributors whose current value is zero.
+compare midnight through the last completed hour on each day. Every anomaly carries the
+preceding seven comparable periods' median and, where attributable, the contributor changes in
+the anomaly's direction. Contributor values are signed current-minus-previous deltas, including
+previous contributors whose current value is zero.
+
+## Slack message
+
+Each run posts one message to the user-activity channel grouping every anomaly it found, in the
+same shape as the CloudWatch alarm relay: a header naming the compare and the count, a
+colour-barred attachment with one section per metric, admin buttons and a `category business`
+footer. The bar is red when any metric moved the way abuse would push it (signups, active
+users, API requests, credits, spend or receipts up), amber for a fall, blue for growth such as
+new paying subscribers.
+
+```
+:bar_chart: Business metrics, 16:00 UTC intraday compare: 3 anomalies
+
+00:00 to 16:00 UTC today (16h) against the same hours yesterday. The median is the same 16h
+over the previous 7 days. The day closes at midnight UTC with its own compare.
+
+:small_red_triangle_down: Verified signups down 18.6%
+Now 192, previous 236, 7-day median 285
+Fewer accounts verified their email than yesterday. Usually traffic or verification-email
+delivery; check bounces and the email provider if it keeps falling.
+
+:small_red_triangle_down: Active users down 19.6%
+Now 45, previous 56, 7-day median 56
+Fewer distinct external users were active than yesterday. A dip across the whole day points at
+an outage or a sign-in problem; a one-hour dip is usually noise.
+
+:small_red_triangle_down: Credits charged down 60.8%
+Now 2,667 credits, previous 6,811 credits, 7-day median 6,811 credits
+Fewer credits were charged than yesterday. Fine if usage fell too; otherwise check that
+metering still charges every completion.
+Top movers: user ...e89e -2,965 credits, Claude Opus 5.5 -2,958 credits,
+Claude Haiku 5.5 -1,269 credits and 2 more
+
+[Open analytics]
+
+category business  |  production  |  16:00 UTC, 2 Nov
+```
+
+The midnight run is titled `2 Nov closed-day compare` and explains that it compares the closed
+UTC day against the day before. Labels, units, the one-line meaning per direction and the
+abuse/dip/growth signal live in `packages/server-utils/src/analytics/businessMetricLabels.ts`;
+the layout is `businessMetricSlackMessage.ts` next to it. Counts print whole, credits say
+`credits`, provider spend says `USD`, and Stripe receipts print in major units with their
+currency code.
+
+Contributors never appear as raw ids. Users and organizations render as admin links (the user
+page, or the organizations tab opened on that organization) labelled by the last four
+characters of the id; models render by display name. At most three are shown, followed by
+"and N more". When every contributor moved by exactly one (signups, active users) the rows are
+the accounts themselves: on a rise the first three are linked as `Accounts:` so a suspected
+farm account is one click away, and on a fall the line is omitted. Buttons appear only when
+`SERVER_DOMAIN` is set: `Open analytics` always, `Signup activity` when signups or active users
+rose, `Credit analytics` when credits or spend rose.
 
 ## Configuration
 
@@ -82,8 +135,9 @@ delivery receipts are retained for ten days.
    for the full handler's seeded >5% and <5% decisions with an isolated Slack transport.
 3. Deploy to `dev` with a test-channel webhook. Seed source records for two comparable periods
    with a change above both configured guards; invoke the worker with an EventBridge-shaped
-   `{ "time": "<scheduled UTC ISO timestamp>" }`. Confirm the named alert in Slack. Repeat
-   with a change under 5%, using a new period, and confirm no post. Never seed production data.
+   `{ "time": "<scheduled UTC ISO timestamp>" }`. Confirm the grouped message names the metric
+   in Slack. Repeat with a change under 5%, using a new period, and confirm no post. Never seed
+   production data.
 4. Configure production's webhook and per-currency guards, deploy, and confirm the
    `business-metric-alerts` success log plus actual channel delivery. A missing webhook logs a
    skipped run. Source query, Stripe API, and Slack errors fail the invocation; inspect the
@@ -91,7 +145,10 @@ delivery receipts are retained for ten days.
 
 Delivery receipts are stored only after Slack accepts a post. A lease prevents simultaneous
 workers from sending the same metric/day/direction/run kind, and failed posts are retried.
-A contended lease skips that anomaly and continues delivering the others. A crashed sender's
+A run claims a receipt per anomaly, posts one message with the anomalies it claimed, then
+completes every receipt; a contended lease drops that anomaly from the group and the others
+still post, and a run that claims nothing posts nothing. A rejected post releases every
+receipt in the group. A crashed sender's
 lease expires after 15 minutes, allowing a later invocation or replay to retry. An early retry
 that encounters the lease can succeed without sending that alert or reaching the DLQ. For a
 crashed daily-close sender, manually replay the original event after lease expiry; the next
@@ -104,8 +161,8 @@ day with a separate receipt, so it can alert even after an intraday alert in the
 Repeated delivery of that closing alert is suppressed. The next UTC day starts fresh.
 Failed posts do not consume the receipt and remain retryable.
 
-On an alert, inspect the named user/org/model contributors, compare the 7-day median, and check
-the relevant source data before changing thresholds. A small-number guard prevents noise; it
+On an alert, read the meaning line, open the linked contributors, compare the 7-day median, and
+check the relevant source data before changing thresholds. A small-number guard prevents noise; it
 does not make a changing business baseline safe to ignore. Check `subscriberBaselineReady` in
 the success log while the subscription snapshots warm up.
 
