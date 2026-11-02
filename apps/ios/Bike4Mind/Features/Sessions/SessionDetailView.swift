@@ -14,6 +14,7 @@ struct SessionDetailView: View {
 
 private struct ChatScreen: View {
   let session: SessionSummary
+  @Environment(AppServices.self) private var services
   @State private var model: ChatViewModel
   @FocusState private var composerFocused: Bool
 
@@ -31,10 +32,27 @@ private struct ChatScreen: View {
       .task { await model.load() }
       .task { await model.listen() }
       .onDisappear { model.stop() }
+      .onChange(of: model.turns) { _, turns in
+        services.chatTurnsChanged(sessionID: session.id, title: session.name, turns: turns)
+      }
+      .onChange(of: settledLiveTurnCount) { _, _ in services.refreshWidgetCredits() }
+      .onChange(of: services.navigator.composeRequest, initial: true) { _, _ in takeComposeRequest() }
       .refreshable { await model.refresh() }
       .sensoryFeedback(trigger: model.hapticTrigger) { _, trigger in
         trigger.map(Self.feedback(for:))
       }
+  }
+
+  /// Live turns that reached a terminal state; each one spent credits, so the Credits widget re-reads the balance.
+  private var settledLiveTurnCount: Int {
+    model.liveTurns.filter { $0.status?.isTerminal ?? false }.count
+  }
+
+  /// An App Intent (Start quest) asked for this session's composer: prefill and focus it.
+  private func takeComposeRequest() {
+    guard let request = services.navigator.takeComposeRequest(forSession: session.id) else { return }
+    if !request.draft.isEmpty { model.draft = request.draft }
+    composerFocused = true
   }
 
   private static func feedback(for trigger: HapticTrigger) -> SensoryFeedback {

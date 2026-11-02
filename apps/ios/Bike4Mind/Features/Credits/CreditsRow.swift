@@ -6,15 +6,16 @@ struct CreditsSection: View {
   @Environment(AppServices.self) private var services
 
   var body: some View {
-    CreditsContent(api: services.api)
+    let widgets = services.widgets
+    CreditsContent(api: services.api) { await widgets.recordCredits($0) }
   }
 }
 
 private struct CreditsContent: View {
   @State private var model: CreditsViewModel
 
-  init(api: any B4MAPI) {
-    _model = State(initialValue: CreditsViewModel(api: api))
+  init(api: any B4MAPI, onBalance: @escaping @Sendable (CreditBalance) async -> Void) {
+    _model = State(initialValue: CreditsViewModel(api: api, onBalance: onBalance))
   }
 
   var body: some View {

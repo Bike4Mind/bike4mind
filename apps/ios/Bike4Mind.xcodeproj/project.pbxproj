@@ -8,16 +8,48 @@
 
 /* Begin PBXBuildFile section */
 		B4A000000000000000000101 /* B4MKit in Frameworks */ = {isa = PBXBuildFile; productRef = B4A000000000000000000501 /* B4MKit */; };
+		B4A700000000000000000101 /* B4MKit in Frameworks */ = {isa = PBXBuildFile; productRef = B4A700000000000000000501 /* B4MKit */; };
+		B4A700000000000000000102 /* Widgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B4A700000000000000000201 /* Widgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B4A700000000000000000601 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B4A000000000000000000801 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B4A700000000000000000701;
+			remoteInfo = Widgets;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B4A700000000000000000404 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B4A700000000000000000102 /* Widgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		B4A000000000000000000201 /* Bike4Mind.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Bike4Mind.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B4A700000000000000000201 /* Widgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = Widgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		B4A000000000000000000301 /* Bike4Mind */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Bike4Mind;
+			sourceTree = "<group>";
+		};
+		B4A700000000000000000301 /* Widgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Widgets;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +63,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B4A700000000000000000401 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B4A700000000000000000101 /* B4MKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -38,6 +78,7 @@
 			isa = PBXGroup;
 			children = (
 				B4A000000000000000000301 /* Bike4Mind */,
+				B4A700000000000000000301 /* Widgets */,
 				B4A000000000000000000602 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -46,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				B4A000000000000000000201 /* Bike4Mind.app */,
+				B4A700000000000000000201 /* Widgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -60,10 +102,12 @@
 				B4A000000000000000000402 /* Sources */,
 				B4A000000000000000000401 /* Frameworks */,
 				B4A000000000000000000403 /* Resources */,
+				B4A700000000000000000404 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				B4A700000000000000000602 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				B4A000000000000000000301 /* Bike4Mind */,
@@ -76,6 +120,29 @@
 			productReference = B4A000000000000000000201 /* Bike4Mind.app */;
 			productType = "com.apple.product-type.application";
 		};
+		B4A700000000000000000701 /* Widgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B4A700000000000000000902 /* Build configuration list for PBXNativeTarget "Widgets" */;
+			buildPhases = (
+				B4A700000000000000000402 /* Sources */,
+				B4A700000000000000000401 /* Frameworks */,
+				B4A700000000000000000403 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				B4A700000000000000000301 /* Widgets */,
+			);
+			name = Widgets;
+			packageProductDependencies = (
+				B4A700000000000000000501 /* B4MKit */,
+			);
+			productName = Widgets;
+			productReference = B4A700000000000000000201 /* Widgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -87,6 +154,9 @@
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					B4A000000000000000000701 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					B4A700000000000000000701 = {
 						CreatedOnToolsVersion = 27.0;
 					};
 				};
@@ -109,12 +179,20 @@
 			projectRoot = "";
 			targets = (
 				B4A000000000000000000701 /* Bike4Mind */,
+				B4A700000000000000000701 /* Widgets */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		B4A000000000000000000403 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B4A700000000000000000403 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -131,7 +209,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B4A700000000000000000402 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B4A700000000000000000602 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B4A700000000000000000701 /* Widgets */;
+			targetProxy = B4A700000000000000000601 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B4A000000000000000000911 /* Debug */ = {
@@ -199,6 +292,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Bike4Mind;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIBackgroundModes = audio;
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Bike4Mind uses Face ID to unlock the app when App Lock is on.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -232,6 +326,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Bike4Mind;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIBackgroundModes = audio;
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Bike4Mind uses Face ID to unlock the app when App Lock is on.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -245,6 +340,62 @@
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bike4mind.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		B4A700000000000000000921 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = WidgetSupport/Widgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WidgetSupport/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Bike4Mind Widgets";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bike4mind.app.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B4A700000000000000000922 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = WidgetSupport/Widgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WidgetSupport/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Bike4Mind Widgets";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bike4mind.app.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -273,6 +424,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		B4A700000000000000000902 /* Build configuration list for PBXNativeTarget "Widgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B4A700000000000000000921 /* Debug */,
+				B4A700000000000000000922 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -284,6 +444,10 @@
 
 /* Begin XCSwiftPackageProductDependency section */
 		B4A000000000000000000501 /* B4MKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = B4MKit;
+		};
+		B4A700000000000000000501 /* B4MKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = B4MKit;
 		};

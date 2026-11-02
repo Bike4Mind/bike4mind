@@ -24,9 +24,7 @@ struct MainTabView: View {
       .tag(AppTab.lakes)
 
       NavigationStack {
-        PlaceholderScreen(
-          title: "Media", systemImage: "photo.on.rectangle",
-          message: "Your generated images, video and music will appear here.")
+        MediaGalleryView()
       }
       .tabItem { Label("Media", systemImage: "photo.on.rectangle") }
       .tag(AppTab.media)
@@ -36,6 +34,13 @@ struct MainTabView: View {
       }
       .tabItem { Label("Settings", systemImage: "gearshape") }
       .tag(AppTab.settings)
+    }
+    .sheet(
+      isPresented: Binding(
+        get: { navigator.newConversationRequest != nil },
+        set: { if !$0 { navigator.dismissNewConversation() } })
+    ) {
+      NewConversationView(draft: navigator.newConversationRequest?.draft ?? "", api: services.api)
     }
     .onChange(of: navigator.externalURL) { _, url in
       guard let url else { return }

@@ -46,3 +46,9 @@ SIMCTL_CHILD_B4M_UI_FIXTURES=1 xcrun simctl launch booted com.bike4mind.app
   Until then, universal links open in Safari and APNs registration fails (logged, harmless) in the simulator.
 - Authorization: provisional (silent) on first signed-in moment; the system prompt appears once, when the user first
   opens a conversation (`PushRegistrationCoordinator.userDidReachValueMoment`).
+
+## Widgets, App Intents and the media gallery
+
+- **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point; a Live Activity adds its `ActivityConfiguration` there and reuses `Widgets/Shared/`.
+- **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send.
+- **Media tab** (`Bike4Mind/Features/Media/`): a grid over the Files API via the hand-written `MediaClient`. Presigned URLs are re-fetched near expiry and at most twice after a playback failure. Under `B4M_UI_FIXTURES=1` the tab and the widgets show canned data.

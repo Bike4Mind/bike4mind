@@ -5,7 +5,7 @@ PROJECT := Bike4Mind.xcodeproj
 SCHEME := Bike4Mind
 DERIVED_DATA := $(CURDIR)/build/DerivedData
 # Generated sources are excluded from formatting so a regeneration diff is exactly the generator's output.
-SWIFT_SOURCES = $(shell find Bike4Mind Packages -name '*.swift' -not -path '*/Generated/*' -not -path '*/.build/*')
+SWIFT_SOURCES = $(shell find Bike4Mind Widgets Packages -name '*.swift' -not -path '*/Generated/*' -not -path '*/.build/*')
 
 .PHONY: build test format lint clean generate-client
 

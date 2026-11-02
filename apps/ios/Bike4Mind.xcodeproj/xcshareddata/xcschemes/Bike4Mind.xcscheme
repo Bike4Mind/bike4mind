@@ -20,6 +20,20 @@
                ReferencedContainer = "container:Bike4Mind.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "NO"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "B4A700000000000000000701"
+               BuildableName = "Widgets.appex"
+               BlueprintName = "Widgets"
+               ReferencedContainer = "container:Bike4Mind.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction

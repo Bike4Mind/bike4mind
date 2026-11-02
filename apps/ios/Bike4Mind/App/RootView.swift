@@ -35,6 +35,7 @@ struct RootView: View {
       if auth.state == .signedIn {
         let realtime = services.realtime
         Task { await realtime.resume() }
+        services.refreshWidgetCredits()
       }
     }
   }
@@ -44,13 +45,19 @@ struct RootView: View {
     case .signedIn, .locked:
       // First sign-in (or a restored launch) is the moment to ask for quiet push authorization.
       Task { await services.push.sessionDidStart() }
-      if state == .signedIn { services.navigator.releasePendingRoute() }
+      if state == .signedIn {
+        services.navigator.releasePendingRoute()
+        services.prepareWidgets()
+      }
     case .signedOut:
       // Cached rows belong to the account that fetched them.
       let realtime = services.realtime
       Task { await realtime.stop() }
       Task { await services.sessionListCache.clear() }
       services.push.sessionDidEnd()
+      // The widgets sit on the Home Screen: they must not keep showing the last account's data.
+      let widgets = services.widgets
+      Task { await widgets.signOut() }
       services.navigator.discardPendingRoute()
     case .restoring:
       break

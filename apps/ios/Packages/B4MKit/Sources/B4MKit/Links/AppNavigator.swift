@@ -8,6 +8,9 @@ import Observation
 public final class AppNavigator {
   public var selectedTab: AppTab = .sessions
   public var sessionPath: [SessionSummary] = []
+  /// The composer an App Intent asked for. A new-conversation request is shown as a sheet until
+  /// `dismissNewConversation()`; a session request is taken by that session's screen via `takeComposeRequest`.
+  public private(set) var composeRequest: ComposeRequest?
   /// A Safari fallback the view layer should open, then clear with `consumeExternalURL()`.
   public private(set) var externalURL: URL?
 
@@ -45,11 +48,33 @@ public final class AppNavigator {
       if sessionPath.last?.id != id { sessionPath = [.placeholder(id: id)] }
     case .sessions:
       sessionPath = []
+    case .compose(let request):
+      composeRequest = request
+      if case .session(let id) = request.target, sessionPath.last?.id != id {
+        sessionPath = [.placeholder(id: id)]
+      }
     case .lakes, .lake, .media, .settings:
       break
     case .web(let url):
       externalURL = url
     }
+  }
+
+  /// The pending new-conversation request, if that is what an intent asked for.
+  public var newConversationRequest: ComposeRequest? {
+    guard let composeRequest, composeRequest.target == .newConversation else { return nil }
+    return composeRequest
+  }
+
+  public func dismissNewConversation() {
+    if newConversationRequest != nil { composeRequest = nil }
+  }
+
+  /// Hands the draft for `sessionID` to its screen exactly once.
+  public func takeComposeRequest(forSession sessionID: String) -> ComposeRequest? {
+    guard let composeRequest, composeRequest.target == .session(id: sessionID) else { return nil }
+    self.composeRequest = nil
+    return composeRequest
   }
 
   public func consumeExternalURL() {
@@ -64,7 +89,7 @@ public final class AppNavigator {
     case .session(let id): return sessionPath.last?.id == id
     case .sessions: return sessionPath.isEmpty
     case .lakes, .media, .settings: return true
-    case .lake, .web: return false
+    case .lake, .web, .compose: return false
     }
   }
 }

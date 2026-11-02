@@ -37,7 +37,7 @@ public enum DeepLinkRouter {
 
   /// Server ids are Mongo object ids today; accept any conservative slug so a format change is not an outage,
   /// but never let path punctuation through into a navigation value.
-  private static func isValidIdentifier(_ value: String) -> Bool {
+  static func isValidIdentifier(_ value: String) -> Bool {
     guard !value.isEmpty, value.count <= 64 else { return false }
     return value.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
   }

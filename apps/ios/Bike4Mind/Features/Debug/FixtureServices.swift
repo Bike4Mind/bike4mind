@@ -8,6 +8,7 @@
     static var isEnabled: Bool { ProcessInfo.processInfo.environment["B4M_UI_FIXTURES"] == "1" }
 
     static let api: any B4MAPI = FixtureAPI()
+    static let media: any MediaAPI = FixtureMediaAPI()
     static let realtime = FixtureRealtime()
     static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
 
@@ -68,6 +69,37 @@
 
       func quest(id: String) async throws -> QuestTurn {
         throw APIError.notFound
+      }
+    }
+
+    /// A canned gallery: no URLs (nothing to download offline), so tiles draw their symbol placeholders.
+    private struct FixtureMediaAPI: MediaAPI {
+      private static let now = Date()
+
+      private static let all: [MediaItem] = (0..<24).map { index in
+        let kind: MediaKind = index % 5 == 3 ? .video : (index % 5 == 4 ? .audio : .image)
+        let (ext, mime) =
+          switch kind {
+          case .image: ("png", "image/png")
+          case .video: ("mp4", "video/mp4")
+          case .audio: ("mp3", "audio/mpeg")
+          }
+        return MediaItem(
+          id: "fixture-media-\(index)", kind: kind, fileName: "generation-\(index).\(ext)", mimeType: mime,
+          createdAt: now.addingTimeInterval(-Double(index) * 3_600))
+      }
+
+      func listMedia(kind: MediaKind?, page: Int, limit: Int) async throws -> MediaPage {
+        let matching = Self.all.filter { kind == nil || $0.kind == kind }
+        let start = (page - 1) * limit
+        guard start < matching.count else { return MediaPage(items: [], hasMore: false) }
+        let slice = matching[start..<min(start + limit, matching.count)]
+        return MediaPage(items: Array(slice), hasMore: start + limit < matching.count)
+      }
+
+      func media(id: String) async throws -> MediaItem {
+        guard let item = Self.all.first(where: { $0.id == id }) else { throw APIError.notFound }
+        return item
       }
     }
 

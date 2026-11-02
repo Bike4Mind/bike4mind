@@ -27,6 +27,11 @@ public final class IncomingEventHandler {
     return true
   }
 
+  /// Opens a route raised from inside the app process (App Intents), queued until the shell is ready.
+  public func open(_ route: Route) {
+    navigator.open(route, isShellReady: isShellReady())
+  }
+
   public func didTapNotification(_ payload: NotificationPayload) {
     guard let route = payload.route else { return }
     navigator.open(route, isShellReady: isShellReady())
