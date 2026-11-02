@@ -86,6 +86,7 @@ describe('getOrgTool', () => {
 
     const result = await runTool({ orgId: ORG_ID });
 
+    expect(resolveAdminOrgRef).toHaveBeenCalledWith({ orgId: ORG_ID });
     expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', [ORG_ID]);
     expect(result.data.organization).toEqual({
       id: ORG_ID,
@@ -126,6 +127,14 @@ describe('getOrgTool', () => {
     expect(result.data.members).toHaveLength(25);
     expect(result.data.membersTruncated).toBe(true);
     expect(resolveUserNames.mock.calls[0][0]).toHaveLength(26);
+  });
+
+  it('truncates the customer-written description to 500 characters', async () => {
+    resolveAdminOrgRef.mockResolvedValue({ ok: true, org: orgDoc({ description: 'x'.repeat(2000) }) });
+
+    const result = await runTool({ orgId: ORG_ID });
+
+    expect(result.data.organization.description).toHaveLength(500);
   });
 
   it('never emits secrets or the system prompt text', async () => {

@@ -55,12 +55,14 @@ describe('getOrgUsageTool', () => {
     resolveAdminOrgRef.mockResolvedValue({ ok: false, error: 'not_found', message: 'nope' });
 
     expect(await runTool({ name: 'Nope' })).toEqual({ ok: false, error: 'not_found', message: 'nope' });
+    expect(resolveAdminOrgRef).toHaveBeenCalledWith({ orgId: undefined, name: 'Nope' });
     expect(ownerUsageSummary).not.toHaveBeenCalled();
   });
 
   it('reads the org-owned rollup for the default 30 days and names the members', async () => {
     const result = await runTool({ orgId: ORG_ID });
 
+    expect(resolveAdminOrgRef).toHaveBeenCalledWith({ orgId: ORG_ID, name: undefined });
     expect(ownerUsageSummary).toHaveBeenCalledWith(ORG_ID, 'Organization', 30);
     expect(result.data).toEqual({
       organization: { id: ORG_ID, name: 'Acme', currentCredits: 900 },

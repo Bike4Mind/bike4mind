@@ -8,6 +8,8 @@ import { resolveAdminOrgRef } from '../resolveAdminOrgRef';
 import { AdminOrgRefSchema } from '../schemas';
 
 const MAX_MEMBERS = 25;
+// Same cap as admin_get_user_feedback puts on customer-written text.
+const MAX_DESCRIPTION_CHARS = 500;
 
 /**
  * The only organization fields the admin assistant may emit; output is always built by picking
@@ -32,13 +34,14 @@ export const ADMIN_ASSISTANT_ORG_FIELDS = [
 
 const toOrgFieldValue = (org: IOrganizationDocument, field: (typeof ADMIN_ASSISTANT_ORG_FIELDS)[number]): unknown => {
   const value: unknown = org[field];
+  if (field === 'description' && typeof value === 'string') return value.slice(0, MAX_DESCRIPTION_CHARS);
   return value instanceof Date ? value.toISOString() : (value ?? null);
 };
 
 export const getOrgTool = defineAdminTool({
   name: 'admin_get_org',
   description:
-    'Look up one organization by id or name: profile basics (seats, credit balance, storage in bytes against its limit in MB), owner, members with role, and active subscriptions.',
+    'Look up one organization by id or name: profile basics (description truncated to 500 characters, seats, credit balance, storage in bytes against its limit in MB), owner, members with role, and active subscriptions.',
   input: AdminOrgRefSchema,
   run: async ref => {
     const resolved = await resolveAdminOrgRef(ref);
