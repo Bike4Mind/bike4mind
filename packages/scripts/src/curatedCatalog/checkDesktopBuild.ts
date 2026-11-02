@@ -1,9 +1,11 @@
 /**
  * Release gate for a built Desktop app (`apps/desktop/out`): the public test keys must not be in it, and the list
- * URL it baked in must be empty or the expected https URL. The desktop release workflow runs it between the build
- * and packaging.
+ * URL it baked in must be empty or the expected https URL. Each `--also-scan` dir (the externalized
+ * `@bike4mind/local-models` dist, which holds the keyring and ships from node_modules) gets the test-key scan only.
+ * The desktop release workflow runs it between the build and packaging.
  *
  *   pnpm --filter @bike4mind/scripts curated:check-build apps/desktop/out [--expect-url <public list URL>]
+ *     [--also-scan <dir>]...
  */
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -75,20 +77,37 @@ export async function buildInfoProblems(dir: string, expectedUrl?: string): Prom
 export async function main(argv: string[], env: NodeJS.ProcessEnv, log = console.log): Promise<number> {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, allowPositionals: true, options: { 'expect-url': { type: 'string' } } });
+    parsed = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: { 'expect-url': { type: 'string' }, 'also-scan': { type: 'string', multiple: true } },
+    });
   } catch {
     parsed = null;
   }
   if (!parsed || parsed.positionals.length !== 1) {
-    log('usage: curated:check-build <built app dir> [--expect-url <public list URL>]');
+    log('usage: curated:check-build <built app dir> [--expect-url <public list URL>] [--also-scan <dir>]...');
     return 2;
   }
   const dir = cliPath(parsed.positionals[0], env);
   const findings = await findDevKey(dir);
   for (const finding of findings) log(`${finding.file}: contains the curated ${finding.marker}`);
+  let scanFailed = false;
+  for (const extra of parsed.values['also-scan'] ?? []) {
+    const extraDir = cliPath(extra, env);
+    try {
+      for (const finding of await findDevKey(extraDir)) {
+        findings.push(finding);
+        log(`${path.join(extraDir, finding.file)}: contains the curated ${finding.marker}`);
+      }
+    } catch {
+      scanFailed = true;
+      log(`${extraDir} cannot be scanned; was it built?`);
+    }
+  }
   const problems = await buildInfoProblems(dir, parsed.values['expect-url']);
   for (const problem of problems) log(problem);
-  if (findings.length > 0 || problems.length > 0) return 1;
+  if (findings.length > 0 || problems.length > 0 || scanFailed) return 1;
   log('no curated test key in the build, and the list URL is acceptable');
   return 0;
 }

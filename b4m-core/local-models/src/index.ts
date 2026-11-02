@@ -85,6 +85,31 @@ export {
   type CuratedVerifyFailure,
   type CuratedVerifyResult,
 } from './curatedSignature';
+export {
+  CURATED_BACKOFF_BASE_MS,
+  CURATED_CHECK_INTERVAL_MS,
+  CuratedListSource,
+  type CuratedCheckStatus,
+  type CuratedListSettings,
+  type CuratedListSourceDeps,
+  type CuratedSourceView,
+} from './curatedSource/CuratedListSource';
+export {
+  CuratedStore,
+  curatedStoreRoot,
+  type CuratedCheckState,
+  type CuratedCopy,
+  type CuratedRevoked,
+} from './curatedSource/CuratedStore';
+export {
+  curatedSibling,
+  fetchCurated,
+  resolveCuratedUrl,
+  type CuratedFetchFailure,
+  type CuratedFetchOptions,
+  type CuratedFetchResult,
+} from './curatedSource/fetchCurated';
+export { PRODUCTION_CURATED_KEYS } from './curatedSource/keys';
 export { BodyTooLargeError, DEFAULT_REQUEST_TIMEOUT_MS, readCapped } from './http';
 export { archFromModelInfo, tensorStatsFromTensors } from './arch';
 export {
