@@ -24,8 +24,8 @@ import { hostingNetworkOf } from './datacenterAsns';
  * tripped it; a Cache claim keyed by IP or ASN keeps it to one alert per network per window across
  * Lambdas. The refusal caps for the same networks live in signupNetworkLimits.ts.
  *
- * Each burst is also recorded as a shadow detection (what policy v1 would have done; it never acts)
- * for admin grading, behind the shadowDetectionRecordingEnabled kill switch.
+ * A signup that trips any burst is also recorded as one shadow detection (what policy v1 would have
+ * done; it never acts) for admin grading, behind the shadowDetectionRecordingEnabled kill switch.
  */
 
 const MINUTE_MS = 60_000;
@@ -174,21 +174,29 @@ async function alertOnce(input: {
   }
 }
 
-/** The shadow detection one burst records: what policy v1 would have done, without doing it. */
+/**
+ * The shadow detection one signup records: what policy v1 would have done, without doing it. One
+ * record per signup however many bursts it tripped (it is one "would contain" decision), with a
+ * signal per tripped burst.
+ */
 export function buildSignupNetworkShadowDetection(input: {
-  burst: SignupNetworkBurst;
+  bursts: [SignupNetworkBurst, ...SignupNetworkBurst[]];
   network: INetworkMeta;
   userId: string;
   windowMinutes: number;
   detectedAt: Date;
 }): RecordShadowDetectionInput {
-  const { burst, network, userId, windowMinutes, detectedAt } = input;
-  const source = burst.scope === 'ip' ? 'one IP' : 'one network';
+  const { bursts, network, userId, windowMinutes, detectedAt } = input;
+  const [first, ...rest] = bursts;
+  const counts = [
+    `${formatSignupCount(first.signups)} self-serve signups from ${burstSource(first)}`,
+    ...rest.map(burst => `${formatSignupCount(burst.signups)} from ${burstSource(burst)}`),
+  ];
   return {
     detector: 'signupNetworkBurst',
     policyVersion: SIGNUP_NETWORK_BURST_POLICY_VERSION,
     wouldAction: 'contain',
-    summary: `${formatSignupCount(burst.signups)} self-serve signups from ${source} in ${windowMinutes} minutes`,
+    summary: `${counts.join(' and ')} in ${windowMinutes} minutes`,
     userIds: [userId],
     network: {
       ip: network.ip,
@@ -197,41 +205,59 @@ export function buildSignupNetworkShadowDetection(input: {
       country: network.country,
       hosting: hostingNetworkOf(network),
     },
-    signals: [
-      {
-        key: burst.scope === 'ip' ? 'ipSignups' : 'asnSignups',
-        label: burst.scope === 'ip' ? 'Self-serve signups from this IP' : 'Self-serve signups from this network',
-        // JSON and Mongo cannot hold Infinity; a truncated count is unknown beyond the scan cap.
-        observed: Number.isFinite(burst.signups) ? burst.signups : null,
-        threshold: burst.max,
-      },
-    ],
+    signals: bursts.map(burst => ({
+      key: burst.scope === 'ip' ? 'ipSignups' : 'asnSignups',
+      label: burst.scope === 'ip' ? 'Self-serve signups from this IP' : 'Self-serve signups from this network',
+      // JSON and Mongo cannot hold Infinity; a truncated count is unknown beyond the scan cap.
+      observed: Number.isFinite(burst.signups) ? burst.signups : null,
+      threshold: burst.max,
+    })),
     windowMinutes,
     detectedAt,
   };
 }
 
+function burstSource(burst: SignupNetworkBurst): string {
+  return burst.scope === 'ip' ? 'one IP' : 'one network';
+}
+
 /**
- * Records the burst as a shadow detection, once per network per window. Only writes the record:
- * never touches the account, its credits or keys. Never throws.
+ * Records the signup's bursts as one shadow detection when it wins the shadow claim of at least one
+ * tripped network this window. Only writes the record: never touches the account, its credits or
+ * keys. A failed write releases the claims it won, so the next signup retries. Never throws.
  */
 async function recordShadowDetectionOnce(input: {
-  burst: SignupNetworkBurst;
+  bursts: [SignupNetworkBurst, ...SignupNetworkBurst[]];
   network: INetworkMeta;
   userId: string;
   windowMinutes: number;
   logger: Logger;
 }): Promise<void> {
-  const { burst, network, userId, windowMinutes, logger } = input;
+  const { bursts, network, userId, windowMinutes, logger } = input;
+  const wonKeys: string[] = [];
   try {
-    const key = dedupeKey(burst, network, SHADOW_DEDUPE_KEY_PREFIX);
-    const { claimed } = await cacheRepository.claimDedup(key, { userId }, windowMinutes * MINUTE_MS);
-    if (!claimed) return;
+    // allSettled, so a claim won beside one that threw is still known, and released below.
+    const claims = await Promise.allSettled(
+      bursts.map(async burst => {
+        const key = dedupeKey(burst, network, SHADOW_DEDUPE_KEY_PREFIX);
+        const { claimed } = await cacheRepository.claimDedup(key, { userId }, windowMinutes * MINUTE_MS);
+        if (claimed) wonKeys.push(key);
+      })
+    );
+    const failedClaim = claims.find(claim => claim.status === 'rejected');
+    if (failedClaim) throw failedClaim.reason;
+    if (wonKeys.length === 0) return;
     await shadowDetectionRepository.record(
-      buildSignupNetworkShadowDetection({ burst, network, userId, windowMinutes, detectedAt: new Date() })
+      buildSignupNetworkShadowDetection({ bursts, network, userId, windowMinutes, detectedAt: new Date() })
     );
   } catch (error) {
-    logger.error('[signup-network-alerts] Shadow detection was not recorded', { scope: burst.scope, error });
+    await Promise.all(wonKeys.map(key => cacheRepository.deleteByKey(key))).catch((releaseError: unknown) =>
+      logger.error('[signup-network-alerts] Shadow detection claim was not released', { error: releaseError })
+    );
+    logger.error('[signup-network-alerts] Shadow detection was not recorded', {
+      scopes: bursts.map(burst => burst.scope),
+      error,
+    });
   }
 }
 
@@ -276,12 +302,13 @@ export async function alertSignupNetworkBurst(input: {
     });
     const recordShadow = getSettingsValue('shadowDetectionRecordingEnabled', settings, true);
     const burstInput = { network, userId, windowMinutes: thresholds.windowMinutes, logger };
-    await Promise.all(
-      bursts.flatMap(burst => [
-        alertOnce({ burst, ...burstInput }),
-        ...(recordShadow ? [recordShadowDetectionOnce({ burst, ...burstInput })] : []),
-      ])
-    );
+    const [firstBurst, ...otherBursts] = bursts;
+    await Promise.all([
+      ...bursts.map(burst => alertOnce({ burst, ...burstInput })),
+      ...(recordShadow && firstBurst
+        ? [recordShadowDetectionOnce({ bursts: [firstBurst, ...otherBursts], ...burstInput })]
+        : []),
+    ]);
   } catch (error) {
     logger.error('[signup-network-alerts] Burst check failed', error);
   }

@@ -182,6 +182,21 @@ describe('POST /api/admin/shadow-detections/verdict', () => {
     expect(h.userWrite).not.toHaveBeenCalled();
   });
 
+  it('still answers 200 with the saved verdict when the audit write throws, and logs it', async () => {
+    h.addVerdict.mockResolvedValue({ status: 'updated', item: item({ verdict: 'confirmed_abuse', revision: 1 }) });
+    h.record.mockRejectedValue(new Error('actor lookup failed'));
+    const { req, res } = request('POST', { body: verdictBody() });
+
+    await h.handlers.verdict.post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ id: DETECTION_ID, verdict: 'confirmed_abuse', revision: 1 });
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(DETECTION_ID),
+      expect.any(Error)
+    );
+  });
+
   it('answers a stale revision with 409 and the current record, without auditing', async () => {
     h.addVerdict.mockResolvedValue({ status: 'conflict', item: item({ verdict: 'legitimate_human', revision: 1 }) });
     const { req, res } = request('POST', { body: verdictBody() });

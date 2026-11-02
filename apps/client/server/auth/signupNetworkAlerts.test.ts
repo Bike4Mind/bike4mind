@@ -258,7 +258,7 @@ describe('alertSignupNetworkBurst', () => {
     expect(mocks.loggerError).toHaveBeenCalledWith('[signup-network-alerts] Burst check failed', expect.any(Error));
   });
 
-  it('records one shadow detection per burst under its own dedupe claim', async () => {
+  it('records one shadow detection per signup, with a signal per tripped burst, under each burst claim', async () => {
     await alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' });
 
     expect(mocks.claimDedup).toHaveBeenCalledWith(
@@ -271,24 +271,41 @@ describe('alertSignupNetworkBurst', () => {
       { userId: 'u1' },
       180 * 60_000
     );
-    expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(2);
+    expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(1);
     expect(mocks.recordShadowDetection).toHaveBeenCalledWith(
       expect.objectContaining({
         detector: 'signupNetworkBurst',
         policyVersion: SIGNUP_NETWORK_BURST_POLICY_VERSION,
         wouldAction: 'contain',
         userIds: ['u1'],
-        summary: '2 self-serve signups from one IP in 180 minutes',
-        signals: [{ key: 'ipSignups', label: expect.any(String), observed: 2, threshold: 1 }],
+        summary: '2 self-serve signups from one IP and 3 from one network in 180 minutes',
+        signals: [
+          { key: 'ipSignups', label: expect.any(String), observed: 2, threshold: 1 },
+          { key: 'asnSignups', label: expect.any(String), observed: 3, threshold: 2 },
+        ],
       })
     );
+    expect(mocks.postMessageToSlackWithOutcome).toHaveBeenCalledTimes(2);
   });
 
-  it('records nothing when the shadow claim is already held, even if the alert claim is free', async () => {
+  it('records nothing when every shadow claim is already held, even if the alert claims are free', async () => {
     mocks.claimDedup.mockImplementation(async (key: string) => ({ claimed: !key.startsWith('shadow-detection:') }));
     await alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' });
     expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
     expect(mocks.postMessageToSlackWithOutcome).toHaveBeenCalledTimes(2);
+  });
+
+  it('still records once, with both signals, when only one shadow claim is won', async () => {
+    mocks.claimDedup.mockImplementation(async (key: string) => ({
+      claimed: key !== 'shadow-detection:signup-network:ip:hash:203.0.113.7',
+    }));
+    await alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' });
+    expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(1);
+    expect(mocks.recordShadowDetection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signals: [expect.objectContaining({ key: 'ipSignups' }), expect.objectContaining({ key: 'asnSignups' })],
+      })
+    );
   });
 
   it('keeps the shadow claim when the Slack post fails', async () => {
@@ -318,10 +335,15 @@ describe('alertSignupNetworkBurst', () => {
     expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
   });
 
-  it('still alerts when recording fails, and logs the failure', async () => {
+  it('releases the shadow claims it won when recording fails, still alerts, and logs the failure', async () => {
+    mocks.claimDedup.mockImplementation(async (key: string) => ({
+      claimed: key !== 'shadow-detection:signup-network:asn:64500',
+    }));
     mocks.recordShadowDetection.mockRejectedValue(new Error('db down'));
     await expect(alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
     expect(mocks.postMessageToSlackWithOutcome).toHaveBeenCalledTimes(2);
+    expect(mocks.deleteByKey).toHaveBeenCalledTimes(1);
+    expect(mocks.deleteByKey).toHaveBeenCalledWith('shadow-detection:signup-network:ip:hash:203.0.113.7');
     expect(mocks.loggerError).toHaveBeenCalledWith(
       '[signup-network-alerts] Shadow detection was not recorded',
       expect.objectContaining({ error: expect.any(Error) })
@@ -341,7 +363,7 @@ describe('buildSignupNetworkShadowDetection', () => {
   it('describes a network burst with the network it came from', () => {
     expect(
       buildSignupNetworkShadowDetection({
-        burst: { scope: 'asn', signups: 3, max: 2, hosting: true },
+        bursts: [{ scope: 'asn', signups: 3, max: 2, hosting: true }],
         network: HOSTED,
         userId: 'u1',
         windowMinutes: 60,
@@ -360,16 +382,42 @@ describe('buildSignupNetworkShadowDetection', () => {
     });
   });
 
+  it('names every tripped scope and carries a signal for each', () => {
+    const detection = buildSignupNetworkShadowDetection({
+      bursts: [
+        { scope: 'ip', signups: 3, max: 1 },
+        { scope: 'asn', signups: 7, max: 2, hosting: true },
+      ],
+      network: HOSTED,
+      userId: 'u1',
+      windowMinutes: 180,
+      detectedAt,
+    });
+    expect(detection.summary).toBe('3 self-serve signups from one IP and 7 from one network in 180 minutes');
+    expect(detection.signals).toEqual([
+      { key: 'ipSignups', label: 'Self-serve signups from this IP', observed: 3, threshold: 1 },
+      { key: 'asnSignups', label: 'Self-serve signups from this network', observed: 7, threshold: 2 },
+    ]);
+  });
+
   it('reports a truncated count as a floor with no observed number', () => {
     const detection = buildSignupNetworkShadowDetection({
-      burst: { scope: 'ip', signups: Infinity, max: 1 },
+      bursts: [
+        { scope: 'ip', signups: Infinity, max: 1 },
+        { scope: 'asn', signups: Infinity, max: 2, hosting: false },
+      ],
       network: CONSUMER,
       userId: 'u1',
       windowMinutes: 180,
       detectedAt,
     });
-    expect(detection.summary).toBe('more than 5,000 self-serve signups from one IP in 180 minutes');
-    expect(detection.signals[0]).toMatchObject({ observed: null, threshold: 1 });
+    expect(detection.summary).toBe(
+      'more than 5,000 self-serve signups from one IP and more than 5,000 from one network in 180 minutes'
+    );
+    expect(detection.signals).toEqual([
+      expect.objectContaining({ observed: null, threshold: 1 }),
+      expect.objectContaining({ observed: null, threshold: 2 }),
+    ]);
     expect(detection.network?.hosting).toBe(false);
   });
 });

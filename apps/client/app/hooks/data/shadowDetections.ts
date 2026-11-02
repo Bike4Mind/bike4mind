@@ -31,12 +31,14 @@ export function useShadowDetections(query: ShadowDetectionListQuery) {
 
 /**
  * `conflict` means another admin graded the detection first (its revision moved); `item` is the
- * detection as it is now, so the admin can re-decide against it.
+ * detection as it is now, so the admin can re-decide against it, and `message` is the server's
+ * explanation when it sent one.
  */
 export type ShadowDetectionVerdictResult =
-  { status: 'recorded'; item: ShadowDetectionRow } | { status: 'conflict'; item: ShadowDetectionRow };
+  | { status: 'recorded'; item: ShadowDetectionRow }
+  | { status: 'conflict'; item: ShadowDetectionRow; message: string | null };
 
-const conflictBodySchema = z.object({ item: shadowDetectionRowSchema });
+const conflictBodySchema = z.object({ error: z.string().optional(), item: shadowDetectionRowSchema });
 
 export function useShadowDetectionVerdict() {
   const queryClient = useQueryClient();
@@ -51,7 +53,7 @@ export function useShadowDetectionVerdict() {
         if (!isAxiosError(error) || error.response?.status !== 409) throw error;
         const body = conflictBodySchema.safeParse(error.response.data);
         if (!body.success) throw error;
-        return { status: 'conflict', item: body.data.item };
+        return { status: 'conflict', item: body.data.item, message: body.data.error?.trim() || null };
       }
     },
     // A conflict also means the list is stale.

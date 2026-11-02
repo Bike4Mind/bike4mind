@@ -12,10 +12,11 @@ const m = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   search: {} as Record<string, unknown>,
   navigate: vi.fn(),
+  verdictError: null as Error | null,
 }));
 vi.mock('@client/app/hooks/data/shadowDetections', () => ({
   useShadowDetections: m.useShadowDetections,
-  useShadowDetectionVerdict: () => ({ mutateAsync: m.mutateAsync, isPending: false, error: null }),
+  useShadowDetectionVerdict: () => ({ mutateAsync: m.mutateAsync, isPending: false, error: m.verdictError }),
 }));
 vi.mock('@tanstack/react-router', () => ({
   useSearch: () => m.search,
@@ -95,6 +96,7 @@ describe('ShadowDetectionsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     m.search = {};
+    m.verdictError = null;
     m.useShadowDetections.mockReturnValue(queryResult(list()));
   });
 
@@ -145,10 +147,106 @@ describe('ShadowDetectionsTab', () => {
     expect(screen.getByText('No unreviewed detections')).toBeTruthy();
   });
 
-  it('shows the truncated notice', () => {
+  it('shows the truncated notice and leaves the partial row count out of the header', () => {
     m.useShadowDetections.mockReturnValue(queryResult(list({ truncated: true })));
     renderTab();
     expect(screen.getByTestId('shadow-detection-truncated')).toBeTruthy();
+    expect(within(screen.getByTestId('admin-page-header')).getByRole('heading').textContent).toBe('Detections');
+  });
+
+  it('counts the rows in the header when the list is complete', () => {
+    renderTab();
+    expect(within(screen.getByTestId('admin-page-header')).getByRole('heading').textContent).toBe('Detections (1)');
+  });
+
+  // The URL patch the last navigate wrote, applied to an empty search.
+  const lastSearchPatch = (): Record<string, unknown> => {
+    const { search } = m.navigate.mock.lastCall?.[0] as { search: (previous: object) => Record<string, unknown> };
+    return search({});
+  };
+
+  it('lists every verdict once the Verdict chip is cleared, not the Unreviewed default', async () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('admin-filter-clear-verdict-btn'));
+    await waitFor(() => expect(m.navigate).toHaveBeenCalled());
+    expect(lastSearchPatch()).toMatchObject({ detectionVerdict: 'all' });
+  });
+
+  it('clears the filters from a filtered empty state', async () => {
+    m.search = { detectionDetector: 'signupNetworkBurst', detectionVerdict: 'confirmed_abuse' };
+    m.useShadowDetections.mockReturnValue(queryResult(list({ data: [], summary: [] })));
+    renderTab();
+    expect(screen.getByText('No detections graded confirmed abuse')).toBeTruthy();
+
+    const reset = screen.getByTestId('shadow-detection-reset-btn');
+    expect(reset.textContent).toBe('Clear filters');
+    fireEvent.click(reset);
+    await waitFor(() => expect(m.navigate).toHaveBeenCalled());
+    const patch = lastSearchPatch();
+    expect(patch.detectionDetector).toBeUndefined();
+    expect(patch.detectionVerdict).toBeUndefined();
+  });
+
+  it('refreshes from the unfiltered empty state', () => {
+    const query = { ...queryResult(list({ data: [], summary: [] })) };
+    m.useShadowDetections.mockReturnValue(query);
+    renderTab();
+    const reset = screen.getByTestId('shadow-detection-reset-btn');
+    expect(reset.textContent).toBe('Refresh');
+    fireEvent.click(reset);
+    expect(query.refetch).toHaveBeenCalledTimes(1);
+    expect(m.navigate).not.toHaveBeenCalled();
+  });
+
+  it('shows the load error with a retry', () => {
+    const query = { ...queryResult(list()), data: undefined, error: new Error('boom') };
+    m.useShadowDetections.mockReturnValue(query);
+    renderTab();
+    expect(within(screen.getByTestId('admin-error-state')).getByText("Couldn't load detections.")).toBeTruthy();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(query.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders a missing signal value as a muted dash', async () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [
+            detection({ signals: [{ key: 'ipSignups', label: 'Signups from one IP', observed: null, threshold: 1 }] }),
+          ],
+        })
+      )
+    );
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const signals = await screen.findByTestId('shadow-detection-signals');
+    expect(signals.textContent).toContain('Signups from one IP: - observed, threshold 1');
+    expect(signals.textContent).not.toContain('n/a');
+  });
+
+  it('links every account the detection names in the verdict dialog', async () => {
+    const userIds = ['b', 'c', 'd', 'e'].map(char => char.repeat(24));
+    m.useShadowDetections.mockReturnValue(queryResult(list({ data: [detection({ userIds })] })));
+    renderTab();
+    const row = screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`);
+    expect(within(row).getByText('+2 more')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const actors = await screen.findByTestId('shadow-detection-dialog-actors');
+    for (const userId of userIds) {
+      expect(within(actors).getByTestId(`shadow-detection-dialog-user-link-${userId}`).getAttribute('href')).toBe(
+        `/admin/users/${userId}`
+      );
+    }
+    expect(within(actors).getByText('203.0.113.7 / Example Hosting / NL / Hosting')).toBeTruthy();
+  });
+
+  it('shows a failed verdict as an error in the dialog', async () => {
+    m.verdictError = new Error('Rate limit reached');
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+    expect(within(dialog).getByTestId('shadow-detection-verdict-error').textContent).toContain('Rate limit reached');
   });
 
   const openAndSubmit = async () => {
@@ -189,10 +287,12 @@ describe('ShadowDetectionsTab', () => {
         },
       ],
     });
-    m.mutateAsync.mockResolvedValueOnce({ status: 'conflict', item: graded });
+    m.mutateAsync.mockResolvedValueOnce({ status: 'conflict', item: graded, message: 'Graded by someone else.' });
     await openAndSubmit();
 
-    expect(await screen.findByTestId('shadow-detection-verdict-conflict')).toBeTruthy();
+    expect((await screen.findByTestId('shadow-detection-verdict-conflict')).textContent).toContain(
+      'Graded by someone else.'
+    );
     const dialog = screen.getByTestId('shadow-detection-verdict-dialog');
     expect(within(dialog).getByText('Change verdict')).toBeTruthy();
     expect(
@@ -204,6 +304,14 @@ describe('ShadowDetectionsTab', () => {
     fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
     await waitFor(() =>
       expect(m.mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ expectedRevision: 5 }))
+    );
+  });
+
+  it('falls back to a generic conflict message when the server sends none', async () => {
+    m.mutateAsync.mockResolvedValueOnce({ status: 'conflict', item: detection({ revision: 5 }), message: null });
+    await openAndSubmit();
+    expect((await screen.findByTestId('shadow-detection-verdict-conflict')).textContent).toContain(
+      'Another admin graded this detection first.'
     );
   });
 });

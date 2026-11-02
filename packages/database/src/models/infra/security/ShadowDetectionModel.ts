@@ -86,8 +86,8 @@ export const ShadowDetectionSchema = new Schema<IShadowDetectionDocument>(
   { timestamps: true, versionKey: false, collection: 'ShadowDetection' }
 );
 
-// Retention: the record carries a raw IP, so it does not outlive a year. The same index serves the
-// newest-first list, so there is no separate { detectedAt: -1 }.
+// Retention: the record carries a raw IP, so it does not outlive a year. The unfiltered newest-first
+// list ({ detectedAt: -1, _id: -1 }) gets no index of its own: volume is low, and the sort is cheap.
 ShadowDetectionSchema.index({ detectedAt: 1 }, { expireAfterSeconds: RETENTION_SECONDS });
 ShadowDetectionSchema.index({ detector: 1, verdict: 1, detectedAt: -1 });
 ShadowDetectionSchema.index({ userIds: 1 });

@@ -69,7 +69,7 @@ const VERDICT_FILTER_LABELS: Record<VerdictFilter, string> = {
   insufficient_evidence: VERDICT_DISPLAY.insufficient_evidence.label,
 };
 
-// Users shown per row before collapsing into "+N"; the full list is in the tooltip.
+// Users shown per row before collapsing into "+N"; the verdict dialog links every one.
 const VISIBLE_USER_IDS = 2;
 
 const muted = { color: 'admin.inkMuted' } as const;
@@ -97,13 +97,8 @@ export const formatNetwork = (network: ShadowDetectionNetwork): string =>
     .filter((part): part is string => !!part)
     .join(' / ');
 
-const UserLink: React.FC<{ userId: string; detectionId: string }> = ({ userId, detectionId }) => (
-  <Link
-    to="/admin/users/$userId"
-    params={{ userId }}
-    data-testid={`shadow-detection-user-link-${detectionId}-${userId}`}
-    style={{ textDecoration: 'none' }}
-  >
+const UserLink: React.FC<{ userId: string; testId: string }> = ({ userId, testId }) => (
+  <Link to="/admin/users/$userId" params={{ userId }} data-testid={testId} style={{ textDecoration: 'none' }}>
     <Typography level="body-xs" fontFamily="code" noWrap sx={{ color: 'admin.link' }}>
       {userId}
     </Typography>
@@ -115,7 +110,7 @@ const Actor: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => {
   return (
     <Stack gap={0.25} sx={{ minWidth: 0 }}>
       {row.userIds.slice(0, VISIBLE_USER_IDS).map(userId => (
-        <UserLink key={userId} userId={userId} detectionId={row.id} />
+        <UserLink key={userId} userId={userId} testId={`shadow-detection-user-link-${row.id}-${userId}`} />
       ))}
       {hidden.length > 0 && (
         <Tooltip title={hidden.join(', ')}>
@@ -141,7 +136,14 @@ const VerdictChip: React.FC<{ verdict: ShadowDetectionVerdict | null; testId?: s
     <StatusChip tone="neutral" label="Unreviewed" data-testid={testId} />
   );
 
-const formatValue = (value: number | null) => (value === null ? 'n/a' : value.toLocaleString());
+const SignalValue: React.FC<{ value: number | null }> = ({ value }) =>
+  value === null ? (
+    <Typography component="span" sx={muted}>
+      -
+    </Typography>
+  ) : (
+    <>{value.toLocaleString()}</>
+  );
 
 const SignalList: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => (
   <Stack gap={0.5} data-testid="shadow-detection-signals">
@@ -156,7 +158,8 @@ const SignalList: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => (
       <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
         {row.signals.map(signal => (
           <Typography key={signal.key} component="li" level="body-sm">
-            {signal.label}: {formatValue(signal.observed)} observed, threshold {formatValue(signal.threshold)}
+            {signal.label}: <SignalValue value={signal.observed} /> observed, threshold{' '}
+            <SignalValue value={signal.threshold} />
           </Typography>
         ))}
       </Box>
@@ -238,6 +241,29 @@ const SummaryStrip: React.FC<{ row: ShadowDetectionSummaryRow }> = ({ row }) => 
   );
 };
 
+const CONFLICT_FALLBACK_MESSAGE = 'Another admin graded this detection first. Review it again.';
+
+/** Every account and the network the detection names, so each profile is one click from grading. */
+const DialogActors: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => (
+  <Stack gap={0.25} data-testid="shadow-detection-dialog-actors" sx={{ minWidth: 0 }}>
+    <Typography level="body-xs" sx={muted}>
+      {row.userIds.length === 1 ? 'Account' : `Accounts (${row.userIds.length.toLocaleString()})`}
+    </Typography>
+    {row.userIds.length === 0 ? (
+      <Dash />
+    ) : (
+      row.userIds.map(userId => (
+        <UserLink key={userId} userId={userId} testId={`shadow-detection-dialog-user-link-${userId}`} />
+      ))
+    )}
+    {row.network && (
+      <Typography level="body-xs" sx={{ ...muted, overflowWrap: 'anywhere' }}>
+        {formatNetwork(row.network)}
+      </Typography>
+    )}
+  </Stack>
+);
+
 type VerdictDialogProps = {
   row: ShadowDetectionRow;
   now: number;
@@ -248,16 +274,17 @@ type VerdictDialogProps = {
 const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowChange }) => {
   const mutation = useShadowDetectionVerdict();
   const [verdict, setVerdict] = useState<ShadowDetectionVerdict | null>(null);
-  const [conflict, setConflict] = useState(false);
+  // The server's explanation of a stale verdict, or null when there is no conflict to show.
+  const [conflict, setConflict] = useState<string | null>(null);
   const title = row.verdict ? 'Change verdict' : 'Record verdict';
 
   const submit = async (reason: string) => {
     if (!verdict) return;
-    setConflict(false);
+    setConflict(null);
     const result = await mutation.mutateAsync({ id: row.id, expectedRevision: row.revision, verdict, reason });
     if (result.status === 'conflict') {
       onRowChange(result.item);
-      setConflict(true);
+      setConflict(result.message ?? CONFLICT_FALLBACK_MESSAGE);
       return;
     }
     onClose();
@@ -289,10 +316,10 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
           <VerdictChip verdict={row.verdict} testId="shadow-detection-dialog-current-verdict" />
         </Stack>
       </Stack>
+      <DialogActors row={row} />
       {conflict && (
         <Alert color="warning" data-testid="shadow-detection-verdict-conflict">
-          Another admin graded this detection first. Its current verdict and history are shown below; record yours again
-          if you still disagree.
+          {conflict} Its current verdict and history are shown below.
         </Alert>
       )}
       {mutation.error && (
@@ -423,7 +450,8 @@ export const ShadowDetectionsTab: React.FC = () => {
     >
       <AdminPageHeader
         title="Detections"
-        count={detections.data ? rows.length : undefined}
+        // A truncated list is not the total: the summary tiles carry the real counts.
+        count={detections.data && !detections.data.truncated ? rows.length : undefined}
         description="Detectors record what they would have done to an account or network. Nothing here changes an account: grade each detection so its precision can be measured."
       />
       {summary.length > 0 && (
@@ -504,7 +532,7 @@ export const ShadowDetectionsTab: React.FC = () => {
                   else void detections.refetch();
                 }}
               >
-                {filtered ? 'Show unreviewed' : 'Refresh'}
+                {filtered ? 'Clear filters' : 'Refresh'}
               </Button>
             }
           />

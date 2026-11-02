@@ -63,13 +63,19 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         return;
       }
 
-      await recordAdminActionFromRequest(req, {
-        action: 'security.detection.reviewed',
-        target: { kind: 'system', id: result.item.id, displayName: `Shadow detection ${result.item.id}` },
-        summary: `graded a ${result.item.detector} detection as ${verdict}`,
-        reason,
-        details: auditDetails(result.item),
-      });
+      // The verdict has already committed: a failed audit write must not turn it into a 500, which the
+      // reviewer's retry would then meet as a 409 against their own verdict.
+      try {
+        await recordAdminActionFromRequest(req, {
+          action: 'security.detection.reviewed',
+          target: { kind: 'system', id: result.item.id, displayName: `Shadow detection ${result.item.id}` },
+          summary: `graded a ${result.item.detector} detection as ${verdict}`,
+          reason,
+          details: auditDetails(result.item),
+        });
+      } catch (error) {
+        req.logger.error(`Audit entry failed for shadow detection verdict ${result.item.id}`, error);
+      }
       respond(res, shadowDetectionItemSchema, result.item);
     })
   );
