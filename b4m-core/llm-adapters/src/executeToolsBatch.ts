@@ -16,6 +16,26 @@ export function isTerminalToolError(error: unknown): boolean {
   return error instanceof PermissionDeniedError || getQuestErrorCode(error) !== undefined;
 }
 
+/**
+ * Thrown by the services tool failure guard (toolFailureGuard.ts) in place of running a tool that
+ * already failed repeatedly this turn. An expected refusal, not a new failure: the failures that
+ * tripped it were logged when they happened.
+ */
+export class ToolBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ToolBlockedError';
+  }
+}
+
+/**
+ * Log level for a tool failure fed back to the model. Adapters that log a failed tool
+ * (Bedrock, Anthropic, Gemini) pick the level through this.
+ */
+export function toolFailureLogLevel(error: unknown): 'warn' | 'error' {
+  return error instanceof ToolBlockedError ? 'warn' : 'error';
+}
+
 /** Whether the named tool is flagged `endsTurnAfterText` in the offered tool list. */
 export function isTurnEndingTool(
   name: string,
