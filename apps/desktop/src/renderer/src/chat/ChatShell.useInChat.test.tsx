@@ -15,10 +15,20 @@ vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScre
 
 let offered: ChatWith | undefined;
 let shownError: string | null | undefined;
+let closeModels: (() => void) | undefined;
 vi.mock('../models/ModelsScreen', () => ({
-  ModelsScreen: ({ chatWith, chatError }: { chatWith?: ChatWith; chatError?: string | null }) => {
+  ModelsScreen: ({
+    chatWith,
+    chatError,
+    onClose,
+  }: {
+    chatWith?: ChatWith;
+    chatError?: string | null;
+    onClose: () => void;
+  }) => {
     offered = chatWith;
     shownError = chatError;
+    closeModels = onClose;
     return <div data-testid="models-screen" />;
   },
 }));
@@ -128,6 +138,7 @@ beforeEach(() => {
   );
   offered = undefined;
   shownError = undefined;
+  closeModels = undefined;
   createSession.mockClear();
   setSessionModel.mockClear();
   deleteSession.mockClear();
@@ -204,5 +215,29 @@ describe('Use in chat', () => {
     await act(async () => undefined);
     expect(shownError).toContain('disk full');
     expect(document.querySelector('[data-testid="models-screen"]')).not.toBeNull();
+  });
+
+  it('says the empty conversation is left behind when removing it fails too', async () => {
+    setSessionModel.mockResolvedValueOnce(null as never);
+    deleteSession.mockRejectedValueOnce(new Error('locked'));
+    await openModels();
+    await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
+    await act(async () => undefined);
+    expect(deleteSession).toHaveBeenCalledWith('fresh-1', false);
+    expect(shownError).toContain('could not remove the empty one');
+  });
+
+  it('drops the error when Models is closed, so reopening it does not show a stale one', async () => {
+    setSessionModel.mockResolvedValueOnce(null as never);
+    await openModels();
+    await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
+    await act(async () => undefined);
+    expect(shownError).toContain('could not start a conversation on that model');
+
+    await act(async () => closeModels?.());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-models-btn"]')?.click());
+    await act(async () => undefined);
+    expect(document.querySelector('[data-testid="models-screen"]')).not.toBeNull();
+    expect(shownError).toBeNull();
   });
 });
