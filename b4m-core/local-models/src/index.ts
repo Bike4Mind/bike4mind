@@ -64,6 +64,7 @@ export {
   type CuratedListing,
   type CuratedSource,
   type CuratedTierPick,
+  type LoadCuratedOptions,
 } from './curated';
 export {
   CURATED_KEY_ROLES,

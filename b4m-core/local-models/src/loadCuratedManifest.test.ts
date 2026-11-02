@@ -95,4 +95,44 @@ describe('loadCuratedManifest', () => {
       expect.stringContaining('MODELS: curated list unreadable, showing the bundled one')
     );
   });
+
+  describe('an entry with a minimum CLI version', () => {
+    const withMinimum = (minCliVersion: string) => {
+      const input = structuredClone(bundled) as { entries: { id: string; minCliVersion?: string }[] };
+      input.entries[0].minCliVersion = minCliVersion;
+      return { input, id: input.entries[0].id };
+    };
+    const ids = (manifest: { entries: { id: string }[] }) => manifest.entries.map(entry => entry.id);
+
+    it('is left out for an older CLI, and the drop names the version it needs', () => {
+      const warn = vi.fn();
+      const { input, id } = withMinimum('1.2.0');
+      const manifest = loadCuratedManifest(warn, input, { cliVersion: '1.1.9' });
+
+      expect(ids(manifest)).not.toContain(id);
+      expect(manifest.entries).toHaveLength(strict().entries.length - 1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`entries.${id}: needs CLI 1.2.0 or newer`));
+    });
+
+    it.each([
+      ['the same version', '1.2.0'],
+      ['a newer patch', '1.2.1'],
+      ['a newer major', '2.0.0'],
+      ['a pre-release of that version', '1.2.0-rc.1'],
+    ])('is kept for %s', (_label, cliVersion) => {
+      const warn = vi.fn();
+      const { input, id } = withMinimum('1.2.0');
+      expect(ids(loadCuratedManifest(warn, input, { cliVersion }))).toContain(id);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    // A caller that passes no version (Desktop has its own loader and field) and an unreadable one both keep it.
+    it.each([
+      ['no CLI version', undefined],
+      ['an unreadable CLI version', 'dev'],
+    ])('is kept with %s', (_label, cliVersion) => {
+      const { input, id } = withMinimum('9.0.0');
+      expect(ids(loadCuratedManifest(vi.fn(), input, { cliVersion }))).toContain(id);
+    });
+  });
 });
