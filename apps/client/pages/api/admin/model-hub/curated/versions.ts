@@ -11,7 +11,8 @@ import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { adminApi } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
-// A 4 MiB list escaped into a JSON string, under the 6 MB Lambda request cap.
+// Real lists are a few KB. A list near the 4 MiB cap, escaped into JSON and again into the Lambda event, may not
+// fit the 6 MB request cap.
 const MAX_BODY_BYTES = 6 * 1024 * 1024;
 
 const ImportBody = z.object({

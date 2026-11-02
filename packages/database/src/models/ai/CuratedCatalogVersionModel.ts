@@ -114,6 +114,17 @@ export class CuratedCatalogVersionRepository {
     return this.versionModel.findOne({ channel, sequence }, PROJECTION).lean<CuratedCatalogVersionRecord>().exec();
   }
 
+  /** The highest sequence of `channel` that any of `keyIds` signed; 0 when none did. */
+  async highestSequenceSignedBy(channel: string, keyIds: readonly string[]): Promise<number> {
+    if (keyIds.length === 0) return 0;
+    const found = await this.versionModel
+      .findOne({ channel, keyIds: { $in: [...keyIds] } }, { _id: 0, sequence: 1 })
+      .sort({ sequence: -1 })
+      .lean<Pick<CuratedCatalogVersionRecord, 'sequence'>>()
+      .exec();
+    return found?.sequence ?? 0;
+  }
+
   /** Reads only the one stored text a route serves; null when there is no such version. */
   async readServed(
     channel: string,

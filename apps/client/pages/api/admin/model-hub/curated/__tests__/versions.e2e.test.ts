@@ -15,7 +15,11 @@ import {
 import { ApiKeyScope, HTTPError } from '@bike4mind/common';
 import { CURATED_CHANNEL } from '@bike4mind/server-utils/modelHub/curatedCatalog';
 import { curatedDevKeyPair } from '@bike4mind/server-utils/modelHub/curatedDevKeys';
-import { catalogText, signatureText, testSigner } from '@bike4mind/server-utils/modelHub/curatedTestPairs';
+import {
+  catalogText,
+  signatureText,
+  testSigner,
+} from '@bike4mind/server-utils/modelHub/__tests__/utils/curatedTestPairs';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 const stage = vi.hoisted(() => ({ value: 'test', deployed: false }));
@@ -169,6 +173,7 @@ describe('POST /api/admin/model-hub/curated/versions against real Mongo', () => 
     stage.value = 'production';
     expect(await post(pair(1))).toMatchObject({ status: 400, json: { error: /unknown-key/ } });
     stage.value = 'staging';
+    expect(await post(pair(1))).toMatchObject({ status: 400, json: { error: /unknown-key/ } });
     stage.deployed = true;
     expect(await post(pair(1))).toMatchObject({ status: 400, json: { error: /unknown-key/ } });
     expect(await CuratedCatalogVersion.countDocuments()).toBe(0);
@@ -185,6 +190,17 @@ describe('POST /api/admin/model-hub/curated/versions against real Mongo', () => 
     expect((await post(pair(3))).status).toBe(201);
     const sequences = (await CuratedCatalogVersion.find({}).lean()).map(v => v.sequence).sort();
     expect(sequences).toEqual([2, 3]);
+  });
+
+  it('stores one of two concurrent imports at the same sequence and answers the other 409', async () => {
+    expect((await post(pair(2))).status).toBe(201);
+    const recovery = curatedDevKeyPair('recovery');
+    const coSigned = pair(3, [devSigner, { key: recovery.key, privateKey: recovery.privateKey }]);
+    const results = await Promise.all([post(pair(3)), post(coSigned)]);
+    expect(results.map(r => r.status).sort()).toEqual([201, 409]);
+    const sequences = (await CuratedCatalogVersion.find({}).lean()).map(v => v.sequence).sort();
+    expect(sequences).toEqual([2, 3]);
+    expect(await AdminAuditLogModel.countDocuments()).toBe(2);
   });
 
   it('requires a reason', async () => {

@@ -1,4 +1,5 @@
-import { curatedJsonSchemaText, NotFoundError } from '@bike4mind/common';
+import { NotFoundError } from '@bike4mind/common';
+import { curatedJsonSchemaText } from '@bike4mind/common/modelHub';
 import { curatedCatalogVersionRepository } from '@bike4mind/database';
 import {
   CURATED_CHANNEL,

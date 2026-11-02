@@ -1,4 +1,4 @@
-import { CuratedCatalogSchema, parseHubManifest, type HubManifest } from '@bike4mind/common';
+import { CuratedCatalogSchema, parseHubManifest, type HubManifest } from '@bike4mind/common/modelHub';
 import {
   curatedCatalogVersionRepository,
   withTransaction,
@@ -29,16 +29,17 @@ export const CURATED_SCHEMA_CACHE_CONTROL = 'public, max-age=3600';
 const PREVIEW_STAGE = /^pr\d+$/;
 
 /**
- * The public test keys are trusted only with MODEL_HUB_CURATED_DEV_KEYS=1, never on production, and on a deployed
- * stage only when it is a preview, so a local, self-hosted or preview app can take a list the dev builds of Desktop
- * and the CLI accept. `deployed` is isDeployedStage() from utils/config.
+ * The public test keys are trusted only with MODEL_HUB_CURATED_DEV_KEYS=1, never on production or staging, and on a
+ * deployed stage only when it is a preview, so a local or self-hosted app can take a list the dev builds of Desktop
+ * and the CLI accept. `deployed` is isDeployedStage() from utils/config. infra/ sets the variable on no stage, so a
+ * deployed preview needs it added to its environment first.
  */
 export function curatedDevKeysEnabled(
   env: Record<string, string | undefined>,
   stage: string | undefined,
   deployed: boolean
 ): boolean {
-  if (env.MODEL_HUB_CURATED_DEV_KEYS !== '1' || stage === 'production') return false;
+  if (env.MODEL_HUB_CURATED_DEV_KEYS !== '1' || stage === 'production' || stage === 'staging') return false;
   return !deployed || PREVIEW_STAGE.test(stage ?? '');
 }
 
@@ -100,6 +101,8 @@ export interface LiveList {
 const utf8 = (text: string) => Buffer.from(text, 'utf8');
 // A lone surrogate would be stored as one string but hashed and served as U+FFFD.
 const wellFormed = (text: string) => utf8(text).toString('utf8') === text;
+// Clients decode with TextDecoder, which drops a leading BOM; the stored text keeps it, as the signature covers it.
+const parseJson = (text: string): unknown => JSON.parse(text.replace(/^\uFEFF/, ''));
 const refuse = (error: string, status: 400 | 409 = 400): CuratedImportRefusal => ({ ok: false, status, error });
 
 const issues = (error: { issues: { path: PropertyKey[]; message: string }[] }) =>
@@ -113,8 +116,17 @@ const recoveryCheck = (keyring: readonly CuratedKey[]) => (id: string) =>
 
 export function readLive(record: CuratedCatalogVersionRecord | null, keyring: readonly CuratedKey[]): LiveList | null {
   if (!record) return null;
-  const { manifest } = parseHubManifest(JSON.parse(record.manifestBytes));
+  const { manifest } = parseHubManifest(parseJson(record.manifestBytes));
   return { record, manifest, recoverySigned: record.keyIds.some(recoveryCheck(keyring)) };
+}
+
+export interface CuratedImportCheck {
+  ok: true;
+  plan: CuratedImportPlan;
+  sequence: number;
+  keyIds: string[];
+  /** For `recover`: the keyring keys clients still count toward their floor once they apply this list. */
+  floorKeyIds: string[];
 }
 
 /**
@@ -128,7 +140,7 @@ export function checkCuratedImport(
   signature: string,
   keyring: readonly CuratedKey[],
   live: LiveList | null
-): { ok: true; plan: CuratedImportPlan; sequence: number; keyIds: string[] } | CuratedImportRefusal {
+): CuratedImportCheck | CuratedImportRefusal {
   if (!wellFormed(manifest) || !wellFormed(signature)) return refuse('the pair is not well-formed UTF-8 text');
   const manifestBytes = utf8(manifest);
   const signatureBytes = utf8(signature);
@@ -143,7 +155,7 @@ export function checkCuratedImport(
 
   let raw: unknown;
   try {
-    raw = JSON.parse(manifest);
+    raw = parseJson(manifest);
   } catch {
     return refuse('the list is not JSON');
   }
@@ -158,7 +170,7 @@ export function checkCuratedImport(
     return refuse(`the signature file must name sequence ${sequence}`);
   const keyIds = verified.keys.map(key => key.keyId);
   if (live && manifest === live.record.manifestBytes && signature === live.record.signatureBytes)
-    return { ok: true, plan: 'already-live', sequence, keyIds };
+    return { ok: true, plan: 'already-live', sequence, keyIds, floorKeyIds: [] };
 
   // Same rule as the bucket publish (catalogChecks.ts verifyCandidate), so both paths refuse the same lists.
   for (const tier of next.tiers)
@@ -181,14 +193,22 @@ export function checkCuratedImport(
     live !== null &&
     recoverySigned &&
     live.record.keyIds.every(id => !isRecovery(id) && next.revokedKeyIds.includes(id));
+  const revokedAfter = new Set([...revoked, ...next.revokedKeyIds]);
+  const recovered = (): CuratedImportCheck => ({
+    ok: true,
+    plan: 'recover',
+    sequence,
+    keyIds,
+    floorKeyIds: keyring.filter(key => key.role === 'recovery' || !revokedAfter.has(key.keyId)).map(key => key.keyId),
+  });
   if (live && sequence <= liveSequence) {
-    if (recover) return { ok: true, plan: 'recover', sequence, keyIds };
+    if (recover) return recovered();
     return refuse(`sequence ${sequence} is not above live sequence ${liveSequence}`, 409);
   }
   if (sequence - liveSequence > CURATED_MAX_SEQUENCE_STEP)
     return refuse(`sequence ${sequence} is more than ${CURATED_MAX_SEQUENCE_STEP} above live sequence ${liveSequence}`);
-  if (!live) return { ok: true, plan: 'first', sequence, keyIds };
-  if (recover) return { ok: true, plan: 'recover', sequence, keyIds };
+  if (!live) return { ok: true, plan: 'first', sequence, keyIds, floorKeyIds: [] };
+  if (recover) return recovered();
 
   const current = live.manifest;
   if (Date.parse(next.updatedAt) < Date.parse(current.updatedAt))
@@ -198,7 +218,7 @@ export function checkCuratedImport(
     return refuse('changelog items already live were changed or removed; only prepend new ones');
   const missing = live.recoverySigned ? current.revokedKeyIds.filter(id => !next.revokedKeyIds.includes(id)) : [];
   if (missing.length > 0) return refuse(`revokedKeyIds drops ${missing.join(', ')}`);
-  return { ok: true, plan: 'next', sequence, keyIds };
+  return { ok: true, plan: 'next', sequence, keyIds, floorKeyIds: [] };
 }
 
 export interface CuratedImportDeps {
@@ -232,6 +252,15 @@ export async function importCuratedVersion(
       if (checked.plan === 'already-live') return { ok: true, alreadyLive: true, version: liveRecord! };
       if (await repository.findBySequence(CURATED_CHANNEL, checked.sequence))
         return refuse(`sequence ${checked.sequence} is already stored`, 409);
+      // Clients ignore a list below the highest one they took from a key still trusted (CuratedListSource #floor).
+      if (checked.plan === 'recover') {
+        const floor = await repository.highestSequenceSignedBy(CURATED_CHANNEL, checked.floorKeyIds);
+        if (checked.sequence < floor)
+          return refuse(
+            `sequence ${checked.sequence} is below ${floor}, signed by a key this list leaves trusted`,
+            409
+          );
+      }
       const version = await repository.append({
         channel: CURATED_CHANNEL,
         sequence: checked.sequence,

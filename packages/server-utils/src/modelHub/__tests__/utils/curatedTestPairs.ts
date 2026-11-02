@@ -28,7 +28,7 @@ type Catalog = Record<string, unknown> & {
 };
 
 const REPO_CATALOG = readFileSync(
-  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../catalog/model-hub/curated-v2.json'),
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../../catalog/model-hub/curated-v2.json'),
   'utf8'
 );
 

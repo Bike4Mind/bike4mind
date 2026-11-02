@@ -8,13 +8,17 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../../packages/database/src/__test__/createMongoServer';
 import { Cache as CacheModel, CuratedCatalogVersion, curatedCatalogVersionRepository } from '@bike4mind/database';
-import { curatedJsonSchemaText } from '@bike4mind/common';
+import { curatedJsonSchemaText } from '@bike4mind/common/modelHub';
 import {
   CURATED_CHANNEL,
   checkCuratedImport,
   importCuratedVersion,
 } from '@bike4mind/server-utils/modelHub/curatedCatalog';
-import { catalogText, signatureText, testSigner } from '@bike4mind/server-utils/modelHub/curatedTestPairs';
+import {
+  catalogText,
+  signatureText,
+  testSigner,
+} from '@bike4mind/server-utils/modelHub/__tests__/utils/curatedTestPairs';
 import handler from '../[file]';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

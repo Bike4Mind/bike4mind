@@ -54,6 +54,18 @@ describe('CuratedCatalogVersionRepository', () => {
     expect(await curatedCatalogVersionRepository.findBySequence('curated-v2', 4)).toBeNull();
   });
 
+  it('finds the highest sequence any of the given keys signed, per channel', async () => {
+    const repo = curatedCatalogVersionRepository;
+    await repo.append(version({ sequence: 2, position: 1, keyIds: ['old'] }));
+    await repo.append(version({ sequence: 500, position: 2, keyIds: ['old', 'recovery'] }));
+    await repo.append(version({ sequence: 1002, position: 3, keyIds: ['leaked'] }));
+    await repo.append(version({ channel: 'other', sequence: 900, position: 1, keyIds: ['old'] }));
+    expect(await repo.highestSequenceSignedBy('curated-v2', ['old'])).toBe(500);
+    expect(await repo.highestSequenceSignedBy('curated-v2', ['leaked', 'recovery'])).toBe(1002);
+    expect(await repo.highestSequenceSignedBy('curated-v2', ['unknown'])).toBe(0);
+    expect(await repo.highestSequenceSignedBy('curated-v2', [])).toBe(0);
+  });
+
   it('reads only the served text', async () => {
     await curatedCatalogVersionRepository.append(version({ sequence: 2, position: 1 }));
     await curatedCatalogVersionRepository.append(version({ sequence: 5, position: 2, signatureBytes: 'sig-5' }));

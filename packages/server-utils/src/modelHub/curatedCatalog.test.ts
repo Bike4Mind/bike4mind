@@ -20,11 +20,11 @@ import {
   type CuratedImportDeps,
 } from './curatedCatalog';
 import { curatedDevKeys } from './curatedDevKeys';
-import { catalogText, signatureText, testSigner } from './curatedTestPairs';
+import { catalogText, signatureText, testSigner } from './__tests__/utils/curatedTestPairs';
 
 const tolerantDrop = vi.hoisted(() => ({ path: null as string | null }));
-vi.mock('@bike4mind/common', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+vi.mock('@bike4mind/common/modelHub', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common/modelHub')>();
   return {
     ...actual,
     parseHubManifest: (input: unknown) => {
@@ -50,6 +50,10 @@ function memoryRepository() {
     latest,
     async findBySequence(channel: string, sequence: number) {
       return versions.find(v => v.channel === channel && v.sequence === sequence) ?? null;
+    },
+    async highestSequenceSignedBy(channel: string, keyIds: readonly string[]) {
+      const signed = versions.filter(v => v.channel === channel && v.keyIds.some(id => keyIds.includes(id)));
+      return Math.max(0, ...signed.map(v => v.sequence));
     },
     async append(version: NewCuratedCatalogVersion) {
       const taken = (v: CuratedCatalogVersionRecord) =>
@@ -278,6 +282,23 @@ describe('importCuratedVersion', () => {
     expect(next).toMatchObject({ ok: true, plan: 'next' });
   });
 
+  it('refuses a recovery list below the highest list a key it leaves trusted signed, as clients would ignore it', async () => {
+    const { repository } = memoryRepository();
+    expect((await importPair(repository, pair(2))).ok).toBe(true);
+    expect((await importPair(repository, pair(10))).ok).toBe(true);
+    expect((await importPair(repository, pair(15, [signing2]))).ok).toBe(true);
+
+    expect(await importPair(repository, pair(5, [recovery], revoking(signing2.key.keyId)))).toMatchObject({
+      ok: false,
+      status: 409,
+      error: /below 10/,
+    });
+    expect(await importPair(repository, pair(12, [recovery], revoking(signing2.key.keyId)))).toMatchObject({
+      ok: true,
+      plan: 'recover',
+    });
+  });
+
   it('refuses a recovery list at a sequence already stored, and one that leaves a live signer unrevoked', async () => {
     const { repository } = memoryRepository();
     await importPair(repository, pair(2));
@@ -301,6 +322,15 @@ describe('importCuratedVersion', () => {
     });
   });
 
+  it('takes a list saved with a UTF-8 BOM, as clients do, and stores it with the BOM', async () => {
+    const { repository, latest } = memoryRepository();
+    const manifest = `\uFEFF${catalogText(1)}`;
+    const p = { manifest, signature: signatureText(manifest, [signing], 1) };
+    expect(await importPair(repository, p)).toMatchObject({ ok: true, plan: 'first' });
+    expect((await latest(CURATED_CHANNEL))?.manifestBytes).toBe(manifest);
+    expect(await importPair(repository, pair(2))).toMatchObject({ ok: true, plan: 'next' });
+  });
+
   it('gives the second of two imports checked against the same live version a 409', async () => {
     const { versions, repository, latest } = memoryRepository();
     await importPair(repository, pair(2));
@@ -318,6 +348,7 @@ describe('curatedServerKeyring', () => {
     expect(curatedDevKeysEnabled(on, 'dev', false)).toBe(true);
     expect(curatedDevKeysEnabled(on, 'pr6349', true)).toBe(true);
     expect(curatedDevKeysEnabled(on, 'staging', true)).toBe(false);
+    expect(curatedDevKeysEnabled(on, 'staging', false)).toBe(false);
     expect(curatedDevKeysEnabled(on, 'production', false)).toBe(false);
     expect(curatedDevKeysEnabled({}, 'dev', false)).toBe(false);
     expect(curatedServerKeyring(false)).toEqual([...PRODUCTION_CURATED_KEYS]);
