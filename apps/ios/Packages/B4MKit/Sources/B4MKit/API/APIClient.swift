@@ -6,12 +6,14 @@ import OpenAPIRuntime
 /// generated response enums to domain models and `APIError`.
 public struct APIClient: B4MAPI {
   private let client: Client
+  private let requester: AuthorizedRequester
 
   public init(
     baseURL: URL,
     tokens: any AccessTokenProviding,
     transport: any HTTPTransport = URLSessionTransport()
   ) {
+    requester = AuthorizedRequester(baseURL: baseURL, tokens: tokens, transport: transport)
     client = Client(
       serverURL: baseURL,
       configuration: Configuration(dateTranscoder: LenientISO8601DateTranscoder()),
@@ -69,6 +71,28 @@ public struct APIClient: B4MAPI {
     }
   }
 
+  public func quest(id: String) async throws -> QuestTurn {
+    try await call {
+      let output = try await client.getQuest(path: .init(id: id))
+      switch output {
+      case .ok(let ok):
+        return QuestTurn(try ok.body.json)
+      case .unauthorized: throw APIError.signedOut
+      case .forbidden: throw APIError.forbidden
+      case .notFound: throw APIError.notFound
+      case .tooManyRequests: throw APIError.rateLimited
+      case .undocumented(let status, _): throw APIError(status: status)
+      default: throw APIError.malformedResponse
+      }
+    }
+  }
+
+  public func sendChatMessage(_ request: ChatSendRequest) async throws -> ChatSendReceipt {
+    let response = try await requester.send(
+      method: "POST", path: "api/chat", jsonBody: try ChatSendWire.body(for: request))
+    return try ChatSendWire.receipt(status: response.status, body: response.body)
+  }
+
   /// Runs one generated call and folds every failure into `APIError`.
   private func call<Result>(_ operation: () async throws -> Result) async throws -> Result {
     do {
@@ -122,6 +146,20 @@ extension QuestTurn {
       createdAt: payload.createdAt,
       creditsUsed: payload.creditsUsed,
       pendingAction: payload.pendingAction.map(PendingAction.init)
+    )
+  }
+}
+
+extension QuestTurn {
+  fileprivate init(_ payload: Components.Schemas.GetQuestResponse200) {
+    self.init(
+      id: payload.id,
+      prompt: nil,
+      reply: payload.reply,
+      status: payload.status.flatMap { Status(rawValue: $0.rawValue) },
+      kind: payload._type.flatMap { Kind(rawValue: $0.rawValue) },
+      errorCode: payload.errorCode.flatMap { ErrorCode(rawValue: $0.rawValue) },
+      createdAt: payload.createdAt ?? Date()
     )
   }
 }

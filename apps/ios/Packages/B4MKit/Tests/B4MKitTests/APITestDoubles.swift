@@ -53,6 +53,39 @@ actor FakeAPI: B4MAPI {
     if let failure { throw failure }
     return balance
   }
+
+  private(set) var sentMessages: [ChatSendRequest] = []
+  var sendResult: Result<ChatSendReceipt, APIError> = .success(ChatSendReceipt(questID: "quest-1", sessionID: "s1"))
+  /// Served in order by `quest(id:)`; the last entry repeats.
+  var polledQuests: [QuestTurn] = []
+  private(set) var questLookups: [String] = []
+
+  func setSendResult(_ result: Result<ChatSendReceipt, APIError>) { sendResult = result }
+  func setPolledQuests(_ quests: [QuestTurn]) { polledQuests = quests }
+
+  private var holdingSends = false
+  private var heldSends: [CheckedContinuation<Void, Never>] = []
+
+  /// Parks every send until `releaseSends()`, to let a test land a frame before the POST answers.
+  func holdSends() { holdingSends = true }
+
+  func releaseSends() {
+    holdingSends = false
+    for send in heldSends { send.resume() }
+    heldSends.removeAll()
+  }
+
+  func sendChatMessage(_ request: ChatSendRequest) async throws -> ChatSendReceipt {
+    sentMessages.append(request)
+    if holdingSends { await withCheckedContinuation { heldSends.append($0) } }
+    return try sendResult.get()
+  }
+
+  func quest(id: String) async throws -> QuestTurn {
+    questLookups.append(id)
+    guard !polledQuests.isEmpty else { throw APIError.notFound }
+    return polledQuests.count > 1 ? polledQuests.removeFirst() : polledQuests[0]
+  }
 }
 
 enum Samples {

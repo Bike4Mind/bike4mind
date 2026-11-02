@@ -8,6 +8,7 @@
     static var isEnabled: Bool { ProcessInfo.processInfo.environment["B4M_UI_FIXTURES"] == "1" }
 
     static let api: any B4MAPI = FixtureAPI()
+    static let realtime = FixtureRealtime()
 
     private struct FixtureAPI: B4MAPI {
       private static let now = Date()
@@ -47,6 +48,66 @@
       }
 
       func creditBalance() async throws -> CreditBalance { CreditBalance(credits: 31_667) }
+
+      func sendChatMessage(_ request: ChatSendRequest) async throws -> ChatSendReceipt {
+        let questID = "fixture-quest-\(UUID().uuidString.prefix(8))"
+        let sessionID: String
+        switch request.target {
+        case .session(let id): sessionID = id
+        case .newConversation: sessionID = "fixture-new"
+        }
+        await FixtureServices.realtime.streamReply(questID: questID, sessionID: sessionID, prompt: request.message)
+        return ChatSendReceipt(questID: questID, sessionID: sessionID)
+      }
+
+      func quest(id: String) async throws -> QuestTurn {
+        throw APIError.notFound
+      }
+    }
+
+    /// Streams a canned reply as cumulative `streamed_chat_completion` frames, so the chat screen can be
+    /// exercised without a server.
+    actor FixtureRealtime: RealtimeClient {
+      private var listeners: [UUID: AsyncStream<RealtimeEvent>.Continuation] = [:]
+
+      var connectionState: RealtimeConnectionState { .connected }
+
+      func start() {}
+      func stop() {}
+      func resume() {}
+      func reauthenticate(accessToken: String) {}
+      func subscribe(_ request: SubscriptionRequest) -> AsyncStream<DataUpdate> { AsyncStream { _ in } }
+
+      func events() -> AsyncStream<RealtimeEvent> {
+        let (stream, continuation) = AsyncStream<RealtimeEvent>.makeStream()
+        listeners[UUID()] = continuation
+        return stream
+      }
+
+      func streamReply(questID: String, sessionID: String, prompt: String) {
+        let reply =
+          "Here is a quick answer to **\(prompt)**.\n\n1. First, a short point.\n2. Then another.\n\nThat streamed in by replacement."
+        let words = reply.split(separator: " ", omittingEmptySubsequences: false)
+        Task {
+          try? await Task.sleep(for: .milliseconds(400))
+          for count in stride(from: 1, through: words.count, by: 2) {
+            emit(questID, sessionID, prompt, words.prefix(count).joined(separator: " "), "running")
+            try? await Task.sleep(for: .milliseconds(60))
+          }
+          emit(questID, sessionID, prompt, reply, "done")
+        }
+      }
+
+      private func emit(_ questID: String, _ sessionID: String, _ prompt: String, _ reply: String, _ status: String) {
+        let quest: JSONObject = [
+          "id": .string(questID), "sessionId": .string(sessionID), "prompt": .string(prompt),
+          "reply": .string(reply), "status": .string(status), "type": "message", "creditsUsed": 12,
+        ]
+        let frame = ActionFrame(
+          action: ChatQuestFrame.action,
+          payload: ["action": .string(ChatQuestFrame.action), "quest": .object(quest), "statusMessage": ""])
+        for listener in listeners.values { listener.yield(.frame(frame)) }
+      }
     }
   }
 #endif

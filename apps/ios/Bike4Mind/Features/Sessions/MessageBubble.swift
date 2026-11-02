@@ -1,7 +1,7 @@
 import B4MKit
 import SwiftUI
 
-/// One chat bubble. Takes a `TranscriptMessage` and nothing else, so the live chat screen can render
+/// One chat bubble. Takes a `TranscriptMessage` and nothing else, so the live chat screen renders
 /// streaming replies with the same view by swapping the message's text.
 struct MessageBubble: View {
   let message: TranscriptMessage
@@ -40,6 +40,12 @@ struct MessageBubble: View {
     .padding(.vertical, Tokens.Spacing.s + 2)
     .background(isUser ? Tokens.Palette.userBubble : Tokens.Palette.assistantBubble)
     .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous))
+    .overlay {
+      if let outline {
+        RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous)
+          .strokeBorder(outline.opacity(0.6), lineWidth: 1)
+      }
+    }
     .frame(maxWidth: Tokens.Layout.bubbleMaxWidth, alignment: isUser ? .trailing : .leading)
   }
 
@@ -57,6 +63,15 @@ struct MessageBubble: View {
     }
     .font(Tokens.Typography.meta)
     .foregroundStyle(Tokens.Palette.secondaryText)
+  }
+
+  /// Refused and failed turns are outlined so the error reads as an error, not as a reply.
+  private var outline: Color? {
+    switch message.badge {
+    case .failed: Tokens.Palette.destructive
+    case .outOfCredits: Tokens.Palette.warning
+    default: nil
+    }
   }
 
   private var accessibilityLabel: String {
@@ -105,7 +120,8 @@ struct StatusBadge: View {
   }
 }
 
-/// Shows which tool is waiting and with what. Approve/deny belongs to chat (M3).
+/// Shows which tool is waiting and with what. Read-only: answering an approval is not part of the public
+/// API contract yet (see `ApprovalState.canRespondInApp`), so the card points to the web.
 private struct PendingActionCard: View {
   let action: PendingAction
 
@@ -113,6 +129,14 @@ private struct PendingActionCard: View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
       Label(action.tool, systemImage: "wrench.and.screwdriver")
         .font(Tokens.Typography.caption.weight(.semibold))
+      TimelineView(.periodic(from: .now, by: 30)) { context in
+        Text(
+          action.hasLapsed(at: context.date)
+            ? "This request expired." : "Approve or deny this on Bike4Mind for the web."
+        )
+        .font(Tokens.Typography.meta)
+        .foregroundStyle(Tokens.Palette.secondaryText)
+      }
       ForEach(action.parameters.sorted(by: { $0.key < $1.key }), id: \.key) { name, value in
         Text("\(name): \(value)")
           .font(Tokens.Typography.meta.monospaced())

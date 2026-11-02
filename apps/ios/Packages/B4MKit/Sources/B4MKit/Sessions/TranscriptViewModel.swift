@@ -8,6 +8,8 @@ import Observation
 public final class TranscriptViewModel {
   public let sessionID: String
   public private(set) var messages: [TranscriptMessage] = []
+  /// The loaded turns behind `messages`, oldest first. Chat overlays live turns on these.
+  public private(set) var turns: [QuestTurn] = []
   public private(set) var state: ListLoadState = .idle
   public private(set) var isLoadingMore = false
   public private(set) var loadMoreError: APIError?
@@ -39,7 +41,8 @@ public final class TranscriptViewModel {
     do {
       let page = try await api.listSessionQuests(sessionID: sessionID, cursor: nil, limit: pageSize)
       pages.replace(with: page)
-      messages = TranscriptMapper.messages(from: pages.items)
+      turns = pages.items
+      messages = TranscriptMapper.messages(from: turns)
       loadMoreError = nil
       state = .loaded
     } catch {
@@ -61,7 +64,8 @@ public final class TranscriptViewModel {
     do {
       let page = try await api.listSessionQuests(sessionID: sessionID, cursor: cursor, limit: pageSize)
       pages.append(page)
-      messages = TranscriptMapper.messages(from: pages.items)
+      turns = pages.items
+      messages = TranscriptMapper.messages(from: turns)
       loadMoreError = nil
     } catch {
       loadMoreError = (error as? APIError) ?? .malformedResponse

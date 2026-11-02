@@ -17,6 +17,7 @@ struct RootView: View {
         SignInView(signOutReason: reason)
       case .signedIn:
         MainTabView()
+          .task { await services.realtime.start() }
       case .locked:
         LockedView()
       }
@@ -25,11 +26,18 @@ struct RootView: View {
     .onChange(of: auth.state) { _, state in
       // Cached rows belong to the account that fetched them.
       guard case .signedOut = state else { return }
+      let realtime = services.realtime
+      Task { await realtime.stop() }
       Task { await services.sessionListCache.clear() }
     }
     .onChange(of: scenePhase) { _, phase in
       // Lock on the way out so the app-switcher snapshot never shows content.
       if phase == .background { auth.lockIfNeeded() }
+      // A socket that gave up reconnecting while backgrounded gets a fresh start.
+      if phase == .active, auth.state == .signedIn {
+        let realtime = services.realtime
+        Task { await realtime.resume() }
+      }
     }
   }
 }
