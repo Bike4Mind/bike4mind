@@ -200,7 +200,7 @@ export async function handler(event: unknown): Promise<ProbeDetectorResult> {
   const end = new Date(scheduledEventSchema.parse(event).time);
   const window = { start: new Date(end.getTime() - policy.windowMs), end };
 
-  const rows = await runLogsInsightsQuery({ logGroup, window, queryString: PROBE_QUERY, limit: QUERY_ROW_LIMIT });
+  const rows = await runLogsInsightsQuery({ logGroups: [logGroup], window, queryString: PROBE_QUERY, limit: QUERY_ROW_LIMIT });
   const truncated = rows.length >= QUERY_ROW_LIMIT;
   const actors = actorsOverThreshold(groupProbeActors(parseProbeRows(rows)), policy.threshold);
   logger.log('api-probe-scan', {

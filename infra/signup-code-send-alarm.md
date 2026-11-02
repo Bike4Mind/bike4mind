@@ -140,8 +140,10 @@ The line is written by a dedicated info-level JSON logger in
 metadata. Research completions log each settled configuration, including when
 credit enforcement is disabled; aborts carrying settled partial usage count too.
 
-Metric filters on the ChatCompletion log group write to the `<app>/<stage>/LLMSpend`
-namespace:
+Metric filters on the ChatCompletion log group and the `cli_completion_request`
+WebSocket Lambda's log group (both run `executeCompletion`; the list is
+`infra/llmSpendLogGroups.ts`) write the same metrics to the `<app>/<stage>/LLMSpend`
+namespace, so every alarm and widget below sums both:
 
 | Metric                      | Value            | Dimensions        |
 | --------------------------- | ---------------- | ----------------- |
@@ -163,13 +165,13 @@ routes to the same Slack DLQ topic. It is not listed in the dashboard alarm-stat
 
 When it (or the 5-minute `llm-spend-young-accounts` alarm) fires, the Slack relay
 (`apps/workers/src/events/youngAccountSpendDetail.ts`) runs a Logs Insights query
-over the ChatCompletion log group for the breaching window and adds a "Top
+over the same log groups for the breaching window and adds a "Top
 accounts in the window" section: up to five accounts with id, estimated USD,
 call count, age at the end of the window, top models, and an admin-page link.
 The sum matches the alarm's measured value because both read the same lines
 (unless the query hits its 500-row cap, which the post then says).
 Lines logged before `userId` was added are skipped. The relay has `logs:StartQuery`
-on that log group only and a 60-second timeout; a query that fails or runs past
+on those log groups only and a 60-second timeout; a query that fails or runs past
 its 25-second budget leaves a one-line note in the post instead of blocking it.
 
 A second alarm per provider pages when `EstimatedUsd` sums to at least
@@ -180,9 +182,10 @@ DLQ topic, is listed in the alarm-status widget, and has its own "Estimated USD
 per hour by provider" widget with both ceilings drawn.
 
 The figures are estimates from our price table, not provider invoices. Paths
-outside the ChatCompletion service are not counted: the legacy WebSocket CLI
-and Slack quest Lambdas log the same line, but Lambda's text log format hides it
-from JSON filters; the agent executor, image, video and voice paths do not log it.
+outside those two log groups are not counted: the Slack quest Lambdas log the
+same line but are not filtered; the agent executor, image, video and voice paths
+do not log it. JSON selectors do match Lambda's tab-prefixed text lines (see
+`infra/logMessageFilterPattern.ts`).
 
 ## Mail send failures (`infra/mailAlarms.ts`)
 

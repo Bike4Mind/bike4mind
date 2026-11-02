@@ -89,7 +89,8 @@ websocketApi.route('voice_session_ended', {
 });
 
 // CLI Completions — streaming, long-running (bypasses CloudFront 20s timeout)
-// Its log group carries the same spend and overdraft lines as ChatCompletion; llmSpend.ts filters both.
+// Its log group carries the same spend and overdraft lines as ChatCompletion: llmSpendLogGroups.ts
+// lists it for the spend metric filters and the young-account alarm relay's query.
 const cliCompletionRoute = websocketApi.route('cli_completion_request', {
   handler: 'apps/client/server/websocket/cliCompletion.func',
   runtime: 'nodejs24.x',

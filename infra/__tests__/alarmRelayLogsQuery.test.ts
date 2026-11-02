@@ -1,8 +1,8 @@
 /**
  * @vitest-environment node
  *
- * Pins the alarm relay's access to the ChatCompletion log group: the young-account spend alarms
- * list the accounts behind a breach by querying it (apps/workers/src/events/youngAccountSpendDetail.ts),
+ * Pins the alarm relay's access to the LLM spend log groups: the young-account spend alarms
+ * list the accounts behind a breach by querying them (apps/workers/src/events/youngAccountSpendDetail.ts),
  * and the relay needs the group name, the query permissions, and time to wait for the answer.
  *
  * Text-matched, not executed: infra/ is an SST program and does not load outside `sst`.
@@ -22,18 +22,22 @@ const RELAY = DLQ_ALARMS.slice(
 );
 
 describe('alarm relay log query wiring', () => {
-  it('hands the relay the ChatCompletion log group name the spend metrics are filtered from', () => {
-    expect(DLQ_ALARMS).toContain("import { chatCompletionLogGroupName } from './chatCompletionLogGroup';");
-    expect(read('infra/llmSpend.ts')).toContain(
-      "import { chatCompletionLogGroupName } from './chatCompletionLogGroup';"
+  it('hands the relay every log group the spend metrics are filtered from', () => {
+    const sourcesImport = "import { llmSpendLogSources } from './llmSpendLogGroups';";
+    expect(DLQ_ALARMS).toContain(sourcesImport);
+    expect(read('infra/llmSpend.ts')).toContain('llmSpendLogSources()');
+    expect(DLQ_ALARMS).toContain('const spendLogGroupNames = llmSpendLogSources().map(source => source.logGroupName);');
+    expect(RELAY).toContain("LLM_SPEND_LOG_GROUPS: $util.all(spendLogGroupNames).apply(names => names.join(','))");
+    expect(read('apps/workers/src/events/youngAccountSpendDetail.ts')).toContain(
+      "export const LLM_SPEND_LOG_GROUPS_ENV = 'LLM_SPEND_LOG_GROUPS';"
     );
-    expect(RELAY).toContain('LLM_SPEND_LOG_GROUP: chatCompletionLogGroupName');
   });
 
-  it('lets the relay start a query on that group only, and read or stop any query', () => {
-    expect(RELAY).toMatch(/actions: \['logs:StartQuery'\], resources: \[spendLogGroupArn, /);
+  it('lets the relay start a query on those groups only, and read or stop any query', () => {
+    expect(RELAY).toContain("actions: ['logs:StartQuery'], resources: spendLogGroupArns");
     expect(RELAY).toContain("actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*']");
-    expect(DLQ_ALARMS).toContain('aws.cloudwatch.getLogGroupOutput({ name: chatCompletionLogGroupName }).arn');
+    expect(DLQ_ALARMS).toContain('const arn = aws.cloudwatch.getLogGroupOutput({ name }).arn;');
+    expect(DLQ_ALARMS).toContain('return [arn, $interpolate`${arn}:*`];');
   });
 
   it('gives the relay time to wait for the query', () => {

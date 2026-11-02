@@ -8,10 +8,9 @@
  * See infra/signup-code-send-alarm.md.
  */
 
-import { chatCompletionLogGroupName } from './chatCompletionLogGroup';
 import { dlqAlarmTopic } from './dlqAlarms';
 import { parseAlarmThreshold } from './signupAlarmThreshold';
-import { cliCompletionRoute } from './websocket';
+import { llmSpendLogSources, type LlmSpendLogSource } from './llmSpendLogGroups';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
@@ -68,30 +67,6 @@ const youngAccountSpendBurstThreshold = parseAlarmThreshold(
   process.env.LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN,
   LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN_DEFAULT
 );
-
-type LlmSpendLogSource = {
-  /** Appended to logical and physical filter names; empty keeps the original ChatCompletion resources. */
-  key: string;
-  logGroupName: $util.Output<string>;
-};
-
-/**
- * Every log group that emits `llm-usage-settled` and the overdraft line, i.e. every runtime of
- * executeCompletion (b4m-core/services/src/cliCompletions.ts). Each gets the same filters into the
- * same metrics, so the alarms and dashboard below sum all sources unchanged.
- */
-function llmSpendLogSources(): LlmSpendLogSource[] {
-  const cliCompletionLogGroupName = cliCompletionRoute.nodes.function
-    .apply(fn => fn.nodes.logGroup)
-    .apply(logGroup => {
-      if (!logGroup) throw new Error('cli_completion_request function is missing its CloudWatch log group');
-      return logGroup.name;
-    });
-  return [
-    { key: '', logGroupName: chatCompletionLogGroupName },
-    { key: 'cli-completion', logGroupName: cliCompletionLogGroupName },
-  ];
-}
 
 function createLlmSpendFilters({ key, logGroupName }: LlmSpendLogSource, prefix: string, namespace: string): void {
   const logicalName = (base: string) => (key ? `${base}-${key}` : base);
