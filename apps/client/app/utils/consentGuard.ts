@@ -1,7 +1,7 @@
 import { redirect } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { buildRedirectTo, shouldRedirectToConsent } from './authRedirect';
+import { buildRedirectTo, shouldRedirectToAccountDeletion, shouldRedirectToConsent } from './authRedirect';
 import { bootstrapSession } from './sessionBootstrap';
 
 /**
@@ -31,6 +31,10 @@ export async function enforceConsentRedirect(location: {
   await bootstrapSession();
   const { currentUser, isHydrated } = useUser.getState();
   const { accessToken } = useAccessToken.getState();
+  // Ahead of consent: a deletion-pending session can reach only the restore screen (deletionPendingGate).
+  if (shouldRedirectToAccountDeletion({ currentUser, isHydrated, accessToken })) {
+    throw redirect({ to: '/account-deletion' });
+  }
   if (shouldRedirectToConsent({ currentUser, isHydrated, accessToken })) {
     const redirectTo = buildRedirectTo(location.pathname, location.searchStr, location.hash ? `#${location.hash}` : '');
     throw redirect({

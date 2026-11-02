@@ -30,6 +30,7 @@ import { registerRiskEvidenceQueue } from './riskEvidenceQueue';
 import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 import { registerTelemetryCleanup } from './telemetryCleanup';
 import { registerSignupIpRetention } from './signupIpRetention';
+import { registerAccountDeletionSweep } from './accountDeletionSweep';
 import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerCreditLotSweep } from './creditLotSweep';
@@ -129,6 +130,7 @@ async function main() {
   registerLakeConnectorOrphanReap(worker);
   registerTelemetryCleanup(worker);
   registerSignupIpRetention(worker);
+  registerAccountDeletionSweep(worker);
   registerApiKeyBaselineCalculation(worker);
   registerLakeInconsistencySweep(worker);
   registerCreditLotSweep(worker);

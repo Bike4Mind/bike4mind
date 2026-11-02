@@ -20,6 +20,7 @@ import nc from 'next-connect';
 import { Logger } from '@bike4mind/observability';
 import { jwtSecretOrKeyProvider } from './jwtSecretOrKeyProvider';
 import { verifyJwtPayload } from './verifyJwtPayload';
+import { deletionPendingGate } from './deletionPendingGate';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { createGitHubStrategy } from './githubStrategy';
@@ -168,6 +169,7 @@ export const auth = handler
     next();
   })
   .use(mfaEnrollmentGate)
+  .use(deletionPendingGate)
   .use((req, res, next) => {
     req.logger ??= new Logger();
     req.logger.updateMetadata({ userId: req.user?.id });

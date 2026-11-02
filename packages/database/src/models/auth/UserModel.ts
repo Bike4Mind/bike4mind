@@ -896,6 +896,50 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (result.matchedCount !== 1) throw new NotFoundError(`User ${userId} not found`);
   }
 
+  /**
+   * Marks the account deletion-pending. Idempotent: a repeat keeps the FIRST request time, so asking
+   * again never extends (or resets) the grace period; `newlyMarked` tells the two apart. Null for an
+   * unknown user.
+   */
+  async markDeletionRequested(
+    userId: string,
+    now: Date
+  ): Promise<{ deletionRequestedAt: Date; newlyMarked: boolean } | null> {
+    const marked = await this.model
+      .findOneAndUpdate(
+        { _id: userId, deletionRequestedAt: { $not: { $type: 'date' } } },
+        { $set: { deletionRequestedAt: now } },
+        { new: true, projection: { deletionRequestedAt: 1 } }
+      )
+      .lean<{ deletionRequestedAt?: Date | null }>();
+    if (marked?.deletionRequestedAt) return { deletionRequestedAt: marked.deletionRequestedAt, newlyMarked: true };
+    const existing = await this.model
+      .findById(userId, { deletionRequestedAt: 1 })
+      .lean<{ deletionRequestedAt?: Date | null }>();
+    return existing?.deletionRequestedAt
+      ? { deletionRequestedAt: existing.deletionRequestedAt, newlyMarked: false }
+      : null;
+  }
+
+  /** Clears a deletion request. Returns false when there was none to clear (already restored or never asked). */
+  async clearDeletionRequested(userId: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, deletionRequestedAt: { $type: 'date' } },
+      { $set: { deletionRequestedAt: null } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Ids of accounts whose deletion was requested at or before `cutoff`, oldest request first. */
+  async findDeletionDueUserIds(cutoff: Date, limit: number): Promise<string[]> {
+    const rows = await this.model
+      .find({ deletionRequestedAt: { $lte: cutoff } }, { _id: 1 })
+      .sort({ deletionRequestedAt: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: unknown }>>();
+    return rows.map(row => String(row._id));
+  }
+
   async incrementTokenVersion(userId: string): Promise<number> {
     const updated = await this.model.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } }, { new: true });
     // A null result means the user was deleted between the caller's findById and this $inc.
@@ -1280,6 +1324,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     throttle: { type: UserThrottleSchema, required: false, default: undefined },
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
+    // Self-service deletion request; see accountDeletion.ts in @bike4mind/common.
+    deletionRequestedAt: { type: Date, required: false, default: null },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
@@ -1659,6 +1705,11 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// Serves the account deletion sweep (findDeletionDueUserIds). Partial: only pending accounts carry a date.
+UserSchema.index(
+  { deletionRequestedAt: 1 },
+  { partialFilterExpression: { deletionRequestedAt: { $type: 'date' } }, name: 'user_deletionRequestedAt' }
+);
 UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
 // 20260921235956 byte-for-byte.

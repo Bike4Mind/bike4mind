@@ -29,14 +29,12 @@ import { verifyJwtPayload } from './verifyJwtPayload';
 describe('verifyJwtPayload', () => {
   beforeEach(() => {
     mockFindById.mockReset();
-    mockFindSession
-      .mockReset()
-      .mockResolvedValue({
-        userId: 'customer-1',
-        impersonatedBy: 'admin-9',
-        expiresAt: new Date(Date.now() + 60_000),
-        impersonationExpiresAt: new Date(Date.now() + 60_000),
-      });
+    mockFindSession.mockReset().mockResolvedValue({
+      userId: 'customer-1',
+      impersonatedBy: 'admin-9',
+      expiresAt: new Date(Date.now() + 60_000),
+      impersonationExpiresAt: new Date(Date.now() + 60_000),
+    });
     mockAssertAccountStateUsable.mockReset();
   });
 
@@ -146,8 +144,29 @@ describe('verifyJwtPayload', () => {
 
     await verifyJwtPayload({ id: 'user-1', tokenVersion: 0 }, done);
 
-    expect(mockAssertAccountStateUsable).toHaveBeenCalledWith(user);
+    expect(mockAssertAccountStateUsable).toHaveBeenCalledWith(user, { allowDeletionPending: true });
     expect(done).toHaveBeenCalledWith(null, false);
+  });
+
+  it('refuses a token minted before a deletion request revoked every session', async () => {
+    // requestAccountDeletion bumps tokenVersion; the JWT the user held before still carries the old one.
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 1, deletionRequestedAt: new Date(), isSystem: false });
+    const done = vi.fn();
+
+    await verifyJwtPayload({ id: 'user-1', tokenVersion: 0 }, done);
+
+    expect(done).toHaveBeenCalledWith(null, false);
+  });
+
+  it('admits a fresh sign-in of a deletion-pending account, so it can reach the restore route', async () => {
+    const user = { id: 'user-1', tokenVersion: 1, deletionRequestedAt: new Date(), isSystem: false };
+    mockFindById.mockResolvedValue(user);
+    const done = vi.fn();
+
+    await verifyJwtPayload({ id: 'user-1', tokenVersion: 1 }, done);
+
+    expect(mockAssertAccountStateUsable).toHaveBeenCalledWith(user, { allowDeletionPending: true });
+    expect(done).toHaveBeenCalledWith(null, expect.objectContaining({ id: 'user-1' }));
   });
 
   it('rejects when the user no longer exists', async () => {

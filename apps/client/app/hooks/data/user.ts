@@ -298,6 +298,41 @@ export function useUserLogout() {
   });
 }
 
+export type AccountDeletionScheduled = { deletionRequestedAt: string; deletionScheduledFor: string };
+
+/**
+ * Schedules the caller's own account for deletion (DELETE /api/users/me). The server signs out every
+ * session, this one included, so success tears the client down to /login like a logout. A sole owner
+ * of an org with other members gets a 409 the caller shows as-is.
+ */
+export function useRequestAccountDeletion() {
+  const { setCurrentUser } = useUser();
+  const resetTokens = useAccessToken(s => s.resetTokens);
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.delete<AccountDeletionScheduled>('/api/users/me');
+      return res.data;
+    },
+    onSuccess: () => tearDownClientSession({ setCurrentUser, resetTokens, queryClient }),
+  });
+}
+
+/** Cancels the caller's pending account deletion (POST /api/users/me/restore-deletion). */
+export function useRestoreAccountDeletion() {
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.post<{ restored: boolean }>('/api/users/me/restore-deletion');
+      return res.data;
+    },
+    onSuccess: () => {
+      const { currentUser, setCurrentUser } = useUser.getState();
+      if (currentUser) setCurrentUser({ ...currentUser, deletionRequestedAt: null });
+    },
+  });
+}
+
 const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
 
 /** The caller's own active auth sessions (devices), newest-active first. Powers the

@@ -11,7 +11,10 @@ vi.mock('@tanstack/react-router', () => ({
   redirect: vi.fn((opts: unknown) => ({ isRedirect: true, ...(opts as object) })),
 }));
 
-let userState: { currentUser: { aupAcceptedVersion?: unknown } | null; isHydrated: boolean };
+let userState: {
+  currentUser: { aupAcceptedVersion?: unknown; deletionRequestedAt?: unknown } | null;
+  isHydrated: boolean;
+};
 let tokenState: { accessToken: string | null };
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -40,6 +43,21 @@ describe('enforceConsentRedirect', () => {
     await expect(enforceConsentRedirect(loc('/admin'))).rejects.toThrow(
       expect.objectContaining({ isRedirect: true, to: '/accept-policies', search: { redirectTo: '/admin' } })
     );
+  });
+
+  it('sends an account scheduled for deletion to the restore screen', async () => {
+    userState = {
+      currentUser: { aupAcceptedVersion: '1', deletionRequestedAt: '2026-03-01T00:00:00.000Z' },
+      isHydrated: true,
+    };
+    await expect(enforceConsentRedirect(loc('/admin'))).rejects.toThrow(
+      expect.objectContaining({ isRedirect: true, to: '/account-deletion' })
+    );
+  });
+
+  it('lets a consented account that is not pending deletion through', async () => {
+    userState = { currentUser: { aupAcceptedVersion: '1', deletionRequestedAt: null }, isHydrated: true };
+    await expect(enforceConsentRedirect(loc('/admin'))).resolves.toBeUndefined();
   });
 
   it('preserves the full search string in the return path (the OAuth authorize case)', async () => {

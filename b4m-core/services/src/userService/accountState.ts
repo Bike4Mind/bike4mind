@@ -1,7 +1,7 @@
 import type { ISignupRiskScore, UserModerationStatus } from '@bike4mind/common';
 
 /** The conditions that make an account unusable. The order below is precedence. */
-export type AccountBlockReason = 'banned' | 'disputePending' | 'suspended';
+export type AccountBlockReason = 'banned' | 'disputePending' | 'suspended' | 'deletionPending';
 
 /**
  * The account-state fields the predicates read. A structural subset of `IUser` (loose optional
@@ -11,6 +11,7 @@ export interface AccountStateFields {
   isBanned?: boolean | null;
   disputePending?: boolean | null;
   moderation?: { status?: UserModerationStatus | null } | null;
+  deletionRequestedAt?: Date | string | null;
 }
 
 /**
@@ -26,6 +27,9 @@ export function accountBlockReasons(user: AccountStateFields): AccountBlockReaso
   if (user.isBanned) reasons.push('banned');
   if (user.disputePending) reasons.push('disputePending');
   if (user.moderation?.status === 'suspended') reasons.push('suspended');
+  // Last: a deletion-pending session may still sign in to restore (assertAccountStateUsable), so any
+  // other reason must win the precedence and refuse it outright.
+  if (user.deletionRequestedAt) reasons.push('deletionPending');
   return reasons;
 }
 
@@ -52,10 +56,13 @@ export const ACCOUNT_DISPUTE_PENDING_MESSAGE = 'Account suspended pending disput
 export const ACCOUNT_SUSPENDED_MESSAGE =
   'Your account is suspended for repeated content-policy violations. Please contact support to appeal.';
 
+export const ACCOUNT_DELETION_PENDING_MESSAGE = 'This account is scheduled for deletion. Restore it to keep using it.';
+
 const BLOCK_REASON_MESSAGES: Record<AccountBlockReason, string> = {
   banned: ACCOUNT_BANNED_MESSAGE,
   disputePending: ACCOUNT_DISPUTE_PENDING_MESSAGE,
   suspended: ACCOUNT_SUSPENDED_MESSAGE,
+  deletionPending: ACCOUNT_DELETION_PENDING_MESSAGE,
 };
 
 /**

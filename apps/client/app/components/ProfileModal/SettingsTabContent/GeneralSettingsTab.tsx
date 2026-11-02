@@ -24,6 +24,7 @@ import LanguageSelector from '@client/app/components/LanguageSelector';
 import { useTranslation } from 'react-i18next';
 import VoicePreferenceSection from './VoicePreferenceSection';
 import ActiveSessionsSection from './ActiveSessionsSection';
+import DeleteAccountSection from './DeleteAccountSection';
 import { SupportAccessActivity } from '../SecurityTab/tabs/SupportAccessActivity';
 import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
@@ -516,6 +517,8 @@ const GeneralSettingsTab = () => {
           </Box>
         </Box>
       </SectionContainer>
+
+      <DeleteAccountSection />
 
       {openDeleteAllSessionsModal && (
         <DeleteAllNotebooksConfirm

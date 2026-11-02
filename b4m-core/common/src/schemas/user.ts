@@ -176,6 +176,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   isModerated: true,
   moderation: true,
   disputePending: true,
+  deletionRequestedAt: true,
   isSystem: true,
   subscribedUntil: true,
   photoUrl: true,

@@ -25,4 +25,20 @@ describe('assertAccountStateUsable', () => {
   ])('rejects an account blocked for %s', (reason, message) => {
     expect(() => assertAccountStateUsable({ reason } as never)).toThrow(message);
   });
+
+  it('refuses a deletion-pending account by default (API key, CLI, WebSocket, embed)', () => {
+    expect(() => assertAccountStateUsable({ reason: 'deletionPending' } as never)).toThrow(/scheduled for deletion/);
+  });
+
+  it('admits a deletion-pending account on the browser session surfaces', () => {
+    expect(() =>
+      assertAccountStateUsable({ reason: 'deletionPending' } as never, { allowDeletionPending: true })
+    ).not.toThrow();
+  });
+
+  it('still refuses a suspended account when deletion-pending accounts are allowed', () => {
+    expect(() => assertAccountStateUsable({ reason: 'suspended' } as never, { allowDeletionPending: true })).toThrow(
+      'Your account is suspended'
+    );
+  });
 });

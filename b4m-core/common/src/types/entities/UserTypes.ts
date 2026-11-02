@@ -393,6 +393,12 @@ export interface IUser extends ICreditHolder {
    */
   disputePending?: boolean;
   /**
+   * When the owner asked to delete the account (self-service). While set the account is confined to the
+   * restore-or-leave routes (apps/client/server/auth/auth.ts) and is hard-deleted after the grace period
+   * (see accountDeletion.ts). Cleared by a restore.
+   */
+  deletionRequestedAt?: Date | null;
+  /**
    * Marks a non-human system account (e.g., the Overwatch ingest user).
    * All auth surfaces must call requireNonSystemUser() - system accounts cannot log in.
    * Queries for human users must use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.

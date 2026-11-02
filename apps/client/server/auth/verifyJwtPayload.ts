@@ -58,7 +58,8 @@ export async function verifyJwtPayload(
       if (!isTokenVersionCurrent(jwt_payload.tokenVersion, user.tokenVersion)) {
         return done(null, false);
       }
-      assertAccountStateUsable(user);
+      // A deletion-pending session passes so it can restore; auth.ts confines it to those routes.
+      assertAccountStateUsable(user, { allowDeletionPending: true });
       if (jwt_payload.impersonatedBy) {
         const session = jwt_payload.sid ? await authSessionRepository.findBySid(jwt_payload.sid) : null;
         if (

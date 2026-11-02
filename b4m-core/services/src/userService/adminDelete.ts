@@ -29,6 +29,23 @@ interface AdminDeleteUserAdapters {
   };
 }
 
+/**
+ * Deletes the user row and ends its live sockets: the delete itself, shared by the admin delete below
+ * and the self-service deletion sweep (apps/workers/src/cron/accountDeletionSweep.ts). Callers own the
+ * authorization, the notifications and the post-delete purge. Returns the user as it stood.
+ */
+export const deleteUserAccount = async (
+  id: string,
+  { db }: { db: Pick<AdminDeleteUserAdapters['db'], 'users' | 'realtimeConnections'> }
+): Promise<IUserDocument> => {
+  const user = await db.users.findById(id);
+  if (!user) throw new NotFoundError(`User ${id} not found`);
+
+  await db.users.delete(id);
+  await endRealtimeConnections({ userId: id }, { db });
+  return user;
+};
+
 export const adminDeleteUser = async (
   adminId: string,
   parameters: AdminDeleteUserParameters,
@@ -39,11 +56,7 @@ export const adminDeleteUser = async (
   const admin = await db.users.findById(adminId);
   if (!admin?.isAdmin) throw new UnauthorizedError('You are not authorized to delete users');
 
-  const user = await db.users.findById(id);
-  if (!user) throw new NotFoundError(`User ${id} not found`);
-
-  await db.users.delete(id);
-  await endRealtimeConnections({ userId: id }, { db });
+  const user = await deleteUserAccount(id, { db });
 
   const [enableSlackNotification, enableEmailNotification] = await db.adminSettings.findBySettingNames([
     'EnableUserDeletionSlackNotification',

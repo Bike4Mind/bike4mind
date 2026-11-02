@@ -48,6 +48,7 @@ vi.mock('@/app/components/ProfileModal/ImportHistoryJobsList', () => ({ default:
 vi.mock('./MfaCard', () => ({ default: () => <div data-testid="mfa-card-stub" /> }));
 vi.mock('./VoicePreferenceSection', () => ({ default: () => null }));
 vi.mock('./ActiveSessionsSection', () => ({ default: () => null }));
+vi.mock('./DeleteAccountSection', () => ({ default: () => null }));
 vi.mock('../SecurityTab/tabs/SupportAccessActivity', () => ({
   SupportAccessActivity: () => <div data-testid="support-access-activity" />,
 }));

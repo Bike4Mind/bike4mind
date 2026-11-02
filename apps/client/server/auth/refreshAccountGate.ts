@@ -20,7 +20,8 @@ export async function refuseBlockedRotatedSession(
   logger?: Logger
 ): Promise<void> {
   try {
-    assertAccountStateUsable(rotated.user);
+    // Same admission as verifyJwtPayload: a deletion-pending browser session keeps refreshing so it can restore.
+    assertAccountStateUsable(rotated.user, { allowDeletionPending: true });
   } catch (error) {
     try {
       await authSessionService.revokeSession(rotated.sid, {

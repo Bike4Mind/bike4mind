@@ -151,6 +151,19 @@ export function shouldRedirectToConsent(params: {
 }
 
 /**
+ * True when a signed-in account is scheduled for self-service deletion: the router sends it to the
+ * /account-deletion restore screen. UX only - the server deletionPendingGate (server/auth/deletionPendingGate.ts)
+ * is the enforcement and 403s everything but the restore-or-leave routes.
+ */
+export function shouldRedirectToAccountDeletion(params: {
+  currentUser: { deletionRequestedAt?: unknown } | null;
+  isHydrated: boolean;
+  accessToken: string | null;
+}): boolean {
+  return !!params.accessToken && params.isHydrated && !!params.currentUser?.deletionRequestedAt;
+}
+
+/**
  * Merges a `redirectTo` value onto a relative provider auth URL so social/SSO
  * login can round-trip it through the IdP `state`/`RelayState` param instead of
  * stashing it (the full-page navigation to the provider drops the SPA's in-URL

@@ -19,17 +19,19 @@ const countLabel = (count: number | undefined, singular: string, plural: string)
 
 // Case-sensitive on purpose: typing the exact word is the deliberate act this gate asks for.
 // Surrounding whitespace is ignored so a pasted word with a stray space or newline still counts.
-const CONFIRM_WORD = 'DELETE';
-const matchesConfirmWord = (typed: string) => typed.trim() === CONFIRM_WORD;
+export const CONFIRM_WORD = 'DELETE';
+export const matchesConfirmWord = (typed: string) => typed.trim() === CONFIRM_WORD;
 
-function TypedConfirmField({
+export function TypedConfirmField({
   value,
   onChange,
   disabled,
+  testId = 'delete-all-confirm-input',
 }: {
   value: string;
   onChange: (v: string) => void;
   disabled: boolean;
+  testId?: string;
 }) {
   return (
     <FormControl>
@@ -43,7 +45,7 @@ function TypedConfirmField({
         // Capitals on phones: the keyboard would otherwise offer "Delete", which the exact match rejects.
         slotProps={{
           input: {
-            'data-testid': 'delete-all-confirm-input',
+            'data-testid': testId,
             spellCheck: false,
             autoCapitalize: 'characters',
             autoCorrect: 'off',

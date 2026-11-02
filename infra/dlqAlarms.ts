@@ -85,6 +85,7 @@ import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLe
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -619,6 +620,15 @@ if (isMonitoredStage) {
       displayName: 'Revenue Snapshot',
       application: 'Billing',
       queue: revenueSnapshotDeadLetter.queue,
+    });
+  }
+
+  if (accountDeletionSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'account-deletion-sweep',
+      displayName: 'Account Deletion Sweep',
+      application: 'Account',
+      queue: accountDeletionSweepDeadLetter.queue,
     });
   }
 

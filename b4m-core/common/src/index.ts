@@ -1,4 +1,5 @@
 export * from './errors';
+export * from './accountDeletion';
 export * from './adminUserNotes';
 export * from './signupGrant';
 export * from './apiErrorCodes';

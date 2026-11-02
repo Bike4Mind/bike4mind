@@ -74,6 +74,10 @@ export const authEventSummary = (event: UserAuthAuditEvent, method: string | und
       return 'Failed to confirm an email change';
     case 'email_change_cancelled':
       return 'Cancelled an email change';
+    case 'account_deletion_requested':
+      return 'Asked to delete the account';
+    case 'account_deletion_restored':
+      return 'Restored the account from a pending deletion';
   }
 };
 

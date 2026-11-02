@@ -86,6 +86,7 @@ const AuthSuccessPage = lazy(() => import('./routes/auth/success'));
 const LoginPage = lazy(() => import('./routes/login'));
 const RegisterPage = lazy(() => import('./routes/register'));
 const AcceptPoliciesPage = lazy(() => import('./routes/accept-policies'));
+const AccountDeletionPage = lazy(() => import('./routes/account-deletion'));
 const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
@@ -938,6 +939,20 @@ const acceptPoliciesRoute = createRoute({
   },
 });
 
+// Restore-or-leave screen for an account scheduled for deletion. A rootRoute child without the consent
+// guard, which is what redirects a deletion-pending session here (see consentGuard.ts).
+const accountDeletionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account-deletion',
+  // A cold load of this page must exchange the refresh cookie before it can read the account.
+  beforeLoad: () => bootstrapSession(),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <AccountDeletionPage />
+    </Suspense>
+  ),
+});
+
 // Verify email route (replaces /verify-email.tsx)
 const verifyEmailRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1362,6 +1377,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   registerRoute,
   acceptPoliciesRoute,
+  accountDeletionRoute,
   verifyEmailRoute,
   verifyEmailChangeRoute,
   adminEmergencyRoute,

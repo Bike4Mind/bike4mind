@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ACCOUNT_BANNED_MESSAGE,
+  ACCOUNT_DELETION_PENDING_MESSAGE,
   ACCOUNT_DISPUTE_PENDING_MESSAGE,
   ACCOUNT_SUSPENDED_MESSAGE,
   accountBlockReasons,
@@ -36,6 +37,20 @@ describe('accountBlockReasons', () => {
 
   it.each(['suspend_pending', 'throttled', 'active'] as const)('does not block on moderation status %s', status => {
     expect(accountBlockReasons({ moderation: { status } })).toEqual([]);
+  });
+
+  it('blocks a deletion-pending account, after every other reason', () => {
+    const requestedAt = new Date('2026-01-01T00:00:00.000Z');
+    expect(accountBlockReasons({ deletionRequestedAt: requestedAt })).toEqual(['deletionPending']);
+    expect(accountBlockReasons({ deletionRequestedAt: requestedAt, moderation: { status: 'suspended' } })).toEqual([
+      'suspended',
+      'deletionPending',
+    ]);
+    expect(accountBlockReasons({ deletionRequestedAt: null })).toEqual([]);
+  });
+
+  it('denies AI access to a deletion-pending account', () => {
+    expect(aiAccessDeniedMessage({ deletionRequestedAt: new Date() })).toBe(ACCOUNT_DELETION_PENDING_MESSAGE);
   });
 
   it('does not block on a missing moderation record', () => {
