@@ -267,6 +267,41 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     );
     expect(mockDb.quests.create.mock.calls[0][0]).not.toHaveProperty('signupActivity');
   });
+  // Same boundary: dropped here, the worker's first_value would name no visit.
+  it('carries the server-set visitId onto questStartParams, and never one from the body', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    const visitId = 'a'.repeat(32);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'session', visitId });
+    expect((invoke as any).questStartParams.visitId).toBe(visitId);
+
+    const forged = makeInvoke();
+    await forged.invoke({
+      body: { ...body, visitId: 'b'.repeat(32) } as never,
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+    expect((forged as any).questStartParams).not.toHaveProperty('visitId');
+  });
+  // A retried turn is a new request: it names the visit it was retried in, not the first attempt's.
+  it("carries the retry request's visitId when a quest is retried", async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.findById.mockResolvedValue({ id: 'quest-1', sessionId: 'session-1', status: 'error' });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    const visitId = 'c'.repeat(32);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: { ...body, questId: 'quest-1' }, userId: OWNER_ID, authOrigin: 'session', visitId });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ questId: 'quest-1', visitId }));
+  });
   it('carries a withheld admin role onto questStartParams', async () => {
     mockedGetAvailableModels.mockResolvedValue([
       { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
