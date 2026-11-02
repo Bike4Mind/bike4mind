@@ -556,13 +556,12 @@ export class AcpServer {
     await this.mergeRemoteSkills(config, apiClient);
 
     const startupLog: string[] = [];
-    // ACP runs the default model only, so other saved servers are never needed.
+    // All saved servers attach: fallback models and pinned subagent models may live on a non-default one.
     const { llm, wsManager, models, modelInfo } = await buildLlmBackend({
       config,
       apiClient,
       tokenGetter,
       startupLog,
-      servers: 'default',
     });
 
     const permissionManager = new PermissionManager(
