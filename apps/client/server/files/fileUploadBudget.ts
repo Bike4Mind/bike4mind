@@ -79,9 +79,10 @@ export async function consumeFileUploadBudget(req: ActiveSubscriptionsRequest, f
     );
   }
   const retryAfter = Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / 1000));
+  const minutes = Math.ceil(retryAfter / 60);
   throw new TooManyRequestsError(
     limit > 0
-      ? `Upload limit reached (${limit} files per hour). Try again in ${Math.ceil(retryAfter / 60)} minutes.`
+      ? `Upload limit reached (${limit} files per hour). Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`
       : 'File uploads are currently blocked for your account.',
     { code: FILE_UPLOAD_LIMITED, retryAfter, details: { limit, requested: fileCount } }
   );

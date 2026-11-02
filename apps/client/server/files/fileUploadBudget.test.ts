@@ -99,6 +99,12 @@ describe('consumeFileUploadBudget', () => {
     expect(additionalInfo?.retryAfter).toBeLessThanOrEqual(20 * 60);
   });
 
+  it('says "1 minute", not "1 minutes", in the last minute of the window', async () => {
+    mocks.tryAdd.mockResolvedValue({ success: false, count: 300, expiresAt: new Date(Date.now() + 30_000) });
+
+    await expect(consumeFileUploadBudget(req, 1)).rejects.toThrow(/Try again in 1 minute\.$/);
+  });
+
   it('blocks every upload when the tier limit is set to 0', async () => {
     mocks.getSettingsMap.mockResolvedValue({ fileUploadLimitFreePerHour: '0' });
     mocks.tryAdd.mockResolvedValue({ success: false, count: 0, expiresAt: WINDOW_END });
