@@ -41,7 +41,7 @@ const toOrgFieldValue = (org: IOrganizationDocument, field: (typeof ADMIN_ASSIST
 export const getOrgTool = defineAdminTool({
   name: 'admin_get_org',
   description:
-    'Look up one organization by id or name: profile basics (description truncated to 500 characters, seats, credit balance, storage in bytes against its limit in MB), owner, members with role, and active subscriptions.',
+    'Look up one organization by id or name: profile basics (description truncated to 500 characters, seats, credit balance, storage in bytes against its limit in MB), owner, members with role, and active subscriptions. The owner is reported separately and is usually not in the members list; memberCount includes the owner, matching how seats are counted.',
   input: AdminOrgRefSchema,
   run: async ref => {
     const resolved = await resolveAdminOrgRef(ref);
@@ -63,7 +63,7 @@ export const getOrgTool = defineAdminTool({
           hasSystemPrompt: Boolean(org.systemPrompt?.trim()),
         },
         owner: { userId: org.userId, name: names.get(org.userId) ?? null },
-        memberCount: members.length,
+        memberCount: members.length + (members.some(member => member.userId === org.userId) ? 0 : 1),
         members: shownMembers.map(member => ({
           userId: member.userId,
           name: names.get(member.userId) ?? null,

@@ -49,7 +49,8 @@ const orgDoc = (extra: Record<string, unknown> = {}) => ({
   createdAt: new Date('2026-01-01T00:00:00Z'),
   userId: 'owner-1',
   adminUserIds: ['manager-1'],
-  users: [{ userId: 'owner-1' }, { userId: 'manager-1' }, { userId: 'member-1' }],
+  // Matches organizationService.create: the owner is not stored in users[].
+  users: [{ userId: 'manager-1' }, { userId: 'member-1' }],
   ...extra,
 });
 
@@ -107,7 +108,6 @@ describe('getOrgTool', () => {
     expect(result.data.owner).toEqual({ userId: 'owner-1', name: 'Olive' });
     expect(result.data.memberCount).toBe(3);
     expect(result.data.members).toEqual([
-      { userId: 'owner-1', name: 'Olive', role: 'owner' },
       { userId: 'manager-1', name: 'Max', role: 'admin' },
       { userId: 'member-1', name: null, role: 'member' },
     ]);
@@ -117,13 +117,25 @@ describe('getOrgTool', () => {
     ]);
   });
 
+  it('does not count the owner twice when users[] also lists them', async () => {
+    resolveAdminOrgRef.mockResolvedValue({
+      ok: true,
+      org: orgDoc({ users: [{ userId: 'owner-1' }, { userId: 'manager-1' }, { userId: 'member-1' }] }),
+    });
+
+    const result = await runTool({ orgId: ORG_ID });
+
+    expect(result.data.memberCount).toBe(3);
+    expect(result.data.members[0]).toEqual({ userId: 'owner-1', name: 'Olive', role: 'owner' });
+  });
+
   it('caps the member list at 25 and resolves names only for the rows it shows', async () => {
     const users = Array.from({ length: 30 }, (_, index) => ({ userId: `m${index}` }));
     resolveAdminOrgRef.mockResolvedValue({ ok: true, org: orgDoc({ users }) });
 
     const result = await runTool({ orgId: ORG_ID });
 
-    expect(result.data.memberCount).toBe(30);
+    expect(result.data.memberCount).toBe(31);
     expect(result.data.members).toHaveLength(25);
     expect(result.data.membersTruncated).toBe(true);
     expect(resolveUserNames.mock.calls[0][0]).toHaveLength(26);
