@@ -1,56 +1,116 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { SecurityDashboardOverview } from '@client/app/hooks/data/admin';
-import { SecurityOverviewGrid } from './SecurityDashboard';
+import type { SecurityScan } from './securityDashboardSearch';
 
-const mocks = vi.hoisted(() => ({ overview: vi.fn(), refetch: vi.fn() }));
-vi.mock('@client/app/hooks/data/admin', () => ({
-  useSecurityDashboardOverview: mocks.overview,
-  useSecurityDashboardAiAssessment: () => ({ data: undefined }),
-  useSecurityScanSchedules: () => ({ data: {} }),
+vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule);
+vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
+vi.mock('@client/app/hooks/data/admin', () => {
+  const query = { data: undefined, isLoading: false, refetch: vi.fn() };
+  const mutation = { mutate: vi.fn(), isPending: false };
+  return {
+    useSecurityDashboardWeb: () => query,
+    useRunWebSecurityScan: () => mutation,
+    useSecurityDashboardCloud: () => query,
+    useRunCloudSecurityScan: () => mutation,
+    useSecurityDashboardProwler: () => query,
+    useRunProwlerScan: () => mutation,
+    useSecurityScanSchedule: () => ({ data: undefined }),
+    useUpdateSecurityScanSchedule: () => mutation,
+  };
+});
+vi.mock('./SecurityDashboard/IncidentView', () => ({
+  IncidentView: () => <div data-testid="incident-view-stub" />,
 }));
-vi.mock('./SecurityDashboard/ActiveDefenseTab', () => ({ default: () => null }));
-vi.mock('./SecurityDashboard/WafTrafficOverview', () => ({ WafTrafficOverview: () => null }));
-const theme = extendTheme({ ...getThemeConfig() });
-const wrapper = ({ children }: { children: React.ReactNode }) => (
-  <CssVarsProvider theme={theme}>{children}</CssVarsProvider>
-);
-const data: SecurityDashboardOverview = {
-  overallScore: 100,
-  totalChecks: 1,
-  passedChecks: 1,
-  lastUpdated: '2026-01-01T00:00:00Z',
-  nextScanInMinutes: null,
-  checks: [
-    {
-      id: 'web',
-      label: 'Website',
-      status: 'pass',
-      enabled: true,
-      score: 100,
-      summary: 'No findings',
-      severityCounts: { critical: 0, high: 0, medium: 0, low: 0 },
-      lastCheckedAt: null,
-    },
-  ],
-};
+vi.mock('./SecurityDashboard/WafTrafficOverview', () => ({
+  WafTrafficOverview: ({ isActive }: { isActive?: boolean }) => (
+    <div data-testid="waf-overview-stub" data-active={String(isActive)} />
+  ),
+}));
+vi.mock('./SecurityDashboard/ActiveDefenseTab', () => ({ default: () => <div data-testid="active-defense-stub" /> }));
+vi.mock('./SecurityDashboard/ScanSummaryTable', () => ({
+  ScanSummaryTable: ({
+    activeScan,
+    onSelect,
+  }: {
+    activeScan: SecurityScan;
+    onSelect: (scan: SecurityScan) => void;
+  }) => (
+    <div data-testid="scan-summary-stub" data-active={activeScan}>
+      <button type="button" data-testid="scan-summary-stub-cloud" onClick={() => onSelect('cloud')} />
+    </div>
+  ),
+}));
 
-describe('Security overview anatomy', () => {
-  it('opens an available detail from the shared table without exposing hidden tabs', () => {
-    mocks.overview.mockReturnValue({ data, refetch: mocks.refetch });
-    const onOpen = vi.fn();
-    render(<SecurityOverviewGrid onOpen={onOpen} />, { wrapper });
-    expect(screen.getByTestId('admin-data-table')).toBeVisible();
-    fireEvent.click(screen.getByTestId('security-open-web-btn'));
-    expect(onOpen).toHaveBeenCalledWith('web');
+import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
+import SecurityDashboard from './SecurityDashboard';
+
+const theme = extendTheme({ ...getThemeConfig() });
+const renderPage = () =>
+  render(
+    <CssVarsProvider theme={theme}>
+      <SecurityDashboard />
+    </CssVarsProvider>
+  );
+
+describe('SecurityDashboard views', () => {
+  beforeEach(() => fakeAdminRouter.reset({ tab: 'security-dashboard' }));
+
+  it('opens the incident view on a bare tab link', () => {
+    renderPage();
+    expect(screen.getByTestId('admin-page-header')).toHaveTextContent('Security');
+    expect(screen.getByTestId('security-dashboard-views-incident-btn')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('incident-view-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('waf-overview-stub')).not.toBeInTheDocument();
   });
 
-  it('offers a retry when the overview fails instead of leaving a blank screen', () => {
-    mocks.overview.mockReturnValue({ isError: true, refetch: mocks.refetch });
-    render(<SecurityOverviewGrid onOpen={vi.fn()} />, { wrapper });
-    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
-    expect(mocks.refetch).toHaveBeenCalledOnce();
+  it('keeps the selected view in the URL and mounts the firewall only while it is open', () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('security-dashboard-views-firewall-btn'));
+
+    expect(fakeAdminRouter.search).toMatchObject({ tab: 'security-dashboard', securityView: 'firewall' });
+    expect(screen.getByTestId('waf-overview-stub')).toHaveAttribute('data-active', 'true');
+    expect(screen.queryByTestId('incident-view-stub')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('security-dashboard-views-incident-btn'));
+    expect(fakeAdminRouter.search).not.toHaveProperty('securityView');
+    expect(screen.queryByTestId('waf-overview-stub')).not.toBeInTheDocument();
+  });
+
+  it('opens the scan panel a link names', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans', securityScan: 'active-defense' });
+    renderPage();
+    expect(screen.getByTestId('scan-summary-stub')).toHaveAttribute('data-active', 'active-defense');
+    expect(screen.getByTestId('security-scans-active-defense-panel')).toContainElement(
+      screen.getByTestId('active-defense-stub')
+    );
+  });
+
+  it('switches the scan panel from the summary table and the panel control', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans' });
+    renderPage();
+    expect(screen.getByTestId('security-scans-web-panel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('scan-summary-stub-cloud'));
+    expect(fakeAdminRouter.search).toMatchObject({ securityView: 'scans', securityScan: 'cloud' });
+    expect(screen.getByTestId('security-scans-cloud-panel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('security-scans-panel-tabs-web'));
+    expect(fakeAdminRouter.search).not.toHaveProperty('securityScan');
+    expect(screen.getByTestId('security-scans-web-panel')).toBeInTheDocument();
+  });
+
+  it('drops the scan panel when leaving the Scans view', () => {
+    fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'scans', securityScan: 'prowler' });
+    renderPage();
+    fireEvent.click(screen.getByTestId('security-dashboard-views-incident-btn'));
+    expect(fakeAdminRouter.search).toEqual({ tab: 'security-dashboard' });
+  });
+
+  it('falls back to the incident view for an unknown view', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'security-dashboard', securityView: 'overview' }));
+    renderPage();
+    expect(screen.getByTestId('incident-view-stub')).toBeInTheDocument();
   });
 });

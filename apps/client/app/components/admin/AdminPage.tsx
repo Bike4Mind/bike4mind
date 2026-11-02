@@ -74,7 +74,7 @@ const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), {
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
-const SecurityDashboardMock = dynamic(() => import('./SecurityDashboardMock'), { ssr: false });
+const SecurityDashboard = dynamic(() => import('./SecurityDashboard'), { ssr: false });
 const Team = lazy(() => import('./Team'));
 const SlackWorkspacesTab = dynamic(() => import('./SlackWorkspacesTab'), { ssr: false });
 const SlackMetricsPage = dynamic(() => import('./SlackMetrics'), { ssr: false });
@@ -265,7 +265,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.VoiceSettings && <VoiceSettingsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SecurityDashboard}>
-            {activeTab === AdminTab.SecurityDashboard && <SecurityDashboardMock />}
+            {activeTab === AdminTab.SecurityDashboard && <SecurityDashboard />}
           </TabPanel>
           <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
           <TabPanel value={AdminTab.SystemHealth}>

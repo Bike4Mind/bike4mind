@@ -90,7 +90,6 @@ describe('CacheKeys', () => {
       expect(CacheKeys.userInvites('u1', 10, 2)).toBe('userInvites:u1:10:2');
       expect(CacheKeys.modelList('u1')).toBe('model-list:u1');
       expect(CacheKeys.securityBehavioralSummary('u1')).toBe('security-behavioral-summary-v2:u1');
-      expect(CacheKeys.securityDashboardAiAssessment('prod', 'abc')).toBe('security-dashboard-ai-assessment:prod:abc');
       expect(CacheKeys.refineText('hello')).toMatch(/^refine-text:[0-9a-f]{16}$/);
     });
 
