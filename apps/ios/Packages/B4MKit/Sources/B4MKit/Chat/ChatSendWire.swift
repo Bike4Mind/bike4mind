@@ -15,15 +15,18 @@ enum ChatSendWire {
     let newConversation: Bool?
     /// Lets capable models stream tokens; the reply reaches the app over the socket either way.
     let stream: Bool
+    /// Omitted (not `[]`) when nothing is attached, so a plain message's body is unchanged.
+    let fileIds: [String]?
   }
 
   static func body(for request: ChatSendRequest) throws -> Data {
     let body: Body
+    let fileIds = request.fileIDs.isEmpty ? nil : request.fileIDs
     switch request.target {
     case .session(let id):
-      body = Body(message: request.message, sessionId: id, newConversation: nil, stream: true)
+      body = Body(message: request.message, sessionId: id, newConversation: nil, stream: true, fileIds: fileIds)
     case .newConversation:
-      body = Body(message: request.message, sessionId: nil, newConversation: true, stream: true)
+      body = Body(message: request.message, sessionId: nil, newConversation: true, stream: true, fileIds: fileIds)
     }
     let encoder = JSONEncoder()
     encoder.outputFormatting = .sortedKeys

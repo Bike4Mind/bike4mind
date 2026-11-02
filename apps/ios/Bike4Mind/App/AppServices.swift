@@ -16,6 +16,7 @@ final class AppServices {
     let realtime: WSClient
     let cache: FileSessionListCache
     let media: MediaClient
+    let capture: CaptureStack
   }
 
   @ObservationIgnored private let auth: AuthController
@@ -112,6 +113,27 @@ final class AppServices {
     #endif
     Task { await widgets.clearRunning() }
   }
+  /// Share, camera and voice capture for the current server; fixtures under `B4M_UI_FIXTURES=1`.
+  var capture: CaptureStack {
+    #if DEBUG
+      if FixtureServices.isEnabled { return fixtureCapture }
+    #endif
+    return current.capture
+  }
+
+  /// Called at launch and on foreground: finishes uploads the share extension or an earlier run left behind.
+  func resumeCapture() {
+    guard auth.state == .signedIn || auth.state == .locked, let engine = capture.engine else { return }
+    Task { await engine.resume() }
+  }
+
+  /// `application(_:handleEventsForBackgroundURLSession:)`: the system relaunched the app for upload events.
+  func reattachCaptureSession(identifier: String, completion: @escaping @Sendable () -> Void) {
+    guard let engine = capture.engine else { return completion() }
+    Task { await engine.reattach(identifier: identifier, systemCompletion: completion) }
+  }
+
+  @ObservationIgnored private let fixtureCapture = CaptureStack.fixture()
 
   private var current: Graph {
     if let built, built.environment == auth.environment { return built }
@@ -120,6 +142,8 @@ final class AppServices {
     }
     let environment = auth.environment
     let auth = self.auth
+    // The share extension reads the server from the App Group, so it always follows the app's choice.
+    SharedServerEnvironment.store().save(environment)
     let fresh = Graph(
       environment: environment,
       api: APIClient(baseURL: environment.baseURL, tokens: auth),
@@ -127,7 +151,8 @@ final class AppServices {
         handshake: RealtimeHandshake(baseURL: environment.baseURL, tokens: auth),
         tokenRotations: { await auth.accessTokenRotations() }),
       cache: FileSessionListCache(directory: FileSessionListCache.defaultDirectory(), environment: environment),
-      media: MediaClient(baseURL: environment.baseURL, tokens: auth)
+      media: MediaClient(baseURL: environment.baseURL, tokens: auth),
+      capture: .live(baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app)
     )
     built = fresh
     return fresh

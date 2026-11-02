@@ -52,3 +52,21 @@ SIMCTL_CHILD_B4M_UI_FIXTURES=1 xcrun simctl launch booted com.bike4mind.app
 - **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point; a Live Activity adds its `ActivityConfiguration` there and reuses `Widgets/Shared/`.
 - **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send.
 - **Media tab** (`Bike4Mind/Features/Media/`): a grid over the Files API via the hand-written `MediaClient`. Presigned URLs are re-fetched near expiry and at most twice after a playback failure. Under `B4M_UI_FIXTURES=1` the tab and the widgets show canned data.
+## Share and capture
+
+- **Share extension** (`ShareExtension/`): a `com.apple.share-services` target that takes links, text, images, PDFs and
+  files from any app, lets the user pick a lake or session and an optional note, and uploads in the background. The target is a
+  thin shell; mapping, the destination memory, the upload state machine and the wire clients live in
+  `Packages/B4MKit/Sources/B4MKit/Capture`. `CaptureUI/` (the composer view) is compiled into both the app and the extension.
+- **In-app capture**: the Sessions toolbar's capture menu (camera, photo library, voice note) and the microphone button in the
+  chat composer reuse the same composer and engine.
+- **Uploads** go `POST /api/v1/files` -> presigned `PUT` (background `URLSession`) -> poll `GET /api/v1/files/{id}` until
+  scanned -> attach (`POST /api/v1/data-lakes/{id}/files/{file}` or a chat turn with `fileIds`). Jobs are JSON files in the App
+  Group container, so either process can resume the other's work. The app re-creates the extension's session when the system
+  relaunches it (`handleEventsForBackgroundURLSession`).
+- **Voice** records with `AVAudioRecorder` and transcribes through `POST /api/v1/transcriptions/uploads` + `POST /api/v1/transcriptions`.
+- **Shared access**: both targets carry the `group.com.bike4mind.app` App Group and the `$(AppIdentifierPrefix)com.bike4mind.shared`
+  keychain group so the extension can read the app's refresh token. The team prefix is resolved at runtime; with no entitlement in
+  effect (an unsigned build) the keychain item stays private to the app, the App Group falls back to Application Support, and the
+  extension simply reports it is signed out. The share flow works end to end only on a signed build with both capabilities enabled.
+- `B4M_UI_FIXTURES=1` swaps in fixture destinations, submission and transcription, in the app and in the extension.

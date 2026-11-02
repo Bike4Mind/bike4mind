@@ -31,6 +31,7 @@ struct RootView: View {
       if phase == .background { auth.lockIfNeeded() }
       guard phase == .active else { return }
       Task { await services.push.appDidBecomeActive() }
+      services.resumeCapture()
       // A socket that gave up reconnecting while backgrounded gets a fresh start.
       if auth.state == .signedIn {
         let realtime = services.realtime

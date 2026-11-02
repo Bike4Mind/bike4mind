@@ -15,9 +15,10 @@ struct Bike4MindApp: App {
     #endif
     #if DEBUG
       let tokenStore: any TokenStore =
-        FixtureServices.isEnabled ? InMemoryTokenStore(refreshToken: "fixture") : KeychainTokenStore()
+        FixtureServices.isEnabled
+        ? InMemoryTokenStore(refreshToken: "fixture") : KeychainTokenStore(accessGroup: KeychainAccessGroup.resolved())
     #else
-      let tokenStore: any TokenStore = KeychainTokenStore()
+      let tokenStore: any TokenStore = KeychainTokenStore(accessGroup: KeychainAccessGroup.resolved())
     #endif
     let auth = AuthController(environment: environment, tokenStore: tokenStore)
     _auth = State(initialValue: auth)

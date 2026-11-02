@@ -17,6 +17,7 @@ private struct ChatScreen: View {
   @Environment(AppServices.self) private var services
   @State private var model: ChatViewModel
   @FocusState private var composerFocused: Bool
+  @State private var isRecordingVoice = false
 
   init(session: SessionSummary, api: any B4MAPI, realtime: any RealtimeClient) {
     self.session = session
@@ -29,6 +30,14 @@ private struct ChatScreen: View {
       .navigationBarTitleDisplayMode(.inline)
       .background(Tokens.Palette.background)
       .safeAreaInset(edge: .bottom) { composer }
+      .sheet(isPresented: $isRecordingVoice) {
+        VoiceRecorderPanel(
+          onTranscript: { text in
+            model.draft = model.draft.isEmpty ? text : model.draft + " " + text
+            isRecordingVoice = false
+          },
+          onCancel: { isRecordingVoice = false })
+      }
       .task { await model.load() }
       .task { await model.listen() }
       .onDisappear { model.stop() }
@@ -137,6 +146,15 @@ private struct ChatScreen: View {
 
   private var composer: some View {
     HStack(alignment: .bottom, spacing: Tokens.Spacing.s) {
+      Button {
+        isRecordingVoice = true
+      } label: {
+        Image(systemName: "mic.circle")
+          .font(.system(size: 32))
+          .symbolRenderingMode(.hierarchical)
+      }
+      .accessibilityLabel("Dictate a message")
+      .accessibilityIdentifier("chat-composer-mic")
       TextField("Message", text: $model.draft, axis: .vertical)
         .lineLimit(1...6)
         .focused($composerFocused)
