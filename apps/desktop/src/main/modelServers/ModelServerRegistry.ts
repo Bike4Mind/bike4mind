@@ -224,7 +224,7 @@ export class ModelServerRegistry {
     if (!outcome.kind) {
       // Some servers answer 403, not 401, when the token is missing.
       const hint = outcome.forbidden && !headers ? ' If this server needs an API key, enter it and test again.' : '';
-      // Logged so the code a declined macOS Local Network permission produces can be confirmed.
+      // The system code tells a declined macOS Local Network permission (EHOSTUNREACH) apart from a down server.
       if (outcome.code) this.deps.logger.warn(`MODEL SERVERS: testing ${label} (${scope}) failed with ${outcome.code}`);
       return failed(
         withLocalNetworkHint(

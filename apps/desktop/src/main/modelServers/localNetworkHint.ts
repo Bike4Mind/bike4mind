@@ -3,8 +3,8 @@ import type { AddressScope } from '@bike4mind/local-models/servers';
 /**
  * macOS asks before an app connects to a LAN address (NSLocalNetworkUsageDescription in
  * electron-builder.yml). Once the user declines, connects to private addresses fail at the socket and
- * macOS does not ask again, so the failure is the only signal. The codes are what a declined
- * permission is expected to produce; ModelServerRegistry logs the code it actually gets.
+ * macOS does not ask again, so the failure is the only signal. A declined permission fails with
+ * EHOSTUNREACH (seen on macOS 26); ENETUNREACH is kept as the other no-route code.
  */
 const DECLINED_CODES = new Set(['EHOSTUNREACH', 'ENETUNREACH']);
 

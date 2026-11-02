@@ -420,11 +420,28 @@ describe('ModelServerRegistry', () => {
       fake.state.down.add('http://127.0.0.2:11434');
       fake.state.downCode = 'EHOSTUNREACH';
       const linux = registry(fake, {}, { platform: 'linux' }).registry;
-      expect((await linux.probe({ address: '192.168.1.20:11434', credential: none })).error).not.toMatch(HINT);
+      const onLinux = (await linux.probe({ address: '192.168.1.20:11434', credential: none })).error;
+      expect(onLinux).toMatch(/no route to the host/);
+      expect(onLinux).not.toMatch(HINT);
       const mac = registry(fake, {}, { platform: 'darwin' }).registry;
-      expect((await mac.probe({ address: '127.0.0.2:11434', credential: none })).error).not.toMatch(HINT);
+      const loopback = (await mac.probe({ address: '127.0.0.2:11434', credential: none })).error;
+      expect(loopback).toMatch(/no route to the host/);
+      expect(loopback).not.toMatch(HINT);
       fake.state.downCode = 'ECONNREFUSED';
-      expect((await mac.probe({ address: '192.168.1.20:11434', credential: none })).error).not.toMatch(HINT);
+      const refused = (await mac.probe({ address: '192.168.1.20:11434', credential: none })).error;
+      expect(refused).toMatch(/connection refused/);
+      expect(refused).not.toMatch(HINT);
+    });
+
+    it('shows it when listing the models of a LAN server that went down', async () => {
+      const fake = fakeOllama();
+      const { registry: servers } = registry(fake, {}, { platform: 'darwin' });
+      await addLanServer(servers);
+      fake.state.down.add(lan);
+      fake.state.downCode = 'EHOSTUNREACH';
+      await servers.models();
+      const [, saved] = await servers.views();
+      expect(saved.health.error).toMatch(HINT);
     });
 
     it('shows it on a saved LAN server that goes down, and in the chat error', async () => {
