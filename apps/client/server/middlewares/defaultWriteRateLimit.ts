@@ -45,7 +45,7 @@ export const __resetDefaultWriteLimitCache = (): void => {
   loggedWindows.clear();
 };
 
-async function readSettings(): Promise<{ mode: DefaultWriteRateLimitMode; perMin: number }> {
+async function readSettings(logger: Request['logger']): Promise<{ mode: DefaultWriteRateLimitMode; perMin: number }> {
   const now = Date.now();
   if (settingsCache && settingsCache.expiresAt > now) return settingsCache.value;
   let value = FALLBACK;
@@ -62,8 +62,9 @@ async function readSettings(): Promise<{ mode: DefaultWriteRateLimitMode; perMin
         : FALLBACK.mode,
       perMin: typeof perMin === 'number' && perMin > 0 ? perMin : FALLBACK.perMin,
     };
-  } catch {
-    // Fall through to FALLBACK; cached below so an outage costs one failed read per TTL, not per request.
+  } catch (error) {
+    // Fall through to FALLBACK; cached below so an outage costs one failed read (and line) per TTL.
+    logger.warn('[defaultWriteRateLimit] settings unavailable; falling back to log mode', { error });
   }
   settingsCache = { value, expiresAt: now + SETTINGS_CACHE_TTL_MS };
   return value;
@@ -84,7 +85,7 @@ export async function defaultWriteRateLimit(req: Request, res: Response, next: N
     return next();
   }
 
-  const { mode, perMin } = await readSettings();
+  const { mode, perMin } = await readSettings(req.logger);
   if (mode === 'off') return next();
   // Already over and logged this window: log mode would let it through anyway, so skip the counter,
   // whose over-limit path costs several Mongo round trips per request.

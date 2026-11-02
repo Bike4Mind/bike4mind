@@ -1130,6 +1130,14 @@ function makeStringSetting(
 }
 
 /**
+ * The default per-user write limit's modes and its default cap. Shared with the middleware that reads
+ * them (apps/client/server/middlewares/defaultWriteRateLimit.ts), which falls back to these values.
+ */
+export const DEFAULT_WRITE_RATE_LIMIT_MODES = ['off', 'log', 'enforce'] as const;
+export type DefaultWriteRateLimitMode = (typeof DEFAULT_WRITE_RATE_LIMIT_MODES)[number];
+export const DEFAULT_WRITE_RATE_LIMIT_PER_MIN = 120;
+
+/**
  * Data-lake semantic-search scan budgets. Declared here so the admin-settings default and the
  * retrieval code that applies it cannot drift - `semanticDataLakeSearch` imports these same
  * constants for the case where no setting row exists.
@@ -1143,14 +1151,6 @@ function makeStringSetting(
  * this change exists to expose for a sort-memory failure on the same large lakes. Raise it only
  * alongside keyset file pagination.
  */
-/**
- * The default per-user write limit's modes and its default cap. Shared with the middleware that reads
- * them (apps/client/server/middlewares/defaultWriteRateLimit.ts), which falls back to these values.
- */
-export const DEFAULT_WRITE_RATE_LIMIT_MODES = ['off', 'log', 'enforce'] as const;
-export type DefaultWriteRateLimitMode = (typeof DEFAULT_WRITE_RATE_LIMIT_MODES)[number];
-export const DEFAULT_WRITE_RATE_LIMIT_PER_MIN = 120;
-
 export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
 

@@ -116,9 +116,13 @@ describe('defaultWriteRateLimit', () => {
   it('falls back to logging at 120/min when the settings cannot be read', async () => {
     mocks.getSettingsMap.mockRejectedValue(new Error('db down'));
     mocks.tryIncrement.mockResolvedValue({ success: false, expiresAt: WINDOW_END });
-    const { next } = await run();
+    const { next, warn } = await run();
     expect(mocks.tryIncrement).toHaveBeenCalledWith('rate-limit:u1:default-write', 120, 60_000);
     expect(next).toHaveBeenCalledWith();
+    expect(warn).toHaveBeenCalledWith(
+      '[defaultWriteRateLimit] settings unavailable; falling back to log mode',
+      expect.objectContaining({ error: expect.any(Error) })
+    );
   });
 
   it('falls back to log mode for an unknown stored mode', async () => {
