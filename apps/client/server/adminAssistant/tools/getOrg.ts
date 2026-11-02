@@ -1,0 +1,77 @@
+import type { IOrganizationDocument } from '@bike4mind/common';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { resolveUserNames } from '../../utils/resolveUserNames';
+import { defineAdminTool } from '../defineAdminTool';
+import { orgRoleOf, toSubscriptionSummary } from '../formatters';
+import { resolveAdminOrgRef } from '../resolveAdminOrgRef';
+import { AdminOrgRefSchema } from '../schemas';
+
+const MAX_MEMBERS = 25;
+
+/**
+ * The only organization fields the admin assistant may emit; output is always built by picking
+ * these, never by spreading a doc. Excludes ORGANIZATION_SECRET_FIELDS (toSafeOrganization) and
+ * the customer-written systemPrompt, which is reported only as present or not.
+ */
+export const ADMIN_ASSISTANT_ORG_FIELDS = [
+  'id',
+  'name',
+  'personal',
+  'description',
+  'billingContact',
+  'seats',
+  'currentCredits',
+  'lastCreditsPurchasedAt',
+  'maxCreditsPerMember',
+  'storageLimit',
+  'currentStorageSize',
+  'allowedGroupTypes',
+  'createdAt',
+] as const;
+
+const toOrgFieldValue = (org: IOrganizationDocument, field: (typeof ADMIN_ASSISTANT_ORG_FIELDS)[number]): unknown => {
+  const value: unknown = org[field];
+  return value instanceof Date ? value.toISOString() : (value ?? null);
+};
+
+export const getOrgTool = defineAdminTool({
+  name: 'admin_get_org',
+  description:
+    'Look up one organization by id or name: profile basics (seats, credit balance, storage in bytes against its limit in MB), owner, members with role, and active subscriptions.',
+  input: AdminOrgRefSchema,
+  run: async ref => {
+    const resolved = await resolveAdminOrgRef(ref);
+    if (!resolved.ok) return resolved;
+    const { org } = resolved;
+
+    const members = org.users ?? [];
+    const shownMembers = members.slice(0, MAX_MEMBERS);
+    const [names, subscriptions] = await Promise.all([
+      resolveUserNames([org.userId, ...shownMembers.map(member => member.userId)]),
+      subscriptionRepository.findActiveSubscriptionsByOwners(SubscriptionOwnerType.Organization, [org.id]),
+    ]);
+
+    return {
+      ok: true,
+      data: {
+        organization: {
+          ...Object.fromEntries(ADMIN_ASSISTANT_ORG_FIELDS.map(field => [field, toOrgFieldValue(org, field)])),
+          hasSystemPrompt: Boolean(org.systemPrompt?.trim()),
+        },
+        owner: { userId: org.userId, name: names.get(org.userId) ?? null },
+        memberCount: members.length,
+        members: shownMembers.map(member => ({
+          userId: member.userId,
+          name: names.get(member.userId) ?? null,
+          role: orgRoleOf(org, member.userId),
+        })),
+        membersTruncated: members.length > MAX_MEMBERS,
+        subscriptions: subscriptions.map(subscription => ({
+          ...toSubscriptionSummary(subscription),
+          seats: subscription.quantity,
+        })),
+      },
+    };
+  },
+});
