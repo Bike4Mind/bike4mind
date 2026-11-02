@@ -55,6 +55,31 @@ actor FakePushTokenAPI: PushTokenAPI {
     registrations.append(Registration(token: token, environment: environment, appVersion: appVersion))
   }
 
+  struct LiveActivityRegistration: Equatable {
+    let token: String
+    let activityID: String
+    let questID: String
+    let environment: PushEnvironment
+  }
+  private(set) var liveActivityRegistrations: [LiveActivityRegistration] = []
+  private(set) var liveActivityAttempts = 0
+  private var liveActivityFailures = 0
+
+  /// The next `count` live activity registrations throw `registerError` (or `.offline`), then succeed.
+  func failLiveActivityRegistrations(_ count: Int) { liveActivityFailures = count }
+
+  func registerLiveActivityToken(
+    _ token: String, activityID: String, questID: String, environment: PushEnvironment, appVersion: String?
+  ) async throws {
+    liveActivityAttempts += 1
+    if liveActivityFailures > 0 {
+      liveActivityFailures -= 1
+      throw registerError ?? APIError.offline
+    }
+    liveActivityRegistrations.append(
+      LiveActivityRegistration(token: token, activityID: activityID, questID: questID, environment: environment))
+  }
+
   func unregisterPushToken(_ token: String) async throws {
     if let unregisterDelay { try await Task.sleep(for: unregisterDelay) }
     unregistered.append(token)

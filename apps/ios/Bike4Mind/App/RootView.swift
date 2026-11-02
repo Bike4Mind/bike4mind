@@ -46,6 +46,7 @@ struct RootView: View {
     case .signedIn, .locked:
       // First sign-in (or a restored launch) is the moment to ask for quiet push authorization.
       Task { await services.push.sessionDidStart() }
+      services.questActivities.sessionDidStart()
       if state == .signedIn {
         services.navigator.releasePendingRoute()
         services.prepareWidgets()
@@ -56,6 +57,10 @@ struct RootView: View {
       Task { await realtime.stop() }
       Task { await services.sessionListCache.clear() }
       services.push.sessionDidEnd()
+      // A session that ended on its own cannot unregister tokens; the activities still must not linger.
+      services.questActivities.sessionDidEnd()
+      let monitor = services.agentRunMonitor
+      Task { await monitor.stopAll() }
       // The widgets sit on the Home Screen: they must not keep showing the last account's data.
       let widgets = services.widgets
       Task { await widgets.signOut() }

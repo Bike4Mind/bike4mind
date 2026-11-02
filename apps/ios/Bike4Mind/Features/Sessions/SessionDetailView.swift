@@ -8,7 +8,9 @@ struct SessionDetailView: View {
   @Environment(AppServices.self) private var services
 
   var body: some View {
-    ChatScreen(session: session, api: services.api, realtime: services.realtime)
+    ChatScreen(
+      session: session, api: services.api, realtime: services.realtime, activities: services.questActivities,
+      agentRuns: services.agentRuns)
   }
 }
 
@@ -19,9 +21,15 @@ private struct ChatScreen: View {
   @FocusState private var composerFocused: Bool
   @State private var isRecordingVoice = false
 
-  init(session: SessionSummary, api: any B4MAPI, realtime: any RealtimeClient) {
+  init(
+    session: SessionSummary, api: any B4MAPI, realtime: any RealtimeClient, activities: any QuestActivityTracking,
+    agentRuns: any AgentRunStarting
+  ) {
     self.session = session
-    _model = State(initialValue: ChatViewModel(sessionID: session.id, api: api, realtime: realtime))
+    _model = State(
+      initialValue: ChatViewModel(
+        sessionID: session.id, api: api, realtime: realtime, title: session.name, activities: activities,
+        agentRuns: agentRuns))
   }
 
   var body: some View {
@@ -145,6 +153,21 @@ private struct ChatScreen: View {
   }
 
   private var composer: some View {
+    VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+      if model.sendsAsAgentRun {
+        Label("Agent run: leave anytime, progress shows on your Lock Screen", systemImage: "bolt.circle.fill")
+          .font(Tokens.Typography.meta)
+          .foregroundStyle(.secondary)
+          .accessibilityIdentifier("chat-composer-agent-hint")
+      }
+      composerRow
+    }
+    .padding(.horizontal, Tokens.Spacing.m)
+    .padding(.vertical, Tokens.Spacing.s)
+    .background(.bar)
+  }
+
+  private var composerRow: some View {
     HStack(alignment: .bottom, spacing: Tokens.Spacing.s) {
       Button {
         isRecordingVoice = true
@@ -155,6 +178,18 @@ private struct ChatScreen: View {
       }
       .accessibilityLabel("Dictate a message")
       .accessibilityIdentifier("chat-composer-mic")
+      if model.canRunAgent {
+        Button {
+          model.sendsAsAgentRun.toggle()
+        } label: {
+          Image(systemName: model.sendsAsAgentRun ? "bolt.circle.fill" : "bolt.circle")
+            .font(.system(size: 32))
+            .symbolRenderingMode(.hierarchical)
+        }
+        .accessibilityLabel("Run as agent")
+        .accessibilityValue(model.sendsAsAgentRun ? "On" : "Off")
+        .accessibilityIdentifier("chat-composer-agent-toggle")
+      }
       TextField("Message", text: $model.draft, axis: .vertical)
         .lineLimit(1...6)
         .focused($composerFocused)
@@ -174,9 +209,6 @@ private struct ChatScreen: View {
       .accessibilityLabel("Send")
       .accessibilityIdentifier("chat-composer-send")
     }
-    .padding(.horizontal, Tokens.Spacing.m)
-    .padding(.vertical, Tokens.Spacing.s)
-    .background(.bar)
   }
 
   private func send() {

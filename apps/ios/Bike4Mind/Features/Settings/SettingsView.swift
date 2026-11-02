@@ -42,6 +42,8 @@ struct SettingsView: View {
       Button("Sign Out", role: .destructive) {
         Task {
           // The unregister call needs a live session, so it runs before the session is torn down.
+          await services.questActivities.sessionWillEnd()
+          await services.agentRunMonitor.stopAll()
           await services.push.unregisterBeforeSignOut()
           await auth.signOut()
         }

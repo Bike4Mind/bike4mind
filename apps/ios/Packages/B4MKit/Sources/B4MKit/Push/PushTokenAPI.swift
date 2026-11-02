@@ -18,6 +18,11 @@ public enum PushEnvironment: String, Sendable, Codable {
 public protocol PushTokenAPI: Sendable {
   /// Idempotent upsert of this device's APNs token for the signed-in user.
   func registerPushToken(_ token: String, environment: PushEnvironment, appVersion: String?) async throws
+  /// Registers the push token of one Live Activity, which the server uses to push that quest's progress.
+  /// Must happen as soon as the activity has a token: frames sent before registration are dropped.
+  func registerLiveActivityToken(
+    _ token: String, activityID: String, questID: String, environment: PushEnvironment, appVersion: String?
+  ) async throws
   func unregisterPushToken(_ token: String) async throws
 }
 
@@ -37,11 +42,15 @@ public struct PushTokenClient: PushTokenAPI {
     self.transport = transport
   }
 
+  /// `POST /api/v1/push-tokens`. `activityId` and `questId` are set only for `kind: liveActivity`; nil
+  /// fields are omitted from the JSON.
   private struct RegisterBody: Encodable {
     let token: String
-    let kind = "device"
+    let kind: String
     let platform = "ios"
     let environment: PushEnvironment
+    let activityId: String?
+    let questId: String?
     let appVersion: String?
   }
 
@@ -50,7 +59,19 @@ public struct PushTokenClient: PushTokenAPI {
   }
 
   public func registerPushToken(_ token: String, environment: PushEnvironment, appVersion: String?) async throws {
-    let body = try JSONEncoder().encode(RegisterBody(token: token, environment: environment, appVersion: appVersion))
+    let body = try JSONEncoder().encode(
+      RegisterBody(
+        token: token, kind: "device", environment: environment, activityId: nil, questId: nil, appVersion: appVersion))
+    try await send(method: "POST", body: body)
+  }
+
+  public func registerLiveActivityToken(
+    _ token: String, activityID: String, questID: String, environment: PushEnvironment, appVersion: String?
+  ) async throws {
+    let body = try JSONEncoder().encode(
+      RegisterBody(
+        token: token, kind: "liveActivity", environment: environment, activityId: activityID, questId: questID,
+        appVersion: appVersion))
     try await send(method: "POST", body: body)
   }
 

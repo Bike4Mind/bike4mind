@@ -11,10 +11,42 @@
     static let media: any MediaAPI = FixtureMediaAPI()
     static let realtime = FixtureRealtime()
     static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
+    static let agentRunAPI: any AgentRunAPI = FixtureAgentRunAPI()
 
     private struct NoopPushTokenAPI: PushTokenAPI {
       func registerPushToken(_ token: String, environment: PushEnvironment, appVersion: String?) async throws {}
       func unregisterPushToken(_ token: String) async throws {}
+      func registerLiveActivityToken(
+        _ token: String, activityID: String, questID: String, environment: PushEnvironment, appVersion: String?
+      ) async throws {}
+    }
+
+    /// A scripted agent run: each poll advances it one stage, through an approval, to completion, so the
+    /// Live Activity can be watched going through every state without a server.
+    private actor FixtureAgentRunAPI: AgentRunAPI {
+      private var polls: [String: Int] = [:]
+      private var sequence = 0
+
+      func startRun(sessionID: String, message: String) async throws -> AgentRunReceipt {
+        sequence += 1
+        return AgentRunReceipt(
+          executionID: "fixture-exec-\(sequence)", questID: "fixture-run-quest-\(sequence)", sessionID: sessionID)
+      }
+
+      func run(id: String) async throws -> AgentRunStatus {
+        let count = (polls[id] ?? 0) + 1
+        polls[id] = count
+        let search = AgentRunStatus.Step(type: .action, toolName: "web_search")
+        let seen = AgentRunStatus.Step(type: .observation)
+        let write = AgentRunStatus.Step(type: .action, toolName: "write_report")
+        switch count {
+        case 1: return AgentRunStatus(id: id, state: .running, steps: [search])
+        case 2: return AgentRunStatus(id: id, state: .running, steps: [search, seen])
+        case 3, 4: return AgentRunStatus(id: id, state: .awaitingPermission, steps: [search, seen])
+        case 5: return AgentRunStatus(id: id, state: .running, steps: [search, seen, write])
+        default: return AgentRunStatus(id: id, state: .completed, steps: [search, seen, write])
+        }
+      }
     }
 
     private struct FixtureAPI: B4MAPI {
@@ -126,24 +158,33 @@
         let reply =
           "Here is a quick answer to **\(prompt)**.\n\n1. First, a short point.\n2. Then another.\n\nThat streamed in by replacement."
         let words = reply.split(separator: " ", omittingEmptySubsequences: false)
+        // Status lines are what the Live Activity shows as its stage; the first ones arrive before any text.
+        let stages = ["Reading your message", "Searching your notes", "Drafting a reply"]
         Task {
-          try? await Task.sleep(for: .milliseconds(400))
+          emit(questID, sessionID, prompt, "", "running", stages[0])
+          try? await Task.sleep(for: .milliseconds(1_500))
           for count in stride(from: 1, through: words.count, by: 2) {
-            emit(questID, sessionID, prompt, words.prefix(count).joined(separator: " "), "running")
-            try? await Task.sleep(for: .milliseconds(60))
+            let stage = stages[min(count / 2, stages.count - 1)]
+            emit(questID, sessionID, prompt, words.prefix(count).joined(separator: " "), "running", stage)
+            try? await Task.sleep(for: .milliseconds(450))
           }
           emit(questID, sessionID, prompt, reply, "done")
         }
       }
 
-      private func emit(_ questID: String, _ sessionID: String, _ prompt: String, _ reply: String, _ status: String) {
+      private func emit(
+        _ questID: String, _ sessionID: String, _ prompt: String, _ reply: String, _ status: String,
+        _ statusMessage: String = ""
+      ) {
         let quest: JSONObject = [
           "id": .string(questID), "sessionId": .string(sessionID), "prompt": .string(prompt),
           "reply": .string(reply), "status": .string(status), "type": "message", "creditsUsed": 12,
         ]
         let frame = ActionFrame(
           action: ChatQuestFrame.action,
-          payload: ["action": .string(ChatQuestFrame.action), "quest": .object(quest), "statusMessage": ""])
+          payload: [
+            "action": .string(ChatQuestFrame.action), "quest": .object(quest), "statusMessage": .string(statusMessage),
+          ])
         for listener in listeners.values { listener.yield(.frame(frame)) }
       }
     }
