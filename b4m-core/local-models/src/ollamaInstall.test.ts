@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -8,6 +8,7 @@ import {
   detectOllamaInstall,
   findOllamaProcesses,
   isLocalHost,
+  isLocalHostResolved,
   parseEnvironmentFile,
   parseManagerEnvironment,
   parseOllamaHost,
@@ -405,6 +406,38 @@ describe('isLocalHost', () => {
       expect(isLocalHost(host, ['10.0.0.5', 'box'])).toBe(false);
     }
   });
+
+  it('unwraps an IPv4-mapped IPv6 address, as URL parsing writes it', () => {
+    expect(new URL('http://[::ffff:127.0.0.1]:11434').hostname).toBe('[::ffff:7f00:1]');
+    for (const host of ['::ffff:7f00:1', '::ffff:127.0.0.1', '::ffff:a00:5']) {
+      expect(isLocalHost(host, ['10.0.0.5'])).toBe(true);
+    }
+    expect(isLocalHost('::ffff:a00:6', ['10.0.0.5'])).toBe(false);
+  });
+});
+
+describe('isLocalHostResolved', () => {
+  const local = ['10.0.0.5', 'box'];
+
+  it('takes a name that resolves to loopback or one of this machine addresses as local', async () => {
+    expect(await isLocalHostResolved('box.lan', local, async () => ['10.0.0.5'])).toBe(true);
+    expect(await isLocalHostResolved('box.local', local, async () => ['192.0.2.9', '::1'])).toBe(true);
+    expect(await isLocalHostResolved('box.lan', local, async () => ['192.0.2.9'])).toBe(false);
+  });
+
+  it('keeps an unresolvable name, and a name that resolves to a wildcard, non-local', async () => {
+    expect(await isLocalHostResolved('gone.lan', local, async () => Promise.reject(new Error('ENOTFOUND')))).toBe(
+      false
+    );
+    expect(await isLocalHostResolved('gone.lan', local, async () => [])).toBe(false);
+    expect(await isLocalHostResolved('any.lan', local, async () => ['0.0.0.0'])).toBe(false);
+  });
+
+  it('does not look up an IP literal', async () => {
+    const resolve = vi.fn(async () => ['127.0.0.1']);
+    expect(await isLocalHostResolved('10.0.0.6', local, resolve)).toBe(false);
+    expect(resolve).not.toHaveBeenCalled();
+  });
 });
 
 describe('detectOllamaInstall', () => {
@@ -587,6 +620,27 @@ describe('detectOllamaInstall', () => {
       localAddresses: ['10.0.0.5'],
     });
     expect(here.install.type).toBe('official');
+  });
+
+  it('detects the install for a URL naming this machine by FQDN or mapped loopback, not for an unresolvable name', async () => {
+    const root = tree({});
+    proc(root, [{ pid: 812, comm: 'ollama', argv: ['/usr/local/bin/ollama', 'serve'], env: null }]);
+    const base = { rootDir: root, exec: systemctl({}), localAddresses: ['192.168.1.20', 'box'] };
+    const manual = { type: 'manual', unit: null, binary: '/usr/local/bin/ollama' };
+    const fqdn = await detectOllamaInstall({
+      ...base,
+      url: 'http://box.lan:11434',
+      lookup: async () => ['192.168.1.20'],
+    });
+    expect(fqdn.install).toEqual(manual);
+    const mapped = await detectOllamaInstall({ ...base, url: 'http://[::ffff:127.0.0.1]:11434' });
+    expect(mapped.install).toEqual(manual);
+    const gone = await detectOllamaInstall({
+      ...base,
+      url: 'http://gone.lan:11434',
+      lookup: async () => Promise.reject(new Error('ENOTFOUND')),
+    });
+    expect(gone.install.type).toBe('unknown');
   });
 
   it("reads the service manager's environment for an active unit, OLLAMA_HOST included", async () => {
