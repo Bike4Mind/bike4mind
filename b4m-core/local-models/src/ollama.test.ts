@@ -238,6 +238,7 @@ describe('OllamaRuntime.inspect', () => {
       projectorBlobs: [projector],
       draftBlobs: [],
       adapterBlobs: [],
+      storeDir: '/models',
     });
 
     await server.close();
@@ -250,18 +251,25 @@ describe('OllamaRuntime.inspect', () => {
       projectorBlobs: [],
       draftBlobs: [],
       adapterBlobs: [],
+      storeDir: null,
     });
   });
 
   it.each([
-    ['a Windows profile with a space', 'C:\\Users\\John Smith\\.ollama\\models\\blobs\\sha256-'],
-    ['a macOS volume with a space', '/Volumes/External Drive/ollama/blobs/sha256-'],
-    ['a bare blob name', 'sha256-'],
-  ])('reads the weights blob from a FROM path on %s', async (_label, prefix) => {
+    [
+      'a Windows profile with a space',
+      'C:\\Users\\John Smith\\.ollama\\models\\blobs\\sha256-',
+      'C:\\Users\\John Smith\\.ollama\\models',
+    ],
+    ['a macOS volume with a space', '/Volumes/External Drive/ollama/blobs/sha256-', '/Volumes/External Drive/ollama'],
+    ['a bare blob name', 'sha256-', null],
+  ])('reads the weights blob and model folder from a FROM path on %s', async (_label, prefix, storeDir) => {
     const blob = 'e'.repeat(64);
     const show = { ...gemma4Show, modelfile: `FROM ${prefix}${blob}\r\nTEMPLATE x\n` };
     server = await startFakeServer({ 'GET /api/tags': json(tags), 'POST /api/show': json(show) });
-    expect((await runtimeFor(server).inspect(fixtureTags.gemma4.name)).contents?.modelBlob).toBe(blob);
+    const { contents } = await runtimeFor(server).inspect(fixtureTags.gemma4.name);
+    expect(contents?.modelBlob).toBe(blob);
+    expect(contents?.storeDir).toBe(storeDir);
   });
 
   it('reads no weights blob from a FROM line that names something else', async () => {

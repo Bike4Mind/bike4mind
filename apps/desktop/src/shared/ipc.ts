@@ -111,6 +111,7 @@ import type {
   ModelPullRequest,
   ModelPullResult,
   ModelRemoveResult,
+  ModelStoreLocation,
   ModelRuntimeStatus,
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
@@ -338,6 +339,7 @@ export const IPC_CHANNELS = {
   modelsResumePull: 'models:resume-pull',
   modelsDismissPull: 'models:dismiss-pull',
   modelsRemove: 'models:remove',
+  modelsGetStoreLocation: 'models:get-store-location',
   /** Hugging Face sign-in: whether a token is saved, save one, forget it. None of them returns the token. */
   modelsGetHfAccess: 'models:get-hf-access',
   modelsSaveHfAccess: 'models:save-hf-access',
@@ -613,6 +615,8 @@ export interface DesktopApi {
     resumePull(key: string): Promise<ModelPullResult>;
     dismissPull(key: string): Promise<void>;
     remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
+    /** The folder a pull would land in, and its free space on this computer. */
+    getStoreLocation(serverId?: string): Promise<ModelStoreLocation>;
     /** Whether a Hugging Face token is saved; the token itself never comes back to the renderer. */
     getHfToken(): Promise<HfTokenStatus>;
     /** Saves the token once Hugging Face accepts it. */

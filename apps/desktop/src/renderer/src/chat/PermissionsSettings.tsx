@@ -18,6 +18,7 @@ import type {
   CapabilityLedgerState,
   CapabilityScope,
 } from '@shared/capabilities';
+import { formatBytes } from '@shared/models';
 import {
   type ClaudeCodeSourceView,
   PERMISSION_LISTS,
@@ -579,6 +580,16 @@ function ApprovalSummaryExport() {
 
 function scopeLabel(scope: CapabilityScope): string {
   if (scope.kind === 'browser-origin') return `${scope.access}: ${scope.value}`;
+  if (scope.kind === 'model-pull') {
+    const where = !scope.path
+      ? ''
+      : scope.pathSource === 'default'
+        ? `, probably in ${scope.path} (Ollama's default folder)`
+        : scope.pathSource === 'elsewhere'
+          ? `, in ${scope.path} as Ollama reported it, not on this computer's disk`
+          : `, in ${scope.path}`;
+    return `${scope.model} to ${scope.server}, ${formatBytes(scope.bytes)}${where}`;
+  }
   return scope.value;
 }
 
@@ -621,7 +632,7 @@ function CapabilityLedgerView({
         </Typography>
       </Stack>
       <Typography level="body-xs" textColor="text.tertiary">
-        Local grants for files, tools, browser origins, imported identity and credit-spending actions.
+        Local grants for files, tools, browser origins, imported identity, credit-spending actions and model downloads.
       </Typography>
       {error && <Typography color="danger">Could not load capability ledger: {error}</Typography>}
       {open && state && (
