@@ -7,9 +7,9 @@ import {
 } from '@bike4mind/common';
 import { shadowDetectionRepository } from '@bike4mind/database';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { BadRequestError, NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { respond } from '@server/utils/respond';
 
@@ -34,7 +34,12 @@ const auditDetails = (item: ShadowDetectionItem) => ({
  * a 409 with the current record so the reviewer can look again. Grading only appends to the
  * detection record: it never acts on the accounts it names.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+// Grading judges whether an account abused the service, so it takes the moderation permission.
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate' },
+})
   .use(
     rateLimit({
       limit: SHADOW_DETECTION_VERDICT_RATE_LIMIT,
@@ -44,7 +49,6 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
   )
   .post(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
       const parsed = shadowDetectionVerdictRequestSchema.safeParse(req.body);
       if (!parsed.success) throw new BadRequestError('Expected a detection id, its revision and a verdict');
       const reason = parseAdminActionReason(parsed.data.reason);

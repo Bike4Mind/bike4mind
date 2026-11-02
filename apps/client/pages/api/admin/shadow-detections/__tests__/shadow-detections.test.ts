@@ -5,7 +5,7 @@ import { ApiKeyScope, SHADOW_DETECTION_LIST_LIMIT, type ShadowDetectionItem } fr
 const h = vi.hoisted(() => ({
   handlers: {} as Record<string, Record<string, (req: unknown, res: unknown) => Promise<void>>>,
   current: '',
-  baseOptions: vi.fn(),
+  routeOptions: vi.fn(),
   list: vi.fn(),
   summarize: vi.fn(),
   addVerdict: vi.fn(),
@@ -13,9 +13,10 @@ const h = vi.hoisted(() => ({
   userWrite: vi.fn(),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (options: unknown) => {
-    h.baseOptions(options);
+// The permission gate itself is adminApi's (covered by its own tests); these assert each route declares it.
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (options: unknown) => {
+    h.routeOptions(options);
     const route = (h.handlers[h.current] = {} as Record<string, (req: unknown, res: unknown) => Promise<void>>);
     const chain = {
       use: () => chain,
@@ -59,12 +60,6 @@ const request = (method: 'GET' | 'POST', options: { body?: unknown; query?: Reco
   return { req, res };
 };
 
-const nonAdminRequest = (method: 'GET' | 'POST', body?: unknown) => {
-  const { req, res } = createMocks({ method, body });
-  Object.assign(req, { user: { id: ADMIN_ID, isAdmin: false }, logger: {} });
-  return { req, res };
-};
-
 const item = (overrides: Partial<ShadowDetectionItem> = {}): ShadowDetectionItem => ({
   id: DETECTION_ID,
   detector: 'signupNetworkBurst',
@@ -100,11 +95,12 @@ beforeEach(async () => {
 });
 
 describe('GET /api/admin/shadow-detections', () => {
-  it('is session-only and admin-only', async () => {
-    expect(h.baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
-    const { req, res } = nonAdminRequest('GET');
-    await expect(h.handlers.list.get(req, res)).rejects.toThrow(/admin access required/i);
-    expect(h.list).not.toHaveBeenCalled();
+  it('is session-only and gated on the support read permission', () => {
+    expect(h.routeOptions).toHaveBeenCalledWith({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: 'support:read' },
+    });
   });
 
   it('passes the filters through and returns the list with its summary', async () => {
@@ -144,10 +140,12 @@ describe('GET /api/admin/shadow-detections', () => {
 });
 
 describe('POST /api/admin/shadow-detections/verdict', () => {
-  it('is session-only and admin-only', async () => {
-    const { req, res } = nonAdminRequest('POST', verdictBody());
-    await expect(h.handlers.verdict.post(req, res)).rejects.toThrow(/admin access required/i);
-    expect(h.addVerdict).not.toHaveBeenCalled();
+  it('is session-only and gated on the moderation permission', () => {
+    expect(h.routeOptions).toHaveBeenCalledWith({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'users:moderate' },
+    });
   });
 
   it('records the verdict as the signed-in admin, audits it and returns the updated record', async () => {
