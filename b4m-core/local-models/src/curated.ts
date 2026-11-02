@@ -17,6 +17,9 @@ import { isAbliteratedModel } from './abliterated';
 import { ollamaModelKey } from './huggingface';
 import type { ModelInspection, OllamaRegistryLayers } from './types';
 
+/** The bundled list re-serialized, for a client that cannot read the file's exact text; Desktop bundles the text itself. */
+export const BUNDLED_CURATED_JSON_TEXT = JSON.stringify(bundled);
+
 const EMPTY = { schemaVersion: 2, updatedAt: '1970-01-01T00:00:00Z', families: {}, rankings: {}, entries: [] };
 const SHOWN_DROPS = 5;
 

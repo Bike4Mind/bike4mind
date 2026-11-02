@@ -19,7 +19,6 @@ import {
   isAbliteratedModel,
   isHubRepoId,
   isPermissiveEntry,
-  loadCuratedManifest,
   ollamaLibraryLayers,
   probeHardware,
   RuntimeHttpError,
@@ -39,6 +38,7 @@ import {
   type AddressScope,
 } from '@bike4mind/local-models/servers';
 import { ConfigStore } from '../storage/ConfigStore.js';
+import { createCliCuratedList, type CuratedOrigin } from '../models/curatedList.js';
 import {
   defaultOn,
   DESKTOP_ONLY_STATUS,
@@ -157,8 +157,10 @@ export interface ModelsDeps extends ModelSourceDeps {
   machine: MachineReader;
   /** The Ollama host a command would use before it is resolved; null when it would detect one on this machine. */
   runtimeHost: () => string | null;
-  /** The curated list Desktop uses, bundled with the CLI. */
-  curated: () => HubManifest;
+  /** The curated list Desktop uses: the one bundled with the CLI, or a newer signed one. */
+  curated: () => HubManifest | Promise<HubManifest>;
+  /** Present when this CLI can fetch a newer list: checks now, and says where the list in use came from. */
+  curatedSource?: { refresh: () => Promise<void>; origin: () => CuratedOrigin | null };
   /** This computer's memory, which picks its tier of the Curated list. */
   hardware: () => Promise<HardwareProfile>;
   servers?: ModelServersDeps;
@@ -173,6 +175,8 @@ export interface ModelsOptions {
   includeAbliterated: boolean;
   /** `servers`: also ask each OpenAI-compatible server whether it accepts tool calls. */
   checkTools?: boolean;
+  /** `curated`: check for a newer list now instead of when the last check is 6 hours old. */
+  refresh?: boolean;
 }
 
 export type PullResult = 'pulled' | 'declined' | 'cancelled';
@@ -486,7 +490,9 @@ const sizeOfBuild = (build: HubBuild) => curatedSource(build).sizeBytes;
 
 /** Lists the Curated models without contacting any runtime; downloading one is always a separate `pull`. */
 export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
-  const manifest = deps.curated();
+  if (opts.refresh) await abortable(deps.curatedSource?.refresh() ?? Promise.resolve(), deps.signal);
+  const manifest = await abortable(Promise.resolve(deps.curated()), deps.signal);
+  const origin = deps.curatedSource?.origin() ?? null;
   const hardware = await abortable(deps.hardware(), deps.signal);
   const listing = curatedListing(manifest).map(({ entry, builds }) => ({
     entry,
@@ -499,6 +505,15 @@ export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promis
       JSON.stringify(
         {
           updatedAt: manifest.updatedAt,
+          ...(origin && {
+            source: {
+              origin: origin.origin,
+              sequence: origin.sequence,
+              check: origin.check,
+              stale: origin.stale,
+              checkedAt: origin.checkedAt,
+            },
+          }),
           machine: {
             memoryKind: hardware.memoryKind,
             totalMemoryBytes: hardware.totalMemoryBytes,
@@ -525,6 +540,8 @@ export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promis
   }
 
   deps.log(`Curated list from ${clean(manifest.updatedAt.slice(0, 10))}. ${machineText(hardware)}`);
+  if (origin) deps.log(origin.text);
+  else if (opts.refresh) deps.log('This CLI has no online curated list; showing the bundled one.');
   if (listing.length === 0) {
     deps.log('The Curated list has no models. Search Hugging Face with: b4m models search <query>');
     return 0;
@@ -1059,6 +1076,7 @@ export async function runModelsCommand(
     acceptLicense: Boolean(argv['accept-license']),
     includeAbliterated: Boolean(argv['include-abliterated']),
     checkTools: Boolean(argv['check-tools']),
+    refresh: Boolean(argv.refresh),
   };
   try {
     if (argv.server !== undefined) {
@@ -1222,6 +1240,7 @@ export async function handleModelsCommand(subcommand: string | undefined, argv: 
   process.on('SIGINT', onSigint);
 
   let hub: HubClient | undefined;
+  const curatedList = createCliCuratedList({ offline: Boolean(argv.offline) });
   try {
     return await runModelsCommand(subcommand, argv, {
       hub: () => (hub ??= new HuggingFaceHub({ token: process.env.HF_TOKEN })),
@@ -1253,7 +1272,8 @@ export async function handleModelsCommand(subcommand: string | undefined, argv: 
         const host = flagHost || process.env.B4M_OLLAMA_HOST || models.ollamaHost;
         return host ? withDefaultOllamaPort(host) : null;
       },
-      curated: () => loadCuratedManifest(message => console.error(message)),
+      curated: () => curatedList.manifest(),
+      curatedSource: curatedList,
       hardware: () => probeHardware(),
       servers: {
         load: () => loadModelServers(),

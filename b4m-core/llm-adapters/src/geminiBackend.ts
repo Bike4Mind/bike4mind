@@ -9,7 +9,7 @@ import {
   Tool,
 } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
@@ -986,7 +986,10 @@ export class GeminiBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
-                this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+                this.logger[toolFailureLogLevel(outcome.error)](
+                  `[Gemini] Error executing tool ${outcome.toolCall.name}:`,
+                  outcome.error
+                );
                 // Strip too - matches the success path above (openaiBackend does the same for
                 // its error branch) so an error message can't carry echoable artifact markup.
                 const errorContent = JSON.stringify({
@@ -1287,7 +1290,10 @@ export class GeminiBackend implements ICompletionBackend {
             } as IMessage);
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-            this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+            this.logger[toolFailureLogLevel(outcome.error)](
+              `[Gemini] Error executing tool ${outcome.toolCall.name}:`,
+              outcome.error
+            );
             // Strip too - matches the success path above (openaiBackend does the same for its
             // error branch) so an error message can't carry echoable artifact markup.
             const errorContent = JSON.stringify({

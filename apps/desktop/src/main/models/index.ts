@@ -3,9 +3,21 @@ import { stat, statfs } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { app, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
-import { HuggingFaceHub, OllamaRuntime, ollamaLibraryLayers, probeHardware } from '@bike4mind/local-models';
+import {
+  CuratedListSource,
+  CuratedStore,
+  type CuratedListSettings as SourceListSettings,
+  type CuratedSourceView as SourceView,
+  HuggingFaceHub,
+  OllamaRuntime,
+  PRODUCTION_CURATED_KEYS,
+  curatedStoreRoot,
+  ollamaLibraryLayers,
+  probeHardware,
+  resolveCuratedUrl,
+} from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
-import type { CuratedList, HfTokenResult, ModelPull } from '@shared/models';
+import type { CuratedList, CuratedListSettings, CuratedSourceView, HfTokenResult, ModelPull } from '@shared/models';
 import { localHardware } from '../chat/localContextSizing';
 import { createMainLogger } from '../logger';
 import type { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
@@ -13,12 +25,9 @@ import { privateFile } from '../privateFile';
 import { appWindows } from '../windows';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import { BUNDLED_CURATED_TEXT } from './curated/bundled';
-import { CuratedSource } from './curated/CuratedSource';
-import { CuratedStore, curatedStoreRoot } from './curated/CuratedStore';
 import { curatedDevOverrides } from './curated/devKey';
-import { resolveCuratedUrl } from './curated/fetchCurated';
-import { PRODUCTION_CURATED_KEYS } from './curated/keys';
 import { invalid, registerModelsIpc, serverArg, text } from './ipc';
+import { loadCuratedManifest } from './loadCuratedManifest';
 import { ModelHubService, type ModelHubServiceDeps } from './ModelHubService';
 import { PullLedger } from './pullLedger';
 
@@ -42,21 +51,30 @@ async function freeBytes(path: string): Promise<number> {
   }
 }
 
+// Fails typecheck when the renderer's mirrored types in shared/models.ts drift from local-models in either direction.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+export const curatedTypesMatch: [Same<CuratedSourceView, SourceView>, Same<CuratedListSettings, SourceListSettings>] = [
+  true,
+  true,
+];
+
 /**
  * The curated list's source. The URL is baked in at build time from B4M_CURATED_MANIFEST_URL (see the `define`
  * block in electron.vite.config.ts); a fork that sets nothing, or a build with no trusted key, uses its bundled list.
  */
-function curatedSource(onChange: () => void): CuratedSource {
+function curatedSource(onChange: () => void): CuratedListSource {
   const allowLoopbackHttp = !app.isPackaged;
   // A constant false in release builds, so the test key and its module are not in the bundle at all.
   const dev = __B4M_CURATED_DEV_KEYS__ ? curatedDevOverrides(app.isPackaged, process.env) : null;
-  return new CuratedSource({
+  const desktopVersion = app.getVersion();
+  return new CuratedListSource({
     url: resolveCuratedUrl(dev?.url ?? process.env.B4M_CURATED_MANIFEST_URL, allowLoopbackHttp),
     keys: [...PRODUCTION_CURATED_KEYS, ...(dev?.keys ?? [])],
     store: new CuratedStore(curatedStoreRoot(app.getPath('userData'), dev !== null)),
     bundledText: BUNDLED_CURATED_TEXT,
-    desktopVersion: app.getVersion(),
+    load: json => loadCuratedManifest(warn, json, { desktopVersion }),
     allowLoopbackHttp,
+    userAgent: 'Bike4Mind-Desktop',
     log: warn,
     onChange,
   });

@@ -13,6 +13,11 @@ import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { recordPaymentStart } from '@server/billing/paymentRisk';
 import { readNetworkMeta } from '@server/auth/networkMeta';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import {
+  backfillCustomerSignupMetadata,
+  paymentRiskMetadata,
+  signupNetworkMetadata,
+} from '@server/integrations/stripe/riskMetadata';
 import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 import type Stripe from 'stripe';
 
@@ -24,10 +29,12 @@ const handler = baseApi()
 
     await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'credit_purchase');
 
+    // The risk fields are what Radar rules read (`::account_age_hours::`); see riskMetadata.ts.
     const metadata: PaymentDetails['metadata'] = {
       userId: req.user.id,
       environment: Config.STAGE,
       transactionType: parsedBody.transactionType,
+      ...paymentRiskMetadata(req.user),
     };
 
     let paymentDetails: PaymentDetails;
@@ -58,8 +65,11 @@ const handler = baseApi()
         email: req.user.email!,
         name: req.user.name!,
         type: CustomerType.User,
+        metadata: signupNetworkMetadata(req.user),
       });
       customerId = createdCustomerId = customer.id;
+    } else {
+      await backfillCustomerSignupMetadata({ customerId, user: req.user }, req.logger);
     }
 
     let paymentIntent: Stripe.PaymentIntent;

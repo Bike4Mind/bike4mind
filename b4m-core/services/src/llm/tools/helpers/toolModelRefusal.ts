@@ -16,7 +16,20 @@ export function paidPlanRefusalOrRethrow(
   return `Error: ${error.message}`;
 }
 
-/** Asserts a tool's model is admitted; null when it is, the refusal text per paidPlanRefusalOrRethrow when not. */
+/**
+ * Appended to a toolModelRefusal refusal. Its callers take the model from the user's settings or a default,
+ * never from a tool argument, so "choose a free-tier model" is not something the calling model can do:
+ * without this it retries the same call until the failure guard (toolFailureGuard.ts) blocks the tool.
+ */
+const SETTINGS_MODEL_NOTE =
+  " This model is set by the user's settings or the tool's default, not by this tool call, so calling the tool " +
+  'again will be refused the same way. Do not retry it this turn: tell the user, who can upgrade their plan or ' +
+  'pick a free-tier model in their settings.';
+
+/**
+ * Asserts a tool's model is admitted; null when it is, the refusal text per paidPlanRefusalOrRethrow when not.
+ * For tools whose model is not a tool argument (see SETTINGS_MODEL_NOTE).
+ */
 export async function toolModelRefusal(
   context: Pick<ToolContext, 'logger'>,
   admission: Pick<ModelAdmission, 'assert'>,
@@ -27,6 +40,6 @@ export async function toolModelRefusal(
     await admission.assert(modelId);
     return null;
   } catch (error) {
-    return paidPlanRefusalOrRethrow(context, error, modelId, toolName);
+    return paidPlanRefusalOrRethrow(context, error, modelId, toolName) + SETTINGS_MODEL_NOTE;
   }
 }
