@@ -1590,9 +1590,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   formatTools(tools: ICompletionOptionTools[] = [], providerTools: ToolSearchServerTool[] = []) {
     const customTools = sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
-      // `strict` is an OpenAI-only tool field. Anthropic rejects it with
-      // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the
-      // spread copy (e.g. a tool schema that sets strict: true for OpenAI structured tools).
+      // A caller's `strict` (usually an OpenAI flag) is dropped: Anthropic 400s strict on any object
+      // not closed with additionalProperties: false, and this backend does not check the schema.
       delete rest.strict;
       return {
         ...rest,

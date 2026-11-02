@@ -38,6 +38,18 @@ describe('specsInput', () => {
   });
 });
 
+describe('registerModelServersIpc transport', () => {
+  it('passes an SSH destination through as ssh and anything else as http', async () => {
+    const { registry, invoke } = register();
+    await invoke(IPC_CHANNELS.modelServersProbe, { address: 'me@gpu', transport: 'ssh' });
+    await invoke(IPC_CHANNELS.modelServersProbe, { address: 'gpu:11434', transport: 'telnet' });
+    await invoke(IPC_CHANNELS.modelServersAdd, { address: 'me@gpu', transport: 'ssh', name: 'gpu' });
+    expect(registry.probe).toHaveBeenNthCalledWith(1, expect.objectContaining({ address: 'me@gpu', transport: 'ssh' }));
+    expect(registry.probe).toHaveBeenNthCalledWith(2, expect.objectContaining({ transport: 'http' }));
+    expect(registry.add).toHaveBeenCalledWith(expect.objectContaining({ address: 'me@gpu', transport: 'ssh' }));
+  });
+});
+
 describe('registerModelServersIpc hardware', () => {
   it('passes entered specs to the registry and leaves them out when not sent', async () => {
     const { registry, invoke } = register();

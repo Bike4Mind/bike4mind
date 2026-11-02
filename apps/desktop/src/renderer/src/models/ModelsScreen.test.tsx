@@ -68,6 +68,7 @@ function server(id: string, name: string, extra: Partial<ModelServerView> = {}):
     name,
     local: id === 'local',
     kind: 'ollama',
+    transport: 'http',
     address: id === 'local' ? 'http://127.0.0.1:11434' : `http://192.168.1.${id.length}:11434`,
     access: 'manage',
     auth: { type: 'none' },
@@ -1728,6 +1729,16 @@ describe('ModelsScreen servers', () => {
     await click(q('models-server-select'));
     await click(q(`models-server-option-${id}`));
   }
+
+  it('shows an SSH server by its destination', async () => {
+    const lab = server('lab', 'SSH lab', { transport: 'ssh', address: 'me@gpu', unencrypted: false });
+    bridge.servers = [THIS_COMPUTER, lab];
+    bridge.remote.lab = { status: remoteStatus(lab, { url: 'ssh://me@gpu' }), installed: { ok: true, models: [qwen] } };
+    await mount();
+    await pickServer('lab');
+    expect(q('models-runtime-status')?.textContent).toContain('on SSH lab at me@gpu over SSH');
+    expect(q('models-runtime-status')?.textContent).not.toContain('ssh://');
+  });
 
   it('offers no switcher until a model server is saved', async () => {
     bridge.servers = [THIS_COMPUTER];

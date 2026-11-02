@@ -59,7 +59,7 @@ describe('loadModelServers', () => {
 
   it('uses the injected reader and passes its problem through', async () => {
     const result = await loadModelServers(async () => ({ servers: [], path: null, problem: 'broken' }));
-    expect(result).toEqual({ servers: [], problem: 'broken' });
+    expect(result).toEqual({ servers: [], desktopOnly: [], problem: 'broken' });
     expect((await readDesktopModelServers()).path).toBeNull();
   });
 });

@@ -8,6 +8,8 @@ import FormHelperText from '@mui/joy/FormHelperText';
 import FormLabel from '@mui/joy/FormLabel';
 import Input from '@mui/joy/Input';
 import Option from '@mui/joy/Option';
+import Radio from '@mui/joy/Radio';
+import RadioGroup from '@mui/joy/RadioGroup';
 import Select from '@mui/joy/Select';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
@@ -21,6 +23,7 @@ import type {
   ModelServerProbeResult,
   ModelServerSpecs,
   ModelServerState,
+  ModelServerTransportType,
   ModelServerView,
 } from '@shared/modelServers';
 import { specsProblem } from '@shared/modelServers';
@@ -334,7 +337,8 @@ function ServerRow({
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const look = STATE_LOOK[server.health.state];
-  const askCredentials = !server.local && (server.health.state === 'credentials' || server.credentialsMissing);
+  const ssh = server.transport === 'ssh';
+  const askCredentials = !server.local && !ssh && (server.health.state === 'credentials' || server.credentialsMissing);
   const removesCredential = draft.type === 'none' && server.auth.type !== 'none';
   const canSaveCredential = !secretMissing(draft) && (draft.type !== 'none' || removesCredential);
 
@@ -373,6 +377,11 @@ function ServerRow({
           <Chip size="sm" variant="outlined">
             {KIND_LABEL[server.kind]}
           </Chip>
+          {ssh && (
+            <Chip size="sm" variant="outlined" data-testid="model-servers-ssh-chip">
+              SSH
+            </Chip>
+          )}
           {server.unencrypted && (
             <Chip size="sm" variant="soft" color="warning" data-testid="model-servers-unencrypted-chip">
               Unencrypted
@@ -430,35 +439,39 @@ function ServerRow({
                 <Option value="manage">{ACCESS_LABEL.manage}</Option>
               </Select>
             </FormControl>
-            <FormControl size="sm">
-              <FormLabel>Kind</FormLabel>
-              <Select
+            {!ssh && (
+              <FormControl size="sm">
+                <FormLabel>Kind</FormLabel>
+                <Select
+                  size="sm"
+                  value={server.kind}
+                  disabled={busy}
+                  onChange={(_event, kind) => kind && kind !== server.kind && void update({ kind })}
+                  slotProps={{ button: { 'data-testid': 'model-servers-kind-select' } }}
+                >
+                  <Option value="ollama">{KIND_LABEL.ollama}</Option>
+                  <Option value="openai-compatible">{KIND_LABEL['openai-compatible']}</Option>
+                </Select>
+              </FormControl>
+            )}
+            {!ssh && (
+              <Button
                 size="sm"
-                value={server.kind}
+                variant="outlined"
+                color="neutral"
                 disabled={busy}
-                onChange={(_event, kind) => kind && kind !== server.kind && void update({ kind })}
-                slotProps={{ button: { 'data-testid': 'model-servers-kind-select' } }}
+                onClick={() => {
+                  if (!editing) setDraft(draftFor(server.auth));
+                  setEditing(!editing);
+                }}
+                data-testid="model-servers-credentials-btn"
               >
-                <Option value="ollama">{KIND_LABEL.ollama}</Option>
-                <Option value="openai-compatible">{KIND_LABEL['openai-compatible']}</Option>
-              </Select>
-            </FormControl>
-            <Button
-              size="sm"
-              variant="outlined"
-              color="neutral"
-              disabled={busy}
-              onClick={() => {
-                if (!editing) setDraft(draftFor(server.auth));
-                setEditing(!editing);
-              }}
-              data-testid="model-servers-credentials-btn"
-            >
-              {askCredentials ? 'Enter new credentials' : 'Credentials'}
-            </Button>
+                {askCredentials ? 'Enter new credentials' : 'Credentials'}
+              </Button>
+            )}
           </Stack>
         )}
-        {(editing || askCredentials) && !server.local && (
+        {(editing || askCredentials) && !server.local && !ssh && (
           <Stack spacing={1} data-testid="model-servers-credentials-form">
             <CredentialFields draft={draft} onChange={setDraft} testPrefix="model-servers-edit" />
             <Button
@@ -563,6 +576,8 @@ function ServerRow({
 }
 
 function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult) => void }) {
+  const [via, setVia] = useState<ModelServerTransportType>('http');
+  const ssh = via === 'ssh';
   const [address, setAddress] = useState('');
   const [credential, setCredential] = useState<CredentialDraft>(EMPTY_CREDENTIAL);
   const [probe, setProbe] = useState<ModelServerProbeResult | null>(null);
@@ -599,7 +614,11 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
     setError(null);
     try {
       const tested = attempt.current;
-      const result = await window.b4m.modelServers.probe({ address, credential: toCredential(credential) });
+      const result = await window.b4m.modelServers.probe({
+        address,
+        credential: ssh ? { type: 'none' } : toCredential(credential),
+        transport: via,
+      });
       if (tested !== attempt.current) return;
       setProbe(result);
       if (result.kind) setKind(result.kind);
@@ -620,7 +639,8 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
     try {
       const result = await window.b4m.modelServers.add({
         address,
-        credential: toCredential(credential),
+        credential: ssh ? { type: 'none' } : toCredential(credential),
+        transport: via,
         name,
         kind,
         access,
@@ -642,11 +662,34 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
       <Stack spacing={1.25}>
         <Typography level="title-sm">Add a server</Typography>
         <FormControl size="sm">
-          <FormLabel>Address</FormLabel>
+          <FormLabel>Connect with</FormLabel>
+          <RadioGroup
+            orientation="horizontal"
+            size="sm"
+            value={via}
+            onChange={event => {
+              setVia(event.target.value === 'ssh' ? 'ssh' : 'http');
+              untest();
+            }}
+          >
+            <Radio
+              value="http"
+              label="Address"
+              slotProps={{ input: { 'data-testid': 'model-servers-add-via-http' } }}
+            />
+            <Radio value="ssh" label="SSH" slotProps={{ input: { 'data-testid': 'model-servers-add-via-ssh' } }} />
+          </RadioGroup>
+        </FormControl>
+        <FormControl size="sm">
+          <FormLabel>{ssh ? 'SSH destination' : 'Address'}</FormLabel>
           <Input
             size="sm"
             value={address}
-            placeholder="https://gpu.example.com, http://192.168.1.20:11434 or host:port"
+            placeholder={
+              ssh
+                ? 'user@gpu-box, or a Host alias from your ssh config'
+                : 'https://gpu.example.com, http://192.168.1.20:11434 or host:port'
+            }
             onChange={event => {
               setAddress(event.target.value);
               untest();
@@ -654,17 +697,21 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
             slotProps={{ input: { 'data-testid': 'model-servers-add-address-input' } }}
           />
           <FormHelperText>
-            Ollama or an OpenAI-compatible server such as llama-server, LM Studio or vLLM.
+            {ssh
+              ? "Desktop uses this computer's ssh client and keys to reach Ollama at 127.0.0.1:11434 on that machine. It cannot ask for a password or passphrase: use a key, loaded into ssh-agent if it has a passphrase."
+              : 'Ollama or an OpenAI-compatible server such as llama-server, LM Studio or vLLM.'}
           </FormHelperText>
         </FormControl>
-        <CredentialFields
-          draft={credential}
-          onChange={next => {
-            setCredential(next);
-            untest();
-          }}
-          testPrefix="model-servers-add"
-        />
+        {!ssh && (
+          <CredentialFields
+            draft={credential}
+            onChange={next => {
+              setCredential(next);
+              untest();
+            }}
+            testPrefix="model-servers-add"
+          />
+        )}
         <Button
           size="sm"
           variant="outlined"
@@ -728,18 +775,20 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
                   slotProps={{ input: { 'data-testid': 'model-servers-add-name-input' } }}
                 />
               </FormControl>
-              <FormControl size="sm" sx={{ flex: 1, minWidth: 160 }}>
-                <FormLabel>Kind</FormLabel>
-                <Select
-                  size="sm"
-                  value={kind}
-                  onChange={(_event, next) => next && setKind(next)}
-                  slotProps={{ button: { 'data-testid': 'model-servers-add-kind-select' } }}
-                >
-                  <Option value="ollama">{KIND_LABEL.ollama}</Option>
-                  <Option value="openai-compatible">{KIND_LABEL['openai-compatible']}</Option>
-                </Select>
-              </FormControl>
+              {!ssh && (
+                <FormControl size="sm" sx={{ flex: 1, minWidth: 160 }}>
+                  <FormLabel>Kind</FormLabel>
+                  <Select
+                    size="sm"
+                    value={kind}
+                    onChange={(_event, next) => next && setKind(next)}
+                    slotProps={{ button: { 'data-testid': 'model-servers-add-kind-select' } }}
+                  >
+                    <Option value="ollama">{KIND_LABEL.ollama}</Option>
+                    <Option value="openai-compatible">{KIND_LABEL['openai-compatible']}</Option>
+                  </Select>
+                </FormControl>
+              )}
               <FormControl size="sm" sx={{ flex: 1, minWidth: 160 }}>
                 <FormLabel>Access</FormLabel>
                 <Select
