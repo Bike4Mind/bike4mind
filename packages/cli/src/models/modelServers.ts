@@ -160,14 +160,15 @@ const now = () => performance.now();
 export async function resolveServerTarget(
   server: CliModelServer,
   secret: string | undefined,
-  fetchOverride?: FetchLike
+  fetchOverride?: FetchLike,
+  probeTimeoutMs?: number
 ): Promise<RuntimeTarget & { product: OpenAICompatibleProduct | null }> {
   const name = clean(server.name);
   if (needsCredential(server, secret)) throw new Error(`${name} needs credentials. Run: ${loginHint(server)}`);
   const fetch = fetchOverride ?? serverFetch(server, secret);
   const parsed = parseServerAddress(server.transport.baseUrl);
   const baseUrl = parsed?.baseUrl ?? server.transport.baseUrl;
-  const outcome = await probeServer(fetch, baseUrl, server.name, now, server.kind);
+  const outcome = await probeServer(fetch, baseUrl, server.name, now, server.kind, probeTimeoutMs);
   if (!outcome.kind) {
     if (outcome.auth) {
       const refused = secret ? `${name} refused the saved credentials.` : `${name} needs credentials.`;

@@ -71,7 +71,10 @@ export { describeFailure, DROP_CODES, errorCode } from './failure';
 export { answersWithoutCredentials, forbiddenMessage, probeServer, type ProbeOutcome } from './probe';
 export {
   contextTooSmallHint,
+  conversationFullHint,
   isToolRefusal,
+  messageTooLongHint,
+  promptTooLargeHint,
   refusesTools,
   probeToolSupport,
   serverContextTokens,
