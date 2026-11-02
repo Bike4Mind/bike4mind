@@ -9,7 +9,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { ChatModels, supportsForcedToolChoice, type ModelInfo, type ResponseFormat } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 import type { CompletionInfo, ICompletionOptions, ICompletionOptionTools } from './backend';
-import { buildStructuredOutputFormat, buildToolUseInstruction, isStrictCompatibleSchema } from './forcedToolChoice';
+import {
+  buildStructuredOutputFormat,
+  buildToolUseInstruction,
+  declaresOpenObject,
+  isStrictCompatibleSchema,
+} from './forcedToolChoice';
 
 type Params = Record<string, unknown> & {
   tools?: Array<Record<string, unknown>>;
@@ -535,6 +540,10 @@ describe('AnthropicBackend on models with forced tool use', () => {
         additionalProperties: false,
       },
     ],
+    [
+      'a schema that declares an open object',
+      { type: 'object', properties: { name: { type: 'string' } }, additionalProperties: { type: 'number' } },
+    ],
   ])('sends %s as-is and not strict', async (_label, schema) => {
     const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
     await run(backend, ChatModels.CLAUDE_5_5_HAIKU, {
@@ -640,6 +649,62 @@ describe('AnthropicBackend json_schema with document citations', () => {
     expect(systemText(captured[0].system)).toContain('Schema name: extract_user');
     expect(JSON.parse(out.text())).toEqual(RESULT);
     expect(out.mode()).toBe('best-effort');
+  });
+
+  it('keeps the forced tool, without thinking, when caller thinking would otherwise move it native', async () => {
+    const { backend, captured } = buildBackend(() => toolUseResponse('extract_user', RESULT));
+    const out = capture();
+    await backend.complete(
+      ChatModels.CLAUDE_5_5_HAIKU,
+      [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'document',
+              source: { type: 'text', media_type: 'text/plain', data: 'Erik is 42.' },
+              citations: { enabled: true },
+            },
+            { type: 'text', text: 'extract the user' },
+          ] as unknown as string,
+        },
+      ],
+      { stream: false, responseFormat: RESPONSE_FORMAT, reasoningEffort: 'high', explicitReasoning: true },
+      out.cb
+    );
+
+    expect(captured[0].tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
+    expect(captured[0]).not.toHaveProperty('output_config');
+    expect(captured[0]).not.toHaveProperty('thinking');
+    expect(JSON.parse(out.text())).toEqual(RESULT);
+    expect(out.mode()).toBe('tool_use');
+  });
+});
+
+describe('declaresOpenObject', () => {
+  it.each([
+    ['a closed schema', SCHEMA, false],
+    ['a schema that omits additionalProperties', { type: 'object', properties: { a: { type: 'string' } } }, false],
+    [
+      'a property named additionalProperties',
+      { type: 'object', properties: { additionalProperties: { type: 'string' } } },
+      false,
+    ],
+    ['additionalProperties: true', { type: 'object', additionalProperties: true }, true],
+    [
+      'an additionalProperties schema',
+      { type: 'object', properties: {}, additionalProperties: { type: 'number' } },
+      true,
+    ],
+    ['an open object nested in items', { type: 'array', items: { type: 'object', additionalProperties: {} } }, true],
+    ['an open object in $defs', { $defs: { meta: { type: 'object', additionalProperties: true } } }, true],
+    [
+      'an open object in an anyOf variant',
+      { anyOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] },
+      true,
+    ],
+  ])('%s -> %s', (_label, schema, expected) => {
+    expect(declaresOpenObject(schema)).toBe(expected);
   });
 });
 

@@ -280,6 +280,25 @@ describe('AnthropicBackend reasoningEffort', () => {
       expect(request.thinking).toBeUndefined();
       expect(request.output_config).toBeUndefined();
     });
+
+    it('keeps the forced tool, unconstrained, for a schema that declares an open object', async () => {
+      const schema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        additionalProperties: { type: 'number' },
+      };
+      const request = await requestFor(ChatModels.CLAUDE_5_5_HAIKU, {
+        reasoningEffort: 'high',
+        explicitReasoning: true,
+        maxTokens: 2000,
+        responseFormat: { type: 'json_schema', json_schema: { name: 'answer', schema } },
+      });
+
+      expect(request.tools).toEqual([{ name: 'answer', input_schema: schema }]);
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
   });
 
   it('sends no thinking config when reasoningEffort is absent', async () => {

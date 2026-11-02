@@ -89,6 +89,7 @@ import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityRemind
 import {
   appendSystemText,
   buildStructuredOutputFormat,
+  declaresOpenObject,
   buildToolUseInstruction,
   downgradeForcedToolChoice,
   hasCitationsEnabled,
@@ -1256,10 +1257,15 @@ export class AnthropicBackend implements ICompletionBackend {
     // precedence; mixing forced-tool with executable tools can deadlock).
     const responseFormat = options.responseFormat;
     const wantsJsonSchema = responseFormat?.type === 'json_schema' && !hasCallerTools;
+    // Structured outputs close every object, so a schema that explicitly keeps one open stays on the
+    // unconstrained forced tool, where extra keys still come through.
+    const schemaDeclaresOpenObject =
+      responseFormat?.type === 'json_schema' && declaresOpenObject(responseFormat.json_schema.schema);
     // The forced tool cannot run alongside thinking, so a caller's own request for adaptive thinking
     // (not a route default, and not `none`) moves json_schema to native structured outputs.
     const callerWantsThinking =
       options.explicitReasoning === true &&
+      !schemaDeclaresOpenObject &&
       currentModelInfo?.can_think === true &&
       supportsAnthropicEffort(model, currentModelInfo) &&
       (options.thinking?.enabled === true ||
@@ -1304,8 +1310,11 @@ export class AnthropicBackend implements ICompletionBackend {
     }
     if (usingResponseFormatToolUse && responseFormat.type === 'json_schema') {
       // Unconstrained, the model can emit a nested object as a JSON string. Strict mode needs the
-      // closed structured-outputs form of the schema; one that has none goes as-is, unconstrained.
-      const strictFormat = buildStructuredOutputFormat(responseFormat.json_schema.schema);
+      // closed structured-outputs form of the schema; one that has none, or that declares an open
+      // object, goes as-is, unconstrained.
+      const strictFormat = schemaDeclaresOpenObject
+        ? null
+        : buildStructuredOutputFormat(responseFormat.json_schema.schema);
       const schemaTool: Tool = {
         name: responseFormat.json_schema.name,
         ...(responseFormat.json_schema.description ? { description: responseFormat.json_schema.description } : {}),
