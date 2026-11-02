@@ -47,8 +47,9 @@ vi.mock('node:fs', async importOriginal => {
   };
 });
 vi.mock('electron', () => electron);
-vi.mock('./curated/CuratedSource', () => ({
-  CuratedSource: class {
+vi.mock('@bike4mind/local-models', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/local-models')>()),
+  CuratedListSource: class {
     current = vi.fn();
     loaded = async () => {};
     checkIfDue = async () => {};
