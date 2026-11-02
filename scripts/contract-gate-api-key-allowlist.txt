@@ -586,6 +586,7 @@ apps/client/pages/api/organizations/users.ts
 apps/client/pages/api/otc/send.ts
 apps/client/pages/api/otc/verify.ts
 apps/client/pages/api/overwatch/v1/events.ts
+apps/client/pages/api/partners/rewards/grant.ts  # confined, admin-provisioned partner scope (rewards:grant) kept out of the public OpenAPI; server-to-server only, session callers refused in the handler
 apps/client/pages/api/ping.ts
 apps/client/pages/api/projects/[id]/files.ts
 apps/client/pages/api/projects/[id]/index.ts
