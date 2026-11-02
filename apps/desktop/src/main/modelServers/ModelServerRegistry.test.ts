@@ -39,6 +39,8 @@ function fakeOllama(models = ['qwen2.5:0.5b']) {
     forbidden: false,
     wantToken: null as string | null,
     versionGate: null as Promise<void> | null,
+    /** The system error code a request to a `down` origin fails with. */
+    downCode: 'ECONNREFUSED',
   };
   const calls: { origin: string; path: string; credentials: Record<string, string> | null }[] = [];
   const handler: Handler = (path, credentials) => {
@@ -58,7 +60,7 @@ function fakeOllama(models = ['qwen2.5:0.5b']) {
       const url = new URL(String(input));
       const credentials = endpoint.credentialHeaders();
       calls.push({ origin: url.origin, path: url.pathname, credentials });
-      if (state.down.has(url.origin)) throw new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+      if (state.down.has(url.origin)) throw new TypeError('fetch failed', { cause: { code: state.downCode } });
       if (url.pathname === '/api/version') await state.versionGate;
       return handler(url.pathname, credentials);
     };
@@ -67,13 +69,15 @@ function fakeOllama(models = ['qwen2.5:0.5b']) {
 
 function registry(
   fake: ReturnType<typeof fakeOllama>,
-  resolve: Record<string, string[]> | ((host: string) => Promise<string[]>) = {}
+  resolve: Record<string, string[]> | ((host: string) => Promise<string[]>) = {},
+  options: { platform?: NodeJS.Platform; logger?: { debug(message: string): void; warn(message: string): void } } = {}
 ) {
   const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
   const changed = vi.fn();
   const instance = new ModelServerRegistry({
     store,
-    logger: { debug: () => undefined, warn: () => undefined },
+    logger: options.logger ?? { debug: () => undefined, warn: () => undefined },
+    platform: options.platform,
     changed,
     fetchFor: fake.fetchFor,
     localFetch: async () => json({ version: '0.12.0' }),
@@ -390,6 +394,58 @@ describe('ModelServerRegistry', () => {
     expect(model).toMatchObject({ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } });
     expect(model.unavailable).toMatch(/gpu box is unreachable/);
     expect((await servers.views())[1].health.state).toBe('unreachable');
+  });
+
+  describe('the macOS Local Network hint', () => {
+    const HINT = /System Settings > Privacy & Security > Local Network/;
+    const lan = 'http://192.168.1.20:11434';
+    const addLanServer = (servers: ModelServerRegistry) =>
+      servers.add({ address: lan, credential: none, name: 'gpu box', kind: 'ollama', access: 'chat' });
+
+    it('adds the hint and logs the code when testing a LAN address fails on macOS', async () => {
+      const fake = fakeOllama();
+      fake.state.down.add(lan);
+      fake.state.downCode = 'EHOSTUNREACH';
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const { registry: servers } = registry(fake, {}, { platform: 'darwin', logger });
+      const probe = await servers.probe({ address: '192.168.1.20:11434', credential: none });
+      expect(probe.ok).toBe(false);
+      expect(probe.error).toMatch(HINT);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('EHOSTUNREACH'));
+    });
+
+    it('leaves it off on other platforms, for other codes and for loopback', async () => {
+      const fake = fakeOllama();
+      fake.state.down.add(lan);
+      fake.state.down.add('http://127.0.0.2:11434');
+      fake.state.downCode = 'EHOSTUNREACH';
+      const linux = registry(fake, {}, { platform: 'linux' }).registry;
+      expect((await linux.probe({ address: '192.168.1.20:11434', credential: none })).error).not.toMatch(HINT);
+      const mac = registry(fake, {}, { platform: 'darwin' }).registry;
+      expect((await mac.probe({ address: '127.0.0.2:11434', credential: none })).error).not.toMatch(HINT);
+      fake.state.downCode = 'ECONNREFUSED';
+      expect((await mac.probe({ address: '192.168.1.20:11434', credential: none })).error).not.toMatch(HINT);
+    });
+
+    it('shows it on a saved LAN server that goes down, and in the chat error', async () => {
+      const fake = fakeOllama();
+      const { registry: servers } = registry(fake, {}, { platform: 'darwin' });
+      await addLanServer(servers);
+      fake.state.down.add(lan);
+      fake.state.downCode = 'EHOSTUNREACH';
+      await servers.check();
+      const [, saved] = await servers.views();
+      expect(saved.health.error).toMatch(HINT);
+      const error = await servers
+        .chatFor(`srv-${saved.id}`)!
+        .stream(
+          { model: `local:srv-${saved.id}:qwen2.5:0.5b`, messages: [{ role: 'user', content: 'hi' }] },
+          () => undefined
+        )
+        .catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(ServerUnreachableError);
+      expect((error as Error).message).toMatch(HINT);
+    });
   });
 
   it('lists an online server without waiting on a slow health check of it', async () => {
