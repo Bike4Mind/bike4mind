@@ -3,7 +3,6 @@ import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import http from 'node:http';
 import net, { type AddressInfo } from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -385,7 +384,8 @@ describe('createSshFetch', () => {
   });
 
   it.skipIf(process.platform === 'win32')('makes an existing ~/.ssh/b4m private', async () => {
-    const home = await mkdtemp(path.join(os.tmpdir(), 'b4m-ssh-'));
+    // Not os.tmpdir(): macOS's long TMPDIR pushes the socket path past the limit, so sharing would be skipped.
+    const home = await mkdtemp('/tmp/b4m-ssh-');
     try {
       await mkdir(path.join(home, '.ssh', 'b4m'), { recursive: true, mode: 0o755 });
       const ssh = fakeSsh(await ollama());
