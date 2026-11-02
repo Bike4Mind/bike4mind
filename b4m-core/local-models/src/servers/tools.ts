@@ -137,9 +137,12 @@ export function messageTooLongHint(
   return `This message (about ${messageTokens} tokens) is too long for ${model.name}'s ${model.context}-token context on ${label}. Send a shorter message, or use a model with a larger context.`;
 }
 
-/** Why a turn cannot be sent: the conversation so far leaves no room in the context for a reply. */
+/**
+ * Why a turn cannot be sent: the conversation so far leaves no room in the context for a reply.
+ * The phrase "context window" must stay: the agents package matches it (isContextLimitError) to compact and retry.
+ */
 export function conversationFullHint(label: string, model: { name: string; context: number }): string {
-  return `This conversation no longer fits ${model.name}'s ${model.context}-token context on ${label} with room for a reply. Start a new conversation, or use a model with a larger context.`;
+  return `This conversation no longer fits ${model.name}'s ${model.context}-token context window on ${label} with room for a reply. Start a new conversation, or use a model with a larger context.`;
 }
 
 function restartWithContext(product: OpenAICompatibleProduct | null, promptTokens: number): string {

@@ -267,7 +267,7 @@ describe('OpenAICompatibleBackend against vLLM', () => {
     ] as unknown as IMessage[];
     const failure = backend.complete('qwen-small', messages, { stream: true, maxTokens: 2048 }, async () => undefined);
     await expect(failure).rejects.toThrow(
-      "This conversation no longer fits qwen-small's 4096-token context on gpu-box with room for a reply. Start a new conversation, or use a model with a larger context."
+      "This conversation no longer fits qwen-small's 4096-token context window on gpu-box with room for a reply. Start a new conversation, or use a model with a larger context."
     );
     expect(fake.requests).toHaveLength(0);
   });
