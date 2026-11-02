@@ -33,7 +33,8 @@ struct SignInView: View {
   private var header: some View {
     VStack(spacing: Tokens.Spacing.m) {
       Image(systemName: "brain.head.profile")
-        .font(.system(size: 64, weight: .regular))
+        .font(.largeTitle)
+        .imageScale(.large)
         .foregroundStyle(Tokens.Palette.brand)
         .accessibilityHidden(true)
       Text("Bike4Mind")

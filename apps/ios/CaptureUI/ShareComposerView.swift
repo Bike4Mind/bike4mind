@@ -60,6 +60,7 @@ struct ShareComposerView: View {
                 Image(systemName: "minus.circle")
               }
               .buttonStyle(.borderless)
+              .frame(minWidth: 44, minHeight: 44)
               .accessibilityLabel("Remove \(item.displayName)")
             }
           }

@@ -8,7 +8,8 @@ struct LockedView: View {
   var body: some View {
     VStack(spacing: Tokens.Spacing.l) {
       Image(systemName: "lock.fill")
-        .font(.system(size: 48))
+        .font(.largeTitle)
+        .imageScale(.large)
         .foregroundStyle(Tokens.Palette.brand)
         .accessibilityHidden(true)
       Text("Bike4Mind is locked")

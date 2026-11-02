@@ -18,8 +18,8 @@ struct MessageBubble: View {
       if !isUser { Spacer(minLength: Tokens.Spacing.xxl) }
     }
     .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel(accessibilityLabel)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(message.accessibilityLabel())
   }
 
   @ViewBuilder
@@ -73,11 +73,6 @@ struct MessageBubble: View {
     default: nil
     }
   }
-
-  private var accessibilityLabel: String {
-    let speaker = isUser ? "You" : "Bike4Mind"
-    return "\(speaker): \(message.text)"
-  }
 }
 
 struct StatusBadge: View {
@@ -90,16 +85,7 @@ struct StatusBadge: View {
       .labelStyle(.titleAndIcon)
   }
 
-  private var title: String {
-    switch badge {
-    case .queued: "Queued"
-    case .working: "Working"
-    case .stopped: "Stopped"
-    case .failed: "Failed"
-    case .awaitingApproval: "Needs approval"
-    case .outOfCredits(let code): code == .spendCapExceeded ? "Spend cap reached" : "Out of credits"
-    }
-  }
+  private var title: String { badge.title }
 
   private var symbol: String {
     switch badge {

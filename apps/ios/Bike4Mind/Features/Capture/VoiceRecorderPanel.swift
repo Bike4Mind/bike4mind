@@ -6,6 +6,7 @@ import SwiftUI
 struct VoiceRecorderPanel: View {
   @Environment(AppServices.self) private var services
   @State private var model: VoiceCaptureModel?
+  @ScaledMetric(relativeTo: .largeTitle) private var recordIconSize: CGFloat = 72
   let onTranscript: (String) -> Void
   let onCancel: () -> Void
 
@@ -66,7 +67,7 @@ struct VoiceRecorderPanel: View {
     Button {
       Task { await action() }
     } label: {
-      Image(systemName: symbol).font(.system(size: 72)).foregroundStyle(tint)
+      Image(systemName: symbol).font(.system(size: recordIconSize)).foregroundStyle(tint)
     }
     .accessibilityLabel(label)
     .accessibilityIdentifier("voice-record-btn")

@@ -20,6 +20,7 @@ private struct ChatScreen: View {
   @State private var model: ChatViewModel
   @FocusState private var composerFocused: Bool
   @State private var isRecordingVoice = false
+  @ScaledMetric(relativeTo: .title) private var composerIconSize: CGFloat = 32
 
   init(
     session: SessionSummary, api: any B4MAPI, realtime: any RealtimeClient, activities: any QuestActivityTracking,
@@ -173,9 +174,10 @@ private struct ChatScreen: View {
         isRecordingVoice = true
       } label: {
         Image(systemName: "mic.circle")
-          .font(.system(size: 32))
+          .font(.system(size: composerIconSize))
           .symbolRenderingMode(.hierarchical)
       }
+      .frame(minWidth: 44, minHeight: 44)
       .accessibilityLabel("Dictate a message")
       .accessibilityIdentifier("chat-composer-mic")
       if model.canRunAgent {
@@ -183,10 +185,12 @@ private struct ChatScreen: View {
           model.sendsAsAgentRun.toggle()
         } label: {
           Image(systemName: model.sendsAsAgentRun ? "bolt.circle.fill" : "bolt.circle")
-            .font(.system(size: 32))
+            .font(.system(size: composerIconSize))
             .symbolRenderingMode(.hierarchical)
         }
+        .frame(minWidth: 44, minHeight: 44)
         .accessibilityLabel("Run as agent")
+        .accessibilityHint("Runs in the background and shows progress on your Lock Screen")
         .accessibilityValue(model.sendsAsAgentRun ? "On" : "Off")
         .accessibilityIdentifier("chat-composer-agent-toggle")
       }
@@ -202,10 +206,11 @@ private struct ChatScreen: View {
         .accessibilityIdentifier("chat-composer-field")
       Button(action: send) {
         Image(systemName: "arrow.up.circle.fill")
-          .font(.system(size: 32))
+          .font(.system(size: composerIconSize))
           .symbolRenderingMode(.hierarchical)
       }
       .disabled(!model.canSend)
+      .frame(minWidth: 44, minHeight: 44)
       .accessibilityLabel("Send")
       .accessibilityIdentifier("chat-composer-send")
     }
@@ -223,16 +228,23 @@ private struct SendFailureRow: View {
   let retry: () -> Void
 
   var body: some View {
-    HStack(spacing: Tokens.Spacing.s) {
-      Label("Not sent. \(error.message)", systemImage: "exclamationmark.circle")
-        .font(Tokens.Typography.meta)
-        .foregroundStyle(Tokens.Palette.destructive)
-      if error.isRetryable || error == .malformedResponse {
-        Button("Retry", action: retry)
-          .font(Tokens.Typography.meta.weight(.semibold))
-      }
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: Tokens.Spacing.s) { content }
+      VStack(alignment: .trailing, spacing: Tokens.Spacing.xs) { content }
     }
     .frame(maxWidth: .infinity, alignment: .trailing)
     .accessibilityIdentifier("chat-send-failure")
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    Label("Not sent. \(error.message)", systemImage: "exclamationmark.circle")
+      .font(Tokens.Typography.meta)
+      .foregroundStyle(Tokens.Palette.destructive)
+    if error.isRetryable || error == .malformedResponse {
+      Button("Retry", action: retry)
+        .font(Tokens.Typography.meta.weight(.semibold))
+        .frame(minHeight: 44)
+    }
   }
 }

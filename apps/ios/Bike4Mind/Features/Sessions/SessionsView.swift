@@ -109,18 +109,25 @@ private struct SessionRow: View {
       Text(session.name.isEmpty ? "Untitled" : session.name)
         .font(.headline)
         .lineLimit(2)
-      HStack(spacing: Tokens.Spacing.s) {
-        Text(RelativeTime.describe(session.lastUpdated))
-        if let model = session.lastUsedModel {
-          Text("\u{00B7}").accessibilityHidden(true)
-          Text(model).lineLimit(1)
-        }
+      // At accessibility text sizes the time and model stack instead of truncating.
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: Tokens.Spacing.s) { details(separator: true) }
+        VStack(alignment: .leading, spacing: 0) { details(separator: false) }
       }
       .font(Tokens.Typography.caption)
       .foregroundStyle(Tokens.Palette.secondaryText)
     }
     .padding(.vertical, Tokens.Spacing.xs)
     .accessibilityElement(children: .combine)
+  }
+
+  @ViewBuilder
+  private func details(separator: Bool) -> some View {
+    Text(RelativeTime.describe(session.lastUpdated))
+    if let model = session.lastUsedModel {
+      if separator { Text("\u{00B7}").accessibilityHidden(true) }
+      Text(model).lineLimit(1)
+    }
   }
 }
 
@@ -129,12 +136,23 @@ struct InlineErrorBanner: View {
   let retry: () -> Void
 
   var body: some View {
-    HStack(spacing: Tokens.Spacing.s) {
-      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Tokens.Palette.warning)
-      Text(message).font(Tokens.Typography.caption)
-      Spacer(minLength: 0)
-      Button("Retry", action: retry).font(Tokens.Typography.caption.weight(.semibold)).buttonStyle(.borderless)
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: Tokens.Spacing.s) { content }
+      VStack(alignment: .leading, spacing: Tokens.Spacing.xs) { content }
     }
     .accessibilityElement(children: .combine)
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    HStack(spacing: Tokens.Spacing.s) {
+      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Tokens.Palette.warning)
+        .accessibilityHidden(true)
+      Text(message).font(Tokens.Typography.caption)
+    }
+    Button("Retry", action: retry)
+      .font(Tokens.Typography.caption.weight(.semibold))
+      .buttonStyle(.borderless)
+      .frame(minHeight: 44)
   }
 }

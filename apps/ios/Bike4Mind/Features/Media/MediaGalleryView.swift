@@ -115,6 +115,8 @@ private struct MediaCell: View {
       .contentShape(Rectangle())
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("\(item.kind.accessibilityName), \(item.displayTitle)")
+      .accessibilityHint("Opens full screen")
+      .accessibilityAddTraits(.isButton)
   }
 
   @ViewBuilder
