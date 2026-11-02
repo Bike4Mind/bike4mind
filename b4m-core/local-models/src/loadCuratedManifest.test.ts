@@ -1,4 +1,4 @@
-import { HubManifestSchema, parseHubManifest, type HubBuild } from '@bike4mind/common';
+import { HubManifestSchema, parseHubManifest, type HubBuild } from '@bike4mind/common/modelHub';
 import { describe, expect, it, vi } from 'vitest';
 import bundled from '../../../catalog/model-hub/curated-v2.json';
 import { isAbliteratedModel } from './abliterated';

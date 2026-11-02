@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { HardwareProfile, HubBuild, HubEntry, HubManifest } from '@bike4mind/common';
+import { readdirSync, readFileSync } from 'node:fs';
+import type { HardwareProfile, HubBuild, HubEntry, HubManifest } from '@bike4mind/common/modelHub';
 import { describe, expect, it } from 'vitest';
 import {
   curatedBuildForRef,
@@ -348,5 +349,15 @@ describe('servesReviewed and installedReviewed', () => {
     const inspection = installedAs(build);
     const pinned = curatedPins(build)?.numCtx ?? null;
     expect(installedReviewed({ ...inspection, parameters: `num_ctx ${(pinned ?? 4096) + 1}` }, build)).toBe(false);
+  });
+});
+
+describe('common imports', () => {
+  it('reach @bike4mind/common through its modelHub entry, never the root that pulls in the rest of common', () => {
+    const dir = import.meta.dirname;
+    const offenders = readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter(file => file.endsWith('.ts'))
+      .filter(file => /from '@bike4mind\/common'/.test(readFileSync(`${dir}/${file}`, 'utf8')));
+    expect(offenders).toEqual([]);
   });
 });

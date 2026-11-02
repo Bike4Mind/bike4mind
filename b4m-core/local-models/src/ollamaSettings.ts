@@ -7,15 +7,15 @@ import {
   type OllamaSettingKey,
 } from '@bike4mind/common/modelHub';
 
-/** Effective Ollama environment, by variable name; unset keys are absent. Only OLLAMA_ENV_KEYS are ever held. */
-export type OllamaEnvironment = Partial<Record<string, string>>;
-
 /** The only variables read from a process, unit or environment file; anything else (API keys, proxies) is dropped. */
-export const OLLAMA_ENV_KEYS: ReadonlySet<string> = new Set<string>([
-  ...OLLAMA_SETTING_KEYS,
-  'OLLAMA_GPU_OVERHEAD',
-  'HOME',
-]);
+export const OLLAMA_ENV_KEY_NAMES = [...OLLAMA_SETTING_KEYS, 'OLLAMA_GPU_OVERHEAD', 'HOME'] as const;
+export type OllamaEnvKey = (typeof OLLAMA_ENV_KEY_NAMES)[number];
+export const OLLAMA_ENV_KEYS: ReadonlySet<OllamaEnvKey> = new Set(OLLAMA_ENV_KEY_NAMES);
+
+export const isOllamaEnvKey = (key: string): key is OllamaEnvKey => (OLLAMA_ENV_KEYS as ReadonlySet<string>).has(key);
+
+/** Effective Ollama environment, by variable name; unset keys are absent. */
+export type OllamaEnvironment = Partial<Record<OllamaEnvKey, string>>;
 
 const GIB = 1024 ** 3;
 
@@ -37,18 +37,18 @@ export const OLLAMA_SETTING_DEFAULTS: Record<OllamaSettingKey, string | null> = 
 };
 
 /** envconfig.Var: surrounding spaces and quotes are not part of the value. */
-export function ollamaEnvValue(env: OllamaEnvironment, key: string): string {
+export function ollamaEnvValue(env: OllamaEnvironment, key: OllamaEnvKey): string {
   return (env[key] ?? '').trim().replace(/^["']+|["']+$/g, '');
 }
 
 /** envconfig.Uint: a value that is not a whole number falls back to the default. */
-function ollamaUint(env: OllamaEnvironment, key: string): number | null {
+function ollamaUint(env: OllamaEnvironment, key: OllamaEnvKey): number | null {
   const value = ollamaEnvValue(env, key);
   return /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
 }
 
 /** envconfig.BoolWithDefault: strconv.ParseBool, and any other non-empty value reads as true. */
-export function ollamaBool(env: OllamaEnvironment, key: string): boolean | null {
+export function ollamaBool(env: OllamaEnvironment, key: OllamaEnvKey): boolean | null {
   const value = ollamaEnvValue(env, key);
   if (!value) return null;
   if (['1', 't', 'T', 'TRUE', 'true', 'True'].includes(value)) return true;

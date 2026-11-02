@@ -59,6 +59,8 @@ const grantSchema = z.object({
   approvalKey: z.string().optional(),
   source: z.enum(['folder-picker', 'permission-rule', 'project-trust', 'approval', 'migration']),
 });
+// Builds that predate a new event type skip it (see laterBuildSequence), so an event that
+// narrows access must reuse 'revoke' rather than add a type an older build would ignore.
 const eventSchema = z.discriminatedUnion('type', [
   z.object({
     sequence: z.number().int().nonnegative(),
@@ -83,9 +85,8 @@ const eventSchema = z.discriminatedUnion('type', [
   }),
 ]);
 /** Only the fields that say which kinds an event uses; see laterBuildSequence. */
+const headerSchema = z.object({ sequence: z.number().int().nonnegative(), type: z.string() });
 const kindsSchema = z.object({
-  sequence: z.number().int().nonnegative(),
-  type: z.string(),
   capability: z.string().optional(),
   scope: z.object({ kind: z.string() }).optional(),
   grant: z
@@ -364,6 +365,7 @@ export class CapabilityLedger {
       endsInNewline = chunk.toString().endsWith('\n');
     });
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
+    let skipped = 0;
     try {
       for await (const line of lines) {
         if (!line.trim()) continue;
@@ -388,8 +390,12 @@ export class CapabilityLedger {
         if (sequence === null) throw parsed.error;
         if (sequence !== this.sequence) throw new SyntaxError('Out of order audit sequence');
         if (parsed.success) this.apply(parsed.data);
-        else this.sequence = sequence + 1;
+        else {
+          this.sequence = sequence + 1;
+          skipped += 1;
+        }
       }
+      if (skipped > 0) console.warn(`[CapabilityLedger] Skipped ${skipped} event(s) written by a newer Desktop`);
       // A process can stop after the JSON record but before its newline. Repair
       // that boundary before the next append can concatenate two valid records.
       if (!endsInNewline) await appendFile(this.filePath, '\n', { encoding: 'utf8', mode: 0o600 });
@@ -484,17 +490,20 @@ function normalizeScope(scope: CapabilityScope): CapabilityScope {
 
 /** The sequence of an event that names a type, capability, scope, subject or source this build does not know; else null. */
 function laterBuildSequence(value: unknown): number | null {
+  const header = headerSchema.safeParse(value);
+  if (!header.success) return null;
+  // A type this build does not know may shape its other fields any way it likes.
+  if (!EVENT_TYPES.has(header.data.type)) return header.data.sequence;
   const parsed = kindsSchema.safeParse(value);
   if (!parsed.success) return null;
   const event = parsed.data;
   const unknown = (known: Set<string>, kind: string | undefined) => kind !== undefined && !known.has(kind);
   const newer =
-    !EVENT_TYPES.has(event.type) ||
     unknown(CAPABILITIES, event.capability ?? event.grant?.capability) ||
     unknown(SCOPE_KINDS, (event.scope ?? event.grant?.scope)?.kind) ||
     unknown(SUBJECT_KINDS, event.grant?.subject?.kind) ||
     unknown(SOURCES, event.grant?.source);
-  return newer ? event.sequence : null;
+  return newer ? header.data.sequence : null;
 }
 
 function isLegacyDocument(line: string): boolean {

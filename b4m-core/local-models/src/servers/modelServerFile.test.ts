@@ -148,17 +148,36 @@ describe('readDesktopModelServers', () => {
     expect(result.problem).toBeTruthy();
   });
 
-  it('skips records it cannot use, such as an ssh transport', async () => {
+  it('skips records it cannot use, such as an unknown transport', async () => {
     const body = {
       servers: [
         stored({ id: 'ssh1', transport: { type: 'ssh', host: 'box' } }),
+        stored({ id: 'ws1', transport: { type: 'websocket', url: 'ws://box' } }),
         stored({ id: 'bad', kind: 'other' }),
         'junk',
         stored({ id: 'ok1', name: 'kept' }),
       ],
     };
     await put('@bike4mind/desktop', JSON.stringify(body));
-    expect((await readDesktopModelServers(opts())).servers.map(s => s.name)).toEqual(['kept']);
+    const result = await readDesktopModelServers(opts());
+    expect(result.servers.map(s => s.name)).toEqual(['kept']);
+    expect(result.desktopOnly).toEqual([]);
+  });
+
+  it('lists SSH servers apart, as ones only Desktop can reach', async () => {
+    const body = {
+      servers: [
+        stored({ id: 'ssh1', name: 'lab', auth: { type: 'none' }, transport: { type: 'ssh', destination: 'me@lab' } }),
+        stored({ id: 'ssh2', transport: { type: 'ssh', destination: '-oProxyCommand=x' } }),
+        stored({ id: 'ok1', name: 'kept' }),
+      ],
+    };
+    await put('@bike4mind/desktop', JSON.stringify(body));
+    const result = await readDesktopModelServers(opts());
+    expect(result.servers.map(s => s.name)).toEqual(['kept']);
+    expect(result.desktopOnly).toEqual([
+      { id: 'ssh1', name: 'lab', kind: 'ollama', access: 'manage', transport: { type: 'ssh', destination: 'me@lab' } },
+    ]);
   });
 
   it('reads a newer version as it is and never writes the file', async () => {
@@ -188,6 +207,14 @@ describe('stored records', () => {
     expect(isStored(record)).toBe(true);
     expect(hydrate(record as never)).not.toHaveProperty('secret');
     expect(isStored({ ...record, id: 'UPPER' })).toBe(false);
+  });
+
+  it('hydrates an SSH destination only when it cannot pass as an ssh option', () => {
+    const ssh = (destination: unknown) => hydrate(stored({ transport: { type: 'ssh', destination } }) as never);
+    expect(ssh('me@gpu')?.transport).toEqual({ type: 'ssh', destination: 'me@gpu' });
+    expect(ssh('-oProxyCommand=touch /tmp/x')).toBeNull();
+    expect(ssh('gpu box')).toBeNull();
+    expect(ssh(42)).toBeNull();
   });
 
   it('keeps only specs that check out', () => {
