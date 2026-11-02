@@ -4,9 +4,15 @@ DESTINATION ?= platform=iOS Simulator,name=$(SIMULATOR),OS=latest
 PROJECT := Bike4Mind.xcodeproj
 SCHEME := Bike4Mind
 DERIVED_DATA := $(CURDIR)/build/DerivedData
-SWIFT_SOURCES := Bike4Mind Packages
+# Generated sources are excluded from formatting so a regeneration diff is exactly the generator's output.
+SWIFT_SOURCES = $(shell find Bike4Mind Packages -name '*.swift' -not -path '*/Generated/*' -not -path '*/.build/*')
 
-.PHONY: build test format lint clean
+.PHONY: build test format lint clean generate-client
+
+CLIENT_PKG := Packages/B4MClient
+GENERATOR_PKG := Tools/Generator
+SPEC_PATH_IN_REPO := apps/client/public/openapi.json
+
 
 build:
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination '$(DESTINATION)' -derivedDataPath $(DERIVED_DATA) build
@@ -18,12 +24,26 @@ build:
 test:
 	cd Packages/B4MKit && xcodebuild -scheme B4MKit -destination '$(DESTINATION)' -derivedDataPath $(DERIVED_DATA) test
 	cd Packages/B4MKit && swift test
+	cd $(CLIENT_PKG) && swift test
 
 format:
-	xcrun swift-format format --in-place --recursive --parallel $(SWIFT_SOURCES)
+	xcrun swift-format format --in-place --parallel $(SWIFT_SOURCES)
 
 lint:
-	xcrun swift-format lint --strict --recursive --parallel $(SWIFT_SOURCES)
+	xcrun swift-format lint --strict --parallel $(SWIFT_SOURCES)
 
 clean:
 	rm -rf build
+
+# Regenerates Packages/B4MClient from an OpenAPI snapshot. Without arguments it re-runs the generator
+# on the committed snapshot (reproducibility check: `git diff` must stay empty). To take a new snapshot:
+#   make generate-client SPEC_REF=origin/main        # read the spec from a git ref
+#   make generate-client SPEC_FILE=/path/to/openapi.json
+generate-client:
+	@if [ -n "$(SPEC_REF)" ]; then git show "$(SPEC_REF):$(SPEC_PATH_IN_REPO)" > $(CLIENT_PKG)/openapi.json; \
+	elif [ -n "$(SPEC_FILE)" ]; then cp "$(SPEC_FILE)" $(CLIENT_PKG)/openapi.json; fi
+	swift build --package-path $(GENERATOR_PKG) --product swift-openapi-generator
+	rm -rf $(CLIENT_PKG)/Sources/B4MClient/Generated
+	$(GENERATOR_PKG)/.build/debug/swift-openapi-generator generate $(CLIENT_PKG)/openapi.json \
+		--config $(CLIENT_PKG)/openapi-generator-config.yaml \
+		--output-directory $(CLIENT_PKG)/Sources/B4MClient/Generated
