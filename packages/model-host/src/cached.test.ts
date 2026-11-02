@@ -24,13 +24,34 @@ describe('cached', () => {
     expect(await get()).toBe('up');
   });
 
-  it('fails a load that hangs past its deadline and lets the next call start a new one', async () => {
+  it('fails a load that hangs past its deadline and starts no other until it settles', async () => {
     let calls = 0;
-    const get = cached(() => (++calls === 1 ? new Promise<string>(() => {}) : Promise.resolve('fresh')), 60_000, {
-      timeoutMs: 30,
-      timeoutError: () => new Error('slow'),
-    });
+    let finish: (value: string) => void = () => {};
+    const get = cached(
+      () => (++calls === 1 ? new Promise<string>(resolve => (finish = resolve)) : Promise.resolve('fresh')),
+      60_000,
+      { timeoutMs: 30, timeoutError: () => new Error('slow') }
+    );
     await expect(Promise.all([get(), get()])).rejects.toThrow('slow');
+    await expect(get()).rejects.toThrow('slow');
+    expect(calls).toBe(1);
+    finish('late');
+    await new Promise(resolve => setImmediate(resolve));
+    expect(await get()).toBe('late');
+    expect(calls).toBe(1);
+  });
+
+  it('starts a new load once a timed-out one fails', async () => {
+    let calls = 0;
+    let fail: (error: Error) => void = () => {};
+    const get = cached(
+      () => (++calls === 1 ? new Promise<string>((_, reject) => (fail = reject)) : Promise.resolve('fresh')),
+      60_000,
+      { timeoutMs: 30, timeoutError: () => new Error('slow') }
+    );
+    await expect(get()).rejects.toThrow('slow');
+    fail(new Error('gave up'));
+    await new Promise(resolve => setImmediate(resolve));
     expect(await get()).toBe('fresh');
     expect(calls).toBe(2);
   });

@@ -6,7 +6,7 @@ export class TokenBucket {
   constructor(
     readonly capacity: number,
     readonly perSecond: number,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = () => performance.now()
   ) {
     this.#tokens = capacity;
     this.#last = now();
@@ -14,7 +14,7 @@ export class TokenBucket {
 
   #refill(): void {
     const now = this.now();
-    this.#tokens = Math.min(this.capacity, this.#tokens + ((now - this.#last) / 1000) * this.perSecond);
+    this.#tokens = Math.min(this.capacity, this.#tokens + (Math.max(0, now - this.#last) / 1000) * this.perSecond);
     this.#last = now;
   }
 

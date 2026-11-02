@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmod, lstat, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { ModelHostHelloSchema } from '@bike4mind/common/modelHub';
@@ -103,7 +103,9 @@ describe('serve', () => {
     await expect(serve({ ...base(), socketDir: join(dir, 'other'), stateDir })).rejects.toThrow(
       /Another b4m-host is running/
     );
-    await expect(serve({ ...base(), socketDir, stateDir: join(dir, 'state2') })).rejects.toThrow(/already listening/);
+    await expect(serve({ ...base(), socketDir, stateDir: join(dir, 'state2') })).rejects.toThrow(
+      `Another b4m-host is running with sockets in ${socketDir}`
+    );
 
     const fresh = await dirs();
     const stale = join(fresh.socketDir, 'admin.sock');
@@ -130,9 +132,23 @@ describe('serve', () => {
     const { socketDir, stateDir } = await dirs();
     await mkdir(stateDir, { recursive: true, mode: 0o700 });
     const dead = spawnSync(process.execPath, ['-e', '0']).pid;
-    await writeFile(join(stateDir, 'serve.lock'), JSON.stringify({ pid: dead, host: hostname(), nonce: 'x' }));
+    const lock = { pid: dead, host: hostname(), machine: await machineIdentity(), nonce: 'x' };
+    await writeFile(join(stateDir, 'serve.lock'), JSON.stringify(lock));
     const { listeners } = await start({ socketDir, stateDir });
     expect(listeners).toHaveLength(1);
+  });
+
+  it('leaves a lock from another machine with the same hostname alone, even a stale one', async () => {
+    const { socketDir, stateDir } = await dirs();
+    await mkdir(stateDir, { recursive: true, mode: 0o700 });
+    const dead = spawnSync(process.execPath, ['-e', '0']).pid;
+    const lockPath = join(stateDir, 'serve.lock');
+    await writeFile(lockPath, JSON.stringify({ pid: dead, host: hostname(), machine: 'another-machine', nonce: 'x' }));
+    await utimes(lockPath, new Date(0), new Date(0));
+    await expect(serve({ ...base(), socketDir, stateDir })).rejects.toThrow(
+      `Another b4m-host is running with state in ${stateDir} (pid ${dead} on ${hostname()}); if that machine no longer runs it, remove ${lockPath}`
+    );
+    expect(JSON.parse(await readFile(lockPath, 'utf8')).nonce).toBe('x');
   });
 
   it('leaves a fresh lock held from another machine alone, whatever its pid', async () => {
@@ -141,7 +157,7 @@ describe('serve', () => {
     const dead = spawnSync(process.execPath, ['-e', '0']).pid;
     await writeFile(join(stateDir, 'serve.lock'), JSON.stringify({ pid: dead, host: 'other-box', nonce: 'x' }));
     await expect(serve({ ...base(), socketDir, stateDir })).rejects.toThrow(
-      `Another b4m-host is running with state in ${stateDir} (pid ${dead} on other-box)`
+      `Another b4m-host is running with state in ${stateDir} (pid ${dead} on other-box); if that machine no longer runs it, remove ${join(stateDir, 'serve.lock')}`
     );
   });
 

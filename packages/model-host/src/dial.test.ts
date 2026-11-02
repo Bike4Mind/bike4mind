@@ -132,6 +132,27 @@ describe('dialStdio', () => {
     expect(err).toBe('b4m-host: the host closed the connection\n');
   });
 
+  it.skipIf(isRoot)('exits 4 with how to get access when the only live socket cannot be opened', async () => {
+    const { server, admin, manage } = await setup();
+    await server.listen({ role: 'manage', path: manage, mode: 0o600, gid: null });
+    await chmod(manage, 0o000);
+    const { code, out, err } = await bridge([admin, manage], 'GET / HTTP/1.0\r\n\r\n');
+    expect(code).toBe(EXIT_NO_ACCESS);
+    expect(out).toBe('');
+    expect(err).toContain(`usermod -aG b4m-host ${login()}`);
+    expect(err).toContain('groupadd b4m-host');
+  });
+
+  it.skipIf(isRoot)('exits 3 when the admin socket is out of reach and the manage one is refused', async () => {
+    const { server, admin, manage } = await setup();
+    await server.listen({ role: 'admin', path: admin, mode: 0o600, gid: null });
+    await chmod(admin, 0o000);
+    staleSocket(manage);
+    const { code, err } = await bridge([admin, manage], 'GET / HTTP/1.0\r\n\r\n');
+    expect(code).toBe(EXIT_NOT_RUNNING);
+    expect(err).toContain('sudo systemctl start b4m-host');
+  });
+
   it('exits 3 with how to start the service when nothing listens', async () => {
     const { admin, manage } = await setup();
     const { code, out, err } = await bridge([admin, manage], 'GET / HTTP/1.0\r\n\r\n');

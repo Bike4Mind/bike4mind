@@ -1,5 +1,8 @@
 export interface CachedOptions {
-  /** A load still running after this long fails for its callers, and the next call starts afresh (ms). */
+  /**
+   * A load still running after this long fails for its callers (ms). Until it settles, later calls fail at once rather
+   * than start another: a load stuck on a hung mount holds a libuv thread, and stacking them starves every fs call.
+   */
   timeoutMs?: number;
   timeoutError?: () => Error;
   now?: () => number;
@@ -21,18 +24,24 @@ export function cached<T>(load: () => Promise<T>, maxAgeMs: number, options: Cac
   const timeoutError = options.timeoutError ?? (() => new Error(`Timed out after ${timeoutMs} ms`));
   let value: { at: number; result: T } | null = null;
   let pending: Promise<T> | null = null;
+  /** The load itself, kept until it settles even after its callers gave up on it. */
+  let running: Promise<T> | null = null;
   return () => {
     if (value && now() - value.at < maxAgeMs) return Promise.resolve(value.result);
     if (pending) return pending;
-    const loading = load();
-    const attempt: Promise<T> = (timeoutMs ? withDeadline(loading, timeoutMs, timeoutError) : loading)
-      .then(result => {
-        value = { at: now(), result };
-        return result;
-      })
-      .finally(() => {
-        if (pending === attempt) pending = null;
-      });
+    if (running) return Promise.reject(timeoutError());
+    const loading = load().then(result => {
+      value = { at: now(), result };
+      return result;
+    });
+    const settled = () => {
+      if (running === loading) running = null;
+    };
+    loading.then(settled, settled);
+    running = loading;
+    const attempt: Promise<T> = (timeoutMs ? withDeadline(loading, timeoutMs, timeoutError) : loading).finally(() => {
+      if (pending === attempt) pending = null;
+    });
     pending = attempt;
     return attempt;
   };

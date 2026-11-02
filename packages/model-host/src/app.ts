@@ -22,6 +22,7 @@ export interface HostAppOptions {
   eventsIntervalMs?: number;
   /** Per socket. */
   maxEventStreams?: number;
+  log?: (line: string) => void;
 }
 
 export interface HostApp {
@@ -44,6 +45,7 @@ export function createHostApp(options: HostAppOptions): HostApp {
     intervalMs: options.eventsIntervalMs ?? 10_000,
     maxStreams: options.maxEventStreams ?? 32,
     maxBufferedBytes: 1024 * 1024,
+    log: options.log,
   });
 
   const routes: Route[] = [

@@ -97,33 +97,53 @@ function processAlive(pid: number): boolean {
   }
 }
 
-async function lockHolderHost(lockPath: string): Promise<string | null> {
+interface LockHolder {
+  pid: number | null;
+  host: string | null;
+  machine: string | null;
+}
+
+async function readLockHolder(lockPath: string): Promise<LockHolder | null> {
   try {
-    const holder = JSON.parse(await readFile(lockPath, 'utf8')) as { host?: unknown };
-    return typeof holder.host === 'string' ? holder.host : null;
+    const holder = JSON.parse(await readFile(lockPath, 'utf8')) as { pid?: unknown; host?: unknown; machine?: unknown };
+    return {
+      pid: typeof holder.pid === 'number' ? holder.pid : null,
+      host: typeof holder.host === 'string' ? holder.host : null,
+      machine: typeof holder.machine === 'string' ? holder.machine : null,
+    };
   } catch {
     return null;
   }
 }
 
 /**
- * One host per state directory. A holder on this machine whose pid is gone crashed and is taken over at once; one on
- * another machine (a shared home) is left until its lock goes stale.
+ * One host per state directory and per socket directory (`what` names which, for the error). A holder on this machine
+ * whose pid is gone crashed and is taken over at once. A holder on another machine (a shared home) is never taken
+ * over, however stale its lock looks: staleness compares that machine's refreshes with this one's clock and boot time.
+ * Machines are told apart by `machineIdentity()`, since two can share a default hostname.
  */
-async function takeLock(stateDir: string) {
-  const path = join(stateDir, 'serve');
-  try {
-    return await lockFile(path, 'b4m-host');
-  } catch (error) {
-    if (!(error instanceof ModelFileBusyError)) throw error;
-    const host = await lockHolderHost(`${path}.lock`);
-    if (error.pid && host === hostname() && !processAlive(error.pid)) {
-      return lockFile(path, 'b4m-host', { force: true });
-    }
-    const holder = [error.pid ? `pid ${error.pid}` : null, host && host !== hostname() ? `on ${host}` : null]
+async function takeLock(dir: string, what: string, machine: string) {
+  const path = join(dir, 'serve');
+  const lockPath = `${path}.lock`;
+  const busy = (holder: LockHolder) => {
+    const remote = holder.machine ? holder.machine !== machine : holder.host !== null && holder.host !== hostname();
+    const detail = [holder.pid ? `pid ${holder.pid}` : null, remote && holder.host ? `on ${holder.host}` : null]
       .filter(Boolean)
       .join(' ');
-    throw new Error(`Another b4m-host is running with state in ${stateDir}${holder ? ` (${holder})` : ''}`);
+    const hint = remote ? `; if that machine no longer runs it, remove ${lockPath}` : '';
+    return new Error(`Another b4m-host is running with ${what} in ${dir}${detail ? ` (${detail})` : ''}${hint}`);
+  };
+  const before = await readLockHolder(lockPath);
+  if (before?.machine && before.machine !== machine) throw busy(before);
+  try {
+    return await lockFile(path, 'b4m-host', { machine });
+  } catch (error) {
+    if (!(error instanceof ModelFileBusyError)) throw error;
+    const holder = await readLockHolder(lockPath);
+    if (error.pid && holder?.machine === machine && !processAlive(error.pid)) {
+      return lockFile(path, 'b4m-host', { force: true, machine });
+    }
+    throw busy(holder ?? { pid: error.pid, host: null, machine: null });
   }
 }
 
@@ -182,18 +202,27 @@ export async function serve(options: ServeOptions): Promise<void> {
   await ensurePrivateDir(stateDir, options.mode === 'user' ? 0o700 : 0o750);
   await ensurePrivateDir(socketDir, options.mode === 'user' ? 0o700 : 0o755);
 
-  const lock = await takeLock(stateDir);
-  // Stops on the caller's signal, or when another host took the lock over (a shared state dir).
+  const machine = await machineIdentity();
+  const locks = [{ dir: stateDir, lock: await takeLock(stateDir, 'state', machine) }];
+  try {
+    if (socketDir !== stateDir) locks.push({ dir: socketDir, lock: await takeLock(socketDir, 'sockets', machine) });
+  } catch (error) {
+    await locks[0].lock.release();
+    throw error;
+  }
+  // Stops on the caller's signal, or when another host took a lock over (a shared directory).
   const stopped = new AbortController();
   const stop = () => stopped.abort();
   options.signal.addEventListener('abort', stop, { once: true });
   let lockLost = null as Error | null;
   const lockCheck = setInterval(() => {
-    lock.check().catch((error: unknown) => {
-      if (!(error instanceof ModelFileBusyError)) return;
-      lockLost = new Error(`Lost the lock on ${stateDir}; another b4m-host took it over`);
-      stop();
-    });
+    for (const { dir, lock } of locks) {
+      lock.check().catch((error: unknown) => {
+        if (!(error instanceof ModelFileBusyError)) return;
+        lockLost ??= new Error(`Lost the lock on ${dir}; another b4m-host took it over`);
+        stop();
+      });
+    }
   }, options.lockCheckMs ?? 10_000);
   const runtime = new OllamaRuntime({ baseUrl: ollamaUrl });
   const probe = options.probe ?? probeModelHost;
@@ -202,11 +231,12 @@ export async function serve(options: ServeOptions): Promise<void> {
   try {
     app = createHostApp({
       mode: options.mode,
-      serverId: await readServerId(stateDir),
+      serverId: await readServerId(stateDir, machine),
       version: HOST_VERSION,
       ollamaUrl,
       probe: () => probe({ ollamaUrl, runtime }),
       health: () => runtime.health(),
+      log: options.log,
     });
     server = new HostServer(app.handler, options.limits, options.log);
     for (const spec of await listenerSpecs(options, socketDir)) {
@@ -223,7 +253,7 @@ export async function serve(options: ServeOptions): Promise<void> {
     options.signal.removeEventListener('abort', stop);
     app?.close();
     await server?.close();
-    await lock.release();
+    for (const { lock } of locks) await lock.release();
   }
   if (lockLost) throw lockLost;
 }
