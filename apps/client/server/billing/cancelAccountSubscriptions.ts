@@ -77,6 +77,9 @@ async function billedCustomerIds(user: { id: string; stripeCustomerId?: string |
 // so one hung call must not hold a chunk for Stripe's 80 s default.
 const STRIPE_REQUEST_TIMEOUT_MS = 10_000;
 
+// ms. The deadline window for a single-user admin action, well inside the web Lambda's 60 s timeout.
+export const SINGLE_USER_CANCEL_BUDGET_MS = 30_000;
+
 const TIME_BUDGET_EXHAUSTED = 'time budget exhausted';
 
 // A request may not outlive the caller's deadline, but is always given at least 1 ms.

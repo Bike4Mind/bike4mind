@@ -358,7 +358,7 @@ describe('DELETE /api/users/[id]/delete', () => {
 
       expect(order).toEqual(['cancel', 'delete']);
       expect(mockCancelSubscriptions).toHaveBeenCalledWith(
-        { userId: 'u1', reason: 'account_deleted' },
+        { userId: 'u1', reason: 'account_deleted', deadline: expect.any(Number) },
         expect.anything()
       );
       expect(mockRecord).toHaveBeenCalledWith(

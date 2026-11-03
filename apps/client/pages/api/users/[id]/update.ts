@@ -27,6 +27,7 @@ import { requireStepUp } from '@server/auth/stepUp';
 import { propagateAccountRisk } from '@server/billing/linkedAccounts';
 import {
   cancelAccountSubscriptions,
+  SINGLE_USER_CANCEL_BUDGET_MS,
   subscriptionCancellationAudit,
   subscriptionCancellationResponse,
   type AccountSubscriptionCancellation,
@@ -410,7 +411,10 @@ const handler = baseApi().put(
       // A banned or suspended account must not renew. Stripe failures are logged and audited, never
       // undo the block.
       if (blockSnapshot && blockUpdated && userService.entersSuspension(blockSnapshot, blockUpdated)) {
-        cancellation = await cancelAccountSubscriptions({ userId, reason: 'suspended' }, req.logger);
+        cancellation = await cancelAccountSubscriptions(
+          { userId, reason: 'suspended', deadline: Date.now() + SINGLE_USER_CANCEL_BUDGET_MS },
+          req.logger
+        );
         const cancellationEntry = subscriptionCancellationAudit(cancellation, 'suspended');
         if (cancellationEntry) {
           await recordAdminActionFromRequest(req, {
