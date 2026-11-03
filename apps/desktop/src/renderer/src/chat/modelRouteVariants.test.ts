@@ -34,6 +34,14 @@ describe('routeVariantKey', () => {
       routeVariantKey({ id: 'claude-x', backend: 'anthropic' })
     );
   });
+
+  it('keys real versioned Bedrock ids by their version suffix, across every geography', () => {
+    const key = (id: string) => routeVariantKey({ id, backend: 'bedrock' });
+    const foundation = key('anthropic.claude-3-5-sonnet-20241022-v2:0');
+    expect(key('us.anthropic.claude-3-5-sonnet-20241022-v2:0')).toBe(foundation);
+    expect(key('us-gov.anthropic.claude-3-5-sonnet-20241022-v2:0')).toBe(foundation);
+    expect(key('anthropic.claude-3-5-sonnet-20241022-v1:0')).not.toBe(foundation);
+  });
 });
 
 describe('mergeRouteVariants', () => {
