@@ -5,7 +5,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration, { planUserLaneBackfill } from './20260921237400_backfill-user-lane-flags';
+import migration, { planUserLaneBackfill } from './20260921238100_backfill-user-lane-flags';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

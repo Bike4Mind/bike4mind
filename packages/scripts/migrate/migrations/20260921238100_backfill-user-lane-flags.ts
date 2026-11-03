@@ -132,8 +132,9 @@ async function markAll(ids: Types.ObjectId[], field: 'isInternal' | 'isSynthetic
  * only ever sets a flag to true on an account that does not have it, so a re-run marks nothing.
  * Run again after adding a staff domain or a test domain to pick up the accounts already on it.
  */
+// Id below the fail-closed OAuth backfill (20260922000001), so that one cannot block it.
 const migration: MigrationFile = {
-  id: 20260921237400,
+  id: 20260921238100,
   name: 'backfill-user-lane-flags',
 
   up: async () => {
