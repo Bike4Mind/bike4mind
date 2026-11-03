@@ -68,6 +68,57 @@ describe('startRoundTimer', () => {
     expect(timer.end()).toEqual({ startedAt: 0, firstTextAt: 120, endedAt: 400 });
     expect(timer.reasoningFrames()).toBe(0);
   });
+
+  it('ends the span at the last real thinking when an empty block follows it', () => {
+    let clock = 0;
+    const timer = startRoundTimer(() => clock);
+    for (const [at, text] of [
+      [100, ''],
+      [200, 'Checking the index.'],
+      [900, ''],
+    ] as const) {
+      clock = at;
+      timer.reasoning(text);
+    }
+    clock = 950;
+    timer.text();
+    for (const [at, text] of [
+      [3_000, ''],
+      [3_005, '\n\n'],
+      [3_010, ''],
+    ] as const) {
+      clock = at;
+      timer.reasoning(text);
+    }
+    clock = 3_020;
+    timer.text();
+    clock = 3_500;
+
+    expect(timer.end()).toMatchObject({ firstReasoningAt: 100, lastReasoningAt: 900 });
+    expect(timer.reasoningFrames()).toBe(1);
+  });
+
+  it('keeps markers around omitted thinking that follow an empty block', () => {
+    let clock = 0;
+    const timer = startRoundTimer(() => clock);
+    for (const [at, text] of [
+      [100, ''],
+      [105, '\n\n'],
+      [110, ''],
+    ] as const) {
+      clock = at;
+      timer.reasoning(text);
+    }
+    clock = 120;
+    timer.text();
+    clock = 1_000;
+    timer.reasoning('');
+    clock = 4_000;
+    timer.reasoning('');
+    clock = 4_100;
+
+    expect(timer.end()).toMatchObject({ firstReasoningAt: 1_000, lastReasoningAt: 4_000 });
+  });
 });
 
 describe('createRoundProbe', () => {
