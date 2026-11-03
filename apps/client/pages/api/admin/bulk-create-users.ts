@@ -1,14 +1,15 @@
-import { userRepository } from '@bike4mind/database';
+import { grantPackageRepository, userRepository, withTransaction } from '@bike4mind/database';
 import {
   ApiKeyScope,
   MAX_STORAGE_LIMIT_MB,
   AuthEvents,
+  grantPackageRefusalMessage,
   redactUserSecretsForSelf,
   sanitizeUsername,
   selfUserResponseSchema,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { userService } from '@bike4mind/services';
+import { referService, userService } from '@bike4mind/services';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -52,16 +53,31 @@ const bulkCreateResponseSchema = z.object({
 });
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
-  asyncHandler<{}, unknown, { users: UserImportRow[] }>(async (req, res) => {
+  asyncHandler<{}, unknown, { users: UserImportRow[]; grantPackageId?: string }>(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
-    const { users } = req.body;
+    const { users, grantPackageId } = req.body;
 
     if (!Array.isArray(users) || users.length === 0) {
       throw new BadRequestError('Invalid input: users array is required and must not be empty');
     }
+    if (grantPackageId !== undefined && (typeof grantPackageId !== 'string' || grantPackageId.length === 0)) {
+      throw new BadRequestError('Invalid grant package id');
+    }
+    const grantPackage = grantPackageId
+      ? await referService.requireActiveGrantPackage(grantPackageId, grantPackageRepository)
+      : null;
+
+    // Package rows create one at a time: each reserves against the same package caps, and parallel
+    // transactions on one package document would mostly fail on write conflicts.
+    let packageQueue: Promise<unknown> = Promise.resolve();
+    const inPackageQueue = <T>(fn: () => Promise<T>): Promise<T> => {
+      const run = packageQueue.then(fn);
+      packageQueue = run.catch(() => undefined);
+      return run;
+    };
 
     const createdUserIds: string[] = [];
     const startingCreditsById = new Map<string, number>();
@@ -73,36 +89,52 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           // Derived from the address, so coerce it into the username rules rather than reject the row.
           const username = sanitizeUsername(validatedData.email.split('@')[0]) || `user-${randomUUID().slice(0, 8)}`;
 
-          const newUser = await userService.createUser(
-            {
-              username,
-              email: validatedData.email,
-              name: `${validatedData.first || ''} ${validatedData.last || ''}`.trim() || validatedData.email,
-              initialCredits: validatedData.startingCredits ?? 0,
-              record: {
-                // Passwordless: no usable password. Store null so `password`
-                // presence stays a truthful signal. Users sign in via OTC.
-                password: null,
-                hasUsablePassword: false,
-                storageLimit: validatedData.startingStorage,
+          const startingCredits = grantPackage ? grantPackage.credits : (validatedData.startingCredits ?? 0);
+          const createRowUser = () =>
+            userService.createUser(
+              {
+                username,
+                email: validatedData.email,
+                name: `${validatedData.first || ''} ${validatedData.last || ''}`.trim() || validatedData.email,
+                initialCredits: startingCredits,
+                record: {
+                  // Passwordless: no usable password. Store null so `password`
+                  // presence stays a truthful signal. Users sign in via OTC.
+                  password: null,
+                  hasUsablePassword: false,
+                  storageLimit: grantPackage?.storageMb ?? validatedData.startingStorage,
+                },
               },
-            },
-            {
-              db: {
-                users: userRepository,
-              },
-            }
-          );
+              {
+                db: {
+                  users: userRepository,
+                },
+              }
+            );
+
+          // A refused reservation rolls the account back, so a capped package fails only that row.
+          const newUser = grantPackage
+            ? await inPackageQueue(() =>
+                withTransaction(async () => {
+                  const created = await createRowUser();
+                  const reservation = await grantPackageRepository.reserveRedemption(grantPackage.id, created.id);
+                  if (reservation.outcome === 'refused') {
+                    throw new BadRequestError(grantPackageRefusalMessage(reservation.reason));
+                  }
+                  return created;
+                })
+              )
+            : await createRowUser();
 
           createdUserIds.push(newUser.id);
-          startingCreditsById.set(newUser.id, validatedData.startingCredits ?? 0);
+          startingCreditsById.set(newUser.id, startingCredits);
 
           const isSynthetic = await recordSyntheticIdentity(newUser);
           await emitSignupFunnelEvents({
             user: { id: newUser.id, isSynthetic },
             method: 'admin',
             emailVerified: newUser.emailVerified === true,
-            creditsGranted: newUser.currentCredits ?? validatedData.startingCredits ?? 0,
+            creditsGranted: newUser.currentCredits ?? startingCredits,
           });
 
           if (validatedData.tags && validatedData.tags.length > 0) {
