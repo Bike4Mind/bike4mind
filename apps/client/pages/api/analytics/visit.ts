@@ -101,7 +101,8 @@ const handler = baseApi({ auth: false, maxBodySize: 1024 })
     const hopToken = hold ? undefined : readHopToken(req.body);
     if (hopToken !== undefined) {
       // Awaited, unlike the visit event below: a hop is redeemed once, so a `hop` event lost to a
-      // frozen Lambda has no later request to recover it. Bounded by the emit's own 2s timeout.
+      // frozen Lambda has no later request to recover it. The emit's HTTP call times out at 2s; the
+      // store update and a failure metric add to that.
       const linkVisit = resolveServerConsent(req) === 'granted';
       const outcome = await redeemHop({ token: hopToken, visitId, linkVisit });
       if (outcome.redeemed) {

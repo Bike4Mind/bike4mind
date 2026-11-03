@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { MAX_HOP_TOKEN_LENGTH } from '@bike4mind/server-utils/lib/hopNames';
 
 /**
  * The token a verified hop travels as: `<hopId>.<exp>.<mac>`.
@@ -17,11 +18,11 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 /** How long a minted token redeems for. */
 export const HOP_TOKEN_TTL_SECONDS = 10 * 60;
 
-/** The longest token a beacon may carry. A real one is 87 characters. */
-export const MAX_HOP_TOKEN_LENGTH = 128;
+export { MAX_HOP_TOKEN_LENGTH };
 
 const HOP_ID_SHAPE = /^[0-9a-f]{32}$/;
-const EXP_SHAPE = /^\d{1,12}$/;
+// Canonical digits only: the MAC covers Number(exp), so a leading zero would be a second spelling.
+const EXP_SHAPE = /^[1-9]\d{0,11}$/;
 const MAC_SHAPE = /^[A-Za-z0-9_-]{43}$/;
 
 /**
@@ -42,16 +43,12 @@ export function isHopId(value: unknown): value is string {
 }
 
 /**
- * The hop key, derived from a server secret by HMAC under its own label (domain separation).
- *
- * Derived rather than held as a secret of its own so that hops need no new deployment secret. The
- * parent is the analytics pseudonym salt, which every deployment that reports to Overwatch already
- * holds, and without which no hop event could be sent anyway. The derived key cannot be turned
- * back into the salt, and no pseudonym can be turned into it: a pseudonym is the same HMAC over a
- * 24-character user id, never over this label.
+ * The hop key, derived from the analytics pseudonym salt so hops need no secret of their own.
+ * HKDF rather than HMAC(salt, label): a pseudonym is HMAC(salt, input), so with HKDF no input to
+ * pseudonymize, whatever it is, can produce this key.
  */
 export function deriveHopKey(secret: string): Buffer {
-  return crypto.createHmac('sha256', secret).update(HOP_KEY_LABEL).digest();
+  return Buffer.from(crypto.hkdfSync('sha256', secret, '', HOP_KEY_LABEL, 32));
 }
 
 /** The configured hop key, or undefined when this deployment has no pseudonym salt. */

@@ -50,10 +50,12 @@ describe('the hop key', () => {
     expect(deriveHopKey('other-salt').equals(key)).toBe(false);
   });
 
-  it('is not any pseudonym the same secret produces', () => {
-    // A pseudonym is HMAC(salt, userId) over a 24-character id; the key is HMAC(salt, label).
-    const pseudonym = crypto.createHmac('sha256', 'test-salt').update('5f1e2d3c4b5a69788796a5b4').digest();
-    expect(KEY.equals(pseudonym)).toBe(false);
+  it('is not any pseudonym the same secret produces, even of the label itself', () => {
+    // A pseudonym is HMAC(salt, input); the key must not be one for any input.
+    for (const input of ['5f1e2d3c4b5a69788796a5b4', 'b4m-hop-token-key/v1']) {
+      const pseudonym = crypto.createHmac('sha256', 'test-salt').update(input).digest();
+      expect(KEY.equals(pseudonym), input).toBe(false);
+    }
   });
 
   it('is absent when no salt is configured', () => {
@@ -118,6 +120,7 @@ describe('hop tokens', () => {
       `${hopId.toUpperCase()}.${exp}.${mac}`,
       `${hopId}.-1.${mac}`,
       `${hopId}.1e9.${mac}`,
+      `${hopId}.0${exp}.${mac}`,
       `${hopId}.${exp}.${mac.slice(1)}`,
       `${hopId}.${exp}.${mac}=`,
       `${hopId}.${exp}.${mac.slice(0, 42)}+`,

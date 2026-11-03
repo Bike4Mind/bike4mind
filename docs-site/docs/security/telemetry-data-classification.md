@@ -242,11 +242,12 @@ hop for itself.
    made. Mint only there: not on page render, not for a prefetch
    (`Sec-Purpose: prefetch`), and not for a known crawler.
 2. In that endpoint, call `POST /api/overwatch/v1/hops` with the source's ingest
-   key in `x-api-key` and a JSON body `{ dest: "bike4mind", path, srcSessionId,
-srcVisitorHash, lane }`. Only `dest` is required. Send `srcSessionId` and
-   `srcVisitorHash` only with the visitor's consent, and send a hash, never a raw
-   identifier. Never send a source product: the body is refused if it names one.
-   A test persona's run sends `lane: "synthetic"`.
+   key in `x-api-key` and a JSON body
+   `{ dest: "bike4mind", path, srcSessionId, srcVisitorHash, lane }`. Only
+   `dest` is required. Send `srcSessionId` and `srcVisitorHash` only with the
+   visitor's consent, and send a hash, never a raw identifier. Never send a
+   source product: the body is refused if it names one. A test persona's run
+   sends `lane: "synthetic"`.
 3. Answer the visitor with a 302 straight to the returned `url`
    (`<app><path>?b4m_hop=<token>`), with `Cache-Control: no-store`. No
    intermediate page and no second hop: a cached or bounced redirect would replay

@@ -1,4 +1,4 @@
-import { HOP_PARAM } from '@bike4mind/server-utils/lib/hopNames';
+import { HOP_PARAM, MAX_HOP_TOKEN_LENGTH } from '@bike4mind/server-utils/lib/hopNames';
 import { publishResolvedConsent, resolveConsent } from './consentRegion';
 
 const VISIT_BEACON_PATH = '/api/analytics/visit';
@@ -30,9 +30,6 @@ function visitLanding(): VisitLanding {
   return { ...(referrer && { referrer }), landingPath };
 }
 
-/** The longest hop token sent on; the server refuses a longer one anyway. */
-const MAX_HOP_TOKEN = 128;
-
 /**
  * Take a verified-hop token off the landing URL, and return it.
  *
@@ -52,7 +49,7 @@ function takeHopToken(): string | null {
     const token = url.searchParams.get(HOP_PARAM) ?? '';
     url.searchParams.delete(HOP_PARAM);
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
-    return token.length > 0 && token.length <= MAX_HOP_TOKEN ? token : null;
+    return token.length > 0 && token.length <= MAX_HOP_TOKEN_LENGTH ? token : null;
   } catch {
     return null;
   }

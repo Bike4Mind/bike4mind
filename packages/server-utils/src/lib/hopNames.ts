@@ -10,6 +10,9 @@
  */
 export const HOP_PARAM = 'b4m_hop';
 
+/** The longest hop token the browser sends on and the server accepts. A real one is 87 characters. */
+export const MAX_HOP_TOKEN_LENGTH = 128;
+
 /**
  * The HttpOnly first-party cookie that holds a redeemed hop's id for the signup it may lead to.
  * Set only with the visitor's consent. Server-only: no client code reads it.

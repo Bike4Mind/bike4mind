@@ -202,16 +202,16 @@ describe('beaconVisit', () => {
     });
 
     it("publishes this load's consent before the beacon, so the server reads the same answer", () => {
-      const fetchMock = vi.fn().mockImplementation(() => {
-        expect(mockPublishConsent).toHaveBeenCalledWith('granted');
-        return Promise.resolve({ status: 204 });
-      });
+      // Asserted after the call: send() swallows anything thrown inside fetch.
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
       vi.stubGlobal('fetch', fetchMock);
       window.history.replaceState(null, '', `/?b4m_hop=${TOKEN}`);
 
       beaconVisit();
 
       expect(fetchMock).toHaveBeenCalledOnce();
+      expect(mockPublishConsent).toHaveBeenCalledWith('granted');
+      expect(mockPublishConsent.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0]);
     });
 
     it('sends the token, and no source, when consent is declined', () => {
