@@ -553,12 +553,12 @@ describe('ChatService spawn placement', () => {
 
   async function spawnAwaitingInstall(branch: string) {
     const install = holdInstall();
-    await spawnWith({ placement: 'worktree', branch });
+    const { parent } = await spawnWith({ placement: 'worktree', branch });
     const worktree = await worktreeOf(branch);
     const spawned = await child();
     if (!spawned) throw new Error('Child missing');
     await vi.waitUntil(() => install.waitFor.mock.calls.length > 0, { timeout: 5000, interval: 5 });
-    return { ...install, worktree, spawned };
+    return { ...install, worktree, spawned, parent };
   }
 
   it("starts a spawned agent's first turn only once its install has settled", async () => {
@@ -593,16 +593,40 @@ describe('ChatService spawn placement', () => {
     expect(spawnBookkeeping(spawned.id)).toEqual({ watched: false, launching: false, waiting: false });
   });
 
-  it('starts no turn when the agent is stopped during its install wait, and tells the parent', async () => {
-    const { worktree, spawned } = await spawnAwaitingInstall('agent/install-stopped');
+  it('keeps an agent stopped during its install wait, with its task handed back unsent', async () => {
+    const { parent, worktree, spawned } = await spawnAwaitingInstall('agent/install-stopped');
 
     service.stop(spawned.id);
-    await vi.waitUntil(() => events.some(event => event.type === 'spawn-failed'), { timeout: 5000, interval: 5 });
     await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 5000, interval: 5 });
+    await vi.waitUntil(() => queueEvents.some(event => event.sessionId === spawned.id && event.returned), {
+      timeout: 5000,
+      interval: 5,
+    });
 
     expect(seedPosted(worktree)).toBe(false);
-    expect(await store.get(spawned.id)).toBeNull();
+    expect(queueEvents.find(event => event.sessionId === spawned.id && event.returned)?.returned).toMatchObject({
+      reason: 'stopped',
+      messages: [{ text: 'do the thing' }],
+    });
+    const kept = await store.get(spawned.id);
+    expect(kept?.messages.some(message => message.system && message.content.includes('do the thing'))).toBe(true);
+    expect((await listWorktrees(main)).some(entry => entry.path === worktree)).toBe(true);
+    expect(events.some(event => event.type === 'spawn-failed')).toBe(false);
     expect(spawnBookkeeping(spawned.id)).toEqual({ watched: false, launching: false, waiting: false });
+
+    const round = await vi.waitUntil(() => streams[1], { timeout: 5000, interval: 5 });
+    round.write(frame({ type: 'content', text: 'ok' }));
+    round.write(frame('[DONE]'));
+    await vi.waitUntil(
+      () =>
+        events.some(
+          event =>
+            event.type === 'message' &&
+            event.sessionId === parent.id &&
+            /was stopped by the user before it began/.test(event.message.content)
+        ),
+      { timeout: 5000, interval: 10 }
+    );
   });
 
   it('keeps other turns blocked until a failed spawn has been removed', async () => {

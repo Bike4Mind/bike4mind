@@ -4968,6 +4968,7 @@ export class ChatService {
     this.deps.activity?.preparingStarted(child.id);
     let failure: string | null = null;
     let deleted = false;
+    let stopped = false;
     try {
       let text = seed;
       if (worktree) {
@@ -4982,6 +4983,7 @@ export class ChatService {
           const waited = await this.awaitSpawnInstall(child.id);
           if (waited !== 'ready') failure = 'It was stopped before its first turn.';
           deleted = waited === 'deleted';
+          stopped = waited === 'stopped';
         }
       }
       if (!failure) {
@@ -4999,7 +5001,10 @@ export class ChatService {
         this.deps.logger.debug(`CHAT: spawned ${child.id} from ${parentId}`);
         return;
       }
-      await this.abandonSpawn(parentId, child, failure, onFailed, deleted).catch((err: unknown) => {
+      const settled = stopped
+        ? this.keepStoppedSpawn(parentId, child)
+        : this.abandonSpawn(parentId, child, failure, onFailed, deleted);
+      await settled.catch((err: unknown) => {
         this.deps.logger.warn(`CHAT: could not clean up ${child.id}: ${err instanceof Error ? err.message : err}`);
       });
     } finally {
@@ -5037,6 +5042,82 @@ export class ChatService {
   }
 
   /**
+   * A spawned agent the user stopped while its install ran: keep the session and its worktree,
+   * and hand the seed back unsent, since stopping is their call rather than a startup failure.
+   */
+  private async keepStoppedSpawn(parentId: string, child: ChatSessionSummary): Promise<void> {
+    this.spawnWatch.delete(child.id);
+    const stored = await this.deps.store.get(child.id);
+    if (!stored) return;
+    const seed: ChatQueuedMessage[] = stored.messages.some(message => message.role === 'user' && !message.system)
+      ? []
+      : [
+          {
+            id: randomUUID(),
+            sessionId: child.id,
+            text: stored.origin?.seedPrompt ?? '',
+            queuedAt: new Date().toISOString(),
+          },
+        ];
+    const pending = this.deps.queue?.list(child.id) ?? [];
+    const saved = await this.saveUnsentInput(
+      child.id,
+      [...seed, ...pending.filter(entry => !entry.relay && !entry.automatic)],
+      {
+        content: 'Stopped before its first turn. Unsent input saved:',
+        display: 'Unsent input saved after it was stopped:',
+      }
+    );
+    if (!saved) return;
+    await this.strandRelay(
+      child.id,
+      pending.filter(message => message.relay)
+    );
+    this.deps.queue?.giveBack(child.id, seed, 'stopped');
+    this.deps.logger.debug(`CHAT: ${child.id} was stopped before its first turn and kept`);
+    await this.deliverChildReport(parentId, {
+      localOnly: isLocalModel(child.model),
+      content:
+        `The session you started, "${child.title}" (${child.id}), was stopped by the user before it began. ` +
+        'Its task was saved there unsent and nothing is running for it. Do not restart it unless the user asks.',
+      display: `The session "${child.title}" was stopped before it began.`,
+    });
+    await this.recordAgentSettled(parentId, {
+      sessionId: child.id,
+      title: child.title,
+      outcome: 'aborted',
+      lastReply: null,
+    });
+    await this.wakeParentForAgents(parentId);
+  }
+
+  /**
+   * Queue return events only reach an open composer, so input handed back is also saved to the
+   * transcript; switching away first cannot lose the task or its files. False once the session
+   * is deleted meanwhile, which wins.
+   */
+  private async saveUnsentInput(
+    sessionId: string,
+    messages: readonly ChatQueuedMessage[],
+    heading: { content: string; display: string }
+  ): Promise<boolean> {
+    for (const message of messages) {
+      const recovery: ChatMessage = {
+        id: randomUUID(),
+        role: 'user',
+        system: true,
+        content: `${heading.content}\n\n${message.text}`,
+        display: `${heading.display}\n\n${message.text}`,
+        createdAt: new Date().toISOString(),
+        ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+      };
+      if (!(await this.deps.store.appendMessage(sessionId, recovery))) return false;
+      this.emit({ type: 'message', sessionId, message: recovery });
+    }
+    return true;
+  }
+
+  /**
    * Remove an empty failed spawn, or retain accepted input and its files for retry.
    * Only a removed child reopens its suggestion: a retained child is the retry destination.
    */
@@ -5069,22 +5150,15 @@ export class ChatService {
                 queuedAt: new Date().toISOString(),
               },
             ];
-        // Queue return events only reach an open composer. Save an explicit unsent copy as
-        // well, so switching away before startup fails cannot lose the task or its files.
-        for (const message of [...seed, ...pending.filter(entry => !entry.relay && !entry.automatic)]) {
-          const recovery: ChatMessage = {
-            id: randomUUID(),
-            role: 'user',
-            system: true,
-            content: `Startup failed before this queued task could run. Unsent input saved for retry:\n\n${message.text}`,
-            display: `Unsent input saved after startup failed:\n\n${message.text}`,
-            createdAt: new Date().toISOString(),
-            ...(message.attachments?.length ? { attachments: message.attachments } : {}),
-          };
-          const recovered = await this.deps.store.appendMessage(child.id, recovery);
-          if (!recovered) return; // A deliberate deletion during recovery wins.
-          this.emit({ type: 'message', sessionId: child.id, message: recovery });
-        }
+        const saved = await this.saveUnsentInput(
+          child.id,
+          [...seed, ...pending.filter(entry => !entry.relay && !entry.automatic)],
+          {
+            content: 'Startup failed before this queued task could run. Unsent input saved for retry:',
+            display: 'Unsent input saved after startup failed:',
+          }
+        );
+        if (!saved) return;
         await this.strandRelay(
           child.id,
           pending.filter(message => message.relay)
