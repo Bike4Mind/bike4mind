@@ -55,7 +55,7 @@ vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
-import { NotionTokenManager, NotionReconnectRequiredError } from './notionTokenManager';
+import { NotionTokenManager, NotionReconnectRequiredError, NotionNotConnectedError } from './notionTokenManager';
 import { encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 
 describe('NotionTokenManager', () => {
@@ -80,20 +80,36 @@ describe('NotionTokenManager', () => {
   });
 
   describe('getValidTokens', () => {
-    it('should return null when user not found', async () => {
+    it('should throw NotionNotConnectedError without logging when user not found', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       mockFindById.mockResolvedValue(null);
 
-      const result = await NotionTokenManager.getValidTokens('user-123');
-
-      expect(result).toBeNull();
+      await expect(NotionTokenManager.getValidTokens('user-123')).rejects.toThrow(NotionNotConnectedError);
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
     });
 
-    it('should return null when notionConnect is not set', async () => {
+    it('should throw NotionNotConnectedError without logging when notionConnect is not set', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       mockFindById.mockResolvedValue({ id: 'user-123', notionConnect: null });
+
+      await expect(NotionTokenManager.getValidTokens('user-123')).rejects.toThrow(NotionNotConnectedError);
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
+    it('should still return null and log at error when the token cannot be decrypted', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockFindById.mockResolvedValue({
+        id: 'user-123',
+        notionConnect: { status: 'connected', accessToken: '', workspaceId: 'ws-123', workspaceName: 'WS' },
+      });
 
       const result = await NotionTokenManager.getValidTokens('user-123');
 
       expect(result).toBeNull();
+      expect(errorSpy).toHaveBeenCalledWith('Failed to decrypt Notion access token for user:', 'user-123');
+      errorSpy.mockRestore();
     });
 
     it('should throw NotionReconnectRequiredError when status is needs_reconnect', async () => {
@@ -273,12 +289,21 @@ describe('NotionTokenManager', () => {
       expect(token).toBe('decrypted-valid-token');
     });
 
-    it('should throw error when tokens cannot be retrieved', async () => {
+    it('should throw NotionNotConnectedError when there is no connection', async () => {
       mockFindById.mockResolvedValue(null);
+
+      await expect(NotionTokenManager.ensureValidToken('user-123')).rejects.toThrow(NotionNotConnectedError);
+    });
+
+    it('should throw error when tokens cannot be retrieved', async () => {
+      mockFindById.mockRejectedValueOnce(new Error('db down'));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       await expect(NotionTokenManager.ensureValidToken('user-123')).rejects.toThrow(
         'Failed to get valid Notion tokens'
       );
+      expect(errorSpy).toHaveBeenCalledWith('Error in getValidTokens:', expect.any(Error));
+      errorSpy.mockRestore();
     });
   });
 
