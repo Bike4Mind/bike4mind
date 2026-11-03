@@ -26,6 +26,9 @@ import { cleanLandingPath } from '@server/analytics/visitLanding';
  * the same cleaner as the landing (visitLanding.ts), and all it records is that path on a visit
  * id this server minted. Its own per-IP bucket, so a burst of page changes can never use up the
  * allowance the visit beacon counts visits with.
+ *
+ * Anyone can mint a visit cookie through the visit beacon and post made-up (but cleaned) paths
+ * here, up to the rate limit, so page_view counts are best-effort and can be inflated.
  */
 
 // Per-IP. A person clicking quickly through the app changes page a few times a minute; 120
