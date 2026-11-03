@@ -91,7 +91,7 @@ const isBanAction = (type: AdminUsersBulkAction['type']): type is BanActionType 
 
 type UserOutcome =
   | { status: 'applied'; snapshot: UserUndoSnapshot; subscriptionCancelError?: string }
-  | { status: 'skipped' }
+  | { status: 'skipped'; canceledSubscriptions?: string[]; subscriptionCancelError?: string }
   | { status: 'failed'; userId: string; error: string };
 
 type ApplyContext = { action: AdminUsersBulkAction; actorId: string; reason: string; batchId: string };
@@ -187,12 +187,18 @@ function summaryFor(action: AdminUsersBulkAction, snapshot: UserUndoSnapshot): s
 async function applyToUser(user: BulkUser, context: ApplyContext, deps: ExecuteDeps): Promise<UserOutcome> {
   try {
     const snapshot = await deps.withTransaction(() => applySteps(user.id, context, deps));
-    if (!snapshot) return { status: 'skipped' };
+    const { type } = context.action;
+    if (!snapshot) {
+      if (!isBanAction(type)) return { status: 'skipped' };
+      // A ban action changes nothing only for a user already suspended; still cancel, so a ban from
+      // before this step existed is caught up.
+      const holder: Pick<UserUndoSnapshot, 'canceledSubscriptions'> = {};
+      const cancel = await cancelSubscriptionsOf(user, type, context.batchId, deps, holder);
+      return { status: 'skipped', ...holder, ...cancel };
+    }
     // After the commit, so a rollback never ends sockets for a ban that did not stick.
     if (snapshot.banned || snapshot.apiKeys) await deps.endRealtimeConnections(user.id);
-    // Also after the commit: a Stripe cancel cannot roll back with the transaction. A contain on an
-    // already-suspended user still cancels, so a ban from before this step existed is caught up.
-    const { type } = context.action;
+    // Also after the commit: a Stripe cancel cannot roll back with the transaction.
     if (!isBanAction(type)) return { status: 'applied', snapshot };
     return {
       status: 'applied',
@@ -214,7 +220,7 @@ async function cancelSubscriptionsOf(
   action: BanActionType,
   batchId: string,
   deps: ExecuteDeps,
-  snapshot: UserUndoSnapshot
+  snapshot: Pick<UserUndoSnapshot, 'canceledSubscriptions'>
 ): Promise<{ subscriptionCancelError?: string }> {
   try {
     const { canceled, failed } = await deps.cancelSubscriptions(user, action, batchId);
@@ -270,6 +276,8 @@ export async function executeAdminUsersBulk(
   const snapshots: UserUndoSnapshot[] = [];
   const failed: AdminUsersBulkResult['failed'] = [];
   const subscriptionCancelFailures: AdminUsersBulkResult['subscriptionCancelFailures'] = [];
+  // Subscriptions canceled for skipped (already suspended) users, which have no undo snapshot.
+  const skippedCancellations: { userId: string; subscriptionIds: string[] }[] = [];
   let attempted = 0;
   const undoRecord = () => ({
     batchId,
@@ -287,7 +295,7 @@ export async function executeAdminUsersBulk(
     const outcomes = await Promise.all(chunk.map(user => applyToUser(user, context, deps)));
     attempted += chunk.length;
     let changed = false;
-    for (const outcome of outcomes) {
+    for (const [index, outcome] of outcomes.entries()) {
       if (outcome.status === 'applied') {
         snapshots.push(outcome.snapshot);
         changed = true;
@@ -295,6 +303,15 @@ export async function executeAdminUsersBulk(
           subscriptionCancelFailures.push({ userId: outcome.snapshot.userId, error: outcome.subscriptionCancelError });
         }
       } else if (outcome.status === 'failed') failed.push({ userId: outcome.userId, error: outcome.error });
+      else {
+        const userId = chunk[index].id;
+        if (outcome.canceledSubscriptions) {
+          skippedCancellations.push({ userId, subscriptionIds: outcome.canceledSubscriptions });
+        }
+        if (outcome.subscriptionCancelError) {
+          subscriptionCancelFailures.push({ userId, error: outcome.subscriptionCancelError });
+        }
+      }
     }
     if (changed) {
       undoExpiresAt = await storeUndoRecord(undoRecord(), now(), deps);
@@ -302,6 +319,12 @@ export async function executeAdminUsersBulk(
   }
 
   const remaining = users.length - attempted;
+  const canceledSubscriptions = [
+    ...snapshots.flatMap(s =>
+      s.canceledSubscriptions ? [{ userId: s.userId, subscriptionIds: s.canceledSubscriptions }] : []
+    ),
+    ...skippedCancellations,
+  ];
   const result: AdminUsersBulkResult = {
     batchId,
     applied: snapshots.length,
@@ -311,7 +334,7 @@ export async function executeAdminUsersBulk(
     remaining,
     undoExpiresAt,
     blockedDomains,
-    canceledSubscriptions: snapshots.reduce((sum, s) => sum + (s.canceledSubscriptions?.length ?? 0), 0),
+    canceledSubscriptions: canceledSubscriptions.reduce((sum, entry) => sum + entry.subscriptionIds.length, 0),
     subscriptionCancelFailures,
   };
 
@@ -342,9 +365,7 @@ export async function executeAdminUsersBulk(
         partial: result.partial,
         remaining,
         blockedDomains,
-        canceledSubscriptions: snapshots.flatMap(s =>
-          s.canceledSubscriptions ? [{ userId: s.userId, subscriptionIds: s.canceledSubscriptions }] : []
-        ),
+        canceledSubscriptions,
         subscriptionCancelFailures,
         // A failed user's own entry rolled back with it, so this is the only record of the failure.
         failed,

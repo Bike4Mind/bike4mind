@@ -277,6 +277,19 @@ describe('users bulk actions on a real replica set', () => {
     expect(cancelAccountSubscriptions).not.toHaveBeenCalled();
   });
 
+  it('cancels for an already-suspended user with nothing else to change, reported though skipped', async () => {
+    const adminId = await seedUser({ isAdmin: true });
+    const banned = await seedUser({ isBanned: true, currentCredits: 0 });
+    cancelAccountSubscriptions.mockResolvedValue({ canceled: ['sub_old'], failed: [] });
+
+    for (const type of ['suspend', 'contain'] as const) {
+      cancelAccountSubscriptions.mockClear();
+      const result = await run(adminId, request([banned], { type }, [banned]));
+      expect(result).toMatchObject({ applied: 0, skipped: 1, canceledSubscriptions: 1 });
+      expect(cancelAccountSubscriptions).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it('rolls back only the user whose audit write fails', async () => {
     const adminId = await seedUser({ isAdmin: true });
     const good = await seedUser();
@@ -371,6 +384,27 @@ describe('users bulk actions on a real replica set', () => {
     });
     expect(await userState(target)).toMatchObject({ isModerated: false });
     expect(ADMIN_USERS_BULK_UNDO_WINDOW_MS).toBe(30_000);
+  });
+
+  it('reports as not restored only the subscriptions of users the undo actually reverted', async () => {
+    const adminId = await seedUser({ isAdmin: true });
+    const reverted = await seedUser();
+    const superseded = await seedUser();
+    cancelAccountSubscriptions.mockImplementation(async ({ userId }) => ({
+      canceled: [userId === reverted ? 'sub_reverted' : 'sub_superseded'],
+      failed: [],
+    }));
+
+    const suspend = await run(adminId, request([reverted, superseded], { type: 'suspend' }, [reverted, superseded]));
+    await seedKey(superseded);
+    await run(adminId, request([superseded], { type: 'revokeApiKeys' }, [superseded]));
+
+    const undone = await undo(adminId, suspend.batchId);
+    expect(undone).toMatchObject({
+      restored: 1,
+      failed: [{ userId: superseded, error: SUPERSEDED_MESSAGE }],
+      subscriptionsNotRestored: ['sub_reverted'],
+    });
   });
 
   it('never lets undo of an older batch revert a user a newer batch changed, and retries it later', async () => {
