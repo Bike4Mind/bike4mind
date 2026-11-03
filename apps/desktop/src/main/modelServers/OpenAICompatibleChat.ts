@@ -18,7 +18,8 @@ import { localBackend, localModelId, parseLocalModelId, type ChatModelOption, ty
 import { isChatCapable } from '@shared/models';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
-import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
+import { estimateTokens, LOCAL_CONTEXT_TARGET_TOKENS, replyLimit, toolReplyReserve } from '../chat/localContext';
+import { toMessages } from '../chat/OllamaLocal';
 import { OPENAI_COMPATIBLE_EFFORT_LEVELS, openAICompatibleControls } from '../chat/modelControls';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { estimatedRate, llamaServerRate, type StreamTiming } from '../chat/tokenRate';
@@ -151,6 +152,12 @@ interface StreamChunk {
 }
 
 const STOP_REASONS: Record<string, string> = { length: 'max_tokens', tool_calls: 'tool_use', stop: 'stop' };
+
+/** vLLM's refusal of a prompt plus max_tokens past max_model_len. */
+async function overflowsContext(response: Response): Promise<boolean> {
+  if (response.status !== 400) return false;
+  return /maximum context length|max_tokens|max_completion_tokens/i.test(await response.clone().text());
+}
 
 /** gpt-oss is the template family these servers pass `reasoning_effort` to; nothing else names its levels. */
 function takesReasoningEffort(model: string): boolean {
@@ -311,7 +318,9 @@ export class OpenAICompatibleChat implements LocalChat {
     const tools = this.toolsOffFor(model)
       ? []
       : (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
-    const post = (withTools: boolean) =>
+    const context = this.contexts.get(model);
+    const limit = replyLimit(context, request.maxTokens, estimateTokens(toMessages(request.messages), tools));
+    const post = (withTools: boolean, maxTokens: number | undefined) =>
       this.server.fetch(`${this.server.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
@@ -321,24 +330,31 @@ export class OpenAICompatibleChat implements LocalChat {
           stream: true,
           stream_options: { include_usage: true },
           messages: toOpenAIMessages(request.messages),
-          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+          ...(maxTokens ? { max_tokens: maxTokens } : {}),
           ...samplingFields(this.server.product, request.generation),
           ...this.thinkingFields(model, request),
           ...(withTools && tools.length > 0 ? { tools } : {}),
         }),
       });
-    const context = this.contexts.get(model);
     const measured = request.toolPromptTokens;
     // Desktop's prompt and tools fit, so the overflow came from this message: a notice for this turn, not the server.
     const longMessage =
-      measured !== undefined && context !== undefined && holdsPrompt(context, measured, request.maxTokens);
+      measured !== undefined &&
+      context !== undefined &&
+      holdsPrompt(context, measured, toolReplyReserve(request.maxTokens));
     if (measured !== undefined || (request.tools?.length ?? 0) > 0) {
       this.learnToolPrompt(measured !== undefined && !longMessage ? measured : undefined);
     }
-    let response = await post(true);
+    let withTools = true;
+    let response = await post(withTools, limit);
     if (!response.ok && tools.length > 0 && (await refusesTools(response))) {
       this.setRefused(model, true);
-      response = await post(false);
+      withTools = false;
+      response = await post(withTools, limit);
+    }
+    // The estimate can run short of the server's own count; without max_tokens it answers in what is left.
+    if (!response.ok && limit !== undefined && context !== undefined && (await overflowsContext(response))) {
+      response = await post(withTools, undefined);
     }
     const why = this.toolsOffFor(model)
       ? toolsOffHint(this.server.label, this.server.product)

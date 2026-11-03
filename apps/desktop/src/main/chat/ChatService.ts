@@ -148,7 +148,13 @@ import { LocalModelRemovedError, OllamaLocal, toMessages } from './OllamaLocal';
 import type { LocalChat } from './localChat';
 import { ServerCredentialsError } from '../modelServers/errors';
 import { holdsPrompt } from '@bike4mind/local-models/servers';
-import { ContextOverflowError, estimateTokens, localTranscriptChars, shrunkTranscriptChars } from './localContext';
+import {
+  ContextOverflowError,
+  estimateTokens,
+  localTranscriptChars,
+  shrunkTranscriptChars,
+  toolReplyReserve,
+} from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
@@ -6145,7 +6151,7 @@ export function toolPromptOverflow(
   const toolPrompt = estimateTokens(toMessages(wire.filter(message => message.role === 'system')), schemas);
   const prompt = wire.findLast(message => message.role === 'user' && !message.continuesTurn);
   const promptTokens = prompt ? estimateTokens(toMessages([prompt])) : 0;
-  return holdsPrompt(window, toolPrompt + promptTokens, maxTokens) ? undefined : toolPrompt;
+  return holdsPrompt(window, toolPrompt + promptTokens, toolReplyReserve(maxTokens)) ? undefined : toolPrompt;
 }
 
 /**

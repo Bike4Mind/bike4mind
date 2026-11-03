@@ -418,6 +418,73 @@ describe('OpenAICompatibleChat on a server that fronts several models', () => {
   });
 });
 
+describe('OpenAICompatibleChat max output on a context the server fixes', () => {
+  const CONTEXT = 8192;
+  const ask = (chars: number, maxTokens?: number) => ({
+    model: 'local:srv-abc123:qwen3-8b',
+    messages: [{ role: 'user' as const, content: 'x'.repeat(chars) }],
+    ...(maxTokens ? { maxTokens } : {}),
+  });
+
+  /** vLLM: refuses prompt + max_tokens past max_model_len, counting `charsPerToken` characters a token. */
+  function vllm(charsPerToken: number, maxModelLen = CONTEXT) {
+    const bodies: Record<string, unknown>[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({
+          object: 'list',
+          data: [{ id: 'qwen3-8b', object: 'model', ...(maxModelLen ? { max_model_len: maxModelLen } : {}) }],
+        });
+      const body = JSON.parse(String(init?.body)) as { max_tokens?: number; messages: { content: string }[] };
+      bodies.push(body as unknown as Record<string, unknown>);
+      const prompt = Math.ceil(body.messages[0].content.length / charsPerToken);
+      if (maxModelLen && body.max_tokens && prompt + body.max_tokens > maxModelLen)
+        return Response.json(
+          {
+            error: {
+              message: `This model's maximum context length is ${maxModelLen} tokens. However, you requested ${prompt + body.max_tokens} tokens.`,
+            },
+          },
+          { status: 400 }
+        );
+      return sse([delta({ content: 'ok' }, 'stop'), '[DONE]']);
+    };
+    return { fetch, bodies };
+  }
+
+  it('keeps a limit that fits, lowers one that does not, and sends none without room', async () => {
+    const server = vllm(4);
+    const client = chat(server.fetch, 'vllm');
+    await client.listModels();
+    await collect(client, ask(400, 4096));
+    await collect(client, ask(20_000, 4096));
+    await collect(client, ask(30_000, 4096));
+    const [fits, lowered, none] = server.bodies.map(body => body.max_tokens as number | undefined);
+    expect(fits).toBe(4096);
+    expect(lowered).toBeGreaterThanOrEqual(256);
+    expect(lowered).toBeLessThan(CONTEXT - 5000);
+    expect(none).toBeUndefined();
+    expect(server.bodies).toHaveLength(3);
+  });
+
+  it('asks again without max_tokens when the server counts the prompt longer than the estimate', async () => {
+    const server = vllm(2);
+    const client = chat(server.fetch, 'vllm');
+    await client.listModels();
+    const events = await collect(client, ask(14_000, 2048));
+    expect(server.bodies.map(body => body.max_tokens)).toEqual([2048, undefined]);
+    expect(events.at(-1)).toMatchObject({ stopReason: 'stop' });
+  });
+
+  it('sends the limit as given when the server states no context', async () => {
+    const server = vllm(4, 0);
+    const client = chat(server.fetch, 'vllm');
+    await client.listModels();
+    await collect(client, ask(30_000, 4096));
+    expect(server.bodies[0]).toMatchObject({ max_tokens: 4096 });
+  });
+});
+
 describe('toOpenAIMessages', () => {
   it('turns tool use and tool results into OpenAI tool calls and tool messages', () => {
     expect(
