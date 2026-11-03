@@ -54,7 +54,9 @@ describe('the cost on a reply', () => {
 
     const row = costs()[0];
     expect(row?.textContent).toBe('54 credits');
-    expect(row?.getAttribute('title')).toBe('1.2k new input, 300 output\nTotal tokens: 300');
+    expect(row?.getAttribute('title')).toBe(
+      '1.2k new input, 300 output\nTotal tokens: 300 (thinking and any sub-agents included)'
+    );
   });
 
   // jsdom cannot hover, so the half worth pinning is that the turn's rule reached this row at
@@ -86,7 +88,7 @@ describe('the cost on a reply', () => {
       expect(row?.textContent).toBe('24.0 tok/s');
       expect(row?.querySelector('[data-testid="chat-message-stat-speed"]')).not.toBeNull();
       expect(row?.getAttribute('title')).toBe(
-        '300 new input, 48 output\nTotal tokens: 48\nSpeed: 24.0 tok/s\nLoad time: 1.2s'
+        '300 new input, 48 output\nTotal tokens: 48 (thinking and any sub-agents included)\nSpeed: 24.0 tok/s\nLoad time: 1.2s'
       );
     });
 
