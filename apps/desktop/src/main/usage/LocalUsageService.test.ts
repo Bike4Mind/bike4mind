@@ -165,11 +165,14 @@ describe('LocalUsageService', () => {
 
   it('imports nothing that can reach a server', async () => {
     const sources = await Promise.all(
-      ['LocalUsageService.ts', 'localUsage.ts'].map(name => readFile(join(__dirname, name), 'utf8'))
+      ['LocalUsageService.ts', 'localUsage.ts', '../chat/tokenRate.ts'].map(name =>
+        readFile(join(__dirname, name), 'utf8')
+      )
     );
+    const local = new Set(['./localUsage', '../chat/tokenRate']);
     for (const source of sources) {
       const imports = [...source.matchAll(/from '([^']+)'/g)].map(match => match[1]);
-      expect(imports.every(path => path.startsWith('@shared/') || path === './localUsage')).toBe(true);
+      expect(imports.every(path => path.startsWith('@shared/') || local.has(path))).toBe(true);
       expect(source).not.toMatch(/\bfetch\(|axios|client-auth|electron/);
     }
   });

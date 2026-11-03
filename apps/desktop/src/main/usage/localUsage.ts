@@ -1,6 +1,7 @@
-import { isLocalModel, parseLocalModelId, type ChatMessage, type ChatSession } from '@shared/chat';
+import { isLocalModel, parseLocalModelId, type ChatMessage, type ChatSession, type ChatUsage } from '@shared/chat';
 import { LOCAL_SERVER_NAME, serverIdOfRuntime } from '@shared/modelServers';
 import type { LocalUsage, LocalUsageBar, LocalUsageFigures, LocalUsageRow, UsageWindowId } from '@shared/usage';
+import { addTokenRate } from '../chat/tokenRate';
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
@@ -45,10 +46,9 @@ function amount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-/** One reply's contribution. Session files are this app's own but older ones predate every field. */
-function replyFigures(message: ChatMessage): LocalUsageFigures {
+/** One reply's contribution on one model. Session files are this app's own but older ones predate every field. */
+function replyFigures(usage: ChatUsage): LocalUsageFigures {
   const figures = emptyFigures();
-  const usage = message.usage;
   figures.replies = 1;
   figures.outputTokens = amount(usage?.outputTokens);
   figures.contextTokens = amount(usage?.inputTokens);
@@ -99,28 +99,68 @@ function replyModel(message: ChatMessage, sessionModel: string): string | null {
   return message.usage?.rate ? sessionModel : null;
 }
 
+function addShare(total: ChatUsage | undefined, next: ChatUsage): ChatUsage {
+  const rate = addTokenRate(total?.rate, next.rate);
+  return {
+    outputTokens: amount(total?.outputTokens) + amount(next.outputTokens),
+    inputTokens: amount(total?.inputTokens) + amount(next.inputTokens),
+    ...(rate ? { rate } : {}),
+  };
+}
+
 /**
- * A session's local replies, bucketed by model and UTC hour.
- *
- * Only `message.usage` is read: it is the whole reply's sum, and adding `rounds[].usage` as well
- * would count every request twice.
+ * A reply's usage per model its requests went to. `message.usage` is the sum of `rounds[].usage`,
+ * so it is the whole answer unless a continued reply's rounds name different models; then the
+ * rounds are summed per model instead, and never both.
  */
+function replyShares(message: ChatMessage & { usage: ChatUsage }, sessionModel: string): Map<string | null, ChatUsage> {
+  const replyLevel = replyModel(message, sessionModel);
+  const rounds = Array.isArray(message.rounds)
+    ? message.rounds.filter(round => round && typeof round === 'object')
+    : [];
+  const modelOf = (round: (typeof rounds)[number]): string | null =>
+    typeof round.model === 'string' ? round.model : replyLevel;
+  if (new Set(rounds.map(modelOf)).size < 2) return new Map([[replyLevel, message.usage]]);
+
+  const shares = new Map<string | null, ChatUsage>();
+  const counted = { outputTokens: 0, inputTokens: 0 };
+  for (const round of rounds) {
+    if (!round.usage || typeof round.usage !== 'object') continue;
+    const model = modelOf(round);
+    shares.set(model, addShare(shares.get(model), round.usage));
+    counted.outputTokens += amount(round.usage.outputTokens);
+    counted.inputTokens += amount(round.usage.inputTokens);
+  }
+  // What no round carries: an explore sub-loop's spend, which only hosted turns run, or a round
+  // stored before rounds kept usage, which ran on the reply's own model.
+  const rest = {
+    outputTokens: Math.max(0, amount(message.usage.outputTokens) - counted.outputTokens),
+    inputTokens: Math.max(0, amount(message.usage.inputTokens) - counted.inputTokens),
+  };
+  const allLocal = [...shares.keys()].every(model => model !== null && isLocalModel(model));
+  if (allLocal && (rest.outputTokens > 0 || rest.inputTokens > 0))
+    shares.set(replyLevel, addShare(shares.get(replyLevel), rest));
+  return shares;
+}
+
+/** A session's local replies, bucketed by model and UTC hour. */
 export function sessionUsageBuckets(session: Pick<ChatSession, 'model' | 'messages'>): LocalUsageBucket[] {
   const buckets = new Map<string, LocalUsageBucket>();
   for (const message of session.messages) {
     if (message?.role !== 'assistant' || !message.usage || typeof message.usage !== 'object') continue;
-    const model = replyModel(message, session.model);
-    if (!model || !isLocalModel(model) || !parseLocalModelId(model)) continue;
     const at = Date.parse(message.createdAt);
     if (!Number.isFinite(at)) continue;
     const hour = Math.floor(at / HOUR_MS) * HOUR_MS;
-    const key = `${hour}\n${model}`;
-    let bucket = buckets.get(key);
-    if (!bucket) {
-      bucket = { model, hour, ...emptyFigures() };
-      buckets.set(key, bucket);
+    for (const [model, usage] of replyShares(message as ChatMessage & { usage: ChatUsage }, session.model)) {
+      if (!model || !isLocalModel(model) || !parseLocalModelId(model)) continue;
+      const key = `${hour}\n${model}`;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { model, hour, ...emptyFigures() };
+        buckets.set(key, bucket);
+      }
+      addFigures(bucket, replyFigures(usage));
     }
-    addFigures(bucket, replyFigures(message));
   }
   return [...buckets.values()];
 }
