@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, Profiler } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { ChatMessage, ChatReplyStats } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MessageThread } from './MessageThread';
-import { RAIL_GAP, railSpacing } from './ReplyStatsRail';
+import { MessageThread, railRows } from './MessageThread';
 import { REPLY_STATS } from './replyStats';
 import { reloadReplyStatsPrefs, setReplyStatShown } from './replyStatsPrefs';
 import type { TurnProgress } from './statusLine';
@@ -24,41 +23,32 @@ function message(id: string, fields: Partial<ChatMessage> = {}): ChatMessage {
   return { id, role: 'assistant', content: 'done', createdAt: '2026-01-01T00:00:00.000Z', ...fields };
 }
 
-describe('railSpacing', () => {
-  const box = (id: string, top: number, height: number, push = 0) => ({ id, top, push, height });
+describe('railRows', () => {
+  const user = (id: string) => message(id, { role: 'user', content: 'Q' });
+  const relay = message('r1', {
+    role: 'user',
+    content: 'Done',
+    relay: { fromSessionId: 's2', fromTitle: 'Other', hops: 1 },
+  });
+  const system = message('s1', { role: 'user', content: 'Note', system: true });
 
-  it('leaves the next message where it is and pushes the next reply only as far as clears its rail', () => {
-    // A one-line answer under a 126px rail; the next reply, under a user message, starts at 112.
-    const spacing = railSpacing([box('a1', 0, 126), box('a2', 112, 126)], 400);
-    expect(spacing.pushes).toEqual(new Map([['a2', 126 + RAIL_GAP - 112]]));
-    expect(spacing.endSpace).toBe(0);
+  it("runs a rail down its reply and the turns after it, up to the next reply's own", () => {
+    const thread = [user('u1'), message('a1'), user('u2'), message('a2'), relay, system, user('u3'), message('a3')];
+    expect(railRows(thread, 1, thread.length)).toBe(2);
+    expect(railRows(thread, 3, thread.length)).toBe(4);
+    expect(railRows(thread, 7, thread.length)).toBe(1);
   });
 
-  it('moves nothing when the rails already clear each other', () => {
-    expect(railSpacing([box('a1', 0, 54), box('a2', 112, 126)], 400)).toEqual({ pushes: new Map(), endSpace: 0 });
+  it('stops at the end of the list it is drawn in, and at a reply straight after', () => {
+    const thread = [message('a1'), message('a2'), user('u1'), user('u2')];
+    expect(railRows(thread, 0, thread.length)).toBe(1);
+    expect(railRows(thread, 1, thread.length)).toBe(3);
+    expect(railRows(thread, 1, 3)).toBe(2);
   });
 
-  it('measures each reply from where it sits without its own push, so a drawn spacing stays put', () => {
-    const drawn = railSpacing([box('a1', 0, 126), box('a2', 112 + 30, 126, 30)], 400 + 30);
-    expect(drawn.pushes).toEqual(new Map([['a2', 30]]));
-  });
-
-  it('counts a push above in where the replies after it will sit', () => {
-    // a2's push moves a3 down by as much, which then clears a2's rail without one of its own.
-    const spacing = railSpacing([box('a1', 0, 126), box('a2', 112, 126), box('a3', 260, 54)], 400);
-    expect(spacing.pushes).toEqual(new Map([['a2', 30]]));
-  });
-
-  it("gives the thread's end room for the last rail, after any push", () => {
-    expect(railSpacing([box('a1', 0, 126)], 60).endSpace).toBe(66);
-    expect(railSpacing([box('a1', 0, 126), box('a2', 112, 126)], 200).endSpace).toBe(142 + 126 - 230);
-  });
-
-  it('skips a rail not laid out, and reads what it cannot measure as 0', () => {
-    expect(railSpacing([box('a1', 0, 126), box('a2', 112, 0), box('a3', 130, Number.NaN)], 0)).toEqual({
-      pushes: new Map(),
-      endSpace: 126,
-    });
+  it('runs on past a compaction divider, which is not a reply', () => {
+    const thread = [message('a1'), message('b1', { boundary: { kind: 'compact' } }), user('u1'), message('a2')];
+    expect(railRows(thread, 0, thread.length)).toBe(3);
   });
 });
 
@@ -176,33 +166,87 @@ describe('the reply stats rail and its footer fallback', () => {
     );
   });
 
-  it('pushes a reply down to clear the rail above it and leaves the thread room for the last, only while drawn', () => {
-    const replies = () => container.querySelectorAll<HTMLElement>('[data-testid="chat-message-assistant"]');
-    const railOf = (id: string) => container.querySelector<HTMLElement>(`[data-rail-for="${id}"]`);
-    const pushOf = (id: string) => {
-      const rail = railOf(id);
-      return rail ? parseFloat(getComputedStyle(rail).top) || 0 : 0;
-    };
-    // jsdom lays nothing out: a1 at 0, a2 at 112 and the thread's end at 200, each moved by a2's push.
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-      const unpushed = this.dataset.railFor === 'a2' ? 112 : this.dataset.testid === 'chat-thread-end' ? 200 : 0;
-      return { top: unpushed + (unpushed > 0 ? pushOf('a2') : 0) } as DOMRect;
-    });
-    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
-      return this.parentElement?.dataset.railFor ? 126 : 0;
-    });
+  describe('laid out by the grid, never by measuring', () => {
+    const replies = () => Array.from(container.querySelectorAll<HTMLElement>('[data-testid="chat-message-assistant"]'));
+    const cellOf = (id: string) => container.querySelector<HTMLElement>(`[data-rail-for="${id}"]`);
     const thread = [...settled, message('u2', { role: 'user', content: 'And 223?' }), { ...settled[1]!, id: 'a2' }];
-    const end = () => container.querySelector<HTMLElement>('[data-testid="chat-thread-end"]')!;
+    // Rows 126px tall and boxes that never sit still, as fractional display scaling reads them: a
+    // spacing measured from these would move the replies, and would never settle.
+    const measuredAnywhere = () => {
+      let calls = 0;
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+        () => ({ top: (calls++ % 3) * 0.4 }) as DOMRect
+      );
+      vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.closest('[data-rail-for]') ? 126 : 0;
+      });
+    };
 
-    render(thread, { statsRail: true });
-    expect(getComputedStyle(replies()[0]!).paddingTop).not.toBe('30px');
-    expect(getComputedStyle(replies()[1]!).paddingTop).toBe(`${126 + RAIL_GAP - 112}px`);
-    expect(pushOf('a2')).toBe(30);
-    expect(end().style.height).toBe(`${142 + 126 - 230}px`);
+    it('draws a thread of rails in no more commits than one without, whatever its boxes measure', () => {
+      measuredAnywhere();
+      const mount = (statsRail: boolean) => {
+        const commits = vi.fn();
+        const host = document.createElement('div');
+        const own = createRoot(host);
+        act(() =>
+          own.render(
+            <Profiler id="thread" onRender={commits}>
+              <MessageThread
+                messages={thread}
+                sessionId="s1"
+                streaming={false}
+                onRespond={() => undefined}
+                onContinue={() => undefined}
+                statsRail={statsRail}
+              />
+            </Profiler>
+          )
+        );
+        const drawn = host.querySelectorAll('[data-testid="chat-reply-stats-rail"]').length;
+        act(() => own.unmount());
+        return { commits: commits.mock.calls.length, drawn };
+      };
 
-    render(thread, { statsRail: false });
-    expect(getComputedStyle(replies()[1]!).paddingTop).not.toBe('30px');
-    expect(end().style.height).toBe('');
+      const without = mount(false);
+      expect(mount(true)).toEqual({ commits: without.commits, drawn: 2 });
+    });
+
+    it('puts each rail in the cell beside its reply and the turns up to the next reply, read after the reply', () => {
+      render(thread, { statsRail: true });
+      const [a1, a2] = replies();
+
+      expect(cellOf('a1')?.nextElementSibling).toBe(a1);
+      expect(cellOf('a1')?.style.gridRow).toBe('span 2');
+      expect(cellOf('a2')?.style.gridRow).toBe('span 1');
+      expect(a2?.getAttribute('aria-owns')).toBe(cellOf('a2')?.querySelector('[role="group"]')?.id);
+      // A rail taller than its rows grows them: the reply keeps the top of its row and the prompt
+      // the bottom of its own, so the room opens between a reply and the next prompt.
+      expect(getComputedStyle(a1!.parentElement!).display).toBe('grid');
+      expect(getComputedStyle(a1!).alignSelf).toBe('start');
+      const prompt = container.querySelectorAll('[data-testid="chat-message-user"]')[1]!.parentElement!;
+      expect(getComputedStyle(prompt).alignSelf).toBe('end');
+      expect(getComputedStyle(cellOf('a1')!).gridColumn).toBe('1');
+    });
+
+    it('leaves the live reply where it is when its rail gets its first row', () => {
+      measuredAnywhere();
+      const live: TurnProgress = { startedAt: Date.now() - 4000, tokens: null, messageId: 'a2' };
+      const writing = [...thread.slice(0, 3), message('a2', { content: 'Working' })];
+      render(writing, { statsRail: true, streaming: true, liveTurn: live });
+      const reply = replies()[1]!;
+      const drawn = { className: reply.className, style: reply.getAttribute('style') };
+      expect(cellOf('a2')).toBeNull();
+
+      render(writing, {
+        statsRail: true,
+        streaming: true,
+        liveTurn: { ...live, usage: { inputTokens: 900, outputTokens: 30 } },
+      });
+      expect(cellOf('a2')).not.toBeNull();
+      expect(replies()[1]).toBe(reply);
+      expect({ className: reply.className, style: reply.getAttribute('style') }).toEqual(drawn);
+      expect(cellOf('a1')?.style.gridRow).toBe('span 2');
+    });
   });
 
   it('ticks the live reply off its own clock, leaving the total and speed to the status line', () => {

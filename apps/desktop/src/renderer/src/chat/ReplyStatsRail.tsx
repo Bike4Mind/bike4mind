@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { memo, useEffect, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Typography from '@mui/joy/Typography';
 import type { ChatMessage, ChatUsage } from '@shared/chat';
@@ -17,115 +17,22 @@ import {
 import { REPLY_STATS_RAIL_INSET, REPLY_STATS_RAIL_WIDTH, useReplyStatsPrefs } from './replyStatsPrefs';
 import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './statusLine';
 
-/** The clear space between one rail's last row and the next rail's first, in px. */
-export const RAIL_GAP = 16;
-
-export interface RailBox {
-  /** The reply's message id. */
-  id: string;
-  /** Where the rail is drawn, in viewport px, with its reply's push. */
-  top: number;
-  /** The push it was drawn with. */
-  push: number;
-  height: number;
-}
-
-export interface RailSpacing {
-  /** How far each reply is pushed down, in px; a reply left where it is has no entry. */
-  pushes: ReadonlyMap<string, number>;
-  /** Room after the thread's last turn for a rail that runs past it, in px. */
-  endSpace: number;
-}
-
-export const NO_RAIL_SPACING: RailSpacing = { pushes: new Map(), endSpace: 0 };
-
-const finite = (value: number): number => (Number.isFinite(value) ? value : 0);
-
 /**
- * Where each reply goes so its rail starts RAIL_GAP below the one above it. A rail sits left of
- * the column, so it runs on beside whatever follows its reply and only another rail can meet it;
- * a reply is pushed down only when its rail would. `end` is where the thread's last turn ends,
- * and the room after it keeps the last rail inside the scroll, which the thread follows to.
+ * The thread's turns as a grid: a zero-width first column for the rails, which draw out to its
+ * left, and the turns in the second. A rail spans its reply's row and the rows after it up to the
+ * next reply (see railRows), so the browser sizes those rows to hold it: a reply never moves for
+ * its own rail, and nothing is measured. Extra height lands after the reply and above the turns
+ * that follow, so a prompt stays one gap above its own answer.
  */
-export function railSpacing(rails: readonly RailBox[], end: number): RailSpacing {
-  const pushes = new Map<string, number>();
-  // How far this spacing moves what follows, against how it is drawn now.
-  let shift = 0;
-  let above: number | null = null;
-  for (const rail of rails) {
-    const drawnPush = finite(rail.push);
-    const height = finite(rail.height);
-    if (height <= 0) {
-      shift -= drawnPush;
-      continue;
-    }
-    const unpushed = finite(rail.top) - drawnPush + shift;
-    const push: number = above === null ? 0 : Math.max(0, Math.ceil(above + RAIL_GAP - unpushed));
-    if (push > 0) pushes.set(rail.id, push);
-    shift += push - drawnPush;
-    above = unpushed + push + height;
-  }
-  const endSpace = above === null ? 0 : Math.max(0, Math.ceil(above - (finite(end) + shift)));
-  return { pushes, endSpace };
-}
-
-function sameSpacing(a: RailSpacing, b: RailSpacing): boolean {
-  if (a.endSpace !== b.endSpace || a.pushes.size !== b.pushes.size) return false;
-  for (const [id, push] of a.pushes) if (b.pushes.get(id) !== push) return false;
-  return true;
-}
-
-function measureRails(column: HTMLElement, end: HTMLElement, drawn: RailSpacing): RailSpacing {
-  const rails = Array.from(column.querySelectorAll<HTMLElement>('[data-rail-for]'), rail => {
-    const id = rail.dataset.railFor ?? '';
-    const rows = rail.firstElementChild;
-    return {
-      id,
-      top: rail.getBoundingClientRect().top,
-      push: drawn.pushes.get(id) ?? 0,
-      height: rows instanceof HTMLElement ? rows.offsetHeight : 0,
-    };
-  });
-  return railSpacing(rails, end.getBoundingClientRect().top);
-}
-
-/**
- * The thread's railSpacing, measured after every render and whenever the column resizes. `end`
- * is the element after the thread's last turn, the one the auto-scroll brings into view.
- */
-export function useRailSpacing(
-  column: RefObject<HTMLElement | null>,
-  end: RefObject<HTMLElement | null>,
-  enabled: boolean
-): RailSpacing {
-  // A stat ticked in Settings changes a rail's height without rendering the thread.
-  useReplyStatsPrefs();
-  const [spacing, setSpacing] = useState<RailSpacing>(NO_RAIL_SPACING);
-  const drawn = useRef(spacing);
-
-  const measure = useCallback(() => {
-    const next =
-      enabled && column.current && end.current
-        ? measureRails(column.current, end.current, drawn.current)
-        : NO_RAIL_SPACING;
-    if (!sameSpacing(drawn.current, next)) setSpacing(next);
-  }, [column, end, enabled]);
-
-  useLayoutEffect(() => {
-    drawn.current = spacing;
-    measure();
-  });
-
-  useEffect(() => {
-    const el = column.current;
-    if (!enabled || !el || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [column, enabled, measure]);
-
-  return enabled ? spacing : NO_RAIL_SPACING;
-}
+export const turnGridSx = {
+  display: 'grid',
+  gridTemplateColumns: '0 minmax(0, 1fr)',
+  rowGap: 3,
+  // The specificity of Joy's Stack spacing, which this replaces: a turn's own margin never applies.
+  '& > :not(style)': { gridColumn: '2', alignSelf: 'end', margin: 0 },
+  '& > [data-reply]': { alignSelf: 'start' },
+  '& > [data-rail-for]': { gridColumn: '1', alignSelf: 'stretch' },
+} as const;
 
 interface RailContent {
   /** Every stat the reply has, for the title. */
@@ -212,28 +119,27 @@ const visuallyHiddenSx = {
   whiteSpace: 'nowrap',
 } as const;
 
+/** The id of a reply's rail group, which its reply owns for a screen reader. */
+export const railGroupId = (messageId: string): string => `reply-stats-${messageId}`;
+
+interface RailProps {
+  message: ChatMessage;
+  /** The turn in flight, while this is the reply it is writing. */
+  turn?: TurnProgress | null;
+  /** How many of the thread's grid rows the rail runs down, its reply's first; see railRows. */
+  span: number;
+}
+
 /**
- * A reply's stats as margin notes left of it, top-aligned with its first line.
- *
- * Absolute inside the turn, so it scrolls and windows with its reply and runs on past a short one;
- * the sticky block inside keeps it in view down a long reply and lets it leave with the reply's
- * end. No card, only a hairline on the reply's side, so it reads as notes set apart from the text
- * rather than as a panel competing with it.
+ * A reply's stats as margin notes left of it, top-aligned with its first line: the grid cell in
+ * turnGridSx's rail column beside the reply and the turns after it. The sticky block inside keeps
+ * it in view down a long reply. No card, only a hairline on the reply's side, so it reads as notes
+ * set apart from the text rather than as a panel competing with it.
  *
  * A screen reader gets one sentence per reply in place of a label and a value per row, so a long
  * thread reads as its replies with a short note after each.
  */
-export const ReplyStatsRail = memo(function ReplyStatsRail({
-  message,
-  turn,
-  push = 0,
-}: {
-  message: ChatMessage;
-  /** The turn in flight, while this is the reply it is writing. */
-  turn?: TurnProgress | null;
-  /** The reply's push down from the top of its turn; see railSpacing. */
-  push?: number;
-}) {
+export const ReplyStatsRail = memo(function ReplyStatsRail({ message, turn, span }: RailProps) {
   const { hidden } = useReplyStatsPrefs();
   const showDollars = useShowDollarCosts();
   const now = useClock(turn?.startedAt ?? null);
@@ -245,17 +151,14 @@ export const ReplyStatsRail = memo(function ReplyStatsRail({
 
   return (
     <Box
-      sx={{
-        position: 'absolute',
-        top: push,
-        bottom: 0,
-        right: `calc(100% + ${REPLY_STATS_RAIL_INSET}px)`,
-        width: REPLY_STATS_RAIL_WIDTH,
-      }}
+      // Never the scroll anchor: stuck rows hold still while the text beside them moves.
+      sx={{ minWidth: 0, overflowAnchor: 'none' }}
+      style={{ gridRow: `span ${span}` }}
       data-rail-for={message.id}
       data-testid="chat-reply-stats-rail"
     >
       <Box
+        id={railGroupId(message.id)}
         role="group"
         aria-label="Reply stats"
         // Native, as the hover footer's: a Joy tooltip per reply would mount a popper for every turn.
@@ -263,6 +166,8 @@ export const ReplyStatsRail = memo(function ReplyStatsRail({
         sx={{
           position: 'sticky',
           top: 12,
+          width: REPLY_STATS_RAIL_WIDTH,
+          ml: `${-(REPLY_STATS_RAIL_WIDTH + REPLY_STATS_RAIL_INSET)}px`,
           pr: 1.25,
           borderRight: '1px solid',
           borderColor: 'divider',

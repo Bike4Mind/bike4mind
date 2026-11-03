@@ -34,7 +34,7 @@ const LEGACY_RATE_KEY = 'b4m.chat.showTokenRate';
 
 /**
  * Off until ticked: a self-hosted server's own timings and the wait for the first token. Each is
- * a row on every reply, and a reply is held tall enough for all of its rows.
+ * a row on every reply, and a rail longer than the turns beside it spaces those turns out.
  */
 export const REPLY_STATS_OFF_BY_DEFAULT: ReadonlySet<ReplyStatId> = new Set([
   'promptSpeed',
